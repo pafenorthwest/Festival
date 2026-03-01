@@ -1,0 +1,87 @@
+# establish-goals.rules
+# Allow only the establish-goals helper scripts.
+# These scripts encapsulate all shell logic and enforce hard-stop behavior.
+
+prefix_rule(
+    pattern=["./.codex/scripts/goals-scaffold.sh"],
+    decision="allow",
+    justification="Scaffold establish-goals vN files for a task.",
+    match=["./.codex/scripts/goals-scaffold.sh"],
+)
+
+prefix_rule(
+    pattern=["./codex/scripts/goals-scaffold.sh"],
+    decision="allow",
+    justification="Scaffold establish-goals vN files for a task (repo-local codex path).",
+    match=["./codex/scripts/goals-scaffold.sh"],
+)
+
+prefix_rule(
+    pattern=["/Users/eric/.codex/scripts/goals-scaffold.sh"],
+    decision="allow",
+    justification="Scaffold establish-goals vN files for a task (home codex path).",
+    match=["/Users/eric/.codex/scripts/goals-scaffold.sh"],
+)
+
+prefix_rule(
+    pattern=["./.codex/scripts/goals-next-iteration.sh"],
+    decision="allow",
+    justification="Create the next establish-goals iteration (vN+1).",
+    match=["./.codex/scripts/goals-next-iteration.sh"],
+)
+
+prefix_rule(
+    pattern=["./codex/scripts/goals-next-iteration.sh"],
+    decision="allow",
+    justification="Create the next establish-goals iteration (vN+1) (repo-local codex path).",
+    match=["./codex/scripts/goals-next-iteration.sh"],
+)
+
+prefix_rule(
+    pattern=["/Users/eric/.codex/scripts/goals-next-iteration.sh"],
+    decision="allow",
+    justification="Create the next establish-goals iteration (vN+1) (home codex path).",
+    match=["/Users/eric/.codex/scripts/goals-next-iteration.sh"],
+)
+
+prefix_rule(
+    pattern=["./.codex/scripts/goals-extract.sh"],
+    decision="allow",
+    justification="Extract normalized goals from establish-goals artifact.",
+    match=["./.codex/scripts/goals-extract.sh"],
+)
+
+prefix_rule(
+    pattern=["./codex/scripts/goals-extract.sh"],
+    decision="allow",
+    justification="Extract normalized goals from establish-goals artifact (repo-local codex path).",
+    match=["./codex/scripts/goals-extract.sh"],
+)
+
+prefix_rule(
+    pattern=["/Users/eric/.codex/scripts/goals-extract.sh"],
+    decision="allow",
+    justification="Extract normalized goals from establish-goals artifact (home codex path).",
+    match=["/Users/eric/.codex/scripts/goals-extract.sh"],
+)
+
+prefix_rule(
+    pattern=["./.codex/scripts/goals-validate.sh"],
+    decision="allow",
+    justification="Validate goals invariants (count, state, success criteria).",
+    match=["./.codex/scripts/goals-validate.sh"],
+)
+
+prefix_rule(
+    pattern=["./codex/scripts/goals-validate.sh"],
+    decision="allow",
+    justification="Validate goals invariants (count, state, success criteria) (repo-local codex path).",
+    match=["./codex/scripts/goals-validate.sh"],
+)
+
+prefix_rule(
+    pattern=["/Users/eric/.codex/scripts/goals-validate.sh"],
+    decision="allow",
+    justification="Validate goals invariants (count, state, success criteria) (home codex path).",
+    match=["/Users/eric/.codex/scripts/goals-validate.sh"],
+)

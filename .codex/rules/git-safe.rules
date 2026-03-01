@@ -1,0 +1,385 @@
+# Auto-allow a small, explicit set of git read/write commands commonly used
+# by commit/pull workflows. Rules are exact-prefix matches over argv.
+
+# -----------------------
+# Branch / status / fetch
+# -----------------------
+
+prefix_rule(
+    pattern = ["git", "branch", "--show-current"],
+    decision = "allow",
+    justification = "Read current branch name for safety checks.",
+    match = ["git branch --show-current"],
+)
+
+prefix_rule(
+    pattern = ["git", "status", "--porcelain"],
+    decision = "allow",
+    justification = "List working tree changes in machine-readable form.",
+    match = ["git status --porcelain"],
+)
+
+prefix_rule(
+    pattern = ["git", "fetch", "--prune"],
+    decision = "allow",
+    justification = "Fetch remote updates without modifying working files.",
+    match = ["git fetch --prune"],
+)
+
+prefix_rule(
+    pattern = ["git", "fetch", "origin"],
+    decision = "allow",
+    justification = "Fetch latest origin refs for detached-head landing branch checks.",
+    match = [
+        "git fetch origin",
+        "git fetch origin --prune",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "ls-remote", "--exit-code", "--heads", "origin"],
+    decision = "allow",
+    justification = "Check whether a remote branch already exists before creating a landing branch.",
+    match = [
+        "git ls-remote --exit-code --heads origin land-the-plan/task/agent-20260210120000",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "switch", "-c"],
+    decision = "allow",
+    justification = "Create and switch to a newly validated landing branch.",
+    match = [
+        "git switch -c land-the-plan/task/agent-20260210120000",
+    ],
+)
+
+# -----------------------
+# Diff / inspection
+# -----------------------
+
+prefix_rule(
+    pattern = ["git", "diff"],
+    decision = "allow",
+    justification = "Inspect changes (unstaged/staged depending on flags).",
+    match = [
+        "git diff",
+        "git diff --cached",
+        "git diff --cached --name-only -z",
+        "git diff --cached --numstat -- path/to/file",
+        "git diff --cached -- path/to/file",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "diff", "--name-only", "--diff-filter=U"],
+    decision = "allow",
+    justification = "List conflicted/unmerged paths only.",
+    match = ["git diff --name-only --diff-filter=U"],
+)
+
+# -----------------------
+# Upstream / divergence checks
+# -----------------------
+
+prefix_rule(
+    pattern = ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    decision = "allow",
+    justification = "Resolve upstream tracking ref for current branch.",
+    match = ["git rev-parse --abbrev-ref --symbolic-full-name @{u}"],
+)
+
+prefix_rule(
+    pattern = ["git", "rev-list", "--left-right", "--count", "HEAD...@{u}"],
+    decision = "allow",
+    justification = "Compute ahead/behind counts vs upstream.",
+    match = ["git rev-list --left-right --count HEAD...@{u}"],
+)
+
+# -----------------------
+# Pull / push (scoped)
+# -----------------------
+
+prefix_rule(
+    pattern = ["git", "pull", "--ff-only"],
+    decision = "allow",
+    justification = "Fast-forward-only pull; never creates merges.",
+    match = [
+        "git pull --ff-only",
+        "git pull --ff-only origin feature-branch",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "push", "origin"],
+    decision = "allow",
+    justification = "Push to origin; branch name follows as argument.",
+    match = ["git push origin feature-branch"],
+)
+
+prefix_rule(
+    pattern = ["gh", "pr", "create"],
+    decision = "allow",
+    justification = "Allow PR creation as fallback when GitHub MCP PR creation fails with permission/auth-access errors.",
+    match = [
+        "gh pr create --base main --head land-the-plan/task/agent-20260210120000 --title \"Title\" --body \"Body\"",
+    ],
+)
+
+# -----------------------
+# Commit (scoped)
+# -----------------------
+
+prefix_rule(
+    pattern = ["git", "commit"],
+    decision = "allow",
+    justification = "Commit changes locally.",
+    match = [
+        "git commit",
+        "git commit path/to/file",
+    ],
+)
+
+# -----------------------
+# Tracking / staging helpers (scoped)
+# -----------------------
+
+prefix_rule(
+    pattern = ["git", "ls-files", "-o", "--exclude-standard"],
+    decision = "allow",
+    justification = "List untracked files excluding standard ignores.",
+    match = ["git ls-files -o --exclude-standard"],
+)
+
+prefix_rule(
+    pattern = ["git", "add"],
+    decision = "allow",
+    justification = "Add all files and stage to git.",
+    match = ["git add -A","git add path/to/file",],
+)
+
+prefix_rule(
+    pattern = ["git", "rm", "--cached"],
+    decision = "allow",
+    justification = "Stop tracking a file without deleting it from disk.",
+    match = ["git rm --cached path/to/file"],
+)
+
+# -----------------------
+# Existing-worktree safety prep
+# -----------------------
+
+prefix_rule(
+    pattern = ["git", "worktree", "prune"],
+    decision = "allow",
+    justification = "Prune stale worktree metadata during Stage 2 safety prep.",
+    match = ["git worktree prune"],
+)
+
+# ----------------------
+# Auto-allow trusted helper scripts (exact path prefix)
+# ----------------------
+
+prefix_rule(
+    pattern = ["/Users/eric/.codex/scripts/git-diff-staged-skip-binary.sh"],
+    decision = "allow",
+    justification = "Trusted helper script to diff staged files while skipping binaries.",
+    match = [
+        "/Users/eric/.codex/scripts/git-diff-staged-skip-binary.sh",
+    ],
+)
+
+prefix_rule(
+    pattern = ["/Users/eric/.codex/scripts/git-commit-preflight.sh"],
+    decision = "allow",
+    justification = "Trusted helper script for git-commit preflight safety checks and fast-forward sync.",
+    match = [
+        "/Users/eric/.codex/scripts/git-commit-preflight.sh",
+    ],
+)
+
+prefix_rule(
+    pattern = ["/Users/eric/.codex/scripts/codex-config-bootstrap-sync.sh"],
+    decision = "allow",
+    justification = "Trusted helper script to apply/revert detached-head worktree bootstrap path overrides in codex-config.yaml.",
+    match = [
+        "/Users/eric/.codex/scripts/codex-config-bootstrap-sync.sh apply",
+        "/Users/eric/.codex/scripts/codex-config-bootstrap-sync.sh revert",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./.codex/scripts/git-commit-preflight.sh"],
+    decision = "allow",
+    justification = "Trusted helper script for git-commit preflight checks (canonical repo path).",
+    match = [
+        "./.codex/scripts/git-commit-preflight.sh",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./.codex/scripts/codex-config-bootstrap-sync.sh"],
+    decision = "allow",
+    justification = "Trusted helper script to apply/revert detached-head worktree bootstrap path overrides in codex-config.yaml (canonical repo path).",
+    match = [
+        "./.codex/scripts/codex-config-bootstrap-sync.sh apply",
+        "./.codex/scripts/codex-config-bootstrap-sync.sh revert",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./codex/scripts/git-commit-preflight.sh"],
+    decision = "allow",
+    justification = "Trusted helper script for git-commit preflight checks (repo-local fallback path).",
+    match = [
+        "./codex/scripts/git-commit-preflight.sh",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./codex/scripts/codex-config-bootstrap-sync.sh"],
+    decision = "allow",
+    justification = "Trusted helper script to apply/revert detached-head worktree bootstrap path overrides in codex-config.yaml (repo-local fallback path).",
+    match = [
+        "./codex/scripts/codex-config-bootstrap-sync.sh apply",
+        "./codex/scripts/codex-config-bootstrap-sync.sh revert",
+    ],
+)
+
+prefix_rule(
+    pattern = ["/Users/eric/.codex/scripts/git-track-safe-untracked.sh"],
+    decision = "allow",
+    justification = "Trusted helper script to apply git-commit track-file policies and stage intent-to-add safely.",
+    match = [
+        "/Users/eric/.codex/scripts/git-track-safe-untracked.sh",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./.codex/scripts/git-track-safe-untracked.sh"],
+    decision = "allow",
+    justification = "Trusted helper script to apply git-commit track-file policies (canonical repo path).",
+    match = [
+        "./.codex/scripts/git-track-safe-untracked.sh",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./codex/scripts/git-track-safe-untracked.sh"],
+    decision = "allow",
+    justification = "Trusted helper script to apply git-commit track-file policies (repo-local fallback path).",
+    match = [
+        "./codex/scripts/git-track-safe-untracked.sh",
+    ],
+)
+
+prefix_rule(
+    pattern = ["/Users/eric/.codex/scripts/git-push-branch-safe.sh"],
+    decision = "allow",
+    justification = "Trusted helper script for validated branch push including detached HEAD mode.",
+    match = [
+        "/Users/eric/.codex/scripts/git-push-branch-safe.sh feature/add-feature-x",
+    ],
+)
+
+prefix_rule(
+    pattern = ["/Users/eric/.codex/scripts/git-land-branch-safe.sh"],
+    decision = "allow",
+    justification = "Trusted helper script to fetch, validate, and create detached-head landing branches safely.",
+    match = [
+        "/Users/eric/.codex/scripts/git-land-branch-safe.sh add-feature-x codex-agent 20260210153045",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./.codex/scripts/git-push-branch-safe.sh"],
+    decision = "allow",
+    justification = "Trusted helper script for validated branch push including detached HEAD mode (canonical repo path).",
+    match = [
+        "./.codex/scripts/git-push-branch-safe.sh feature/add-feature-x",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./.codex/scripts/git-land-branch-safe.sh"],
+    decision = "allow",
+    justification = "Trusted helper script to fetch, validate, and create detached-head landing branches safely (canonical repo path).",
+    match = [
+        "./.codex/scripts/git-land-branch-safe.sh add-feature-x codex-agent 20260210153045",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./codex/scripts/git-push-branch-safe.sh"],
+    decision = "allow",
+    justification = "Trusted helper script for validated branch push including detached HEAD mode (repo-local fallback path).",
+    match = [
+        "./codex/scripts/git-push-branch-safe.sh feature/add-feature-x",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./codex/scripts/git-land-branch-safe.sh"],
+    decision = "allow",
+    justification = "Trusted helper script to fetch, validate, and create detached-head landing branches safely (repo-local fallback path).",
+    match = [
+        "./codex/scripts/git-land-branch-safe.sh add-feature-x codex-agent 20260210153045",
+    ],
+)
+
+prefix_rule(
+    pattern = ["/Users/eric/.codex/scripts/task-manifest-land-update.sh"],
+    decision = "allow",
+    justification = "Trusted helper script to stamp task-manifest metadata during landing and safely commit/push that update.",
+    match = [
+        "/Users/eric/.codex/scripts/task-manifest-land-update.sh add-feature-x",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./.codex/scripts/task-manifest-land-update.sh"],
+    decision = "allow",
+    justification = "Trusted helper script to stamp task-manifest metadata during landing and safely commit/push that update (canonical repo path).",
+    match = [
+        "./.codex/scripts/task-manifest-land-update.sh add-feature-x",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./codex/scripts/task-manifest-land-update.sh"],
+    decision = "allow",
+    justification = "Trusted helper script to stamp task-manifest metadata during landing and safely commit/push that update (repo-local fallback path).",
+    match = [
+        "./codex/scripts/task-manifest-land-update.sh add-feature-x",
+    ],
+)
+
+prefix_rule(
+    pattern = ["/Users/eric/.codex/scripts/prepare-takeoff-worktree.sh"],
+    decision = "allow",
+    justification = "Trusted helper script for Stage 2 existing-worktree safety prep.",
+    match = [
+        "/Users/eric/.codex/scripts/prepare-takeoff-worktree.sh add-feature-x",
+        "/Users/eric/.codex/scripts/prepare-takeoff-worktree.sh add-feature-x codex/add-feature-x",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./.codex/scripts/prepare-takeoff-worktree.sh"],
+    decision = "allow",
+    justification = "Trusted helper script for Stage 2 existing-worktree safety prep (canonical repo path).",
+    match = [
+        "./.codex/scripts/prepare-takeoff-worktree.sh add-feature-x",
+        "./.codex/scripts/prepare-takeoff-worktree.sh add-feature-x codex/add-feature-x",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./codex/scripts/prepare-takeoff-worktree.sh"],
+    decision = "allow",
+    justification = "Trusted helper script for Stage 2 existing-worktree safety prep (repo-local fallback path).",
+    match = [
+        "./codex/scripts/prepare-takeoff-worktree.sh add-feature-x",
+        "./codex/scripts/prepare-takeoff-worktree.sh add-feature-x codex/add-feature-x",
+    ],
+)

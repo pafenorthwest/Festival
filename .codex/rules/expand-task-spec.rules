@@ -1,0 +1,445 @@
+# expand-task-spec.rules
+# Auto-allow a narrow set of commands used by the expand-task-spec skill.
+
+# -------------------------
+# Task scaffolding script
+# -------------------------
+
+prefix_rule(
+    pattern=["/Users/eric/.codex/scripts/task-scaffold.sh"],
+    decision="allow",
+    justification="Scaffold /tasks/<task-name>/ and validate required files.",
+    match=[
+        "/Users/eric/.codex/scripts/task-scaffold.sh add-feature-x",
+    ],
+)
+
+prefix_rule(
+    pattern=["./.codex/scripts/task-scaffold.sh"],
+    decision="allow",
+    justification="Scaffold /tasks/<task-name>/ and validate required files (canonical repo path).",
+    match=[
+        "./.codex/scripts/task-scaffold.sh add-feature-x",
+    ],
+)
+
+prefix_rule(
+    pattern=["./codex/scripts/task-scaffold.sh"],
+    decision="allow",
+    justification="Scaffold /tasks/<task-name>/ and validate required files (repo-local fallback path).",
+    match=[
+        "./codex/scripts/task-scaffold.sh add-feature-x",
+    ],
+)
+
+# -------------------------
+# Project initialization script
+# -------------------------
+
+prefix_rule(
+    pattern=["/Users/eric/.codex/scripts/project-init.sh"],
+    decision="allow",
+    justification="Bootstrap a new cloned repository with codex assets and open a setup PR.",
+    match=[
+        "/Users/eric/.codex/scripts/project-init.sh",
+        "/Users/eric/.codex/scripts/project-init.sh basic-python",
+    ],
+)
+
+prefix_rule(
+    pattern=["./.codex/scripts/project-init.sh"],
+    decision="allow",
+    justification="Bootstrap a new cloned repository with codex assets and open a setup PR (canonical repo path).",
+    match=[
+        "./.codex/scripts/project-init.sh",
+        "./.codex/scripts/project-init.sh basic-python",
+    ],
+)
+
+prefix_rule(
+    pattern=["./codex/scripts/project-init.sh"],
+    decision="allow",
+    justification="Bootstrap a new cloned repository with codex assets and open a setup PR (repo-local fallback path).",
+    match=[
+        "./codex/scripts/project-init.sh",
+        "./codex/scripts/project-init.sh basic-python",
+    ],
+)
+
+# -------------------------
+# Prepare-takeoff bootstrap script
+# -------------------------
+
+prefix_rule(
+    pattern=["/Users/eric/.codex/scripts/prepare-takeoff-bootstrap.sh"],
+    decision="allow",
+    justification="Bootstrap codex root selection and codex-commands manifest deterministically.",
+    match=[
+        "/Users/eric/.codex/scripts/prepare-takeoff-bootstrap.sh",
+    ],
+)
+
+prefix_rule(
+    pattern=["./.codex/scripts/prepare-takeoff-bootstrap.sh"],
+    decision="allow",
+    justification="Bootstrap codex root selection and codex-commands manifest deterministically (canonical repo path).",
+    match=[
+        "./.codex/scripts/prepare-takeoff-bootstrap.sh",
+    ],
+)
+
+prefix_rule(
+    pattern=["./codex/scripts/prepare-takeoff-bootstrap.sh"],
+    decision="allow",
+    justification="Bootstrap codex root selection and codex-commands manifest deterministically (repo-local fallback path).",
+    match=[
+        "./codex/scripts/prepare-takeoff-bootstrap.sh",
+    ],
+)
+
+# -------------------------
+# Prepare-phased-impl scripts
+# -------------------------
+
+prefix_rule(
+    pattern=["/Users/eric/.codex/scripts/complexity-score.sh"],
+    decision="allow",
+    justification="Compute deterministic complexity level and recommended goals/phases from scored JSON signals.",
+    match=[
+        "/Users/eric/.codex/scripts/complexity-score.sh ./tasks/add-feature-x/complexity-signals.json --format json",
+    ],
+)
+
+prefix_rule(
+    pattern=["./.codex/scripts/complexity-score.sh"],
+    decision="allow",
+    justification="Compute deterministic complexity level and recommended goals/phases from scored JSON signals (canonical repo path).",
+    match=[
+        "./.codex/scripts/complexity-score.sh ./tasks/add-feature-x/complexity-signals.json --format json",
+    ],
+)
+
+prefix_rule(
+    pattern=["./codex/scripts/complexity-score.sh"],
+    decision="allow",
+    justification="Compute deterministic complexity level and recommended goals/phases from scored JSON signals (repo-local fallback path).",
+    match=[
+        "./codex/scripts/complexity-score.sh ./tasks/add-feature-x/complexity-signals.json --format json",
+    ],
+)
+
+prefix_rule(
+    pattern=["/Users/eric/.codex/scripts/prepare-phased-impl-archive.sh"],
+    decision="allow",
+    justification="Archive previous Stage 3 planning artifacts using short-hash archive GUIDs before restart.",
+    match=[
+        "/Users/eric/.codex/scripts/prepare-phased-impl-archive.sh add-feature-x",
+    ],
+)
+
+prefix_rule(
+    pattern=["./.codex/scripts/prepare-phased-impl-archive.sh"],
+    decision="allow",
+    justification="Archive previous Stage 3 planning artifacts using short-hash archive GUIDs before restart (canonical repo path).",
+    match=[
+        "./.codex/scripts/prepare-phased-impl-archive.sh add-feature-x",
+    ],
+)
+
+prefix_rule(
+    pattern=["./codex/scripts/prepare-phased-impl-archive.sh"],
+    decision="allow",
+    justification="Archive previous Stage 3 planning artifacts using short-hash archive GUIDs before restart (repo-local fallback path).",
+    match=[
+        "./codex/scripts/prepare-phased-impl-archive.sh add-feature-x",
+    ],
+)
+
+prefix_rule(
+    pattern=["/Users/eric/.codex/scripts/prepare-phased-impl-scaffold.sh"],
+    decision="allow",
+    justification="Create/normalize dynamic phase planning files for Stage 3.",
+    match=[
+        "/Users/eric/.codex/scripts/prepare-phased-impl-scaffold.sh add-feature-x medium",
+    ],
+)
+
+prefix_rule(
+    pattern=["./.codex/scripts/prepare-phased-impl-scaffold.sh"],
+    decision="allow",
+    justification="Create/normalize dynamic phase planning files for Stage 3 (canonical repo path).",
+    match=[
+        "./.codex/scripts/prepare-phased-impl-scaffold.sh add-feature-x medium",
+    ],
+)
+
+prefix_rule(
+    pattern=["./codex/scripts/prepare-phased-impl-scaffold.sh"],
+    decision="allow",
+    justification="Create/normalize dynamic phase planning files for Stage 3 (repo-local fallback path).",
+    match=[
+        "./codex/scripts/prepare-phased-impl-scaffold.sh add-feature-x medium",
+    ],
+)
+
+prefix_rule(
+    pattern=["/Users/eric/.codex/scripts/prepare-phased-impl-scope-lock.sh"],
+    decision="allow",
+    justification="Lock IN SCOPE / OUT OF SCOPE snapshot to enforce no-new-scope rule in Stage 3.",
+    match=[
+        "/Users/eric/.codex/scripts/prepare-phased-impl-scope-lock.sh add-feature-x",
+    ],
+)
+
+prefix_rule(
+    pattern=["./.codex/scripts/prepare-phased-impl-scope-lock.sh"],
+    decision="allow",
+    justification="Lock IN SCOPE / OUT OF SCOPE snapshot to enforce no-new-scope rule in Stage 3 (canonical repo path).",
+    match=[
+        "./.codex/scripts/prepare-phased-impl-scope-lock.sh add-feature-x",
+    ],
+)
+
+prefix_rule(
+    pattern=["./codex/scripts/prepare-phased-impl-scope-lock.sh"],
+    decision="allow",
+    justification="Lock IN SCOPE / OUT OF SCOPE snapshot to enforce no-new-scope rule in Stage 3 (repo-local fallback path).",
+    match=[
+        "./codex/scripts/prepare-phased-impl-scope-lock.sh add-feature-x",
+    ],
+)
+
+prefix_rule(
+    pattern=["/Users/eric/.codex/scripts/prepare-phased-impl-validate.sh"],
+    decision="allow",
+    justification="Validate Stage 3 gates and emit READY FOR IMPLEMENTATION or BLOCKED.",
+    match=[
+        "/Users/eric/.codex/scripts/prepare-phased-impl-validate.sh add-feature-x",
+    ],
+)
+
+prefix_rule(
+    pattern=["./.codex/scripts/prepare-phased-impl-validate.sh"],
+    decision="allow",
+    justification="Validate Stage 3 gates and emit READY FOR IMPLEMENTATION or BLOCKED (canonical repo path).",
+    match=[
+        "./.codex/scripts/prepare-phased-impl-validate.sh add-feature-x",
+    ],
+)
+
+prefix_rule(
+    pattern=["./codex/scripts/prepare-phased-impl-validate.sh"],
+    decision="allow",
+    justification="Validate Stage 3 gates and emit READY FOR IMPLEMENTATION or BLOCKED (repo-local fallback path).",
+    match=[
+        "./codex/scripts/prepare-phased-impl-validate.sh add-feature-x",
+    ],
+)
+
+# -------------------------
+# Implement validation script
+# -------------------------
+
+prefix_rule(
+    pattern=["/Users/eric/.codex/scripts/implement-validate.sh"],
+    decision="allow",
+    justification="Validate Stage 4 gates and emit READY TO LAND or BLOCKED.",
+    match=[
+        "/Users/eric/.codex/scripts/implement-validate.sh add-feature-x",
+    ],
+)
+
+prefix_rule(
+    pattern=["./.codex/scripts/implement-validate.sh"],
+    decision="allow",
+    justification="Validate Stage 4 gates and emit READY TO LAND or BLOCKED (canonical repo path).",
+    match=[
+        "./.codex/scripts/implement-validate.sh add-feature-x",
+    ],
+)
+
+prefix_rule(
+    pattern=["./codex/scripts/implement-validate.sh"],
+    decision="allow",
+    justification="Validate Stage 4 gates and emit READY TO LAND or BLOCKED (repo-local fallback path).",
+    match=[
+        "./codex/scripts/implement-validate.sh add-feature-x",
+    ],
+)
+
+# -------------------------
+# Revalidate code review script
+# -------------------------
+
+prefix_rule(
+    pattern=["/Users/eric/.codex/scripts/revalidate-code-review.sh"],
+    decision="allow",
+    justification="Scaffold/validate Stage 5 code review findings and verdict output.",
+    match=[
+        "/Users/eric/.codex/scripts/revalidate-code-review.sh add-feature-x",
+        "/Users/eric/.codex/scripts/revalidate-code-review.sh add-feature-x main",
+    ],
+)
+
+prefix_rule(
+    pattern=["./.codex/scripts/revalidate-code-review.sh"],
+    decision="allow",
+    justification="Scaffold/validate Stage 5 code review findings and verdict output (canonical repo path).",
+    match=[
+        "./.codex/scripts/revalidate-code-review.sh add-feature-x",
+        "./.codex/scripts/revalidate-code-review.sh add-feature-x main",
+    ],
+)
+
+prefix_rule(
+    pattern=["./codex/scripts/revalidate-code-review.sh"],
+    decision="allow",
+    justification="Scaffold/validate Stage 5 code review findings and verdict output (repo-local fallback path).",
+    match=[
+        "./codex/scripts/revalidate-code-review.sh add-feature-x",
+        "./codex/scripts/revalidate-code-review.sh add-feature-x main",
+    ],
+)
+
+# -------------------------
+# Node / TypeScript (npm/bun)
+# -------------------------
+
+prefix_rule(
+    pattern=["bun", "run", "lint"],
+    decision="allow",
+    justification="Run repository lint script (bun).",
+    match=["bun run lint"],
+)
+
+prefix_rule(
+    pattern=["npm", "run", "lint"],
+    decision="allow",
+    justification="Run repository lint script (npm).",
+    match=["npm run lint"],
+)
+
+prefix_rule(
+    pattern=["bun", "run", "check"],
+    decision="allow",
+    justification="Run repository check script (bun).",
+    match=["bun run check"],
+)
+
+prefix_rule(
+    pattern=["npm", "run", "check"],
+    decision="allow",
+    justification="Run repository check script (npm).",
+    match=["npm run check"],
+)
+
+prefix_rule(
+    pattern=["bun", "run", "format"],
+    decision="allow",
+    justification="Run prettier format fix (bun).",
+    match=["bun run format"],
+)
+
+prefix_rule(
+    pattern=["npm", "run", "format"],
+    decision="allow",
+    justification="Run prettier format fix (npm).",
+    match=["npm run format"],
+)
+
+prefix_rule(
+    pattern=["bun", "run", "build"],
+    decision="allow",
+    justification="Run repository build script (bun).",
+    match=["bun run build"],
+)
+
+prefix_rule(
+    pattern=["npm", "run", "build"],
+    decision="allow",
+    justification="Run repository build script (npm).",
+    match=["npm run build"],
+)
+
+prefix_rule(
+    pattern=["bun", "run", "dev"],
+    decision="allow",
+    justification="Run service locally (bun).",
+    match=["bun run dev"],
+)
+
+prefix_rule(
+    pattern=["npm", "run", "dev"],
+    decision="allow",
+    justification="Run service locally (npm).",
+    match=["npm run dev"],
+)
+
+prefix_rule(
+    pattern=["bun", "run", "test"],
+    decision="allow",
+    justification="Run repository test script (bun).",
+    match=["bun run test"],
+)
+
+# npm test is a distinct argv shape from npm run test
+prefix_rule(
+    pattern=["npm", "test"],
+    decision="allow",
+    justification="Run repository tests via npm test.",
+    match=["npm test"],
+)
+
+prefix_rule(
+    pattern=["npm", "run", "test"],
+    decision="allow",
+    justification="Run repository test script (npm).",
+    match=["npm run test"],
+)
+
+# Optional: ONLY if you intend to run vitest directly (outside npm/bun scripts)
+prefix_rule(
+    pattern=["vitest", "run"],
+    decision="allow",
+    justification="Run vitest directly (non-interactive).",
+    match=["vitest run"],
+)
+
+# -------------------------
+# Python / uv
+# -------------------------
+
+prefix_rule(
+    pattern=["uv", "sync"],
+    decision="allow",
+    justification="Sync Python dependencies via uv.",
+    match=["uv sync"],
+)
+
+prefix_rule(
+    pattern=["uv", "run", "ruff", "check", "."],
+    decision="allow",
+    justification="Run ruff lint via uv.",
+    match=["uv run ruff check ."],
+)
+
+prefix_rule(
+    pattern=["uv", "run", "ruff", "format", "."],
+    decision="allow",
+    justification="Run ruff formatter via uv.",
+    match=["uv run ruff format ."],
+)
+
+prefix_rule(
+    pattern=["uv", "run", "black", "."],
+    decision="allow",
+    justification="Run black formatter via uv.",
+    match=["uv run black ."],
+)
+
+prefix_rule(
+    pattern=["uv", "run", "pytest", "-q"],
+    decision="allow",
+    justification="Run pytest quietly via uv.",
+    match=["uv run pytest -q"],
+)

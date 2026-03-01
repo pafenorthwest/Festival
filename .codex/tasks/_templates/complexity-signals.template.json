@@ -1,0 +1,24 @@
+{
+  "scope": 0,
+  "behavior": 0,
+  "dependency": 0,
+  "uncertainty": 0,
+  "verification": 0,
+  "evidence": {
+    "scope": "files=3 surface=tasks+scripts bounded to one subsystem",
+    "behavior": "one workflow updated; no broad behavior contract changes",
+    "dependency": "interfaces=none",
+    "uncertainty": "known pattern with small migration risk",
+    "verification": "checks=lint,build,test",
+    "guardrails": "no schema/api contract change; no new deps; localized surface; reversible with straightforward verification (informational; score bands still determine level)"
+  },
+  "guardrails": {
+    "no_schema_or_api_contract_change": true,
+    "no_new_external_dependencies": true,
+    "localized_surface": true,
+    "reversible_with_straightforward_verification": true
+  },
+  "overrides": {
+    "reason": ""
+  }
+}
