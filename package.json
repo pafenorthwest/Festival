@@ -1,0 +1,11 @@
+{
+  "name": "festival",
+  "private": true,
+  "version": "0.0.0",
+  "packageManager": "bun@1.2.23",
+  "scripts": {
+    "lint": "echo \"lint: no targets\"",
+    "build": "echo \"build: no targets\"",
+    "test": "echo \"test: no targets\""
+  }
+}
