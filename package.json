@@ -1,11 +1,27 @@
 {
   "name": "festival",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "type": "module",
   "packageManager": "bun@1.2.23",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
-    "lint": "echo \"lint: no targets\"",
-    "build": "echo \"build: no targets\"",
-    "test": "echo \"test: no targets\""
+    "lint": "bun run lint:common && bun run lint:backend && bun run lint:frontend",
+    "lint:common": "bun run --cwd packages/common lint",
+    "lint:backend": "bun run --cwd packages/backend lint",
+    "lint:frontend": "bun run --cwd packages/frontend lint",
+    "build": "bun run build:common && bun run build:backend && bun run build:frontend",
+    "build:common": "bun run --cwd packages/common build",
+    "build:backend": "bun run --cwd packages/backend build",
+    "build:frontend": "bun run --cwd packages/frontend build",
+    "test": "bun run build:common && bun run test:common && bun run test:backend && bun run test:frontend",
+    "test:common": "bun run --cwd packages/common test",
+    "test:backend": "bun run --cwd packages/backend test",
+    "test:frontend": "bun run --cwd packages/frontend test"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2"
   }
 }
