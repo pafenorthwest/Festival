@@ -1,0 +1,23 @@
+{
+  "selected_signals_path": "/Users/eric/pafenorthwest/Festival/tasks/build-shopify-festival-app/complexity-signals.json",
+  "selected_signals_sha256": "037d31191e8bea81fb16093732a5c529171968cb7a1a26d29942f96ce7ad95c9",
+  "score_script_path": "/Users/eric/pafenorthwest/Festival/.codex/scripts/complexity-score.sh",
+  "score_script_sha256": "45a062dd25a8938ad1fba76e1be65815c40d7d722a20ff07c22c74ed0e479699",
+  "ranges": {
+    "goals": {
+      "min": 3,
+      "max": 5
+    },
+    "phases": {
+      "min": 2,
+      "max": 4
+    }
+  },
+  "recommended": {
+    "goals": 4,
+    "phases": 3
+  },
+  "complexity_input": "@tasks/build-shopify-festival-app/complexity-signals.json",
+  "complexity_descriptor": "scored:L2 (focused)",
+  "captured_at": "2026-03-01T20:38:39Z"
+}
