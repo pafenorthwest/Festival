@@ -23,5 +23,13 @@
   },
   "devDependencies": {
     "typescript": "^5.9.2"
-  }
+  },
+  "dependencies": {
+    "firebase": "^12.10.0"
+  },
+  "trustedDependencies": [
+    "@firebase/util",
+    "esbuild",
+    "protobufjs"
+  ]
 }
