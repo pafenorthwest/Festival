@@ -1,76 +1,89 @@
-import { Router } from "express";
-import type { CheckoutRequest, PayerProfileInput, RefundRequest, StudentMetadata } from "@festival/common";
+import type {
+	CheckoutRequest,
+	PayerProfileInput,
+	RefundRequest,
+	StudentMetadata,
+} from "@festival/common";
 import { FESTIVAL_CLASS_CATALOG } from "@festival/common";
+import { Hono } from "hono";
 import type { RegistrationService } from "../services/registration-service.js";
 
-export function buildApiRouter(registrationService: RegistrationService): Router {
-  const router = Router();
+export function buildApiRouter(registrationService: RegistrationService): Hono {
+	const router = new Hono();
 
-  router.get("/classes", (_request, response) => {
-    response.json({ classes: FESTIVAL_CLASS_CATALOG });
-  });
+	router.get("/classes", (c) => {
+		return c.json({ classes: FESTIVAL_CLASS_CATALOG });
+	});
 
-  router.post("/payers", async (request, response) => {
-    try {
-      const payload = request.body as PayerProfileInput;
-      const payer = await registrationService.createPayer(payload);
-      response.status(201).json({ payer });
-    } catch (error) {
-      response.status(400).json({ error: (error as Error).message });
-    }
-  });
+	router.post("/payers", async (c) => {
+		try {
+			const payload = (await c.req.json()) as PayerProfileInput;
+			const payer = await registrationService.createPayer(payload);
+			return c.json({ payer }, 201);
+		} catch (error) {
+			return c.json({ error: (error as Error).message }, 400);
+		}
+	});
 
-  router.post("/cart/validate", (request, response) => {
-    try {
-      const payload = request.body as Pick<CheckoutRequest, "selection" | "eligibility">;
-      const validation = registrationService.validateSelection(payload.selection, payload.eligibility);
-      response.json({ validation });
-    } catch (error) {
-      response.status(400).json({ error: (error as Error).message });
-    }
-  });
+	router.post("/cart/validate", async (c) => {
+		try {
+			const payload = (await c.req.json()) as Pick<
+				CheckoutRequest,
+				"selection" | "eligibility"
+			>;
 
-  router.post("/passes", async (request, response) => {
-    try {
-      const payload = request.body as {
-        payerId: string;
-        studentId: string;
-        classId: string;
-        metadata: StudentMetadata;
-      };
+			const validation = registrationService.validateSelection(
+				payload.selection,
+				payload.eligibility,
+			);
 
-      const pass = await registrationService.createDigitalPass(
-        payload.payerId,
-        payload.studentId,
-        payload.classId,
-        payload.metadata
-      );
+			return c.json({ validation });
+		} catch (error) {
+			return c.json({ error: (error as Error).message }, 400);
+		}
+	});
 
-      response.status(201).json({ pass });
-    } catch (error) {
-      response.status(400).json({ error: (error as Error).message });
-    }
-  });
+	router.post("/passes", async (c) => {
+		try {
+			const payload = (await c.req.json()) as {
+				payerId: string;
+				studentId: string;
+				classId: string;
+				metadata: StudentMetadata;
+			};
 
-  router.post("/checkout", async (request, response) => {
-    try {
-      const payload = request.body as CheckoutRequest;
-      const checkout = await registrationService.createCheckout(payload);
-      response.status(201).json({ checkout });
-    } catch (error) {
-      response.status(400).json({ error: (error as Error).message });
-    }
-  });
+			const pass = await registrationService.createDigitalPass(
+				payload.payerId,
+				payload.studentId,
+				payload.classId,
+				payload.metadata,
+			);
 
-  router.post("/refunds", async (request, response) => {
-    try {
-      const payload = request.body as RefundRequest;
-      const refund = await registrationService.processDropRefund(payload);
-      response.status(201).json({ refund });
-    } catch (error) {
-      response.status(400).json({ error: (error as Error).message });
-    }
-  });
+			return c.json({ pass }, 201);
+		} catch (error) {
+			return c.json({ error: (error as Error).message }, 400);
+		}
+	});
 
-  return router;
+	router.post("/checkout", async (c) => {
+		try {
+			const payload = (await c.req.json()) as CheckoutRequest;
+			const checkout = await registrationService.createCheckout(payload);
+			return c.json({ checkout }, 201);
+		} catch (error) {
+			return c.json({ error: (error as Error).message }, 400);
+		}
+	});
+
+	router.post("/refunds", async (c) => {
+		try {
+			const payload = (await c.req.json()) as RefundRequest;
+			const refund = await registrationService.processDropRefund(payload);
+			return c.json({ refund }, 201);
+		} catch (error) {
+			return c.json({ error: (error as Error).message }, 400);
+		}
+	});
+
+	return router;
 }

@@ -4,7 +4,7 @@ Monorepo for a festival registration app with Shopify/Stripe orchestration.
 
 ## Workspaces
 - `packages/common`: shared domain models and business rules.
-- `packages/backend`: Express TypeScript API server.
+- `packages/backend`: Hono Backend with TypeScript API server.
 - `packages/frontend`: SolidJS browser app.
 
 ## Commands
