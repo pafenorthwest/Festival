@@ -22,6 +22,17 @@
     "test:frontend": "bun run --cwd packages/frontend test"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.4.9",
+    "@types/bun": "^1.3.11",
     "typescript": "^5.9.2"
-  }
+  },
+  "dependencies": {
+    "firebase": "^12.10.0",
+    "hono": "^4.12.9"
+  },
+  "trustedDependencies": [
+    "@firebase/util",
+    "esbuild",
+    "protobufjs"
+  ]
 }

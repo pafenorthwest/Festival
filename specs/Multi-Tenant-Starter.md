@@ -39,7 +39,7 @@ Create four pages
     - This user takes the role set by the admin when the invite was created
 - A organization landing page
   - the URL is the `base name` + `orgainzation name`
-  - header nave with Organization name (on-press navigate to organization landing page) in left , and log-out in right
+  - header nav with Organization name (on-press navigate to organization landing page) in left , and log-out in right
   - a simple message showing `Welcome to $organization you are $role role`
 
   ## Organization
