@@ -1,0 +1,24 @@
+{
+  "scope": 2,
+  "behavior": 2,
+  "dependency": 2,
+  "uncertainty": 2,
+  "verification": 4,
+  "evidence": {
+    "scope": "files=25 surface=frontend+backend+common+task-artifacts bounded to one organization-onboarding subsystem",
+    "behavior": "one bounded workflow set: auth entry, organization creation, invite acceptance, and organization landing",
+    "dependency": "interfaces=firebase-auth, hono-http, postgres-persistence, solidjs-ui",
+    "uncertainty": "known implementation pattern with moderate integration risk across auth, persistence, and invite routing",
+    "verification": "checks=lint,build,test with unit, integration, and frontend flow coverage",
+    "guardrails": "schema and API changes are required; dependencies may expand; feature work remains repo-local and reversible through explicit verification"
+  },
+  "guardrails": {
+    "no_schema_or_api_contract_change": false,
+    "no_new_external_dependencies": false,
+    "localized_surface": false,
+    "reversible_with_straightforward_verification": true
+  },
+  "overrides": {
+    "reason": ""
+  }
+}

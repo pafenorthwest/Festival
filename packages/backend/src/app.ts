@@ -1,42 +1,52 @@
 import { Hono } from "hono";
-import { ShopifyAdminClient } from "./clients/shopify-admin-client.js";
-import { ShopifyStorefrontClient } from "./clients/shopify-storefront-client.js";
-import { StripeClient } from "./clients/stripe-client.js";
 import { loadEnv } from "./config/env.js";
-import { InMemoryRepository } from "./repo/in-memory-repository.js";
+import { createFirebaseAuthVerifier } from "./auth/firebase-auth-verifier.js";
+import type { AuthVerifier } from "./auth/types.js";
+import type { AppEnv } from "./config/env.js";
+import { PostgresOrganizationRepository } from "./repo/postgres-organization-repository.js";
+import type { OrganizationRepository } from "./repo/organization-repository.js";
 import { buildApiRouter } from "./routes/api-router.js";
-import { RegistrationService } from "./services/registration-service.js";
+import { OrganizationService } from "./services/organization-service.js";
 
-export function createApp() {
-	const env = loadEnv();
+export interface CreateAppOptions {
+	env?: AppEnv;
+	repository?: OrganizationRepository;
+	authVerifier?: AuthVerifier;
+}
 
-	const repository = new InMemoryRepository();
-	const shopifyAdminClient = new ShopifyAdminClient({
-		shopDomain: env.shopifyStoreDomain,
-		accessToken: env.shopifyAdminAccessToken,
-	});
-	const shopifyStorefrontClient = new ShopifyStorefrontClient({
-		shopDomain: env.shopifyStoreDomain,
-		storefrontAccessToken: env.shopifyStorefrontToken,
-	});
-	const stripeClient = new StripeClient({ secretKey: env.stripeSecretKey });
+export async function createApp(options: CreateAppOptions = {}) {
+	const env =
+		options.env ??
+		loadEnv({
+			requireDatabase: !options.repository,
+			requireFirebaseAdmin: !options.authVerifier,
+		});
 
-	const registrationService = new RegistrationService(
-		repository,
-		shopifyAdminClient,
-		shopifyStorefrontClient,
-		stripeClient,
-	);
+	if (env.databaseUrl) {
+		process.env.DATABASE_URL = env.databaseUrl;
+	}
+
+	const repository =
+		options.repository ??
+		new PostgresOrganizationRepository(
+			env.databaseSchema ?? (() => {
+				throw new Error("DB_SCHEMA is required for the runtime repository.");
+			})(),
+		);
+	await repository.ensureReady();
+
+	const authVerifier =
+		options.authVerifier ??
+		createFirebaseAuthVerifier(env as Required<Pick<AppEnv, "firebaseProjectId">> & AppEnv);
+	const organizationService = new OrganizationService(repository);
 
 	const app = new Hono();
 
-	// GET /health
 	app.get("/health", (c) => {
 		return c.json({ status: "ok" });
 	});
 
-	// Mount /api router
-	app.route("/api", buildApiRouter(registrationService));
+	app.route("/api", buildApiRouter(organizationService, authVerifier));
 
 	return { app, env };
 }

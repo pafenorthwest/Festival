@@ -1,12 +1,45 @@
 export interface AppEnv {
 	port: number;
-	shopifyStoreDomain?: string;
-	shopifyAdminAccessToken?: string;
-	shopifyStorefrontToken?: string;
-	stripeSecretKey?: string;
+	databaseUrl?: string;
+	databaseSchema?: string;
+	firebaseProjectId?: string;
+	firebaseClientEmail?: string;
+	firebasePrivateKey?: string;
 }
 
-export function loadEnv(): AppEnv {
+function parseRequiredEnv(name: string): string {
+	const value = process.env[name]?.trim();
+	if (!value) {
+		throw new Error(`Missing required environment variable: ${name}`);
+	}
+
+	return value;
+}
+
+function parseDatabaseSsl(value: string | undefined): string {
+	const normalized = value?.trim().toLowerCase();
+	if (!normalized || normalized === "false" || normalized === "0") {
+		return "disable";
+	}
+
+	return "require";
+}
+
+export function buildDatabaseUrl(): string {
+	const user = encodeURIComponent(parseRequiredEnv("DB_USER"));
+	const password = encodeURIComponent(parseRequiredEnv("DB_PASSWORD"));
+	const host = parseRequiredEnv("DB_HOST");
+	const port = parseRequiredEnv("DB_PORT");
+	const database = encodeURIComponent(parseRequiredEnv("DATABASE"));
+	const sslmode = parseDatabaseSsl(process.env.DB_SSL);
+
+	return `postgresql://${user}:${password}@${host}:${port}/${database}?sslmode=${sslmode}`;
+}
+
+export function loadEnv(options?: {
+	requireDatabase?: boolean;
+	requireFirebaseAdmin?: boolean;
+}): AppEnv {
 	const portRaw = process.env.PORT ?? "3000";
 	const port = Number.parseInt(portRaw, 10);
 
@@ -14,11 +47,22 @@ export function loadEnv(): AppEnv {
 		throw new Error(`Invalid PORT value: ${portRaw}`);
 	}
 
+	const requireDatabase = options?.requireDatabase ?? true;
+	const requireFirebaseAdmin = options?.requireFirebaseAdmin ?? true;
+	const databaseUrl = requireDatabase ? buildDatabaseUrl() : undefined;
+	const databaseSchema = requireDatabase
+		? parseRequiredEnv("DB_SCHEMA")
+		: process.env.DB_SCHEMA?.trim();
+	const firebaseProjectId = requireFirebaseAdmin
+		? parseRequiredEnv("FIREBASE_PROJECT_ID")
+		: process.env.FIREBASE_PROJECT_ID?.trim();
+
 	return {
 		port,
-		shopifyStoreDomain: process.env.SHOPIFY_STORE_DOMAIN,
-		shopifyAdminAccessToken: process.env.SHOPIFY_ADMIN_ACCESS_TOKEN,
-		shopifyStorefrontToken: process.env.SHOPIFY_STOREFRONT_ACCESS_TOKEN,
-		stripeSecretKey: process.env.STRIPE_SECRET_KEY,
+		databaseUrl,
+		databaseSchema,
+		firebaseProjectId,
+		firebaseClientEmail: process.env.FIREBASE_CLIENT_EMAIL?.trim(),
+		firebasePrivateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
 	};
 }

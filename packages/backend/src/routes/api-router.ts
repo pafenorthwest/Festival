@@ -1,89 +1,151 @@
 import type {
-	CheckoutRequest,
-	PayerProfileInput,
-	RefundRequest,
-	StudentMetadata,
+	AcceptInviteInput,
+	CreateInviteInput,
+	CreateOrganizationInput,
+	AuthenticatedUser,
 } from "@festival/common";
-import { FESTIVAL_CLASS_CATALOG } from "@festival/common";
 import { Hono } from "hono";
-import type { RegistrationService } from "../services/registration-service.js";
+import type { Context, MiddlewareHandler } from "hono";
+import { AppError } from "../errors/app-error.js";
+import type { OrganizationService } from "../services/organization-service.js";
+import type { AuthVerifier } from "../auth/types.js";
 
-export function buildApiRouter(registrationService: RegistrationService): Hono {
-	const router = new Hono();
+type AppVariables = {
+	identity: AuthenticatedUser;
+};
 
-	router.get("/classes", (c) => {
-		return c.json({ classes: FESTIVAL_CLASS_CATALOG });
-	});
+function jsonError(c: Context, error: unknown) {
+	if (error instanceof AppError) {
+		c.status(error.status as 400 | 401 | 403 | 404 | 409 | 500);
+		return c.json({ error: error.message });
+	}
 
-	router.post("/payers", async (c) => {
+	c.status(500);
+	return c.json({ error: (error as Error).message });
+}
+
+async function readIdentity(
+	c: Context<{ Variables: AppVariables }>,
+	authVerifier: AuthVerifier,
+): Promise<AuthenticatedUser | null> {
+	const header = c.req.header("Authorization");
+	if (!header) {
+		return null;
+	}
+
+	const [scheme, token] = header.split(" ");
+	if (scheme !== "Bearer" || !token) {
+		throw new AppError("Authorization header must use Bearer token format.", 401);
+	}
+
+	return authVerifier.verify(token);
+}
+
+function requireAuth(
+	authVerifier: AuthVerifier,
+): MiddlewareHandler<{ Variables: AppVariables }> {
+		return async (c, next) => {
+			const identity = await readIdentity(c, authVerifier);
+			if (!identity) {
+				c.status(401);
+				return c.json({ error: "Authentication required." });
+			}
+
+		c.set("identity", identity);
+		await next();
+	};
+}
+
+export function buildApiRouter(
+	organizationService: OrganizationService,
+	authVerifier: AuthVerifier,
+): Hono<{ Variables: AppVariables }> {
+	const router = new Hono<{ Variables: AppVariables }>();
+
+	router.get("/session", async (c) => {
 		try {
-			const payload = (await c.req.json()) as PayerProfileInput;
-			const payer = await registrationService.createPayer(payload);
-			return c.json({ payer }, 201);
+			const identity = await readIdentity(c, authVerifier);
+			return c.json(await organizationService.getSession(identity ?? undefined));
 		} catch (error) {
-			return c.json({ error: (error as Error).message }, 400);
+			return jsonError(c, error);
 		}
 	});
 
-	router.post("/cart/validate", async (c) => {
+	router.post("/organizations", requireAuth(authVerifier), async (c) => {
 		try {
-			const payload = (await c.req.json()) as Pick<
-				CheckoutRequest,
-				"selection" | "eligibility"
-			>;
-
-			const validation = registrationService.validateSelection(
-				payload.selection,
-				payload.eligibility,
+			const payload = (await c.req.json()) as CreateOrganizationInput;
+			c.status(201);
+			return c.json(
+				await organizationService.createOrganization(c.var.identity, payload),
 			);
-
-			return c.json({ validation });
 		} catch (error) {
-			return c.json({ error: (error as Error).message }, 400);
+			return jsonError(c, error);
 		}
 	});
 
-	router.post("/passes", async (c) => {
+	router.post("/invites", requireAuth(authVerifier), async (c) => {
 		try {
-			const payload = (await c.req.json()) as {
-				payerId: string;
-				studentId: string;
-				classId: string;
-				metadata: StudentMetadata;
-			};
+			const payload = (await c.req.json()) as CreateInviteInput;
+			c.status(201);
+			return c.json(await organizationService.createInvite(c.var.identity, payload));
+		} catch (error) {
+			return jsonError(c, error);
+		}
+	});
 
-			const pass = await registrationService.createDigitalPass(
-				payload.payerId,
-				payload.studentId,
-				payload.classId,
-				payload.metadata,
+	router.get("/invites/:token", async (c) => {
+		try {
+			return c.json(await organizationService.getInvite(c.req.param("token")));
+		} catch (error) {
+			return jsonError(c, error);
+		}
+	});
+
+	router.post("/invites/:token/accept", requireAuth(authVerifier), async (c) => {
+		try {
+			const payload = (await c.req.json()) as AcceptInviteInput;
+			c.status(201);
+			return c.json(
+				await organizationService.acceptInvite(
+					c.var.identity,
+					c.req.param("token"),
+					payload,
+				),
 			);
-
-			return c.json({ pass }, 201);
 		} catch (error) {
-			return c.json({ error: (error as Error).message }, 400);
+			return jsonError(c, error);
 		}
 	});
 
-	router.post("/checkout", async (c) => {
+	router.get("/organizations/:slug", requireAuth(authVerifier), async (c) => {
 		try {
-			const payload = (await c.req.json()) as CheckoutRequest;
-			const checkout = await registrationService.createCheckout(payload);
-			return c.json({ checkout }, 201);
+			return c.json(
+				await organizationService.getOrganizationLanding(
+					c.var.identity,
+					c.req.param("slug"),
+				),
+			);
 		} catch (error) {
-			return c.json({ error: (error as Error).message }, 400);
+			return jsonError(c, error);
 		}
 	});
 
-	router.post("/refunds", async (c) => {
-		try {
-			const payload = (await c.req.json()) as RefundRequest;
-			const refund = await registrationService.processDropRefund(payload);
-			return c.json({ refund }, 201);
-		} catch (error) {
-			return c.json({ error: (error as Error).message }, 400);
-		}
-	});
+	router.post(
+		"/organizations/:slug/welcome/dismiss",
+		requireAuth(authVerifier),
+		async (c) => {
+			try {
+				return c.json(
+					await organizationService.dismissWelcome(
+						c.var.identity,
+						c.req.param("slug"),
+					),
+				);
+			} catch (error) {
+				return jsonError(c, error);
+			}
+		},
+	);
 
 	return router;
 }
