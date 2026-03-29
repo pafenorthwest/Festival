@@ -1,0 +1,30 @@
+code_review:
+  base_branch: main
+
+notes:
+  - "Update this manifest only when the repository's canonical commands change."
+  - "Tasks must also copy the chosen commands into /tasks/<task-name>/spec.md under Verification Commands."
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# PREPARE-TAKEOFF BOOTSTRAP START
+bootstrap:
+  codex_root: "/Users/eric/.codex/worktrees/d85b/Festival/.codex"
+  codex_scripts_dir: "/Users/eric/.codex/worktrees/d85b/Festival/.codex/scripts"
+  canonical_scripts_path: "./.codex/scripts"
+  repository_local_fallback_scripts_path: "./codex/scripts"
+  home_fallback_scripts_path: "$HOME/.codex/scripts"
+# PREPARE-TAKEOFF BOOTSTRAP END

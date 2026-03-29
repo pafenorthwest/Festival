@@ -9,6 +9,5 @@
 		"moduleResolution": "Bundler",
 		"types": ["vite/client"]
 	},
-	"references": [{ "path": "../common" }],
 	"include": ["src/**/*.ts", "src/**/*.tsx"]
 }
