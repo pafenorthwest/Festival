@@ -511,81 +511,80 @@ export default function App() {
 						</Show>
 					</section>
 
-					<Show when={sessionMembership() && createdOrganizationSlug()}>
-						<section class="panel flow-panel">
-							<h3>Invite administrators and reviewers</h3>
-							<p>
-								Add optional invites before continuing to{" "}
-								<code>
-									{buildOrgPath(sessionMembership()!.organizationSlug)}
-								</code>
-								.
-							</p>
-							<label class="field">
-								<span>Email</span>
-								<input
-									type="email"
-									value={inviteDraft().email}
-									onInput={(event) =>
-										setInviteDraft((current) => ({
-											...current,
-											email: event.currentTarget.value,
-										}))
-									}
-								/>
-							</label>
-							<label class="field">
-								<span>Role</span>
-								<select
-									value={inviteDraft().role}
-									onInput={(event) =>
-										setInviteDraft((current) => ({
-											...current,
-											role: event.currentTarget.value as OrganizationRole,
-										}))
-									}
-								>
-									<For each={ORGANIZATION_ROLES}>
-										{(role) => <option value={role}>{role}</option>}
-									</For>
-								</select>
-							</label>
-							<div class="stack-actions">
-								<button
-									type="button"
-									onClick={handleCreateInvite}
-									disabled={isBusy()}
-								>
-									Send invite
-								</button>
-								<button
-									type="button"
-									class="secondary-button"
-									onClick={() =>
-										navigate(
-											buildOrgPath(sessionMembership()!.organizationSlug),
-										)
-									}
-								>
-									Continue to organization
-								</button>
-							</div>
-							<Show when={createdInvites().length > 0}>
-								<ul class="invite-list">
-									<For each={createdInvites()}>
-										{(entry) => (
-											<li>
-												<strong>{entry.email}</strong>
-												<span>{entry.role}</span>
-												<code>
-													{window.location.origin}/invite/{entry.token}
-												</code>
-											</li>
-										)}
-									</For>
-								</ul>
+					<Show when={sessionMembership()} keyed>
+						{(membership) => (
+							<Show when={createdOrganizationSlug()}>
+								<section class="panel flow-panel">
+									<h3>Invite administrators and reviewers</h3>
+									<p>
+										Add optional invites before continuing to{" "}
+										<code>{buildOrgPath(membership.organizationSlug)}</code>.
+									</p>
+									<label class="field">
+										<span>Email</span>
+										<input
+											type="email"
+											value={inviteDraft().email}
+											onInput={(event) =>
+												setInviteDraft((current) => ({
+													...current,
+													email: event.currentTarget.value,
+												}))
+											}
+										/>
+									</label>
+									<label class="field">
+										<span>Role</span>
+										<select
+											value={inviteDraft().role}
+											onInput={(event) =>
+												setInviteDraft((current) => ({
+													...current,
+													role: event.currentTarget.value as OrganizationRole,
+												}))
+											}
+										>
+											<For each={ORGANIZATION_ROLES}>
+												{(role) => <option value={role}>{role}</option>}
+											</For>
+										</select>
+									</label>
+									<div class="stack-actions">
+										<button
+											type="button"
+											onClick={handleCreateInvite}
+											disabled={isBusy()}
+										>
+											Send invite
+										</button>
+										<button
+											type="button"
+											class="secondary-button"
+											onClick={() =>
+												navigate(buildOrgPath(membership.organizationSlug))
+											}
+										>
+											Continue to organization
+										</button>
+									</div>
+									<Show when={createdInvites().length > 0}>
+										<ul class="invite-list">
+											<For each={createdInvites()}>
+												{(entry) => (
+													<li>
+														<strong>{entry.email}</strong>
+														<span>{entry.role}</span>
+														<code>
+															{window.location.origin}/invite/{entry.token}
+														</code>
+													</li>
+												)}
+											</For>
+										</ul>
+									</Show>
+								</section>
 							</Show>
-						</section>
+						)}
 					</Show>
 				</Match>
 
@@ -596,18 +595,21 @@ export default function App() {
 							Accept the invite and join the organization with your assigned
 							role.
 						</p>
-						<Show when={invite()}>
-							<div class="invite-summary">
-								<div>
-									<strong>Organization:</strong> {invite()!.organizationName}
+						<Show when={invite()} keyed>
+							{(inviteSummary) => (
+								<div class="invite-summary">
+									<div>
+										<strong>Organization:</strong>{" "}
+										{inviteSummary.organizationName}
+									</div>
+									<div>
+										<strong>Assigned role:</strong> {inviteSummary.role}
+									</div>
+									<div>
+										<strong>Invite email:</strong> {inviteSummary.email}
+									</div>
 								</div>
-								<div>
-									<strong>Assigned role:</strong> {invite()!.role}
-								</div>
-								<div>
-									<strong>Invite email:</strong> {invite()!.email}
-								</div>
-							</div>
+							)}
 						</Show>
 						<label class="field">
 							<span>Name</span>
@@ -644,10 +646,14 @@ export default function App() {
 							<button
 								type="button"
 								class="org-title"
-								onClick={() =>
-									sessionMembership() &&
-									navigate(buildOrgPath(sessionMembership()!.organizationSlug))
-								}
+								onClick={() => {
+									const membership = sessionMembership();
+									if (!membership) {
+										return;
+									}
+
+									navigate(buildOrgPath(membership.organizationSlug));
+								}}
 							>
 								{organization()?.name ?? sessionMembership()?.organizationName}
 							</button>
@@ -684,69 +690,71 @@ export default function App() {
 				</Match>
 			</Switch>
 
-			<Show when={signInModalKind()}>
-				<div class="modal-backdrop" role="presentation">
-					<section class="modal-card" role="dialog" aria-modal="true">
-						<h3>
-							{signInModalKind() === "invite"
-								? "Accept organization invite"
-								: "Choose a sign-in method"}
-						</h3>
-						<p>
-							Use Google SSO or request a passwordless email link. Cancel
-							returns to the no-organization landing page.
-						</p>
-						<label class="field">
-							<span>Email address</span>
-							<input
-								type="email"
-								value={signInEmail()}
-								onInput={(event) => setSignInEmail(event.currentTarget.value)}
-								placeholder="you@example.com"
-							/>
-						</label>
-						<Show when={signInModalKind() === "invite"}>
+			<Show when={signInModalKind()} keyed>
+				{(modalKind) => (
+					<div class="modal-backdrop" role="presentation">
+						<section class="modal-card" role="dialog" aria-modal="true">
+							<h3>
+								{modalKind === "invite"
+									? "Accept organization invite"
+									: "Choose a sign-in method"}
+							</h3>
+							<p>
+								Use Google SSO or request a passwordless email link. Cancel
+								returns to the no-organization landing page.
+							</p>
 							<label class="field">
-								<span>Name</span>
+								<span>Email address</span>
 								<input
-									type="text"
-									value={inviteName()}
-									onInput={(event) => setInviteName(event.currentTarget.value)}
-									placeholder="Your full name"
+									type="email"
+									value={signInEmail()}
+									onInput={(event) => setSignInEmail(event.currentTarget.value)}
+									placeholder="you@example.com"
 								/>
 							</label>
-						</Show>
-						<div class="modal-actions">
+							<Show when={modalKind === "invite"}>
+								<label class="field">
+									<span>Name</span>
+									<input
+										type="text"
+										value={inviteName()}
+										onInput={(event) =>
+											setInviteName(event.currentTarget.value)
+										}
+										placeholder="Your full name"
+									/>
+								</label>
+							</Show>
+							<div class="modal-actions">
+								<button
+									type="button"
+									onClick={() => void handleGoogleSignIn(modalKind)}
+									disabled={isBusy()}
+								>
+									Continue with Google
+								</button>
+								<button
+									type="button"
+									class="secondary-button"
+									onClick={() => void handlePasswordlessSignIn(modalKind)}
+									disabled={isBusy()}
+								>
+									Send email link
+								</button>
+							</div>
 							<button
 								type="button"
-								onClick={() => void handleGoogleSignIn(signInModalKind()!)}
-								disabled={isBusy()}
+								class="link-button"
+								onClick={() => {
+									setSignInModalKind(null);
+									navigate("/");
+								}}
 							>
-								Continue with Google
+								Cancel
 							</button>
-							<button
-								type="button"
-								class="secondary-button"
-								onClick={() =>
-									void handlePasswordlessSignIn(signInModalKind()!)
-								}
-								disabled={isBusy()}
-							>
-								Send email link
-							</button>
-						</div>
-						<button
-							type="button"
-							class="link-button"
-							onClick={() => {
-								setSignInModalKind(null);
-								navigate("/");
-							}}
-						>
-							Cancel
-						</button>
-					</section>
-				</div>
+						</section>
+					</div>
+				)}
 			</Show>
 		</main>
 	);

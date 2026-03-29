@@ -9,7 +9,7 @@ Allow the repository-root `dev` and `prod` commands to accept an optional `--env
 - Update `scripts/run-dev.sh` to accept and forward an optional `--env-file=...` backend argument.
 - Update `scripts/run-prod.sh` to accept and forward an optional `--env-file=...` backend argument.
 - Preserve current behavior when the argument is omitted.
-- Keep canonical verification commands unchanged: `bun run lint`, `bun run build`, and `bun run test`.
+- Keep canonical verification commands unchanged: `bun run format:check`, `bun run build`, and `bun run test`.
 
 ## Non-goals
 
@@ -75,7 +75,7 @@ None.
 > Pin the exact commands discovered for this repo (also update `./codex/project-structure.md` and `./codex/codex-config.yaml`).
 
 - Lint:
-  - `bun run lint`
+  - `bun run format:check`
 - Build:
   - `bun run build`
 - Test:

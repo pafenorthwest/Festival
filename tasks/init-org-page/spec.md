@@ -24,14 +24,14 @@ Apply a follow-up maintenance pass to the completed multi-tenant starter so the 
 - The multi-tenant starter implementation is present, but there is no `.github/workflows/` pull-request workflow.
 - [`README.md`](/Users/eric/.codex/worktrees/d85b/Festival/README.md) still describes a Shopify/Stripe registration app and obsolete env vars.
 - [`.codex/project-structure.md`](/Users/eric/.codex/worktrees/d85b/Festival/.codex/project-structure.md) still describes the old app shape and stale verification commands.
-- The current root commands in [`package.json`](/Users/eric/.codex/worktrees/d85b/Festival/package.json) are `bun run lint`, `bun run build`, and `bun run test`.
+- The current root commands in [`package.json`](/Users/eric/.codex/worktrees/d85b/Festival/package.json) are `bun run format:check`, `bun run build`, and `bun run test`.
 - The inspected test surfaces are isolated from external services:
   - backend org-route tests use `InMemoryOrganizationRepository` and `FakeAuthVerifier`
   - common and frontend tests are local Bun tests
 
 ## Proposed behavior
 - Add a PR workflow under `.github/workflows/` that runs for base branches `main` and `release/v*`.
-- Install Bun in CI and run the canonical verification commands `bun run lint`, `bun run build`, and `bun run test`.
+- Install Bun in CI and run the canonical verification commands `bun run format:check`, `bun run build`, and `bun run test`.
 - Update repo metadata and README text so the current architecture, local commands, and env requirements are documented consistently.
 - Leave application runtime behavior unchanged.
 
@@ -51,7 +51,7 @@ Apply a follow-up maintenance pass to the completed multi-tenant starter so the 
   - checkout
   - install Bun
   - `bun install --frozen-lockfile`
-  - `bun run lint`
+  - `bun run format:check`
   - `bun run build`
   - `bun run test`
 
@@ -94,7 +94,7 @@ Resolved contract items include the pull-request base branches, the requirement 
 > Pin the exact commands discovered for this repo (also update `./.codex/project-structure.md` and `./.codex/codex-config.yaml` if canonical command records change).
 
 - Lint:
-  - `bun run lint`
+  - `bun run format:check`
 - Build:
   - `bun run build`
 - Test:
@@ -110,11 +110,11 @@ Resolved contract items include the pull-request base branches, the requirement 
 
 ## Acceptance criteria checklist
 - [ ] A workflow file exists under `.github/workflows/` and triggers on pull requests whose base branch is `main` or matches `release/v*`.
-- [ ] The workflow installs dependencies and runs `bun run lint`, `bun run build`, and `bun run test`.
+- [ ] The workflow installs dependencies and runs `bun run format:check`, `bun run build`, and `bun run test`.
 - [ ] `.codex/project-structure.md` no longer describes the old Shopify/Stripe app and instead reflects the current monorepo purpose, workspace layout, and canonical verification commands.
 - [ ] This spec and `.codex/project-structure.md` reflect the same canonical verification commands used by the workflow.
 - [ ] `README.md` documents the current workspace purpose, local run commands, and Firebase/PostgreSQL env vars, including the operator-managed non-`public` schema requirement.
-- [ ] Root `bun run lint`, `bun run build`, and `bun run test` pass after the updates.
+- [ ] Root `bun run format:check`, `bun run build`, and `bun run test` pass after the updates.
 
 ## IN SCOPE
 - Pull-request workflow creation for `main` and `release/v*`.

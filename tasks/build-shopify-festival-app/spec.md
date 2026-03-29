@@ -103,7 +103,7 @@ Non-blocking assumptions are captured in `goals/build-shopify-festival-app/estab
 > Pin the exact commands discovered for this repo (also update `project-structure.md` and `codex-config.yaml` if canonical command records change).
 
 - Lint:
-  - `bun run lint`
+  - `bun run format:check`
 - Build:
   - `bun run build`
 - Test:
@@ -128,7 +128,7 @@ Non-blocking assumptions are captured in `goals/build-shopify-festival-app/estab
 - [ ] Cart dependency/ensemble rules are enforced and tested.
 - [ ] Eligibility filter is enforced and tested.
 - [ ] SolidJS frontend builds and uses backend APIs for core flow.
-- [ ] Root lint/build/test pass.
+- [ ] Root `bun run format:check`, `bun run build`, and `bun run test` pass.
 
 ## IN SCOPE
 - New docs under `reference/shopify/`.
