@@ -1,0 +1,25 @@
+{
+  "scope": 0,
+  "behavior": 2,
+  "dependency": 0,
+  "uncertainty": 0,
+  "verification": 0,
+  "evidence": {
+    "scope": "files=4 surface=package-json+shell+docs; bounded to root development flow",
+    "behavior": "default backend dev env-file wiring changes while preserving explicit overrides",
+    "dependency": "interfaces=existing Bun CLI and repo markdown only",
+    "uncertainty": "current command surfaces and root .env location were directly inspected",
+    "verification": "checks=lint,build,test",
+    "guardrails": "no schema/api contract change; no new deps; localized surface; reversible with straightforward verification"
+  },
+  "guardrails": {
+    "no_schema_or_api_contract_change": true,
+    "no_new_external_dependencies": true,
+    "localized_surface": true,
+    "reversible_with_straightforward_verification": true
+  },
+  "overrides": {
+    "phases": 1,
+    "reason": "Single surgical phase is sufficient because the work is limited to one root command path and synchronized documentation updates."
+  }
+}

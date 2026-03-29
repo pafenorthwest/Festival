@@ -20,9 +20,12 @@ Festival is a Bun workspace monorepo for a multi-tenant organization starter bui
 
 ## Local development
 1. Install dependencies with `bun install`.
-2. Start only the backend with `bun run dev:backend`.
-3. Start only the frontend with `bun run dev:frontend`.
-4. Start both services together with `bun run dev`.
+2. Create or update the repo-root `.env` file with the backend variables listed below.
+3. Start only the backend with `bun run dev:backend`. This command defaults to `--env-file=$(pwd)/.env`.
+4. Start only the frontend with `bun run dev:frontend`.
+5. Start both services together with `bun run dev`. The backend portion of this command also defaults to the repo-root `.env`.
+
+If you need a different backend env file for the combined dev flow, run `bun run dev --env-file=/absolute/path/to/.env`.
 
 The default backend port is `3000`. Set `VITE_API_BASE` in the frontend if the API is served from a different origin during development.
 
@@ -49,7 +52,7 @@ The combined production command expects a local `nginx` binary to be installed a
 - `FIREBASE_CLIENT_EMAIL` optional when using explicit Firebase Admin service-account credentials.
 - `FIREBASE_PRIVATE_KEY` optional when using explicit Firebase Admin service-account credentials.
 
-The backend assembles its PostgreSQL connection string from the `DB_*` variables at runtime.
+The backend assembles its PostgreSQL connection string from the `DB_*` variables at runtime. During root development flows, the backend is started with the repo-root `.env` by default.
 
 ### Frontend
 - `VITE_API_BASE` optional; defaults to the current origin.

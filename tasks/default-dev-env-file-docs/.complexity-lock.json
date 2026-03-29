@@ -1,0 +1,23 @@
+{
+  "selected_signals_path": "/Users/eric/pafenorthwest/Festival/tasks/default-dev-env-file-docs/complexity-signals.json",
+  "selected_signals_sha256": "a6d77acd6e3610cdec452820e0974035dc64919a5c47a9c09bcfc36fdc5d8409",
+  "score_script_path": "/Users/eric/pafenorthwest/Festival/.codex/scripts/complexity-score.sh",
+  "score_script_sha256": "45a062dd25a8938ad1fba76e1be65815c40d7d722a20ff07c22c74ed0e479699",
+  "ranges": {
+    "goals": {
+      "min": 1,
+      "max": 3
+    },
+    "phases": {
+      "min": 1,
+      "max": 1
+    }
+  },
+  "recommended": {
+    "goals": 1,
+    "phases": 1
+  },
+  "complexity_input": "surgical",
+  "complexity_descriptor": "surgical",
+  "captured_at": "2026-03-29T04:09:57Z"
+}
