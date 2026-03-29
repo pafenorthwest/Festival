@@ -1,3 +1,4 @@
+import { type FirebaseApp, getApps, initializeApp } from "firebase/app";
 import {
 	type Auth,
 	GoogleAuthProvider,
@@ -10,7 +11,6 @@ import {
 	signOut,
 	type Unsubscribe,
 } from "firebase/auth";
-import { initializeApp, type FirebaseApp, getApps } from "firebase/app";
 import { buildInvitePath } from "./routes.js";
 
 type PendingIntent =

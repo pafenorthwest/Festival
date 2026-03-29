@@ -1,10 +1,10 @@
 import { Hono } from "hono";
-import { loadEnv } from "./config/env.js";
 import { createFirebaseAuthVerifier } from "./auth/firebase-auth-verifier.js";
 import type { AuthVerifier } from "./auth/types.js";
 import type { AppEnv } from "./config/env.js";
-import { PostgresOrganizationRepository } from "./repo/postgres-organization-repository.js";
+import { loadEnv } from "./config/env.js";
 import type { OrganizationRepository } from "./repo/organization-repository.js";
+import { PostgresOrganizationRepository } from "./repo/postgres-organization-repository.js";
 import { buildApiRouter } from "./routes/api-router.js";
 import { OrganizationService } from "./services/organization-service.js";
 
@@ -29,15 +29,18 @@ export async function createApp(options: CreateAppOptions = {}) {
 	const repository =
 		options.repository ??
 		new PostgresOrganizationRepository(
-			env.databaseSchema ?? (() => {
-				throw new Error("DB_SCHEMA is required for the runtime repository.");
-			})(),
+			env.databaseSchema ??
+				(() => {
+					throw new Error("DB_SCHEMA is required for the runtime repository.");
+				})(),
 		);
 	await repository.ensureReady();
 
 	const authVerifier =
 		options.authVerifier ??
-		createFirebaseAuthVerifier(env as Required<Pick<AppEnv, "firebaseProjectId">> & AppEnv);
+		createFirebaseAuthVerifier(
+			env as Required<Pick<AppEnv, "firebaseProjectId">> & AppEnv,
+		);
 	const organizationService = new OrganizationService(repository);
 
 	const app = new Hono();

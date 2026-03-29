@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
-	ORGANIZATION_ROLES,
 	deriveDisplayName,
+	ORGANIZATION_ROLES,
 	validateOrganizationName,
 } from "../src/organization.js";
 

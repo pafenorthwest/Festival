@@ -6,6 +6,7 @@ import type {
 	SessionResponse,
 } from "@festival/common";
 import { ORGANIZATION_ROLES } from "@festival/common";
+import type { User } from "firebase/auth";
 import {
 	createEffect,
 	createMemo,
@@ -17,7 +18,6 @@ import {
 	Show,
 	Switch,
 } from "solid-js";
-import type { User } from "firebase/auth";
 import {
 	acceptInvite,
 	createInvite,
@@ -36,11 +36,7 @@ import {
 	signInWithGoogle,
 	subscribeToAuthChanges,
 } from "./lib/firebase-auth.js";
-import {
-	buildOrgPath,
-	type AppRoute,
-	parseRoute,
-} from "./lib/routes.js";
+import { type AppRoute, buildOrgPath, parseRoute } from "./lib/routes.js";
 
 interface InviteDraft {
 	email: string;
@@ -76,8 +72,9 @@ export default function App() {
 	const [session, setSession] = createSignal<SessionResponse["session"]>({
 		authenticated: false,
 	});
-	const [organization, setOrganization] =
-		createSignal<OrganizationLandingResponse["organization"] | null>(null);
+	const [organization, setOrganization] = createSignal<
+		OrganizationLandingResponse["organization"] | null
+	>(null);
 	const [invite, setInvite] = createSignal<InviteSummary | null>(null);
 	const [createdOrganizationSlug, setCreatedOrganizationSlug] = createSignal<
 		string | null
@@ -137,7 +134,9 @@ export default function App() {
 		}
 	}
 
-	async function handlePostAuthIntent(userOverride: User | null = firebaseUser()) {
+	async function handlePostAuthIntent(
+		userOverride: User | null = firebaseUser(),
+	) {
 		const intent = readPendingIntent();
 		const nextSession = await refreshSession(userOverride);
 
@@ -229,10 +228,7 @@ export default function App() {
 			return;
 		}
 
-		if (
-			membership &&
-			currentRoute.kind === "home"
-		) {
+		if (membership && currentRoute.kind === "home") {
 			navigate(buildOrgPath(membership.organizationSlug));
 			return;
 		}
@@ -257,7 +253,7 @@ export default function App() {
 							inviteToken: currentInviteToken() ?? "",
 							name: inviteName().trim(),
 						}
-					: ({ kind: "create-org" as const });
+					: { kind: "create-org" as const };
 
 			if (kind === "invite" && !inviteName().trim()) {
 				throw new Error("Name is required when accepting an invite.");
@@ -287,7 +283,7 @@ export default function App() {
 							inviteToken: currentInviteToken() ?? "",
 							name: inviteName().trim(),
 						}
-					: ({ kind: "create-org" as const });
+					: { kind: "create-org" as const };
 
 			if (kind === "invite" && !inviteName().trim()) {
 				throw new Error("Name is required when accepting an invite.");
@@ -465,7 +461,10 @@ export default function App() {
 							the initial <code>Admin</code>.
 						</p>
 						<div class="hero-actions">
-							<button type="button" onClick={() => setSignInModalKind("create-org")}>
+							<button
+								type="button"
+								onClick={() => setSignInModalKind("create-org")}
+							>
 								Sign up and start an organization
 							</button>
 						</div>
@@ -483,7 +482,10 @@ export default function App() {
 							<p class="muted">
 								Sign in first to continue to organization creation.
 							</p>
-							<button type="button" onClick={() => setSignInModalKind("create-org")}>
+							<button
+								type="button"
+								onClick={() => setSignInModalKind("create-org")}
+							>
 								Choose sign-in method
 							</button>
 						</Show>
@@ -514,7 +516,10 @@ export default function App() {
 							<h3>Invite administrators and reviewers</h3>
 							<p>
 								Add optional invites before continuing to{" "}
-								<code>{buildOrgPath(sessionMembership()!.organizationSlug)}</code>.
+								<code>
+									{buildOrgPath(sessionMembership()!.organizationSlug)}
+								</code>
+								.
 							</p>
 							<label class="field">
 								<span>Email</span>
@@ -546,14 +551,20 @@ export default function App() {
 								</select>
 							</label>
 							<div class="stack-actions">
-								<button type="button" onClick={handleCreateInvite} disabled={isBusy()}>
+								<button
+									type="button"
+									onClick={handleCreateInvite}
+									disabled={isBusy()}
+								>
 									Send invite
 								</button>
 								<button
 									type="button"
 									class="secondary-button"
 									onClick={() =>
-										navigate(buildOrgPath(sessionMembership()!.organizationSlug))
+										navigate(
+											buildOrgPath(sessionMembership()!.organizationSlug),
+										)
 									}
 								>
 									Continue to organization
@@ -566,7 +577,9 @@ export default function App() {
 											<li>
 												<strong>{entry.email}</strong>
 												<span>{entry.role}</span>
-												<code>{window.location.origin}/invite/{entry.token}</code>
+												<code>
+													{window.location.origin}/invite/{entry.token}
+												</code>
 											</li>
 										)}
 									</For>
@@ -580,7 +593,8 @@ export default function App() {
 					<section class="panel flow-panel">
 						<h2>Invitation landing</h2>
 						<p>
-							Accept the invite and join the organization with your assigned role.
+							Accept the invite and join the organization with your assigned
+							role.
 						</p>
 						<Show when={invite()}>
 							<div class="invite-summary">
@@ -605,12 +619,19 @@ export default function App() {
 							/>
 						</label>
 						<Show when={!session().authenticated}>
-							<button type="button" onClick={() => setSignInModalKind("invite")}>
+							<button
+								type="button"
+								onClick={() => setSignInModalKind("invite")}
+							>
 								Sign up to accept invite
 							</button>
 						</Show>
 						<Show when={session().authenticated && !sessionMembership()}>
-							<button type="button" onClick={handleAcceptInvite} disabled={isBusy()}>
+							<button
+								type="button"
+								onClick={handleAcceptInvite}
+								disabled={isBusy()}
+							>
 								Accept invite
 							</button>
 						</Show>
@@ -630,7 +651,11 @@ export default function App() {
 							>
 								{organization()?.name ?? sessionMembership()?.organizationName}
 							</button>
-							<button type="button" class="secondary-button" onClick={handleLogout}>
+							<button
+								type="button"
+								class="secondary-button"
+								onClick={handleLogout}
+							>
 								Log out
 							</button>
 						</header>
@@ -651,8 +676,9 @@ export default function App() {
 						</Show>
 
 						<p class="org-copy">
-							Welcome to {organization()?.name ?? sessionMembership()?.organizationName} you are{" "}
-							{sessionMembership()?.role} role
+							Welcome to{" "}
+							{organization()?.name ?? sessionMembership()?.organizationName}{" "}
+							you are {sessionMembership()?.role} role
 						</p>
 					</section>
 				</Match>
@@ -667,8 +693,8 @@ export default function App() {
 								: "Choose a sign-in method"}
 						</h3>
 						<p>
-							Use Google SSO or request a passwordless email link. Cancel returns
-							to the no-organization landing page.
+							Use Google SSO or request a passwordless email link. Cancel
+							returns to the no-organization landing page.
 						</p>
 						<label class="field">
 							<span>Email address</span>
@@ -701,7 +727,9 @@ export default function App() {
 							<button
 								type="button"
 								class="secondary-button"
-								onClick={() => void handlePasswordlessSignIn(signInModalKind()!)}
+								onClick={() =>
+									void handlePasswordlessSignIn(signInModalKind()!)
+								}
 								disabled={isBusy()}
 							>
 								Send email link

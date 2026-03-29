@@ -1,17 +1,15 @@
 import { describe, expect, it } from "bun:test";
-import {
-	type AuthenticatedUser,
-	type CreateInviteInput,
-	type CreateOrganizationInput,
+import type {
+	AuthenticatedUser,
+	CreateInviteInput,
+	CreateOrganizationInput,
 } from "@festival/common";
 import { createApp } from "../src/app.js";
 import type { AuthVerifier } from "../src/auth/types.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
 
 class FakeAuthVerifier implements AuthVerifier {
-	constructor(
-		private readonly users: Record<string, AuthenticatedUser>,
-	) {}
+	constructor(private readonly users: Record<string, AuthenticatedUser>) {}
 
 	async verify(token: string): Promise<AuthenticatedUser> {
 		const user = this.users[token];
@@ -59,10 +57,13 @@ describe("organization routes", () => {
 		const payload: CreateOrganizationInput = { name: "festival-admins" };
 
 		const response = await app.fetch(
-			new Request("http://test/api/organizations", withAuth("admin", {
-				method: "POST",
-				body: JSON.stringify(payload),
-			})),
+			new Request(
+				"http://test/api/organizations",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify(payload),
+				}),
+			),
 		);
 
 		expect(response.status).toBe(201);
@@ -87,21 +88,27 @@ describe("organization routes", () => {
 		const { app } = await createTestApp();
 
 		await app.fetch(
-			new Request("http://test/api/organizations", withAuth("admin", {
-				method: "POST",
-				body: JSON.stringify({ name: "festival-admins" }),
-			})),
+			new Request(
+				"http://test/api/organizations",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({ name: "festival-admins" }),
+				}),
+			),
 		);
 
 		const inviteResponse = await app.fetch(
-			new Request("http://test/api/invites", withAuth("admin", {
-				method: "POST",
-				body: JSON.stringify({
-					organizationSlug: "festival-admins",
-					email: "invitee@example.com",
-					role: "Music Reviewer",
-				} satisfies CreateInviteInput),
-			})),
+			new Request(
+				"http://test/api/invites",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						organizationSlug: "festival-admins",
+						email: "invitee@example.com",
+						role: "Music Reviewer",
+					} satisfies CreateInviteInput),
+				}),
+			),
 		);
 
 		expect(inviteResponse.status).toBe(201);
