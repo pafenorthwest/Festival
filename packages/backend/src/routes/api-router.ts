@@ -1,14 +1,14 @@
 import type {
 	AcceptInviteInput,
+	AuthenticatedUser,
 	CreateInviteInput,
 	CreateOrganizationInput,
-	AuthenticatedUser,
 } from "@festival/common";
-import { Hono } from "hono";
 import type { Context, MiddlewareHandler } from "hono";
+import { Hono } from "hono";
+import type { AuthVerifier } from "../auth/types.js";
 import { AppError } from "../errors/app-error.js";
 import type { OrganizationService } from "../services/organization-service.js";
-import type { AuthVerifier } from "../auth/types.js";
 
 type AppVariables = {
 	identity: AuthenticatedUser;
@@ -35,7 +35,10 @@ async function readIdentity(
 
 	const [scheme, token] = header.split(" ");
 	if (scheme !== "Bearer" || !token) {
-		throw new AppError("Authorization header must use Bearer token format.", 401);
+		throw new AppError(
+			"Authorization header must use Bearer token format.",
+			401,
+		);
 	}
 
 	return authVerifier.verify(token);
@@ -44,12 +47,12 @@ async function readIdentity(
 function requireAuth(
 	authVerifier: AuthVerifier,
 ): MiddlewareHandler<{ Variables: AppVariables }> {
-		return async (c, next) => {
-			const identity = await readIdentity(c, authVerifier);
-			if (!identity) {
-				c.status(401);
-				return c.json({ error: "Authentication required." });
-			}
+	return async (c, next) => {
+		const identity = await readIdentity(c, authVerifier);
+		if (!identity) {
+			c.status(401);
+			return c.json({ error: "Authentication required." });
+		}
 
 		c.set("identity", identity);
 		await next();
@@ -65,7 +68,9 @@ export function buildApiRouter(
 	router.get("/session", async (c) => {
 		try {
 			const identity = await readIdentity(c, authVerifier);
-			return c.json(await organizationService.getSession(identity ?? undefined));
+			return c.json(
+				await organizationService.getSession(identity ?? undefined),
+			);
 		} catch (error) {
 			return jsonError(c, error);
 		}
@@ -87,7 +92,9 @@ export function buildApiRouter(
 		try {
 			const payload = (await c.req.json()) as CreateInviteInput;
 			c.status(201);
-			return c.json(await organizationService.createInvite(c.var.identity, payload));
+			return c.json(
+				await organizationService.createInvite(c.var.identity, payload),
+			);
 		} catch (error) {
 			return jsonError(c, error);
 		}
@@ -101,21 +108,25 @@ export function buildApiRouter(
 		}
 	});
 
-	router.post("/invites/:token/accept", requireAuth(authVerifier), async (c) => {
-		try {
-			const payload = (await c.req.json()) as AcceptInviteInput;
-			c.status(201);
-			return c.json(
-				await organizationService.acceptInvite(
-					c.var.identity,
-					c.req.param("token"),
-					payload,
-				),
-			);
-		} catch (error) {
-			return jsonError(c, error);
-		}
-	});
+	router.post(
+		"/invites/:token/accept",
+		requireAuth(authVerifier),
+		async (c) => {
+			try {
+				const payload = (await c.req.json()) as AcceptInviteInput;
+				c.status(201);
+				return c.json(
+					await organizationService.acceptInvite(
+						c.var.identity,
+						c.req.param("token"),
+						payload,
+					),
+				);
+			} catch (error) {
+				return jsonError(c, error);
+			}
+		},
+	);
 
 	router.get("/organizations/:slug", requireAuth(authVerifier), async (c) => {
 		try {

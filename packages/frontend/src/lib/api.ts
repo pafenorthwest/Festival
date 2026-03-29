@@ -74,10 +74,14 @@ export function acceptInvite(
 	token: string,
 	input: AcceptInviteInput,
 ) {
-	return requestJson(`/api/invites/${token}/accept`, {
-		method: "POST",
-		body: JSON.stringify(input),
-	}, idToken) as Promise<{
+	return requestJson(
+		`/api/invites/${token}/accept`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+		idToken,
+	) as Promise<{
 		organization: OrganizationLandingResponse["organization"];
 		membership: OrganizationLandingResponse["membership"];
 	}>;

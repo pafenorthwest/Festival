@@ -33,13 +33,18 @@ export interface CreateInviteRecordInput {
 export interface OrganizationRepository {
 	ensureReady(): Promise<void>;
 	upsertUser(user: AuthenticatedUser): Promise<OrganizationUserRecord>;
-	findMembershipByUserId(userId: string): Promise<MembershipWithOrganization | null>;
+	findMembershipByUserId(
+		userId: string,
+	): Promise<MembershipWithOrganization | null>;
 	findMembershipByUserAndSlug(
 		userId: string,
 		slug: string,
 	): Promise<MembershipWithOrganization | null>;
 	findOrganizationBySlug(slug: string): Promise<OrganizationRecord | null>;
-	createOrganization(input: { name: string; slug: string }): Promise<OrganizationRecord>;
+	createOrganization(input: {
+		name: string;
+		slug: string;
+	}): Promise<OrganizationRecord>;
 	createMembership(
 		input: CreateMembershipInput,
 	): Promise<OrganizationMembershipRecord>;

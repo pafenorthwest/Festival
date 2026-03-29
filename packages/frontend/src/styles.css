@@ -11,8 +11,8 @@
 	--bullet-success: #1f7a57;
 	--bullet-shadow: 0 24px 60px rgba(31, 36, 49, 0.12);
 	--bullet-radius: 18px;
-	--bullet-serif: "Iowan Old Style", "Palatino Linotype", "URW Palladio L", P052,
-		serif;
+	--bullet-serif:
+		"Iowan Old Style", "Palatino Linotype", "URW Palladio L", P052, serif;
 }
 
 * {
@@ -24,8 +24,16 @@ body {
 	font-family: var(--bullet-serif);
 	color: var(--bullet-ink);
 	background:
-		radial-gradient(circle at top left, rgba(68, 89, 214, 0.16), transparent 28%),
-		radial-gradient(circle at top right, rgba(182, 135, 44, 0.12), transparent 22%),
+		radial-gradient(
+			circle at top left,
+			rgba(68, 89, 214, 0.16),
+			transparent 28%
+		),
+		radial-gradient(
+			circle at top right,
+			rgba(182, 135, 44, 0.12),
+			transparent 22%
+		),
 		linear-gradient(180deg, #fdfaf3 0%, var(--bullet-paper) 46%, #efe8da 100%);
 	min-height: 100vh;
 }
@@ -41,7 +49,11 @@ button {
 	cursor: pointer;
 	border-radius: 999px;
 	padding: 0.9rem 1.25rem;
-	background: linear-gradient(135deg, var(--bullet-accent), var(--bullet-accent-strong));
+	background: linear-gradient(
+		135deg,
+		var(--bullet-accent),
+		var(--bullet-accent-strong)
+	);
 	color: white;
 	box-shadow: 0 10px 24px rgba(68, 89, 214, 0.18);
 }

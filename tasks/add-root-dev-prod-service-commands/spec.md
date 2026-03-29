@@ -11,7 +11,7 @@ Add root workspace commands for running frontend and backend services separately
 - Add a root `prod:backend` command that runs the backend from built artifacts rather than the watch-mode development entrypoint.
 - Add a root `prod` command that prepares and runs the production backend together with nginx serving the built frontend `dist` assets via checked-in config.
 - Document the new commands and nginx-based production frontend flow.
-- Preserve the canonical verification commands: `bun run lint`, `bun run build`, `bun run test`.
+- Preserve the canonical verification commands: `bun run format:check`, `bun run build`, `bun run test`.
 
 ## Non-goals
 
@@ -85,7 +85,7 @@ None.
 > Pin the exact commands discovered for this repo (also update `./codex/project-structure.md` and `./codex/codex-config.yaml`).
 
 - Lint:
-  - `bun run lint`
+  - `bun run format:check`
 - Build:
   - `bun run build`
 - Test:

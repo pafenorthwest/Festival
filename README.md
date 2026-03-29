@@ -14,7 +14,7 @@ Festival is a Bun workspace monorepo for a multi-tenant organization starter bui
 - `bun run dev`
 - `bun run prod:backend`
 - `bun run prod`
-- `bun run lint`
+- `bun run format:check`
 - `bun run build`
 - `bun run test`
 

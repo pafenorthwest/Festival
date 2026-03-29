@@ -9,7 +9,7 @@
 - Workspaces: `packages/common`, `packages/backend`, `packages/frontend`
 - Primary integrations: Firebase Authentication, PostgreSQL
 - Canonical verification commands:
-  - Lint: `bun run lint`
+  - Lint: `bun run format:check`
   - Build: `bun run build`
   - Test: `bun run test`
 
@@ -59,7 +59,7 @@
 
 ## Verification
 
-- Lint: `bun run lint`
+- Lint: `bun run format:check`
 - Build: `bun run build`
 - Test: `bun run test`
 
@@ -74,7 +74,7 @@
 
 ## Success Criteria
 
-- Root lint/build/test pass.
+- Root `bun run format:check`, `bun run build`, and `bun run test` pass.
 - Frontend, backend, and common packages remain aligned on the org-onboarding contract.
 - Repo metadata accurately reflects the current multi-tenant starter instead of the retired Shopify/Stripe app description.
 - Canonical verification commands stay synchronized across `package.json`, task specs, and pull-request automation.

@@ -79,7 +79,7 @@ None.
 > Pin the exact commands discovered for this repo (also update `./codex/project-structure.md` and `./codex/codex-config.yaml`).
 
 - Lint:
-  - `bun run lint`
+  - `bun run format:check`
 - Build:
   - `bun run build`
 - Test:
@@ -95,7 +95,7 @@ None.
 - [ ] `bun run dev` defaults the backend process to the repo-root `.env`.
 - [ ] `bun run dev -- --env-file=/custom/path/.env` still uses the explicit override.
 - [ ] `README.md` and `.codex/project-structure.md` accurately describe the behavior.
-- [ ] Canonical verification commands remain unchanged and pass.
+- [ ] Canonical verification commands remain synchronized and pass.
 
 ## IN SCOPE
 - Root development command changes in `package.json` and `scripts/run-dev.sh`.

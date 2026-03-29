@@ -81,7 +81,7 @@ Non-blocking assumptions are captured in `goals/build-solidjs-reference/establis
 > Pin the exact commands discovered for this repo (also update `./codex/project-structure.md` and `./codex/codex-config.yaml`).
 
 - Lint:
-  - `bun run lint`
+  - `bun run format:check`
 - Build:
   - `bun run build`
 - Test:

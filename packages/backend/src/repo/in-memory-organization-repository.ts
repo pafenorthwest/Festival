@@ -19,7 +19,10 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 	private readonly usersByUid = new Map<string, string>();
 	private readonly organizations = new Map<string, OrganizationRecord>();
 	private readonly organizationsBySlug = new Map<string, string>();
-	private readonly memberships = new Map<string, OrganizationMembershipRecord>();
+	private readonly memberships = new Map<
+		string,
+		OrganizationMembershipRecord
+	>();
 	private readonly membershipsByUserId = new Map<string, string>();
 	private readonly invites = new Map<string, OrganizationInviteRecord>();
 	private readonly invitesByToken = new Map<string, string>();
@@ -81,7 +84,8 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		userId: string,
 		slug: string,
 	): Promise<MembershipWithOrganization | null> {
-		const membershipWithOrganization = await this.findMembershipByUserId(userId);
+		const membershipWithOrganization =
+			await this.findMembershipByUserId(userId);
 		if (
 			!membershipWithOrganization ||
 			membershipWithOrganization.organization.slug !== slug
@@ -92,7 +96,9 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		return membershipWithOrganization;
 	}
 
-	async findOrganizationBySlug(slug: string): Promise<OrganizationRecord | null> {
+	async findOrganizationBySlug(
+		slug: string,
+	): Promise<OrganizationRecord | null> {
 		const organizationId = this.organizationsBySlug.get(slug);
 		if (!organizationId) {
 			return null;
@@ -152,7 +158,9 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		return invite;
 	}
 
-	async findInviteByToken(token: string): Promise<InviteWithOrganization | null> {
+	async findInviteByToken(
+		token: string,
+	): Promise<InviteWithOrganization | null> {
 		const inviteId = this.invitesByToken.get(token);
 		if (!inviteId) {
 			return null;
@@ -199,7 +207,9 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 
 		const membership = this.memberships.get(membershipId);
 		if (!membership || membership.organizationId !== organizationId) {
-			throw new Error(`Membership not found for organization ${organizationId}`);
+			throw new Error(
+				`Membership not found for organization ${organizationId}`,
+			);
 		}
 
 		const updated: OrganizationMembershipRecord = {

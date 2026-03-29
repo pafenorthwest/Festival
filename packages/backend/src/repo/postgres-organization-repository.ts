@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { sql } from "bun";
 import type {
 	AuthenticatedUser,
 	OrganizationInviteRecord,
@@ -8,6 +7,7 @@ import type {
 	OrganizationRole,
 	OrganizationUserRecord,
 } from "@festival/common";
+import { sql } from "bun";
 import type {
 	CreateInviteRecordInput,
 	CreateMembershipInput,
@@ -289,7 +289,9 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		return rows[0] ? mapMembership(rows[0]) : null;
 	}
 
-	async findOrganizationBySlug(slug: string): Promise<OrganizationRecord | null> {
+	async findOrganizationBySlug(
+		slug: string,
+	): Promise<OrganizationRecord | null> {
 		await this.ensureReady();
 
 		const rows = (await sql.unsafe(
@@ -432,7 +434,9 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		};
 	}
 
-	async findInviteByToken(token: string): Promise<InviteWithOrganization | null> {
+	async findInviteByToken(
+		token: string,
+	): Promise<InviteWithOrganization | null> {
 		await this.ensureReady();
 
 		const rows = (await sql.unsafe(
