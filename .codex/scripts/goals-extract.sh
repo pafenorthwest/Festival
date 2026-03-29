@@ -26,17 +26,26 @@ fi
 
 STATE=$(sed -n 's/^- State: //p; s/^State: //p' "$ESTABLISH_FILE" | head -n 1)
 
+extract_heading_section() {
+  local heading_prefix="$1"
+  awk -v heading_prefix="${heading_prefix}" '
+    index($0, heading_prefix) == 1 { in_section=1 }
+    /^## / && index($0, heading_prefix) != 1 && in_section { exit }
+    in_section { print }
+  ' "$ESTABLISH_FILE"
+}
+
 {
   echo "# Goals Extract"
   echo "- Task name: ${TASK_NAME}"
   echo "- Iteration: ${ITERATION}"
   echo "- State: ${STATE}"
   echo
-  sed -n '/^## Goals/,/^## /p' "$ESTABLISH_FILE" | sed '$d'
+  extract_heading_section "## Goals"
   echo
-  sed -n '/^## Non-goals/,/^## /p' "$ESTABLISH_FILE" | sed '$d'
+  extract_heading_section "## Non-goals"
   echo
-  sed -n '/^## Success criteria/,/^## /p' "$ESTABLISH_FILE" | sed '$d'
+  extract_heading_section "## Success criteria"
 } > "$GOALS_FILE"
 
 echo "Extracted normalized goals to ${GOALS_FILE}"
