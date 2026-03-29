@@ -4,6 +4,20 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 backend_pid=""
 frontend_pid=""
+backend_bun_args=("--env-file=${ROOT_DIR}/.env")
+
+for arg in "$@"; do
+  case "$arg" in
+    --env-file=*)
+      backend_bun_args=("$arg")
+      ;;
+    *)
+      echo "Unsupported argument for 'bun run dev': $arg" >&2
+      echo "Supported arguments: --env-file=/path/to/.env" >&2
+      exit 1
+      ;;
+  esac
+done
 
 cleanup() {
   trap - EXIT INT TERM
@@ -26,7 +40,7 @@ trap 'exit 130' INT TERM
 cd "$ROOT_DIR"
 
 echo "Starting backend dev server on http://localhost:3000"
-bun run --cwd packages/backend dev &
+bun run "${backend_bun_args[@]}" --cwd packages/backend dev &
 backend_pid=$!
 
 echo "Starting frontend dev server on http://localhost:5173"

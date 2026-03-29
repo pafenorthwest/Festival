@@ -27,6 +27,9 @@
 ├── README.md
 ├── package.json
 ├── biome.json
+├── scripts/
+│   ├── run-dev.sh
+│   └── run-prod.sh
 ├── specs/
 │   ├── Multi-Tenant-Starter.md
 │   └── Style.md
@@ -50,6 +53,7 @@
 - Place shared organization/auth domain logic in `packages/common/src`.
 - Place backend HTTP routes, auth verification, and repository implementations in `packages/backend/src`.
 - Place frontend routing, Firebase auth helpers, and organization UI flows in `packages/frontend/src`.
+- Keep root development commands and `README.md` aligned so backend dev flows default to the repo-root `.env` unless explicitly overridden.
 - Keep tests close to each workspace under `tests/`.
 - Document repo-level command or architecture changes in `README.md`, task specs, and this file together.
 
@@ -63,6 +67,7 @@
 
 - Use workspace links (`workspace:*`) for internal dependencies.
 - Keep TypeScript strict mode enabled.
+- Treat the repo-root `.env` as the default env-file source for root backend development commands unless an explicit override is supplied.
 - Do not assume a default PostgreSQL `public` schema exists; operators must provide `DB_SCHEMA`.
 - Keep secrets in environment variables only.
 - Keep PR automation limited to commands that run without live DB or Firebase dependencies.
