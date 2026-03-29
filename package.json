@@ -8,6 +8,11 @@
     "packages/*"
   ],
   "scripts": {
+    "dev": "./scripts/run-dev.sh",
+    "prod": "./scripts/run-prod.sh",
+    "dev:frontend": "bun run --cwd packages/frontend dev",
+    "dev:backend": "bun run --cwd packages/backend dev",
+    "prod:backend": "bun run build:common && bun run build:backend && NODE_ENV=production bun ./packages/backend/dist/index.js",
     "lint": "bun run lint:common && bun run lint:backend && bun run lint:frontend",
     "lint:common": "bun run --cwd packages/common lint",
     "lint:backend": "bun run --cwd packages/backend lint",

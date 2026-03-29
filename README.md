@@ -9,16 +9,30 @@ Festival is a Bun workspace monorepo for a multi-tenant organization starter bui
 
 ## Commands
 - `bun install`
+- `bun run dev:frontend`
+- `bun run dev:backend`
+- `bun run dev`
+- `bun run prod:backend`
+- `bun run prod`
 - `bun run lint`
 - `bun run build`
 - `bun run test`
 
 ## Local development
 1. Install dependencies with `bun install`.
-2. Start the backend with `bun --cwd packages/backend run dev`.
-3. Start the frontend with `bun --cwd packages/frontend run dev`.
+2. Start only the backend with `bun run dev:backend`.
+3. Start only the frontend with `bun run dev:frontend`.
+4. Start both services together with `bun run dev`.
 
 The default backend port is `3000`. Set `VITE_API_BASE` in the frontend if the API is served from a different origin during development.
+
+## Local production
+1. Start only the compiled backend with `bun run prod:backend`.
+2. Start the full production flow with `bun run prod`.
+
+`bun run prod` builds the workspace, starts the backend on `http://localhost:3000`, and serves the frontend build through nginx on `http://localhost:8080` using [`nginx/festival.conf`](nginx/festival.conf). The checked-in nginx config serves `packages/frontend/dist`, applies SPA fallback to `index.html`, and proxies `/api` requests to the backend on port `3000`.
+
+The combined production command expects a local `nginx` binary to be installed and available on `PATH`.
 
 ## Environment
 
