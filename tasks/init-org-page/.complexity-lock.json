@@ -1,0 +1,23 @@
+{
+  "selected_signals_path": "/Users/eric/.codex/worktrees/d85b/Festival/tasks/init-org-page/complexity-signals.json",
+  "selected_signals_sha256": "6cb79b7066ee83b5815d11921a6cd30db8e22ccc515341384b6f3b49dd494f7b",
+  "score_script_path": "/Users/eric/.codex/worktrees/d85b/Festival/.codex/scripts/complexity-score.sh",
+  "score_script_sha256": "45a062dd25a8938ad1fba76e1be65815c40d7d722a20ff07c22c74ed0e479699",
+  "ranges": {
+    "goals": {
+      "min": 3,
+      "max": 5
+    },
+    "phases": {
+      "min": 2,
+      "max": 4
+    }
+  },
+  "recommended": {
+    "goals": 4,
+    "phases": 3
+  },
+  "complexity_input": "focused",
+  "complexity_descriptor": "focused",
+  "captured_at": "2026-03-29T03:04:32Z"
+}

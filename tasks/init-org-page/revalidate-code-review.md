@@ -1,0 +1,417 @@
+# Revalidate Code Review
+- Task name: init-org-page
+- Findings status: none
+
+## Reviewer Prompt
+You are acting as a reviewer for a proposed code change made by another engineer.
+Focus on issues that impact correctness, performance, security, maintainability, or developer experience.
+Flag only actionable issues introduced by the pull request.
+When you flag an issue, provide a short, direct explanation and cite the affected file and line range.
+Prioritize severe issues and avoid nit-level comments unless they block understanding of the diff.
+After listing findings, produce an overall correctness verdict ("patch is correct" or "patch is incorrect") with a concise justification and a confidence score between 0 and 1.
+Ensure that file citations and line numbers are exactly correct using the tools available; if they are incorrect your comments will be rejected.
+
+## Output Schema
+```json
+[
+  {
+    "file": "path/to/file",
+    "line_range": "10-25",
+    "severity": "high",
+    "explanation": "Short explanation."
+  }
+]
+```
+
+## Review Context (auto-generated)
+<!-- REVIEW-CONTEXT START -->
+- Generated at: 2026-03-29T03:07:31Z
+- Base branch: main
+- Diff mode: base-branch
+- Diff command: `git diff main...HEAD`
+- Diff bytes: 325163
+
+### Changed files
+- `.codex/codex-config.yaml`
+- `.codex/project-structure.md`
+- `.gitignore`
+- `README.md`
+- `biome.json`
+- `bun.lock`
+- `develop.env`
+- `goals/init-org-page/goals.v3.md`
+- `goals/task-manifest.csv`
+- `package.json`
+- `packages/backend/package.json`
+- `packages/backend/src/app.ts`
+- `packages/backend/src/auth/firebase-auth-verifier.ts`
+- `packages/backend/src/auth/types.ts`
+- `packages/backend/src/clients/shopify-admin-client.ts`
+- `packages/backend/src/clients/shopify-storefront-client.ts`
+- `packages/backend/src/clients/stripe-client.ts`
+- `packages/backend/src/config/env.ts`
+- `packages/backend/src/errors/app-error.ts`
+- `packages/backend/src/index.ts`
+- `packages/backend/src/repo/in-memory-organization-repository.ts`
+- `packages/backend/src/repo/in-memory-repository.ts`
+- `packages/backend/src/repo/organization-repository.ts`
+- `packages/backend/src/repo/postgres-organization-repository.ts`
+- `packages/backend/src/routes/api-router.ts`
+- `packages/backend/src/services/organization-service.ts`
+- `packages/backend/src/services/registration-service.ts`
+- `packages/backend/tests/organization-routes.test.ts`
+- `packages/backend/tests/registration-service.test.ts`
+- `packages/backend/tsconfig.json`
+- `packages/common/package.json`
+- `packages/common/src/catalog.ts`
+- `packages/common/src/domain.ts`
+- `packages/common/src/index.ts`
+- `packages/common/src/organization.ts`
+- `packages/common/src/rules.ts`
+- `packages/common/tests/organization.test.ts`
+- `packages/common/tests/rules.test.ts`
+- `packages/common/tsconfig.json`
+- `packages/frontend/package.json`
+- `packages/frontend/src/App.tsx`
+- `packages/frontend/src/lib/api.ts`
+- `packages/frontend/src/lib/cart.ts`
+- `packages/frontend/src/lib/firebase-auth.ts`
+- `packages/frontend/src/lib/routes.ts`
+- `packages/frontend/src/main.tsx`
+- `packages/frontend/src/styles.css`
+- `packages/frontend/tests/cart.test.ts`
+- `packages/frontend/tests/routes.test.ts`
+- `packages/frontend/tsconfig.json`
+- `packages/frontend/vite.config.ts`
+- `specs/Multi-Tenant-Starter.md`
+- `specs/Style.md`
+- `tasks/init-org-page/audit-log.md`
+- `tasks/init-org-page/goal-versions.diff`
+- `tasks/init-org-page/retention.min.json`
+- `tasks/init-org-page/risk-acceptance.md`
+- `tasks/init-org-page/spec.md`
+- `tsconfig.base.json`
+
+### Citation candidates (verify before use)
+- `.codex/codex-config.yaml:1-30`
+- `.codex/project-structure.md:10-11`
+- `.codex/project-structure.md:14-14`
+- `.codex/project-structure.md:16-16`
+- `.codex/project-structure.md:22-22`
+- `.codex/project-structure.md:4-4`
+- `.codex/project-structure.md:53-53`
+- `.codex/project-structure.md:58-59`
+- `.codex/project-structure.md:62-63`
+- `.codex/project-structure.md:68-68`
+- `.codex/project-structure.md:75-75`
+- `.codex/project-structure.md:83-83`
+- `.gitignore:50-52`
+- `README.md:7-7`
+- `biome.json:1-35`
+- `bun.lock:101-101`
+- `bun.lock:103-103`
+- `bun.lock:105-105`
+- `bun.lock:107-107`
+- `bun.lock:109-109`
+- `bun.lock:11-12`
+- `bun.lock:111-111`
+- `bun.lock:113-113`
+- `bun.lock:115-115`
+- `bun.lock:117-117`
+- `bun.lock:119-119`
+- `bun.lock:121-121`
+- `bun.lock:123-123`
+- `bun.lock:125-125`
+- `bun.lock:127-127`
+- `bun.lock:129-129`
+- `bun.lock:131-131`
+- `bun.lock:133-133`
+- `bun.lock:135-135`
+- `bun.lock:137-137`
+- `bun.lock:139-139`
+- `bun.lock:141-141`
+- `bun.lock:143-143`
+- `bun.lock:145-145`
+- `bun.lock:147-147`
+- `bun.lock:149-155`
+- `bun.lock:163-264`
+- `bun.lock:21-22`
+- `bun.lock:275-295`
+- `bun.lock:297-297`
+- `bun.lock:299-299`
+- `bun.lock:301-301`
+- `bun.lock:303-303`
+- `bun.lock:305-305`
+- `bun.lock:307-307`
+- `bun.lock:309-309`
+- `bun.lock:311-311`
+- `bun.lock:313-313`
+- `bun.lock:315-315`
+- `bun.lock:317-317`
+- `bun.lock:319-319`
+- `bun.lock:321-321`
+- `bun.lock:323-323`
+- `bun.lock:325-325`
+- `bun.lock:327-327`
+- `bun.lock:329-329`
+- `bun.lock:331-331`
+- `bun.lock:333-333`
+- `bun.lock:335-335`
+- `bun.lock:337-337`
+- `bun.lock:339-339`
+- `bun.lock:34-34`
+- `bun.lock:341-341`
+- `bun.lock:343-349`
+- `bun.lock:359-359`
+- `bun.lock:361-361`
+- `bun.lock:365-369`
+- `bun.lock:371-371`
+- `bun.lock:373-373`
+- `bun.lock:375-375`
+- `bun.lock:377-377`
+- `bun.lock:379-379`
+- `bun.lock:381-381`
+- `bun.lock:383-383`
+- `bun.lock:385-385`
+- `bun.lock:387-387`
+- `bun.lock:389-389`
+- `bun.lock:391-391`
+- `bun.lock:393-393`
+- `bun.lock:395-395`
+- `bun.lock:397-399`
+- `bun.lock:403-405`
+- `bun.lock:409-409`
+- `bun.lock:411-411`
+- `bun.lock:413-413`
+- `bun.lock:415-415`
+- `bun.lock:417-417`
+- `bun.lock:419-419`
+- `bun.lock:423-423`
+- `bun.lock:425-425`
+- `bun.lock:427-427`
+- `bun.lock:43-47`
+- `bun.lock:431-431`
+- `bun.lock:433-433`
+- `bun.lock:435-439`
+- `bun.lock:449-451`
+- `bun.lock:455-461`
+- `bun.lock:463-463`
+- `bun.lock:465-467`
+- `bun.lock:471-475`
+- `bun.lock:477-477`
+- `bun.lock:479-479`
+- `bun.lock:485-490`
+- `bun.lock:493-494`
+- `bun.lock:499-504`
+- `bun.lock:507-508`
+- `bun.lock:511-512`
+- `bun.lock:515-521`
+- `bun.lock:523-523`
+- `bun.lock:525-525`
+- `bun.lock:529-531`
+- `bun.lock:535-536`
+- `bun.lock:541-542`
+- `bun.lock:545-545`
+- `bun.lock:547-547`
+- `bun.lock:549-549`
+- `bun.lock:551-563`
+- `bun.lock:565-565`
+- `bun.lock:567-567`
+- `bun.lock:569-583`
+- `bun.lock:589-589`
+- `bun.lock:593-593`
+- `bun.lock:595-595`
+- `bun.lock:597-597`
+- `bun.lock:599-599`
+- `bun.lock:6-9`
+- `bun.lock:601-601`
+- `bun.lock:603-603`
+- `bun.lock:605-609`
+- `bun.lock:613-613`
+- `bun.lock:615-615`
+- `bun.lock:617-617`
+- `bun.lock:619-619`
+- `bun.lock:621-621`
+- `bun.lock:623-623`
+- `bun.lock:625-625`
+- `bun.lock:627-627`
+- `bun.lock:629-629`
+- `bun.lock:631-631`
+- `bun.lock:633-633`
+- `bun.lock:635-635`
+- `bun.lock:637-637`
+- `bun.lock:639-639`
+- `bun.lock:641-641`
+- `bun.lock:643-643`
+- `bun.lock:645-645`
+- `bun.lock:647-647`
+- `bun.lock:649-649`
+- `bun.lock:651-651`
+- `bun.lock:653-653`
+- `bun.lock:655-655`
+- `bun.lock:657-659`
+- `bun.lock:663-663`
+- `bun.lock:665-665`
+- `bun.lock:670-670`
+- `bun.lock:673-673`
+- `bun.lock:675-675`
+- `bun.lock:679-679`
+- `bun.lock:683-703`
+- `bun.lock:705-705`
+- `bun.lock:707-717`
+- `bun.lock:721-753`
+- `bun.lock:73-73`
+- `bun.lock:75-75`
+- `bun.lock:755-755`
+- `bun.lock:757-757`
+- `bun.lock:85-99`
+- `develop.env:1-82`
+- `goals/init-org-page/goals.v3.md:1-37`
+- `goals/task-manifest.csv:4-4`
+- `package.json:25-26`
+- `package.json:28-37`
+- `packages/backend/package.json:2-17`
+- `packages/backend/src/app.ts:1-1`
+- `packages/backend/src/app.ts:11-51`
+- `packages/backend/src/app.ts:3-7`
+- `packages/backend/src/app.ts:9-9`
+- `packages/backend/src/auth/firebase-auth-verifier.ts:1-62`
+- `packages/backend/src/auth/types.ts:1-5`
+- `packages/backend/src/clients/shopify-admin-client.ts:104-146`
+- `packages/backend/src/clients/shopify-admin-client.ts:14-15`
+- `packages/backend/src/clients/shopify-admin-client.ts:159-229`
+- `packages/backend/src/clients/shopify-admin-client.ts:19-39`
+- `packages/backend/src/clients/shopify-admin-client.ts:2-6`
+- `packages/backend/src/clients/shopify-admin-client.ts:53-91`
+- `packages/backend/src/clients/shopify-admin-client.ts:9-10`
+- `packages/backend/src/clients/shopify-storefront-client.ts:14-16`
+- `packages/backend/src/clients/shopify-storefront-client.ts:20-45`
+- `packages/backend/src/clients/shopify-storefront-client.ts:4-5`
+- `packages/backend/src/clients/shopify-storefront-client.ts:59-126`
+- `packages/backend/src/clients/shopify-storefront-client.ts:9-10`
+- `packages/backend/src/clients/stripe-client.ts:13-14`
+- `packages/backend/src/clients/stripe-client.ts:18-120`
+- `packages/backend/src/clients/stripe-client.ts:4-4`
+- `packages/backend/src/clients/stripe-client.ts:8-9`
+- `packages/backend/src/config/env.ts:10-67`
+- `packages/backend/src/config/env.ts:2-7`
+- `packages/backend/src/errors/app-error.ts:1-8`
+- `packages/backend/src/index.ts:3-3`
+- `packages/backend/src/index.ts:5-7`
+- `packages/backend/src/index.ts:9-12`
+- `packages/backend/src/repo/in-memory-organization-repository.ts:1-213`
+- `packages/backend/src/repo/in-memory-repository.ts:10-11`
+- `packages/backend/src/repo/in-memory-repository.ts:13-22`
+- `packages/backend/src/repo/in-memory-repository.ts:2-7`
+- `packages/backend/src/repo/in-memory-repository.ts:24-26`
+- `packages/backend/src/repo/in-memory-repository.ts:28-30`
+- `packages/backend/src/repo/in-memory-repository.ts:32-44`
+- `packages/backend/src/repo/in-memory-repository.ts:46-48`
+- `packages/backend/src/repo/in-memory-repository.ts:50-52`
+- `packages/backend/src/repo/organization-repository.ts:1-55`
+- `packages/backend/src/repo/postgres-organization-repository.ts:1-513`
+- `packages/backend/src/routes/api-router.ts:1-150`
+- `packages/backend/src/services/organization-service.ts:1-323`
+- `packages/backend/src/services/registration-service.ts:11-11`
+- `packages/backend/src/services/registration-service.ts:15-15`
+- `packages/backend/src/services/registration-service.ts:18-151`
+- `packages/backend/src/services/registration-service.ts:2-10`
+- `packages/backend/tests/organization-routes.test.ts:1-130`
+- `packages/backend/tests/registration-service.test.ts:10-15`
+- `packages/backend/tests/registration-service.test.ts:19-20`
+- `packages/backend/tests/registration-service.test.ts:2-2`
+- `packages/backend/tests/registration-service.test.ts:22-27`
+- `packages/backend/tests/registration-service.test.ts:29-44`
+- `packages/backend/tests/registration-service.test.ts:46-48`
+- `packages/backend/tests/registration-service.test.ts:50-51`
+- `packages/backend/tests/registration-service.test.ts:53-58`
+- `packages/backend/tests/registration-service.test.ts:6-7`
+- `packages/backend/tests/registration-service.test.ts:60-60`
+- `packages/backend/tests/registration-service.test.ts:62-64`
+- `packages/backend/tsconfig.json:2-12`
+- `packages/common/package.json:2-18`
+- `packages/common/src/catalog.ts:4-35`
+- `packages/common/src/domain.ts:11-13`
+- `packages/common/src/domain.ts:19-24`
+- `packages/common/src/domain.ts:28-33`
+- `packages/common/src/domain.ts:37-42`
+- `packages/common/src/domain.ts:4-7`
+- `packages/common/src/domain.ts:46-47`
+- `packages/common/src/domain.ts:51-52`
+- `packages/common/src/domain.ts:56-58`
+- `packages/common/src/domain.ts:62-66`
+- `packages/common/src/domain.ts:70-74`
+- `packages/common/src/domain.ts:78-81`
+- `packages/common/src/domain.ts:85-88`
+- `packages/common/src/index.ts:1-1`
+- `packages/common/src/index.ts:3-3`
+- `packages/common/src/index.ts:4-4`
+- `packages/common/src/organization.ts:1-182`
+- `packages/common/src/rules.ts:12-14`
+- `packages/common/src/rules.ts:16-16`
+- `packages/common/src/rules.ts:2-5`
+- `packages/common/src/rules.ts:20-22`
+- `packages/common/src/rules.ts:24-71`
+- `packages/common/src/rules.ts:9-10`
+- `packages/common/tests/organization.test.ts:1-44`
+- `packages/common/tests/rules.test.ts:18-20`
+- `packages/common/tests/rules.test.ts:22-33`
+- `packages/common/tests/rules.test.ts:35-37`
+- `packages/common/tests/rules.test.ts:39-50`
+- `packages/common/tests/rules.test.ts:5-16`
+- `packages/common/tests/rules.test.ts:52-55`
+- `packages/common/tsconfig.json:2-10`
+- `packages/frontend/package.json:2-20`
+- `packages/frontend/src/App.tsx:1-69`
+- `packages/frontend/src/App.tsx:72-724`
+- `packages/frontend/src/lib/api.ts:1-11`
+- `packages/frontend/src/lib/api.ts:15-101`
+- `packages/frontend/src/lib/cart.ts:3-10`
+- `packages/frontend/src/lib/firebase-auth.ts:1-160`
+- `packages/frontend/src/lib/routes.ts:1-35`
+- `packages/frontend/src/main.tsx:5-11`
+- `packages/frontend/src/styles.css:0-0`
+- `packages/frontend/src/styles.css:101-105`
+- `packages/frontend/src/styles.css:108-112`
+- `packages/frontend/src/styles.css:115-123`
+- `packages/frontend/src/styles.css:126-129`
+- `packages/frontend/src/styles.css:132-146`
+- `packages/frontend/src/styles.css:148-155`
+- `packages/frontend/src/styles.css:158-275`
+- `packages/frontend/src/styles.css:19-19`
+- `packages/frontend/src/styles.css:2-15`
+- `packages/frontend/src/styles.css:23-30`
+- `packages/frontend/src/styles.css:33-36`
+- `packages/frontend/src/styles.css:39-46`
+- `packages/frontend/src/styles.css:49-53`
+- `packages/frontend/src/styles.css:56-60`
+- `packages/frontend/src/styles.css:64-69`
+- `packages/frontend/src/styles.css:72-76`
+- `packages/frontend/src/styles.css:79-82`
+- `packages/frontend/src/styles.css:85-90`
+- `packages/frontend/src/styles.css:93-98`
+- `packages/frontend/tests/cart.test.ts:11-13`
+- `packages/frontend/tests/cart.test.ts:5-9`
+- `packages/frontend/tests/routes.test.ts:1-27`
+- `packages/frontend/tsconfig.json:2-12`
+- `packages/frontend/vite.config.ts:5-14`
+- `specs/Multi-Tenant-Starter.md:1-56`
+- `specs/Style.md:1-208`
+- `tasks/init-org-page/audit-log.md:1-18`
+- `tasks/init-org-page/goal-versions.diff:1-131`
+- `tasks/init-org-page/retention.min.json:1-1`
+- `tasks/init-org-page/risk-acceptance.md:1-11`
+- `tasks/init-org-page/spec.md:1-162`
+- `tsconfig.base.json:10-10`
+- `tsconfig.base.json:3-3`
+<!-- REVIEW-CONTEXT END -->
+
+## Findings JSON
+```json
+[]
+```
+
+## Overall Correctness Verdict
+- Verdict: patch is correct
+- Confidence: 0.87
+- Justification: The follow-up change is limited to CI and documentation alignment, the workflow runs the same root Bun commands verified locally, and no correctness, security, or maintainability regressions were found in the updated metadata surfaces.

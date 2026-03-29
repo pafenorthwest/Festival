@@ -1,11 +1,11 @@
 # Festival
 
-Monorepo for a festival registration app with Shopify/Stripe orchestration.
+Festival is a Bun workspace monorepo for a multi-tenant organization starter built with SolidJS, Hono, Firebase Authentication, and PostgreSQL.
 
 ## Workspaces
-- `packages/common`: shared domain models and business rules.
-- `packages/backend`: Hono Backend with TypeScript API server.
-- `packages/frontend`: SolidJS browser app.
+- `packages/common`: shared organization, membership, invite, and auth contracts.
+- `packages/backend`: Hono API server and PostgreSQL/Firebase-backed organization services.
+- `packages/frontend`: SolidJS browser app for sign-in, org creation, invite acceptance, and org landing.
 
 ## Commands
 - `bun install`
@@ -13,12 +13,39 @@ Monorepo for a festival registration app with Shopify/Stripe orchestration.
 - `bun run build`
 - `bun run test`
 
-## Run locally
-1. Start backend: `bun --cwd packages/backend run dev`
-2. Start frontend: `bun --cwd packages/frontend run dev`
+## Local development
+1. Install dependencies with `bun install`.
+2. Start the backend with `bun --cwd packages/backend run dev`.
+3. Start the frontend with `bun --cwd packages/frontend run dev`.
 
-Set env vars for live integrations:
-- `SHOPIFY_STORE_DOMAIN`
-- `SHOPIFY_ADMIN_ACCESS_TOKEN`
-- `SHOPIFY_STOREFRONT_ACCESS_TOKEN`
-- `STRIPE_SECRET_KEY`
+The default backend port is `3000`. Set `VITE_API_BASE` in the frontend if the API is served from a different origin during development.
+
+## Environment
+
+### Backend
+- `PORT` optional; defaults to `3000`.
+- `DB_USER`
+- `DB_PASSWORD`
+- `DB_HOST`
+- `DB_PORT`
+- `DATABASE`
+- `DB_SSL` optional; truthy values map to `sslmode=require`, otherwise `sslmode=disable`.
+- `DB_SCHEMA` required. The database user is expected to create and manage its own schema. There is no default schema assumption, and there is no `public` schema requirement.
+- `FIREBASE_PROJECT_ID` required for Firebase token verification.
+- `FIREBASE_CLIENT_EMAIL` optional when using explicit Firebase Admin service-account credentials.
+- `FIREBASE_PRIVATE_KEY` optional when using explicit Firebase Admin service-account credentials.
+
+The backend assembles its PostgreSQL connection string from the `DB_*` variables at runtime.
+
+### Frontend
+- `VITE_API_BASE` optional; defaults to the current origin.
+- `VITE_FIREBASE_API_KEY`
+- `VITE_FIREBASE_AUTH_DOMAIN`
+- `VITE_FIREBASE_PROJECT_ID`
+- `VITE_FIREBASE_APP_ID`
+
+The frontend uses Google sign-in and passwordless email-link authentication through Firebase.
+
+## Testing
+
+`bun run test` is designed to run in an isolated environment. The current backend tests use in-memory repositories and fake auth verifiers, so they do not require a live PostgreSQL instance or Firebase project.

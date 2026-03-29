@@ -1,82 +1,71 @@
 # Init Org Page
 
 ## Overview
-Implement starter multi-tenant organization onboarding on the current SolidJS + Hono monorepo using Firebase authentication and PostgreSQL-backed organization persistence. The feature set covers no-org entry, organization creation, role-based invites, invite acceptance, and organization landing routing at `/org/<organization-slug>`.
+Apply a follow-up maintenance pass to the completed multi-tenant starter so the repository metadata and pull-request automation match the shipped SolidJS + Hono, Firebase, and PostgreSQL onboarding stack. This scope is limited to a pull-request GitHub Actions workflow, canonical command metadata, and README accuracy.
 
 ## Goals
-1. Define the architecture around the current `SolidJS + Hono` stack, real Firebase authentication, and PostgreSQL organization persistence without assuming any default database schema exists.
-2. Add a no-org landing page with Google SSO and passwordless Firebase email-link sign-in to start organization creation.
-3. Add organization creation with slug validation, uniqueness, and the originating user recorded as the `Admin` role.
-4. Add invite creation and acceptance where invited users may only be assigned `Admin`, `Division Chair`, `Music Reviewer`, `Concert Chair`, or `Read Only`.
-5. Add the organization landing page at `/org/<organization-slug>` with organization name, logout, role message, and a dismissible first-visit welcome box for invited users.
-6. Add authenticated backend APIs and PostgreSQL persistence for organizations, users, invites, and roles, including database tables for user records and their organization associations, without relying on a `public` schema.
-7. Connect frontend auth/API state so returning users route to their organization landing page after login.
-8. Add automated coverage for the new organization/auth flows and keep `bun run lint`, `bun run build`, and `bun run test` passing.
+1. Add a GitHub Actions workflow that runs on pull requests targeting `main` and `release/v*`.
+2. Configure that workflow to run the repo's pinned verification commands for pull requests, including `bun run test` because the current test suite is isolated from live PostgreSQL and Firebase dependencies.
+3. Update the repo metadata in `.codex/project-structure.md` so it accurately describes the current monorepo purpose, architecture, and canonical verification commands.
+4. Update the canonical pinned-command records in the task spec and repo metadata to match the selected verification commands for this repo and this task.
+5. Refresh `README.md` so it accurately describes the current SolidJS + Hono multi-tenant starter, local commands, and environment requirements for Firebase and PostgreSQL.
+6. Keep the follow-up scope limited to CI/workflow, canonical command metadata, and README accuracy without changing the already-implemented org onboarding behavior.
 
 ## Non-goals
-- Production deployment, domains, and CI/CD wiring.
-- Enterprise tenancy features beyond the starter flows in `specs/Multi-Tenant-Starter.md`.
-- Rich onboarding content beyond the starter welcome box for first-time invited users.
+- Changing the implemented org onboarding feature behavior, routes, roles, or persistence model.
+- Adding deployment infrastructure beyond the requested pull-request workflow.
 
 ## Use cases / user stories
-- As a new user without an organization, I can choose Google SSO or passwordless email-link sign-in and start creating an organization.
-- As the originating user, I become the `Admin` for the organization I create.
-- As an admin, I can invite other users into my organization with one of the allowed roles.
-- As an invited user, I can accept the invite, complete sign-in, and land on my organization page with a first-visit welcome box.
-- As a returning member, I sign in and route directly to my organization landing page.
+- As a reviewer opening a PR into `main` or `release/v*`, I get automated verification for the canonical Bun commands.
+- As a contributor, I can rely on the repo metadata and README to describe the current multi-tenant starter instead of the retired Shopify/Stripe app description.
+- As a maintainer, I can see that CI runs only commands that are safe without a live database or Firebase environment.
 
 ## Current behavior
-- Notes: the repository currently contains a festival registration app skeleton, but no organization onboarding, invite, tenancy, or authentication flows for this task.
-- Key files:
-  - `packages/frontend/src/App.tsx`
-  - `packages/backend/src/app.ts`
-  - `packages/common/src/domain.ts`
-  - `specs/Multi-Tenant-Starter.md`
+- The multi-tenant starter implementation is present, but there is no `.github/workflows/` pull-request workflow.
+- [`README.md`](/Users/eric/.codex/worktrees/d85b/Festival/README.md) still describes a Shopify/Stripe registration app and obsolete env vars.
+- [`.codex/project-structure.md`](/Users/eric/.codex/worktrees/d85b/Festival/.codex/project-structure.md) still describes the old app shape and stale verification commands.
+- The current root commands in [`package.json`](/Users/eric/.codex/worktrees/d85b/Festival/package.json) are `bun run lint`, `bun run build`, and `bun run test`.
+- The inspected test surfaces are isolated from external services:
+  - backend org-route tests use `InMemoryOrganizationRepository` and `FakeAuthVerifier`
+  - common and frontend tests are local Bun tests
 
 ## Proposed behavior
-- Behavior changes:
-  - add frontend routes and UI states for no-org landing, sign-in choice, organization creation, invite acceptance, and organization landing;
-  - add backend routes and persistence for organizations, memberships, invites, and authenticated user association;
-  - use Firebase for Google SSO and passwordless email-link authentication;
-  - use PostgreSQL for application data with an operator-created schema and no dependency on `public`.
-- Edge cases:
-  - invalid or duplicate organization slugs must be rejected;
-  - sign-in cancellation must return to the no-org landing page;
-  - unauthorized API access must be rejected;
-  - invite acceptance must honor only the assigned role and organization;
-  - first-visit welcome messaging must only appear for newly invited users.
+- Add a PR workflow under `.github/workflows/` that runs for base branches `main` and `release/v*`.
+- Install Bun in CI and run the canonical verification commands `bun run lint`, `bun run build`, and `bun run test`.
+- Update repo metadata and README text so the current architecture, local commands, and env requirements are documented consistently.
+- Leave application runtime behavior unchanged.
 
 ## Technical design
 ### Architecture / modules impacted
-- `packages/frontend/*` for routing, auth UI, invite flow, and organization landing.
-- `packages/backend/*` for auth verification, organization APIs, and persistence wiring.
-- `packages/common/*` for shared role, invite, organization, and membership contracts.
-- Root workspace/tooling files only as needed to support dependencies and verification.
+- `.github/workflows/*` for pull-request verification automation.
+- `.codex/project-structure.md` for canonical repo metadata and verification records.
+- `tasks/init-org-page/spec.md` for task-local pinned verification commands.
+- `README.md` for contributor-facing setup and architecture documentation.
 
-### API changes (if any)
-- New or updated Hono endpoints for:
-  - auth session/user bootstrap
-  - organization creation
-  - invite creation and acceptance
-  - organization membership lookup / landing bootstrap
+### CI behavior
+- Trigger: `pull_request`
+- Base branches:
+  - `main`
+  - `release/v*`
+- Steps:
+  - checkout
+  - install Bun
+  - `bun install --frozen-lockfile`
+  - `bun run lint`
+  - `bun run build`
+  - `bun run test`
 
-### UI/UX changes (if any)
-- New organization onboarding and landing surfaces in the SolidJS frontend.
-- Sign-in choice entry point with Google and passwordless email-link options.
-- Dismissible welcome box on first invited-user landing.
-
-### Data model / schema changes (PostgreSQL)
-- Migrations: required for organization, user, membership, invite, and first-visit welcome state tables or equivalent persisted structures.
-- Backward compatibility: new feature surface; no existing org schema to preserve.
-- Rollback: remove newly added org/auth routes and schema objects created for this task.
+### Verification rationale
+- `bun run test` stays in the pinned command set because the current suite does not require a live PostgreSQL instance or Firebase project:
+  - backend tests inject in-memory doubles instead of loading runtime env or connecting to Postgres
+  - frontend/common tests execute locally with Bun only
 
 ## Security & privacy
-- Firebase-issued identity must be verified before granting organization API access.
-- No secrets may be committed; Firebase and PostgreSQL configuration stays in environment variables.
-- Invite acceptance must bind the authenticated user to only the intended organization and assigned role.
+- CI must not require committed secrets.
+- Documentation must continue to direct users to environment variables rather than in-repo credentials.
 
-## Observability (logs/metrics)
-- Log auth/bootstrap failures, invite acceptance failures, and organization API authorization failures with enough context for diagnosis and without leaking secrets.
+## Observability
+- GitHub Actions logs provide PR verification visibility for the pinned commands.
 
 ## Governing context
 - Rules:
@@ -94,15 +83,15 @@ Implement starter multi-tenant organization onboarding on the current SolidJS + 
   - network-restricted shell
 
 ## Goal lock assertion
-Locked goals source: `goals/init-org-page/goals.v3.md` (state: `locked`).
+Locked goals source: `goals/init-org-page/goals.v4.md` (state: `locked`).
 No reinterpretation or scope expansion is permitted without relock.
 
 ## Ambiguity check
 No blocking ambiguity remains for Stage 2.
-Resolved contract items include Firebase Google + passwordless email-link auth, `/org/<organization-slug>` routing, PostgreSQL persistence, allowed invite roles, and no reliance on a `public` schema.
+Resolved contract items include the pull-request base branches, the requirement to update `.codex/project-structure.md`, and the decision to keep `bun run test` in CI because the current suite is isolated from live DB/Firebase services.
 
 ## Verification Commands
-> Pin the exact commands discovered for this repo (also update `./codex/project-structure.md` and `./codex/codex-config.yaml` if canonical command records change).
+> Pin the exact commands discovered for this repo (also update `./.codex/project-structure.md` and `./.codex/codex-config.yaml` if canonical command records change).
 
 - Lint:
   - `bun run lint`
@@ -113,50 +102,46 @@ Resolved contract items include Firebase Google + passwordless email-link auth, 
 
 ## Test strategy
 - Unit:
-  - role, slug, invite, and org-membership rule logic in shared/backend surfaces
+  - keep command-record and documentation changes aligned with the existing isolated test suite
 - Integration:
-  - Hono route tests for auth bootstrap, organization creation, invites, and membership lookup
-- E2E / UI (if applicable):
-  - frontend tests for no-org landing, auth choice flow, organization creation, invite landing, and organization routing
+  - verify the GitHub Actions workflow runs the same pinned commands recorded in repo metadata
+- Documentation:
+  - ensure README and `.codex/project-structure.md` reflect the current multi-tenant starter and env requirements
 
 ## Acceptance criteria checklist
-- [ ] No-org landing exposes Google SSO and passwordless email-link sign-in, with cancel returning home.
-- [ ] Organization creation enforces lowercase-hyphen slug rules, maximum length, and uniqueness.
-- [ ] The originating user is persisted as the `Admin` role for the created organization.
-- [ ] Invite creation is limited to `Admin`, `Division Chair`, `Music Reviewer`, `Concert Chair`, and `Read Only`.
-- [ ] Invited users can accept an invite and land on the shared organization page with a dismissible first-visit welcome box.
-- [ ] Backend persistence includes tables or equivalent persisted structures for users and their organization associations.
-- [ ] Backend routes reject unauthorized access and do not rely on a `public` schema.
-- [ ] Returning authenticated users route to `/org/<organization-slug>`.
-- [ ] Root `bun run lint`, `bun run build`, and `bun run test` pass.
+- [ ] A workflow file exists under `.github/workflows/` and triggers on pull requests whose base branch is `main` or matches `release/v*`.
+- [ ] The workflow installs dependencies and runs `bun run lint`, `bun run build`, and `bun run test`.
+- [ ] `.codex/project-structure.md` no longer describes the old Shopify/Stripe app and instead reflects the current monorepo purpose, workspace layout, and canonical verification commands.
+- [ ] This spec and `.codex/project-structure.md` reflect the same canonical verification commands used by the workflow.
+- [ ] `README.md` documents the current workspace purpose, local run commands, and Firebase/PostgreSQL env vars, including the operator-managed non-`public` schema requirement.
+- [ ] Root `bun run lint`, `bun run build`, and `bun run test` pass after the updates.
 
 ## IN SCOPE
-- Frontend changes required for organization onboarding, invite acceptance, and organization landing.
-- Backend API and persistence changes required for organizations, memberships, invites, and auth-backed access control.
-- Shared domain contract changes required for organization roles and tenancy data.
-- PostgreSQL integration work required to operate against an operator-created non-`public` schema.
-- Automated tests needed for the new org/auth behavior.
+- Pull-request workflow creation for `main` and `release/v*`.
+- Repo metadata updates in `.codex/project-structure.md`.
+- Task verification-command record updates in this spec.
+- README refresh for the current multi-tenant starter.
 
 ## OUT OF SCOPE
-- Deployment infrastructure, CI/CD, and domain/subdomain provisioning.
-- Broader tenant administration features beyond the listed roles and starter onboarding flow.
-- Non-starter onboarding instructions beyond the initial dismissible welcome box.
+- Changes to frontend, backend, shared-domain, or persistence behavior for org onboarding.
+- Deployment automation beyond the requested PR workflow.
+- New runtime tests or feature work unrelated to the metadata/workflow follow-up.
 
 ## Execution posture lock
 - Simplicity bias locked.
-- Surgical changes only, limited to task surfaces.
+- Surgical changes only, limited to workflow and documentation/metadata surfaces.
 - Fail-fast behavior required for uncertain, unauthorized, or blocked states.
 
 ## Change control
 - Goal, constraint, and success-criteria changes require relock through `establish-goals`.
 - Verification contract (`lint`, `build`, `test`) cannot be weakened or bypassed.
-- Database schema assumptions cannot be expanded to include `public` without relock.
+- CI command selection must remain aligned with the verified isolated test capability.
 
 ## Stage 2 verdict
 READY FOR PLANNING
 
 ## Implementation phase strategy
-- Complexity: scored:L3 (multi-surface)
-- Complexity scoring details: score=12; recommended-goals=6; guardrails-all-true=false; signals=/Users/eric/.codex/worktrees/d85b/Festival/tasks/init-org-page/complexity-signals.json
-- Active phases: 1..6
+- Complexity: focused
+- Complexity scoring details: score=6; recommended-goals=4; guardrails-all-true=true; signals=/Users/eric/.codex/worktrees/d85b/Festival/tasks/init-org-page/complexity-signals.json
+- Active phases: 1..3
 - No new scope introduced: required
