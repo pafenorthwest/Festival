@@ -1,4 +1,5 @@
 prefix_rule(pattern=["swiftlint"], decision="allow")
 prefix_rule(pattern=["xcodebuild"], decision="allow")
-prefix_rule(pattern=["/bin/zsh", "-lc", "xcodebuild -project iOSCommerceApp.xcodeproj -scheme iOSCommerceApp -destination 'platform=iOS Simulator,name=iPad Pro (12.9-inch) (6th generation)' build > /tmp/guest-entry-build-latest.log 2>&1"], decision="allow")
 prefix_rule(pattern=["git", "-C", "/Users/eric/orderport/repos/iOSCommerceApp", "rev-parse", "--short", "HEAD"], decision="allow")
+prefix_rule(pattern=["docker", "run"], decision="allow")
+prefix_rule(pattern=["docker", "build"], decision="allow")

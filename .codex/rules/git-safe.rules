@@ -118,11 +118,156 @@ prefix_rule(
 )
 
 prefix_rule(
-    pattern = ["gh", "pr", "create"],
+    pattern = ["./codex/scripts/gh-wrap.sh", "pr", "create"],
     decision = "allow",
-    justification = "Allow PR creation as fallback when GitHub MCP PR creation fails with permission/auth-access errors.",
+    justification = "Allow wrapper-based PR creation fallback after GitHub MCP auth-access failure.",
     match = [
-        "gh pr create --base main --head land-the-plan/task/agent-20260210120000 --title \"Title\" --body \"Body\"",
+        "./codex/scripts/gh-wrap.sh pr create --base main --head land-the-plan/task/agent-20260210120000 --title \"Title\" --body \"Body\"",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./codex/scripts/gh-wrap.sh", "pr", "view"],
+    decision = "allow",
+    justification = "Allow wrapper-based PR lookup during fallback.",
+    match = [
+        "./codex/scripts/gh-wrap.sh pr view land-the-plan/task/agent-20260210120000 --json number,url",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./codex/scripts/gh-wrap.sh", "pr", "edit"],
+    decision = "allow",
+    justification = "Allow wrapper-based PR update during fallback.",
+    match = [
+        "./codex/scripts/gh-wrap.sh pr edit 123 --title \"Title\" --body \"Body\"",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./codex/scripts/gh-wrap.sh", "pr", "list"],
+    decision = "allow",
+    justification = "Allow wrapper-based PR listing for explicit operator workflows.",
+    match = [
+        "./codex/scripts/gh-wrap.sh pr list --repo ericpassmore/prompts",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./codex/scripts/gh-wrap.sh", "pr", "comment"],
+    decision = "allow",
+    justification = "Allow wrapper-based PR comment creation for explicit operator workflows.",
+    match = [
+        "./codex/scripts/gh-wrap.sh pr comment 123 --body \"Body\"",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./codex/scripts/gh-wrap.sh", "pr", "status"],
+    decision = "allow",
+    justification = "Allow wrapper-based PR status checks.",
+    match = [
+        "./codex/scripts/gh-wrap.sh pr status --repo ericpassmore/prompts",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./codex/scripts/gh-wrap.sh", "pr", "close"],
+    decision = "allow",
+    justification = "Allow wrapper-based PR close operations for explicit operator workflows.",
+    match = [
+        "./codex/scripts/gh-wrap.sh pr close 123 --repo ericpassmore/prompts",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./codex/scripts/gh-wrap.sh", "pr", "reopen"],
+    decision = "allow",
+    justification = "Allow wrapper-based PR reopen operations for explicit operator workflows.",
+    match = [
+        "./codex/scripts/gh-wrap.sh pr reopen 123 --repo ericpassmore/prompts",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./codex/scripts/gh-wrap.sh", "edit"],
+    decision = "allow",
+    justification = "Allow the wrapper alias for PR edit workflows.",
+    match = [
+        "./codex/scripts/gh-wrap.sh edit 123 --title \"Title\" --body \"Body\"",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./codex/scripts/gh-wrap.sh", "issue", "create"],
+    decision = "allow",
+    justification = "Allow wrapper-based issue creation in ericpassmore/prompts for the issue-first workflow.",
+    match = [
+        "./codex/scripts/gh-wrap.sh issue create --repo ericpassmore/prompts --title \"skill: summary\" --body \"Body\"",
+        "./codex/scripts/gh-wrap.sh issue create --repo ericpassmore/prompts --title \"skill: summary\" --body-file /tmp/issue.md",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./codex/scripts/gh-wrap.sh", "issue", "delete"],
+    decision = "allow",
+    justification = "Allow wrapper-based issue deletion for manual auth diagnostics.",
+    match = [
+        "./codex/scripts/gh-wrap.sh issue delete 123 --repo ericpassmore/prompts --yes",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./codex/scripts/gh-wrap.sh", "issue", "edit"],
+    decision = "allow",
+    justification = "Allow wrapper-based issue edits for explicit operator workflows.",
+    match = [
+        "./codex/scripts/gh-wrap.sh issue edit 123 --repo ericpassmore/prompts --title \"Title\"",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./codex/scripts/gh-wrap.sh", "issue", "list"],
+    decision = "allow",
+    justification = "Allow wrapper-based issue listing for explicit operator workflows.",
+    match = [
+        "./codex/scripts/gh-wrap.sh issue list --repo ericpassmore/prompts",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./codex/scripts/gh-wrap.sh", "issue", "close"],
+    decision = "allow",
+    justification = "Allow wrapper-based issue close operations for explicit operator workflows.",
+    match = [
+        "./codex/scripts/gh-wrap.sh issue close 123 --repo ericpassmore/prompts",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./codex/scripts/gh-wrap.sh", "issue", "reopen"],
+    decision = "allow",
+    justification = "Allow wrapper-based issue reopen operations for explicit operator workflows.",
+    match = [
+        "./codex/scripts/gh-wrap.sh issue reopen 123 --repo ericpassmore/prompts",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./codex/scripts/gh-wrap.sh", "label", "create"],
+    decision = "allow",
+    justification = "Allow wrapper-based label creation for explicit operator workflows.",
+    match = [
+        "./codex/scripts/gh-wrap.sh label create example --repo ericpassmore/prompts --description \"Example\" --color FF0000",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./codex/scripts/gh-auth-check.sh"],
+    decision = "allow",
+    justification = "Allow explicit manual GitHub auth diagnostics through the wrapper-based check script.",
+    match = [
+        "./codex/scripts/gh-auth-check.sh --repo ericpassmore/prompts",
     ],
 )
 

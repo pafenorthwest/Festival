@@ -26,8 +26,19 @@ fi
 
 STATE=$(sed -n 's/^- State: //p; s/^State: //p' "$GOALS_FILE" | head -n 1)
 
-GOAL_COUNT=$(sed -n '/^## Goals/,/^## /p' "$GOALS_FILE" | awk '/^[0-9]+\./ {count++} END {print count+0}')
-SUCCESS_COUNT=$(sed -n '/^## Success criteria/,/^## /p' "$GOALS_FILE" | awk '/^-/ {count++} END {print count+0}')
+count_section_lines() {
+  local heading_prefix="$1"
+  local content_pattern="$2"
+  awk -v heading_prefix="${heading_prefix}" -v content_pattern="${content_pattern}" '
+    index($0, heading_prefix) == 1 { in_section=1; next }
+    /^## / && index($0, heading_prefix) != 1 && in_section { exit }
+    in_section && $0 ~ content_pattern { count++ }
+    END { print count+0 }
+  ' "$GOALS_FILE"
+}
+
+GOAL_COUNT="$(count_section_lines "## Goals" "^[0-9]+\\.")"
+SUCCESS_COUNT="$(count_section_lines "## Success criteria" "^-")"
 
 if [[ "$GOAL_COUNT" -gt 20 ]]; then
   echo "ERROR: Too many goals (${GOAL_COUNT}); max is 20"
