@@ -33,7 +33,7 @@ Document the repository's local setup path end to end. Add a dedicated `SETUP.md
   - `SETUP.md` does not exist.
   - The repo-root `.env` and `develop.env` currently use a mixed and partially stale naming scheme that does not cleanly reflect the approved setup contract.
   - PostgreSQL bootstrap currently has an init script for role/database creation, but the repo does not automatically create the application schema.
-  - The backend code requires `DB_SCHEMA`, `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, and `FIREBASE_PRIVATE_KEY`; the frontend code requires `VITE_API_BASE`, `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, and `VITE_FIREBASE_APP_ID`.
+  - The backend code requires `DB_SCHEMA`, `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, and `FIREBASE_PRIVATE_KEY`; the frontend code requires `FRONT_API_BASE`, `FRONT_FIREBASE_API_KEY`, `FRONT_FIREBASE_AUTH_DOMAIN`, `FRONT_FIREBASE_PROJECT_ID`, and `FRONT_FIREBASE_APP_ID`.
 - Key files:
   - `README.md`
   - `.env`

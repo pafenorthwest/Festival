@@ -32,12 +32,12 @@ Festival needs both frontend Firebase web config and backend Firebase Admin cred
 Use the official [Firebase Web setup guide](https://firebase.google.com/docs/web/setup).
 
 You need these values from the Firebase console for the frontend:
-- `VITE_FIREBASE_API_KEY`
-- `VITE_FIREBASE_AUTH_DOMAIN`
-- `VITE_FIREBASE_PROJECT_ID`
-- `VITE_FIREBASE_APP_ID`
+- `FRONT_FIREBASE_API_KEY`
+- `FRONT_FIREBASE_AUTH_DOMAIN`
+- `FRONT_FIREBASE_PROJECT_ID`
+- `FRONT_FIREBASE_APP_ID`
 
-Set `VITE_API_BASE=http://localhost:3000` for local development so the frontend talks to the backend running on port `3000`.
+Set `FRONT_API_BASE=http://localhost:3000` for local development so the frontend talks to the backend running on port `3000`.
 
 ### 2.2 Enable Authentication providers
 
@@ -141,11 +141,11 @@ These values come from the Firebase web app configuration. See the official [Fir
 
 | Variable | Required | Notes |
 | --- | --- | --- |
-| `VITE_API_BASE` | yes for split frontend/backend local dev | Set to `http://localhost:3000` when the frontend runs on `5173` and the backend runs on `3000`. |
-| `VITE_FIREBASE_API_KEY` | yes | Firebase web app API key. |
-| `VITE_FIREBASE_AUTH_DOMAIN` | yes | Usually `<project-id>.firebaseapp.com`. |
-| `VITE_FIREBASE_PROJECT_ID` | yes | Firebase project ID exposed to the web app. |
-| `VITE_FIREBASE_APP_ID` | yes | Firebase web app ID. |
+| `FRONT_API_BASE` | yes for split frontend/backend local dev | Set to `http://localhost:3000` when the frontend runs on `5173` and the backend runs on `3000`. |
+| `FRONT_FIREBASE_API_KEY` | yes | Firebase web app API key. |
+| `FRONT_FIREBASE_AUTH_DOMAIN` | yes | Usually `<project-id>.firebaseapp.com`. |
+| `FRONT_FIREBASE_PROJECT_ID` | yes | Firebase project ID exposed to the web app. |
+| `FRONT_FIREBASE_APP_ID` | yes | Firebase web app ID. |
 
 #### Backend Firebase Admin
 
@@ -186,7 +186,7 @@ APP_URL=http://localhost:5173
 API_URL=http://localhost:3000
 ```
 
-The frontend runtime also needs the `VITE_*` Firebase values, and the backend runtime needs the `DB_*` and `FIREBASE_*` values described above.
+The frontend runtime also needs the `FRONT_*` Firebase values, and the backend runtime needs the `DB_*` and `FIREBASE_*` values described above.
 
 ## 5. Start the app locally
 

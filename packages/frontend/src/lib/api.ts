@@ -10,7 +10,7 @@ import type {
 	SessionResponse,
 } from "@festival/common";
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? "";
+const API_BASE = import.meta.env.FRONT_API_BASE ?? "";
 
 async function requestJson<T>(
 	path: string,
