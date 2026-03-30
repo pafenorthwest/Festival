@@ -3,13 +3,15 @@ code_review:
 
 github_cli:
   owner_token_env:
-    example-owner: GH_PAFE_TOKEN
+    ericpassmore: GH_PROMPT_TOKEN
+    pafenorthwest: GH_PAFE_TOKEN
 
 notes:
   - "Update this manifest only when the repository's canonical commands change."
   - "Tasks must also copy the chosen commands into /tasks/<task-name>/spec.md under Verification Commands."
   - "github_cli.owner_token_env maps a GitHub owner/org to the env var name a wrapper should use for GH_TOKEN rebinding."
   - "Store env var names only; never store token values in this file."
+
 
 
 # PREPARE-TAKEOFF BOOTSTRAP START

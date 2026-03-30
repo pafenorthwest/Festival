@@ -21,10 +21,10 @@ const PENDING_EMAIL_KEY = "festival.pendingEmail";
 const PENDING_INTENT_KEY = "festival.pendingIntent";
 
 function getFirebaseConfig() {
-	const apiKey = import.meta.env.VITE_FIREBASE_API_KEY;
-	const authDomain = import.meta.env.VITE_FIREBASE_AUTH_DOMAIN;
-	const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID;
-	const appId = import.meta.env.VITE_FIREBASE_APP_ID;
+	const apiKey = import.meta.env.FRONT_FIREBASE_API_KEY;
+	const authDomain = import.meta.env.FRONT_FIREBASE_AUTH_DOMAIN;
+	const projectId = import.meta.env.FRONT_FIREBASE_PROJECT_ID;
+	const appId = import.meta.env.FRONT_FIREBASE_APP_ID;
 
 	if (!apiKey || !authDomain || !projectId || !appId) {
 		return null;
@@ -62,7 +62,7 @@ function assertAuth(): Auth {
 	const auth = getFirebaseAuth();
 	if (!auth) {
 		throw new Error(
-			"Firebase web configuration is missing. Set the required VITE_FIREBASE_* environment variables.",
+			"Firebase web configuration is missing. Set the required FRONT_FIREBASE_* environment variables.",
 		);
 	}
 
