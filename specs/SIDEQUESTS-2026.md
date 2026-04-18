@@ -233,18 +233,224 @@ Add this as a fourth parallel workstream. This one is operationally critical—y
 
 ---
 
-### Priority
+## 5. Music Review App & Catalog Cleanup
 
-**High priority** — this is not a “nice to have”
-This is what prevents weeks of manual cleanup and damaged trust with families.
+**Goal:** Create an internal review tool and API to normalize repertoire data into professional titles, canonical composer names, and reference-backed works.
+
+**Purpose:**
+
+* Clean up inconsistent piece titles entered during registration
+* Standardize composer names
+* Tie reviewed works to an authoritative reference
+* Build a reusable repertoire catalog over time
+
+**Key Principle:**
+
+* User-submitted text is the raw input
+* Reviewed catalog data becomes the trusted internal reference
 
 ---
 
-# Final Side Quest Set
+### Scope
+
+* Internal review app for staff and editors
+* API for querying, reviewing, and updating repertoire records
+* IMSLP reference URL for composer/work verification
+* Personal review queue for each reviewer
+* Flagging system for titles needing attention
+* Filtering by:
+
+  * class type
+  * division
+  * string search
+  * review status
+  * assigned reviewer
+
+---
+
+### Core Capabilities
+
+**Review Workflow**
+
+* View submitted title/composer
+* Compare against normalized values
+* Save reviewed title and composer
+* Attach IMSLP URL reference
+* Mark as:
+
+  * reviewed
+  * flagged
+  * needs follow-up
+  * approved for publication
+
+**Personal Work Queue**
+
+* Each reviewer has an assigned queue
+* Queue can be manually assigned or auto-filled
+* Reviewer sees:
+
+  * pending items
+  * flagged items
+  * recent completions
+
+**Flagging**
+
+* Flag records for:
+
+  * ambiguous title
+  * missing composer
+  * spelling issue
+  * duplicate work
+  * uncertain work identification
+* Add reviewer notes
+
+**Filtering**
+
+* By class type
+* By division
+* By substring / free-text match
+* By status
+* By reviewer
+* By flagged / unflagged
+
+---
+
+### Deliverables
+
+**Tables:**
+
+* `music_entry`
+* `music_review`
+* `music_flag`
+* `composer_catalog`
+* `work_catalog`
+* `review_assignment`
+
+**Suggested Data Model**
+
+* `music_entry`
+
+  * raw title
+  * raw composer
+  * performer / registration linkage
+  * class type
+  * division
+* `music_review`
+
+  * normalized title
+  * normalized composer
+  * imslp_url
+  * status
+  * reviewed_by
+  * reviewed_at
+* `music_flag`
+
+  * flag type
+  * note
+  * created_by
+* `composer_catalog`
+
+  * canonical composer name
+  * imslp composer URL
+* `work_catalog`
+
+  * canonical work title
+  * composer reference
+  * accepted naming form
+
+---
+
+### API Surface
+
+**Read**
+
+* list music entries
+* filter by class type / division / status / assigned user
+* get reviewer queue
+* search by title/composer substring
+
+**Write**
+
+* assign entry to reviewer
+* save reviewed title/composer
+* attach IMSLP URL
+* add or clear flags
+* mark approved / needs follow-up
+
+**Admin**
+
+* bulk assign queue items
+* export reviewed catalog
+* view flagged backlog
+
+---
+
+### UI Capabilities
+
+* Reviewer dashboard with personal queue
+* Split view:
+
+  * raw submitted data
+  * normalized reviewed data
+* Inline flagging and notes
+* Filter panel:
+
+  * class type
+  * division
+  * string match
+  * status
+  * assigned user
+* Quick links to IMSLP reference
+* History of changes per record
+
+---
+
+### Exit Criteria
+
+* Reviewers can process repertoire through a personal queue
+* Titles and composers can be normalized consistently
+* Each approved work can include an IMSLP reference URL
+* Staff can filter and resolve flagged titles efficiently
+* Cleaned data can be reused in programs, schedules, and reports
+
+---
+
+### Failure Modes
+
+* No distinction between raw submission and reviewed value
+* Editors overwrite source text with no audit history
+* IMSLP links stored inconsistently
+* No queue ownership, so work stalls
+* No canonical catalog, forcing repeated manual cleanup
+
+---
+
+### Integration Guidance
+
+* Can begin after **Phase 2**, once class registration metadata exists
+* Most useful before large-scale scheduling, program generation, and concert publication
+* Should integrate later with:
+
+  * registration metadata
+  * program generation
+  * schedule output
+  * adjudication / results publication
+
+---
+
+### Priority
+
+**High priority** Admin Billing and Reconcilation 
+
+---
+
+# Updated Side Quest Set
 
 * Communications Automation
 * Volunteer Portal
 * Drop & Transfer Management
 * **Admin Billing Reconciliation (Debit & Credit Repair)**
+* Music Review App & Catalog Cleanup
+
 
 
