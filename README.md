@@ -1,6 +1,58 @@
-# Festival
+# Festival Software
 
-Festival is a Bun workspace monorepo for a multi-tenant organization starter built with SolidJS, Hono, Firebase Authentication, and PostgreSQL.
+Festival Software is a purpose-built platform designed to support the full lifecycle of a performing arts festival—from registration and payments to scheduling and event execution.
+
+The system is engineered to replace legacy tools that fail under load, lack flexibility, and create operational friction during peak registration periods.
+
+## Core Approach
+
+This platform is built around a **clear separation of responsibilities**:
+
+* **Shopify** handles payments, checkout, and customer identity for families
+* **Local Application** manages festival-specific logic, including registrations, metadata, scheduling, and capacity
+* **Firebase** supports internal authentication for administrators and staff
+
+This architecture ensures reliability, scalability, and flexibility while leveraging proven external systems where appropriate.
+
+## Key Capabilities
+
+* **Multi-Tenant Organization Management**
+  Support for multiple festivals or organizations with strict data isolation and role-based access control
+* **Memberships & Payments (Shopify Integration)**
+  Memberships and class registrations are purchased through Shopify, ensuring a stable and familiar checkout experience
+* **Class Registration & Entitlements**
+  Registrations are modeled as entitlements, with rich metadata captured locally (performer details, repertoire, age group)
+* **Capacity Management & Waitlists**
+  The system enforces class limits, manages waitlists, and ensures fairness during high-demand registration periods
+* **High-Performance Registration**
+  Designed to handle peak load scenarios (target: 500+ requests/second) without degradation
+* **Scheduling & Venue Management**
+  Tools to assign performers to rooms and time slots, supporting real-world festival logistics
+
+## Design Principles
+
+* **Own the Critical Logic**
+  Inventory, scheduling, and fairness are controlled locally—not delegated to third-party systems
+* **Asynchronous by Default**
+  Shopify webhooks drive state changes; all integrations are idempotent and replayable
+* **Separation of Identity Domains**
+  Families authenticate via Shopify; administrators via Firebase
+* **Operational Resilience**
+  The system is designed to tolerate inconsistencies and includes reconciliation paths between systems
+
+
+## Roadmap Overview
+
+![Roadmap Timeline 2026](./specs/festival-software-timeline-2026.png)
+
+* **Foundation & Multi-Tenant Core** — Establish authentication, organizations, and data model
+* **Memberships & Shopify Integration** — Enable payments and external identity
+* **Class Registration & Entitlements** — Capture structured registration data
+* **Smart Cart, Capacity & Waitlists** — Enforce limits and fairness
+* **Performance & Scale Readiness** — Validate system under load
+* **Scheduling & Venue Management** — Support event execution
+
+
 
 ## Workspaces
 - `packages/common`: shared organization, membership, invite, and auth contracts.
