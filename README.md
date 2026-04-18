@@ -4,7 +4,7 @@ Festival Software is a purpose-built platform designed to support the full lifec
 
 The system is engineered to replace legacy tools that fail under load, lack flexibility, and create operational friction during peak registration periods.
 
-See [Detailed Roadmap](./specs/ROADMAP-2026.md)
+See [Detailed Roadmap](./specs/ROADMAP-2026.md) and [Sidequests](./specs/SIDEQUESTS-2026.md) for more detailed work breakdown.
 
 ## Core Approach
 
