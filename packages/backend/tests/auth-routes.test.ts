@@ -215,4 +215,26 @@ describe("auth routes", () => {
 
 		expect(response.status).toBe(400);
 	});
+
+	it("rejects non-object login event bodies", async () => {
+		const { app } = await createTestApp();
+		await app.fetch(
+			new Request(
+				"http://test/api/v1/auth/sync",
+				withAuth("user", { method: "POST" }),
+			),
+		);
+
+		const response = await app.fetch(
+			new Request(
+				"http://test/api/v1/auth/login-event",
+				withAuth("user", {
+					method: "POST",
+					body: "null",
+				}),
+			),
+		);
+
+		expect(response.status).toBe(400);
+	});
 });

@@ -114,6 +114,10 @@ async function readLoginEventInput(c: Context): Promise<LoginEventInput> {
 		throw new AppError("Request body must be valid JSON.", 400);
 	}
 
+	if (!payload || typeof payload !== "object") {
+		throw new AppError("Request body must be a JSON object.", 400);
+	}
+
 	const provider = (payload as { provider?: unknown }).provider;
 	if (!isAuthLoginProvider(provider)) {
 		throw new AppError("provider must be one of: google, password.", 400);
