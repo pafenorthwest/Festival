@@ -11,6 +11,14 @@ export interface InMemoryLoginEventRecord extends InsertLoginEventInput {
 	loginAtIso: string;
 }
 
+/**
+ * Test/local AppUserRepository implementation.
+ *
+ * createApp decides whether this is used: callers can inject it directly for
+ * tests, and createApp falls back to it when no DB_SCHEMA-backed Postgres app
+ * user repository can be constructed. Runtime environments with DB_SCHEMA use
+ * PostgresAppUserRepository instead.
+ */
 export class InMemoryAppUserRepository implements AppUserRepository {
 	private readonly users = new Map<string, AppUserRecord>();
 	private readonly usersByFirebaseUid = new Map<string, string>();
