@@ -29,6 +29,37 @@ export interface OrganizationUserRecord {
 	createdAtIso: string;
 }
 
+export type AuthLoginProvider = "google" | "password";
+
+export interface AppUserRecord {
+	id: string;
+	firebaseUid: string;
+	email: string;
+	fullName?: string;
+	isActive: boolean;
+	createdAtIso: string;
+	updatedAtIso: string;
+}
+
+export interface AppUserPayload {
+	id: string;
+	firebaseUid: string;
+	email: string;
+	fullName?: string;
+}
+
+export interface AppUserResponse {
+	user: AppUserPayload;
+}
+
+export interface LoginEventInput {
+	provider: AuthLoginProvider;
+}
+
+export interface LoginEventResponse {
+	status: "ok";
+}
+
 export interface OrganizationMembershipRecord {
 	id: string;
 	organizationId: string;
@@ -116,6 +147,12 @@ export interface DismissWelcomeResponse {
 
 export function isOrganizationRole(value: string): value is OrganizationRole {
 	return ORGANIZATION_ROLES.includes(value as OrganizationRole);
+}
+
+export function isAuthLoginProvider(
+	value: unknown,
+): value is AuthLoginProvider {
+	return value === "google" || value === "password";
 }
 
 export function normalizeOrganizationName(value: string): string {

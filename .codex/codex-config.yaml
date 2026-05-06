@@ -15,10 +15,11 @@ notes:
 
 
 
+
 # PREPARE-TAKEOFF BOOTSTRAP START
 bootstrap:
-  codex_root: "/Users/eric/pafenorthwest/Festival/.codex"
-  codex_scripts_dir: "/Users/eric/pafenorthwest/Festival/.codex/scripts"
+  codex_root: "/Users/eric/.codex/worktrees/4062/Festival/.codex"
+  codex_scripts_dir: "/Users/eric/.codex/worktrees/4062/Festival/.codex/scripts"
   canonical_scripts_path: "./.codex/scripts"
   repository_local_fallback_scripts_path: "./codex/scripts"
   home_fallback_scripts_path: "$HOME/.codex/scripts"
