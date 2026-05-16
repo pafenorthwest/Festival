@@ -1,0 +1,24 @@
+{
+  "scope": 2,
+  "behavior": 2,
+  "dependency": 2,
+  "uncertainty": 2,
+  "verification": 2,
+  "evidence": {
+    "scope": "files=8 surface=common+backend routes+services+repositories+tests",
+    "behavior": "backend organization, membership, invite, and API contract behavior updated",
+    "dependency": "interfaces=shared TypeScript contracts and repository interface",
+    "uncertainty": "existing partial implementation reduces discovery risk",
+    "verification": "checks=lint,build,test plus backend/common route and contract tests",
+    "guardrails": "no frontend scope; no issue #21 tenant middleware scope; no new external dependencies expected"
+  },
+  "guardrails": {
+    "no_schema_or_api_contract_change": false,
+    "no_new_external_dependencies": true,
+    "localized_surface": true,
+    "reversible_with_straightforward_verification": true
+  },
+  "overrides": {
+    "reason": "Task intentionally changes backend schema/API contracts within the locked issue #20 scope."
+  }
+}

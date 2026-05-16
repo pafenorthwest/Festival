@@ -11,6 +11,7 @@ import {
 	type InviteSummary,
 	isOrganizationRole,
 	type OrganizationLandingResponse,
+	type OrganizationMembershipListResponse,
 	type OrganizationMembershipRecord,
 	type OrganizationRecord,
 	type OrganizationSession,
@@ -51,6 +52,7 @@ function toInviteSummary(input: {
 		organizationSlug: input.organization.slug,
 		email: input.email,
 		role: input.role,
+		status: input.acceptedAtIso ? "accepted" : "pending",
 		acceptedAtIso: input.acceptedAtIso,
 	};
 }
@@ -72,7 +74,7 @@ export class OrganizationService {
 			email: identity.email.toLowerCase(),
 			displayName: deriveDisplayName(identity),
 		});
-		const membership = await this.repository.findMembershipByUserId(user.id);
+		const memberships = await this.repository.listMembershipsByUserId(user.id);
 
 		const session: OrganizationSession = {
 			authenticated: true,
@@ -83,11 +85,27 @@ export class OrganizationService {
 			},
 		};
 
-		if (membership) {
-			session.membership = toSessionMembership(membership);
+		if (memberships[0]) {
+			session.membership = toSessionMembership(memberships[0]);
 		}
 
 		return { session };
+	}
+
+	async listMemberships(
+		identity: AuthenticatedUser,
+	): Promise<OrganizationMembershipListResponse> {
+		const user = await this.repository.upsertUser({
+			...identity,
+			displayName: deriveDisplayName(identity),
+			email: identity.email.toLowerCase(),
+		});
+
+		return {
+			memberships: (await this.repository.listMembershipsByUserId(user.id)).map(
+				toSessionMembership,
+			),
+		};
 	}
 
 	async createOrganization(
@@ -104,15 +122,6 @@ export class OrganizationService {
 			displayName: deriveDisplayName(identity),
 			email: identity.email.toLowerCase(),
 		});
-		const existingMembership = await this.repository.findMembershipByUserId(
-			user.id,
-		);
-		if (existingMembership) {
-			throw new AppError(
-				`User already belongs to organization ${existingMembership.organization.slug}.`,
-				409,
-			);
-		}
 
 		const existingOrganization = await this.repository.findOrganizationBySlug(
 			validation.normalized,
@@ -226,17 +235,14 @@ export class OrganizationService {
 			}),
 		});
 
-		const existingMembership = await this.repository.findMembershipByUserId(
-			user.id,
-		);
-		if (
-			existingMembership &&
-			existingMembership.organization.id !== invite.organization.id
-		) {
-			throw new AppError(
-				"Authenticated user already belongs to another organization.",
-				409,
+		const existingMembership =
+			await this.repository.findMembershipByUserAndSlug(
+				user.id,
+				invite.organization.slug,
 			);
+
+		if (invite.invite.acceptedAtIso) {
+			throw new AppError("Invite has already been accepted.", 409);
 		}
 
 		let membership = existingMembership?.membership;

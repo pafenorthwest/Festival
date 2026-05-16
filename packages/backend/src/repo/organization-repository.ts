@@ -36,6 +36,9 @@ export interface OrganizationRepository {
 	findMembershipByUserId(
 		userId: string,
 	): Promise<MembershipWithOrganization | null>;
+	listMembershipsByUserId(
+		userId: string,
+	): Promise<MembershipWithOrganization[]>;
 	findMembershipByUserAndSlug(
 		userId: string,
 		slug: string,

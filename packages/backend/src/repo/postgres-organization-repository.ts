@@ -159,7 +159,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			CREATE TABLE IF NOT EXISTS ${schema}.memberships (
 				id TEXT PRIMARY KEY,
 				organization_id TEXT NOT NULL REFERENCES ${schema}.organizations (id) ON DELETE CASCADE,
-				user_id TEXT NOT NULL UNIQUE REFERENCES ${schema}.users (id) ON DELETE CASCADE,
+				user_id TEXT NOT NULL REFERENCES ${schema}.users (id) ON DELETE CASCADE,
 				role TEXT NOT NULL,
 				origin TEXT NOT NULL,
 				joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -176,6 +176,12 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 				accepted_at TIMESTAMPTZ NULL
 			);
+
+			ALTER TABLE ${schema}.memberships
+				DROP CONSTRAINT IF EXISTS memberships_user_id_key;
+
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_memberships_user_org
+				ON ${schema}.memberships (user_id, organization_id);
 		`);
 	}
 
@@ -234,6 +240,13 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 	async findMembershipByUserId(
 		userId: string,
 	): Promise<MembershipWithOrganization | null> {
+		const memberships = await this.listMembershipsByUserId(userId);
+		return memberships[0] ?? null;
+	}
+
+	async listMembershipsByUserId(
+		userId: string,
+	): Promise<MembershipWithOrganization[]> {
 		await this.ensureReady();
 
 		const rows = (await sql.unsafe(
@@ -252,11 +265,11 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			 JOIN ${this.schema}.organizations o
 			   ON o.id = m.organization_id
 			 WHERE m.user_id = $1
-			 LIMIT 1`,
+			 ORDER BY m.joined_at ASC`,
 			[userId],
 		)) as MembershipRow[];
 
-		return rows[0] ? mapMembership(rows[0]) : null;
+		return rows.map(mapMembership);
 	}
 
 	async findMembershipByUserAndSlug(

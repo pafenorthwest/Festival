@@ -88,6 +88,14 @@ export function buildApiRouter(
 		}
 	});
 
+	router.get("/memberships", requireAuth(authVerifier), async (c) => {
+		try {
+			return c.json(await organizationService.listMemberships(c.var.identity));
+		} catch (error) {
+			return jsonError(c, error);
+		}
+	});
+
 	router.post("/invites", requireAuth(authVerifier), async (c) => {
 		try {
 			const payload = (await c.req.json()) as CreateInviteInput;

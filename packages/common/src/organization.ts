@@ -81,6 +81,8 @@ export interface OrganizationInviteRecord {
 	acceptedAtIso?: string;
 }
 
+export type OrganizationInviteStatus = "pending" | "accepted";
+
 export interface SessionMembership {
 	organizationId: string;
 	organizationName: string;
@@ -97,6 +99,10 @@ export interface OrganizationSession {
 
 export interface SessionResponse {
 	session: OrganizationSession;
+}
+
+export interface OrganizationMembershipListResponse {
+	memberships: SessionMembership[];
 }
 
 export interface CreateOrganizationInput {
@@ -120,6 +126,7 @@ export interface InviteSummary {
 	organizationSlug: string;
 	email: string;
 	role: OrganizationRole;
+	status: OrganizationInviteStatus;
 	acceptedAtIso?: string;
 }
 
