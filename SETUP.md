@@ -107,6 +107,29 @@ Festival uses two repo-root env files during local setup:
 
 Keep both files aligned. `develop.env` should stay as the human-readable reference, and `.env` should contain your working local values.
 
+### Frontend `.env.local`
+
+The frontend is started from `packages/frontend`, so Vite reads frontend env files from that package directory. Keep backend and shared local values in the repo-root `.env`, but add the Vite-exposed frontend values to:
+
+```bash
+packages/frontend/.env.local
+```
+
+Required values:
+
+```dotenv
+FRONT_API_BASE=http://localhost:3000
+FRONT_FIREBASE_API_KEY=...
+FRONT_FIREBASE_AUTH_DOMAIN=...
+FRONT_FIREBASE_PROJECT_ID=...
+FRONT_FIREBASE_APP_ID=...
+```
+
+Do not rename these to `VITE_*`. This project configures Vite with `envPrefix: "FRONT_"`, so `FRONT_*` variables are intentionally exposed to frontend code.
+```
+
+The key point: root `.env` feeds the backend; `packages/frontend/.env.local` feeds Vite/frontend runtime.
+
 ### 4.1 Variable walkthrough
 
 #### Environment and local URLs

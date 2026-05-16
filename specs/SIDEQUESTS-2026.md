@@ -1,6 +1,6 @@
-Add these as **parallel workstreams (“Side Quests”)**—independent, additive, and safe to develop alongside core phases.
+**Parallel workstreams (“Side Quests”)**—independent, additive, and safe to develop alongside core phases.
 # Side Quests (Parallel Workstreams)
-
+---
 
 ## 1. Communications Automation (Email & SMS)
 
@@ -127,12 +127,6 @@ Add these as **parallel workstreams (“Side Quests”)**—independent, additiv
 * Inventory mismatch after transfer
 * Refunds not synced with Shopify
 
----
-
-Add this as a fourth parallel workstream. This one is operationally critical—your current system failures (credits, partial payments, mismatches) are exactly where trust breaks.
-
----
-
 ## 4. Admin Billing Reconciliation (Debit & Credit Repair)
 
 **Goal:** Give administrators precise control to correct payment mismatches between Shopify and actual services rendered.
@@ -153,8 +147,6 @@ Add this as a fourth parallel workstream. This one is operationally critical—y
 
 * Shopify remains the **source of truth for money movement**
 * Local system becomes the **source of truth for intent + reconciliation**
-
----
 
 ### Deliverables
 
@@ -181,8 +173,6 @@ Add this as a fourth parallel workstream. This one is operationally critical—y
 * apply credit to registration
 * reconcile payment mismatch
 
----
-
 ### UI Capabilities
 
 * Search by:
@@ -202,8 +192,6 @@ Add this as a fourth parallel workstream. This one is operationally critical—y
   * generate invoice
   * mark resolved
 
----
-
 ### Exit Criteria
 
 * Admin can resolve any payment mismatch without engineering support
@@ -214,16 +202,12 @@ Add this as a fourth parallel workstream. This one is operationally critical—y
   * tied to a user and reason
 * Shopify and local system remain reconcilable at all times
 
----
-
 ### Failure Modes (Critical)
 
 * Silent adjustments (no audit trail)
 * Double refunds or duplicate credits
 * Ledger drift between Shopify and local system
 * No way to reconstruct financial history
-
----
 
 ### Integration Guidance
 
@@ -249,8 +233,6 @@ Add this as a fourth parallel workstream. This one is operationally critical—y
 * User-submitted text is the raw input
 * Reviewed catalog data becomes the trusted internal reference
 
----
-
 ### Scope
 
 * Internal review app for staff and editors
@@ -265,8 +247,6 @@ Add this as a fourth parallel workstream. This one is operationally critical—y
   * string search
   * review status
   * assigned reviewer
-
----
 
 ### Core Capabilities
 
@@ -313,8 +293,6 @@ Add this as a fourth parallel workstream. This one is operationally critical—y
 * By reviewer
 * By flagged / unflagged
 
----
-
 ### Deliverables
 
 **Tables:**
@@ -358,8 +336,6 @@ Add this as a fourth parallel workstream. This one is operationally critical—y
   * composer reference
   * accepted naming form
 
----
-
 ### API Surface
 
 **Read**
@@ -383,8 +359,6 @@ Add this as a fourth parallel workstream. This one is operationally critical—y
 * export reviewed catalog
 * view flagged backlog
 
----
-
 ### UI Capabilities
 
 * Reviewer dashboard with personal queue
@@ -403,8 +377,6 @@ Add this as a fourth parallel workstream. This one is operationally critical—y
 * Quick links to IMSLP reference
 * History of changes per record
 
----
-
 ### Exit Criteria
 
 * Reviewers can process repertoire through a personal queue
@@ -412,8 +384,6 @@ Add this as a fourth parallel workstream. This one is operationally critical—y
 * Each approved work can include an IMSLP reference URL
 * Staff can filter and resolve flagged titles efficiently
 * Cleaned data can be reused in programs, schedules, and reports
-
----
 
 ### Failure Modes
 
@@ -440,17 +410,5 @@ Add this as a fourth parallel workstream. This one is operationally critical—y
 
 ### Priority
 
-**High priority** Admin Billing and Reconcilation 
-
----
-
-# Updated Side Quest Set
-
-* Communications Automation
-* Volunteer Portal
-* Drop & Transfer Management
-* **Admin Billing Reconciliation (Debit & Credit Repair)**
-* Music Review App & Catalog Cleanup
-
-
+**High priority** Admin Billing and Reconcilation
 
