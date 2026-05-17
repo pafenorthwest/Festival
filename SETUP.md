@@ -206,8 +206,16 @@ These values are part of the approved setup contract for this repo, even though 
 | `AUTH_PROVIDER` | yes | Use `firebase` for the current setup path. |
 | `AUTH_MODE` | yes | Use `auto_provision` for the current local flow. |
 | `AUTH_REQUIRE_EMAIL_VERIFIED` | yes | Use `true` unless you intentionally want a looser local policy. |
-| `FIREBASE_AUTH_EMULATOR_HOST` | optional | Dev-only note for teams that also run the Firebase Auth emulator. |
+| `FIREBASE_AUTH_EMULATOR_HOST` | optional | Leave commented out unless both frontend and backend are intentionally using the Firebase Auth emulator. If this variable is present while using real Firebase Auth, the backend Admin SDK can reject real ID tokens with invalid-signature errors. |
 | `FIREBASE_USE_EMULATOR` | optional | Dev-only toggle, default `false` for the primary setup path. |
+
+For the primary local setup path with a real Firebase project, make sure the backend `.env` does not define `FIREBASE_AUTH_EMULATOR_HOST`:
+
+```dotenv
+# Keep this commented out unless you are running Firebase Auth emulator end-to-end.
+# FIREBASE_AUTH_EMULATOR_HOST=localhost:9099
+FIREBASE_USE_EMULATOR=false
+```
 
 ### 4.2 Example env flow
 
