@@ -36,6 +36,11 @@ async function createTestApp() {
 				email: "invitee@example.com",
 				displayName: "Invitee User",
 			},
+			outsider: {
+				uid: "uid-outsider",
+				email: "outsider@example.com",
+				displayName: "Outsider User",
+			},
 		}),
 	});
 }
@@ -73,6 +78,74 @@ describe("organization routes", () => {
 		};
 		expect(data.organization.slug).toBe("festival-admins");
 		expect(data.membership.role).toBe("Admin");
+	});
+
+	it("rejects duplicate organization names", async () => {
+		const { app } = await createTestApp();
+
+		await app.fetch(
+			new Request(
+				"http://test/api/organizations",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({ name: "festival-admins" }),
+				}),
+			),
+		);
+
+		const duplicate = await app.fetch(
+			new Request(
+				"http://test/api/organizations",
+				withAuth("outsider", {
+					method: "POST",
+					body: JSON.stringify({ name: "festival-admins" }),
+				}),
+			),
+		);
+
+		expect(duplicate.status).toBe(409);
+		await expect(duplicate.json()).resolves.toMatchObject({
+			error: "Organization name is already registered.",
+		});
+	});
+
+	it("lists the authenticated user's organization memberships", async () => {
+		const { app } = await createTestApp();
+
+		await app.fetch(
+			new Request(
+				"http://test/api/organizations",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({ name: "festival-admins" }),
+				}),
+			),
+		);
+		await app.fetch(
+			new Request(
+				"http://test/api/organizations",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({ name: "festival-board" }),
+				}),
+			),
+		);
+
+		const response = await app.fetch(
+			new Request("http://test/api/memberships", withAuth("admin")),
+		);
+
+		expect(response.status).toBe(200);
+		const data = (await response.json()) as {
+			memberships: Array<{ organizationSlug: string; role: string }>;
+		};
+		expect(data.memberships).toHaveLength(2);
+		expect(
+			data.memberships.map((membership) => membership.organizationSlug),
+		).toEqual(["festival-admins", "festival-board"]);
+		expect(
+			data.memberships.every((membership) => membership.role === "Admin"),
+		).toBeTrue();
 	});
 
 	it("rejects unauthorized organization access", async () => {
@@ -113,9 +186,29 @@ describe("organization routes", () => {
 
 		expect(inviteResponse.status).toBe(201);
 		const inviteData = (await inviteResponse.json()) as {
-			invite: { token: string; role: string };
+			invite: { token: string; role: string; status: string };
 		};
 		expect(inviteData.invite.role).toBe("Music Reviewer");
+		expect(inviteData.invite.status).toBe("pending");
+
+		const lookupResponse = await app.fetch(
+			new Request(`http://test/api/invites/${inviteData.invite.token}`),
+		);
+		expect(lookupResponse.status).toBe(200);
+		const lookupData = (await lookupResponse.json()) as {
+			invite: {
+				organizationSlug: string;
+				email: string;
+				role: string;
+				status: string;
+			};
+		};
+		expect(lookupData.invite).toMatchObject({
+			organizationSlug: "festival-admins",
+			email: "invitee@example.com",
+			role: "Music Reviewer",
+			status: "pending",
+		});
 
 		const acceptResponse = await app.fetch(
 			new Request(
@@ -133,5 +226,87 @@ describe("organization routes", () => {
 		};
 		expect(acceptData.membership.role).toBe("Music Reviewer");
 		expect(acceptData.membership.showWelcome).toBeTrue();
+	});
+
+	it("rejects invite creation for non-members and unknown invite tokens", async () => {
+		const { app } = await createTestApp();
+
+		const inviteResponse = await app.fetch(
+			new Request(
+				"http://test/api/invites",
+				withAuth("outsider", {
+					method: "POST",
+					body: JSON.stringify({
+						organizationSlug: "festival-admins",
+						email: "invitee@example.com",
+						role: "Read Only",
+					} satisfies CreateInviteInput),
+				}),
+			),
+		);
+
+		expect(inviteResponse.status).toBe(404);
+
+		const lookupResponse = await app.fetch(
+			new Request("http://test/api/invites/missing-token"),
+		);
+		expect(lookupResponse.status).toBe(404);
+	});
+
+	it("rejects duplicate invite acceptance", async () => {
+		const { app } = await createTestApp();
+
+		await app.fetch(
+			new Request(
+				"http://test/api/organizations",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({ name: "festival-admins" }),
+				}),
+			),
+		);
+
+		const inviteResponse = await app.fetch(
+			new Request(
+				"http://test/api/invites",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						organizationSlug: "festival-admins",
+						email: "invitee@example.com",
+						role: "Read Only",
+					} satisfies CreateInviteInput),
+				}),
+			),
+		);
+		const inviteData = (await inviteResponse.json()) as {
+			invite: { token: string };
+		};
+
+		const firstAccept = await app.fetch(
+			new Request(
+				`http://test/api/invites/${inviteData.invite.token}/accept`,
+				withAuth("invitee", {
+					method: "POST",
+					body: JSON.stringify({ name: "Invited Reader" }),
+				}),
+			),
+		);
+		expect(firstAccept.status).toBe(201);
+
+		const secondAccept = await app.fetch(
+			new Request(
+				`http://test/api/invites/${inviteData.invite.token}/accept`,
+				withAuth("invitee", {
+					method: "POST",
+					body: JSON.stringify({ name: "Invited Reader" }),
+				}),
+			),
+		);
+
+		expect(secondAccept.status).toBe(409);
+		await expect(secondAccept.json()).resolves.toMatchObject({
+			error: "Invite has already been accepted.",
+		});
 	});
 });

@@ -23,7 +23,8 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		string,
 		OrganizationMembershipRecord
 	>();
-	private readonly membershipsByUserId = new Map<string, string>();
+	private readonly membershipsByUserId = new Map<string, Set<string>>();
+	private readonly membershipsByUserAndOrganization = new Map<string, string>();
 	private readonly invites = new Map<string, OrganizationInviteRecord>();
 	private readonly invitesByToken = new Map<string, string>();
 
@@ -62,11 +63,37 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 	async findMembershipByUserId(
 		userId: string,
 	): Promise<MembershipWithOrganization | null> {
-		const membershipId = this.membershipsByUserId.get(userId);
+		const membershipIds = this.membershipsByUserId.get(userId);
+		const membershipId = membershipIds?.values().next().value;
 		if (!membershipId) {
 			return null;
 		}
 
+		return this.membershipWithOrganization(membershipId);
+	}
+
+	async listMembershipsByUserId(
+		userId: string,
+	): Promise<MembershipWithOrganization[]> {
+		const membershipIds = this.membershipsByUserId.get(userId);
+		if (!membershipIds) {
+			return [];
+		}
+
+		const memberships = await Promise.all(
+			[...membershipIds].map((membershipId) =>
+				this.membershipWithOrganization(membershipId),
+			),
+		);
+		return memberships.filter(
+			(membership): membership is MembershipWithOrganization =>
+				membership !== null,
+		);
+	}
+
+	private async membershipWithOrganization(
+		membershipId: string,
+	): Promise<MembershipWithOrganization | null> {
 		const membership = this.memberships.get(membershipId);
 		if (!membership) {
 			return null;
@@ -84,16 +111,19 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		userId: string,
 		slug: string,
 	): Promise<MembershipWithOrganization | null> {
-		const membershipWithOrganization =
-			await this.findMembershipByUserId(userId);
-		if (
-			!membershipWithOrganization ||
-			membershipWithOrganization.organization.slug !== slug
-		) {
+		const organizationId = this.organizationsBySlug.get(slug);
+		if (!organizationId) {
 			return null;
 		}
 
-		return membershipWithOrganization;
+		const membershipId = this.membershipsByUserAndOrganization.get(
+			`${userId}:${organizationId}`,
+		);
+		if (!membershipId) {
+			return null;
+		}
+
+		return this.membershipWithOrganization(membershipId);
 	}
 
 	async findOrganizationBySlug(
@@ -126,6 +156,11 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 	async createMembership(
 		input: CreateMembershipInput,
 	): Promise<OrganizationMembershipRecord> {
+		const key = `${input.userId}:${input.organizationId}`;
+		if (this.membershipsByUserAndOrganization.has(key)) {
+			throw new Error("Membership already exists for this organization.");
+		}
+
 		const membership: OrganizationMembershipRecord = {
 			id: randomUUID(),
 			organizationId: input.organizationId,
@@ -136,7 +171,11 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		};
 
 		this.memberships.set(membership.id, membership);
-		this.membershipsByUserId.set(membership.userId, membership.id);
+		const userMemberships =
+			this.membershipsByUserId.get(membership.userId) ?? new Set<string>();
+		userMemberships.add(membership.id);
+		this.membershipsByUserId.set(membership.userId, userMemberships);
+		this.membershipsByUserAndOrganization.set(key, membership.id);
 		return membership;
 	}
 
@@ -200,7 +239,9 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		userId: string,
 		organizationId: string,
 	): Promise<OrganizationMembershipRecord> {
-		const membershipId = this.membershipsByUserId.get(userId);
+		const membershipId = this.membershipsByUserAndOrganization.get(
+			`${userId}:${organizationId}`,
+		);
 		if (!membershipId) {
 			throw new Error(`Membership not found for user ${userId}`);
 		}
