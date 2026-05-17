@@ -1,0 +1,23 @@
+{
+  "selected_signals_path": "/Users/eric/.codex/worktrees/d201/Festival/tasks/fix-dev-session-cors/complexity-signals.json",
+  "selected_signals_sha256": "73c5366cf0607b3a4002fa64b1ee157f45aef76a4018710cef89ea5a508157cb",
+  "score_script_path": "/Users/eric/.codex/worktrees/d201/Festival/.codex/scripts/complexity-score.sh",
+  "score_script_sha256": "45a062dd25a8938ad1fba76e1be65815c40d7d722a20ff07c22c74ed0e479699",
+  "ranges": {
+    "goals": {
+      "min": 1,
+      "max": 3
+    },
+    "phases": {
+      "min": 1,
+      "max": 1
+    }
+  },
+  "recommended": {
+    "goals": 2,
+    "phases": 1
+  },
+  "complexity_input": "surgical",
+  "complexity_descriptor": "surgical",
+  "captured_at": "2026-05-17T02:10:06Z"
+}

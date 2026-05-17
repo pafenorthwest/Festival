@@ -54,6 +54,57 @@ function withAuth(token: string, init?: RequestInit): RequestInit {
 }
 
 describe("auth routes", () => {
+	it("allows local frontend CORS preflights for session requests", async () => {
+		const { app } = await createTestApp();
+
+		const response = await app.fetch(
+			new Request("http://test/api/session", {
+				method: "OPTIONS",
+				headers: {
+					Origin: "http://localhost:5173",
+					"Access-Control-Request-Method": "GET",
+					"Access-Control-Request-Headers": "authorization,content-type",
+				},
+			}),
+		);
+
+		expect(response.status).toBe(204);
+		expect(response.headers.get("Access-Control-Allow-Origin")).toBe(
+			"http://localhost:5173",
+		);
+		expect(response.headers.get("Access-Control-Allow-Headers")).toContain(
+			"Authorization",
+		);
+	});
+
+	it("does not allow unconfigured CORS origins for session requests", async () => {
+		const { app } = await createTestApp();
+
+		const response = await app.fetch(
+			new Request("http://test/api/session", {
+				headers: { Origin: "http://malicious.test" },
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		expect(response.headers.get("Access-Control-Allow-Origin")).toBeNull();
+	});
+
+	it("adds CORS headers to local frontend session responses", async () => {
+		const { app } = await createTestApp();
+
+		const response = await app.fetch(
+			new Request("http://test/api/session", {
+				headers: { Origin: "http://localhost:5173" },
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		expect(response.headers.get("Access-Control-Allow-Origin")).toBe(
+			"http://localhost:5173",
+		);
+	});
+
 	it("syncs a new user and updates an existing user without duplicates", async () => {
 		const { app } = await createTestApp();
 
