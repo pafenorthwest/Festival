@@ -99,6 +99,22 @@ This alignment is mandatory:
 
 Do not rely on `public`. The repository explicitly treats the schema as operator-managed.
 
+### 3.3 Apply table setup and updates
+
+There is not a separate migration script for table changes right now. After the role, database, and schema exist, start the backend:
+
+```bash
+bun run dev:backend
+```
+
+Backend startup creates and updates the tables inside `DB_SCHEMA`. In the current backend flow, `createApp()` calls `repository.ensureReady()`, and `packages/backend/src/repo/postgres-organization-repository.ts` runs the `CREATE TABLE IF NOT EXISTS ...` and `ALTER TABLE ...` setup.
+
+The schema name must match your `.env` exactly:
+
+```dotenv
+DB_SCHEMA=orgs
+```
+
 ## 4. Align the env files
 
 Festival uses two repo-root env files during local setup:
@@ -232,6 +248,8 @@ bun run dev
 ```
 
 The backend dev commands default to the repo-root `.env`.
+
+For database setup, this backend startup step is also the current table migration/update step. Make sure the schema named by `DB_SCHEMA` already exists before running it.
 
 ## 6. Optional local production flow
 
