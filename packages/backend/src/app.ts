@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import { createFirebaseAuthVerifier } from "./auth/firebase-auth-verifier.js";
 import type { AuthVerifier } from "./auth/types.js";
 import type { AppEnv } from "./config/env.js";
@@ -18,6 +19,11 @@ export interface CreateAppOptions {
 	appUserRepository?: AppUserRepository;
 	authVerifier?: AuthVerifier;
 }
+
+const allowedApiOrigins = new Set([
+	"http://localhost:5173",
+	"http://127.0.0.1:5173",
+]);
 
 export async function createApp(options: CreateAppOptions = {}) {
 	const env =
@@ -55,6 +61,16 @@ export async function createApp(options: CreateAppOptions = {}) {
 	const organizationService = new OrganizationService(repository);
 
 	const app = new Hono();
+
+	app.use(
+		"/api/*",
+		cors({
+			origin: (origin) =>
+				allowedApiOrigins.has(origin) ? origin : undefined,
+			allowHeaders: ["Authorization", "Content-Type"],
+			allowMethods: ["GET", "POST", "OPTIONS"],
+		}),
+	);
 
 	app.get("/health", (c) => {
 		return c.json({ status: "ok" });
