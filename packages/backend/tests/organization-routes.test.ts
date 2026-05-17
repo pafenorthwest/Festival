@@ -12,6 +12,10 @@ class FakeAuthVerifier implements AuthVerifier {
 	constructor(private readonly users: Record<string, AuthenticatedUser>) {}
 
 	async verify(token: string): Promise<AuthenticatedUser> {
+		if (token === "invalid") {
+			throw new Error("Invalid token");
+		}
+
 		const user = this.users[token];
 		if (!user) {
 			throw new Error(`Unknown token ${token}`);
@@ -157,6 +161,57 @@ describe("organization routes", () => {
 		expect(response.status).toBe(401);
 	});
 
+	it("rejects malformed and invalid authorization headers", async () => {
+		const { app } = await createTestApp();
+
+		const malformed = await app.fetch(
+			new Request("http://test/api/organizations/festival-admins", {
+				headers: { Authorization: "Basic admin" },
+			}),
+		);
+		expect(malformed.status).toBe(401);
+		await expect(malformed.json()).resolves.toMatchObject({
+			error: "Authorization header must use Bearer token format.",
+		});
+
+		const invalid = await app.fetch(
+			new Request(
+				"http://test/api/organizations/festival-admins",
+				withAuth("invalid"),
+			),
+		);
+		expect(invalid.status).toBe(401);
+		await expect(invalid.json()).resolves.toMatchObject({
+			error: "Invalid token",
+		});
+	});
+
+	it("rejects cross-tenant organization access without returning org data", async () => {
+		const { app } = await createTestApp();
+
+		await app.fetch(
+			new Request(
+				"http://test/api/organizations",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({ name: "festival-admins" }),
+				}),
+			),
+		);
+
+		const response = await app.fetch(
+			new Request(
+				"http://test/api/organizations/festival-admins",
+				withAuth("outsider"),
+			),
+		);
+
+		expect(response.status).toBe(403);
+		await expect(response.json()).resolves.toEqual({
+			error: "Organization access denied.",
+		});
+	});
+
 	it("creates and accepts an allowed-role invite", async () => {
 		const { app } = await createTestApp();
 
@@ -228,6 +283,66 @@ describe("organization routes", () => {
 		expect(acceptData.membership.showWelcome).toBeTrue();
 	});
 
+	it("rejects admin-only invite creation for non-admin organization members", async () => {
+		const { app } = await createTestApp();
+
+		await app.fetch(
+			new Request(
+				"http://test/api/organizations",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({ name: "festival-admins" }),
+				}),
+			),
+		);
+
+		const inviteResponse = await app.fetch(
+			new Request(
+				"http://test/api/invites",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						organizationSlug: "festival-admins",
+						email: "invitee@example.com",
+						role: "Read Only",
+					} satisfies CreateInviteInput),
+				}),
+			),
+		);
+		const inviteData = (await inviteResponse.json()) as {
+			invite: { token: string };
+		};
+
+		await app.fetch(
+			new Request(
+				`http://test/api/invites/${inviteData.invite.token}/accept`,
+				withAuth("invitee", {
+					method: "POST",
+					body: JSON.stringify({ name: "Invited Reader" }),
+				}),
+			),
+		);
+
+		const nonAdminInvite = await app.fetch(
+			new Request(
+				"http://test/api/invites",
+				withAuth("invitee", {
+					method: "POST",
+					body: JSON.stringify({
+						organizationSlug: "festival-admins",
+						email: "outsider@example.com",
+						role: "Read Only",
+					} satisfies CreateInviteInput),
+				}),
+			),
+		);
+
+		expect(nonAdminInvite.status).toBe(403);
+		await expect(nonAdminInvite.json()).resolves.toEqual({
+			error: "Insufficient organization role.",
+		});
+	});
+
 	it("rejects invite creation for non-members and unknown invite tokens", async () => {
 		const { app } = await createTestApp();
 
@@ -245,7 +360,10 @@ describe("organization routes", () => {
 			),
 		);
 
-		expect(inviteResponse.status).toBe(404);
+		expect(inviteResponse.status).toBe(403);
+		await expect(inviteResponse.json()).resolves.toEqual({
+			error: "Organization access denied.",
+		});
 
 		const lookupResponse = await app.fetch(
 			new Request("http://test/api/invites/missing-token"),
