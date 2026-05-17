@@ -1,0 +1,24 @@
+{
+  "scope": 2,
+  "behavior": 2,
+  "dependency": 2,
+  "uncertainty": 2,
+  "verification": 4,
+  "evidence": {
+    "scope": "files=routes,auth,service,repo,tests surface=backend subsystem",
+    "behavior": "org-scoped authorization behavior tightened for tenant and role checks",
+    "dependency": "interfaces=Hono request variables, OrganizationRepository, AuthVerifier",
+    "uncertainty": "existing service-level checks need careful migration to middleware without changing authorized response contracts",
+    "verification": "checks=backend route tests plus lint,build,test",
+    "guardrails": "no schema/api contract change expected; no new deps; localized backend surface; reversible with straightforward verification"
+  },
+  "guardrails": {
+    "no_schema_or_api_contract_change": true,
+    "no_new_external_dependencies": true,
+    "localized_surface": true,
+    "reversible_with_straightforward_verification": true
+  },
+  "overrides": {
+    "reason": ""
+  }
+}

@@ -10,3 +10,4 @@ number,taskname,first_create_date,first_create_hhmmss,first_create_git_hash
 9,database-auth-foundation,2026-05-02,201412,e741f85
 10,phase-0-organization-membership-foundation-api,2026-05-16,164124,91b86f6
 11,fix-dev-session-cors,2026-05-17,000000,-------
+12,tenant-context-role-authorization,2026-05-17,000000,-------
