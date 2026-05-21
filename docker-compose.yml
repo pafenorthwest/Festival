@@ -1,0 +1,64 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: festival-postgres
+    environment:
+      POSTGRES_USER: festivaladmin
+      POSTGRES_PASSWORD: festivaladmin
+      POSTGRES_DB: festival_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U festivaladmin -d festival_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "5432:5432"
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    image: festival-backend:local
+    container_name: festival-backend
+    environment:
+      PORT: 3000
+      DB_USER: festivaladmin
+      DB_PASSWORD: festivaladmin
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DATABASE: festival_db
+      DB_SSL: "false"
+      DB_SCHEMA: orgs
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-demo-festival}
+      FIREBASE_CLIENT_EMAIL: ${FIREBASE_CLIENT_EMAIL:-}
+      FIREBASE_PRIVATE_KEY: ${FIREBASE_PRIVATE_KEY:-}
+      FIREBASE_AUTH_EMULATOR_HOST: ${FIREBASE_AUTH_EMULATOR_HOST:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+      args:
+        FRONT_API_BASE: ${FRONT_API_BASE:-http://backend:3000}
+        FRONT_FIREBASE_API_KEY: ${FRONT_FIREBASE_API_KEY:-demo-api-key}
+        FRONT_FIREBASE_AUTH_DOMAIN: ${FRONT_FIREBASE_AUTH_DOMAIN:-demo-festival.firebaseapp.com}
+        FRONT_FIREBASE_PROJECT_ID: ${FRONT_FIREBASE_PROJECT_ID:-demo-festival}
+        FRONT_FIREBASE_APP_ID: ${FRONT_FIREBASE_APP_ID:-1:000000000000:web:demo}
+        FRONT_FIREBASE_AUTH_EMULATOR_URL: ${FRONT_FIREBASE_AUTH_EMULATOR_URL:-}
+    image: festival-frontend:local
+    container_name: festival-frontend
+    depends_on:
+      - backend
+    ports:
+      - "8080:8080"
+
+volumes:
+  postgres_data:
