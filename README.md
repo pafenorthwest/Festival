@@ -119,6 +119,8 @@ Services:
 docker compose -f docker-compose.yml -f docker-compose.mock.yml up --build
 ```
 
+`docker-compose.mock.yml` is an override file and should not be used by itself.
+
 Additional mock services:
 - Firebase Auth emulator: http://localhost:9099
 - Firebase Emulator UI: http://localhost:4000

@@ -1,8 +1,9 @@
-FROM oven/bun:1.2.23-alpine AS deps
+FROM oven/bun:1.3.14-alpine AS deps
 WORKDIR /app
 
 COPY package.json bun.lock tsconfig.json tsconfig.base.json ./
 COPY packages/common/package.json packages/common/package.json
+COPY packages/backend/package.json packages/backend/package.json
 COPY packages/frontend/package.json packages/frontend/package.json
 RUN bun install --frozen-lockfile
 
@@ -23,7 +24,9 @@ ENV FRONT_FIREBASE_AUTH_EMULATOR_URL=${FRONT_FIREBASE_AUTH_EMULATOR_URL}
 
 COPY packages/common packages/common
 COPY packages/frontend packages/frontend
-RUN bun run build:common && bun run --cwd packages/frontend build
+RUN rm -rf packages/common/dist packages/common/tsconfig.tsbuildinfo \
+	&& bun run build:common \
+	&& bun run --cwd packages/frontend build
 
 FROM nginx:1.27-alpine AS runtime
 WORKDIR /usr/share/nginx/html
