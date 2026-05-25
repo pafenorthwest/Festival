@@ -1,8 +1,8 @@
 import { type FirebaseApp, getApps, initializeApp } from "firebase/app";
 import {
 	type Auth,
-	GoogleAuthProvider,
 	connectAuthEmulator,
+	GoogleAuthProvider,
 	getAuth,
 	isSignInWithEmailLink,
 	onIdTokenChanged,
