@@ -47,7 +47,7 @@ services:
       context: .
       dockerfile: docker/frontend.Dockerfile
       args:
-        FRONT_API_BASE: ${FRONT_API_BASE:-http://backend:3000}
+        FRONT_API_BASE: ""
         FRONT_FIREBASE_API_KEY: ${FRONT_FIREBASE_API_KEY:-demo-api-key}
         FRONT_FIREBASE_AUTH_DOMAIN: ${FRONT_FIREBASE_AUTH_DOMAIN:-demo-festival.firebaseapp.com}
         FRONT_FIREBASE_PROJECT_ID: ${FRONT_FIREBASE_PROJECT_ID:-demo-festival}
