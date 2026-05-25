@@ -89,45 +89,19 @@ Follow [SETUP.md](SETUP.md) for the full step-by-step setup, including:
 
 ## Docker Compose
 
-This repository now includes Docker Compose support for local service orchestration.
-
-### Images built by this repository
-- Core stack: `2` custom images
-  - `festival-backend:local`
-  - `festival-frontend:local`
-- Mock-auth stack: `3` custom images
-  - `festival-backend:local`
-  - `festival-frontend:local`
-  - `festival-firebase-emulator:local`
-
-PostgreSQL uses the upstream image `postgres:16-alpine` (pulled, not built).
-
-### Run core stack (backend + frontend + postgres)
+Quick start:
 
 ```bash
 docker compose up --build
 ```
 
-Services:
-- frontend: http://localhost:8080
-- backend API: http://localhost:3000
-- postgres: localhost:5432
-
-### Run with Firebase Auth emulator mock
+Run with Firebase Auth emulator mock:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.mock.yml up --build
 ```
 
-`docker-compose.mock.yml` is an override file and should not be used by itself.
-
-Additional mock services:
-- Firebase Auth emulator: http://localhost:9099
-- Firebase Emulator UI: http://localhost:4000
-
-Notes:
-- The backend points to the auth emulator via `FIREBASE_AUTH_EMULATOR_HOST=firebase-emulator:9099` in `docker-compose.mock.yml`.
-- The frontend uses `FRONT_FIREBASE_AUTH_EMULATOR_URL=http://localhost:9099` in the same override file.
+For full Docker prerequisites, environment setup, ports, teardown, and troubleshooting, see [SETUP.md Docker Compose section](./SETUP.md#6-run-with-docker-compose).
 
 ## Verification
 - `bun run format:check`

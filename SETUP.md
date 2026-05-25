@@ -259,7 +259,111 @@ The backend dev commands default to the repo-root `.env`.
 
 For database setup, this backend startup step is also the current table migration/update step. Make sure the schema named by `DB_SCHEMA` already exists before running it.
 
-## 6. Optional local production flow
+## 6. Run with Docker Compose
+
+Docker Compose runs the backend, frontend, and PostgreSQL together. You can run either:
+- the core stack (real Firebase configuration path), or
+- the mock-auth stack (Firebase Auth emulator).
+
+### 6.1 Prerequisites for Docker flow
+
+- Install Docker Engine and Docker Compose v2 (`docker compose`).
+- Confirm Docker is running:
+
+```bash
+docker compose version
+```
+
+- From the repository root, make sure `.env` exists (you can copy structure from `develop.env`).
+
+For the core stack, set real Firebase values in `.env`:
+- `FIREBASE_PROJECT_ID`
+- `FIREBASE_CLIENT_EMAIL` and `FIREBASE_PRIVATE_KEY` (or `GOOGLE_APPLICATION_CREDENTIALS`)
+- frontend `FRONT_FIREBASE_*` values
+
+For the mock-auth stack, real Firebase secrets are not required because the override file injects demo/emulator values.
+
+### 6.2 Start the core stack
+
+From the repo root:
+
+```bash
+docker compose up --build
+```
+
+Services and ports:
+- frontend (nginx): `http://localhost:8080`
+- backend API: `http://localhost:3000`
+- postgres: `localhost:5432`
+
+What this command does:
+- builds `festival-backend:local` and `festival-frontend:local`
+- pulls `postgres:16-alpine`
+- starts services in dependency order
+
+When finished, stop with:
+
+```bash
+docker compose down
+```
+
+If you need a full reset of PostgreSQL volume data:
+
+```bash
+docker compose down -v
+```
+
+### 6.3 Start the stack with Firebase Auth emulator (mock service)
+
+Use the mock override file together with the base compose file:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.mock.yml up --build
+```
+
+Do not run `docker-compose.mock.yml` by itself.
+
+Additional mock services and ports:
+- Firebase Auth emulator: `http://localhost:9099`
+- Firebase Emulator UI: `http://localhost:4000`
+
+In mock mode:
+- backend uses `FIREBASE_AUTH_EMULATOR_HOST=firebase-emulator:9099`
+- frontend build injects `FRONT_FIREBASE_AUTH_EMULATOR_URL=http://localhost:9099`
+
+Stop mock mode with:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.mock.yml down
+```
+
+### 6.4 Useful Docker troubleshooting commands
+
+Check service status:
+
+```bash
+docker compose ps
+```
+
+Tail logs for all services:
+
+```bash
+docker compose logs -f
+```
+
+Tail backend logs only:
+
+```bash
+docker compose logs -f backend
+```
+
+Rebuild images after Dockerfile or frontend build-arg changes:
+
+```bash
+docker compose build --no-cache
+```
+
+## 7. Optional local production flow
 
 If you want to test the combined production-like flow locally, install `nginx` first, then run:
 
@@ -269,7 +373,7 @@ bun run prod
 
 `bun run prod:backend` starts only the compiled backend.
 
-## 7. Sanity checks
+## 8. Sanity checks
 
 Run the repo verification commands after setup changes:
 
