@@ -19,6 +19,7 @@ import {
 	type SessionResponse,
 	validateOrganizationName,
 } from "@festival/common";
+import type { TenantContext } from "../auth/tenant-context.js";
 import { AppError } from "../errors/app-error.js";
 import type {
 	MembershipWithOrganization,
@@ -58,7 +59,7 @@ function toInviteSummary(input: {
 }
 
 export class OrganizationService {
-	constructor(private readonly repository: OrganizationRepository) {}
+	constructor(readonly repository: OrganizationRepository) {}
 
 	async getSession(identity?: AuthenticatedUser): Promise<SessionResponse> {
 		if (!identity) {
@@ -191,6 +192,36 @@ export class OrganizationService {
 		};
 	}
 
+	async createInviteForTenant(
+		tenant: TenantContext,
+		input: CreateInviteInput,
+	): Promise<CreateInviteResponse> {
+		if (!isOrganizationRole(input.role)) {
+			throw new AppError(`Unsupported role: ${input.role}`, 400);
+		}
+
+		if (input.organizationSlug !== tenant.organization.slug) {
+			throw new AppError("Organization access denied.", 403);
+		}
+
+		const invite = await this.repository.createInvite({
+			organizationId: tenant.organization.id,
+			email: input.email.toLowerCase(),
+			role: input.role,
+			invitedByUserId: tenant.user.id,
+		});
+
+		return {
+			invite: toInviteSummary({
+				token: invite.token,
+				organization: tenant.organization,
+				email: invite.email,
+				role: invite.role,
+				acceptedAtIso: invite.acceptedAtIso,
+			}),
+		};
+	}
+
 	async getInvite(token: string): Promise<{ invite: InviteSummary }> {
 		const invite = await this.repository.findInviteByToken(token);
 		if (!invite) {
@@ -290,6 +321,18 @@ export class OrganizationService {
 		};
 	}
 
+	getOrganizationLandingForTenant(
+		tenant: TenantContext,
+	): OrganizationLandingResponse {
+		return {
+			organization: tenant.organization,
+			membership: toSessionMembership({
+				membership: tenant.membership,
+				organization: tenant.organization,
+			}),
+		};
+	}
+
 	async dismissWelcome(
 		identity: AuthenticatedUser,
 		slug: string,
@@ -323,6 +366,31 @@ export class OrganizationService {
 			membership: toSessionMembership({
 				membership: updatedMembership,
 				organization: membership.organization,
+			}),
+		};
+	}
+
+	async dismissWelcomeForTenant(
+		tenant: TenantContext,
+	): Promise<DismissWelcomeResponse> {
+		if (tenant.membership.origin !== "invite") {
+			return {
+				membership: toSessionMembership({
+					membership: tenant.membership,
+					organization: tenant.organization,
+				}),
+			};
+		}
+
+		const updatedMembership = await this.repository.dismissWelcome(
+			tenant.user.id,
+			tenant.organization.id,
+		);
+
+		return {
+			membership: toSessionMembership({
+				membership: updatedMembership,
+				organization: tenant.organization,
 			}),
 		};
 	}
