@@ -1,0 +1,31 @@
+# Compose override for mock auth services.
+# Use together with docker-compose.yml:
+# docker compose -f docker-compose.yml -f docker-compose.mock.yml up --build
+services:
+  firebase-emulator:
+    build:
+      context: .
+      dockerfile: docker/firebase-emulator.Dockerfile
+    image: festival-firebase-emulator:local
+    container_name: festival-firebase-emulator
+    ports:
+      - "9099:9099"
+      - "4000:4000"
+
+  frontend:
+    build:
+      args:
+        FRONT_FIREBASE_PROJECT_ID: demo-festival
+        FRONT_FIREBASE_AUTH_DOMAIN: demo-festival.firebaseapp.com
+        FRONT_FIREBASE_API_KEY: demo-api-key
+        FRONT_FIREBASE_APP_ID: 1:000000000000:web:demo
+        FRONT_FIREBASE_AUTH_EMULATOR_URL: http://localhost:9099
+
+  backend:
+    depends_on:
+      - firebase-emulator
+    environment:
+      FIREBASE_PROJECT_ID: demo-festival
+      FIREBASE_AUTH_EMULATOR_HOST: firebase-emulator:9099
+      FIREBASE_CLIENT_EMAIL: ""
+      FIREBASE_PRIVATE_KEY: ""

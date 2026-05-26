@@ -1,6 +1,7 @@
 import { type FirebaseApp, getApps, initializeApp } from "firebase/app";
 import {
 	type Auth,
+	connectAuthEmulator,
 	GoogleAuthProvider,
 	getAuth,
 	isSignInWithEmailLink,
@@ -40,6 +41,7 @@ function getFirebaseConfig() {
 
 let firebaseApp: FirebaseApp | null | undefined;
 let firebaseAuth: Auth | null | undefined;
+let emulatorConnected = false;
 
 export function getFirebaseAuth(): Auth | null {
 	if (firebaseAuth !== undefined) {
@@ -55,6 +57,13 @@ export function getFirebaseAuth(): Auth | null {
 
 	firebaseApp = getApps()[0] ?? initializeApp(config);
 	firebaseAuth = getAuth(firebaseApp);
+
+	const emulatorUrl = import.meta.env.FRONT_FIREBASE_AUTH_EMULATOR_URL?.trim();
+	if (emulatorUrl && !emulatorConnected) {
+		connectAuthEmulator(firebaseAuth, emulatorUrl, { disableWarnings: true });
+		emulatorConnected = true;
+	}
+
 	return firebaseAuth;
 }
 

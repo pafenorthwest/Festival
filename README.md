@@ -87,6 +87,22 @@ Follow [SETUP.md](SETUP.md) for the full step-by-step setup, including:
 - `bun run build`
 - `bun run test`
 
+## Docker Compose
+
+Quick start:
+
+```bash
+docker compose up --build
+```
+
+Run with Firebase Auth emulator mock:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.mock.yml up --build
+```
+
+For full Docker prerequisites, environment setup, ports, teardown, and troubleshooting, see [SETUP.md Docker Compose section](./SETUP.md#6-run-with-docker-compose).
+
 ## Verification
 - `bun run format:check`
 - `bun run build`
