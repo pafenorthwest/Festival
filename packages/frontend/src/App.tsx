@@ -46,6 +46,18 @@ interface InviteDraft {
 	role: OrganizationRole;
 }
 
+interface InviteFeedback {
+	id: number;
+	email: string;
+	role: OrganizationRole;
+	status: "success" | "error";
+}
+
+const ORGANIZATION_NAME_PATTERN = /^[A-Za-z0-9\-() ]+$/;
+const ORGANIZATION_SHORT_NAME_PATTERN = /^[A-Za-z0-9-]+$/;
+const INVITE_FEEDBACK_DURATION_MS = 2200;
+const INVITE_CARD_SCROLL_DELAY_MS = 600;
+
 async function getIdToken(user: User | null): Promise<string | null> {
 	return user ? user.getIdToken() : null;
 }
@@ -84,13 +96,24 @@ export default function App() {
 	const [inviteName, setInviteName] = createSignal("");
 	const [organizationName, setOrganizationName] = createSignal("");
 	const [organizationShortName, setOrganizationShortName] = createSignal("");
+	const [organizationNameTouched, setOrganizationNameTouched] =
+		createSignal(false);
+	const [organizationShortNameTouched, setOrganizationShortNameTouched] =
+		createSignal(false);
+	const [createOrganizationAttempted, setCreateOrganizationAttempted] =
+		createSignal(false);
 	const [inviteDraft, setInviteDraft] = createSignal<InviteDraft>({
 		email: "",
 		role: "Admin",
 	});
+	const [inviteFeedback, setInviteFeedback] =
+		createSignal<InviteFeedback | null>(null);
 	const [statusMessage, setStatusMessage] = createSignal("");
 	const [errorMessage, setErrorMessage] = createSignal("");
 	const [isBusy, setIsBusy] = createSignal(false);
+	let invitePanelRef: HTMLElement | undefined;
+	let invitePanelScrollTimeout: ReturnType<typeof setTimeout> | undefined;
+	let inviteFeedbackTimeout: ReturnType<typeof setTimeout> | undefined;
 
 	const route = createMemo<AppRoute>(() => parseRoute(location.pathname));
 	const sessionMembership = createMemo(() => session().membership ?? null);
@@ -105,6 +128,53 @@ export default function App() {
 		const user = firebaseUser();
 		return user ? toAuthenticatedUser(user) : null;
 	});
+	const organizationCreated = createMemo(() =>
+		Boolean(createdOrganizationSlug()),
+	);
+	const organizationValidationErrors = createMemo(() => {
+		const errors: string[] = [];
+		const name = organizationName().trim();
+		const shortName = organizationShortName().trim();
+
+		if (!name) {
+			errors.push("Organization name is required.");
+		} else if (!ORGANIZATION_NAME_PATTERN.test(name)) {
+			errors.push("Organization name may contain only [A-Za-z0-9-() ].");
+		}
+
+		if (!shortName) {
+			errors.push("Short name is required.");
+		} else if (!ORGANIZATION_SHORT_NAME_PATTERN.test(shortName)) {
+			errors.push("Short name may contain only [A-Za-z0-9-].");
+		}
+
+		return errors;
+	});
+	const shouldShowOrganizationValidation = createMemo(
+		() =>
+			createOrganizationAttempted() ||
+			organizationNameTouched() ||
+			organizationShortNameTouched(),
+	);
+	const hasOrganizationNameError = createMemo(() => {
+		if (!shouldShowOrganizationValidation()) {
+			return false;
+		}
+
+		const name = organizationName().trim();
+		return !name || !ORGANIZATION_NAME_PATTERN.test(name);
+	});
+	const hasOrganizationShortNameError = createMemo(() => {
+		if (!shouldShowOrganizationValidation()) {
+			return false;
+		}
+
+		const shortName = organizationShortName().trim();
+		return !shortName || !ORGANIZATION_SHORT_NAME_PATTERN.test(shortName);
+	});
+	const organizationValidationMessage = createMemo(() =>
+		organizationValidationErrors().join(" "),
+	);
 
 	function navigate(path: string) {
 		if (location.pathname === path) {
@@ -117,6 +187,46 @@ export default function App() {
 	function clearMessages() {
 		setErrorMessage("");
 		setStatusMessage("");
+	}
+
+	function resetOnboardingFlowState() {
+		setOrganization(null);
+		setCreatedOrganizationSlug(null);
+		setCreatedInvites([]);
+		setOrganizationName("");
+		setOrganizationShortName("");
+		setOrganizationNameTouched(false);
+		setOrganizationShortNameTouched(false);
+		setCreateOrganizationAttempted(false);
+		setInviteDraft({
+			email: "",
+			role: "Admin",
+		});
+		setInviteFeedback(null);
+		if (invitePanelScrollTimeout) {
+			clearTimeout(invitePanelScrollTimeout);
+			invitePanelScrollTimeout = undefined;
+		}
+
+		if (inviteFeedbackTimeout) {
+			clearTimeout(inviteFeedbackTimeout);
+			inviteFeedbackTimeout = undefined;
+		}
+	}
+
+	function showInviteFeedback(feedback: Omit<InviteFeedback, "id">) {
+		if (inviteFeedbackTimeout) {
+			clearTimeout(inviteFeedbackTimeout);
+		}
+
+		setInviteFeedback({
+			...feedback,
+			id: Date.now(),
+		});
+		inviteFeedbackTimeout = setTimeout(() => {
+			setInviteFeedback(null);
+			inviteFeedbackTimeout = undefined;
+		}, INVITE_FEEDBACK_DURATION_MS);
 	}
 
 	function openSignInModal(kind: "create-org" | "invite") {
@@ -235,6 +345,11 @@ export default function App() {
 
 	onMount(() => {
 		const unsubscribe = subscribeToAuthChanges((user) => {
+			const previousUser = firebaseUser();
+			if (previousUser?.uid !== user?.uid) {
+				resetOnboardingFlowState();
+			}
+
 			setFirebaseUser(user);
 			void (async () => {
 				try {
@@ -250,6 +365,15 @@ export default function App() {
 			})();
 		});
 		onCleanup(() => unsubscribe());
+		onCleanup(() => {
+			if (invitePanelScrollTimeout) {
+				clearTimeout(invitePanelScrollTimeout);
+			}
+
+			if (inviteFeedbackTimeout) {
+				clearTimeout(inviteFeedbackTimeout);
+			}
+		});
 
 		void (async () => {
 			try {
@@ -375,13 +499,20 @@ export default function App() {
 			return;
 		}
 
+		setCreateOrganizationAttempted(true);
+		const validationErrors = organizationValidationErrors();
+		if (validationErrors.length > 0) {
+			setStatusMessage("");
+			return;
+		}
+
 		setIsBusy(true);
 		clearMessages();
 		try {
 			const token = await user.getIdToken();
 			const response = await createOrganization(token, {
-				name: organizationName(),
-				shortName: organizationShortName(),
+				name: organizationName().trim(),
+				shortName: organizationShortName().trim().toLowerCase(),
 			});
 			setCreatedOrganizationSlug(response.organization.slug);
 			setMemberships((current) => [...current, response.membership]);
@@ -392,6 +523,13 @@ export default function App() {
 				membership: response.membership,
 			}));
 			setStatusMessage("Organization created. Invite admins now or continue.");
+			invitePanelScrollTimeout = setTimeout(() => {
+				invitePanelRef?.scrollIntoView({
+					behavior: "smooth",
+					block: "start",
+				});
+				invitePanelScrollTimeout = undefined;
+			}, INVITE_CARD_SCROLL_DELAY_MS);
 		} catch (error) {
 			setErrorMessage((error as Error).message);
 		} finally {
@@ -407,22 +545,60 @@ export default function App() {
 			return;
 		}
 
+		const nextInvite = {
+			email: inviteDraft().email.trim(),
+			role: inviteDraft().role,
+		};
+		if (!nextInvite.email) {
+			setErrorMessage("Email address is required.");
+			showInviteFeedback({
+				email: "Email address",
+				role: nextInvite.role,
+				status: "error",
+			});
+			return;
+		}
+
+		const normalizedEmail = nextInvite.email.toLowerCase();
+		const isDuplicateInvite = createdInvites().some(
+			(entry) => entry.email.toLowerCase() === normalizedEmail,
+		);
+		if (isDuplicateInvite) {
+			setErrorMessage("That email has already been invited.");
+			showInviteFeedback({
+				email: nextInvite.email,
+				role: nextInvite.role,
+				status: "error",
+			});
+			return;
+		}
+
 		setIsBusy(true);
 		clearMessages();
 		try {
 			const token = await user.getIdToken();
 			const response = await createInvite(token, {
 				organizationSlug: membership.organizationSlug,
-				email: inviteDraft().email,
-				role: inviteDraft().role,
+				email: nextInvite.email,
+				role: nextInvite.role,
 			});
 			setCreatedInvites((current) => [...current, response.invite]);
 			setInviteDraft({
 				email: "",
 				role: "Admin",
 			});
+			showInviteFeedback({
+				email: response.invite.email,
+				role: response.invite.role,
+				status: "success",
+			});
 			setStatusMessage(`Invite created for ${response.invite.email}.`);
 		} catch (error) {
+			showInviteFeedback({
+				email: nextInvite.email,
+				role: nextInvite.role,
+				status: "error",
+			});
 			setErrorMessage((error as Error).message);
 		} finally {
 			setIsBusy(false);
@@ -494,8 +670,7 @@ export default function App() {
 			setFirebaseUser(null);
 			setSession({ authenticated: false });
 			setMemberships([]);
-			setOrganization(null);
-			setCreatedOrganizationSlug(null);
+			resetOnboardingFlowState();
 			navigate("/");
 		} catch (error) {
 			setErrorMessage((error as Error).message);
@@ -508,12 +683,9 @@ export default function App() {
 		<main class="shell">
 			<header class="masthead">
 				<div>
-					<p class="eyebrow">Festival Organizational Login</p>
-					<h1>Organization onboarding without a default schema safety net.</h1>
-					<p class="lede">
-						Use Google SSO or passwordless email-link authentication, then land
-						in a schema-aware multi-tenant organization flow.
-					</p>
+					<p class="eyebrow">Music Festival Administration</p>
+					<h1>Get Started.</h1>
+					<p class="lede">Sign up to get started.</p>
 				</div>
 				<Show when={sessionMembership()}>
 					<div class="identity-card">
@@ -559,15 +731,14 @@ export default function App() {
 					<section class="panel hero-panel">
 						<h2>Start a new organization</h2>
 						<p>
-							Choose a sign-in method, create your organization slug, and become
-							the initial <code>Admin</code>.
+							Sign-up. Create a Organization. Create a Festival. Invite Users.
 						</p>
 						<div class="hero-actions">
 							<button
 								type="button"
 								onClick={() => openSignInModal("create-org")}
 							>
-								Sign up and start an organization
+								Sign up
 							</button>
 						</div>
 					</section>
@@ -576,10 +747,7 @@ export default function App() {
 				<Match when={route().kind === "create-org"}>
 					<section class="panel flow-panel">
 						<h2>Create organization</h2>
-						<p>
-							Use the organization name for display and a short name for the
-							route.
-						</p>
+						<p>Enter your full organization name and a short abbreviation.</p>
 						<Show when={!session().authenticated}>
 							<p class="muted">
 								Sign in first to continue to organization creation.
@@ -597,30 +765,48 @@ export default function App() {
 								<input
 									type="text"
 									value={organizationName()}
-									onInput={(event) =>
-										setOrganizationName(event.currentTarget.value)
-									}
+									onInput={(event) => {
+										setOrganizationNameTouched(true);
+										setOrganizationName(event.currentTarget.value);
+									}}
 									placeholder="Performing Arts Festival"
+									aria-invalid={hasOrganizationNameError()}
+									readOnly={organizationCreated()}
 								/>
-								<small>Name: max 255 chars</small>
+								<small>The full name of your organization</small>
 							</label>
 							<label class="field">
 								<span>Short name</span>
 								<input
 									type="text"
 									value={organizationShortName()}
-									onInput={(event) =>
-										setOrganizationShortName(event.currentTarget.value)
-									}
+									onInput={(event) => {
+										setOrganizationShortNameTouched(true);
+										setOrganizationShortName(event.currentTarget.value);
+									}}
 									placeholder="pafe"
+									aria-invalid={hasOrganizationShortNameError()}
+									readOnly={organizationCreated()}
 								/>
-								<small>Short name: max 6 chars</small>
-								<small>Allowed: [A-Za-z0-9-]</small>
+								<small>
+									Easy to remember short name: try for 6-8 characters
+								</small>
+								<small>Letters, numbers, and hyphens only</small>
 							</label>
+							<Show
+								when={
+									shouldShowOrganizationValidation() &&
+									organizationValidationMessage()
+								}
+							>
+								<section class="banner error-banner validation-banner">
+									{organizationValidationMessage()}
+								</section>
+							</Show>
 							<button
 								type="button"
 								onClick={handleCreateOrganization}
-								disabled={isBusy()}
+								disabled={isBusy() || organizationCreated()}
 							>
 								Create organization
 							</button>
@@ -630,11 +816,15 @@ export default function App() {
 					<Show when={sessionMembership()} keyed>
 						{(membership) => (
 							<Show when={createdOrganizationSlug()}>
-								<section class="panel flow-panel">
+								<section
+									class="panel flow-panel"
+									ref={(element) => {
+										invitePanelRef = element;
+									}}
+								>
 									<h3>Invite administrators and reviewers</h3>
 									<p>
-										Add optional invites before continuing to{" "}
-										<code>{buildOrgPath(membership.organizationSlug)}</code>.
+										Optional: send out additional invites before continuing.
 									</p>
 									<label class="field">
 										<span>Email</span>
@@ -671,7 +861,9 @@ export default function App() {
 											onClick={handleCreateInvite}
 											disabled={isBusy()}
 										>
-											Send invite
+											{createdInvites().length > 0
+												? "Send another invite"
+												: "Send invite"}
 										</button>
 										<button
 											type="button"
@@ -683,6 +875,22 @@ export default function App() {
 											Continue to organization
 										</button>
 									</div>
+									<Show when={inviteFeedback()} keyed>
+										{(feedback) => (
+											<div
+												class={`invite-feedback invite-feedback-${feedback.status}`}
+											>
+												<sup aria-hidden="true" />
+												<span class="sr-only">
+													{feedback.status === "success"
+														? "Invite sent"
+														: "Invite failed"}
+												</span>
+												<span>{feedback.email}</span>
+												<span>{feedback.role}</span>
+											</div>
+										)}
+									</Show>
 									<Show when={createdInvites().length > 0}>
 										<ul class="invite-list">
 											<For each={createdInvites()}>
@@ -690,9 +898,6 @@ export default function App() {
 													<li>
 														<strong>{entry.email}</strong>
 														<span>{entry.role}</span>
-														<code>
-															{window.location.origin}/invite/{entry.token}
-														</code>
 													</li>
 												)}
 											</For>

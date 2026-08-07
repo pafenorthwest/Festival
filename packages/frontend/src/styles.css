@@ -58,6 +58,13 @@ button {
 	box-shadow: 0 10px 24px rgba(68, 89, 214, 0.18);
 }
 
+button:disabled {
+	cursor: not-allowed;
+	background: #9ca3af;
+	color: rgba(255, 255, 255, 0.82);
+	box-shadow: none;
+}
+
 button.secondary-button {
 	background: transparent;
 	color: var(--bullet-ink);
@@ -81,11 +88,33 @@ select {
 	background: rgba(255, 255, 255, 0.94);
 }
 
+input[aria-invalid="true"] {
+	border-color: var(--bullet-error);
+	box-shadow: 0 0 0 3px rgba(185, 77, 54, 0.16);
+}
+
+input:read-only {
+	color: var(--bullet-soft-ink);
+	background: rgba(231, 235, 240, 0.74);
+}
+
 code {
 	font-size: 0.9rem;
 	background: rgba(68, 89, 214, 0.09);
 	padding: 0.15rem 0.4rem;
 	border-radius: 6px;
+}
+
+.sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
 }
 
 .shell {
@@ -179,6 +208,7 @@ code {
 	display: grid;
 	gap: 1rem;
 	max-width: 760px;
+	scroll-margin-top: 1.5rem;
 }
 
 .field {
@@ -201,11 +231,46 @@ code {
 	background: linear-gradient(135deg, var(--bullet-success), #16563d);
 }
 
+.validation-banner {
+	margin-bottom: 0;
+}
+
 .invite-summary,
 .invite-list,
 .organization-list {
 	display: grid;
 	gap: 0.6rem;
+}
+
+.invite-feedback {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr) auto;
+	gap: 0.35rem;
+	align-items: baseline;
+	width: min(420px, 100%);
+	color: var(--bullet-soft-ink);
+	animation: invite-feedback-fade 2.2s ease-out forwards;
+}
+
+.invite-feedback sup {
+	position: relative;
+	top: -0.25em;
+	font-weight: 700;
+	line-height: 1;
+}
+
+.invite-feedback-success sup::before {
+	content: "\2713";
+	color: var(--bullet-success);
+}
+
+.invite-feedback-error sup::before {
+	content: "\00d7";
+	color: var(--bullet-error);
+}
+
+.invite-feedback span:last-child {
+	color: var(--bullet-soft-ink);
 }
 
 .invite-list {
@@ -221,6 +286,17 @@ code {
 	border-radius: 14px;
 	background: rgba(255, 255, 255, 0.7);
 	border: 1px solid rgba(31, 36, 49, 0.08);
+}
+
+@keyframes invite-feedback-fade {
+	0%,
+	70% {
+		opacity: 1;
+	}
+
+	100% {
+		opacity: 0;
+	}
 }
 
 .organization-choice {

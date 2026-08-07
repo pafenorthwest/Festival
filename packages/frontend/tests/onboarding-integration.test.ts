@@ -76,6 +76,7 @@ describe("organization onboarding integration", () => {
 		expect(source).toContain("await logoutCurrentUser()");
 		expect(source).toContain("setSession({ authenticated: false })");
 		expect(source).toContain("setMemberships([])");
+		expect(source).toContain("resetOnboardingFlowState()");
 		expect(source).toContain('navigate("/")');
 		expect(source).not.toContain('button("Logout", () => undefined');
 	});
@@ -170,7 +171,49 @@ describe("organization onboarding integration", () => {
 
 		expect(source).toContain("organizationShortName");
 		expect(source).toContain("Short name");
-		expect(source).toContain("Allowed: [A-Za-z0-9-]");
-		expect(source).toContain("shortName: organizationShortName()");
+		expect(source).toContain("ORGANIZATION_SHORT_NAME_PATTERN");
+		expect(source).toContain(
+			"shortName: organizationShortName().trim().toLowerCase()",
+		);
+	});
+
+	it("keeps issue 63 onboarding validation and invite UX wired in the frontend", async () => {
+		const source = await Bun.file("src/App.tsx").text();
+		const styles = await Bun.file("src/styles.css").text();
+
+		expect(source).toContain("ORGANIZATION_NAME_PATTERN");
+		expect(source).toContain("ORGANIZATION_SHORT_NAME_PATTERN");
+		expect(source).toContain("Organization name is required.");
+		expect(source).toContain("Short name is required.");
+		expect(source).toContain("aria-invalid={hasOrganizationNameError()}");
+		expect(source).toContain("aria-invalid={hasOrganizationShortNameError()}");
+		expect(source).toContain("readOnly={organizationCreated()}");
+		expect(source).toContain("INVITE_CARD_SCROLL_DELAY_MS = 600");
+		expect(source).toContain("scrollIntoView");
+		expect(source).toContain("Send another invite");
+		expect(source).toContain("That email has already been invited.");
+		expect(source).toContain("entry.email.toLowerCase() === normalizedEmail");
+		expect(source).toContain("class={`invite-feedback invite-feedback-");
+		expect(styles).toContain("invite-feedback-success");
+		expect(styles).toContain("invite-feedback-error");
+		expect(source).not.toContain(
+			"window.location.origin}/invite/{entry.token}",
+		);
+		expect(styles).toContain('input[aria-invalid="true"]');
+		expect(styles).toContain("button:disabled");
+		expect(styles).toContain("@keyframes invite-feedback-fade");
+	});
+
+	it("clears user-scoped onboarding drafts when the authenticated user changes", async () => {
+		const source = await Bun.file("src/App.tsx").text();
+
+		expect(source).toContain("function resetOnboardingFlowState()");
+		expect(source).toContain("setCreatedOrganizationSlug(null)");
+		expect(source).toContain("setCreatedInvites([])");
+		expect(source).toContain('setOrganizationName("")');
+		expect(source).toContain('setOrganizationShortName("")');
+		expect(source).toContain('email: "",');
+		expect(source).toContain("const previousUser = firebaseUser()");
+		expect(source).toContain("previousUser?.uid !== user?.uid");
 	});
 });
