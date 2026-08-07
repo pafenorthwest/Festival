@@ -1,5 +1,0 @@
-prefix_rule(pattern=["swiftlint"], decision="allow")
-prefix_rule(pattern=["xcodebuild"], decision="allow")
-prefix_rule(pattern=["git", "-C", "/Users/eric/orderport/repos/iOSCommerceApp", "rev-parse", "--short", "HEAD"], decision="allow")
-prefix_rule(pattern=["docker", "run"], decision="allow")
-prefix_rule(pattern=["docker", "build"], decision="allow")

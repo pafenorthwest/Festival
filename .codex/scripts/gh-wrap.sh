@@ -167,7 +167,7 @@ usage() {
   cat <<'EOF'
 Usage:
   ./codex/scripts/gh-wrap.sh pr <create|view|edit|list|comment|status|close|reopen> [gh args...]
-  ./codex/scripts/gh-wrap.sh issue <create|delete|edit|list|close|reopen> [gh args...]
+  ./codex/scripts/gh-wrap.sh issue <create|view|delete|edit|list|close|reopen> [gh args...]
   ./codex/scripts/gh-wrap.sh label create [gh args...]
   ./codex/scripts/gh-wrap.sh edit [gh args...]   # alias for "pr edit"
 EOF
@@ -199,7 +199,7 @@ normalize_command() {
         return 2
       fi
       case "${args[1]}" in
-        create|delete|edit|list|close|reopen)
+        create|view|delete|edit|list|close|reopen)
           printf '%s\0' "${args[@]}"
           return 0
           ;;
