@@ -1,12 +1,18 @@
 import type {
 	AuthenticatedUser,
+	FestivalSummary,
 	InviteSummary,
+	OrganizationAdminUserEntry,
 	OrganizationLandingResponse,
 	OrganizationRole,
 	SessionMembership,
 	SessionResponse,
 } from "@festival/common";
-import { ORGANIZATION_ROLES } from "@festival/common";
+import {
+	ORGANIZATION_ROLES,
+	validateFestivalDates,
+	validateFestivalName,
+} from "@festival/common";
 import { useLocation, useNavigate } from "@solidjs/router";
 import type { User } from "firebase/auth";
 import {
@@ -22,9 +28,14 @@ import {
 } from "solid-js";
 import {
 	acceptInvite,
+	cancelAdminInvite,
+	createFestival,
 	createInvite,
 	createOrganization,
+	deleteAdminMembership,
 	dismissWelcome,
+	getAdminUsers,
+	getFestivals,
 	getInvite,
 	getMemberships,
 	getOrganization,
@@ -39,7 +50,13 @@ import {
 	signInWithGoogle,
 	subscribeToAuthChanges,
 } from "./lib/firebase-auth.js";
-import { type AppRoute, buildOrgPath, parseRoute } from "./lib/routes.js";
+import {
+	type AppRoute,
+	buildOrgAdminFestivalsPath,
+	buildOrgAdminUsersPath,
+	buildOrgPath,
+	parseRoute,
+} from "./lib/routes.js";
 
 interface InviteDraft {
 	email: string;
@@ -53,10 +70,21 @@ interface InviteFeedback {
 	status: "success" | "error";
 }
 
+interface FestivalDraft {
+	name: string;
+	startDate: string;
+	endDate: string;
+}
+
 const ORGANIZATION_NAME_PATTERN = /^[A-Za-z0-9\-() ]+$/;
 const ORGANIZATION_SHORT_NAME_PATTERN = /^[A-Za-z0-9-]+$/;
 const INVITE_FEEDBACK_DURATION_MS = 2200;
 const INVITE_CARD_SCROLL_DELAY_MS = 600;
+const ADMIN_ROUTE_KINDS = [
+	"org-admin",
+	"org-admin-users",
+	"org-admin-festivals",
+] as const;
 
 async function getIdToken(user: User | null): Promise<string | null> {
 	return user ? user.getIdToken() : null;
@@ -68,6 +96,20 @@ function toAuthenticatedUser(user: User): AuthenticatedUser {
 		email: user.email ?? "",
 		displayName: user.displayName ?? user.email ?? user.uid,
 	};
+}
+
+function formatDateOnly(value: string): string {
+	const [year, month, day] = value.split("-");
+	if (!year || !month || !day) {
+		return value;
+	}
+
+	return `${month}/${day}/${year}`;
+}
+
+function shortUserLabel(user: AuthenticatedUser | undefined): string {
+	const label = user?.displayName || user?.email || "";
+	return label.slice(0, 8);
 }
 
 export default function App() {
@@ -86,6 +128,10 @@ export default function App() {
 		string | null
 	>(null);
 	const [createdInvites, setCreatedInvites] = createSignal<InviteSummary[]>([]);
+	const [adminUsers, setAdminUsers] = createSignal<
+		OrganizationAdminUserEntry[]
+	>([]);
+	const [festivals, setFestivals] = createSignal<FestivalSummary[]>([]);
 	const [signInModalKind, setSignInModalKind] = createSignal<
 		"create-org" | "invite" | null
 	>(null);
@@ -108,6 +154,14 @@ export default function App() {
 	});
 	const [inviteFeedback, setInviteFeedback] =
 		createSignal<InviteFeedback | null>(null);
+	const [festivalDraft, setFestivalDraft] = createSignal<FestivalDraft>({
+		name: "",
+		startDate: "",
+		endDate: "",
+	});
+	const [festivalNameTouched, setFestivalNameTouched] = createSignal(false);
+	const [createFestivalAttempted, setCreateFestivalAttempted] =
+		createSignal(false);
 	const [statusMessage, setStatusMessage] = createSignal("");
 	const [errorMessage, setErrorMessage] = createSignal("");
 	const [isBusy, setIsBusy] = createSignal(false);
@@ -175,6 +229,38 @@ export default function App() {
 	const organizationValidationMessage = createMemo(() =>
 		organizationValidationErrors().join(" "),
 	);
+	const isAdminMember = createMemo(() => sessionMembership()?.role === "Admin");
+	const festivalNameValidation = createMemo(() =>
+		validateFestivalName(festivalDraft().name),
+	);
+	const shouldShowFestivalNameValidation = createMemo(
+		() => createFestivalAttempted() || festivalNameTouched(),
+	);
+	const hasFestivalNameError = createMemo(
+		() => shouldShowFestivalNameValidation() && !festivalNameValidation().valid,
+	);
+	const festivalNameValidationMessage = createMemo(() =>
+		festivalNameValidation().errors.join(" "),
+	);
+	const isAdminRoute = createMemo(() =>
+		ADMIN_ROUTE_KINDS.some((kind) => kind === route().kind),
+	);
+	const isAdminSubRoute = createMemo(
+		() =>
+			route().kind === "org-admin-users" ||
+			route().kind === "org-admin-festivals",
+	);
+	const adminBreadcrumb = createMemo(() => {
+		switch (route().kind) {
+			case "org-admin-users":
+				return "Admin > Users";
+			case "org-admin-festivals":
+				return "Admin > Festivals";
+			default:
+				return "Admin";
+		}
+	});
+	const adminUserLabel = createMemo(() => shortUserLabel(session().user));
 
 	function navigate(path: string) {
 		if (location.pathname === path) {
@@ -189,10 +275,22 @@ export default function App() {
 		setStatusMessage("");
 	}
 
+	function backToAdmin() {
+		clearMessages();
+		const membership = sessionMembership();
+		if (!membership) {
+			return;
+		}
+
+		navigate(buildOrgPath(membership.organizationSlug));
+	}
+
 	function resetOnboardingFlowState() {
 		setOrganization(null);
 		setCreatedOrganizationSlug(null);
 		setCreatedInvites([]);
+		setAdminUsers([]);
+		setFestivals([]);
 		setOrganizationName("");
 		setOrganizationShortName("");
 		setOrganizationNameTouched(false);
@@ -202,6 +300,13 @@ export default function App() {
 			email: "",
 			role: "Admin",
 		});
+		setFestivalDraft({
+			name: "",
+			startDate: "",
+			endDate: "",
+		});
+		setFestivalNameTouched(false);
+		setCreateFestivalAttempted(false);
 		setInviteFeedback(null);
 		if (invitePanelScrollTimeout) {
 			clearTimeout(invitePanelScrollTimeout);
@@ -294,6 +399,26 @@ export default function App() {
 			...current,
 			membership: response.membership,
 		}));
+	}
+
+	async function loadAdminUsers(slug: string) {
+		const token = await getIdToken(firebaseUser());
+		if (!token) {
+			return;
+		}
+
+		const response = await getAdminUsers(token, slug);
+		setAdminUsers(response.users);
+	}
+
+	async function loadFestivals(slug: string) {
+		const token = await getIdToken(firebaseUser());
+		if (!token) {
+			return;
+		}
+
+		const response = await getFestivals(token, slug);
+		setFestivals(response.festivals);
 	}
 
 	async function loadInvite(token: string) {
@@ -405,9 +530,15 @@ export default function App() {
 		const currentRoute = route();
 		const membership = sessionMembership();
 
-		if (currentRoute.kind === "org" && currentRoute.slug && firebaseUser()) {
+		if (
+			(currentRoute.kind === "org-root" ||
+				currentRoute.kind === "org-admin" ||
+				currentRoute.kind === "org-admin-users" ||
+				currentRoute.kind === "org-admin-festivals") &&
+			currentRoute.slug &&
+			firebaseUser()
+		) {
 			void loadOrganization(currentRoute.slug);
-			return;
 		}
 
 		if (
@@ -425,6 +556,22 @@ export default function App() {
 			createdOrganizationSlug() !== membership.organizationSlug
 		) {
 			navigate(buildOrgPath(membership.organizationSlug));
+		}
+	});
+
+	createEffect(() => {
+		const currentRoute = route();
+		if (!isAdminMember()) {
+			return;
+		}
+
+		if (currentRoute.kind === "org-admin-users") {
+			void loadAdminUsers(currentRoute.slug);
+			return;
+		}
+
+		if (currentRoute.kind === "org-admin-festivals") {
+			void loadFestivals(currentRoute.slug);
 		}
 	});
 
@@ -605,6 +752,136 @@ export default function App() {
 		}
 	}
 
+	async function handleCreateAdminInvite() {
+		const user = firebaseUser();
+		const currentRoute = route();
+		if (!user || currentRoute.kind !== "org-admin-users") {
+			setErrorMessage("Admin users page is required before inviting members.");
+			return;
+		}
+
+		const nextInvite = {
+			email: inviteDraft().email.trim(),
+			role: inviteDraft().role,
+		};
+		if (!nextInvite.email) {
+			setErrorMessage("Email address is required.");
+			return;
+		}
+
+		const normalizedEmail = nextInvite.email.toLowerCase();
+		if (
+			adminUsers().some(
+				(entry) => entry.email.toLowerCase() === normalizedEmail,
+			)
+		) {
+			setErrorMessage("That email has already been added.");
+			return;
+		}
+
+		setIsBusy(true);
+		clearMessages();
+		try {
+			const token = await user.getIdToken();
+			await createInvite(token, {
+				organizationSlug: currentRoute.slug,
+				email: nextInvite.email,
+				role: nextInvite.role,
+			});
+			setInviteDraft({
+				email: "",
+				role: "Admin",
+			});
+			await loadAdminUsers(currentRoute.slug);
+			setStatusMessage(`Invite created for ${nextInvite.email}.`);
+		} catch (error) {
+			setErrorMessage((error as Error).message);
+		} finally {
+			setIsBusy(false);
+		}
+	}
+
+	async function handleDeleteAdminUser(entry: OrganizationAdminUserEntry) {
+		const user = firebaseUser();
+		const currentRoute = route();
+		if (!user || currentRoute.kind !== "org-admin-users") {
+			return;
+		}
+
+		if (entry.isSelf) {
+			setErrorMessage("Admins cannot delete their own membership.");
+			return;
+		}
+
+		setIsBusy(true);
+		clearMessages();
+		try {
+			const token = await user.getIdToken();
+			if (entry.status === "accepted") {
+				await deleteAdminMembership(token, currentRoute.slug, entry.id);
+			} else {
+				await cancelAdminInvite(token, currentRoute.slug, entry.id);
+			}
+			await loadAdminUsers(currentRoute.slug);
+			setStatusMessage(`${entry.email} removed.`);
+		} catch (error) {
+			setErrorMessage((error as Error).message);
+		} finally {
+			setIsBusy(false);
+		}
+	}
+
+	async function handleCreateFestival() {
+		const user = firebaseUser();
+		const currentRoute = route();
+		if (!user || currentRoute.kind !== "org-admin-festivals") {
+			return;
+		}
+
+		setCreateFestivalAttempted(true);
+		const nameValidation = festivalNameValidation();
+		const draft = festivalDraft();
+		if (!nameValidation.valid) {
+			setStatusMessage("");
+			return;
+		}
+
+		if (!draft.startDate || !draft.endDate) {
+			setErrorMessage("Festival start date and end date are required.");
+			return;
+		}
+
+		const dateValidation = validateFestivalDates(draft);
+		if (!dateValidation.valid) {
+			setErrorMessage(dateValidation.errors.join(" "));
+			return;
+		}
+
+		setIsBusy(true);
+		clearMessages();
+		try {
+			const token = await user.getIdToken();
+			await createFestival(token, currentRoute.slug, {
+				name: nameValidation.normalized,
+				startDate: draft.startDate,
+				endDate: draft.endDate,
+			});
+			setFestivalDraft({
+				name: "",
+				startDate: "",
+				endDate: "",
+			});
+			setFestivalNameTouched(false);
+			setCreateFestivalAttempted(false);
+			await loadFestivals(currentRoute.slug);
+			setStatusMessage("Festival created.");
+		} catch (error) {
+			setErrorMessage((error as Error).message);
+		} finally {
+			setIsBusy(false);
+		}
+	}
+
 	async function handleAcceptInvite() {
 		const user = firebaseUser();
 		const token = currentInviteToken();
@@ -684,14 +961,46 @@ export default function App() {
 			<header class="masthead">
 				<div>
 					<p class="eyebrow">Music Festival Administration</p>
-					<h1>Get Started.</h1>
-					<p class="lede">Sign up to get started.</p>
+					<Show
+						when={isAdminRoute()}
+						fallback={
+							<>
+								<h1>Get Started.</h1>
+								<p class="lede">Sign up to get started.</p>
+							</>
+						}
+					>
+						<h1>{adminBreadcrumb()}</h1>
+					</Show>
 				</div>
-				<Show when={sessionMembership()}>
-					<div class="identity-card">
-						<div class="identity-label">Signed in as</div>
-						<div>{session().user?.displayName}</div>
-						<div class="identity-email">{session().user?.email}</div>
+				<Show when={sessionMembership() && !isAdminRoute()}>
+					{() => (
+						<div class="identity-card">
+							<div class="identity-label">Signed in as</div>
+							<div>{session().user?.displayName}</div>
+							<div class="identity-email">{session().user?.email}</div>
+						</div>
+					)}
+				</Show>
+				<Show when={sessionMembership() && isAdminRoute()}>
+					<div class="masthead-actions">
+						<Show when={isAdminSubRoute()}>
+							<button
+								type="button"
+								class="secondary-button compact-header-button"
+								onClick={backToAdmin}
+							>
+								Back to Admin
+							</button>
+						</Show>
+						<button
+							type="button"
+							class="secondary-button compact-header-button"
+							onClick={handleLogout}
+							disabled={isBusy()}
+						>
+							Log out {adminUserLabel()}
+						</button>
 					</div>
 				</Show>
 			</header>
@@ -738,7 +1047,7 @@ export default function App() {
 								type="button"
 								onClick={() => openSignInModal("create-org")}
 							>
-								Sign up
+								Sign up or Sign In
 							</button>
 						</div>
 					</section>
@@ -958,23 +1267,13 @@ export default function App() {
 					</section>
 				</Match>
 
-				<Match when={route().kind === "org"}>
+				<Match when={route().kind === "org-root"}>
 					<section class="panel org-shell">
 						<header class="org-header">
-							<button
-								type="button"
-								class="org-title"
-								onClick={() => {
-									const membership = sessionMembership();
-									if (!membership) {
-										return;
-									}
-
-									navigate(buildOrgPath(membership.organizationSlug));
-								}}
-							>
+							<h1 class="org-title">
+								Reserved Root Page for{" "}
 								{organization()?.name ?? sessionMembership()?.organizationName}
-							</button>
+							</h1>
 							<button
 								type="button"
 								class="secondary-button"
@@ -983,6 +1282,17 @@ export default function App() {
 							>
 								Log out
 							</button>
+						</header>
+					</section>
+				</Match>
+
+				<Match when={route().kind === "org-admin"}>
+					<section class="panel org-shell">
+						<header class="org-header">
+							<h2 class="org-title">
+								{organization()?.name ?? sessionMembership()?.organizationName}{" "}
+								admin
+							</h2>
 						</header>
 
 						<Show when={sessionMembership()?.showWelcome}>
@@ -1000,12 +1310,211 @@ export default function App() {
 							</div>
 						</Show>
 
-						<p class="org-copy">
-							Welcome to{" "}
-							{organization()?.name ?? sessionMembership()?.organizationName}{" "}
-							you are {sessionMembership()?.role} role
-						</p>
+						<div class="admin-card-grid">
+							<button
+								type="button"
+								class="admin-workflow-card"
+								disabled={!isAdminMember()}
+								onClick={() => {
+									const membership = sessionMembership();
+									if (!membership || !isAdminMember()) {
+										return;
+									}
+
+									navigate(buildOrgAdminUsersPath(membership.organizationSlug));
+								}}
+							>
+								<strong>Users</strong>
+								<span>Manage members and pending invites.</span>
+							</button>
+							<button
+								type="button"
+								class="admin-workflow-card"
+								disabled={!isAdminMember()}
+								onClick={() => {
+									const membership = sessionMembership();
+									if (!membership || !isAdminMember()) {
+										return;
+									}
+
+									navigate(
+										buildOrgAdminFestivalsPath(membership.organizationSlug),
+									);
+								}}
+							>
+								<strong>Festivals</strong>
+								<span>Create and review festival dates.</span>
+							</button>
+						</div>
 					</section>
+				</Match>
+
+				<Match when={route().kind === "org-admin-users"}>
+					<Show
+						when={isAdminMember()}
+						fallback={
+							<section class="panel flow-panel access-denied-panel">
+								<h2>Access denied</h2>
+								<p>Only Admin members can manage organization users.</p>
+							</section>
+						}
+					>
+						<section class="panel flow-panel">
+							<header class="admin-page-header">
+								<div>
+									<h2>Users</h2>
+									<p>Accepted members and pending invites.</p>
+								</div>
+							</header>
+							<div class="admin-list">
+								<For each={adminUsers()}>
+									{(entry) => (
+										<div
+											class={`admin-user-row admin-user-row-${entry.status}`}
+										>
+											<span class="status-dot" aria-hidden="true" />
+											<strong>{entry.email}</strong>
+											<span>{entry.role}</span>
+											<button
+												type="button"
+												class="icon-button trash-button"
+												aria-label={`Remove ${entry.email}`}
+												onClick={() => void handleDeleteAdminUser(entry)}
+												disabled={isBusy() || entry.isSelf}
+											/>
+										</div>
+									)}
+								</For>
+							</div>
+							<label class="field">
+								<span>Email</span>
+								<input
+									type="email"
+									value={inviteDraft().email}
+									onInput={(event) =>
+										setInviteDraft((current) => ({
+											...current,
+											email: event.currentTarget.value,
+										}))
+									}
+								/>
+							</label>
+							<label class="field">
+								<span>Role</span>
+								<select
+									value={inviteDraft().role}
+									onInput={(event) =>
+										setInviteDraft((current) => ({
+											...current,
+											role: event.currentTarget.value as OrganizationRole,
+										}))
+									}
+								>
+									<For each={ORGANIZATION_ROLES}>
+										{(role) => <option value={role}>{role}</option>}
+									</For>
+								</select>
+							</label>
+							<button
+								type="button"
+								onClick={handleCreateAdminInvite}
+								disabled={isBusy()}
+							>
+								Send invite
+							</button>
+						</section>
+					</Show>
+				</Match>
+
+				<Match when={route().kind === "org-admin-festivals"}>
+					<Show
+						when={isAdminMember()}
+						fallback={
+							<section class="panel flow-panel access-denied-panel">
+								<h2>Access denied</h2>
+								<p>Only Admin members can manage festivals.</p>
+							</section>
+						}
+					>
+						<section class="panel flow-panel">
+							<header class="admin-page-header">
+								<div>
+									<h2>Festivals</h2>
+									<p>Festival dates for this organization.</p>
+								</div>
+							</header>
+							<div class="festival-list">
+								<For each={festivals()}>
+									{(festival) => (
+										<div class="festival-row">
+											<strong>{festival.name}</strong>
+											<span>{formatDateOnly(festival.startDate)}</span>
+											<span>{formatDateOnly(festival.endDate)}</span>
+										</div>
+									)}
+								</For>
+							</div>
+							<label class="field">
+								<span>Festival name</span>
+								<input
+									type="text"
+									maxLength={255}
+									value={festivalDraft().name}
+									onInput={(event) => {
+										setFestivalNameTouched(true);
+										setFestivalDraft((current) => ({
+											...current,
+											name: event.currentTarget.value,
+										}));
+									}}
+									aria-invalid={hasFestivalNameError()}
+								/>
+							</label>
+							<Show
+								when={
+									shouldShowFestivalNameValidation() &&
+									festivalNameValidationMessage()
+								}
+							>
+								<section class="banner error-banner validation-banner">
+									{festivalNameValidationMessage()}
+								</section>
+							</Show>
+							<label class="field">
+								<span>Start date</span>
+								<input
+									type="date"
+									value={festivalDraft().startDate}
+									onInput={(event) =>
+										setFestivalDraft((current) => ({
+											...current,
+											startDate: event.currentTarget.value,
+										}))
+									}
+								/>
+							</label>
+							<label class="field">
+								<span>End date</span>
+								<input
+									type="date"
+									value={festivalDraft().endDate}
+									onInput={(event) =>
+										setFestivalDraft((current) => ({
+											...current,
+											endDate: event.currentTarget.value,
+										}))
+									}
+								/>
+							</label>
+							<button
+								type="button"
+								onClick={handleCreateFestival}
+								disabled={isBusy()}
+							>
+								Create festival
+							</button>
+						</section>
+					</Show>
 				</Match>
 			</Switch>
 

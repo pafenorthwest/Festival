@@ -2,6 +2,8 @@ import { describe, expect, it } from "bun:test";
 import {
 	deriveDisplayName,
 	ORGANIZATION_ROLES,
+	validateFestivalDates,
+	validateFestivalName,
 	validateOrganizationName,
 	validateOrganizationShortName,
 } from "../src/organization.js";
@@ -60,5 +62,35 @@ describe("organization helpers", () => {
 				email: "ada@example.com",
 			}),
 		).toBe("Ada Lovelace");
+	});
+
+	it("validates festival names and date ranges", () => {
+		expect(validateFestivalName("Spring Festival (West)").valid).toBeTrue();
+
+		const invalidName = validateFestivalName("Spring Festival!");
+		expect(invalidName.valid).toBeFalse();
+		expect(invalidName.errors).toContain(
+			"Festival name may only contain letters, numbers, spaces, and parentheses.",
+		);
+
+		const invalidDates = validateFestivalDates({
+			startDate: "2027-06-10",
+			endDate: "2027-06-09",
+			today: "2027-06-01",
+		});
+		expect(invalidDates.valid).toBeFalse();
+		expect(invalidDates.errors).toContain(
+			"Festival end date must be the same as or after start date.",
+		);
+
+		const pastDates = validateFestivalDates({
+			startDate: "2027-05-31",
+			endDate: "2027-06-01",
+			today: "2027-06-01",
+		});
+		expect(pastDates.valid).toBeFalse();
+		expect(pastDates.errors).toContain(
+			"Festival start date cannot be in the past.",
+		);
 	});
 });

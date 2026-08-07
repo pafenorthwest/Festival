@@ -1,12 +1,15 @@
 import { randomUUID } from "node:crypto";
 import type {
 	AuthenticatedUser,
+	FestivalRecord,
+	OrganizationAdminUserEntry,
 	OrganizationInviteRecord,
 	OrganizationMembershipRecord,
 	OrganizationRecord,
 	OrganizationUserRecord,
 } from "@festival/common";
 import type {
+	CreateFestivalRecordInput,
 	CreateInviteRecordInput,
 	CreateMembershipInput,
 	InviteWithOrganization,
@@ -27,6 +30,7 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 	private readonly membershipsByUserAndOrganization = new Map<string, string>();
 	private readonly invites = new Map<string, OrganizationInviteRecord>();
 	private readonly invitesByToken = new Map<string, string>();
+	private readonly festivals = new Map<string, FestivalRecord>();
 
 	async ensureReady(): Promise<void> {}
 
@@ -42,6 +46,7 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 				...existing,
 				email: user.email.toLowerCase(),
 				displayName: user.displayName,
+				disassociated: false,
 			};
 			this.users.set(existingId, updated);
 			return updated;
@@ -52,6 +57,7 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			firebaseUid: user.uid,
 			email: user.email.toLowerCase(),
 			displayName: user.displayName,
+			disassociated: false,
 			createdAtIso: new Date().toISOString(),
 		};
 
@@ -233,6 +239,131 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			...invite,
 			acceptedAtIso: new Date().toISOString(),
 		});
+	}
+
+	async listAdminUsers(
+		organizationId: string,
+		currentUserId: string,
+	): Promise<OrganizationAdminUserEntry[]> {
+		const acceptedUsers = [...this.memberships.values()]
+			.filter((membership) => membership.organizationId === organizationId)
+			.map((membership) => {
+				const user = this.users.get(membership.userId);
+				if (!user) {
+					throw new Error(`User not found for membership ${membership.id}`);
+				}
+
+				return {
+					id: membership.id,
+					email: user.email,
+					role: membership.role,
+					status: "accepted" as const,
+					isSelf: membership.userId === currentUserId,
+				};
+			});
+		const pendingUsers = [...this.invites.values()]
+			.filter(
+				(invite) =>
+					invite.organizationId === organizationId && !invite.acceptedAtIso,
+			)
+			.map((invite) => ({
+				id: invite.id,
+				email: invite.email,
+				role: invite.role,
+				status: "pending" as const,
+				isSelf: false,
+			}));
+
+		return [...acceptedUsers, ...pendingUsers];
+	}
+
+	async deleteMembership(input: {
+		organizationId: string;
+		membershipId: string;
+		currentUserId: string;
+	}): Promise<void> {
+		const membership = this.memberships.get(input.membershipId);
+		if (!membership || membership.organizationId !== input.organizationId) {
+			throw new Error("Membership not found.");
+		}
+
+		if (membership.userId === input.currentUserId) {
+			throw new Error("Admins cannot delete their own membership.");
+		}
+
+		this.memberships.delete(input.membershipId);
+		this.membershipsByUserId.get(membership.userId)?.delete(input.membershipId);
+		this.membershipsByUserAndOrganization.delete(
+			`${membership.userId}:${membership.organizationId}`,
+		);
+
+		const user = this.users.get(membership.userId);
+		if (user) {
+			this.users.set(user.id, {
+				...user,
+				disassociated: true,
+			});
+		}
+	}
+
+	async cancelInvite(input: {
+		organizationId: string;
+		inviteId: string;
+	}): Promise<void> {
+		const invite = this.invites.get(input.inviteId);
+		if (!invite || invite.organizationId !== input.organizationId) {
+			throw new Error("Invite not found.");
+		}
+
+		this.invites.delete(input.inviteId);
+		this.invitesByToken.delete(invite.token);
+	}
+
+	async listFestivals(organizationId: string): Promise<FestivalRecord[]> {
+		return [...this.festivals.values()].filter(
+			(festival) => festival.organizationId === organizationId,
+		);
+	}
+
+	async createFestival(
+		input: CreateFestivalRecordInput,
+	): Promise<FestivalRecord> {
+		if (
+			[...this.festivals.values()].some(
+				(festival) =>
+					festival.organizationId === input.organizationId &&
+					(festival.name.toLowerCase() === input.name.toLowerCase() ||
+						festival.code === input.code),
+			)
+		) {
+			throw new Error("Festival already exists for this organization.");
+		}
+
+		const festival: FestivalRecord = {
+			id: input.id,
+			organizationId: input.organizationId,
+			code: input.code,
+			name: input.name,
+			startDate: input.startDate,
+			endDate: input.endDate,
+			createdAtIso: new Date().toISOString(),
+		};
+
+		this.festivals.set(festival.id, festival);
+		return festival;
+	}
+
+	async findFestivalByName(
+		organizationId: string,
+		name: string,
+	): Promise<FestivalRecord | null> {
+		return (
+			[...this.festivals.values()].find(
+				(festival) =>
+					festival.organizationId === organizationId &&
+					festival.name.toLowerCase() === name.toLowerCase(),
+			) ?? null
+		);
 	}
 
 	async dismissWelcome(

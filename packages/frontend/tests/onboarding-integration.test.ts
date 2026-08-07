@@ -216,4 +216,21 @@ describe("organization onboarding integration", () => {
 		expect(source).toContain("const previousUser = firebaseUser()");
 		expect(source).toContain("previousUser?.uid !== user?.uid");
 	});
+
+	it("keeps admin headers compact with breadcrumbs and header-level back navigation", async () => {
+		const source = await Bun.file("src/App.tsx").text();
+		const styles = await Bun.file("src/styles.css").text();
+
+		expect(source).toContain("Admin > Users");
+		expect(source).toContain("Admin > Festivals");
+		expect(source).toContain("Log out {adminUserLabel()}");
+		expect(source).toContain("function shortUserLabel");
+		expect(source).toContain("function backToAdmin()");
+		expect(source).toContain("clearMessages()");
+		expect(source).toContain("validateFestivalDates(draft)");
+		expect(source).toContain('class="masthead-actions"');
+		expect(source).toContain('class="secondary-button compact-header-button"');
+		expect(styles).toContain(".compact-header-button");
+		expect(styles).toContain("background: rgba(31, 122, 87, 0.08);");
+	});
 });

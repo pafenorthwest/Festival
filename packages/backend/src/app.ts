@@ -67,7 +67,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 		cors({
 			origin: (origin) => (allowedApiOrigins.has(origin) ? origin : undefined),
 			allowHeaders: ["Authorization", "Content-Type"],
-			allowMethods: ["GET", "POST", "OPTIONS"],
+			allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
 		}),
 	);
 

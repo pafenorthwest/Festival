@@ -452,4 +452,259 @@ describe("organization routes", () => {
 			error: "Invite has already been accepted.",
 		});
 	});
+
+	it("lists accepted and pending admin users, blocks duplicates, and deletes rows", async () => {
+		const { app } = await createTestApp();
+
+		await app.fetch(
+			new Request(
+				"http://test/api/organizations",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						name: "Festival Admins",
+						shortName: "pafe",
+					}),
+				}),
+			),
+		);
+		const inviteResponse = await app.fetch(
+			new Request(
+				"http://test/api/invites",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						organizationSlug: "pafe",
+						email: "invitee@example.com",
+						role: "Music Reviewer",
+					} satisfies CreateInviteInput),
+				}),
+			),
+		);
+		expect(inviteResponse.status).toBe(201);
+
+		const duplicateInvite = await app.fetch(
+			new Request(
+				"http://test/api/invites",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						organizationSlug: "pafe",
+						email: "INVITEE@example.com",
+						role: "Admin",
+					} satisfies CreateInviteInput),
+				}),
+			),
+		);
+		expect(duplicateInvite.status).toBe(409);
+
+		const usersResponse = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/users",
+				withAuth("admin"),
+			),
+		);
+		expect(usersResponse.status).toBe(200);
+		const usersData = (await usersResponse.json()) as {
+			users: Array<{
+				id: string;
+				email: string;
+				status: "accepted" | "pending";
+				isSelf: boolean;
+			}>;
+		};
+		expect(usersData.users.map((user) => user.status)).toEqual([
+			"accepted",
+			"pending",
+		]);
+		expect(usersData.users[0]?.isSelf).toBeTrue();
+
+		const selfDelete = await app.fetch(
+			new Request(
+				`http://test/api/organizations/pafe/admin/memberships/${usersData.users[0]?.id}`,
+				withAuth("admin", { method: "DELETE" }),
+			),
+		);
+		expect(selfDelete.status).toBe(400);
+
+		const pendingDelete = await app.fetch(
+			new Request(
+				`http://test/api/organizations/pafe/admin/invites/${usersData.users[1]?.id}`,
+				withAuth("admin", { method: "DELETE" }),
+			),
+		);
+		expect(pendingDelete.status).toBe(200);
+
+		const afterDelete = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/users",
+				withAuth("admin"),
+			),
+		);
+		const afterDeleteData = (await afterDelete.json()) as {
+			users: Array<{ email: string }>;
+		};
+		expect(afterDeleteData.users.map((user) => user.email)).toEqual([
+			"admin@example.com",
+		]);
+	});
+
+	it("requires Admin role for admin users and festivals subpages", async () => {
+		const { app } = await createTestApp();
+
+		await app.fetch(
+			new Request(
+				"http://test/api/organizations",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						name: "Festival Admins",
+						shortName: "pafe",
+					}),
+				}),
+			),
+		);
+		const inviteResponse = await app.fetch(
+			new Request(
+				"http://test/api/invites",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						organizationSlug: "pafe",
+						email: "invitee@example.com",
+						role: "Read Only",
+					} satisfies CreateInviteInput),
+				}),
+			),
+		);
+		const inviteData = (await inviteResponse.json()) as {
+			invite: { token: string };
+		};
+		await app.fetch(
+			new Request(
+				`http://test/api/invites/${inviteData.invite.token}/accept`,
+				withAuth("invitee", {
+					method: "POST",
+					body: JSON.stringify({ name: "Read Only User" }),
+				}),
+			),
+		);
+
+		const usersResponse = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/users",
+				withAuth("invitee"),
+			),
+		);
+		const festivalsResponse = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/festivals",
+				withAuth("invitee"),
+			),
+		);
+
+		expect(usersResponse.status).toBe(403);
+		expect(festivalsResponse.status).toBe(403);
+	});
+
+	it("creates and lists organization festivals with validation", async () => {
+		const { app } = await createTestApp();
+
+		await app.fetch(
+			new Request(
+				"http://test/api/organizations",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						name: "Festival Admins",
+						shortName: "pafe",
+					}),
+				}),
+			),
+		);
+
+		const createResponse = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/festivals",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						name: "Spring Festival (West)",
+						startDate: "2027-06-10",
+						endDate: "2027-06-12",
+					}),
+				}),
+			),
+		);
+		expect(createResponse.status).toBe(201);
+		const createData = (await createResponse.json()) as {
+			festival: { code: string; name: string };
+		};
+		expect(createData.festival.name).toBe("Spring Festival (West)");
+		expect(createData.festival.code).toHaveLength(6);
+
+		const duplicateResponse = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/festivals",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						name: "spring festival (west)",
+						startDate: "2027-06-10",
+						endDate: "2027-06-12",
+					}),
+				}),
+			),
+		);
+		expect(duplicateResponse.status).toBe(409);
+
+		const invalidDateResponse = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/festivals",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						name: "Summer Festival",
+						startDate: "2027-06-12",
+						endDate: "2027-06-10",
+					}),
+				}),
+			),
+		);
+		expect(invalidDateResponse.status).toBe(400);
+
+		const pastDateResponse = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/festivals",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						name: "Past Festival",
+						startDate: "2020-06-10",
+						endDate: "2020-06-12",
+					}),
+				}),
+			),
+		);
+		expect(pastDateResponse.status).toBe(400);
+		await expect(pastDateResponse.json()).resolves.toMatchObject({
+			error: "Festival start date cannot be in the past.",
+		});
+
+		const listResponse = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/festivals",
+				withAuth("admin"),
+			),
+		);
+		const listData = (await listResponse.json()) as {
+			festivals: Array<{ name: string; startDate: string; endDate: string }>;
+		};
+		expect(listData.festivals).toHaveLength(1);
+		expect(listData.festivals[0]).toMatchObject({
+			name: "Spring Festival (West)",
+			startDate: "2027-06-10",
+			endDate: "2027-06-12",
+		});
+	});
 });

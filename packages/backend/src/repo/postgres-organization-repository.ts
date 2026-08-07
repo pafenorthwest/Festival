@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type {
 	AuthenticatedUser,
+	FestivalRecord,
+	OrganizationAdminUserEntry,
 	OrganizationInviteRecord,
 	OrganizationMembershipRecord,
 	OrganizationRecord,
@@ -9,6 +11,7 @@ import type {
 } from "@festival/common";
 import { sql } from "bun";
 import type {
+	CreateFestivalRecordInput,
 	CreateInviteRecordInput,
 	CreateMembershipInput,
 	InviteWithOrganization,
@@ -43,6 +46,16 @@ interface InviteRow {
 	organization_created_at: string;
 }
 
+interface FestivalRow {
+	id: string;
+	organization_id: string;
+	code: string;
+	name: string;
+	start_date: string;
+	end_date: string;
+	created_at: string;
+}
+
 function sanitizeSchemaName(schema: string): string {
 	if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(schema)) {
 		throw new Error(
@@ -72,6 +85,7 @@ function mapUser(row: {
 	firebase_uid: string;
 	email: string;
 	display_name: string;
+	disassociated: boolean;
 	created_at: string;
 }): OrganizationUserRecord {
 	return {
@@ -79,6 +93,19 @@ function mapUser(row: {
 		firebaseUid: row.firebase_uid,
 		email: row.email,
 		displayName: row.display_name,
+		disassociated: row.disassociated,
+		createdAtIso: row.created_at,
+	};
+}
+
+function mapFestival(row: FestivalRow): FestivalRecord {
+	return {
+		id: row.id,
+		organizationId: row.organization_id,
+		code: row.code,
+		name: row.name,
+		startDate: row.start_date,
+		endDate: row.end_date,
 		createdAtIso: row.created_at,
 	};
 }
@@ -153,6 +180,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				firebase_uid TEXT NOT NULL UNIQUE,
 				email TEXT NOT NULL UNIQUE,
 				display_name TEXT NOT NULL,
+				disassociated BOOLEAN NOT NULL DEFAULT FALSE,
 				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 			);
 
@@ -177,11 +205,30 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				accepted_at TIMESTAMPTZ NULL
 			);
 
+			CREATE TABLE IF NOT EXISTS ${schema}.festivals (
+				id TEXT PRIMARY KEY,
+				organization_id TEXT NOT NULL REFERENCES ${schema}.organizations (id) ON DELETE CASCADE,
+				code TEXT NOT NULL,
+				name TEXT NOT NULL,
+				start_date DATE NOT NULL,
+				end_date DATE NOT NULL,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			);
+
+			ALTER TABLE ${schema}.users
+				ADD COLUMN IF NOT EXISTS disassociated BOOLEAN NOT NULL DEFAULT FALSE;
+
 			ALTER TABLE ${schema}.memberships
 				DROP CONSTRAINT IF EXISTS memberships_user_id_key;
 
 			CREATE UNIQUE INDEX IF NOT EXISTS idx_memberships_user_org
 				ON ${schema}.memberships (user_id, organization_id);
+
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_festivals_org_code
+				ON ${schema}.festivals (organization_id, code);
+
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_festivals_org_name_lower
+				ON ${schema}.festivals (organization_id, LOWER(name));
 		`);
 	}
 
@@ -189,7 +236,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		await this.ensureReady();
 
 		const existingRows = (await sql.unsafe(
-			`SELECT id, firebase_uid, email, display_name, created_at
+			`SELECT id, firebase_uid, email, display_name, disassociated, created_at
 			 FROM ${this.schema}.users
 			 WHERE firebase_uid = $1
 			 LIMIT 1`,
@@ -199,21 +246,23 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			firebase_uid: string;
 			email: string;
 			display_name: string;
+			disassociated: boolean;
 			created_at: string;
 		}>;
 
 		if (existingRows.length > 0) {
 			const [updatedRow] = (await sql.unsafe(
 				`UPDATE ${this.schema}.users
-				 SET email = $2, display_name = $3
+				 SET email = $2, display_name = $3, disassociated = FALSE
 				 WHERE firebase_uid = $1
-				 RETURNING id, firebase_uid, email, display_name, created_at`,
+				 RETURNING id, firebase_uid, email, display_name, disassociated, created_at`,
 				[user.uid, user.email.toLowerCase(), user.displayName],
 			)) as Array<{
 				id: string;
 				firebase_uid: string;
 				email: string;
 				display_name: string;
+				disassociated: boolean;
 				created_at: string;
 			}>;
 
@@ -224,13 +273,14 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			`INSERT INTO ${this.schema}.users (
 				id, firebase_uid, email, display_name
 			) VALUES ($1, $2, $3, $4)
-			RETURNING id, firebase_uid, email, display_name, created_at`,
+			RETURNING id, firebase_uid, email, display_name, disassociated, created_at`,
 			[randomUUID(), user.uid, user.email.toLowerCase(), user.displayName],
 		)) as Array<{
 			id: string;
 			firebase_uid: string;
 			email: string;
 			display_name: string;
+			disassociated: boolean;
 			created_at: string;
 		}>;
 
@@ -485,6 +535,195 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			 WHERE token = $1`,
 			[token],
 		);
+	}
+
+	async listAdminUsers(
+		organizationId: string,
+		currentUserId: string,
+	): Promise<OrganizationAdminUserEntry[]> {
+		await this.ensureReady();
+
+		const acceptedRows = (await sql.unsafe(
+			`SELECT
+				m.id,
+				u.email,
+				m.role,
+				(m.user_id = $2) AS is_self
+			 FROM ${this.schema}.memberships m
+			 JOIN ${this.schema}.users u
+			   ON u.id = m.user_id
+			 WHERE m.organization_id = $1
+			 ORDER BY m.joined_at ASC`,
+			[organizationId, currentUserId],
+		)) as Array<{
+			id: string;
+			email: string;
+			role: OrganizationRole;
+			is_self: boolean;
+		}>;
+		const pendingRows = (await sql.unsafe(
+			`SELECT id, email, role
+			 FROM ${this.schema}.invites
+			 WHERE organization_id = $1
+			   AND accepted_at IS NULL
+			 ORDER BY created_at ASC`,
+			[organizationId],
+		)) as Array<{
+			id: string;
+			email: string;
+			role: OrganizationRole;
+		}>;
+
+		return [
+			...acceptedRows.map((row) => ({
+				id: row.id,
+				email: row.email,
+				role: row.role,
+				status: "accepted" as const,
+				isSelf: row.is_self,
+			})),
+			...pendingRows.map((row) => ({
+				id: row.id,
+				email: row.email,
+				role: row.role,
+				status: "pending" as const,
+				isSelf: false,
+			})),
+		];
+	}
+
+	async deleteMembership(input: {
+		organizationId: string;
+		membershipId: string;
+		currentUserId: string;
+	}): Promise<void> {
+		await this.ensureReady();
+
+		const rows = (await sql.unsafe(
+			`SELECT user_id
+			 FROM ${this.schema}.memberships
+			 WHERE id = $1
+			   AND organization_id = $2
+			 LIMIT 1`,
+			[input.membershipId, input.organizationId],
+		)) as Array<{ user_id: string }>;
+		const row = rows[0];
+		if (!row) {
+			throw new Error("Membership not found.");
+		}
+
+		if (row.user_id === input.currentUserId) {
+			throw new Error("Admins cannot delete their own membership.");
+		}
+
+		await sql.unsafe(
+			`DELETE FROM ${this.schema}.memberships
+			 WHERE id = $1
+			   AND organization_id = $2`,
+			[input.membershipId, input.organizationId],
+		);
+		await sql.unsafe(
+			`UPDATE ${this.schema}.users
+			 SET disassociated = TRUE
+			 WHERE id = $1`,
+			[row.user_id],
+		);
+	}
+
+	async cancelInvite(input: {
+		organizationId: string;
+		inviteId: string;
+	}): Promise<void> {
+		await this.ensureReady();
+
+		await sql.unsafe(
+			`DELETE FROM ${this.schema}.invites
+			 WHERE id = $1
+			   AND organization_id = $2
+			   AND accepted_at IS NULL`,
+			[input.inviteId, input.organizationId],
+		);
+	}
+
+	async listFestivals(organizationId: string): Promise<FestivalRecord[]> {
+		await this.ensureReady();
+
+		const rows = (await sql.unsafe(
+			`SELECT
+				id,
+				organization_id,
+				code,
+				name,
+				start_date::text AS start_date,
+				end_date::text AS end_date,
+				created_at
+			 FROM ${this.schema}.festivals
+			 WHERE organization_id = $1
+			 ORDER BY start_date ASC, name ASC`,
+			[organizationId],
+		)) as FestivalRow[];
+
+		return rows.map(mapFestival);
+	}
+
+	async createFestival(
+		input: CreateFestivalRecordInput,
+	): Promise<FestivalRecord> {
+		await this.ensureReady();
+
+		const [row] = (await sql.unsafe(
+			`INSERT INTO ${this.schema}.festivals (
+				id,
+				organization_id,
+				code,
+				name,
+				start_date,
+				end_date
+			) VALUES ($1, $2, $3, $4, $5, $6)
+			RETURNING
+				id,
+				organization_id,
+				code,
+				name,
+				start_date::text AS start_date,
+				end_date::text AS end_date,
+				created_at`,
+			[
+				input.id,
+				input.organizationId,
+				input.code,
+				input.name,
+				input.startDate,
+				input.endDate,
+			],
+		)) as FestivalRow[];
+
+		return mapFestival(row);
+	}
+
+	async findFestivalByName(
+		organizationId: string,
+		name: string,
+	): Promise<FestivalRecord | null> {
+		await this.ensureReady();
+
+		const rows = (await sql.unsafe(
+			`SELECT
+				id,
+				organization_id,
+				code,
+				name,
+				start_date::text AS start_date,
+				end_date::text AS end_date,
+				created_at
+			 FROM ${this.schema}.festivals
+			 WHERE organization_id = $1
+			   AND LOWER(name) = LOWER($2)
+			 LIMIT 1`,
+			[organizationId, name],
+		)) as FestivalRow[];
+
+		return rows[0] ? mapFestival(rows[0]) : null;
 	}
 
 	async dismissWelcome(

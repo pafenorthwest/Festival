@@ -1,11 +1,15 @@
 import type {
 	AcceptInviteInput,
+	CreateFestivalInput,
+	CreateFestivalResponse,
 	CreateInviteInput,
 	CreateInviteResponse,
 	CreateOrganizationInput,
 	CreateOrganizationResponse,
 	DismissWelcomeResponse,
 	InviteSummary,
+	OrganizationAdminUsersResponse,
+	OrganizationFestivalListResponse,
 	OrganizationLandingResponse,
 	OrganizationMembershipListResponse,
 	SessionResponse,
@@ -109,6 +113,65 @@ export function dismissWelcome(idToken: string, slug: string) {
 		`/api/organizations/${slug}/welcome/dismiss`,
 		{
 			method: "POST",
+		},
+		idToken,
+	);
+}
+
+export function getAdminUsers(idToken: string, slug: string) {
+	return requestJson<OrganizationAdminUsersResponse>(
+		`/api/organizations/${slug}/admin/users`,
+		undefined,
+		idToken,
+	);
+}
+
+export function deleteAdminMembership(
+	idToken: string,
+	slug: string,
+	membershipId: string,
+) {
+	return requestJson(
+		`/api/organizations/${slug}/admin/memberships/${membershipId}`,
+		{
+			method: "DELETE",
+		},
+		idToken,
+	);
+}
+
+export function cancelAdminInvite(
+	idToken: string,
+	slug: string,
+	inviteId: string,
+) {
+	return requestJson(
+		`/api/organizations/${slug}/admin/invites/${inviteId}`,
+		{
+			method: "DELETE",
+		},
+		idToken,
+	);
+}
+
+export function getFestivals(idToken: string, slug: string) {
+	return requestJson<OrganizationFestivalListResponse>(
+		`/api/organizations/${slug}/admin/festivals`,
+		undefined,
+		idToken,
+	);
+}
+
+export function createFestival(
+	idToken: string,
+	slug: string,
+	input: CreateFestivalInput,
+) {
+	return requestJson<CreateFestivalResponse>(
+		`/api/organizations/${slug}/admin/festivals`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
 		},
 		idToken,
 	);

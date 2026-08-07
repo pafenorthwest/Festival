@@ -131,6 +131,24 @@ code {
 	margin-bottom: 1.5rem;
 }
 
+.masthead-actions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: end;
+	gap: 0.65rem;
+}
+
+button.compact-header-button {
+	padding: 0.65rem 0.85rem;
+	line-height: 1.1;
+	max-width: 9.5rem;
+	white-space: normal;
+	background: var(--bullet-ink);
+	color: white;
+	border-color: var(--bullet-ink);
+	box-shadow: 0 10px 22px rgba(31, 36, 49, 0.16);
+}
+
 .eyebrow {
 	text-transform: uppercase;
 	letter-spacing: 0.18em;
@@ -328,11 +346,118 @@ code {
 }
 
 .org-title {
+	margin: 0;
 	padding: 0;
 	background: none;
 	color: var(--bullet-ink);
 	box-shadow: none;
 	font-size: 1.8rem;
+}
+
+.admin-card-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 0.9rem;
+}
+
+.admin-workflow-card {
+	display: grid;
+	gap: 0.35rem;
+	justify-items: start;
+	min-height: 120px;
+	border-radius: 12px;
+	padding: 1rem;
+	text-align: left;
+	background: rgba(255, 255, 255, 0.72);
+	color: var(--bullet-ink);
+	border: 1px solid rgba(31, 36, 49, 0.1);
+	box-shadow: none;
+}
+
+.admin-workflow-card:disabled {
+	background: rgba(229, 231, 235, 0.78);
+	color: var(--bullet-soft-ink);
+}
+
+.admin-workflow-card span,
+.admin-page-header p,
+.access-denied-panel p {
+	margin: 0;
+	color: var(--bullet-soft-ink);
+}
+
+.admin-page-header {
+	display: flex;
+	justify-content: space-between;
+	gap: 1rem;
+	align-items: start;
+}
+
+.admin-page-header h2 {
+	margin: 0 0 0.35rem;
+}
+
+.admin-list,
+.festival-list {
+	display: grid;
+	gap: 0.55rem;
+}
+
+.admin-user-row,
+.festival-row {
+	display: grid;
+	align-items: center;
+	gap: 0.65rem;
+	padding: 0.8rem 0.9rem;
+	border-radius: 12px;
+	border: 1px solid rgba(31, 36, 49, 0.08);
+}
+
+.admin-user-row {
+	grid-template-columns: auto minmax(0, 1fr) minmax(120px, auto) auto;
+}
+
+.admin-user-row-accepted {
+	background: rgba(31, 122, 87, 0.08);
+}
+
+.admin-user-row-pending {
+	background: rgba(182, 135, 44, 0.12);
+}
+
+.festival-row {
+	grid-template-columns: minmax(0, 1fr) auto auto;
+	background: rgba(31, 122, 87, 0.08);
+}
+
+.status-dot {
+	width: 0.65rem;
+	height: 0.65rem;
+	border-radius: 999px;
+	background: var(--bullet-success);
+}
+
+.admin-user-row-pending .status-dot {
+	background: var(--bullet-gold);
+}
+
+.icon-button {
+	display: inline-grid;
+	place-items: center;
+	width: 2.1rem;
+	height: 2.1rem;
+	padding: 0;
+	border-radius: 999px;
+	background: transparent;
+	color: var(--bullet-error);
+	border: 1px solid rgba(185, 77, 54, 0.25);
+	box-shadow: none;
+}
+
+.trash-button::before {
+	content: "\1f5d1";
+	font-size: 1rem;
+	line-height: 1;
 }
 
 .welcome-box {
@@ -403,5 +528,15 @@ code {
 	.welcome-box {
 		flex-direction: column;
 		align-items: stretch;
+	}
+
+	.admin-card-grid,
+	.admin-user-row,
+	.festival-row {
+		grid-template-columns: 1fr;
+	}
+
+	.admin-page-header {
+		flex-direction: column;
 	}
 }
