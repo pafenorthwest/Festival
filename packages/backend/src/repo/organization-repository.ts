@@ -55,6 +55,7 @@ export interface OrganizationRepository {
 		slug: string,
 	): Promise<MembershipWithOrganization | null>;
 	findOrganizationBySlug(slug: string): Promise<OrganizationRecord | null>;
+	findOrganizationByName(name: string): Promise<OrganizationRecord | null>;
 	createOrganization(input: {
 		name: string;
 		slug: string;

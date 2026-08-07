@@ -373,6 +373,27 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		return rows[0] ? mapOrganization(rows[0]) : null;
 	}
 
+	async findOrganizationByName(
+		name: string,
+	): Promise<OrganizationRecord | null> {
+		await this.ensureReady();
+
+		const rows = (await sql.unsafe(
+			`SELECT id, name, slug, created_at
+			 FROM ${this.schema}.organizations
+			 WHERE LOWER(name) = LOWER($1)
+			 LIMIT 1`,
+			[name],
+		)) as Array<{
+			id: string;
+			name: string;
+			slug: string;
+			created_at: string;
+		}>;
+
+		return rows[0] ? mapOrganization(rows[0]) : null;
+	}
+
 	async createOrganization(input: {
 		name: string;
 		slug: string;

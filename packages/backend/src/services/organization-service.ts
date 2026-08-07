@@ -158,6 +158,12 @@ export class OrganizationService {
 			throw new AppError("Organization short name is already registered.", 409);
 		}
 
+		const existingOrganizationName =
+			await this.repository.findOrganizationByName(nameValidation.normalized);
+		if (existingOrganizationName) {
+			throw new AppError("Organization name is already registered.", 409);
+		}
+
 		const organization = await this.repository.createOrganization({
 			name: nameValidation.normalized,
 			slug: shortNameValidation.normalized,

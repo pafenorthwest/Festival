@@ -123,6 +123,41 @@ describe("organization routes", () => {
 		});
 	});
 
+	it("rejects duplicate organization display names with different short names", async () => {
+		const { app } = await createTestApp();
+
+		await app.fetch(
+			new Request(
+				"http://test/api/organizations",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						name: "Festival Admins",
+						shortName: "pafe",
+					}),
+				}),
+			),
+		);
+
+		const duplicate = await app.fetch(
+			new Request(
+				"http://test/api/organizations",
+				withAuth("outsider", {
+					method: "POST",
+					body: JSON.stringify({
+						name: "festival admins",
+						shortName: "board",
+					}),
+				}),
+			),
+		);
+
+		expect(duplicate.status).toBe(409);
+		await expect(duplicate.json()).resolves.toMatchObject({
+			error: "Organization name is already registered.",
+		});
+	});
+
 	it("lists the authenticated user's organization memberships", async () => {
 		const { app } = await createTestApp();
 

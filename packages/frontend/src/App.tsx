@@ -528,7 +528,6 @@ export default function App() {
 
 	createEffect(() => {
 		const currentRoute = route();
-		const membership = sessionMembership();
 
 		if (
 			(currentRoute.kind === "org-root" ||
@@ -540,6 +539,11 @@ export default function App() {
 		) {
 			void loadOrganization(currentRoute.slug);
 		}
+	});
+
+	createEffect(() => {
+		const currentRoute = route();
+		const membership = sessionMembership();
 
 		if (
 			currentRoute.kind === "home" &&

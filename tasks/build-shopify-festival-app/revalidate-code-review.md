@@ -1,6 +1,6 @@
 # Revalidate Code Review
 - Task name: build-shopify-festival-app
-- Findings status: pending
+- Findings status: complete
 
 ## Reviewer Prompt
 You are acting as a reviewer for a proposed code change made by another engineer.
@@ -25,47 +25,67 @@ Ensure that file citations and line numbers are exactly correct using the tools 
 
 ## Review Context (auto-generated)
 <!-- REVIEW-CONTEXT START -->
-- Generated at: 2026-03-01T20:53:40Z
+- Generated at: 2026-08-07T23:26:52Z
 - Base branch: main
-- Diff mode: fallback
-- Diff command: `git diff`
-- Diff bytes: 8281
+- Diff mode: base-branch
+- Diff command: `git diff main...HEAD`
+- Diff bytes: 127901
 
 ### Changed files
-- `README.md`
-- `goals/task-manifest.csv`
-- `package.json`
-- `project-structure.md`
+- `bun.lock`
+- `packages/backend/src/app.ts`
+- `packages/backend/src/repo/in-memory-organization-repository.ts`
+- `packages/backend/src/repo/organization-repository.ts`
+- `packages/backend/src/repo/postgres-organization-repository.ts`
+- `packages/backend/src/routes/api-router.ts`
+- `packages/backend/src/services/organization-service.ts`
+- `packages/backend/tests/organization-routes.test.ts`
+- `packages/common/src/organization.ts`
+- `packages/common/tests/organization.test.ts`
+- `packages/frontend/package.json`
+- `packages/frontend/src/App.tsx`
+- `packages/frontend/src/lib/api.ts`
+- `packages/frontend/src/lib/routes.ts`
+- `packages/frontend/src/main.tsx`
+- `packages/frontend/src/styles.css`
+- `packages/frontend/tests/onboarding-integration.test.ts`
+- `packages/frontend/tests/routes.test.ts`
+- `packages/frontend/tests/verification.test.ts`
+- `specs/Multi-Tenant-Starter.md`
+- `specs/tech-requirements.md`
 
 ### Citation candidates (verify before use)
-- `README.md:2-24`
-- `goals/task-manifest.csv:2-3`
-- `package.json:11-25`
-- `package.json:4-5`
-- `package.json:7-9`
-- `project-structure.md:11-15`
-- `project-structure.md:23-23`
-- `project-structure.md:25-26`
-- `project-structure.md:31-31`
-- `project-structure.md:36-36`
-- `project-structure.md:37-37`
-- `project-structure.md:4-6`
-- `project-structure.md:42-42`
-- `project-structure.md:43-43`
-- `project-structure.md:44-44`
-- `project-structure.md:48-51`
-- `project-structure.md:60-62`
-- `project-structure.md:65-69`
-- `project-structure.md:72-74`
-- `project-structure.md:8-8`
+- `packages/backend/src/services/organization-service.ts:154-164`
+- `packages/backend/src/services/organization-service.ts:234-239`
+- `packages/backend/src/services/organization-service.ts:258-361`
+- `packages/backend/src/services/organization-service.ts:534-546`
+- `packages/frontend/src/App.tsx:533-542`
+- `packages/frontend/src/App.tsx:562-577`
+- `packages/frontend/src/App.tsx:649-655`
+- `packages/frontend/src/App.tsx:755-802`
+- `packages/frontend/src/App.tsx:834-877`
+- `packages/frontend/src/App.tsx:1351-1518`
 <!-- REVIEW-CONTEXT END -->
 
 ## Findings JSON
 ```json
-[]
+[
+  {
+    "file": "packages/backend/src/services/organization-service.ts",
+    "line_range": "154-164",
+    "severity": "medium",
+    "explanation": "After splitting organization display name from short-name slug, creation only checks for an existing slug before inserting. Postgres still has a unique organization name constraint, so creating the same organization name with a different short name bypasses the service's conflict path and fails as an unhandled 500 in production, while the in-memory test repository allows the duplicate."
+  },
+  {
+    "file": "packages/frontend/src/App.tsx",
+    "line_range": "533-542",
+    "severity": "medium",
+    "explanation": "The route effect now loads organization data for the new admin routes, but the same effect also reads sessionMembership and loadOrganization updates session.membership. On /org/:slug/admin and its subroutes each successful fetch changes the session object, retriggers the effect, and issues another getOrganization request indefinitely."
+  }
+]
 ```
 
 ## Overall Correctness Verdict
-- Verdict: pending
-- Confidence: pending
-- Justification:
+- Verdict: patch is incorrect
+- Confidence: 0.87
+- Justification: The branch passes the current verification commands, but it introduces an organization-name uniqueness gap in the service/repository contract and repeated organization fetches on the new admin routes.

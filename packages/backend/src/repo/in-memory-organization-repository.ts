@@ -22,6 +22,7 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 	private readonly usersByUid = new Map<string, string>();
 	private readonly organizations = new Map<string, OrganizationRecord>();
 	private readonly organizationsBySlug = new Map<string, string>();
+	private readonly organizationsByName = new Map<string, string>();
 	private readonly memberships = new Map<
 		string,
 		OrganizationMembershipRecord
@@ -143,6 +144,17 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		return this.organizations.get(organizationId) ?? null;
 	}
 
+	async findOrganizationByName(
+		name: string,
+	): Promise<OrganizationRecord | null> {
+		const organizationId = this.organizationsByName.get(name.toLowerCase());
+		if (!organizationId) {
+			return null;
+		}
+
+		return this.organizations.get(organizationId) ?? null;
+	}
+
 	async createOrganization(input: {
 		name: string;
 		slug: string;
@@ -156,6 +168,10 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 
 		this.organizations.set(organization.id, organization);
 		this.organizationsBySlug.set(organization.slug, organization.id);
+		this.organizationsByName.set(
+			organization.name.toLowerCase(),
+			organization.id,
+		);
 		return organization;
 	}
 
