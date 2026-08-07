@@ -63,7 +63,10 @@ function withAuth(token: string, init?: RequestInit): RequestInit {
 describe("organization routes", () => {
 	it("creates an organization and records the creator as Admin", async () => {
 		const { app } = await createTestApp();
-		const payload: CreateOrganizationInput = { name: "festival-admins" };
+		const payload: CreateOrganizationInput = {
+			name: "Festival Admins",
+			shortName: "pafe",
+		};
 
 		const response = await app.fetch(
 			new Request(
@@ -78,9 +81,10 @@ describe("organization routes", () => {
 		expect(response.status).toBe(201);
 		const data = (await response.json()) as {
 			membership: { role: string };
-			organization: { slug: string };
+			organization: { name: string; slug: string };
 		};
-		expect(data.organization.slug).toBe("festival-admins");
+		expect(data.organization.name).toBe("Festival Admins");
+		expect(data.organization.slug).toBe("pafe");
 		expect(data.membership.role).toBe("Admin");
 	});
 
@@ -92,7 +96,10 @@ describe("organization routes", () => {
 				"http://test/api/organizations",
 				withAuth("admin", {
 					method: "POST",
-					body: JSON.stringify({ name: "festival-admins" }),
+					body: JSON.stringify({
+						name: "Festival Admins",
+						shortName: "pafe",
+					}),
 				}),
 			),
 		);
@@ -102,14 +109,17 @@ describe("organization routes", () => {
 				"http://test/api/organizations",
 				withAuth("outsider", {
 					method: "POST",
-					body: JSON.stringify({ name: "festival-admins" }),
+					body: JSON.stringify({
+						name: "Festival Board",
+						shortName: "pafe",
+					}),
 				}),
 			),
 		);
 
 		expect(duplicate.status).toBe(409);
 		await expect(duplicate.json()).resolves.toMatchObject({
-			error: "Organization name is already registered.",
+			error: "Organization short name is already registered.",
 		});
 	});
 
@@ -121,7 +131,10 @@ describe("organization routes", () => {
 				"http://test/api/organizations",
 				withAuth("admin", {
 					method: "POST",
-					body: JSON.stringify({ name: "festival-admins" }),
+					body: JSON.stringify({
+						name: "Festival Admins",
+						shortName: "pafe",
+					}),
 				}),
 			),
 		);
@@ -130,7 +143,10 @@ describe("organization routes", () => {
 				"http://test/api/organizations",
 				withAuth("admin", {
 					method: "POST",
-					body: JSON.stringify({ name: "festival-board" }),
+					body: JSON.stringify({
+						name: "Festival Board",
+						shortName: "board",
+					}),
 				}),
 			),
 		);
@@ -146,7 +162,7 @@ describe("organization routes", () => {
 		expect(data.memberships).toHaveLength(2);
 		expect(
 			data.memberships.map((membership) => membership.organizationSlug),
-		).toEqual(["festival-admins", "festival-board"]);
+		).toEqual(["pafe", "board"]);
 		expect(
 			data.memberships.every((membership) => membership.role === "Admin"),
 		).toBeTrue();
@@ -194,16 +210,16 @@ describe("organization routes", () => {
 				"http://test/api/organizations",
 				withAuth("admin", {
 					method: "POST",
-					body: JSON.stringify({ name: "festival-admins" }),
+					body: JSON.stringify({
+						name: "Festival Admins",
+						shortName: "pafe",
+					}),
 				}),
 			),
 		);
 
 		const response = await app.fetch(
-			new Request(
-				"http://test/api/organizations/festival-admins",
-				withAuth("outsider"),
-			),
+			new Request("http://test/api/organizations/pafe", withAuth("outsider")),
 		);
 
 		expect(response.status).toBe(403);
@@ -220,7 +236,10 @@ describe("organization routes", () => {
 				"http://test/api/organizations",
 				withAuth("admin", {
 					method: "POST",
-					body: JSON.stringify({ name: "festival-admins" }),
+					body: JSON.stringify({
+						name: "Festival Admins",
+						shortName: "pafe",
+					}),
 				}),
 			),
 		);
@@ -231,7 +250,7 @@ describe("organization routes", () => {
 				withAuth("admin", {
 					method: "POST",
 					body: JSON.stringify({
-						organizationSlug: "festival-admins",
+						organizationSlug: "pafe",
 						email: "invitee@example.com",
 						role: "Music Reviewer",
 					} satisfies CreateInviteInput),
@@ -259,7 +278,7 @@ describe("organization routes", () => {
 			};
 		};
 		expect(lookupData.invite).toMatchObject({
-			organizationSlug: "festival-admins",
+			organizationSlug: "pafe",
 			email: "invitee@example.com",
 			role: "Music Reviewer",
 			status: "pending",
@@ -291,7 +310,10 @@ describe("organization routes", () => {
 				"http://test/api/organizations",
 				withAuth("admin", {
 					method: "POST",
-					body: JSON.stringify({ name: "festival-admins" }),
+					body: JSON.stringify({
+						name: "Festival Admins",
+						shortName: "pafe",
+					}),
 				}),
 			),
 		);
@@ -302,7 +324,7 @@ describe("organization routes", () => {
 				withAuth("admin", {
 					method: "POST",
 					body: JSON.stringify({
-						organizationSlug: "festival-admins",
+						organizationSlug: "pafe",
 						email: "invitee@example.com",
 						role: "Read Only",
 					} satisfies CreateInviteInput),
@@ -329,7 +351,7 @@ describe("organization routes", () => {
 				withAuth("invitee", {
 					method: "POST",
 					body: JSON.stringify({
-						organizationSlug: "festival-admins",
+						organizationSlug: "pafe",
 						email: "outsider@example.com",
 						role: "Read Only",
 					} satisfies CreateInviteInput),
@@ -352,7 +374,7 @@ describe("organization routes", () => {
 				withAuth("outsider", {
 					method: "POST",
 					body: JSON.stringify({
-						organizationSlug: "festival-admins",
+						organizationSlug: "pafe",
 						email: "invitee@example.com",
 						role: "Read Only",
 					} satisfies CreateInviteInput),
@@ -379,7 +401,10 @@ describe("organization routes", () => {
 				"http://test/api/organizations",
 				withAuth("admin", {
 					method: "POST",
-					body: JSON.stringify({ name: "festival-admins" }),
+					body: JSON.stringify({
+						name: "Festival Admins",
+						shortName: "pafe",
+					}),
 				}),
 			),
 		);
@@ -390,7 +415,7 @@ describe("organization routes", () => {
 				withAuth("admin", {
 					method: "POST",
 					body: JSON.stringify({
-						organizationSlug: "festival-admins",
+						organizationSlug: "pafe",
 						email: "invitee@example.com",
 						role: "Read Only",
 					} satisfies CreateInviteInput),

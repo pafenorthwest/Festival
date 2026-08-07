@@ -18,6 +18,7 @@ import {
 	type SessionMembership,
 	type SessionResponse,
 	validateOrganizationName,
+	validateOrganizationShortName,
 } from "@festival/common";
 import type { TenantContext } from "../auth/tenant-context.js";
 import { AppError } from "../errors/app-error.js";
@@ -113,9 +114,11 @@ export class OrganizationService {
 		identity: AuthenticatedUser,
 		input: CreateOrganizationInput,
 	): Promise<CreateOrganizationResponse> {
-		const validation = validateOrganizationName(input.name);
-		if (!validation.valid) {
-			throw new AppError(validation.errors.join(" "), 400);
+		const nameValidation = validateOrganizationName(input.name);
+		const shortNameValidation = validateOrganizationShortName(input.shortName);
+		const errors = [...nameValidation.errors, ...shortNameValidation.errors];
+		if (errors.length > 0) {
+			throw new AppError(errors.join(" "), 400);
 		}
 
 		const user = await this.repository.upsertUser({
@@ -125,15 +128,15 @@ export class OrganizationService {
 		});
 
 		const existingOrganization = await this.repository.findOrganizationBySlug(
-			validation.normalized,
+			shortNameValidation.normalized,
 		);
 		if (existingOrganization) {
-			throw new AppError("Organization name is already registered.", 409);
+			throw new AppError("Organization short name is already registered.", 409);
 		}
 
 		const organization = await this.repository.createOrganization({
-			name: validation.normalized,
-			slug: validation.normalized,
+			name: nameValidation.normalized,
+			slug: shortNameValidation.normalized,
 		});
 		const membership = await this.repository.createMembership({
 			organizationId: organization.id,

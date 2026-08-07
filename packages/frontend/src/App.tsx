@@ -1,338 +1,899 @@
+import type {
+	AuthenticatedUser,
+	InviteSummary,
+	OrganizationLandingResponse,
+	OrganizationRole,
+	SessionMembership,
+	SessionResponse,
+} from "@festival/common";
+import { ORGANIZATION_ROLES } from "@festival/common";
+import { useLocation, useNavigate } from "@solidjs/router";
+import type { User } from "firebase/auth";
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	For,
+	Match,
+	onCleanup,
+	onMount,
+	Show,
+	Switch,
+} from "solid-js";
+import {
+	acceptInvite,
+	createInvite,
+	createOrganization,
+	dismissWelcome,
+	getInvite,
+	getMemberships,
+	getOrganization,
+	getSession,
+} from "./lib/api.js";
+import {
+	clearPendingIntent,
+	completePasswordlessEmailLinkSignIn,
+	logoutCurrentUser,
+	readPendingIntent,
+	sendPasswordlessEmailLink,
+	signInWithGoogle,
+	subscribeToAuthChanges,
+} from "./lib/firebase-auth.js";
 import { type AppRoute, buildOrgPath, parseRoute } from "./lib/routes.js";
-
-const MOCK_ORG_PATH = buildOrgPath("second-festival");
-const MOCK_ORG_NAME = "Second Festival";
-const MOCK_ROLE = "Admin";
-const ORGANIZATION_ROLES = [
-	"Admin",
-	"Division Chair",
-	"Music Reviewer",
-	"Concert Chair",
-	"Read Only",
-];
 
 interface InviteDraft {
 	email: string;
-	role: string;
+	role: OrganizationRole;
 }
 
-function create<K extends keyof HTMLElementTagNameMap>(
-	tagName: K,
-	className?: string,
-	text?: string,
-): HTMLElementTagNameMap[K] {
-	const element = document.createElement(tagName);
-	if (className) {
-		element.className = className;
-	}
-	if (text !== undefined) {
-		element.textContent = text;
-	}
-	return element;
+async function getIdToken(user: User | null): Promise<string | null> {
+	return user ? user.getIdToken() : null;
 }
 
-function button(
-	text: string,
-	onClick: () => void,
-	className?: string,
-): HTMLButtonElement {
-	const element = create("button", className, text);
-	element.type = "button";
-	element.addEventListener("click", onClick);
-	return element;
-}
-
-function field(
-	labelText: string,
-	input: HTMLInputElement | HTMLSelectElement,
-	...hints: string[]
-): HTMLLabelElement {
-	const label = create("label", "field");
-	label.append(create("span", undefined, labelText), input);
-	for (const hint of hints) {
-		label.append(create("small", undefined, hint));
-	}
-	return label;
-}
-
-function textInput(
-	type: string,
-	placeholder: string,
-	onInput?: (value: string) => void,
-): HTMLInputElement {
-	const input = create("input");
-	input.type = type;
-	input.placeholder = placeholder;
-	if (onInput) {
-		input.addEventListener("input", () => onInput(input.value));
-	}
-	return input;
-}
-
-function navigate(path: string) {
-	if (window.location.pathname !== path) {
-		window.history.pushState({}, "", path);
-	}
-	window.dispatchEvent(new PopStateEvent("popstate"));
-}
-
-export default function App(): HTMLElement {
-	const root = create("main", "shell");
-	const routeHost = create("div");
-	let route: AppRoute = parseRoute(window.location.pathname);
-	let modalKind: "landing" | "invite" | null = null;
-	let inviteDraft: InviteDraft = {
-		email: "",
-		role: ORGANIZATION_ROLES[0] ?? "Admin",
+function toAuthenticatedUser(user: User): AuthenticatedUser {
+	return {
+		uid: user.uid,
+		email: user.email ?? "",
+		displayName: user.displayName ?? user.email ?? user.uid,
 	};
-	let invites: InviteDraft[] = [];
+}
 
-	function syncRoute() {
-		route = parseRoute(window.location.pathname);
-		renderPage();
+export default function App() {
+	const location = useLocation();
+	const routerNavigate = useNavigate();
+	const [firebaseUser, setFirebaseUser] = createSignal<User | null>(null);
+	const [session, setSession] = createSignal<SessionResponse["session"]>({
+		authenticated: false,
+	});
+	const [memberships, setMemberships] = createSignal<SessionMembership[]>([]);
+	const [organization, setOrganization] = createSignal<
+		OrganizationLandingResponse["organization"] | null
+	>(null);
+	const [invite, setInvite] = createSignal<InviteSummary | null>(null);
+	const [createdOrganizationSlug, setCreatedOrganizationSlug] = createSignal<
+		string | null
+	>(null);
+	const [createdInvites, setCreatedInvites] = createSignal<InviteSummary[]>([]);
+	const [signInModalKind, setSignInModalKind] = createSignal<
+		"create-org" | "invite" | null
+	>(null);
+	const [signInStep, setSignInStep] = createSignal<"method" | "email">(
+		"method",
+	);
+	const [signInEmail, setSignInEmail] = createSignal("");
+	const [inviteName, setInviteName] = createSignal("");
+	const [organizationName, setOrganizationName] = createSignal("");
+	const [organizationShortName, setOrganizationShortName] = createSignal("");
+	const [inviteDraft, setInviteDraft] = createSignal<InviteDraft>({
+		email: "",
+		role: "Admin",
+	});
+	const [statusMessage, setStatusMessage] = createSignal("");
+	const [errorMessage, setErrorMessage] = createSignal("");
+	const [isBusy, setIsBusy] = createSignal(false);
+
+	const route = createMemo<AppRoute>(() => parseRoute(location.pathname));
+	const sessionMembership = createMemo(() => session().membership ?? null);
+	const shouldShowOrgChooser = createMemo(
+		() => route().kind === "home" && memberships().length > 1,
+	);
+	const currentInviteToken = createMemo(() => {
+		const currentRoute = route();
+		return currentRoute.kind === "invite" ? currentRoute.token : null;
+	});
+	const authenticatedUser = createMemo(() => {
+		const user = firebaseUser();
+		return user ? toAuthenticatedUser(user) : null;
+	});
+
+	function navigate(path: string) {
+		if (location.pathname === path) {
+			return;
+		}
+
+		routerNavigate(path);
 	}
 
-	function renderHeader() {
-		const header = create("header", "masthead");
-		const copy = create("div");
-		copy.append(
-			create("p", "eyebrow", "Festival Organization Onboarding"),
-			create("h1", undefined, "Set up your festival organization workspace."),
-			create(
-				"p",
-				"lede",
-				"Create an organization, invite team members, or accept an invite using mock UI-only flows.",
-			),
-		);
-		header.append(copy);
-		root.append(header, routeHost);
+	function clearMessages() {
+		setErrorMessage("");
+		setStatusMessage("");
 	}
 
-	function closeModal() {
-		modalKind = null;
-		if (route.kind === "home") {
+	function openSignInModal(kind: "create-org" | "invite") {
+		setSignInStep("method");
+		setSignInModalKind(kind);
+	}
+
+	function closeSignInModal() {
+		setSignInModalKind(null);
+		setSignInStep("method");
+		navigate("/");
+	}
+
+	async function refreshSession(userOverride: User | null = firebaseUser()) {
+		const token = await getIdToken(userOverride);
+		const response = await getSession(token);
+		setSession(response.session);
+
+		if (!token) {
+			setMemberships([]);
+			return response.session;
+		}
+
+		const membershipResponse = await getMemberships(token);
+		setMemberships(membershipResponse.memberships);
+		return response.session;
+	}
+
+	async function routeAfterSession(
+		nextSession: SessionResponse["session"],
+		userOverride: User | null = firebaseUser(),
+	) {
+		const token = await getIdToken(userOverride);
+		if (!token) {
+			return;
+		}
+
+		const membershipResponse = await getMemberships(token);
+		setMemberships(membershipResponse.memberships);
+
+		if (membershipResponse.memberships.length > 1) {
 			navigate("/");
 			return;
 		}
-		renderPage();
-	}
 
-	function renderModal() {
-		if (!modalKind) {
+		const membership =
+			membershipResponse.memberships[0] ?? nextSession.membership ?? null;
+		if (membership) {
+			navigate(buildOrgPath(membership.organizationSlug));
 			return;
 		}
 
-		const backdrop = create("div", "modal-backdrop");
-		backdrop.setAttribute("role", "presentation");
-		const modal = create("section", "modal-card");
-		modal.setAttribute("role", "dialog");
-		modal.setAttribute("aria-modal", "true");
-		modal.append(
-			create(
-				"h3",
-				undefined,
-				modalKind === "invite"
-					? "Accept Invite / Sign Up"
-					: "Sign up / Create Organization",
-			),
-		);
-
-		if (modalKind === "invite") {
-			modal.append(field("Full Name", textInput("text", "Your full name")));
-		}
-
-		const continuePath =
-			modalKind === "invite" ? MOCK_ORG_PATH : "/create-organization";
-		const actions = create("div", "modal-actions");
-		actions.append(
-			button("Continue with Google", () => {
-				modalKind = null;
-				navigate(continuePath);
-			}),
-			button(
-				"Continue with Email",
-				() => {
-					modalKind = null;
-					navigate(continuePath);
-				},
-				"secondary-button",
-			),
-		);
-		modal.append(actions, button("Cancel", closeModal, "link-button"));
-		backdrop.append(modal);
-		routeHost.append(backdrop);
+		navigate("/create-organization");
 	}
 
-	function renderLanding() {
-		const panel = create("section", "panel hero-panel");
-		panel.setAttribute("aria-label", "No organization landing");
-		panel.append(
-			create("h2", undefined, "Welcome to Festival"),
-			create(
-				"p",
-				undefined,
-				"Start by creating an organization for your festival administration team.",
-			),
-		);
-		const actions = create("div", "hero-actions");
-		actions.append(
-			button("Sign up / Create Organization", () => {
-				modalKind = "landing";
-				renderPage();
-			}),
-		);
-		panel.append(actions);
-		routeHost.append(panel);
+	async function loadOrganization(slug: string) {
+		const token = await getIdToken(firebaseUser());
+		if (!token) {
+			return;
+		}
+
+		const response = await getOrganization(token, slug);
+		setOrganization(response.organization);
+		setSession((current) => ({
+			...current,
+			membership: response.membership,
+		}));
 	}
 
-	function renderCreateOrganization() {
-		const formPanel = create("section", "panel flow-panel");
-		formPanel.setAttribute("aria-label", "Create organization");
-		formPanel.append(
-			create("h2", undefined, "Create Organization"),
-			field(
-				"Organization Name",
-				textInput("text", MOCK_ORG_NAME),
-				"Name: max 255 chars",
-			),
-			field(
-				"Short Name",
-				textInput("text", "second-festival"),
-				"Short name: max 6 chars",
-				"Allowed: [A-Za-z0-9-]",
-			),
-		);
-
-		const invitePanel = create("section", "panel flow-panel");
-		invitePanel.setAttribute("aria-label", "Invite Members");
-		const roleSelect = create("select");
-		for (const role of ORGANIZATION_ROLES) {
-			const option = create("option");
-			option.value = role;
-			option.textContent = role;
-			roleSelect.append(option);
+	async function loadInvite(token: string) {
+		try {
+			const response = await getInvite(token);
+			setInvite(response.invite);
+		} catch (error) {
+			setErrorMessage((error as Error).message);
 		}
-		roleSelect.value = inviteDraft.role;
-		roleSelect.addEventListener("input", () => {
-			inviteDraft = { ...inviteDraft, role: roleSelect.value };
-		});
+	}
 
-		const stackActions = create("div", "stack-actions");
-		stackActions.append(
-			button("Add Invite", () => {
-				invites = [
-					...invites,
-					{
-						email: inviteDraft.email || "member@example.com",
-						role: inviteDraft.role,
-					},
-				];
-				inviteDraft = {
-					email: "",
-					role: ORGANIZATION_ROLES[0] ?? "Admin",
-				};
-				renderPage();
-			}),
-			button("Create Organization", () => navigate(MOCK_ORG_PATH)),
-		);
+	async function handlePostAuthIntent(
+		userOverride: User | null = firebaseUser(),
+	) {
+		const intent = readPendingIntent();
+		const nextSession = await refreshSession(userOverride);
 
-		invitePanel.append(
-			create("h3", undefined, "Invite Members"),
-			field(
-				"Email",
-				textInput("email", "member@example.com", (value) => {
-					inviteDraft = { ...inviteDraft, email: value };
-				}),
-			),
-			field("Role", roleSelect),
-			stackActions,
-		);
-
-		if (invites.length > 0) {
-			const list = create("ul", "invite-list");
-			list.setAttribute("aria-label", "Added invites");
-			for (const invite of invites) {
-				const item = create("li");
-				item.append(
-					create("strong", undefined, invite.email),
-					create("span", undefined, invite.role),
-				);
-				list.append(item);
+		if (intent?.kind === "invite" && currentInviteToken()) {
+			const token = await getIdToken(userOverride);
+			if (!token) {
+				return;
 			}
-			invitePanel.append(list);
+
+			const response = await acceptInvite(token, intent.inviteToken, {
+				name: intent.name,
+			});
+			setSession((current) => ({
+				...current,
+				membership: response.membership,
+			}));
+			setMemberships((current) => [...current, response.membership]);
+			navigate(buildOrgPath(response.membership.organizationSlug));
+			clearPendingIntent();
+			return;
 		}
 
-		routeHost.append(formPanel, invitePanel);
-	}
-
-	function renderInvite() {
-		const panel = create("section", "panel flow-panel");
-		panel.setAttribute("aria-label", "Invite landing");
-		const summary = create("div", "invite-summary");
-		const orgLine = create("div");
-		orgLine.append(
-			create("strong", undefined, "Organization Name:"),
-			document.createTextNode(` ${MOCK_ORG_NAME}`),
-		);
-		const roleLine = create("div");
-		roleLine.append(
-			create("strong", undefined, "Role:"),
-			document.createTextNode(` ${MOCK_ROLE}`),
-		);
-		summary.append(orgLine, roleLine);
-		panel.append(
-			create("h2", undefined, "Accept Organization Invite"),
-			summary,
-			button("Accept Invite / Sign Up", () => {
-				modalKind = "invite";
-				renderPage();
-			}),
-		);
-		routeHost.append(panel);
-	}
-
-	function renderOrganization() {
-		const slug = route.kind === "org" ? route.slug : "second-festival";
-		const panel = create("section", "panel org-shell");
-		panel.setAttribute("aria-label", "Organization landing");
-		const header = create("header", "org-header");
-		header.append(
-			button(MOCK_ORG_NAME, () => navigate(buildOrgPath(slug)), "org-title"),
-			button("Logout", () => undefined, "secondary-button"),
-		);
-		panel.append(
-			header,
-			create(
-				"p",
-				"org-copy",
-				`Welcome to ${MOCK_ORG_NAME}, you are ${MOCK_ROLE} role`,
-			),
-		);
-		routeHost.append(panel);
-	}
-
-	function renderPage() {
-		routeHost.replaceChildren();
-		switch (route.kind) {
-			case "create-org":
-				renderCreateOrganization();
-				break;
-			case "invite":
-				renderInvite();
-				break;
-			case "org":
-				renderOrganization();
-				break;
-			case "home":
-				renderLanding();
-				break;
+		if (intent?.kind === "create-org") {
+			if (nextSession.membership) {
+				await routeAfterSession(nextSession, userOverride);
+			} else {
+				navigate("/create-organization");
+			}
+			clearPendingIntent();
+			return;
 		}
-		renderModal();
+
+		await routeAfterSession(nextSession, userOverride);
 	}
 
-	window.addEventListener("popstate", syncRoute);
-	renderHeader();
-	renderPage();
+	onMount(() => {
+		const unsubscribe = subscribeToAuthChanges((user) => {
+			setFirebaseUser(user);
+			void (async () => {
+				try {
+					if (user && readPendingIntent()) {
+						await handlePostAuthIntent(user);
+						return;
+					}
 
-	return root;
+					await refreshSession(user);
+				} catch (error) {
+					setErrorMessage((error as Error).message);
+				}
+			})();
+		});
+		onCleanup(() => unsubscribe());
+
+		void (async () => {
+			try {
+				const pendingIntent = await completePasswordlessEmailLinkSignIn();
+				if (pendingIntent) {
+					setStatusMessage("Email link verified. Continuing sign-in.");
+				}
+			} catch (error) {
+				setErrorMessage((error as Error).message);
+			}
+
+			void refreshSession().catch((error) => {
+				setErrorMessage((error as Error).message);
+			});
+		})();
+	});
+
+	createEffect(() => {
+		const token = currentInviteToken();
+		if (token) {
+			void loadInvite(token);
+			return;
+		}
+
+		setInvite(null);
+	});
+
+	createEffect(() => {
+		const currentRoute = route();
+		const membership = sessionMembership();
+
+		if (currentRoute.kind === "org" && currentRoute.slug && firebaseUser()) {
+			void loadOrganization(currentRoute.slug);
+			return;
+		}
+
+		if (
+			currentRoute.kind === "home" &&
+			memberships().length === 1 &&
+			memberships()[0]
+		) {
+			navigate(buildOrgPath(memberships()[0].organizationSlug));
+			return;
+		}
+
+		if (
+			currentRoute.kind === "create-org" &&
+			membership &&
+			createdOrganizationSlug() !== membership.organizationSlug
+		) {
+			navigate(buildOrgPath(membership.organizationSlug));
+		}
+	});
+
+	async function handleGoogleSignIn(kind: "create-org" | "invite") {
+		clearMessages();
+		setIsBusy(true);
+		try {
+			const intent =
+				kind === "invite" && currentInviteToken()
+					? {
+							kind: "invite" as const,
+							inviteToken: currentInviteToken() ?? "",
+							name: inviteName().trim(),
+						}
+					: { kind: "create-org" as const };
+
+			if (kind === "invite" && !inviteName().trim()) {
+				throw new Error("Name is required when accepting an invite.");
+			}
+
+			await signInWithGoogle(intent);
+			setSignInModalKind(null);
+			setSignInStep("method");
+		} catch (error) {
+			setErrorMessage((error as Error).message);
+		} finally {
+			setIsBusy(false);
+		}
+	}
+
+	async function handlePasswordlessSignIn(kind: "create-org" | "invite") {
+		clearMessages();
+		setIsBusy(true);
+		try {
+			if (!signInEmail().trim()) {
+				throw new Error("Email address is required.");
+			}
+
+			const intent =
+				kind === "invite" && currentInviteToken()
+					? {
+							kind: "invite" as const,
+							inviteToken: currentInviteToken() ?? "",
+							name: inviteName().trim(),
+						}
+					: { kind: "create-org" as const };
+
+			if (kind === "invite" && !inviteName().trim()) {
+				throw new Error("Name is required when accepting an invite.");
+			}
+
+			await sendPasswordlessEmailLink({
+				email: signInEmail().trim(),
+				intent,
+			});
+			setStatusMessage(
+				"Sign-in email sent. Open the email link on this device to continue.",
+			);
+			setSignInModalKind(null);
+			setSignInStep("method");
+		} catch (error) {
+			setErrorMessage((error as Error).message);
+		} finally {
+			setIsBusy(false);
+		}
+	}
+
+	async function handleCreateOrganization() {
+		const user = firebaseUser();
+		if (!user) {
+			setErrorMessage("Sign in before creating an organization.");
+			return;
+		}
+
+		setIsBusy(true);
+		clearMessages();
+		try {
+			const token = await user.getIdToken();
+			const response = await createOrganization(token, {
+				name: organizationName(),
+				shortName: organizationShortName(),
+			});
+			setCreatedOrganizationSlug(response.organization.slug);
+			setMemberships((current) => [...current, response.membership]);
+			setSession((current) => ({
+				...current,
+				authenticated: true,
+				user: authenticatedUser() ?? undefined,
+				membership: response.membership,
+			}));
+			setStatusMessage("Organization created. Invite admins now or continue.");
+		} catch (error) {
+			setErrorMessage((error as Error).message);
+		} finally {
+			setIsBusy(false);
+		}
+	}
+
+	async function handleCreateInvite() {
+		const user = firebaseUser();
+		const membership = sessionMembership();
+		if (!user || !membership) {
+			setErrorMessage("Create an organization before inviting members.");
+			return;
+		}
+
+		setIsBusy(true);
+		clearMessages();
+		try {
+			const token = await user.getIdToken();
+			const response = await createInvite(token, {
+				organizationSlug: membership.organizationSlug,
+				email: inviteDraft().email,
+				role: inviteDraft().role,
+			});
+			setCreatedInvites((current) => [...current, response.invite]);
+			setInviteDraft({
+				email: "",
+				role: "Admin",
+			});
+			setStatusMessage(`Invite created for ${response.invite.email}.`);
+		} catch (error) {
+			setErrorMessage((error as Error).message);
+		} finally {
+			setIsBusy(false);
+		}
+	}
+
+	async function handleAcceptInvite() {
+		const user = firebaseUser();
+		const token = currentInviteToken();
+		if (!user || !token) {
+			setErrorMessage("Sign in before accepting this invite.");
+			return;
+		}
+
+		setIsBusy(true);
+		clearMessages();
+		try {
+			const idToken = await user.getIdToken();
+			const response = await acceptInvite(idToken, token, {
+				name: inviteName(),
+			});
+			setMemberships((current) => [...current, response.membership]);
+			setSession((current) => ({
+				...current,
+				authenticated: true,
+				user: authenticatedUser() ?? undefined,
+				membership: response.membership,
+			}));
+			clearPendingIntent();
+			navigate(buildOrgPath(response.membership.organizationSlug));
+		} catch (error) {
+			setErrorMessage((error as Error).message);
+		} finally {
+			setIsBusy(false);
+		}
+	}
+
+	async function handleDismissWelcome() {
+		const user = firebaseUser();
+		const membership = sessionMembership();
+		if (!user || !membership) {
+			return;
+		}
+
+		try {
+			const token = await user.getIdToken();
+			const response = await dismissWelcome(token, membership.organizationSlug);
+			setSession((current) => ({
+				...current,
+				membership: response.membership,
+			}));
+			setMemberships((current) =>
+				current.map((entry) =>
+					entry.organizationSlug === response.membership.organizationSlug
+						? response.membership
+						: entry,
+				),
+			);
+		} catch (error) {
+			setErrorMessage((error as Error).message);
+		}
+	}
+
+	async function handleLogout() {
+		setIsBusy(true);
+		clearMessages();
+		try {
+			await logoutCurrentUser();
+			setFirebaseUser(null);
+			setSession({ authenticated: false });
+			setMemberships([]);
+			setOrganization(null);
+			setCreatedOrganizationSlug(null);
+			navigate("/");
+		} catch (error) {
+			setErrorMessage((error as Error).message);
+		} finally {
+			setIsBusy(false);
+		}
+	}
+
+	return (
+		<main class="shell">
+			<header class="masthead">
+				<div>
+					<p class="eyebrow">Festival Organizational Login</p>
+					<h1>Organization onboarding without a default schema safety net.</h1>
+					<p class="lede">
+						Use Google SSO or passwordless email-link authentication, then land
+						in a schema-aware multi-tenant organization flow.
+					</p>
+				</div>
+				<Show when={sessionMembership()}>
+					<div class="identity-card">
+						<div class="identity-label">Signed in as</div>
+						<div>{session().user?.displayName}</div>
+						<div class="identity-email">{session().user?.email}</div>
+					</div>
+				</Show>
+			</header>
+
+			<Show when={errorMessage()}>
+				<section class="banner error-banner">{errorMessage()}</section>
+			</Show>
+			<Show when={statusMessage()}>
+				<section class="banner status-banner">{statusMessage()}</section>
+			</Show>
+
+			<Show when={shouldShowOrgChooser()}>
+				<section class="panel flow-panel" aria-label="Organization chooser">
+					<h2>Choose an organization</h2>
+					<p>Select the organization workspace you want to enter.</p>
+					<div class="organization-list">
+						<For each={memberships()}>
+							{(membership) => (
+								<button
+									type="button"
+									class="organization-choice"
+									onClick={() =>
+										navigate(buildOrgPath(membership.organizationSlug))
+									}
+								>
+									<strong>{membership.organizationName}</strong>
+									<span>{membership.role}</span>
+								</button>
+							)}
+						</For>
+					</div>
+				</section>
+			</Show>
+
+			<Switch>
+				<Match when={route().kind === "home" && !shouldShowOrgChooser()}>
+					<section class="panel hero-panel">
+						<h2>Start a new organization</h2>
+						<p>
+							Choose a sign-in method, create your organization slug, and become
+							the initial <code>Admin</code>.
+						</p>
+						<div class="hero-actions">
+							<button
+								type="button"
+								onClick={() => openSignInModal("create-org")}
+							>
+								Sign up and start an organization
+							</button>
+						</div>
+					</section>
+				</Match>
+
+				<Match when={route().kind === "create-org"}>
+					<section class="panel flow-panel">
+						<h2>Create organization</h2>
+						<p>
+							Use the organization name for display and a short name for the
+							route.
+						</p>
+						<Show when={!session().authenticated}>
+							<p class="muted">
+								Sign in first to continue to organization creation.
+							</p>
+							<button
+								type="button"
+								onClick={() => openSignInModal("create-org")}
+							>
+								Choose sign-in method
+							</button>
+						</Show>
+						<Show when={session().authenticated}>
+							<label class="field">
+								<span>Organization name</span>
+								<input
+									type="text"
+									value={organizationName()}
+									onInput={(event) =>
+										setOrganizationName(event.currentTarget.value)
+									}
+									placeholder="Performing Arts Festival"
+								/>
+								<small>Name: max 255 chars</small>
+							</label>
+							<label class="field">
+								<span>Short name</span>
+								<input
+									type="text"
+									value={organizationShortName()}
+									onInput={(event) =>
+										setOrganizationShortName(event.currentTarget.value)
+									}
+									placeholder="pafe"
+								/>
+								<small>Short name: max 6 chars</small>
+								<small>Allowed: [A-Za-z0-9-]</small>
+							</label>
+							<button
+								type="button"
+								onClick={handleCreateOrganization}
+								disabled={isBusy()}
+							>
+								Create organization
+							</button>
+						</Show>
+					</section>
+
+					<Show when={sessionMembership()} keyed>
+						{(membership) => (
+							<Show when={createdOrganizationSlug()}>
+								<section class="panel flow-panel">
+									<h3>Invite administrators and reviewers</h3>
+									<p>
+										Add optional invites before continuing to{" "}
+										<code>{buildOrgPath(membership.organizationSlug)}</code>.
+									</p>
+									<label class="field">
+										<span>Email</span>
+										<input
+											type="email"
+											value={inviteDraft().email}
+											onInput={(event) =>
+												setInviteDraft((current) => ({
+													...current,
+													email: event.currentTarget.value,
+												}))
+											}
+										/>
+									</label>
+									<label class="field">
+										<span>Role</span>
+										<select
+											value={inviteDraft().role}
+											onInput={(event) =>
+												setInviteDraft((current) => ({
+													...current,
+													role: event.currentTarget.value as OrganizationRole,
+												}))
+											}
+										>
+											<For each={ORGANIZATION_ROLES}>
+												{(role) => <option value={role}>{role}</option>}
+											</For>
+										</select>
+									</label>
+									<div class="stack-actions">
+										<button
+											type="button"
+											onClick={handleCreateInvite}
+											disabled={isBusy()}
+										>
+											Send invite
+										</button>
+										<button
+											type="button"
+											class="secondary-button"
+											onClick={() =>
+												navigate(buildOrgPath(membership.organizationSlug))
+											}
+										>
+											Continue to organization
+										</button>
+									</div>
+									<Show when={createdInvites().length > 0}>
+										<ul class="invite-list">
+											<For each={createdInvites()}>
+												{(entry) => (
+													<li>
+														<strong>{entry.email}</strong>
+														<span>{entry.role}</span>
+														<code>
+															{window.location.origin}/invite/{entry.token}
+														</code>
+													</li>
+												)}
+											</For>
+										</ul>
+									</Show>
+								</section>
+							</Show>
+						)}
+					</Show>
+				</Match>
+
+				<Match when={route().kind === "invite"}>
+					<section class="panel flow-panel">
+						<h2>Invitation landing</h2>
+						<p>
+							Accept the invite and join the organization with your assigned
+							role.
+						</p>
+						<Show when={invite()} keyed>
+							{(inviteSummary) => (
+								<div class="invite-summary">
+									<div>
+										<strong>Organization:</strong>{" "}
+										{inviteSummary.organizationName}
+									</div>
+									<div>
+										<strong>Assigned role:</strong> {inviteSummary.role}
+									</div>
+									<div>
+										<strong>Invite email:</strong> {inviteSummary.email}
+									</div>
+								</div>
+							)}
+						</Show>
+						<label class="field">
+							<span>Name</span>
+							<input
+								type="text"
+								value={inviteName()}
+								onInput={(event) => setInviteName(event.currentTarget.value)}
+								placeholder="Your name"
+							/>
+						</label>
+						<Show when={!session().authenticated}>
+							<button type="button" onClick={() => openSignInModal("invite")}>
+								Sign up to accept invite
+							</button>
+						</Show>
+						<Show when={session().authenticated && !sessionMembership()}>
+							<button
+								type="button"
+								onClick={handleAcceptInvite}
+								disabled={isBusy()}
+							>
+								Accept invite
+							</button>
+						</Show>
+					</section>
+				</Match>
+
+				<Match when={route().kind === "org"}>
+					<section class="panel org-shell">
+						<header class="org-header">
+							<button
+								type="button"
+								class="org-title"
+								onClick={() => {
+									const membership = sessionMembership();
+									if (!membership) {
+										return;
+									}
+
+									navigate(buildOrgPath(membership.organizationSlug));
+								}}
+							>
+								{organization()?.name ?? sessionMembership()?.organizationName}
+							</button>
+							<button
+								type="button"
+								class="secondary-button"
+								onClick={handleLogout}
+								disabled={isBusy()}
+							>
+								Log out
+							</button>
+						</header>
+
+						<Show when={sessionMembership()?.showWelcome}>
+							<div class="welcome-box">
+								<div>
+									<strong>Welcome to the organization.</strong>
+									<p>
+										This is your first landing after invite acceptance. Future
+										getting-started instructions can live here.
+									</p>
+								</div>
+								<button type="button" onClick={handleDismissWelcome}>
+									Dismiss
+								</button>
+							</div>
+						</Show>
+
+						<p class="org-copy">
+							Welcome to{" "}
+							{organization()?.name ?? sessionMembership()?.organizationName}{" "}
+							you are {sessionMembership()?.role} role
+						</p>
+					</section>
+				</Match>
+			</Switch>
+
+			<Show when={signInModalKind()} keyed>
+				{(modalKind) => (
+					<div class="modal-backdrop" role="presentation">
+						<section
+							class="modal-card sign-in-card"
+							role="dialog"
+							aria-modal="true"
+						>
+							<h3>
+								{modalKind === "invite"
+									? "Accept organization invite"
+									: "Choose a sign-in method"}
+							</h3>
+							<Show when={modalKind === "invite"}>
+								<label class="field">
+									<span>Name</span>
+									<input
+										type="text"
+										value={inviteName()}
+										onInput={(event) =>
+											setInviteName(event.currentTarget.value)
+										}
+										placeholder="Your full name"
+									/>
+								</label>
+							</Show>
+							<Switch>
+								<Match when={signInStep() === "method"}>
+									<div class="auth-method-stack">
+										<button
+											type="button"
+											onClick={() => void handleGoogleSignIn(modalKind)}
+											disabled={isBusy()}
+										>
+											Google Auth
+										</button>
+										<button
+											type="button"
+											class="secondary-button"
+											onClick={() => setSignInStep("email")}
+											disabled={isBusy()}
+										>
+											Email Link Auth
+										</button>
+									</div>
+								</Match>
+								<Match when={signInStep() === "email"}>
+									<div class="email-link-step">
+										<label class="field">
+											<span>Email address</span>
+											<input
+												type="email"
+												value={signInEmail()}
+												onInput={(event) =>
+													setSignInEmail(event.currentTarget.value)
+												}
+												placeholder="you@example.com"
+											/>
+										</label>
+										<div class="modal-actions">
+											<button
+												type="button"
+												onClick={() => void handlePasswordlessSignIn(modalKind)}
+												disabled={isBusy()}
+											>
+												Send email link
+											</button>
+											<button
+												type="button"
+												class="secondary-button"
+												onClick={() => setSignInStep("method")}
+												disabled={isBusy()}
+											>
+												Back
+											</button>
+										</div>
+									</div>
+								</Match>
+							</Switch>
+							<button
+								type="button"
+								class="link-button"
+								onClick={closeSignInModal}
+							>
+								Cancel
+							</button>
+						</section>
+					</div>
+				)}
+			</Show>
+		</main>
+	);
 }

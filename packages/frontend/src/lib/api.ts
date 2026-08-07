@@ -7,6 +7,7 @@ import type {
 	DismissWelcomeResponse,
 	InviteSummary,
 	OrganizationLandingResponse,
+	OrganizationMembershipListResponse,
 	SessionResponse,
 } from "@festival/common";
 
@@ -38,6 +39,14 @@ async function requestJson<T>(
 
 export function getSession(idToken?: string | null) {
 	return requestJson<SessionResponse>("/api/session", undefined, idToken);
+}
+
+export function getMemberships(idToken: string) {
+	return requestJson<OrganizationMembershipListResponse>(
+		"/api/memberships",
+		undefined,
+		idToken,
+	);
 }
 
 export function createOrganization(

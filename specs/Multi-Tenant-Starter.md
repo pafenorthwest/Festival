@@ -2,7 +2,7 @@
 
 ## User Scenarios
 
-1. A user is able to start a new organization specifying the name of the organization and signing on via a gmail SSO or email login.
+1. A user is able to start a new organization specifying the name of the organization and signing on via Google SSO or passwordless email-link login.
 2. A user configures their organization establishing roles and inviting new role based administrators via email
 3. An existing user is routed to their organization landing page when they login, and their login is associated with an existing organization.
 
@@ -13,7 +13,7 @@ Create four pages
 - A default no-org landing page
   - includes welcome content
   - includes a button to sign-up and create an organization
-    - Sign-up/Create button starts a popover asking them to choose Google SSO or email login
+    - Sign-up/Create button starts a popover asking them to choose Google SSO or passwordless email-link login
     - Failure or cancel returns to no-org landing page
     - Success continues to create organization page
     - This user becomes the default admin and has an admin role
@@ -34,7 +34,7 @@ Create four pages
 - An invite landing page
   - after reciept of email and clicking embedded inbite-link users are sent here
   - sign-up button
-    - Sign up button starts a popover asking them to choose Google SSO or email login, and a single field to enter their name
+    - Sign up button starts a popover asking them to choose Google SSO or passwordless email-link login, and a single field to enter their name
     - Failure or cancel returns to no-org landing page
     - Success continues to create organization landing page
     - This user takes the role set by the admin when the invite was created
@@ -53,16 +53,18 @@ Create four pages
 
 ## References
 
-- ./specs/Style.md skelton style settings
+- ./specs/Style.md Skeleton-inspired style settings
+- ./specs/tech-requirements.md Hono and SolidJS implementation requirements
 - ./reference/solidjs latest solidjs documentation
 
 Below is a first-pass technical design for the **organization onboarding and invitation pages**.
 
 I have made one concrete implementation choice to keep this tight:
 
-* **Frontend**: SolidJS with file-based routes and Solid Router patterns. ([Solid Docs][1])
-* **Auth**: Firebase Authentication for Google SSO and email/password. ([Firebase][2])
+* **Frontend**: SolidJS SPA routing with `@solidjs/router`; do not require SolidStart or file-based routes for this repository. ([Solid Docs][1])
+* **Auth**: Firebase Authentication for Google SSO and passwordless email-link sign-in. ([Firebase][2])
 * **Backend auth**: the frontend sends the Firebase ID token as a Bearer token, and the Hono backend verifies that token with the Firebase Admin SDK before authorizing API access. ([Firebase][3])
+* **Frontend API layer**: keep the current frontend API helper pattern for calls to the Hono API; do not require a Hono RPC/client conversion for this issue.
 
 That is the cleanest path for v1.
 
@@ -98,13 +100,13 @@ Suggested frontend routes:
 * `/invite/:inviteToken`
 
   * invite landing page
-* `/o/:shortOrgName`
+* `/org/:shortOrgName`
 
   * organization landing page
 
 Why this shape:
 
-* Solid supports file-based routing cleanly for page creation. ([Solid Docs][1])
+* `@solidjs/router` is the standard routing layer for this SolidJS SPA and keeps page matching, navigation, and route parameters explicit. ([Solid Docs][1])
 * `shortOrgName` is stable, readable, and matches your URL requirement.
 
 ---
@@ -116,7 +118,7 @@ Why this shape:
 Supported sign-in methods:
 
 * Google SSO
-* email/password
+* passwordless email-link sign-in
 
 Firebase Authentication supports both flows. ([Firebase][2])
 
@@ -162,11 +164,12 @@ Behavior:
 * clicking CTA opens auth popover:
 
   * Google SSO
-  * Email login
+  * passwordless email-link login
 * cancel or auth failure returns user to `/`
 * successful auth checks whether user already belongs to an organization:
 
   * if yes, redirect to that organization landing page
+  * if the user belongs to multiple organizations, show an organization chooser before navigating
   * if no, redirect to `/create-organization`
 
 ## 4.2 Create organization page
@@ -221,14 +224,14 @@ Behavior:
   * show sign-up button
 * sign-up opens auth popover:
 
-  * Google SSO or email login
+  * Google SSO or passwordless email-link login
   * required name field
 * success:
 
   * attach authenticated user to invitation
   * create app user profile if needed
   * create org membership with invited role
-  * redirect to `/o/:shortOrgName`
+  * redirect to `/org/:shortOrgName`
 
 ## 4.4 Organization landing page
 
@@ -238,7 +241,7 @@ Purpose:
 
 Behavior:
 
-* URL: `/o/:shortOrgName`
+* URL: `/org/:shortOrgName`
 * header:
 
   * left: organization name, links back to org landing
@@ -878,7 +881,7 @@ flowchart TD
 
     B -- No --> C[Show no-org landing page]
     C --> D[Click Sign up / Create Organization]
-    D --> E[Auth popover: Google SSO or Email Login]
+    D --> E[Auth popover: Google SSO or passwordless email-link login]
 
     E -- Cancel or Failure --> C
     E -- Success --> F[GET /api/v1/session]
@@ -886,7 +889,9 @@ flowchart TD
     B -- Yes --> F
 
     F --> G{Has organization membership?}
-    G -- Yes --> H[Redirect to /o/:shortOrgName]
+    G -- One --> H[Redirect to /org/:shortOrgName]
+    G -- Multiple --> Z[Show organization chooser]
+    Z --> H
     G -- No --> I[Redirect to /create-organization]
 
     I --> J[Create organization form]
@@ -954,7 +959,7 @@ Calls:
 * `GET /api/v1/invites/:inviteToken`
 * `POST /api/v1/invites/:inviteToken/accept`
 
-## `/o/:shortOrgName`
+## `/org/:shortOrgName`
 
 Components:
 
@@ -1044,7 +1049,7 @@ Use Firebase ID token as the backend bearer token and verify it server-side. Tha
 
 Use:
 
-* `/o/:shortOrgName`
+* `/org/:shortOrgName`
 
 Do not use numeric IDs in the primary user-facing URL.
 
@@ -1060,13 +1065,14 @@ Treat org names and short names as case-insensitive unique values.
 
 # 15. Suggested file layout
 
-For SolidStart or file-based Solid routing:
+For SolidJS SPA routing with `@solidjs/router`:
 
 ```text
-src/routes/index.tsx
-src/routes/create-organization.tsx
-src/routes/invite/[inviteToken].tsx
-src/routes/o/[shortOrgName].tsx
+src/routes.tsx
+src/pages/NoOrgLandingPage.tsx
+src/pages/CreateOrganizationPage.tsx
+src/pages/InviteLandingPage.tsx
+src/pages/OrganizationLandingPage.tsx
 
 src/components/auth/AuthMethodPopover.tsx
 src/components/organization/OrganizationForm.tsx
@@ -1077,12 +1083,10 @@ src/lib/api/session.ts
 src/lib/api/organizations.ts
 src/lib/api/invites.ts
 
-src/server/api/session.ts
-src/server/api/organizations.ts
-src/server/api/invites.ts
+src/lib/api.ts
 ```
 
-Solid’s routing and navigation model is a good fit for this page decomposition. ([Solid Docs][1])
+Solid’s routing and navigation model is a good fit for this page decomposition. The Hono API remains behind the existing frontend API helpers rather than being called through generated route files or Hono RPC. ([Solid Docs][1])
 
 ---
 
@@ -1091,14 +1095,14 @@ Solid’s routing and navigation model is a good fit for this page decomposition
 These are the only decisions I would push back to product before coding:
 
 1. Should an invite be restricted to the invited email address only, or can any authenticated user with the token accept it?
-2. Can one user belong to multiple organizations in v1?
+2. Which organization should be selected by default after login when one user belongs to multiple organizations?
 3. Is the organization creator always permanently an Admin, or can that be changed later?
 4. Should the invite flow require name entry only for first-time users, or every time until profile is complete?
 
 My recommendation:
 
 * bind invite acceptance to invited email
-* allow multi-org membership in schema now
+* allow multi-org membership in schema now and show an organization chooser when more than one membership exists
 * allow creator role management later, but guarantee one admin exists
 * only require full name when missing from profile
 

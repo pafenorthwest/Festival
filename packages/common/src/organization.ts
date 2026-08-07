@@ -107,6 +107,7 @@ export interface OrganizationMembershipListResponse {
 
 export interface CreateOrganizationInput {
 	name: string;
+	shortName: string;
 }
 
 export interface CreateOrganizationResponse {
@@ -163,6 +164,10 @@ export function isAuthLoginProvider(
 }
 
 export function normalizeOrganizationName(value: string): string {
+	return value.trim().replace(/\s+/g, " ");
+}
+
+export function normalizeOrganizationShortName(value: string): string {
 	return value.trim().toLowerCase();
 }
 
@@ -182,13 +187,13 @@ export function validateOrganizationName(
 		errors.push("Organization name is required.");
 	}
 
-	if (normalized.length > 40) {
-		errors.push("Organization name must be 40 characters or less.");
+	if (normalized.length > 255) {
+		errors.push("Organization name must be 255 characters or less.");
 	}
 
-	if (!/^[a-z-]+$/.test(normalized)) {
+	if (!/^[A-Za-z0-9-]+(?: [A-Za-z0-9-]+)*$/.test(normalized)) {
 		errors.push(
-			"Organization name may only contain lowercase letters and hyphens.",
+			"Organization name may only contain letters, numbers, spaces, and hyphens.",
 		);
 	}
 
@@ -198,6 +203,41 @@ export function validateOrganizationName(
 
 	if (normalized.includes("--")) {
 		errors.push("Organization name may not contain consecutive hyphens.");
+	}
+
+	return {
+		valid: errors.length === 0,
+		errors,
+		normalized,
+	};
+}
+
+export function validateOrganizationShortName(
+	value: string,
+): OrganizationNameValidation {
+	const normalized = normalizeOrganizationShortName(value);
+	const errors: string[] = [];
+
+	if (normalized.length === 0) {
+		errors.push("Organization short name is required.");
+	}
+
+	if (normalized.length > 6) {
+		errors.push("Organization short name must be 6 characters or less.");
+	}
+
+	if (!/^[a-z0-9-]+$/.test(normalized)) {
+		errors.push(
+			"Organization short name may only contain letters, numbers, and hyphens.",
+		);
+	}
+
+	if (normalized.startsWith("-") || normalized.endsWith("-")) {
+		errors.push("Organization short name may not start or end with a hyphen.");
+	}
+
+	if (normalized.includes("--")) {
+		errors.push("Organization short name may not contain consecutive hyphens.");
 	}
 
 	return {
