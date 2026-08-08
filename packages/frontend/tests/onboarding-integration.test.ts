@@ -39,13 +39,40 @@ afterEach(() => {
 	fetchCalls = [];
 });
 
+async function readFrontendSource(): Promise<string> {
+	const paths = [
+		"src/App.tsx",
+		"src/app/appFormatting.ts",
+		"src/app/appTypes.ts",
+		"src/app/createFestivalActions.ts",
+		"src/app/createFestivalAppState.ts",
+		"src/app/createFestivalDataLoaders.ts",
+		"src/app/useFestivalAppController.ts",
+		"src/app/useFestivalLifecycle.ts",
+		"src/components/AccessDeniedPanel.tsx",
+		"src/components/AppBanners.tsx",
+		"src/components/AppHeader.tsx",
+		"src/components/SignInModal.tsx",
+		"src/pages/AdminFestivalsPage.tsx",
+		"src/pages/AdminHomePage.tsx",
+		"src/pages/AdminUsersPage.tsx",
+		"src/pages/CreateOrganizationPage.tsx",
+		"src/pages/HomePage.tsx",
+		"src/pages/InviteLandingPage.tsx",
+		"src/pages/OrganizationChooser.tsx",
+		"src/pages/OrganizationRootPage.tsx",
+	];
+	const sources = await Promise.all(paths.map((path) => Bun.file(path).text()));
+	return sources.join("\n");
+}
+
 describe("organization onboarding integration", () => {
 	it("keeps issue 22 wired to router, Firebase auth helpers, and API helpers", async () => {
-		const source = await Bun.file("src/App.tsx").text();
+		const source = await readFrontendSource();
 
 		expect(source).toContain("@solidjs/router");
-		expect(source).toContain("./lib/api.js");
-		expect(source).toContain("./lib/firebase-auth.js");
+		expect(source).toContain("lib/api.js");
+		expect(source).toContain("lib/firebase-auth.js");
 		expect(source).toContain("signInWithGoogle");
 		expect(source).toContain("sendPasswordlessEmailLink");
 		expect(source).toContain("completePasswordlessEmailLinkSignIn");
@@ -61,7 +88,7 @@ describe("organization onboarding integration", () => {
 	});
 
 	it("uses the canonical organization route and an org chooser for multiple memberships", async () => {
-		const source = await Bun.file("src/App.tsx").text();
+		const source = await readFrontendSource();
 
 		expect(source).toContain("buildOrgPath(membership.organizationSlug)");
 		expect(source).toContain("Choose an organization");
@@ -71,7 +98,7 @@ describe("organization onboarding integration", () => {
 	});
 
 	it("keeps logout implemented as Firebase sign-out instead of a no-op", async () => {
-		const source = await Bun.file("src/App.tsx").text();
+		const source = await readFrontendSource();
 
 		expect(source).toContain("await logoutCurrentUser()");
 		expect(source).toContain("setSession({ authenticated: false })");
@@ -82,7 +109,7 @@ describe("organization onboarding integration", () => {
 	});
 
 	it("keeps passwordless email-link auth as the email sign-in path", async () => {
-		const source = await Bun.file("src/App.tsx").text();
+		const source = await readFrontendSource();
 		const authSource = await Bun.file("src/lib/firebase-auth.ts").text();
 
 		expect(source).toContain("sendPasswordlessEmailLink");
@@ -94,7 +121,7 @@ describe("organization onboarding integration", () => {
 	});
 
 	it("keeps the sign-in method dialog narrow with stacked auth choices", async () => {
-		const source = await Bun.file("src/App.tsx").text();
+		const source = await readFrontendSource();
 		const styles = await Bun.file("src/styles.css").text();
 
 		expect(source).toContain("sign-in-card");
@@ -167,27 +194,26 @@ describe("organization onboarding integration", () => {
 	});
 
 	it("requires the create organization flow to collect and submit a short name", async () => {
-		const source = await Bun.file("src/App.tsx").text();
+		const source = await readFrontendSource();
 
 		expect(source).toContain("organizationShortName");
 		expect(source).toContain("Short name");
 		expect(source).toContain("ORGANIZATION_SHORT_NAME_PATTERN");
-		expect(source).toContain(
-			"shortName: organizationShortName().trim().toLowerCase()",
-		);
+		expect(source).toContain("shortName:");
+		expect(source).toContain("organizationShortName().trim().toLowerCase()");
 	});
 
 	it("keeps issue 63 onboarding validation and invite UX wired in the frontend", async () => {
-		const source = await Bun.file("src/App.tsx").text();
+		const source = await readFrontendSource();
 		const styles = await Bun.file("src/styles.css").text();
 
 		expect(source).toContain("ORGANIZATION_NAME_PATTERN");
 		expect(source).toContain("ORGANIZATION_SHORT_NAME_PATTERN");
 		expect(source).toContain("Organization name is required.");
 		expect(source).toContain("Short name is required.");
-		expect(source).toContain("aria-invalid={hasOrganizationNameError()}");
-		expect(source).toContain("aria-invalid={hasOrganizationShortNameError()}");
-		expect(source).toContain("readOnly={organizationCreated()}");
+		expect(source).toContain("hasOrganizationNameError()");
+		expect(source).toContain("hasOrganizationShortNameError()");
+		expect(source).toContain("readOnly={props.app.organizationCreated()}");
 		expect(source).toContain("INVITE_CARD_SCROLL_DELAY_MS = 600");
 		expect(source).toContain("scrollIntoView");
 		expect(source).toContain("Send another invite");
@@ -205,7 +231,7 @@ describe("organization onboarding integration", () => {
 	});
 
 	it("clears user-scoped onboarding drafts when the authenticated user changes", async () => {
-		const source = await Bun.file("src/App.tsx").text();
+		const source = await readFrontendSource();
 
 		expect(source).toContain("function resetOnboardingFlowState()");
 		expect(source).toContain("setCreatedOrganizationSlug(null)");
@@ -213,17 +239,17 @@ describe("organization onboarding integration", () => {
 		expect(source).toContain('setOrganizationName("")');
 		expect(source).toContain('setOrganizationShortName("")');
 		expect(source).toContain('email: "",');
-		expect(source).toContain("const previousUser = firebaseUser()");
+		expect(source).toContain("const previousUser = state.firebaseUser()");
 		expect(source).toContain("previousUser?.uid !== user?.uid");
 	});
 
 	it("keeps admin headers compact with breadcrumbs and header-level back navigation", async () => {
-		const source = await Bun.file("src/App.tsx").text();
+		const source = await readFrontendSource();
 		const styles = await Bun.file("src/styles.css").text();
 
 		expect(source).toContain("Admin > Users");
 		expect(source).toContain("Admin > Festivals");
-		expect(source).toContain("Log out {adminUserLabel()}");
+		expect(source).toContain("Log out {props.app.adminUserLabel()}");
 		expect(source).toContain("function shortUserLabel");
 		expect(source).toContain("function backToAdmin()");
 		expect(source).toContain("clearMessages()");

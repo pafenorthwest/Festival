@@ -37,7 +37,7 @@ describe("organization helpers", () => {
 
 		expect(result.valid).toBeFalse();
 		expect(result.errors).toContain(
-			"Organization short name must be 6 characters or less.",
+			"Organization short name must be 16 characters or less.",
 		);
 		expect(result.errors).toContain(
 			"Organization short name may only contain letters, numbers, and hyphens.",

@@ -277,8 +277,8 @@ export function validateOrganizationShortName(
 		errors.push("Organization short name is required.");
 	}
 
-	if (normalized.length > 6) {
-		errors.push("Organization short name must be 6 characters or less.");
+	if (normalized.length > 16) {
+		errors.push("Organization short name must be 16 characters or less.");
 	}
 
 	if (!/^[a-z0-9-]+$/.test(normalized)) {
