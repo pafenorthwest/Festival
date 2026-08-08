@@ -33,7 +33,7 @@ describe("organization helpers", () => {
 	});
 
 	it("rejects long or invalid organization short names", () => {
-		const result = validateOrganizationShortName("Festival!");
+		const result = validateOrganizationShortName("FestivalFestival!");
 
 		expect(result.valid).toBeFalse();
 		expect(result.errors).toContain(
