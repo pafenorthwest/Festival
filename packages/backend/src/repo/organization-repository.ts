@@ -1,5 +1,7 @@
 import type {
 	AuthenticatedUser,
+	FestivalRecord,
+	OrganizationAdminUserEntry,
 	OrganizationInviteRecord,
 	OrganizationMembershipRecord,
 	OrganizationRecord,
@@ -30,6 +32,15 @@ export interface CreateInviteRecordInput {
 	invitedByUserId: string;
 }
 
+export interface CreateFestivalRecordInput {
+	id: string;
+	organizationId: string;
+	code: string;
+	name: string;
+	startDate: string;
+	endDate: string;
+}
+
 export interface OrganizationRepository {
 	ensureReady(): Promise<void>;
 	upsertUser(user: AuthenticatedUser): Promise<OrganizationUserRecord>;
@@ -44,6 +55,7 @@ export interface OrganizationRepository {
 		slug: string,
 	): Promise<MembershipWithOrganization | null>;
 	findOrganizationBySlug(slug: string): Promise<OrganizationRecord | null>;
+	findOrganizationByName(name: string): Promise<OrganizationRecord | null>;
 	createOrganization(input: {
 		name: string;
 		slug: string;
@@ -56,6 +68,25 @@ export interface OrganizationRepository {
 	): Promise<OrganizationInviteRecord>;
 	findInviteByToken(token: string): Promise<InviteWithOrganization | null>;
 	markInviteAccepted(token: string): Promise<void>;
+	listAdminUsers(
+		organizationId: string,
+		currentUserId: string,
+	): Promise<OrganizationAdminUserEntry[]>;
+	deleteMembership(input: {
+		organizationId: string;
+		membershipId: string;
+		currentUserId: string;
+	}): Promise<void>;
+	cancelInvite(input: {
+		organizationId: string;
+		inviteId: string;
+	}): Promise<void>;
+	listFestivals(organizationId: string): Promise<FestivalRecord[]>;
+	createFestival(input: CreateFestivalRecordInput): Promise<FestivalRecord>;
+	findFestivalByName(
+		organizationId: string,
+		name: string,
+	): Promise<FestivalRecord | null>;
 	dismissWelcome(
 		userId: string,
 		organizationId: string,

@@ -1,14 +1,44 @@
 import { describe, expect, it } from "bun:test";
 import {
 	buildInvitePath,
+	buildOrgAdminFestivalsPath,
+	buildOrgAdminUsersPath,
 	buildOrgPath,
+	buildOrgRootPath,
 	parseRoute,
 } from "../src/lib/routes.js";
 
 describe("route helpers", () => {
+	it("parses onboarding routes", () => {
+		expect(parseRoute("/")).toEqual({ kind: "home" });
+		expect(parseRoute("/create-organization")).toEqual({
+			kind: "create-org",
+		});
+		expect(parseRoute("/invite/abc-123")).toEqual({
+			kind: "invite",
+			token: "abc-123",
+		});
+		expect(parseRoute("/org/second-festival")).toEqual({
+			kind: "org-root",
+			slug: "second-festival",
+		});
+	});
+
 	it("parses organization routes", () => {
 		expect(parseRoute("/org/festival-admins")).toEqual({
-			kind: "org",
+			kind: "org-root",
+			slug: "festival-admins",
+		});
+		expect(parseRoute("/org/festival-admins/admin")).toEqual({
+			kind: "org-admin",
+			slug: "festival-admins",
+		});
+		expect(parseRoute("/org/festival-admins/admin/users")).toEqual({
+			kind: "org-admin-users",
+			slug: "festival-admins",
+		});
+		expect(parseRoute("/org/festival-admins/admin/festivals")).toEqual({
+			kind: "org-admin-festivals",
 			slug: "festival-admins",
 		});
 	});
@@ -18,10 +48,22 @@ describe("route helpers", () => {
 			kind: "invite",
 			token: "token-123",
 		});
+		expect(parseRoute("/invite/anything")).toEqual({
+			kind: "invite",
+			token: "anything",
+		});
 	});
 
 	it("builds org and invite paths", () => {
-		expect(buildOrgPath("festival-admins")).toBe("/org/festival-admins");
+		expect(buildOrgPath("festival-admins")).toBe("/org/festival-admins/admin");
+		expect(buildOrgRootPath("festival-admins")).toBe("/org/festival-admins");
+		expect(buildOrgAdminUsersPath("festival-admins")).toBe(
+			"/org/festival-admins/admin/users",
+		);
+		expect(buildOrgAdminFestivalsPath("festival-admins")).toBe(
+			"/org/festival-admins/admin/festivals",
+		);
+		expect(buildOrgPath("second-festival")).toBe("/org/second-festival/admin");
 		expect(buildInvitePath("abc123")).toBe("/invite/abc123");
 	});
 });

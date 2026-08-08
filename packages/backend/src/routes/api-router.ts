@@ -1,5 +1,6 @@
 import type {
 	AcceptInviteInput,
+	CreateFestivalInput,
 	CreateInviteInput,
 	CreateOrganizationInput,
 } from "@festival/common";
@@ -141,6 +142,101 @@ export function buildApiRouter(
 				return c.json(
 					await organizationService.dismissWelcomeForTenant(
 						getRequiredTenant(c),
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.get(
+		"/organizations/:slug/admin/users",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				return c.json(
+					await organizationService.listAdminUsersForTenant(
+						getRequiredTenant(c),
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.delete(
+		"/organizations/:slug/admin/memberships/:membershipId",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				return c.json(
+					await organizationService.deleteMembershipForTenant(
+						getRequiredTenant(c),
+						c.req.param("membershipId"),
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.delete(
+		"/organizations/:slug/admin/invites/:inviteId",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				return c.json(
+					await organizationService.cancelInviteForTenant(
+						getRequiredTenant(c),
+						c.req.param("inviteId"),
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.get(
+		"/organizations/:slug/admin/festivals",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				return c.json(
+					await organizationService.listFestivalsForTenant(
+						getRequiredTenant(c),
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.post(
+		"/organizations/:slug/admin/festivals",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				const payload = (await c.req.json()) as CreateFestivalInput;
+				c.status(201);
+				return c.json(
+					await organizationService.createFestivalForTenant(
+						getRequiredTenant(c),
+						payload,
 					),
 				);
 			} catch (error) {

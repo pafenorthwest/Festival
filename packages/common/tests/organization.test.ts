@@ -2,23 +2,45 @@ import { describe, expect, it } from "bun:test";
 import {
 	deriveDisplayName,
 	ORGANIZATION_ROLES,
+	validateFestivalDates,
+	validateFestivalName,
 	validateOrganizationName,
+	validateOrganizationShortName,
 } from "../src/organization.js";
 
 describe("organization helpers", () => {
 	it("validates allowed organization names", () => {
-		const result = validateOrganizationName("festival-admins");
+		const result = validateOrganizationName("Performing Arts Festival");
 
 		expect(result.valid).toBeTrue();
-		expect(result.normalized).toBe("festival-admins");
+		expect(result.normalized).toBe("Performing Arts Festival");
 	});
 
-	it("rejects uppercase characters and invalid punctuation", () => {
+	it("rejects invalid organization name punctuation", () => {
 		const result = validateOrganizationName("Festival Admins!");
 
 		expect(result.valid).toBeFalse();
 		expect(result.errors).toContain(
-			"Organization name may only contain lowercase letters and hyphens.",
+			"Organization name may only contain letters, numbers, spaces, and hyphens.",
+		);
+	});
+
+	it("validates and normalizes organization short names", () => {
+		const result = validateOrganizationShortName("PAFE");
+
+		expect(result.valid).toBeTrue();
+		expect(result.normalized).toBe("pafe");
+	});
+
+	it("rejects long or invalid organization short names", () => {
+		const result = validateOrganizationShortName("FestivalFestival!");
+
+		expect(result.valid).toBeFalse();
+		expect(result.errors).toContain(
+			"Organization short name must be 16 characters or less.",
+		);
+		expect(result.errors).toContain(
+			"Organization short name may only contain letters, numbers, and hyphens.",
 		);
 	});
 
@@ -40,5 +62,35 @@ describe("organization helpers", () => {
 				email: "ada@example.com",
 			}),
 		).toBe("Ada Lovelace");
+	});
+
+	it("validates festival names and date ranges", () => {
+		expect(validateFestivalName("Spring Festival (West)").valid).toBeTrue();
+
+		const invalidName = validateFestivalName("Spring Festival!");
+		expect(invalidName.valid).toBeFalse();
+		expect(invalidName.errors).toContain(
+			"Festival name may only contain letters, numbers, spaces, and parentheses.",
+		);
+
+		const invalidDates = validateFestivalDates({
+			startDate: "2027-06-10",
+			endDate: "2027-06-09",
+			today: "2027-06-01",
+		});
+		expect(invalidDates.valid).toBeFalse();
+		expect(invalidDates.errors).toContain(
+			"Festival end date must be the same as or after start date.",
+		);
+
+		const pastDates = validateFestivalDates({
+			startDate: "2027-05-31",
+			endDate: "2027-06-01",
+			today: "2027-06-01",
+		});
+		expect(pastDates.valid).toBeFalse();
+		expect(pastDates.errors).toContain(
+			"Festival start date cannot be in the past.",
+		);
 	});
 });

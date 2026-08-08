@@ -1,15 +1,22 @@
+import { randomUUID } from "node:crypto";
 import {
 	type AcceptInviteInput,
 	type AcceptInviteResponse,
 	type AuthenticatedUser,
+	type CreateFestivalInput,
+	type CreateFestivalResponse,
 	type CreateInviteInput,
 	type CreateInviteResponse,
 	type CreateOrganizationInput,
 	type CreateOrganizationResponse,
 	type DismissWelcomeResponse,
 	deriveDisplayName,
+	type FestivalRecord,
+	type FestivalSummary,
 	type InviteSummary,
 	isOrganizationRole,
+	type OrganizationAdminUsersResponse,
+	type OrganizationFestivalListResponse,
 	type OrganizationLandingResponse,
 	type OrganizationMembershipListResponse,
 	type OrganizationMembershipRecord,
@@ -17,7 +24,10 @@ import {
 	type OrganizationSession,
 	type SessionMembership,
 	type SessionResponse,
+	validateFestivalDates,
+	validateFestivalName,
 	validateOrganizationName,
+	validateOrganizationShortName,
 } from "@festival/common";
 import type { TenantContext } from "../auth/tenant-context.js";
 import { AppError } from "../errors/app-error.js";
@@ -56,6 +66,21 @@ function toInviteSummary(input: {
 		status: input.acceptedAtIso ? "accepted" : "pending",
 		acceptedAtIso: input.acceptedAtIso,
 	};
+}
+
+function toFestivalSummary(record: FestivalRecord): FestivalSummary {
+	return {
+		id: record.id,
+		code: record.code,
+		name: record.name,
+		startDate: record.startDate,
+		endDate: record.endDate,
+		createdAtIso: record.createdAtIso,
+	};
+}
+
+function deriveFestivalCode(id: string): string {
+	return id.replaceAll("-", "").slice(0, 6);
 }
 
 export class OrganizationService {
@@ -113,9 +138,11 @@ export class OrganizationService {
 		identity: AuthenticatedUser,
 		input: CreateOrganizationInput,
 	): Promise<CreateOrganizationResponse> {
-		const validation = validateOrganizationName(input.name);
-		if (!validation.valid) {
-			throw new AppError(validation.errors.join(" "), 400);
+		const nameValidation = validateOrganizationName(input.name);
+		const shortNameValidation = validateOrganizationShortName(input.shortName);
+		const errors = [...nameValidation.errors, ...shortNameValidation.errors];
+		if (errors.length > 0) {
+			throw new AppError(errors.join(" "), 400);
 		}
 
 		const user = await this.repository.upsertUser({
@@ -125,15 +152,21 @@ export class OrganizationService {
 		});
 
 		const existingOrganization = await this.repository.findOrganizationBySlug(
-			validation.normalized,
+			shortNameValidation.normalized,
 		);
 		if (existingOrganization) {
+			throw new AppError("Organization short name is already registered.", 409);
+		}
+
+		const existingOrganizationName =
+			await this.repository.findOrganizationByName(nameValidation.normalized);
+		if (existingOrganizationName) {
 			throw new AppError("Organization name is already registered.", 409);
 		}
 
 		const organization = await this.repository.createOrganization({
-			name: validation.normalized,
-			slug: validation.normalized,
+			name: nameValidation.normalized,
+			slug: shortNameValidation.normalized,
 		});
 		const membership = await this.repository.createMembership({
 			organizationId: organization.id,
@@ -204,9 +237,15 @@ export class OrganizationService {
 			throw new AppError("Organization access denied.", 403);
 		}
 
+		const normalizedEmail = input.email.trim().toLowerCase();
+		await this.assertUniqueAdminUserEmail(
+			tenant.organization.id,
+			normalizedEmail,
+		);
+
 		const invite = await this.repository.createInvite({
 			organizationId: tenant.organization.id,
-			email: input.email.toLowerCase(),
+			email: normalizedEmail,
 			role: input.role,
 			invitedByUserId: tenant.user.id,
 		});
@@ -219,6 +258,110 @@ export class OrganizationService {
 				role: invite.role,
 				acceptedAtIso: invite.acceptedAtIso,
 			}),
+		};
+	}
+
+	async listAdminUsersForTenant(
+		tenant: TenantContext,
+	): Promise<OrganizationAdminUsersResponse> {
+		return {
+			users: await this.repository.listAdminUsers(
+				tenant.organization.id,
+				tenant.user.id,
+			),
+		};
+	}
+
+	async deleteMembershipForTenant(
+		tenant: TenantContext,
+		membershipId: string,
+	): Promise<{ status: "deleted" }> {
+		const users = await this.repository.listAdminUsers(
+			tenant.organization.id,
+			tenant.user.id,
+		);
+		const user = users.find(
+			(entry) => entry.status === "accepted" && entry.id === membershipId,
+		);
+		if (!user) {
+			throw new AppError("Membership not found.", 404);
+		}
+
+		if (user.isSelf) {
+			throw new AppError("Admins cannot delete their own membership.", 400);
+		}
+
+		await this.repository.deleteMembership({
+			organizationId: tenant.organization.id,
+			membershipId,
+			currentUserId: tenant.user.id,
+		});
+		return { status: "deleted" };
+	}
+
+	async cancelInviteForTenant(
+		tenant: TenantContext,
+		inviteId: string,
+	): Promise<{ status: "deleted" }> {
+		const users = await this.repository.listAdminUsers(
+			tenant.organization.id,
+			tenant.user.id,
+		);
+		const user = users.find(
+			(entry) => entry.status === "pending" && entry.id === inviteId,
+		);
+		if (!user) {
+			throw new AppError("Invite not found.", 404);
+		}
+
+		await this.repository.cancelInvite({
+			organizationId: tenant.organization.id,
+			inviteId,
+		});
+		return { status: "deleted" };
+	}
+
+	async listFestivalsForTenant(
+		tenant: TenantContext,
+	): Promise<OrganizationFestivalListResponse> {
+		return {
+			festivals: (
+				await this.repository.listFestivals(tenant.organization.id)
+			).map(toFestivalSummary),
+		};
+	}
+
+	async createFestivalForTenant(
+		tenant: TenantContext,
+		input: CreateFestivalInput,
+	): Promise<CreateFestivalResponse> {
+		const nameValidation = validateFestivalName(input.name);
+		const dateValidation = validateFestivalDates(input);
+		const errors = [...nameValidation.errors, ...dateValidation.errors];
+		if (errors.length > 0) {
+			throw new AppError(errors.join(" "), 400);
+		}
+
+		const existingFestival = await this.repository.findFestivalByName(
+			tenant.organization.id,
+			nameValidation.normalized,
+		);
+		if (existingFestival) {
+			throw new AppError("Festival name is already registered.", 409);
+		}
+
+		const id = randomUUID();
+		const festival = await this.repository.createFestival({
+			id,
+			organizationId: tenant.organization.id,
+			code: deriveFestivalCode(id),
+			name: nameValidation.normalized,
+			startDate: dateValidation.startDate,
+			endDate: dateValidation.endDate,
+		});
+
+		return {
+			festival: toFestivalSummary(festival),
 		};
 	}
 
@@ -393,5 +536,18 @@ export class OrganizationService {
 				organization: tenant.organization,
 			}),
 		};
+	}
+
+	private async assertUniqueAdminUserEmail(
+		organizationId: string,
+		email: string,
+	): Promise<void> {
+		const users = await this.repository.listAdminUsers(organizationId, "");
+		const exists = users.some(
+			(user) => user.email.toLowerCase() === email.toLowerCase(),
+		);
+		if (exists) {
+			throw new AppError("That email has already been added.", 409);
+		}
 	}
 }

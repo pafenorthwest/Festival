@@ -26,6 +26,7 @@ export interface OrganizationUserRecord {
 	firebaseUid: string;
 	email: string;
 	displayName: string;
+	disassociated: boolean;
 	createdAtIso: string;
 }
 
@@ -82,6 +83,42 @@ export interface OrganizationInviteRecord {
 }
 
 export type OrganizationInviteStatus = "pending" | "accepted";
+export type OrganizationAdminUserStatus = "accepted" | "pending";
+
+export interface OrganizationAdminUserEntry {
+	id: string;
+	email: string;
+	role: OrganizationRole;
+	status: OrganizationAdminUserStatus;
+	isSelf: boolean;
+}
+
+export interface OrganizationAdminUsersResponse {
+	users: OrganizationAdminUserEntry[];
+}
+
+export interface DeleteOrganizationAdminUserResponse {
+	status: "deleted";
+}
+
+export interface FestivalRecord {
+	id: string;
+	organizationId: string;
+	code: string;
+	name: string;
+	startDate: string;
+	endDate: string;
+	createdAtIso: string;
+}
+
+export interface FestivalSummary {
+	id: string;
+	code: string;
+	name: string;
+	startDate: string;
+	endDate: string;
+	createdAtIso: string;
+}
 
 export interface SessionMembership {
 	organizationId: string;
@@ -107,6 +144,7 @@ export interface OrganizationMembershipListResponse {
 
 export interface CreateOrganizationInput {
 	name: string;
+	shortName: string;
 }
 
 export interface CreateOrganizationResponse {
@@ -132,6 +170,20 @@ export interface InviteSummary {
 
 export interface CreateInviteResponse {
 	invite: InviteSummary;
+}
+
+export interface CreateFestivalInput {
+	name: string;
+	startDate: string;
+	endDate: string;
+}
+
+export interface CreateFestivalResponse {
+	festival: FestivalSummary;
+}
+
+export interface OrganizationFestivalListResponse {
+	festivals: FestivalSummary[];
 }
 
 export interface AcceptInviteInput {
@@ -163,7 +215,15 @@ export function isAuthLoginProvider(
 }
 
 export function normalizeOrganizationName(value: string): string {
+	return value.trim().replace(/\s+/g, " ");
+}
+
+export function normalizeOrganizationShortName(value: string): string {
 	return value.trim().toLowerCase();
+}
+
+export function normalizeFestivalName(value: string): string {
+	return value.trim().replace(/\s+/g, " ");
 }
 
 export interface OrganizationNameValidation {
@@ -182,13 +242,13 @@ export function validateOrganizationName(
 		errors.push("Organization name is required.");
 	}
 
-	if (normalized.length > 40) {
-		errors.push("Organization name must be 40 characters or less.");
+	if (normalized.length > 255) {
+		errors.push("Organization name must be 255 characters or less.");
 	}
 
-	if (!/^[a-z-]+$/.test(normalized)) {
+	if (!/^[A-Za-z0-9-]+(?: [A-Za-z0-9-]+)*$/.test(normalized)) {
 		errors.push(
-			"Organization name may only contain lowercase letters and hyphens.",
+			"Organization name may only contain letters, numbers, spaces, and hyphens.",
 		);
 	}
 
@@ -204,6 +264,118 @@ export function validateOrganizationName(
 		valid: errors.length === 0,
 		errors,
 		normalized,
+	};
+}
+
+export function validateOrganizationShortName(
+	value: string,
+): OrganizationNameValidation {
+	const normalized = normalizeOrganizationShortName(value);
+	const errors: string[] = [];
+
+	if (normalized.length === 0) {
+		errors.push("Organization short name is required.");
+	}
+
+	if (normalized.length > 16) {
+		errors.push("Organization short name must be 16 characters or less.");
+	}
+
+	if (!/^[a-z0-9-]+$/.test(normalized)) {
+		errors.push(
+			"Organization short name may only contain letters, numbers, and hyphens.",
+		);
+	}
+
+	if (normalized.startsWith("-") || normalized.endsWith("-")) {
+		errors.push("Organization short name may not start or end with a hyphen.");
+	}
+
+	if (normalized.includes("--")) {
+		errors.push("Organization short name may not contain consecutive hyphens.");
+	}
+
+	return {
+		valid: errors.length === 0,
+		errors,
+		normalized,
+	};
+}
+
+export function validateFestivalName(
+	value: string,
+): OrganizationNameValidation {
+	const normalized = normalizeFestivalName(value);
+	const errors: string[] = [];
+
+	if (normalized.length === 0) {
+		errors.push("Festival name is required.");
+	}
+
+	if (normalized.length > 255) {
+		errors.push("Festival name must be 255 characters or less.");
+	}
+
+	if (!/^[A-Za-z0-9()]+(?: [A-Za-z0-9()]+)*$/.test(normalized)) {
+		errors.push(
+			"Festival name may only contain letters, numbers, spaces, and parentheses.",
+		);
+	}
+
+	return {
+		valid: errors.length === 0,
+		errors,
+		normalized,
+	};
+}
+
+export interface FestivalDateValidation {
+	valid: boolean;
+	errors: string[];
+	startDate: string;
+	endDate: string;
+}
+
+export function todayDateOnly(now = new Date()): string {
+	return now.toISOString().slice(0, 10);
+}
+
+export function validateFestivalDates(input: {
+	startDate: string;
+	endDate: string;
+	today?: string;
+}): FestivalDateValidation {
+	const startDate = input.startDate.trim();
+	const endDate = input.endDate.trim();
+	const today = input.today ?? todayDateOnly();
+	const errors: string[] = [];
+	const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+
+	if (!datePattern.test(startDate)) {
+		errors.push("Festival start date is required.");
+	}
+
+	if (!datePattern.test(endDate)) {
+		errors.push("Festival end date is required.");
+	}
+
+	if (datePattern.test(startDate) && startDate < today) {
+		errors.push("Festival start date cannot be in the past.");
+	}
+
+	if (
+		datePattern.test(startDate) &&
+		datePattern.test(endDate) &&
+		endDate < startDate
+	) {
+		errors.push("Festival end date must be the same as or after start date.");
+	}
+
+	return {
+		valid: errors.length === 0,
+		errors,
+		startDate,
+		endDate,
 	};
 }
 

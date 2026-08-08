@@ -1,3 +1,4 @@
+import { Route, Router } from "@solidjs/router";
 import { render } from "solid-js/web";
 import App from "./App.js";
 import "./styles.css";
@@ -8,4 +9,11 @@ if (!root) {
 	throw new Error("Root element #app not found");
 }
 
-render(() => <App />, root);
+render(
+	() => (
+		<Router root={App}>
+			<Route path="/*" component={() => null} />
+		</Router>
+	),
+	root,
+);
