@@ -6,6 +6,7 @@ import type {
 	OrganizationMembershipRecord,
 	OrganizationRecord,
 	OrganizationUserRecord,
+	ShopifyVerificationStatus,
 } from "@festival/common";
 
 export interface MembershipWithOrganization {
@@ -39,6 +40,34 @@ export interface CreateFestivalRecordInput {
 	name: string;
 	startDate: string;
 	endDate: string;
+}
+
+export interface ShopifyIntegrationRecord {
+	organizationId: string;
+	storeDomain: string;
+	clientId: string;
+	encryptedClientSecret: string;
+	verificationStatus: ShopifyVerificationStatus;
+	verifiedAtIso?: string;
+	lastTestedAtIso?: string;
+	lastError?: string;
+	createdAtIso: string;
+	updatedAtIso: string;
+}
+
+export interface UpsertShopifyIntegrationInput {
+	organizationId: string;
+	storeDomain: string;
+	clientId: string;
+	encryptedClientSecret: string;
+}
+
+export interface UpdateShopifyVerificationInput {
+	organizationId: string;
+	verificationStatus: Exclude<ShopifyVerificationStatus, "unknown">;
+	verifiedAtIso?: string;
+	lastTestedAtIso: string;
+	lastError?: string;
 }
 
 export interface OrganizationRepository {
@@ -91,4 +120,13 @@ export interface OrganizationRepository {
 		userId: string,
 		organizationId: string,
 	): Promise<OrganizationMembershipRecord>;
+	getShopifyIntegration(
+		organizationId: string,
+	): Promise<ShopifyIntegrationRecord | null>;
+	upsertShopifyIntegration(
+		input: UpsertShopifyIntegrationInput,
+	): Promise<ShopifyIntegrationRecord>;
+	updateShopifyVerification(
+		input: UpdateShopifyVerificationInput,
+	): Promise<ShopifyIntegrationRecord>;
 }

@@ -12,12 +12,17 @@ import { PostgresOrganizationRepository } from "./repo/postgres-organization-rep
 import { buildApiRouter } from "./routes/api-router.js";
 import { buildAuthRouter } from "./routes/auth-router.js";
 import { OrganizationService } from "./services/organization-service.js";
+import { ShopifyAdminApiClient } from "./shopify/admin-api-client.js";
+import { AesSecretEncryptor } from "./shopify/encryption.js";
+import type { ShopifyIntegrationService } from "./shopify/shopify-integration-service.js";
+import { ShopifyIntegrationService as DefaultShopifyIntegrationService } from "./shopify/shopify-integration-service.js";
 
 export interface CreateAppOptions {
 	env?: AppEnv;
 	repository?: OrganizationRepository;
 	appUserRepository?: AppUserRepository;
 	authVerifier?: AuthVerifier;
+	shopifyIntegrationService?: ShopifyIntegrationService;
 }
 
 const allowedApiOrigins = new Set([
@@ -59,6 +64,15 @@ export async function createApp(options: CreateAppOptions = {}) {
 			: new InMemoryAppUserRepository());
 	await appUserRepository.ensureReady();
 	const organizationService = new OrganizationService(repository);
+	const shopifyIntegrationService =
+		options.shopifyIntegrationService ??
+		(env.aesEncryptionKey
+			? new DefaultShopifyIntegrationService(
+					repository,
+					new AesSecretEncryptor(env.aesEncryptionKey),
+					new ShopifyAdminApiClient(),
+				)
+			: undefined);
 
 	const app = new Hono();
 
@@ -75,7 +89,14 @@ export async function createApp(options: CreateAppOptions = {}) {
 		return c.json({ status: "ok" });
 	});
 
-	app.route("/api", buildApiRouter(organizationService, authVerifier));
+	app.route(
+		"/api",
+		buildApiRouter(
+			organizationService,
+			authVerifier,
+			shopifyIntegrationService,
+		),
+	);
 	app.route("/api/v1/auth", buildAuthRouter(authVerifier, appUserRepository));
 
 	return { app, env };

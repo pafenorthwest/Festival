@@ -91,7 +91,7 @@ export class ShopifyStorefrontClient {
 			throw new Error("Shopify Storefront API credentials are missing.");
 		}
 
-		const endpoint = `https://${this.config.shopDomain}/api/2025-10/graphql.json`;
+		const endpoint = `https://${this.config.shopDomain}/api/2026-07/graphql.json`;
 		const response = await fetch(endpoint, {
 			method: "POST",
 			headers: {

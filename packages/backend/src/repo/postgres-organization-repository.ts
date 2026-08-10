@@ -8,6 +8,7 @@ import type {
 	OrganizationRecord,
 	OrganizationRole,
 	OrganizationUserRecord,
+	ShopifyVerificationStatus,
 } from "@festival/common";
 import { sql } from "bun";
 import type {
@@ -17,6 +18,9 @@ import type {
 	InviteWithOrganization,
 	MembershipWithOrganization,
 	OrganizationRepository,
+	ShopifyIntegrationRecord,
+	UpdateShopifyVerificationInput,
+	UpsertShopifyIntegrationInput,
 } from "./organization-repository.js";
 
 interface MembershipRow {
@@ -54,6 +58,19 @@ interface FestivalRow {
 	start_date: string;
 	end_date: string;
 	created_at: string;
+}
+
+interface ShopifyIntegrationRow {
+	organization_id: string;
+	store_domain: string;
+	client_id: string;
+	encrypted_client_secret: string;
+	verification_status: ShopifyVerificationStatus;
+	verified_at: string | null;
+	last_tested_at: string | null;
+	last_error: string | null;
+	created_at: string;
+	updated_at: string;
 }
 
 function sanitizeSchemaName(schema: string): string {
@@ -107,6 +124,23 @@ function mapFestival(row: FestivalRow): FestivalRecord {
 		startDate: row.start_date,
 		endDate: row.end_date,
 		createdAtIso: row.created_at,
+	};
+}
+
+function mapShopifyIntegration(
+	row: ShopifyIntegrationRow,
+): ShopifyIntegrationRecord {
+	return {
+		organizationId: row.organization_id,
+		storeDomain: row.store_domain,
+		clientId: row.client_id,
+		encryptedClientSecret: row.encrypted_client_secret,
+		verificationStatus: row.verification_status,
+		verifiedAtIso: row.verified_at ?? undefined,
+		lastTestedAtIso: row.last_tested_at ?? undefined,
+		lastError: row.last_error ?? undefined,
+		createdAtIso: row.created_at,
+		updatedAtIso: row.updated_at,
 	};
 }
 
@@ -215,8 +249,28 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 			);
 
+			CREATE TABLE IF NOT EXISTS ${schema}.shopify_integrations (
+				organization_id TEXT PRIMARY KEY REFERENCES ${schema}.organizations (id) ON DELETE CASCADE,
+				store_domain TEXT NOT NULL,
+				client_id TEXT NOT NULL,
+				encrypted_client_secret TEXT NOT NULL,
+				verification_status TEXT NOT NULL DEFAULT 'unknown',
+				verified_at TIMESTAMPTZ NULL,
+				last_tested_at TIMESTAMPTZ NULL,
+				last_error TEXT NULL,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			);
+
 			ALTER TABLE ${schema}.users
 				ADD COLUMN IF NOT EXISTS disassociated BOOLEAN NOT NULL DEFAULT FALSE;
+
+			ALTER TABLE ${schema}.shopify_integrations
+				DROP COLUMN IF EXISTS encrypted_offline_access_token,
+				DROP COLUMN IF EXISTS granted_scopes,
+				DROP COLUMN IF EXISTS installed_at,
+				DROP COLUMN IF EXISTS oauth_state,
+				DROP COLUMN IF EXISTS oauth_state_created_at;
 
 			ALTER TABLE ${schema}.memberships
 				DROP CONSTRAINT IF EXISTS memberships_user_id_key;
@@ -786,5 +840,120 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			joinedAtIso: row.joined_at,
 			welcomeDismissedAtIso: row.welcome_dismissed_at ?? undefined,
 		};
+	}
+
+	async getShopifyIntegration(
+		organizationId: string,
+	): Promise<ShopifyIntegrationRecord | null> {
+		await this.ensureReady();
+
+		const rows = (await sql.unsafe(
+			`SELECT
+				organization_id,
+				store_domain,
+				client_id,
+				encrypted_client_secret,
+				verification_status,
+				verified_at,
+				last_tested_at,
+				last_error,
+				created_at,
+				updated_at
+			 FROM ${this.schema}.shopify_integrations
+			 WHERE organization_id = $1
+			 LIMIT 1`,
+			[organizationId],
+		)) as ShopifyIntegrationRow[];
+
+		return rows[0] ? mapShopifyIntegration(rows[0]) : null;
+	}
+
+	async upsertShopifyIntegration(
+		input: UpsertShopifyIntegrationInput,
+	): Promise<ShopifyIntegrationRecord> {
+		await this.ensureReady();
+
+		const [row] = (await sql.unsafe(
+			`INSERT INTO ${this.schema}.shopify_integrations (
+				organization_id,
+				store_domain,
+				client_id,
+				encrypted_client_secret,
+				verification_status,
+				verified_at,
+				last_tested_at,
+				last_error,
+				updated_at
+			) VALUES ($1, $2, $3, $4, 'unknown', NULL, NULL, NULL, NOW())
+			ON CONFLICT (organization_id) DO UPDATE SET
+				store_domain = EXCLUDED.store_domain,
+				client_id = EXCLUDED.client_id,
+				encrypted_client_secret = EXCLUDED.encrypted_client_secret,
+				verification_status = 'unknown',
+				verified_at = NULL,
+				last_tested_at = NULL,
+				last_error = NULL,
+				updated_at = NOW()
+			RETURNING
+				organization_id,
+				store_domain,
+				client_id,
+				encrypted_client_secret,
+				verification_status,
+				verified_at,
+				last_tested_at,
+				last_error,
+				created_at,
+				updated_at`,
+			[
+				input.organizationId,
+				input.storeDomain,
+				input.clientId,
+				input.encryptedClientSecret,
+			],
+		)) as ShopifyIntegrationRow[];
+
+		return mapShopifyIntegration(row);
+	}
+
+	async updateShopifyVerification(
+		input: UpdateShopifyVerificationInput,
+	): Promise<ShopifyIntegrationRecord> {
+		await this.ensureReady();
+
+		const [row] = (await sql.unsafe(
+			`UPDATE ${this.schema}.shopify_integrations
+			 SET
+				verification_status = $2,
+				verified_at = $3,
+				last_tested_at = $4,
+				last_error = $5,
+				updated_at = NOW()
+			 WHERE organization_id = $1
+			 RETURNING
+				organization_id,
+				store_domain,
+				client_id,
+				encrypted_client_secret,
+				verification_status,
+				verified_at,
+				last_tested_at,
+				last_error,
+				created_at,
+				updated_at`,
+			[
+				input.organizationId,
+				input.verificationStatus,
+				input.verifiedAtIso ?? null,
+				input.lastTestedAtIso,
+				input.lastError ?? null,
+			],
+		)) as ShopifyIntegrationRow[];
+
+		if (!row) {
+			throw new Error("Shopify integration not found.");
+		}
+
+		return mapShopifyIntegration(row);
 	}
 }

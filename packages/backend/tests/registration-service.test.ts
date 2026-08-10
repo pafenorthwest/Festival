@@ -1,10 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import type { RefundRequest } from "@festival/common";
-import { ShopifyAdminClient } from "../src/clients/shopify-admin-client.js";
-import { ShopifyStorefrontClient } from "../src/clients/shopify-storefront-client.js";
 import { StripeClient } from "../src/clients/stripe-client.js";
 import { InMemoryRepository } from "../src/repo/in-memory-repository.js";
 import { RegistrationService } from "../src/services/registration-service.js";
+import { ShopifyAdminClient } from "../src/shopify/shopify-admin-client.js";
+import { ShopifyStorefrontClient } from "../src/shopify/shopify-storefront-client.js";
 
 function createService() {
 	return new RegistrationService(

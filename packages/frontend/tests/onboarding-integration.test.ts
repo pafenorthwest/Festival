@@ -8,6 +8,8 @@ import {
 	getMemberships,
 	getOrganization,
 	getSession,
+	getShopifySettings,
+	saveShopifySettings,
 } from "../src/lib/api.js";
 
 let fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
@@ -150,6 +152,12 @@ describe("organization onboarding integration", () => {
 		await acceptInvite("token-5", "invite-token", { name: "Pat Reviewer" });
 		await getOrganization("token-6", "pafe");
 		await dismissWelcome("token-7", "pafe");
+		await getShopifySettings("token-8", "pafe");
+		await saveShopifySettings("token-9", "pafe", {
+			storeUrl: "example.myshopify.com",
+			clientId: "client-id",
+			clientSecret: "client-secret",
+		});
 
 		expect(
 			fetchCalls.map((call) => call.init?.headers as Record<string, string>),
@@ -161,6 +169,8 @@ describe("organization onboarding integration", () => {
 			expect.objectContaining({ Authorization: "Bearer token-5" }),
 			expect.objectContaining({ Authorization: "Bearer token-6" }),
 			expect.objectContaining({ Authorization: "Bearer token-7" }),
+			expect.objectContaining({ Authorization: "Bearer token-8" }),
+			expect.objectContaining({ Authorization: "Bearer token-9" }),
 		]);
 	});
 
@@ -181,6 +191,12 @@ describe("organization onboarding integration", () => {
 		await getInvite("invite-token");
 		await acceptInvite("token", "invite-token", { name: "Pat Reviewer" });
 		await getOrganization("token", "pafe");
+		await getShopifySettings("token", "pafe");
+		await saveShopifySettings("token", "pafe", {
+			storeUrl: "example.myshopify.com",
+			clientId: "client-id",
+			clientSecret: "client-secret",
+		});
 
 		expect(fetchCalls.map((call) => call.url)).toEqual([
 			"/api/session",
@@ -190,6 +206,8 @@ describe("organization onboarding integration", () => {
 			"/api/invites/invite-token",
 			"/api/invites/invite-token/accept",
 			"/api/organizations/pafe",
+			"/api/organizations/pafe/admin/shopify",
+			"/api/organizations/pafe/admin/shopify",
 		]);
 	});
 

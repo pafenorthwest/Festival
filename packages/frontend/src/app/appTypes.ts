@@ -18,5 +18,11 @@ export interface FestivalDraft {
 	endDate: string;
 }
 
+export interface ShopifyDraft {
+	storeUrl: string;
+	clientId: string;
+	clientSecret: string;
+}
+
 export type SignInModalKind = "create-org" | "invite";
 export type SignInStep = "method" | "email";

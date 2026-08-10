@@ -7,6 +7,7 @@ import type {
 	OrganizationMembershipRecord,
 	OrganizationRecord,
 	OrganizationUserRecord,
+	ShopifyVerificationStatus,
 } from "@festival/common";
 import type {
 	CreateFestivalRecordInput,
@@ -15,6 +16,9 @@ import type {
 	InviteWithOrganization,
 	MembershipWithOrganization,
 	OrganizationRepository,
+	ShopifyIntegrationRecord,
+	UpdateShopifyVerificationInput,
+	UpsertShopifyIntegrationInput,
 } from "./organization-repository.js";
 
 export class InMemoryOrganizationRepository implements OrganizationRepository {
@@ -32,6 +36,10 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 	private readonly invites = new Map<string, OrganizationInviteRecord>();
 	private readonly invitesByToken = new Map<string, string>();
 	private readonly festivals = new Map<string, FestivalRecord>();
+	private readonly shopifyIntegrations = new Map<
+		string,
+		ShopifyIntegrationRecord
+	>();
 
 	async ensureReady(): Promise<void> {}
 
@@ -407,5 +415,51 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 
 		this.memberships.set(membership.id, updated);
 		return updated;
+	}
+
+	async getShopifyIntegration(
+		organizationId: string,
+	): Promise<ShopifyIntegrationRecord | null> {
+		return this.shopifyIntegrations.get(organizationId) ?? null;
+	}
+
+	async upsertShopifyIntegration(
+		input: UpsertShopifyIntegrationInput,
+	): Promise<ShopifyIntegrationRecord> {
+		const existing = this.shopifyIntegrations.get(input.organizationId);
+		const now = new Date().toISOString();
+		const record: ShopifyIntegrationRecord = {
+			organizationId: input.organizationId,
+			storeDomain: input.storeDomain,
+			clientId: input.clientId,
+			encryptedClientSecret: input.encryptedClientSecret,
+			verificationStatus: "unknown",
+			createdAtIso: existing?.createdAtIso ?? now,
+			updatedAtIso: now,
+		};
+
+		this.shopifyIntegrations.set(input.organizationId, record);
+		return record;
+	}
+
+	async updateShopifyVerification(
+		input: UpdateShopifyVerificationInput,
+	): Promise<ShopifyIntegrationRecord> {
+		const existing = this.shopifyIntegrations.get(input.organizationId);
+		if (!existing) {
+			throw new Error("Shopify integration not found.");
+		}
+
+		const record: ShopifyIntegrationRecord = {
+			...existing,
+			verificationStatus: input.verificationStatus as ShopifyVerificationStatus,
+			verifiedAtIso: input.verifiedAtIso,
+			lastTestedAtIso: input.lastTestedAtIso,
+			lastError: input.lastError,
+			updatedAtIso: new Date().toISOString(),
+		};
+
+		this.shopifyIntegrations.set(input.organizationId, record);
+		return record;
 	}
 }

@@ -7,6 +7,7 @@ import {
 	getMemberships,
 	getOrganization,
 	getSession,
+	getShopifySettings,
 } from "../lib/api.js";
 import { buildOrgPath } from "../lib/routes.js";
 import type { FestivalAppState } from "./createFestivalAppState.js";
@@ -94,6 +95,21 @@ export function createFestivalDataLoaders(state: FestivalAppState) {
 		state.setFestivals(response.festivals);
 	}
 
+	async function loadShopifySettings(slug: string) {
+		const token = await getIdToken(state.firebaseUser());
+		if (!token) {
+			return;
+		}
+
+		const response = await getShopifySettings(token, slug);
+		state.setShopifySettings(response.settings);
+		state.setShopifyDraft({
+			storeUrl: response.settings?.storeDomain ?? "",
+			clientId: response.settings?.clientId ?? "",
+			clientSecret: "",
+		});
+	}
+
 	async function loadInvite(token: string) {
 		try {
 			const response = await getInvite(token);
@@ -108,6 +124,7 @@ export function createFestivalDataLoaders(state: FestivalAppState) {
 		loadFestivals,
 		loadInvite,
 		loadOrganization,
+		loadShopifySettings,
 		refreshSession,
 		routeAfterSession,
 	};

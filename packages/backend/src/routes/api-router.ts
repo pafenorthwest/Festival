@@ -3,6 +3,7 @@ import type {
 	CreateFestivalInput,
 	CreateInviteInput,
 	CreateOrganizationInput,
+	SaveShopifyIntegrationInput,
 } from "@festival/common";
 import { Hono } from "hono";
 import {
@@ -18,11 +19,14 @@ import {
 	toJsonError,
 } from "../auth/tenant-context.js";
 import type { AuthVerifier } from "../auth/types.js";
+import { AppError } from "../errors/app-error.js";
 import type { OrganizationService } from "../services/organization-service.js";
+import type { ShopifyIntegrationService } from "../shopify/shopify-integration-service.js";
 
 export function buildApiRouter(
 	organizationService: OrganizationService,
 	authVerifier: AuthVerifier,
+	shopifyIntegrationService?: ShopifyIntegrationService,
 ): Hono<{ Variables: Partial<ApiVariables> }> {
 	const router = new Hono<{ Variables: Partial<ApiVariables> }>();
 	const repository = organizationService.repository;
@@ -235,6 +239,52 @@ export function buildApiRouter(
 				c.status(201);
 				return c.json(
 					await organizationService.createFestivalForTenant(
+						getRequiredTenant(c),
+						payload,
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.get(
+		"/organizations/:slug/admin/shopify",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				if (!shopifyIntegrationService) {
+					throw new AppError("AES_ENCRYPTION_KEY is required.", 500);
+				}
+
+				return c.json(
+					await shopifyIntegrationService.getSettingsForTenant(
+						getRequiredTenant(c),
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.post(
+		"/organizations/:slug/admin/shopify",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				if (!shopifyIntegrationService) {
+					throw new AppError("AES_ENCRYPTION_KEY is required.", 500);
+				}
+
+				const payload = (await c.req.json()) as SaveShopifyIntegrationInput;
+				return c.json(
+					await shopifyIntegrationService.saveAndTestForTenant(
 						getRequiredTenant(c),
 						payload,
 					),

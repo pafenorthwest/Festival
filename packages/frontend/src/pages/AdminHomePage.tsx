@@ -9,6 +9,17 @@ interface AdminHomePageProps {
 	app: FestivalAppController;
 }
 
+function shopifyStatusLabel(status: string | undefined): string {
+	switch (status) {
+		case "ok":
+			return "OK";
+		case "failed":
+			return "Failed";
+		default:
+			return "Unknown";
+	}
+}
+
 export function AdminHomePage(props: AdminHomePageProps) {
 	return (
 		<section class="panel org-shell">
@@ -72,6 +83,90 @@ export function AdminHomePage(props: AdminHomePageProps) {
 					<strong>Festivals</strong>
 					<span>Create and review festival dates.</span>
 				</button>
+				<form
+					class="admin-workflow-card shopify-integration-card"
+					onSubmit={(event) => {
+						event.preventDefault();
+						void props.app.handleSaveShopifySettings();
+					}}
+				>
+					<div class="shopify-card-header">
+						<div>
+							<strong>Shopify Integration</strong>
+							<span>Store credentials and verify Admin API access.</span>
+						</div>
+						<span
+							class={`shopify-status shopify-status-${props.app.shopifySettings()?.verificationStatus ?? "unknown"}`}
+						>
+							{shopifyStatusLabel(
+								props.app.shopifySettings()?.verificationStatus,
+							)}
+						</span>
+					</div>
+					<label class="field">
+						<span>Store URL</span>
+						<input
+							type="text"
+							autocomplete="off"
+							placeholder="example.myshopify.com"
+							value={props.app.shopifyDraft().storeUrl}
+							onInput={(event) =>
+								props.app.setShopifyDraft((current) => ({
+									...current,
+									storeUrl: event.currentTarget.value,
+								}))
+							}
+						/>
+					</label>
+					<label class="field">
+						<span>Client ID</span>
+						<input
+							type="text"
+							autocomplete="off"
+							value={props.app.shopifyDraft().clientId}
+							onInput={(event) =>
+								props.app.setShopifyDraft((current) => ({
+									...current,
+									clientId: event.currentTarget.value,
+								}))
+							}
+						/>
+					</label>
+					<label class="field">
+						<span>Client Secret</span>
+						<input
+							type="password"
+							autocomplete="new-password"
+							placeholder={
+								props.app.shopifySettings()?.hasClientSecret
+									? "Leave blank to keep existing secret"
+									: ""
+							}
+							value={props.app.shopifyDraft().clientSecret}
+							onInput={(event) =>
+								props.app.setShopifyDraft((current) => ({
+									...current,
+									clientSecret: event.currentTarget.value,
+								}))
+							}
+						/>
+					</label>
+					<Show when={props.app.shopifySettings()?.lastError} keyed>
+						{(lastError) => <p class="shopify-error-text">{lastError}</p>}
+					</Show>
+					<button
+						type="submit"
+						class="shopify-submit-button"
+						disabled={
+							!props.app.isAdminMember() || props.app.isShopifyTesting()
+						}
+					>
+						<Show when={props.app.isShopifyTesting()} fallback="Save & Test">
+							<span class="button-spinner" aria-hidden="true" />
+							<span>Testing</span>
+						</Show>
+					</button>
+				</form>
 			</div>
 		</section>
 	);

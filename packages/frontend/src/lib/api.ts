@@ -12,7 +12,10 @@ import type {
 	OrganizationFestivalListResponse,
 	OrganizationLandingResponse,
 	OrganizationMembershipListResponse,
+	SaveShopifyIntegrationInput,
+	SaveShopifyIntegrationResponse,
 	SessionResponse,
+	ShopifyIntegrationSettingsResponse,
 } from "@festival/common";
 
 const API_BASE = import.meta.env.FRONT_API_BASE ?? "";
@@ -169,6 +172,29 @@ export function createFestival(
 ) {
 	return requestJson<CreateFestivalResponse>(
 		`/api/organizations/${slug}/admin/festivals`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+		idToken,
+	);
+}
+
+export function getShopifySettings(idToken: string, slug: string) {
+	return requestJson<ShopifyIntegrationSettingsResponse>(
+		`/api/organizations/${slug}/admin/shopify`,
+		undefined,
+		idToken,
+	);
+}
+
+export function saveShopifySettings(
+	idToken: string,
+	slug: string,
+	input: SaveShopifyIntegrationInput,
+) {
+	return requestJson<SaveShopifyIntegrationResponse>(
+		`/api/organizations/${slug}/admin/shopify`,
 		{
 			method: "POST",
 			body: JSON.stringify(input),

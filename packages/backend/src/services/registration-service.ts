@@ -9,10 +9,10 @@ import {
 	type StudentMetadata,
 	validateCartRules,
 } from "@festival/common";
-import type { ShopifyAdminClient } from "../clients/shopify-admin-client.js";
-import type { ShopifyStorefrontClient } from "../clients/shopify-storefront-client.js";
 import type { StripeClient } from "../clients/stripe-client.js";
 import type { InMemoryRepository } from "../repo/in-memory-repository.js";
+import type { ShopifyAdminClient } from "../shopify/shopify-admin-client.js";
+import type { ShopifyStorefrontClient } from "../shopify/shopify-storefront-client.js";
 
 export class RegistrationService {
 	constructor(

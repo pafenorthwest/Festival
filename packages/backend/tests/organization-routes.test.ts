@@ -7,6 +7,14 @@ import type {
 import { createApp } from "../src/app.js";
 import type { AuthVerifier } from "../src/auth/types.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
+import { AesSecretEncryptor } from "../src/shopify/encryption.js";
+import { ShopifyIntegrationService } from "../src/shopify/shopify-integration-service.js";
+import type {
+	ShopifyConnectivityTester,
+	ShopifyCredentials,
+} from "../src/shopify/types.js";
+
+const TEST_AES_KEY = Buffer.alloc(32, 3).toString("base64");
 
 class FakeAuthVerifier implements AuthVerifier {
 	constructor(private readonly users: Record<string, AuthenticatedUser>) {}
@@ -25,10 +33,19 @@ class FakeAuthVerifier implements AuthVerifier {
 	}
 }
 
+class FakeShopifyTester implements ShopifyConnectivityTester {
+	readonly calls: ShopifyCredentials[] = [];
+
+	async testCredentials(credentials: ShopifyCredentials): Promise<void> {
+		this.calls.push(credentials);
+	}
+}
+
 async function createTestApp() {
+	const repository = new InMemoryOrganizationRepository();
 	return createApp({
 		env: { port: 3000 },
-		repository: new InMemoryOrganizationRepository(),
+		repository,
 		authVerifier: new FakeAuthVerifier({
 			admin: {
 				uid: "uid-admin",
@@ -47,6 +64,34 @@ async function createTestApp() {
 			},
 		}),
 	});
+}
+
+async function createTestAppWithShopify() {
+	const repository = new InMemoryOrganizationRepository();
+	const shopifyTester = new FakeShopifyTester();
+	const app = await createApp({
+		env: { port: 3000 },
+		repository,
+		authVerifier: new FakeAuthVerifier({
+			admin: {
+				uid: "uid-admin",
+				email: "admin@example.com",
+				displayName: "Admin User",
+			},
+			outsider: {
+				uid: "uid-outsider",
+				email: "outsider@example.com",
+				displayName: "Outsider User",
+			},
+		}),
+		shopifyIntegrationService: new ShopifyIntegrationService(
+			repository,
+			new AesSecretEncryptor(TEST_AES_KEY),
+			shopifyTester,
+		),
+	});
+
+	return { ...app, shopifyTester };
 }
 
 function withAuth(token: string, init?: RequestInit): RequestInit {
@@ -741,5 +786,70 @@ describe("organization routes", () => {
 			startDate: "2027-06-10",
 			endDate: "2027-06-12",
 		});
+	});
+
+	it("saves and verifies Shopify settings without returning the secret", async () => {
+		const { app, shopifyTester } = await createTestAppWithShopify();
+
+		await app.fetch(
+			new Request(
+				"http://test/api/organizations",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						name: "Festival Admins",
+						shortName: "pafe",
+					}),
+				}),
+			),
+		);
+
+		const saveResponse = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/shopify",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						storeUrl: "https://example.myshopify.com/admin",
+						clientId: "client-id",
+						clientSecret: "client-secret",
+					}),
+				}),
+			),
+		);
+
+		expect(saveResponse.status).toBe(200);
+		const saveBody = await saveResponse.text();
+		expect(saveBody).not.toContain("client-secret");
+		const saveData = JSON.parse(saveBody) as {
+			settings: {
+				storeDomain: string;
+				clientId: string;
+				hasClientSecret: boolean;
+				verificationStatus: string;
+			};
+		};
+		expect(saveData.settings).toMatchObject({
+			storeDomain: "example.myshopify.com",
+			clientId: "client-id",
+			hasClientSecret: true,
+			verificationStatus: "ok",
+		});
+		expect(shopifyTester.calls[0]).toEqual({
+			storeDomain: "example.myshopify.com",
+			clientId: "client-id",
+			clientSecret: "client-secret",
+		});
+
+		const getResponse = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/shopify",
+				withAuth("admin"),
+			),
+		);
+		const getBody = await getResponse.text();
+
+		expect(getResponse.status).toBe(200);
+		expect(getBody).not.toContain("client-secret");
 	});
 });

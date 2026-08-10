@@ -5,6 +5,7 @@ import type {
 	OrganizationLandingResponse,
 	SessionMembership,
 	SessionResponse,
+	ShopifyIntegrationSettings,
 } from "@festival/common";
 import { validateFestivalName } from "@festival/common";
 import { useLocation, useNavigate } from "@solidjs/router";
@@ -16,6 +17,7 @@ import type {
 	FestivalDraft,
 	InviteDraft,
 	InviteFeedback,
+	ShopifyDraft,
 	SignInModalKind,
 	SignInStep,
 } from "./appTypes.js";
@@ -51,6 +53,14 @@ export function createFestivalAppState() {
 		OrganizationAdminUserEntry[]
 	>([]);
 	const [festivals, setFestivals] = createSignal<FestivalSummary[]>([]);
+	const [shopifySettings, setShopifySettings] =
+		createSignal<ShopifyIntegrationSettings | null>(null);
+	const [shopifyDraft, setShopifyDraft] = createSignal<ShopifyDraft>({
+		storeUrl: "",
+		clientId: "",
+		clientSecret: "",
+	});
+	const [isShopifyTesting, setIsShopifyTesting] = createSignal(false);
 	const [signInModalKind, setSignInModalKind] =
 		createSignal<SignInModalKind | null>(null);
 	const [signInStep, setSignInStep] = createSignal<SignInStep>("method");
@@ -233,6 +243,13 @@ export function createFestivalAppState() {
 		setCreatedInvites([]);
 		setAdminUsers([]);
 		setFestivals([]);
+		setShopifySettings(null);
+		setShopifyDraft({
+			storeUrl: "",
+			clientId: "",
+			clientSecret: "",
+		});
+		setIsShopifyTesting(false);
 		setOrganizationName("");
 		setOrganizationShortName("");
 		setOrganizationNameTouched(false);
@@ -306,6 +323,7 @@ export function createFestivalAppState() {
 		isAdminMember,
 		isAdminRoute,
 		isAdminSubRoute,
+		isShopifyTesting,
 		isBusy,
 		memberships,
 		navigate,
@@ -337,6 +355,7 @@ export function createFestivalAppState() {
 		setInviteName,
 		setInvitePanelRef,
 		setIsBusy,
+		setIsShopifyTesting,
 		setMemberships,
 		setOrganization,
 		setOrganizationName,
@@ -344,6 +363,8 @@ export function createFestivalAppState() {
 		setOrganizationShortName,
 		setOrganizationShortNameTouched,
 		setSession,
+		setShopifyDraft,
+		setShopifySettings,
 		setSignInEmail,
 		setSignInModalKind,
 		setSignInStep,
@@ -355,6 +376,8 @@ export function createFestivalAppState() {
 		signInEmail,
 		signInModalKind,
 		signInStep,
+		shopifyDraft,
+		shopifySettings,
 		statusMessage,
 		currentInviteToken,
 	};

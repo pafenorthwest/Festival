@@ -156,6 +156,11 @@ export function useFestivalLifecycle(
 
 		if (currentRoute.kind === "org-admin-festivals") {
 			void loaders.loadFestivals(currentRoute.slug);
+			return;
+		}
+
+		if (currentRoute.kind === "org-admin") {
+			void loaders.loadShopifySettings(currentRoute.slug);
 		}
 	});
 }
