@@ -1,5 +1,4 @@
 import type {
-	SaveShopifyIntegrationInput,
 	SaveShopifyIntegrationResponse,
 	ShopifyIntegrationSettings,
 	ShopifyIntegrationSettingsResponse,
@@ -58,12 +57,18 @@ export class ShopifyIntegrationService {
 
 	async saveAndTestForTenant(
 		tenant: TenantContext,
-		input: SaveShopifyIntegrationInput,
+		input: unknown,
 	): Promise<SaveShopifyIntegrationResponse> {
 		const existing = await this.repository.getShopifyIntegration(
 			tenant.organization.id,
 		);
-		const secretWasProvided = Boolean(input.clientSecret?.trim());
+		const candidate =
+			input && typeof input === "object"
+				? (input as { clientSecret?: unknown })
+				: {};
+		const secretWasProvided =
+			typeof candidate.clientSecret === "string" &&
+			Boolean(candidate.clientSecret.trim());
 		const validation = validateShopifySettingsInput(input, {
 			requireClientSecret: !existing && !secretWasProvided,
 		});

@@ -57,6 +57,7 @@ async function readFrontendSource(): Promise<string> {
 		"src/components/SignInModal.tsx",
 		"src/pages/AdminFestivalsPage.tsx",
 		"src/pages/AdminHomePage.tsx",
+		"src/pages/AdminIntegrationsPage.tsx",
 		"src/pages/AdminUsersPage.tsx",
 		"src/pages/CreateOrganizationPage.tsx",
 		"src/pages/HomePage.tsx",
@@ -266,6 +267,7 @@ describe("organization onboarding integration", () => {
 		const styles = await Bun.file("src/styles.css").text();
 
 		expect(source).toContain("Admin > Users");
+		expect(source).toContain("Admin > Integrations");
 		expect(source).toContain("Admin > Festivals");
 		expect(source).toContain("Log out {props.app.adminUserLabel()}");
 		expect(source).toContain("function shortUserLabel");

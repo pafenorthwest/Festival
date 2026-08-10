@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
 	buildInvitePath,
 	buildOrgAdminFestivalsPath,
+	buildOrgAdminIntegrationsPath,
 	buildOrgAdminUsersPath,
 	buildOrgPath,
 	buildOrgRootPath,
@@ -37,6 +38,10 @@ describe("route helpers", () => {
 			kind: "org-admin-users",
 			slug: "festival-admins",
 		});
+		expect(parseRoute("/org/festival-admins/admin/integrations")).toEqual({
+			kind: "org-admin-integrations",
+			slug: "festival-admins",
+		});
 		expect(parseRoute("/org/festival-admins/admin/festivals")).toEqual({
 			kind: "org-admin-festivals",
 			slug: "festival-admins",
@@ -59,6 +64,9 @@ describe("route helpers", () => {
 		expect(buildOrgRootPath("festival-admins")).toBe("/org/festival-admins");
 		expect(buildOrgAdminUsersPath("festival-admins")).toBe(
 			"/org/festival-admins/admin/users",
+		);
+		expect(buildOrgAdminIntegrationsPath("festival-admins")).toBe(
+			"/org/festival-admins/admin/integrations",
 		);
 		expect(buildOrgAdminFestivalsPath("festival-admins")).toBe(
 			"/org/festival-admins/admin/festivals",

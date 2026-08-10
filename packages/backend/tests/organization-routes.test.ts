@@ -852,4 +852,40 @@ describe("organization routes", () => {
 		expect(getResponse.status).toBe(200);
 		expect(getBody).not.toContain("client-secret");
 	});
+
+	it("rejects malformed Shopify settings payloads with validation errors", async () => {
+		const { app, shopifyTester } = await createTestAppWithShopify();
+
+		await app.fetch(
+			new Request(
+				"http://test/api/organizations",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						name: "Festival Admins",
+						shortName: "pafe",
+					}),
+				}),
+			),
+		);
+
+		for (const payload of [{}, null]) {
+			const response = await app.fetch(
+				new Request(
+					"http://test/api/organizations/pafe/admin/shopify",
+					withAuth("admin", {
+						method: "POST",
+						body: JSON.stringify(payload),
+					}),
+				),
+			);
+
+			expect(response.status).toBe(400);
+			await expect(response.json()).resolves.toMatchObject({
+				error:
+					"Shopify store URL is required. Shopify client ID is required. Shopify client secret is required.",
+			});
+		}
+		expect(shopifyTester.calls).toHaveLength(0);
+	});
 });

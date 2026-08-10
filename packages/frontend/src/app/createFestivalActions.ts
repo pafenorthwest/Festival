@@ -336,7 +336,7 @@ export function createFestivalActions(
 	async function handleSaveShopifySettings() {
 		const user = state.firebaseUser();
 		const currentRoute = state.route();
-		if (!user || currentRoute.kind !== "org-admin") {
+		if (!user || currentRoute.kind !== "org-admin-integrations") {
 			return;
 		}
 

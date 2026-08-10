@@ -5,6 +5,7 @@ import { AppHeader } from "./components/AppHeader.js";
 import { SignInModal } from "./components/SignInModal.js";
 import { AdminFestivalsPage } from "./pages/AdminFestivalsPage.js";
 import { AdminHomePage } from "./pages/AdminHomePage.js";
+import { AdminIntegrationsPage } from "./pages/AdminIntegrationsPage.js";
 import { AdminUsersPage } from "./pages/AdminUsersPage.js";
 import { CreateOrganizationPage } from "./pages/CreateOrganizationPage.js";
 import { HomePage } from "./pages/HomePage.js";
@@ -41,6 +42,9 @@ export default function App() {
 				</Match>
 				<Match when={app.route().kind === "org-admin-users"}>
 					<AdminUsersPage app={app} />
+				</Match>
+				<Match when={app.route().kind === "org-admin-integrations"}>
+					<AdminIntegrationsPage app={app} />
 				</Match>
 				<Match when={app.route().kind === "org-admin-festivals"}>
 					<AdminFestivalsPage app={app} />

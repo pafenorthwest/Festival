@@ -36,4 +36,32 @@ describe("Shopify settings contract", () => {
 			).valid,
 		).toBeTrue();
 	});
+
+	it("returns validation errors for malformed settings payloads", () => {
+		expect(
+			validateShopifySettingsInput({}, { requireClientSecret: true }).errors,
+		).toEqual([
+			"Shopify store URL is required.",
+			"Shopify client ID is required.",
+			"Shopify client secret is required.",
+		]);
+
+		expect(
+			validateShopifySettingsInput(null, { requireClientSecret: false }).errors,
+		).toEqual([
+			"Shopify store URL is required.",
+			"Shopify client ID is required.",
+		]);
+
+		expect(
+			validateShopifySettingsInput(
+				{ storeUrl: 123, clientId: false, clientSecret: [] },
+				{ requireClientSecret: true },
+			).errors,
+		).toEqual([
+			"Shopify store URL is required.",
+			"Shopify client ID is required.",
+			"Shopify client secret is required.",
+		]);
+	});
 });

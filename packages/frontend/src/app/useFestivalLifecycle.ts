@@ -113,6 +113,7 @@ export function useFestivalLifecycle(
 			(currentRoute.kind === "org-root" ||
 				currentRoute.kind === "org-admin" ||
 				currentRoute.kind === "org-admin-users" ||
+				currentRoute.kind === "org-admin-integrations" ||
 				currentRoute.kind === "org-admin-festivals") &&
 			currentRoute.slug &&
 			state.firebaseUser()
@@ -159,7 +160,7 @@ export function useFestivalLifecycle(
 			return;
 		}
 
-		if (currentRoute.kind === "org-admin") {
+		if (currentRoute.kind === "org-admin-integrations") {
 			void loaders.loadShopifySettings(currentRoute.slug);
 		}
 	});

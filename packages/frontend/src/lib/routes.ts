@@ -5,6 +5,7 @@ export type AppRoute =
 	| { kind: "org-root"; slug: string }
 	| { kind: "org-admin"; slug: string }
 	| { kind: "org-admin-users"; slug: string }
+	| { kind: "org-admin-integrations"; slug: string }
 	| { kind: "org-admin-festivals"; slug: string };
 
 export function buildOrgPath(slug: string): string {
@@ -17,6 +18,10 @@ export function buildOrgRootPath(slug: string): string {
 
 export function buildOrgAdminUsersPath(slug: string): string {
 	return `/org/${slug}/admin/users`;
+}
+
+export function buildOrgAdminIntegrationsPath(slug: string): string {
+	return `/org/${slug}/admin/integrations`;
 }
 
 export function buildOrgAdminFestivalsPath(slug: string): string {
@@ -54,6 +59,16 @@ export function parseRoute(pathname: string): AppRoute {
 	const orgAdminUsersMatch = pathname.match(/^\/org\/([^/]+)\/admin\/users$/);
 	if (orgAdminUsersMatch) {
 		return { kind: "org-admin-users", slug: orgAdminUsersMatch[1] ?? "" };
+	}
+
+	const orgAdminIntegrationsMatch = pathname.match(
+		/^\/org\/([^/]+)\/admin\/integrations$/,
+	);
+	if (orgAdminIntegrationsMatch) {
+		return {
+			kind: "org-admin-integrations",
+			slug: orgAdminIntegrationsMatch[1] ?? "",
+		};
 	}
 
 	const orgAdminFestivalsMatch = pathname.match(

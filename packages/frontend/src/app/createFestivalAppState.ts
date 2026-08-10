@@ -27,6 +27,7 @@ const ORGANIZATION_SHORT_NAME_PATTERN = /^[A-Za-z0-9-]+$/;
 const ADMIN_ROUTE_KINDS = [
 	"org-admin",
 	"org-admin-users",
+	"org-admin-integrations",
 	"org-admin-festivals",
 ] as const;
 
@@ -174,12 +175,15 @@ export function createFestivalAppState() {
 	const isAdminSubRoute = createMemo(
 		() =>
 			route().kind === "org-admin-users" ||
+			route().kind === "org-admin-integrations" ||
 			route().kind === "org-admin-festivals",
 	);
 	const adminBreadcrumb = createMemo(() => {
 		switch (route().kind) {
 			case "org-admin-users":
 				return "Admin > Users";
+			case "org-admin-integrations":
+				return "Admin > Integrations";
 			case "org-admin-festivals":
 				return "Admin > Festivals";
 			default:

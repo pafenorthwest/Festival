@@ -386,10 +386,10 @@ button.compact-header-button {
 	color: var(--bullet-soft-ink);
 }
 
-.shopify-integration-card {
+form.shopify-integration-card {
+	display: grid;
 	align-content: start;
 	gap: 0.8rem;
-	cursor: default;
 }
 
 .shopify-card-header {
@@ -403,6 +403,11 @@ button.compact-header-button {
 .shopify-card-header div {
 	display: grid;
 	gap: 0.35rem;
+}
+
+.shopify-card-header h2,
+.shopify-card-header p {
+	margin: 0;
 }
 
 .shopify-status {

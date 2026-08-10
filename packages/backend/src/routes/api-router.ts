@@ -3,7 +3,6 @@ import type {
 	CreateFestivalInput,
 	CreateInviteInput,
 	CreateOrganizationInput,
-	SaveShopifyIntegrationInput,
 } from "@festival/common";
 import { Hono } from "hono";
 import {
@@ -282,7 +281,7 @@ export function buildApiRouter(
 					throw new AppError("AES_ENCRYPTION_KEY is required.", 500);
 				}
 
-				const payload = (await c.req.json()) as SaveShopifyIntegrationInput;
+				const payload = await c.req.json();
 				return c.json(
 					await shopifyIntegrationService.saveAndTestForTenant(
 						getRequiredTenant(c),

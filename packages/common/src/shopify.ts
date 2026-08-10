@@ -52,12 +52,22 @@ export function normalizeShopifyStoreDomain(value: string): string {
 }
 
 export function validateShopifySettingsInput(
-	input: SaveShopifyIntegrationInput,
+	input: unknown,
 	options: { requireClientSecret: boolean },
 ): ShopifySettingsValidation {
-	const storeDomain = normalizeShopifyStoreDomain(input.storeUrl);
-	const clientId = input.clientId.trim();
-	const clientSecret = input.clientSecret?.trim();
+	const candidate =
+		input && typeof input === "object"
+			? (input as Partial<Record<keyof SaveShopifyIntegrationInput, unknown>>)
+			: {};
+	const storeUrl =
+		typeof candidate.storeUrl === "string" ? candidate.storeUrl : "";
+	const clientId =
+		typeof candidate.clientId === "string" ? candidate.clientId.trim() : "";
+	const clientSecret =
+		typeof candidate.clientSecret === "string"
+			? candidate.clientSecret.trim()
+			: undefined;
+	const storeDomain = normalizeShopifyStoreDomain(storeUrl);
 	const errors: string[] = [];
 
 	if (!storeDomain) {
