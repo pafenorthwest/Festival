@@ -1,6 +1,7 @@
 import { createResource, For, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { getMembershipProducts } from "../lib/api.js";
+import { sanitizeShopifyDescriptionHtml } from "../lib/sanitize-html.js";
 
 interface MembershipPageProps {
 	app: FestivalAppController;
@@ -69,9 +70,12 @@ export function MembershipPage(props: MembershipPageProps) {
 								<h2>{membershipProduct.name}</h2>
 							</div>
 							<Show when={membershipProduct.description}>
-								<p class="membership-description">
-									{membershipProduct.description}
-								</p>
+								<div
+									class="membership-description"
+									innerHTML={sanitizeShopifyDescriptionHtml(
+										membershipProduct.description ?? "",
+									)}
+								/>
 							</Show>
 							<div class="membership-product-footer">
 								<strong>

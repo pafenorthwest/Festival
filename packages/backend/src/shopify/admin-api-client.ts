@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
 	ShopifyAdminApiError,
 	ShopifyCredentialsError,
@@ -15,7 +16,15 @@ const SHOPIFY_ADMIN_API_VERSION = "2026-07";
 interface AccessTokenResponse {
 	access_token?: string;
 	scope?: string;
+	expires_in?: number;
 }
+
+interface CachedAccessToken {
+	accessToken: string;
+	expiresAtMs: number;
+}
+
+const ACCESS_TOKEN_EXPIRY_SAFETY_MS = 60_000;
 
 interface GraphqlResponse<TData> {
 	data?: TData;
@@ -114,8 +123,10 @@ function throwIfUserErrors(userErrors: ShopifyUserErrorPayload[] = []): void {
 export class ShopifyAdminApiClient
 	implements ShopifyConnectivityTester, ShopifyMembershipProductClient
 {
+	private readonly accessTokens = new Map<string, CachedAccessToken>();
+
 	async testCredentials(credentials: ShopifyCredentials): Promise<void> {
-		const accessToken = await this.fetchAccessToken(credentials);
+		const accessToken = await this.fetchAccessToken(credentials, true);
 		const payload = await this.graphqlRequest<{
 			shop?: { id?: string; myshopifyDomain?: string };
 		}>(
@@ -374,7 +385,18 @@ export class ShopifyAdminApiClient
 
 	private async fetchAccessToken(
 		credentials: ShopifyCredentials,
+		forceRefresh = false,
 	): Promise<string> {
+		const cacheKey = this.accessTokenCacheKey(credentials);
+		const cached = this.accessTokens.get(cacheKey);
+		if (
+			!forceRefresh &&
+			cached &&
+			cached.expiresAtMs - ACCESS_TOKEN_EXPIRY_SAFETY_MS > Date.now()
+		) {
+			return cached.accessToken;
+		}
+
 		const response = await fetch(
 			`https://${credentials.storeDomain}/admin/oauth/access_token`,
 			{
@@ -402,8 +424,27 @@ export class ShopifyAdminApiClient
 				"Shopify token response did not include an access token.",
 			);
 		}
+		if (
+			typeof payload.expires_in === "number" &&
+			Number.isFinite(payload.expires_in) &&
+			payload.expires_in > 0
+		) {
+			this.accessTokens.set(cacheKey, {
+				accessToken: payload.access_token,
+				expiresAtMs: Date.now() + payload.expires_in * 1_000,
+			});
+		} else {
+			this.accessTokens.delete(cacheKey);
+		}
 
 		return payload.access_token;
+	}
+
+	private accessTokenCacheKey(credentials: ShopifyCredentials): string {
+		const secretFingerprint = createHash("sha256")
+			.update(credentials.clientSecret)
+			.digest("base64url");
+		return `${credentials.storeDomain}:${credentials.clientId}:${secretFingerprint}`;
 	}
 
 	private async fetchShopCurrencyCode(

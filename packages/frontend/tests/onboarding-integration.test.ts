@@ -60,6 +60,7 @@ async function readFrontendSource(): Promise<string> {
 		"src/components/AppHeader.tsx",
 		"src/components/SignInModal.tsx",
 		"src/lib/api.ts",
+		"src/lib/sanitize-html.ts",
 		"src/pages/AdminFestivalsPage.tsx",
 		"src/pages/AdminHomePage.tsx",
 		"src/pages/AdminIntegrationsPage.tsx",
@@ -249,6 +250,24 @@ describe("organization onboarding integration", () => {
 		expect(source).toContain(`/api/organizations/\${slug}/membership-products`);
 		expect(source).not.toContain("myshopify.com/admin");
 		expect(source).not.toContain("admin/api/2026-07");
+		expect(source).toContain("DOMPurify.sanitize");
+		expect(source).toContain("ALLOWED_TAGS");
+		expect(source).toContain("ALLOWED_ATTR");
+		expect(source).toContain("innerHTML={sanitizeShopifyDescriptionHtml(");
+	});
+
+	it("surfaces Shopify settings load failures on both admin pages", async () => {
+		const lifecycleSource = await Bun.file(
+			"src/app/useFestivalLifecycle.ts",
+		).text();
+
+		const settingsLoadFailureHandlers = lifecycleSource.match(
+			/loadShopifySettings\(currentRoute\.slug\)\.catch/g,
+		);
+		expect(settingsLoadFailureHandlers).toHaveLength(2);
+		expect(lifecycleSource).toContain(
+			"state.setErrorMessage((error as Error).message)",
+		);
 	});
 
 	it("requires the create organization flow to collect and submit a short name", async () => {

@@ -162,7 +162,9 @@ export function useFestivalLifecycle(
 		}
 
 		if (currentRoute.kind === "org-admin-integrations") {
-			void loaders.loadShopifySettings(currentRoute.slug);
+			void loaders.loadShopifySettings(currentRoute.slug).catch((error) => {
+				state.setErrorMessage((error as Error).message);
+			});
 			return;
 		}
 
