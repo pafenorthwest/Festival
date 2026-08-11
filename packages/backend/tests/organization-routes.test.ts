@@ -7,11 +7,18 @@ import type {
 import { createApp } from "../src/app.js";
 import type { AuthVerifier } from "../src/auth/types.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
+import type {
+	CreateMembershipProductRecordInput,
+	ProductRecord,
+} from "../src/repo/organization-repository.js";
 import { AesSecretEncryptor } from "../src/shopify/encryption.js";
 import { ShopifyIntegrationService } from "../src/shopify/shopify-integration-service.js";
+import { ShopifyMembershipProductService } from "../src/shopify/shopify-membership-product-service.js";
 import type {
 	ShopifyConnectivityTester,
 	ShopifyCredentials,
+	ShopifyMembershipProductClient,
+	ShopifyProductDetails,
 } from "../src/shopify/types.js";
 
 const TEST_AES_KEY = Buffer.alloc(32, 3).toString("base64");
@@ -38,6 +45,68 @@ class FakeShopifyTester implements ShopifyConnectivityTester {
 
 	async testCredentials(credentials: ShopifyCredentials): Promise<void> {
 		this.calls.push(credentials);
+	}
+}
+
+function shopifyProduct(
+	overrides: Partial<ShopifyProductDetails> = {},
+): ShopifyProductDetails {
+	const id = overrides.id ?? "gid://shopify/Product/generated";
+
+	return {
+		id,
+		title: "Teacher Membership",
+		description: "Annual membership for teachers.",
+		status: "ACTIVE",
+		variants: [
+			{
+				id: "gid://shopify/ProductVariant/generated",
+				title: "Standard",
+				price: { amount: "75.00", currencyCode: "USD" },
+				productId: id,
+				selectedOptions: [{ name: "Plan", value: "Standard" }],
+			},
+		],
+		...overrides,
+	};
+}
+
+class FakeShopifyProductClient implements ShopifyMembershipProductClient {
+	readonly deletedProductGids: string[] = [];
+	readonly readProductGids: string[][] = [];
+	createResponse = shopifyProduct();
+	updateResponse = shopifyProduct();
+	readResponse = [shopifyProduct()];
+
+	async createProduct(): Promise<ShopifyProductDetails> {
+		return this.createResponse;
+	}
+
+	async updateVariantPrice(): Promise<ShopifyProductDetails> {
+		return this.updateResponse;
+	}
+
+	async readProductsByGid(
+		_credentials: ShopifyCredentials,
+		productGids: string[],
+	): Promise<ShopifyProductDetails[]> {
+		this.readProductGids.push(productGids);
+		return this.readResponse;
+	}
+
+	async deleteProduct(
+		_credentials: ShopifyCredentials,
+		productGid: string,
+	): Promise<void> {
+		this.deletedProductGids.push(productGid);
+	}
+}
+
+class FailingMembershipProductRepository extends InMemoryOrganizationRepository {
+	async createMembershipProductRecord(
+		_input: CreateMembershipProductRecordInput,
+	): Promise<ProductRecord> {
+		throw new Error("database unavailable");
 	}
 }
 
@@ -94,6 +163,36 @@ async function createTestAppWithShopify() {
 	return { ...app, shopifyTester };
 }
 
+async function createTestAppWithMembershipProducts(
+	repository: InMemoryOrganizationRepository = new InMemoryOrganizationRepository(),
+) {
+	const shopifyProductClient = new FakeShopifyProductClient();
+	const encryptor = new AesSecretEncryptor(TEST_AES_KEY);
+	const app = await createApp({
+		env: { port: 3000 },
+		repository,
+		authVerifier: new FakeAuthVerifier({
+			admin: {
+				uid: "uid-admin",
+				email: "admin@example.com",
+				displayName: "Admin User",
+			},
+			reviewer: {
+				uid: "uid-reviewer",
+				email: "reviewer@example.com",
+				displayName: "Reviewer User",
+			},
+		}),
+		shopifyMembershipProductService: new ShopifyMembershipProductService(
+			repository,
+			encryptor,
+			shopifyProductClient,
+		),
+	});
+
+	return { ...app, repository, encryptor, shopifyProductClient };
+}
+
 function withAuth(token: string, init?: RequestInit): RequestInit {
 	return {
 		...init,
@@ -103,6 +202,59 @@ function withAuth(token: string, init?: RequestInit): RequestInit {
 			...(init?.headers ?? {}),
 		},
 	};
+}
+
+function membershipProductPayload(overrides: Record<string, unknown> = {}) {
+	return {
+		name: "Teacher Membership",
+		description: "Annual membership for teachers.",
+		price: "75.00",
+		membershipType: "teacher",
+		entitlementPeriod: "1_year",
+		...overrides,
+	};
+}
+
+async function createOrganizationViaApi(
+	app: Awaited<ReturnType<typeof createApp>>["app"],
+) {
+	await app.fetch(
+		new Request(
+			"http://test/api/organizations",
+			withAuth("admin", {
+				method: "POST",
+				body: JSON.stringify({
+					name: "Festival Admins",
+					shortName: "pafe",
+				}),
+			}),
+		),
+	);
+}
+
+async function saveVerifiedShopifyIntegration(
+	repository: InMemoryOrganizationRepository,
+	encryptor: AesSecretEncryptor,
+) {
+	const organization = await repository.findOrganizationBySlug("pafe");
+	if (!organization) {
+		throw new Error("Expected test organization to exist.");
+	}
+
+	await repository.upsertShopifyIntegration({
+		organizationId: organization.id,
+		storeDomain: "example.myshopify.com",
+		clientId: "client-id",
+		encryptedClientSecret: encryptor.encrypt("client-secret"),
+	});
+	await repository.updateShopifyVerification({
+		organizationId: organization.id,
+		verificationStatus: "ok",
+		verifiedAtIso: new Date().toISOString(),
+		lastTestedAtIso: new Date().toISOString(),
+	});
+
+	return organization;
 }
 
 describe("organization routes", () => {
@@ -887,5 +1039,204 @@ describe("organization routes", () => {
 			});
 		}
 		expect(shopifyTester.calls).toHaveLength(0);
+	});
+
+	it("rejects unauthenticated membership product creation", async () => {
+		const { app } = await createTestAppWithMembershipProducts();
+
+		const response = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/membership-products",
+				{
+					method: "POST",
+					body: JSON.stringify(membershipProductPayload()),
+				},
+			),
+		);
+
+		expect(response.status).toBe(401);
+	});
+
+	it("rejects non-admin membership product creation", async () => {
+		const { app, repository } = await createTestAppWithMembershipProducts();
+		await createOrganizationViaApi(app);
+		const reviewer = await repository.upsertUser({
+			uid: "uid-reviewer",
+			email: "reviewer@example.com",
+			displayName: "Reviewer User",
+		});
+		const organization = await repository.findOrganizationBySlug("pafe");
+		if (!organization) {
+			throw new Error("Expected test organization to exist.");
+		}
+		await repository.createMembership({
+			organizationId: organization.id,
+			userId: reviewer.id,
+			role: "Music Reviewer",
+			origin: "direct",
+		});
+
+		const response = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/membership-products",
+				withAuth("reviewer", {
+					method: "POST",
+					body: JSON.stringify(membershipProductPayload()),
+				}),
+			),
+		);
+
+		expect(response.status).toBe(403);
+	});
+
+	it("rejects invalid membership product payloads before Shopify creation", async () => {
+		const { app, repository, encryptor, shopifyProductClient } =
+			await createTestAppWithMembershipProducts();
+		await createOrganizationViaApi(app);
+		await saveVerifiedShopifyIntegration(repository, encryptor);
+
+		const response = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/membership-products",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify(
+						membershipProductPayload({ name: "", price: "1.234" }),
+					),
+				}),
+			),
+		);
+
+		expect(response.status).toBe(400);
+		await expect(response.json()).resolves.toMatchObject({
+			error:
+				"Membership product name is required. Membership product price must be a non-negative decimal string with at most 2 decimal places.",
+		});
+		expect(shopifyProductClient.readProductGids).toHaveLength(0);
+	});
+
+	it("rejects membership product creation without verified Shopify integration", async () => {
+		const { app } = await createTestAppWithMembershipProducts();
+		await createOrganizationViaApi(app);
+
+		const response = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/membership-products",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify(membershipProductPayload()),
+				}),
+			),
+		);
+
+		expect(response.status).toBe(409);
+		await expect(response.json()).resolves.toMatchObject({
+			error: "Shopify integration is not configured.",
+		});
+	});
+
+	it("rejects browser-supplied Shopify identifiers before creation", async () => {
+		const { app, repository, encryptor, shopifyProductClient } =
+			await createTestAppWithMembershipProducts();
+		await createOrganizationViaApi(app);
+		await saveVerifiedShopifyIntegration(repository, encryptor);
+
+		const response = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/membership-products",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify(
+						membershipProductPayload({
+							shopifyProductGid: "gid://shopify/Product/browser-supplied",
+							shopifyVariantGid:
+								"gid://shopify/ProductVariant/browser-supplied",
+							credentials: { clientSecret: "browser-secret" },
+						}),
+					),
+				}),
+			),
+		);
+
+		expect(response.status).toBe(400);
+		await expect(response.json()).resolves.toMatchObject({
+			error:
+				"Membership product request cannot include browser-controlled fields: shopifyProductGid, shopifyVariantGid, credentials.",
+		});
+		expect(shopifyProductClient.readProductGids).toHaveLength(0);
+	});
+
+	it("creates a membership product from server-generated Shopify IDs and persists the association", async () => {
+		const { app, repository, encryptor, shopifyProductClient } =
+			await createTestAppWithMembershipProducts();
+		await createOrganizationViaApi(app);
+		const organization = await saveVerifiedShopifyIntegration(
+			repository,
+			encryptor,
+		);
+
+		const response = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/membership-products",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify(membershipProductPayload()),
+				}),
+			),
+		);
+
+		expect(response.status).toBe(201);
+		const data = (await response.json()) as {
+			membershipProduct: {
+				id: string;
+				name: string;
+				shopifyProductGid: string;
+				shopifyVariantGid: string;
+				variantName: string;
+				price: { amount: string; currencyCode: string };
+			};
+		};
+		expect(data.membershipProduct).toMatchObject({
+			name: "Teacher Membership",
+			shopifyProductGid: "gid://shopify/Product/generated",
+			shopifyVariantGid: "gid://shopify/ProductVariant/generated",
+			variantName: "Standard",
+			price: { amount: "75.00", currencyCode: "USD" },
+		});
+		expect(shopifyProductClient.readProductGids).toEqual([
+			["gid://shopify/Product/generated"],
+		]);
+		const records = await repository.listMembershipProductRecords(
+			organization.id,
+		);
+		expect(records).toHaveLength(1);
+		expect(records[0]).toMatchObject({
+			shopifyProductGid: "gid://shopify/Product/generated",
+			shopifyVariantGid: "gid://shopify/ProductVariant/generated",
+			productNameSnapshot: "Teacher Membership",
+		});
+	});
+
+	it("cleans up the Shopify product when route persistence fails", async () => {
+		const repository = new FailingMembershipProductRepository();
+		const { app, encryptor, shopifyProductClient } =
+			await createTestAppWithMembershipProducts(repository);
+		await createOrganizationViaApi(app);
+		await saveVerifiedShopifyIntegration(repository, encryptor);
+
+		const response = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/membership-products",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify(membershipProductPayload()),
+				}),
+			),
+		);
+
+		expect(response.status).toBe(502);
+		expect(shopifyProductClient.deletedProductGids).toEqual([
+			"gid://shopify/Product/generated",
+		]);
 	});
 });

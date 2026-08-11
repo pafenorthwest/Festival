@@ -21,11 +21,40 @@ import type { AuthVerifier } from "../auth/types.js";
 import { AppError } from "../errors/app-error.js";
 import type { OrganizationService } from "../services/organization-service.js";
 import type { ShopifyIntegrationService } from "../shopify/shopify-integration-service.js";
+import type { ShopifyMembershipProductService } from "../shopify/shopify-membership-product-service.js";
+
+const FORBIDDEN_MEMBERSHIP_PRODUCT_FIELDS = [
+	"organizationId",
+	"shopifyProductGid",
+	"shopifyVariantGid",
+	"variantName",
+	"storeDomain",
+	"clientId",
+	"clientSecret",
+	"credentials",
+] as const;
+
+function assertNoForbiddenMembershipProductFields(payload: unknown): void {
+	if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+		return;
+	}
+
+	const forbiddenFields = FORBIDDEN_MEMBERSHIP_PRODUCT_FIELDS.filter((field) =>
+		Object.hasOwn(payload, field),
+	);
+	if (forbiddenFields.length > 0) {
+		throw new AppError(
+			`Membership product request cannot include browser-controlled fields: ${forbiddenFields.join(", ")}.`,
+			400,
+		);
+	}
+}
 
 export function buildApiRouter(
 	organizationService: OrganizationService,
 	authVerifier: AuthVerifier,
 	shopifyIntegrationService?: ShopifyIntegrationService,
+	shopifyMembershipProductService?: ShopifyMembershipProductService,
 ): Hono<{ Variables: Partial<ApiVariables> }> {
 	const router = new Hono<{ Variables: Partial<ApiVariables> }>();
 	const repository = organizationService.repository;
@@ -288,6 +317,32 @@ export function buildApiRouter(
 						payload,
 					),
 				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.post(
+		"/organizations/:slug/admin/membership-products",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				if (!shopifyMembershipProductService) {
+					throw new AppError("AES_ENCRYPTION_KEY is required.", 500);
+				}
+
+				const payload = await c.req.json();
+				assertNoForbiddenMembershipProductFields(payload);
+				const membershipProduct =
+					await shopifyMembershipProductService.createMembershipProduct(
+						getRequiredTenant(c).organization,
+						payload,
+					);
+				c.status(201);
+				return c.json({ membershipProduct });
 			} catch (error) {
 				return toJsonError(c, error);
 			}

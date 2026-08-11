@@ -176,17 +176,28 @@ export class ShopifyMembershipProductService {
 				},
 			);
 			variant = assertSupportedProductShape(pricedProduct, createdProduct.id);
+			const [confirmedProduct] = await this.shopifyClient.readProductsByGid(
+				credentials,
+				[pricedProduct.id],
+			);
+			if (!confirmedProduct) {
+				throw new AppError("Shopify membership product was not found.", 502);
+			}
+			variant = assertSupportedProductShape(
+				confirmedProduct,
+				createdProduct.id,
+			);
 
 			const record = await this.repository.createMembershipProductRecord({
 				organizationId: organization.id,
 				membershipType: validation.input.membershipType,
 				entitlementPeriod: validation.input.entitlementPeriod,
-				shopifyProductGid: pricedProduct.id,
+				shopifyProductGid: confirmedProduct.id,
 				shopifyVariantGid: variant.id,
-				productNameSnapshot: pricedProduct.title,
+				productNameSnapshot: confirmedProduct.title,
 			});
 
-			return toSummary(record, pricedProduct, variant);
+			return toSummary(record, confirmedProduct, variant);
 		} catch (error) {
 			if (createdProduct) {
 				await this.tryCleanupProduct(credentials, createdProduct.id);
