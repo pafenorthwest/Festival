@@ -8,6 +8,7 @@ import type {
 	CreateOrganizationResponse,
 	DismissWelcomeResponse,
 	InviteSummary,
+	MembershipProductsListResponse,
 	OrganizationAdminUsersResponse,
 	OrganizationFestivalListResponse,
 	OrganizationLandingResponse,
@@ -108,6 +109,12 @@ export function getOrganization(idToken: string, slug: string) {
 		`/api/organizations/${slug}`,
 		undefined,
 		idToken,
+	);
+}
+
+export function getMembershipProducts(slug: string) {
+	return requestJson<MembershipProductsListResponse>(
+		`/api/organizations/${slug}/membership-products`,
 	);
 }
 

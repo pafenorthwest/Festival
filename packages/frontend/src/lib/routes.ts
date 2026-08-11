@@ -3,6 +3,7 @@ export type AppRoute =
 	| { kind: "create-org" }
 	| { kind: "invite"; token: string }
 	| { kind: "org-root"; slug: string }
+	| { kind: "org-membership"; slug: string }
 	| { kind: "org-admin"; slug: string }
 	| { kind: "org-admin-users"; slug: string }
 	| { kind: "org-admin-integrations"; slug: string }
@@ -14,6 +15,10 @@ export function buildOrgPath(slug: string): string {
 
 export function buildOrgRootPath(slug: string): string {
 	return `/org/${slug}`;
+}
+
+export function buildOrgMembershipPath(slug: string): string {
+	return `/org/${slug}/membership`;
 }
 
 export function buildOrgAdminUsersPath(slug: string): string {
@@ -49,6 +54,11 @@ export function parseRoute(pathname: string): AppRoute {
 	const orgRootMatch = pathname.match(/^\/org\/([^/]+)$/);
 	if (orgRootMatch) {
 		return { kind: "org-root", slug: orgRootMatch[1] ?? "" };
+	}
+
+	const orgMembershipMatch = pathname.match(/^\/org\/([^/]+)\/membership$/);
+	if (orgMembershipMatch) {
+		return { kind: "org-membership", slug: orgMembershipMatch[1] ?? "" };
 	}
 
 	const orgAdminMatch = pathname.match(/^\/org\/([^/]+)\/admin$/);

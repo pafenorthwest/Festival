@@ -204,6 +204,85 @@ button.compact-header-button {
 	margin-bottom: 1.25rem;
 }
 
+.membership-page {
+	display: grid;
+	gap: 1.25rem;
+}
+
+.membership-header {
+	display: flex;
+	justify-content: space-between;
+	gap: 1rem;
+	align-items: start;
+}
+
+.membership-header h1 {
+	margin: 0;
+	font-size: 2rem;
+	line-height: 1.05;
+}
+
+.membership-product-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+	gap: 1rem;
+}
+
+.membership-product-card {
+	display: grid;
+	gap: 1rem;
+	align-content: space-between;
+	min-height: 220px;
+	padding: 1.2rem;
+	border: 1px solid var(--bullet-panel-border);
+	border-radius: 8px;
+	background: rgba(255, 255, 255, 0.7);
+}
+
+.membership-product-card h2 {
+	margin: 0.25rem 0 0;
+	font-size: 1.35rem;
+	line-height: 1.15;
+}
+
+.membership-product-type {
+	margin: 0;
+	color: var(--bullet-accent-strong);
+	font-size: 0.82rem;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.12em;
+}
+
+.membership-description {
+	margin: 0;
+	color: var(--bullet-soft-ink);
+	line-height: 1.5;
+}
+
+.membership-product-footer {
+	display: flex;
+	justify-content: space-between;
+	gap: 1rem;
+	align-items: center;
+}
+
+.membership-product-footer strong {
+	font-size: 1.2rem;
+}
+
+.membership-product-footer span,
+.membership-unavailable {
+	color: var(--bullet-soft-ink);
+}
+
+.membership-unavailable {
+	padding: 1rem;
+	border: 1px solid rgba(185, 77, 54, 0.28);
+	border-radius: 8px;
+	background: rgba(185, 77, 54, 0.08);
+}
+
 .hero-panel {
 	display: grid;
 	gap: 1rem;

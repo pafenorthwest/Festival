@@ -5,6 +5,7 @@ import {
 	createOrganization,
 	dismissWelcome,
 	getInvite,
+	getMembershipProducts,
 	getMemberships,
 	getOrganization,
 	getSession,
@@ -55,6 +56,7 @@ async function readFrontendSource(): Promise<string> {
 		"src/components/AppBanners.tsx",
 		"src/components/AppHeader.tsx",
 		"src/components/SignInModal.tsx",
+		"src/lib/api.ts",
 		"src/pages/AdminFestivalsPage.tsx",
 		"src/pages/AdminHomePage.tsx",
 		"src/pages/AdminIntegrationsPage.tsx",
@@ -62,6 +64,7 @@ async function readFrontendSource(): Promise<string> {
 		"src/pages/CreateOrganizationPage.tsx",
 		"src/pages/HomePage.tsx",
 		"src/pages/InviteLandingPage.tsx",
+		"src/pages/MembershipPage.tsx",
 		"src/pages/OrganizationChooser.tsx",
 		"src/pages/OrganizationRootPage.tsx",
 	];
@@ -152,6 +155,7 @@ describe("organization onboarding integration", () => {
 		});
 		await acceptInvite("token-5", "invite-token", { name: "Pat Reviewer" });
 		await getOrganization("token-6", "pafe");
+		await getMembershipProducts("pafe");
 		await dismissWelcome("token-7", "pafe");
 		await getShopifySettings("token-8", "pafe");
 		await saveShopifySettings("token-9", "pafe", {
@@ -169,6 +173,7 @@ describe("organization onboarding integration", () => {
 			expect.objectContaining({ Authorization: "Bearer token-4" }),
 			expect.objectContaining({ Authorization: "Bearer token-5" }),
 			expect.objectContaining({ Authorization: "Bearer token-6" }),
+			expect.not.objectContaining({ Authorization: expect.any(String) }),
 			expect.objectContaining({ Authorization: "Bearer token-7" }),
 			expect.objectContaining({ Authorization: "Bearer token-8" }),
 			expect.objectContaining({ Authorization: "Bearer token-9" }),
@@ -192,6 +197,7 @@ describe("organization onboarding integration", () => {
 		await getInvite("invite-token");
 		await acceptInvite("token", "invite-token", { name: "Pat Reviewer" });
 		await getOrganization("token", "pafe");
+		await getMembershipProducts("pafe");
 		await getShopifySettings("token", "pafe");
 		await saveShopifySettings("token", "pafe", {
 			storeUrl: "example.myshopify.com",
@@ -207,9 +213,23 @@ describe("organization onboarding integration", () => {
 			"/api/invites/invite-token",
 			"/api/invites/invite-token/accept",
 			"/api/organizations/pafe",
+			"/api/organizations/pafe/membership-products",
 			"/api/organizations/pafe/admin/shopify",
 			"/api/organizations/pafe/admin/shopify",
 		]);
+	});
+
+	it("wires the public membership page through the backend API only", async () => {
+		const source = await readFrontendSource();
+
+		expect(source).toContain('route().kind === "org-membership"');
+		expect(source).toContain("getMembershipProducts(slug)");
+		expect(source).toContain(
+			"Membership information is temporarily unavailable. Please try again",
+		);
+		expect(source).toContain(`/api/organizations/\${slug}/membership-products`);
+		expect(source).not.toContain("myshopify.com/admin");
+		expect(source).not.toContain("admin/api/2026-07");
 	});
 
 	it("requires the create organization flow to collect and submit a short name", async () => {

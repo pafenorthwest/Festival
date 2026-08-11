@@ -4,6 +4,7 @@ import {
 	buildOrgAdminFestivalsPath,
 	buildOrgAdminIntegrationsPath,
 	buildOrgAdminUsersPath,
+	buildOrgMembershipPath,
 	buildOrgPath,
 	buildOrgRootPath,
 	parseRoute,
@@ -28,6 +29,10 @@ describe("route helpers", () => {
 	it("parses organization routes", () => {
 		expect(parseRoute("/org/festival-admins")).toEqual({
 			kind: "org-root",
+			slug: "festival-admins",
+		});
+		expect(parseRoute("/org/festival-admins/membership")).toEqual({
+			kind: "org-membership",
 			slug: "festival-admins",
 		});
 		expect(parseRoute("/org/festival-admins/admin")).toEqual({
@@ -62,6 +67,9 @@ describe("route helpers", () => {
 	it("builds org and invite paths", () => {
 		expect(buildOrgPath("festival-admins")).toBe("/org/festival-admins/admin");
 		expect(buildOrgRootPath("festival-admins")).toBe("/org/festival-admins");
+		expect(buildOrgMembershipPath("festival-admins")).toBe(
+			"/org/festival-admins/membership",
+		);
 		expect(buildOrgAdminUsersPath("festival-admins")).toBe(
 			"/org/festival-admins/admin/users",
 		);
