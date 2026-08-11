@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import type { FestivalAppState } from "../src/app/createFestivalAppState.js";
+import { createFestivalDataLoaders } from "../src/app/createFestivalDataLoaders.js";
 import {
 	acceptInvite,
 	createInvite,
+	createMembershipProduct,
 	createOrganization,
 	dismissWelcome,
 	getInvite,
@@ -60,6 +63,7 @@ async function readFrontendSource(): Promise<string> {
 		"src/pages/AdminFestivalsPage.tsx",
 		"src/pages/AdminHomePage.tsx",
 		"src/pages/AdminIntegrationsPage.tsx",
+		"src/pages/AdminMembershipProductsPage.tsx",
 		"src/pages/AdminUsersPage.tsx",
 		"src/pages/CreateOrganizationPage.tsx",
 		"src/pages/HomePage.tsx",
@@ -156,9 +160,16 @@ describe("organization onboarding integration", () => {
 		await acceptInvite("token-5", "invite-token", { name: "Pat Reviewer" });
 		await getOrganization("token-6", "pafe");
 		await getMembershipProducts("pafe");
+		await createMembershipProduct("token-8", "pafe", {
+			name: "Teacher Membership",
+			description: "Annual membership",
+			price: "75.00",
+			membershipType: "teacher",
+			entitlementPeriod: "1_year",
+		});
 		await dismissWelcome("token-7", "pafe");
-		await getShopifySettings("token-8", "pafe");
-		await saveShopifySettings("token-9", "pafe", {
+		await getShopifySettings("token-9", "pafe");
+		await saveShopifySettings("token-10", "pafe", {
 			storeUrl: "example.myshopify.com",
 			clientId: "client-id",
 			clientSecret: "client-secret",
@@ -174,9 +185,10 @@ describe("organization onboarding integration", () => {
 			expect.objectContaining({ Authorization: "Bearer token-5" }),
 			expect.objectContaining({ Authorization: "Bearer token-6" }),
 			expect.not.objectContaining({ Authorization: expect.any(String) }),
-			expect.objectContaining({ Authorization: "Bearer token-7" }),
 			expect.objectContaining({ Authorization: "Bearer token-8" }),
+			expect.objectContaining({ Authorization: "Bearer token-7" }),
 			expect.objectContaining({ Authorization: "Bearer token-9" }),
+			expect.objectContaining({ Authorization: "Bearer token-10" }),
 		]);
 	});
 
@@ -198,6 +210,12 @@ describe("organization onboarding integration", () => {
 		await acceptInvite("token", "invite-token", { name: "Pat Reviewer" });
 		await getOrganization("token", "pafe");
 		await getMembershipProducts("pafe");
+		await createMembershipProduct("token", "pafe", {
+			name: "Teacher Membership",
+			price: "75.00",
+			membershipType: "teacher",
+			entitlementPeriod: "1_year",
+		});
 		await getShopifySettings("token", "pafe");
 		await saveShopifySettings("token", "pafe", {
 			storeUrl: "example.myshopify.com",
@@ -214,6 +232,7 @@ describe("organization onboarding integration", () => {
 			"/api/invites/invite-token/accept",
 			"/api/organizations/pafe",
 			"/api/organizations/pafe/membership-products",
+			"/api/organizations/pafe/admin/membership-products",
 			"/api/organizations/pafe/admin/shopify",
 			"/api/organizations/pafe/admin/shopify",
 		]);
@@ -288,6 +307,7 @@ describe("organization onboarding integration", () => {
 
 		expect(source).toContain("Admin > Users");
 		expect(source).toContain("Admin > Integrations");
+		expect(source).toContain("Admin > Memberships");
 		expect(source).toContain("Admin > Festivals");
 		expect(source).toContain("Log out {props.app.adminUserLabel()}");
 		expect(source).toContain("function shortUserLabel");
@@ -298,5 +318,69 @@ describe("organization onboarding integration", () => {
 		expect(source).toContain('class="secondary-button compact-header-button"');
 		expect(styles).toContain(".compact-header-button");
 		expect(styles).toContain("background: rgba(31, 122, 87, 0.08);");
+	});
+
+	it("wires issue 70 admin membership UI through existing admin access control", async () => {
+		const source = await readFrontendSource();
+
+		expect(source).toContain('route().kind === "org-admin-memberships"');
+		expect(source).toContain("AdminMembershipProductsPage");
+		expect(source).toContain("buildOrgAdminMembershipsPath");
+		expect(source).toContain("admin/memberships");
+		expect(source).toContain("Only Admin members can manage memberships.");
+		expect(source).toContain("props.app.isAdminMember()");
+		expect(source).toContain("getMembershipProducts(slug)");
+		expect(source).toContain("createMembershipProduct(token");
+		expect(source).toContain("admin/membership-products");
+		expect(source).not.toContain("SHOPIFY_ADMIN_ACCESS_TOKEN");
+		expect(source).not.toContain("admin/api/2026-07");
+	});
+
+	it("covers issue 70 admin membership create states in source", async () => {
+		const source = await readFrontendSource();
+
+		expect(source).toContain("Verified Shopify integration is required");
+		expect(source).toContain("shopifyPrerequisiteMet");
+		expect(source).toContain("Membership product created.");
+		expect(source).toContain("Plan: Standard");
+		expect(source).toContain("isCreatingMembershipProduct()");
+		expect(source).toContain('fallback="Create Membership"');
+		expect(source).toContain("setCreateMembershipProductAttempted(true)");
+		expect(source).toContain("membershipProductValidationMessage()");
+		expect(source).toContain("setMembershipProductDraft((current) =>");
+		expect(source).toContain("await loaders.loadMembershipProducts");
+		expect(source).toContain('name: "",');
+		expect(source).toContain('description: "",');
+		expect(source).toContain('price: "",');
+	});
+
+	it("surfaces membership product load failures without retaining stale data", async () => {
+		let products: unknown[] = [{ id: "stale-product" }];
+		let loading = false;
+		let loadError = "";
+		const state = {
+			setIsLoadingMembershipProducts(value: boolean) {
+				loading = value;
+			},
+			setMembershipProducts(value: unknown[]) {
+				products = value;
+			},
+			setMembershipProductsLoadError(value: string) {
+				loadError = value;
+			},
+		} as unknown as FestivalAppState;
+		globalThis.fetch = (() =>
+			Promise.resolve(
+				mockJsonResponse({ error: "Shopify unavailable" }, 503),
+			)) as typeof fetch;
+
+		const loaders = createFestivalDataLoaders(state);
+		await loaders.loadMembershipProducts("pafe");
+
+		expect(products).toEqual([]);
+		expect(loading).toBe(false);
+		expect(loadError).toBe(
+			"Membership products are temporarily unavailable. Please try again.",
+		);
 	});
 });

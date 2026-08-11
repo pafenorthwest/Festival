@@ -3,6 +3,7 @@ import {
 	buildInvitePath,
 	buildOrgAdminFestivalsPath,
 	buildOrgAdminIntegrationsPath,
+	buildOrgAdminMembershipsPath,
 	buildOrgAdminUsersPath,
 	buildOrgMembershipPath,
 	buildOrgPath,
@@ -47,6 +48,10 @@ describe("route helpers", () => {
 			kind: "org-admin-integrations",
 			slug: "festival-admins",
 		});
+		expect(parseRoute("/org/festival-admins/admin/memberships")).toEqual({
+			kind: "org-admin-memberships",
+			slug: "festival-admins",
+		});
 		expect(parseRoute("/org/festival-admins/admin/festivals")).toEqual({
 			kind: "org-admin-festivals",
 			slug: "festival-admins",
@@ -75,6 +80,9 @@ describe("route helpers", () => {
 		);
 		expect(buildOrgAdminIntegrationsPath("festival-admins")).toBe(
 			"/org/festival-admins/admin/integrations",
+		);
+		expect(buildOrgAdminMembershipsPath("festival-admins")).toBe(
+			"/org/festival-admins/admin/memberships",
 		);
 		expect(buildOrgAdminFestivalsPath("festival-admins")).toBe(
 			"/org/festival-admins/admin/festivals",

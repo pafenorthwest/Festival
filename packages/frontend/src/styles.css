@@ -40,7 +40,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
 	font: inherit;
 }
 
@@ -530,6 +531,77 @@ form.shopify-integration-card {
 	margin-top: 0.2rem;
 }
 
+.membership-admin-layout {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(280px, 420px);
+	gap: 1rem;
+	align-items: start;
+}
+
+.membership-admin-list,
+.membership-admin-form {
+	min-width: 0;
+}
+
+.membership-admin-list {
+	display: grid;
+	gap: 0.8rem;
+}
+
+.admin-membership-list {
+	display: grid;
+	gap: 0.65rem;
+}
+
+.admin-membership-item {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 0.75rem;
+	padding: 0.85rem 0.9rem;
+	border: 1px solid rgba(31, 36, 49, 0.08);
+	border-radius: 8px;
+	background: rgba(31, 122, 87, 0.08);
+}
+
+.admin-membership-item div,
+.admin-membership-meta {
+	display: grid;
+	gap: 0.25rem;
+}
+
+.admin-membership-item span,
+.membership-prerequisite p {
+	margin: 0;
+	color: var(--bullet-soft-ink);
+}
+
+.admin-membership-meta {
+	justify-items: end;
+	text-align: right;
+}
+
+.membership-admin-controls {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 0.75rem;
+}
+
+.membership-prerequisite {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 0.75rem;
+	padding: 0.8rem;
+	border: 1px solid rgba(182, 135, 44, 0.28);
+	border-radius: 8px;
+	background: rgba(182, 135, 44, 0.12);
+}
+
+.membership-prerequisite .secondary-button {
+	white-space: nowrap;
+}
+
 .button-spinner {
 	width: 1rem;
 	height: 1rem;
@@ -676,6 +748,23 @@ form.shopify-integration-card {
 .sign-in-card .modal-actions {
 	display: grid;
 	grid-template-columns: 1fr;
+}
+
+@media (max-width: 760px) {
+	.membership-admin-layout,
+	.membership-admin-controls,
+	.admin-membership-item {
+		grid-template-columns: 1fr;
+	}
+
+	.admin-membership-meta {
+		justify-items: start;
+		text-align: left;
+	}
+
+	.membership-prerequisite {
+		display: grid;
+	}
 }
 
 @media (max-width: 720px) {

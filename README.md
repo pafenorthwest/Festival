@@ -76,6 +76,29 @@ Follow [SETUP.md](SETUP.md) for the full step-by-step setup, including:
 - Required env-file values and how they map to the app.
 - Local development and production commands.
 
+### Shopify Membership Product Setup
+
+Organization Admins configure Shopify from `/org/:slug/admin/integrations`.
+Membership product creation requires a verified organization-scoped Shopify
+integration with:
+
+- `store_domain`: a `*.myshopify.com` store domain.
+- `client_id`: the app client ID used for Shopify Admin API access.
+- `client_secret`: stored encrypted server-side using `AES_ENCRYPTION_KEY`.
+- `verification_status = ok`: required before the admin membership form can
+  create products.
+
+The browser calls only Festival backend APIs. Shopify Admin API credentials,
+tokens, and raw Admin responses must remain server-side. The backend uses the
+saved organization integration and the pinned Admin GraphQL API path already
+implemented in the Shopify backend client.
+
+Manual release validation for a development store should create one membership
+from `/org/:slug/admin/memberships`, confirm the Shopify product has a single
+`Plan = Standard` variant, and confirm `/org/:slug/membership` renders current
+Shopify-backed name, description, and price. Do not commit development-store
+credentials or tokens.
+
 ## Commands
 - `bun install`
 - `bun run dev:frontend`

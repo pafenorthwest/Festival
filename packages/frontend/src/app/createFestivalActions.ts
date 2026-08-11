@@ -5,6 +5,7 @@ import {
 	cancelAdminInvite,
 	createFestival,
 	createInvite,
+	createMembershipProduct,
 	createOrganization,
 	deleteAdminMembership,
 	dismissWelcome,
@@ -333,6 +334,49 @@ export function createFestivalActions(
 		}
 	}
 
+	async function handleCreateMembershipProduct() {
+		const user = state.firebaseUser();
+		const currentRoute = state.route();
+		if (!user || currentRoute.kind !== "org-admin-memberships") {
+			return;
+		}
+
+		state.setCreateMembershipProductAttempted(true);
+		const validation = state.membershipProductValidation();
+		if (!validation.valid) {
+			state.setStatusMessage("");
+			return;
+		}
+
+		if (!state.shopifyPrerequisiteMet()) {
+			state.setErrorMessage(
+				"Verified Shopify integration is required before creating memberships.",
+			);
+			return;
+		}
+
+		state.setIsCreatingMembershipProduct(true);
+		state.clearMessages();
+		try {
+			const token = await user.getIdToken();
+			await createMembershipProduct(token, currentRoute.slug, validation.input);
+			state.setMembershipProductDraft({
+				name: "",
+				description: "",
+				price: "",
+				membershipType: "teacher",
+				entitlementPeriod: "1_year",
+			});
+			state.setCreateMembershipProductAttempted(false);
+			await loaders.loadMembershipProducts(currentRoute.slug);
+			state.setStatusMessage("Membership product created.");
+		} catch (error) {
+			state.setErrorMessage((error as Error).message);
+		} finally {
+			state.setIsCreatingMembershipProduct(false);
+		}
+	}
+
 	async function handleSaveShopifySettings() {
 		const user = state.firebaseUser();
 		const currentRoute = state.route();
@@ -449,6 +493,7 @@ export function createFestivalActions(
 		handleAcceptInvite,
 		handleCreateAdminInvite,
 		handleCreateFestival,
+		handleCreateMembershipProduct,
 		handleCreateInvite,
 		handleCreateOrganization,
 		handleDeleteAdminUser,

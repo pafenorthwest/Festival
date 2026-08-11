@@ -114,6 +114,7 @@ export function useFestivalLifecycle(
 				currentRoute.kind === "org-admin" ||
 				currentRoute.kind === "org-admin-users" ||
 				currentRoute.kind === "org-admin-integrations" ||
+				currentRoute.kind === "org-admin-memberships" ||
 				currentRoute.kind === "org-admin-festivals") &&
 			currentRoute.slug &&
 			state.firebaseUser()
@@ -162,6 +163,14 @@ export function useFestivalLifecycle(
 
 		if (currentRoute.kind === "org-admin-integrations") {
 			void loaders.loadShopifySettings(currentRoute.slug);
+			return;
+		}
+
+		if (currentRoute.kind === "org-admin-memberships") {
+			void loaders.loadShopifySettings(currentRoute.slug).catch((error) => {
+				state.setErrorMessage((error as Error).message);
+			});
+			void loaders.loadMembershipProducts(currentRoute.slug);
 		}
 	});
 }

@@ -4,6 +4,8 @@ import type {
 	CreateFestivalResponse,
 	CreateInviteInput,
 	CreateInviteResponse,
+	CreateMembershipProductInput,
+	CreateMembershipProductResponse,
 	CreateOrganizationInput,
 	CreateOrganizationResponse,
 	DismissWelcomeResponse,
@@ -115,6 +117,21 @@ export function getOrganization(idToken: string, slug: string) {
 export function getMembershipProducts(slug: string) {
 	return requestJson<MembershipProductsListResponse>(
 		`/api/organizations/${slug}/membership-products`,
+	);
+}
+
+export function createMembershipProduct(
+	idToken: string,
+	slug: string,
+	input: CreateMembershipProductInput,
+) {
+	return requestJson<CreateMembershipProductResponse>(
+		`/api/organizations/${slug}/admin/membership-products`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+		idToken,
 	);
 }
 
