@@ -1,6 +1,8 @@
 import type {
 	AuthenticatedUser,
 	FestivalRecord,
+	MembershipEntitlementPeriod,
+	MembershipProductType,
 	OrganizationAdminUserEntry,
 	OrganizationInviteRecord,
 	OrganizationMembershipRecord,
@@ -70,6 +72,28 @@ export interface UpdateShopifyVerificationInput {
 	lastError?: string;
 }
 
+export interface ProductRecord {
+	id: string;
+	organizationId: string;
+	productCategory: "membership";
+	membershipType: MembershipProductType;
+	entitlementPeriod: MembershipEntitlementPeriod;
+	shopifyProductGid: string;
+	shopifyVariantGid: string;
+	productNameSnapshot: string;
+	createdAtIso: string;
+	updatedAtIso: string;
+}
+
+export interface CreateMembershipProductRecordInput {
+	organizationId: string;
+	membershipType: MembershipProductType;
+	entitlementPeriod: MembershipEntitlementPeriod;
+	shopifyProductGid: string;
+	shopifyVariantGid: string;
+	productNameSnapshot: string;
+}
+
 export interface OrganizationRepository {
 	ensureReady(): Promise<void>;
 	upsertUser(user: AuthenticatedUser): Promise<OrganizationUserRecord>;
@@ -129,4 +153,20 @@ export interface OrganizationRepository {
 	updateShopifyVerification(
 		input: UpdateShopifyVerificationInput,
 	): Promise<ShopifyIntegrationRecord>;
+	createMembershipProductRecord(
+		input: CreateMembershipProductRecordInput,
+	): Promise<ProductRecord>;
+	listMembershipProductRecords(
+		organizationId: string,
+	): Promise<ProductRecord[]>;
+	findMembershipProductRecordByType(
+		organizationId: string,
+		membershipType: MembershipProductType,
+	): Promise<ProductRecord | null>;
+	findProductRecordByShopifyProductGid(
+		shopifyProductGid: string,
+	): Promise<ProductRecord | null>;
+	findProductRecordByShopifyVariantGid(
+		shopifyVariantGid: string,
+	): Promise<ProductRecord | null>;
 }

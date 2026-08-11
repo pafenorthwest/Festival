@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import type {
 	AuthenticatedUser,
 	FestivalRecord,
+	MembershipEntitlementPeriod,
+	MembershipProductType,
 	OrganizationAdminUserEntry,
 	OrganizationInviteRecord,
 	OrganizationMembershipRecord,
@@ -15,9 +17,11 @@ import type {
 	CreateFestivalRecordInput,
 	CreateInviteRecordInput,
 	CreateMembershipInput,
+	CreateMembershipProductRecordInput,
 	InviteWithOrganization,
 	MembershipWithOrganization,
 	OrganizationRepository,
+	ProductRecord,
 	ShopifyIntegrationRecord,
 	UpdateShopifyVerificationInput,
 	UpsertShopifyIntegrationInput,
@@ -69,6 +73,19 @@ interface ShopifyIntegrationRow {
 	verified_at: string | null;
 	last_tested_at: string | null;
 	last_error: string | null;
+	created_at: string;
+	updated_at: string;
+}
+
+interface ProductRow {
+	id: string;
+	organization_id: string;
+	product_category: "membership";
+	membership_type: MembershipProductType;
+	entitlement_period: MembershipEntitlementPeriod;
+	shopify_product_gid: string;
+	shopify_variant_gid: string;
+	product_name_snapshot: string;
 	created_at: string;
 	updated_at: string;
 }
@@ -139,6 +156,21 @@ function mapShopifyIntegration(
 		verifiedAtIso: row.verified_at ?? undefined,
 		lastTestedAtIso: row.last_tested_at ?? undefined,
 		lastError: row.last_error ?? undefined,
+		createdAtIso: row.created_at,
+		updatedAtIso: row.updated_at,
+	};
+}
+
+function mapProduct(row: ProductRow): ProductRecord {
+	return {
+		id: row.id,
+		organizationId: row.organization_id,
+		productCategory: row.product_category,
+		membershipType: row.membership_type,
+		entitlementPeriod: row.entitlement_period,
+		shopifyProductGid: row.shopify_product_gid,
+		shopifyVariantGid: row.shopify_variant_gid,
+		productNameSnapshot: row.product_name_snapshot,
 		createdAtIso: row.created_at,
 		updatedAtIso: row.updated_at,
 	};
@@ -262,6 +294,34 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 			);
 
+			CREATE TABLE IF NOT EXISTS ${schema}.products (
+				id TEXT PRIMARY KEY,
+				organization_id TEXT NOT NULL REFERENCES ${schema}.organizations (id) ON DELETE CASCADE,
+				product_category TEXT NOT NULL,
+				membership_type TEXT NULL,
+				entitlement_period TEXT NULL,
+				shopify_product_gid TEXT NOT NULL,
+				shopify_variant_gid TEXT NOT NULL,
+				product_name_snapshot TEXT NOT NULL,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				CONSTRAINT products_product_category_check
+					CHECK (product_category IN ('membership')),
+				CONSTRAINT products_membership_type_check
+					CHECK (
+						membership_type IS NULL OR membership_type IN ('teacher', 'accompanist')
+					),
+				CONSTRAINT products_entitlement_period_check
+					CHECK (
+						entitlement_period IS NULL OR entitlement_period IN ('1_day', '1_month', '1_year')
+					),
+				CONSTRAINT products_membership_fields_check
+					CHECK (
+						product_category <> 'membership'
+						OR (membership_type IS NOT NULL AND entitlement_period IS NOT NULL)
+					)
+			);
+
 			ALTER TABLE ${schema}.users
 				ADD COLUMN IF NOT EXISTS disassociated BOOLEAN NOT NULL DEFAULT FALSE;
 
@@ -283,6 +343,22 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 
 			CREATE UNIQUE INDEX IF NOT EXISTS idx_festivals_org_name_lower
 				ON ${schema}.festivals (organization_id, LOWER(name));
+
+			CREATE INDEX IF NOT EXISTS idx_products_organization_id
+				ON ${schema}.products (organization_id);
+
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_products_shopify_product_gid
+				ON ${schema}.products (shopify_product_gid);
+
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_products_shopify_variant_gid
+				ON ${schema}.products (shopify_variant_gid);
+
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_products_shopify_product_variant_gid
+				ON ${schema}.products (shopify_product_gid, shopify_variant_gid);
+
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_products_org_membership_type
+				ON ${schema}.products (organization_id, membership_type)
+				WHERE product_category = 'membership';
 		`);
 	}
 
@@ -955,5 +1031,155 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		}
 
 		return mapShopifyIntegration(row);
+	}
+
+	async createMembershipProductRecord(
+		input: CreateMembershipProductRecordInput,
+	): Promise<ProductRecord> {
+		await this.ensureReady();
+
+		const [row] = (await sql.unsafe(
+			`INSERT INTO ${this.schema}.products (
+				id,
+				organization_id,
+				product_category,
+				membership_type,
+				entitlement_period,
+				shopify_product_gid,
+				shopify_variant_gid,
+				product_name_snapshot,
+				updated_at
+			) VALUES ($1, $2, 'membership', $3, $4, $5, $6, $7, NOW())
+			RETURNING
+				id,
+				organization_id,
+				product_category,
+				membership_type,
+				entitlement_period,
+				shopify_product_gid,
+				shopify_variant_gid,
+				product_name_snapshot,
+				created_at,
+				updated_at`,
+			[
+				randomUUID(),
+				input.organizationId,
+				input.membershipType,
+				input.entitlementPeriod,
+				input.shopifyProductGid,
+				input.shopifyVariantGid,
+				input.productNameSnapshot,
+			],
+		)) as ProductRow[];
+
+		return mapProduct(row);
+	}
+
+	async listMembershipProductRecords(
+		organizationId: string,
+	): Promise<ProductRecord[]> {
+		await this.ensureReady();
+
+		const rows = (await sql.unsafe(
+			`SELECT
+				id,
+				organization_id,
+				product_category,
+				membership_type,
+				entitlement_period,
+				shopify_product_gid,
+				shopify_variant_gid,
+				product_name_snapshot,
+				created_at,
+				updated_at
+			 FROM ${this.schema}.products
+			 WHERE organization_id = $1
+			   AND product_category = 'membership'
+			 ORDER BY created_at ASC`,
+			[organizationId],
+		)) as ProductRow[];
+
+		return rows.map(mapProduct);
+	}
+
+	async findMembershipProductRecordByType(
+		organizationId: string,
+		membershipType: MembershipProductType,
+	): Promise<ProductRecord | null> {
+		await this.ensureReady();
+
+		const rows = (await sql.unsafe(
+			`SELECT
+				id,
+				organization_id,
+				product_category,
+				membership_type,
+				entitlement_period,
+				shopify_product_gid,
+				shopify_variant_gid,
+				product_name_snapshot,
+				created_at,
+				updated_at
+			 FROM ${this.schema}.products
+			 WHERE organization_id = $1
+			   AND product_category = 'membership'
+			   AND membership_type = $2
+			 LIMIT 1`,
+			[organizationId, membershipType],
+		)) as ProductRow[];
+
+		return rows[0] ? mapProduct(rows[0]) : null;
+	}
+
+	async findProductRecordByShopifyProductGid(
+		shopifyProductGid: string,
+	): Promise<ProductRecord | null> {
+		await this.ensureReady();
+
+		const rows = (await sql.unsafe(
+			`SELECT
+				id,
+				organization_id,
+				product_category,
+				membership_type,
+				entitlement_period,
+				shopify_product_gid,
+				shopify_variant_gid,
+				product_name_snapshot,
+				created_at,
+				updated_at
+			 FROM ${this.schema}.products
+			 WHERE shopify_product_gid = $1
+			 LIMIT 1`,
+			[shopifyProductGid],
+		)) as ProductRow[];
+
+		return rows[0] ? mapProduct(rows[0]) : null;
+	}
+
+	async findProductRecordByShopifyVariantGid(
+		shopifyVariantGid: string,
+	): Promise<ProductRecord | null> {
+		await this.ensureReady();
+
+		const rows = (await sql.unsafe(
+			`SELECT
+				id,
+				organization_id,
+				product_category,
+				membership_type,
+				entitlement_period,
+				shopify_product_gid,
+				shopify_variant_gid,
+				product_name_snapshot,
+				created_at,
+				updated_at
+			 FROM ${this.schema}.products
+			 WHERE shopify_variant_gid = $1
+			 LIMIT 1`,
+			[shopifyVariantGid],
+		)) as ProductRow[];
+
+		return rows[0] ? mapProduct(rows[0]) : null;
 	}
 }

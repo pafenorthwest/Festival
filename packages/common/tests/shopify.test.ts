@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
 	normalizeShopifyStoreDomain,
+	validateMembershipProductInput,
 	validateShopifySettingsInput,
 } from "../src/shopify.js";
 
@@ -63,5 +64,71 @@ describe("Shopify settings contract", () => {
 			"Shopify client ID is required.",
 			"Shopify client secret is required.",
 		]);
+	});
+});
+
+describe("Shopify membership product contract", () => {
+	it("normalizes valid membership product creation input", () => {
+		expect(
+			validateMembershipProductInput({
+				name: " Teacher Membership ",
+				description: " Annual membership. ",
+				price: "75.00",
+				membershipType: "teacher",
+				entitlementPeriod: "1_year",
+			}),
+		).toEqual({
+			valid: true,
+			errors: [],
+			input: {
+				name: "Teacher Membership",
+				description: "Annual membership.",
+				price: "75.00",
+				membershipType: "teacher",
+				entitlementPeriod: "1_year",
+			},
+		});
+	});
+
+	it("rejects missing membership product names", () => {
+		expect(
+			validateMembershipProductInput({
+				name: " ",
+				price: "75.00",
+				membershipType: "teacher",
+				entitlementPeriod: "1_year",
+			}).errors,
+		).toContain("Membership product name is required.");
+	});
+
+	it("rejects invalid membership product prices", () => {
+		for (const price of ["", "-1.00", "1.999", "abc", "01.00"]) {
+			expect(
+				validateMembershipProductInput({
+					name: "Teacher Membership",
+					price,
+					membershipType: "teacher",
+					entitlementPeriod: "1_year",
+				}).valid,
+			).toBeFalse();
+		}
+	});
+
+	it("rejects unsupported membership product options", () => {
+		const result = validateMembershipProductInput({
+			name: "Teacher Membership",
+			price: "75.00",
+			membershipType: "student",
+			entitlementPeriod: "2_years",
+		});
+
+		expect(result.errors).toEqual([
+			"Membership product type must be teacher or accompanist.",
+			"Membership entitlement period must be 1_day, 1_month, or 1_year.",
+		]);
+		expect(result.input).toEqual({
+			name: "Teacher Membership",
+			price: "75.00",
+		});
 	});
 });

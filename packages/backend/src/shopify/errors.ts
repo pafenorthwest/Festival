@@ -11,3 +11,17 @@ export class ShopifyCredentialsError extends ShopifyIntegrationError {
 		this.name = "ShopifyCredentialsError";
 	}
 }
+
+export class ShopifyAdminApiError extends ShopifyIntegrationError {
+	constructor(message: string) {
+		super(message);
+		this.name = "ShopifyAdminApiError";
+	}
+}
+
+export class ShopifyUserError extends ShopifyIntegrationError {
+	constructor(message: string) {
+		super(message);
+		this.name = "ShopifyUserError";
+	}
+}
