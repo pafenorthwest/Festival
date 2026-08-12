@@ -18,11 +18,46 @@ import {
 	toJsonError,
 } from "../auth/tenant-context.js";
 import type { AuthVerifier } from "../auth/types.js";
+import { AppError } from "../errors/app-error.js";
 import type { OrganizationService } from "../services/organization-service.js";
+import type { ShopifyIntegrationService } from "../shopify/shopify-integration-service.js";
+import type { ShopifyMembershipProductService } from "../shopify/shopify-membership-product-service.js";
+
+const FORBIDDEN_MEMBERSHIP_PRODUCT_FIELDS = [
+	"organizationId",
+	"shopifyProductGid",
+	"shopifyVariantGid",
+	"variantName",
+	"storeDomain",
+	"clientId",
+	"clientSecret",
+	"credentials",
+] as const;
+
+const PUBLIC_MEMBERSHIP_PRODUCTS_UNAVAILABLE_MESSAGE =
+	"Membership information is temporarily unavailable. Please try again later.";
+
+function assertNoForbiddenMembershipProductFields(payload: unknown): void {
+	if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+		return;
+	}
+
+	const forbiddenFields = FORBIDDEN_MEMBERSHIP_PRODUCT_FIELDS.filter((field) =>
+		Object.hasOwn(payload, field),
+	);
+	if (forbiddenFields.length > 0) {
+		throw new AppError(
+			`Membership product request cannot include browser-controlled fields: ${forbiddenFields.join(", ")}.`,
+			400,
+		);
+	}
+}
 
 export function buildApiRouter(
 	organizationService: OrganizationService,
 	authVerifier: AuthVerifier,
+	shopifyIntegrationService?: ShopifyIntegrationService,
+	shopifyMembershipProductService?: ShopifyMembershipProductService,
 ): Hono<{ Variables: Partial<ApiVariables> }> {
 	const router = new Hono<{ Variables: Partial<ApiVariables> }>();
 	const repository = organizationService.repository;
@@ -244,6 +279,132 @@ export function buildApiRouter(
 			}
 		},
 	);
+
+	router.get(
+		"/organizations/:slug/admin/shopify",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				if (!shopifyIntegrationService) {
+					throw new AppError("AES_ENCRYPTION_KEY is required.", 500);
+				}
+
+				return c.json(
+					await shopifyIntegrationService.getSettingsForTenant(
+						getRequiredTenant(c),
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.post(
+		"/organizations/:slug/admin/shopify",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				if (!shopifyIntegrationService) {
+					throw new AppError("AES_ENCRYPTION_KEY is required.", 500);
+				}
+
+				const payload = await c.req.json();
+				return c.json(
+					await shopifyIntegrationService.saveAndTestForTenant(
+						getRequiredTenant(c),
+						payload,
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.post(
+		"/organizations/:slug/admin/membership-products",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				if (!shopifyMembershipProductService) {
+					throw new AppError("AES_ENCRYPTION_KEY is required.", 500);
+				}
+
+				const payload = await c.req.json();
+				assertNoForbiddenMembershipProductFields(payload);
+				const membershipProduct =
+					await shopifyMembershipProductService.createMembershipProduct(
+						getRequiredTenant(c).organization,
+						payload,
+					);
+				c.status(201);
+				return c.json({ membershipProduct });
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.get("/organizations/:slug/membership-products", async (c) => {
+		try {
+			if (!shopifyMembershipProductService) {
+				throw new AppError("AES_ENCRYPTION_KEY is required.", 500);
+			}
+
+			const organization = await repository.findOrganizationBySlug(
+				c.req.param("slug"),
+			);
+			if (!organization) {
+				throw new AppError("Organization not found.", 404);
+			}
+
+			const membershipProducts =
+				await shopifyMembershipProductService.listMembershipProductsForOrganization(
+					organization,
+				);
+
+			return c.json({
+				organization: {
+					id: organization.id,
+					slug: organization.slug,
+					name: organization.name,
+				},
+				membershipProducts: membershipProducts.map(
+					({
+						shopifyProductGid: _shopifyProductGid,
+						shopifyVariantGid: _shopifyVariantGid,
+						...membershipProduct
+					}) => membershipProduct,
+				),
+			});
+		} catch (error) {
+			if (
+				error instanceof AppError &&
+				error.status === 404 &&
+				error.message === "Organization not found."
+			) {
+				return toJsonError(c, error);
+			}
+
+			console.error("Public membership product listing failed.", {
+				operation: "shopify.membershipProducts.publicList",
+				organizationSlug: c.req.param("slug"),
+				errorName: error instanceof Error ? error.name : undefined,
+				errorMessage: error instanceof Error ? error.message : undefined,
+			});
+			c.status(502);
+			return c.json({
+				error: PUBLIC_MEMBERSHIP_PRODUCTS_UNAVAILABLE_MESSAGE,
+			});
+		}
+	});
 
 	return router;
 }

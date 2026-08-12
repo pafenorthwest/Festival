@@ -4,15 +4,21 @@ import type {
 	CreateFestivalResponse,
 	CreateInviteInput,
 	CreateInviteResponse,
+	CreateMembershipProductInput,
+	CreateMembershipProductResponse,
 	CreateOrganizationInput,
 	CreateOrganizationResponse,
 	DismissWelcomeResponse,
 	InviteSummary,
+	MembershipProductsListResponse,
 	OrganizationAdminUsersResponse,
 	OrganizationFestivalListResponse,
 	OrganizationLandingResponse,
 	OrganizationMembershipListResponse,
+	SaveShopifyIntegrationInput,
+	SaveShopifyIntegrationResponse,
 	SessionResponse,
+	ShopifyIntegrationSettingsResponse,
 } from "@festival/common";
 
 const API_BASE = import.meta.env.FRONT_API_BASE ?? "";
@@ -108,6 +114,27 @@ export function getOrganization(idToken: string, slug: string) {
 	);
 }
 
+export function getMembershipProducts(slug: string) {
+	return requestJson<MembershipProductsListResponse>(
+		`/api/organizations/${slug}/membership-products`,
+	);
+}
+
+export function createMembershipProduct(
+	idToken: string,
+	slug: string,
+	input: CreateMembershipProductInput,
+) {
+	return requestJson<CreateMembershipProductResponse>(
+		`/api/organizations/${slug}/admin/membership-products`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+		idToken,
+	);
+}
+
 export function dismissWelcome(idToken: string, slug: string) {
 	return requestJson<DismissWelcomeResponse>(
 		`/api/organizations/${slug}/welcome/dismiss`,
@@ -169,6 +196,29 @@ export function createFestival(
 ) {
 	return requestJson<CreateFestivalResponse>(
 		`/api/organizations/${slug}/admin/festivals`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+		idToken,
+	);
+}
+
+export function getShopifySettings(idToken: string, slug: string) {
+	return requestJson<ShopifyIntegrationSettingsResponse>(
+		`/api/organizations/${slug}/admin/shopify`,
+		undefined,
+		idToken,
+	);
+}
+
+export function saveShopifySettings(
+	idToken: string,
+	slug: string,
+	input: SaveShopifyIntegrationInput,
+) {
+	return requestJson<SaveShopifyIntegrationResponse>(
+		`/api/organizations/${slug}/admin/shopify`,
 		{
 			method: "POST",
 			body: JSON.stringify(input),

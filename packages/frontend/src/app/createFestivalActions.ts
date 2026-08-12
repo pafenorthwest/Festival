@@ -5,9 +5,11 @@ import {
 	cancelAdminInvite,
 	createFestival,
 	createInvite,
+	createMembershipProduct,
 	createOrganization,
 	deleteAdminMembership,
 	dismissWelcome,
+	saveShopifySettings,
 } from "../lib/api.js";
 import {
 	clearPendingIntent,
@@ -332,6 +334,84 @@ export function createFestivalActions(
 		}
 	}
 
+	async function handleCreateMembershipProduct() {
+		const user = state.firebaseUser();
+		const currentRoute = state.route();
+		if (!user || currentRoute.kind !== "org-admin-memberships") {
+			return;
+		}
+
+		state.setCreateMembershipProductAttempted(true);
+		const validation = state.membershipProductValidation();
+		if (!validation.valid) {
+			state.setStatusMessage("");
+			return;
+		}
+
+		if (!state.shopifyPrerequisiteMet()) {
+			state.setErrorMessage(
+				"Verified Shopify integration is required before creating memberships.",
+			);
+			return;
+		}
+
+		state.setIsCreatingMembershipProduct(true);
+		state.clearMessages();
+		try {
+			const token = await user.getIdToken();
+			await createMembershipProduct(token, currentRoute.slug, validation.input);
+			state.setMembershipProductDraft({
+				name: "",
+				description: "",
+				price: "",
+				membershipType: "teacher",
+				entitlementPeriod: "1_year",
+			});
+			state.setCreateMembershipProductAttempted(false);
+			await loaders.loadMembershipProducts(currentRoute.slug);
+			state.setStatusMessage("Membership product created.");
+		} catch (error) {
+			state.setErrorMessage((error as Error).message);
+		} finally {
+			state.setIsCreatingMembershipProduct(false);
+		}
+	}
+
+	async function handleSaveShopifySettings() {
+		const user = state.firebaseUser();
+		const currentRoute = state.route();
+		if (!user || currentRoute.kind !== "org-admin-integrations") {
+			return;
+		}
+
+		state.setIsShopifyTesting(true);
+		state.clearMessages();
+		try {
+			const token = await user.getIdToken();
+			const draft = state.shopifyDraft();
+			const response = await saveShopifySettings(token, currentRoute.slug, {
+				storeUrl: draft.storeUrl,
+				clientId: draft.clientId,
+				clientSecret: draft.clientSecret,
+			});
+			state.setShopifySettings(response.settings);
+			state.setShopifyDraft({
+				storeUrl: response.settings.storeDomain,
+				clientId: response.settings.clientId,
+				clientSecret: "",
+			});
+			state.setStatusMessage(
+				response.settings.verificationStatus === "ok"
+					? "Shopify credentials saved and verified."
+					: "Shopify credentials saved, but verification failed.",
+			);
+		} catch (error) {
+			state.setErrorMessage((error as Error).message);
+		} finally {
+			state.setIsShopifyTesting(false);
+		}
+	}
+
 	async function handleAcceptInvite() {
 		const user = state.firebaseUser();
 		const token = state.currentInviteToken();
@@ -413,6 +493,7 @@ export function createFestivalActions(
 		handleAcceptInvite,
 		handleCreateAdminInvite,
 		handleCreateFestival,
+		handleCreateMembershipProduct,
 		handleCreateInvite,
 		handleCreateOrganization,
 		handleDeleteAdminUser,
@@ -420,6 +501,7 @@ export function createFestivalActions(
 		handleGoogleSignIn,
 		handleLogout,
 		handlePasswordlessSignIn,
+		handleSaveShopifySettings,
 	};
 }
 

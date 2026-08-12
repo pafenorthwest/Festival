@@ -19,6 +19,14 @@ This document records the baseline Hono and SolidJS practices for the Phase 0 on
 - Return explicit JSON error responses for authentication, authorization, validation, conflict, not-found, and server failures.
 - Keep Firebase ID tokens as the v1 bearer-token model; do not mint a separate application JWT unless a later requirement justifies it.
 
+## Shopify Authorization
+
+- Use Shopify Dev Dashboard app install plus client credentials grant for backend Shopify Admin API access.
+- Configure Shopify access scopes in released Dev Dashboard app versions; do not request scopes from Festival token calls.
+- Request Shopify access tokens server-side only when needed, use them transiently, and do not persist access tokens in Festival storage.
+- Keep Shopify HTTP/API details, token requests, endpoint construction, response parsing, and Shopify-specific errors inside the dedicated backend Shopify module.
+- Keep `/api/...` reserved for Festival internal APIs that use Firebase authentication and tenant authorization.
+
 ## SolidJS Practices
 
 - Use a SolidJS SPA with `@solidjs/router` for page routing, navigation, and route parameters.

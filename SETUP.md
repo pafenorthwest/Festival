@@ -197,6 +197,35 @@ These values come from the Firebase project and service-account setup. See the o
 | `FIREBASE_PRIVATE_KEY` | yes unless you use `GOOGLE_APPLICATION_CREDENTIALS` | Keep escaped `\n` newlines if stored inline. |
 | `GOOGLE_APPLICATION_CREDENTIALS` | optional | Absolute path to a local service-account JSON file if you prefer file-based credentials. |
 
+#### Backend encryption
+
+The backend encrypts stored integration secrets before writing them to PostgreSQL. Local and deployed environments must provide an AES-256 key as Base64.
+
+Generate a new key with:
+
+```bash
+openssl rand -base64 32
+```
+
+Then set the generated value in the repo-root `.env`:
+
+```dotenv
+AES_ENCRYPTION_KEY=replace-with-generated-base64-key
+```
+
+`AES_ENCRYPTION_KEY` must decode to exactly 32 bytes. Do not commit the generated value.
+
+#### Shopify Dev Dashboard app
+
+Festival uses Shopify's Dev Dashboard app install plus client credentials grant for backend Admin API access.
+
+In the Shopify Dev Dashboard:
+- Configure scopes in the app version, for example `read_orders,read_products,write_products`.
+- Release the version.
+- Install the app on the target store from the app Home tab.
+
+In Festival's organization admin page, enter the store's `*.myshopify.com` domain plus the app Client ID and Client secret. The backend requests short-lived Shopify access tokens as needed and does not persist those tokens.
+
 #### Auth and local dev behavior
 
 These values are part of the approved setup contract for this repo, even though not every one is read directly by the current code paths yet.

@@ -3,8 +3,11 @@ export type AppRoute =
 	| { kind: "create-org" }
 	| { kind: "invite"; token: string }
 	| { kind: "org-root"; slug: string }
+	| { kind: "org-membership"; slug: string }
 	| { kind: "org-admin"; slug: string }
 	| { kind: "org-admin-users"; slug: string }
+	| { kind: "org-admin-integrations"; slug: string }
+	| { kind: "org-admin-memberships"; slug: string }
 	| { kind: "org-admin-festivals"; slug: string };
 
 export function buildOrgPath(slug: string): string {
@@ -15,8 +18,20 @@ export function buildOrgRootPath(slug: string): string {
 	return `/org/${slug}`;
 }
 
+export function buildOrgMembershipPath(slug: string): string {
+	return `/org/${slug}/membership`;
+}
+
 export function buildOrgAdminUsersPath(slug: string): string {
 	return `/org/${slug}/admin/users`;
+}
+
+export function buildOrgAdminIntegrationsPath(slug: string): string {
+	return `/org/${slug}/admin/integrations`;
+}
+
+export function buildOrgAdminMembershipsPath(slug: string): string {
+	return `/org/${slug}/admin/memberships`;
 }
 
 export function buildOrgAdminFestivalsPath(slug: string): string {
@@ -46,6 +61,11 @@ export function parseRoute(pathname: string): AppRoute {
 		return { kind: "org-root", slug: orgRootMatch[1] ?? "" };
 	}
 
+	const orgMembershipMatch = pathname.match(/^\/org\/([^/]+)\/membership$/);
+	if (orgMembershipMatch) {
+		return { kind: "org-membership", slug: orgMembershipMatch[1] ?? "" };
+	}
+
 	const orgAdminMatch = pathname.match(/^\/org\/([^/]+)\/admin$/);
 	if (orgAdminMatch) {
 		return { kind: "org-admin", slug: orgAdminMatch[1] ?? "" };
@@ -54,6 +74,26 @@ export function parseRoute(pathname: string): AppRoute {
 	const orgAdminUsersMatch = pathname.match(/^\/org\/([^/]+)\/admin\/users$/);
 	if (orgAdminUsersMatch) {
 		return { kind: "org-admin-users", slug: orgAdminUsersMatch[1] ?? "" };
+	}
+
+	const orgAdminIntegrationsMatch = pathname.match(
+		/^\/org\/([^/]+)\/admin\/integrations$/,
+	);
+	if (orgAdminIntegrationsMatch) {
+		return {
+			kind: "org-admin-integrations",
+			slug: orgAdminIntegrationsMatch[1] ?? "",
+		};
+	}
+
+	const orgAdminMembershipsMatch = pathname.match(
+		/^\/org\/([^/]+)\/admin\/memberships$/,
+	);
+	if (orgAdminMembershipsMatch) {
+		return {
+			kind: "org-admin-memberships",
+			slug: orgAdminMembershipsMatch[1] ?? "",
+		};
 	}
 
 	const orgAdminFestivalsMatch = pathname.match(

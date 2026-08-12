@@ -4,9 +4,11 @@ import {
 	getAdminUsers,
 	getFestivals,
 	getInvite,
+	getMembershipProducts,
 	getMemberships,
 	getOrganization,
 	getSession,
+	getShopifySettings,
 } from "../lib/api.js";
 import { buildOrgPath } from "../lib/routes.js";
 import type { FestivalAppState } from "./createFestivalAppState.js";
@@ -94,6 +96,38 @@ export function createFestivalDataLoaders(state: FestivalAppState) {
 		state.setFestivals(response.festivals);
 	}
 
+	async function loadMembershipProducts(slug: string) {
+		state.setIsLoadingMembershipProducts(true);
+		state.setMembershipProducts([]);
+		state.setMembershipProductsLoadError("");
+
+		try {
+			const response = await getMembershipProducts(slug);
+			state.setMembershipProducts(response.membershipProducts);
+		} catch {
+			state.setMembershipProductsLoadError(
+				"Membership products are temporarily unavailable. Please try again.",
+			);
+		} finally {
+			state.setIsLoadingMembershipProducts(false);
+		}
+	}
+
+	async function loadShopifySettings(slug: string) {
+		const token = await getIdToken(state.firebaseUser());
+		if (!token) {
+			return;
+		}
+
+		const response = await getShopifySettings(token, slug);
+		state.setShopifySettings(response.settings);
+		state.setShopifyDraft({
+			storeUrl: response.settings?.storeDomain ?? "",
+			clientId: response.settings?.clientId ?? "",
+			clientSecret: "",
+		});
+	}
+
 	async function loadInvite(token: string) {
 		try {
 			const response = await getInvite(token);
@@ -107,7 +141,9 @@ export function createFestivalDataLoaders(state: FestivalAppState) {
 		loadAdminUsers,
 		loadFestivals,
 		loadInvite,
+		loadMembershipProducts,
 		loadOrganization,
+		loadShopifySettings,
 		refreshSession,
 		routeAfterSession,
 	};

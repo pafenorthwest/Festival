@@ -5,6 +5,7 @@ export interface AppEnv {
 	firebaseProjectId?: string;
 	firebaseClientEmail?: string;
 	firebasePrivateKey?: string;
+	aesEncryptionKey?: string;
 }
 
 function parseRequiredEnv(name: string): string {
@@ -64,5 +65,6 @@ export function loadEnv(options?: {
 		firebaseProjectId,
 		firebaseClientEmail: process.env.FIREBASE_CLIENT_EMAIL?.trim(),
 		firebasePrivateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+		aesEncryptionKey: process.env.AES_ENCRYPTION_KEY?.trim(),
 	};
 }

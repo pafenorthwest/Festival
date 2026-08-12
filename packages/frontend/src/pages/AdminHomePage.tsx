@@ -2,6 +2,8 @@ import { Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import {
 	buildOrgAdminFestivalsPath,
+	buildOrgAdminIntegrationsPath,
+	buildOrgAdminMembershipsPath,
 	buildOrgAdminUsersPath,
 } from "../lib/routes.js";
 
@@ -71,6 +73,42 @@ export function AdminHomePage(props: AdminHomePageProps) {
 				>
 					<strong>Festivals</strong>
 					<span>Create and review festival dates.</span>
+				</button>
+				<button
+					type="button"
+					class="admin-workflow-card shopify-integration-card"
+					disabled={!props.app.isAdminMember()}
+					onClick={() => {
+						const membership = props.app.sessionMembership();
+						if (!membership || !props.app.isAdminMember()) {
+							return;
+						}
+
+						props.app.navigate(
+							buildOrgAdminIntegrationsPath(membership.organizationSlug),
+						);
+					}}
+				>
+					<strong>Shopify Integration</strong>
+					<span>Store credentials and verify Admin API access.</span>
+				</button>
+				<button
+					type="button"
+					class="admin-workflow-card"
+					disabled={!props.app.isAdminMember()}
+					onClick={() => {
+						const membership = props.app.sessionMembership();
+						if (!membership || !props.app.isAdminMember()) {
+							return;
+						}
+
+						props.app.navigate(
+							buildOrgAdminMembershipsPath(membership.organizationSlug),
+						);
+					}}
+				>
+					<strong>Memberships</strong>
+					<span>Create and review Shopify-backed memberships.</span>
 				</button>
 			</div>
 		</section>

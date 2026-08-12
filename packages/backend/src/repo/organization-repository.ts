@@ -1,11 +1,14 @@
 import type {
 	AuthenticatedUser,
 	FestivalRecord,
+	MembershipEntitlementPeriod,
+	MembershipProductType,
 	OrganizationAdminUserEntry,
 	OrganizationInviteRecord,
 	OrganizationMembershipRecord,
 	OrganizationRecord,
 	OrganizationUserRecord,
+	ShopifyVerificationStatus,
 } from "@festival/common";
 
 export interface MembershipWithOrganization {
@@ -39,6 +42,56 @@ export interface CreateFestivalRecordInput {
 	name: string;
 	startDate: string;
 	endDate: string;
+}
+
+export interface ShopifyIntegrationRecord {
+	organizationId: string;
+	storeDomain: string;
+	clientId: string;
+	encryptedClientSecret: string;
+	verificationStatus: ShopifyVerificationStatus;
+	verifiedAtIso?: string;
+	lastTestedAtIso?: string;
+	lastError?: string;
+	createdAtIso: string;
+	updatedAtIso: string;
+}
+
+export interface UpsertShopifyIntegrationInput {
+	organizationId: string;
+	storeDomain: string;
+	clientId: string;
+	encryptedClientSecret: string;
+}
+
+export interface UpdateShopifyVerificationInput {
+	organizationId: string;
+	verificationStatus: Exclude<ShopifyVerificationStatus, "unknown">;
+	verifiedAtIso?: string;
+	lastTestedAtIso: string;
+	lastError?: string;
+}
+
+export interface ProductRecord {
+	id: string;
+	organizationId: string;
+	productCategory: "membership";
+	membershipType: MembershipProductType;
+	entitlementPeriod: MembershipEntitlementPeriod;
+	shopifyProductGid: string;
+	shopifyVariantGid: string;
+	productNameSnapshot: string;
+	createdAtIso: string;
+	updatedAtIso: string;
+}
+
+export interface CreateMembershipProductRecordInput {
+	organizationId: string;
+	membershipType: MembershipProductType;
+	entitlementPeriod: MembershipEntitlementPeriod;
+	shopifyProductGid: string;
+	shopifyVariantGid: string;
+	productNameSnapshot: string;
 }
 
 export interface OrganizationRepository {
@@ -91,4 +144,29 @@ export interface OrganizationRepository {
 		userId: string,
 		organizationId: string,
 	): Promise<OrganizationMembershipRecord>;
+	getShopifyIntegration(
+		organizationId: string,
+	): Promise<ShopifyIntegrationRecord | null>;
+	upsertShopifyIntegration(
+		input: UpsertShopifyIntegrationInput,
+	): Promise<ShopifyIntegrationRecord>;
+	updateShopifyVerification(
+		input: UpdateShopifyVerificationInput,
+	): Promise<ShopifyIntegrationRecord>;
+	createMembershipProductRecord(
+		input: CreateMembershipProductRecordInput,
+	): Promise<ProductRecord>;
+	listMembershipProductRecords(
+		organizationId: string,
+	): Promise<ProductRecord[]>;
+	findMembershipProductRecordByType(
+		organizationId: string,
+		membershipType: MembershipProductType,
+	): Promise<ProductRecord | null>;
+	findProductRecordByShopifyProductGid(
+		shopifyProductGid: string,
+	): Promise<ProductRecord | null>;
+	findProductRecordByShopifyVariantGid(
+		shopifyVariantGid: string,
+	): Promise<ProductRecord | null>;
 }

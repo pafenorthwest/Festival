@@ -2,19 +2,26 @@ import { randomUUID } from "node:crypto";
 import type {
 	AuthenticatedUser,
 	FestivalRecord,
+	MembershipProductType,
 	OrganizationAdminUserEntry,
 	OrganizationInviteRecord,
 	OrganizationMembershipRecord,
 	OrganizationRecord,
 	OrganizationUserRecord,
+	ShopifyVerificationStatus,
 } from "@festival/common";
 import type {
 	CreateFestivalRecordInput,
 	CreateInviteRecordInput,
 	CreateMembershipInput,
+	CreateMembershipProductRecordInput,
 	InviteWithOrganization,
 	MembershipWithOrganization,
 	OrganizationRepository,
+	ProductRecord,
+	ShopifyIntegrationRecord,
+	UpdateShopifyVerificationInput,
+	UpsertShopifyIntegrationInput,
 } from "./organization-repository.js";
 
 export class InMemoryOrganizationRepository implements OrganizationRepository {
@@ -32,6 +39,11 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 	private readonly invites = new Map<string, OrganizationInviteRecord>();
 	private readonly invitesByToken = new Map<string, string>();
 	private readonly festivals = new Map<string, FestivalRecord>();
+	private readonly shopifyIntegrations = new Map<
+		string,
+		ShopifyIntegrationRecord
+	>();
+	private readonly products = new Map<string, ProductRecord>();
 
 	async ensureReady(): Promise<void> {}
 
@@ -407,5 +419,143 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 
 		this.memberships.set(membership.id, updated);
 		return updated;
+	}
+
+	async getShopifyIntegration(
+		organizationId: string,
+	): Promise<ShopifyIntegrationRecord | null> {
+		return this.shopifyIntegrations.get(organizationId) ?? null;
+	}
+
+	async upsertShopifyIntegration(
+		input: UpsertShopifyIntegrationInput,
+	): Promise<ShopifyIntegrationRecord> {
+		const existing = this.shopifyIntegrations.get(input.organizationId);
+		const now = new Date().toISOString();
+		const record: ShopifyIntegrationRecord = {
+			organizationId: input.organizationId,
+			storeDomain: input.storeDomain,
+			clientId: input.clientId,
+			encryptedClientSecret: input.encryptedClientSecret,
+			verificationStatus: "unknown",
+			createdAtIso: existing?.createdAtIso ?? now,
+			updatedAtIso: now,
+		};
+
+		this.shopifyIntegrations.set(input.organizationId, record);
+		return record;
+	}
+
+	async updateShopifyVerification(
+		input: UpdateShopifyVerificationInput,
+	): Promise<ShopifyIntegrationRecord> {
+		const existing = this.shopifyIntegrations.get(input.organizationId);
+		if (!existing) {
+			throw new Error("Shopify integration not found.");
+		}
+
+		const record: ShopifyIntegrationRecord = {
+			...existing,
+			verificationStatus: input.verificationStatus as ShopifyVerificationStatus,
+			verifiedAtIso: input.verifiedAtIso,
+			lastTestedAtIso: input.lastTestedAtIso,
+			lastError: input.lastError,
+			updatedAtIso: new Date().toISOString(),
+		};
+
+		this.shopifyIntegrations.set(input.organizationId, record);
+		return record;
+	}
+
+	async createMembershipProductRecord(
+		input: CreateMembershipProductRecordInput,
+	): Promise<ProductRecord> {
+		if (
+			[...this.products.values()].some(
+				(product) =>
+					product.organizationId === input.organizationId &&
+					product.productCategory === "membership" &&
+					product.membershipType === input.membershipType,
+			)
+		) {
+			throw new Error(
+				"Membership product already exists for this organization.",
+			);
+		}
+
+		if (
+			await this.findProductRecordByShopifyProductGid(input.shopifyProductGid)
+		) {
+			throw new Error("Shopify product is already associated.");
+		}
+
+		if (
+			await this.findProductRecordByShopifyVariantGid(input.shopifyVariantGid)
+		) {
+			throw new Error("Shopify variant is already associated.");
+		}
+
+		const now = new Date().toISOString();
+		const record: ProductRecord = {
+			id: randomUUID(),
+			organizationId: input.organizationId,
+			productCategory: "membership",
+			membershipType: input.membershipType,
+			entitlementPeriod: input.entitlementPeriod,
+			shopifyProductGid: input.shopifyProductGid,
+			shopifyVariantGid: input.shopifyVariantGid,
+			productNameSnapshot: input.productNameSnapshot,
+			createdAtIso: now,
+			updatedAtIso: now,
+		};
+
+		this.products.set(record.id, record);
+		return record;
+	}
+
+	async listMembershipProductRecords(
+		organizationId: string,
+	): Promise<ProductRecord[]> {
+		return [...this.products.values()]
+			.filter(
+				(product) =>
+					product.organizationId === organizationId &&
+					product.productCategory === "membership",
+			)
+			.sort((a, b) => a.createdAtIso.localeCompare(b.createdAtIso));
+	}
+
+	async findMembershipProductRecordByType(
+		organizationId: string,
+		membershipType: MembershipProductType,
+	): Promise<ProductRecord | null> {
+		return (
+			[...this.products.values()].find(
+				(product) =>
+					product.organizationId === organizationId &&
+					product.productCategory === "membership" &&
+					product.membershipType === membershipType,
+			) ?? null
+		);
+	}
+
+	async findProductRecordByShopifyProductGid(
+		shopifyProductGid: string,
+	): Promise<ProductRecord | null> {
+		return (
+			[...this.products.values()].find(
+				(product) => product.shopifyProductGid === shopifyProductGid,
+			) ?? null
+		);
+	}
+
+	async findProductRecordByShopifyVariantGid(
+		shopifyVariantGid: string,
+	): Promise<ProductRecord | null> {
+		return (
+			[...this.products.values()].find(
+				(product) => product.shopifyVariantGid === shopifyVariantGid,
+			) ?? null
+		);
 	}
 }

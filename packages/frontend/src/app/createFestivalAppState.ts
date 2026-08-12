@@ -1,12 +1,17 @@
 import type {
 	FestivalSummary,
 	InviteSummary,
+	MembershipProductSummary,
 	OrganizationAdminUserEntry,
 	OrganizationLandingResponse,
 	SessionMembership,
 	SessionResponse,
+	ShopifyIntegrationSettings,
 } from "@festival/common";
-import { validateFestivalName } from "@festival/common";
+import {
+	validateFestivalName,
+	validateMembershipProductInput,
+} from "@festival/common";
 import { useLocation, useNavigate } from "@solidjs/router";
 import type { User } from "firebase/auth";
 import { createMemo, createSignal } from "solid-js";
@@ -16,6 +21,8 @@ import type {
 	FestivalDraft,
 	InviteDraft,
 	InviteFeedback,
+	MembershipProductDraft,
+	ShopifyDraft,
 	SignInModalKind,
 	SignInStep,
 } from "./appTypes.js";
@@ -25,6 +32,8 @@ const ORGANIZATION_SHORT_NAME_PATTERN = /^[A-Za-z0-9-]+$/;
 const ADMIN_ROUTE_KINDS = [
 	"org-admin",
 	"org-admin-users",
+	"org-admin-integrations",
+	"org-admin-memberships",
 	"org-admin-festivals",
 ] as const;
 
@@ -51,6 +60,21 @@ export function createFestivalAppState() {
 		OrganizationAdminUserEntry[]
 	>([]);
 	const [festivals, setFestivals] = createSignal<FestivalSummary[]>([]);
+	const [membershipProducts, setMembershipProducts] = createSignal<
+		MembershipProductSummary[]
+	>([]);
+	const [isLoadingMembershipProducts, setIsLoadingMembershipProducts] =
+		createSignal(false);
+	const [membershipProductsLoadError, setMembershipProductsLoadError] =
+		createSignal("");
+	const [shopifySettings, setShopifySettings] =
+		createSignal<ShopifyIntegrationSettings | null>(null);
+	const [shopifyDraft, setShopifyDraft] = createSignal<ShopifyDraft>({
+		storeUrl: "",
+		clientId: "",
+		clientSecret: "",
+	});
+	const [isShopifyTesting, setIsShopifyTesting] = createSignal(false);
 	const [signInModalKind, setSignInModalKind] =
 		createSignal<SignInModalKind | null>(null);
 	const [signInStep, setSignInStep] = createSignal<SignInStep>("method");
@@ -75,8 +99,22 @@ export function createFestivalAppState() {
 		startDate: "",
 		endDate: "",
 	});
+	const [membershipProductDraft, setMembershipProductDraft] =
+		createSignal<MembershipProductDraft>({
+			name: "",
+			description: "",
+			price: "",
+			membershipType: "teacher",
+			entitlementPeriod: "1_year",
+		});
 	const [festivalNameTouched, setFestivalNameTouched] = createSignal(false);
 	const [createFestivalAttempted, setCreateFestivalAttempted] =
+		createSignal(false);
+	const [
+		createMembershipProductAttempted,
+		setCreateMembershipProductAttempted,
+	] = createSignal(false);
+	const [isCreatingMembershipProduct, setIsCreatingMembershipProduct] =
 		createSignal(false);
 	const [statusMessage, setStatusMessage] = createSignal("");
 	const [errorMessage, setErrorMessage] = createSignal("");
@@ -158,18 +196,36 @@ export function createFestivalAppState() {
 	const festivalNameValidationMessage = createMemo(() =>
 		festivalNameValidation().errors.join(" "),
 	);
+	const membershipProductValidation = createMemo(() =>
+		validateMembershipProductInput(membershipProductDraft()),
+	);
+	const shouldShowMembershipProductValidation = createMemo(() =>
+		createMembershipProductAttempted(),
+	);
+	const membershipProductValidationMessage = createMemo(() =>
+		membershipProductValidation().errors.join(" "),
+	);
+	const shopifyPrerequisiteMet = createMemo(
+		() => shopifySettings()?.verificationStatus === "ok",
+	);
 	const isAdminRoute = createMemo(() =>
 		ADMIN_ROUTE_KINDS.some((kind) => kind === route().kind),
 	);
 	const isAdminSubRoute = createMemo(
 		() =>
 			route().kind === "org-admin-users" ||
+			route().kind === "org-admin-integrations" ||
+			route().kind === "org-admin-memberships" ||
 			route().kind === "org-admin-festivals",
 	);
 	const adminBreadcrumb = createMemo(() => {
 		switch (route().kind) {
 			case "org-admin-users":
 				return "Admin > Users";
+			case "org-admin-integrations":
+				return "Admin > Integrations";
+			case "org-admin-memberships":
+				return "Admin > Memberships";
 			case "org-admin-festivals":
 				return "Admin > Festivals";
 			default:
@@ -233,6 +289,16 @@ export function createFestivalAppState() {
 		setCreatedInvites([]);
 		setAdminUsers([]);
 		setFestivals([]);
+		setMembershipProducts([]);
+		setIsLoadingMembershipProducts(false);
+		setMembershipProductsLoadError("");
+		setShopifySettings(null);
+		setShopifyDraft({
+			storeUrl: "",
+			clientId: "",
+			clientSecret: "",
+		});
+		setIsShopifyTesting(false);
 		setOrganizationName("");
 		setOrganizationShortName("");
 		setOrganizationNameTouched(false);
@@ -247,8 +313,17 @@ export function createFestivalAppState() {
 			startDate: "",
 			endDate: "",
 		});
+		setMembershipProductDraft({
+			name: "",
+			description: "",
+			price: "",
+			membershipType: "teacher",
+			entitlementPeriod: "1_year",
+		});
 		setFestivalNameTouched(false);
 		setCreateFestivalAttempted(false);
+		setCreateMembershipProductAttempted(false);
+		setIsCreatingMembershipProduct(false);
 		setInviteFeedback(null);
 		clearTimers();
 	}
@@ -306,7 +381,15 @@ export function createFestivalAppState() {
 		isAdminMember,
 		isAdminRoute,
 		isAdminSubRoute,
+		isCreatingMembershipProduct,
+		isLoadingMembershipProducts,
+		isShopifyTesting,
 		isBusy,
+		membershipProductDraft,
+		membershipProductValidation,
+		membershipProductValidationMessage,
+		membershipProducts,
+		membershipProductsLoadError,
 		memberships,
 		navigate,
 		openSignInModal,
@@ -323,6 +406,7 @@ export function createFestivalAppState() {
 		sessionMembership,
 		setAdminUsers,
 		setCreateFestivalAttempted,
+		setCreateMembershipProductAttempted,
 		setCreateOrganizationAttempted,
 		setCreatedInvites,
 		setCreatedOrganizationSlug,
@@ -337,6 +421,12 @@ export function createFestivalAppState() {
 		setInviteName,
 		setInvitePanelRef,
 		setIsBusy,
+		setIsCreatingMembershipProduct,
+		setIsLoadingMembershipProducts,
+		setIsShopifyTesting,
+		setMembershipProductDraft,
+		setMembershipProducts,
+		setMembershipProductsLoadError,
 		setMemberships,
 		setOrganization,
 		setOrganizationName,
@@ -344,17 +434,23 @@ export function createFestivalAppState() {
 		setOrganizationShortName,
 		setOrganizationShortNameTouched,
 		setSession,
+		setShopifyDraft,
+		setShopifySettings,
 		setSignInEmail,
 		setSignInModalKind,
 		setSignInStep,
 		setStatusMessage,
 		shouldShowFestivalNameValidation,
+		shouldShowMembershipProductValidation,
 		shouldShowOrganizationValidation,
 		shouldShowOrgChooser,
 		showInviteFeedback,
+		shopifyPrerequisiteMet,
 		signInEmail,
 		signInModalKind,
 		signInStep,
+		shopifyDraft,
+		shopifySettings,
 		statusMessage,
 		currentInviteToken,
 	};
