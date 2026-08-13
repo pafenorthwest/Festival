@@ -2,12 +2,13 @@ import type { SessionResponse } from "@festival/common";
 import type { User } from "firebase/auth";
 import {
 	getAdminUsers,
+	getBootstrap,
 	getFestivals,
+	getFirebaseSession,
 	getInvite,
 	getMembershipProducts,
 	getMemberships,
 	getOrganization,
-	getSession,
 	getShopifySettings,
 } from "../lib/api.js";
 import { buildOrgPath } from "../lib/routes.js";
@@ -22,7 +23,9 @@ export function createFestivalDataLoaders(state: FestivalAppState) {
 		userOverride: User | null = state.firebaseUser(),
 	) {
 		const token = await getIdToken(userOverride);
-		const response = await getSession(token);
+		const response = token
+			? await getFirebaseSession(token)
+			: await getBootstrap();
 		state.setSession(response.session);
 
 		if (!token) {

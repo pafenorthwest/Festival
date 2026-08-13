@@ -12,6 +12,19 @@ import type {
 } from "./types.js";
 
 const SHOPIFY_ADMIN_API_VERSION = "2026-07";
+const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+const DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024;
+
+type ShopifyFetch = (
+	input: RequestInfo | URL,
+	init?: RequestInit,
+) => Promise<Response>;
+
+interface ShopifyAdminApiClientOptions {
+	fetch?: ShopifyFetch;
+	requestTimeoutMs?: number;
+	maxResponseBytes?: number;
+}
 
 interface AccessTokenResponse {
 	access_token?: string;
@@ -115,15 +128,24 @@ function throwIfUserErrors(userErrors: ShopifyUserErrorPayload[] = []): void {
 		return;
 	}
 
-	throw new ShopifyUserError(
-		userErrors.map((error) => error.message).join("; "),
-	);
+	throw new ShopifyUserError("Shopify rejected the product operation.");
 }
 
 export class ShopifyAdminApiClient
 	implements ShopifyConnectivityTester, ShopifyMembershipProductClient
 {
 	private readonly accessTokens = new Map<string, CachedAccessToken>();
+	private readonly fetchImpl: ShopifyFetch;
+	private readonly requestTimeoutMs: number;
+	private readonly maxResponseBytes: number;
+
+	constructor(options: ShopifyAdminApiClientOptions = {}) {
+		this.fetchImpl = options.fetch ?? ((input, init) => fetch(input, init));
+		this.requestTimeoutMs =
+			options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+		this.maxResponseBytes =
+			options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
+	}
 
 	async testCredentials(credentials: ShopifyCredentials): Promise<void> {
 		const accessToken = await this.fetchAccessToken(credentials, true);
@@ -397,10 +419,9 @@ export class ShopifyAdminApiClient
 			return cached.accessToken;
 		}
 
-		const response = await fetch(
-			`https://${credentials.storeDomain}/admin/oauth/access_token`,
+		const payload = await this.postJson<AccessTokenResponse>(
+			this.shopifyUrl(credentials.storeDomain, "/admin/oauth/access_token"),
 			{
-				method: "POST",
 				headers: {
 					"Content-Type": "application/x-www-form-urlencoded",
 				},
@@ -410,15 +431,9 @@ export class ShopifyAdminApiClient
 					client_secret: credentials.clientSecret,
 				}),
 			},
+			"credentials",
 		);
 
-		if (!response.ok) {
-			throw new ShopifyCredentialsError(
-				`Shopify token request failed with status ${response.status}.`,
-			);
-		}
-
-		const payload = (await response.json()) as AccessTokenResponse;
 		if (!payload.access_token) {
 			throw new ShopifyCredentialsError(
 				"Shopify token response did not include an access token.",
@@ -480,29 +495,23 @@ export class ShopifyAdminApiClient
 		query: string,
 		variables: Record<string, unknown> = {},
 	): Promise<TData> {
-		const response = await fetch(
-			`https://${storeDomain}/admin/api/${SHOPIFY_ADMIN_API_VERSION}/graphql.json`,
+		const payload = await this.postJson<GraphqlResponse<TData>>(
+			this.shopifyUrl(
+				storeDomain,
+				`/admin/api/${SHOPIFY_ADMIN_API_VERSION}/graphql.json`,
+			),
 			{
-				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
 					"X-Shopify-Access-Token": accessToken,
 				},
 				body: JSON.stringify({ query, variables }),
 			},
+			"admin",
 		);
 
-		if (!response.ok) {
-			throw new ShopifyAdminApiError(
-				`Shopify Admin API request failed with status ${response.status}.`,
-			);
-		}
-
-		const payload = (await response.json()) as GraphqlResponse<TData>;
 		if (payload.errors && payload.errors.length > 0) {
-			throw new ShopifyAdminApiError(
-				`Shopify Admin API request failed: ${payload.errors.map((error) => error.message).join("; ")}`,
-			);
+			throw new ShopifyAdminApiError("Shopify Admin API returned an error.");
 		}
 
 		if (!payload.data) {
@@ -510,5 +519,109 @@ export class ShopifyAdminApiClient
 		}
 
 		return payload.data;
+	}
+
+	private shopifyUrl(storeDomain: string, path: string): URL {
+		if (!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(storeDomain)) {
+			throw new ShopifyCredentialsError(
+				"Shopify store domain is not a canonical myshopify.com host.",
+			);
+		}
+
+		const url = new URL(`https://${storeDomain}${path}`);
+		if (
+			url.protocol !== "https:" ||
+			url.username ||
+			url.password ||
+			url.port ||
+			url.hostname !== storeDomain
+		) {
+			throw new ShopifyCredentialsError("Shopify destination is not allowed.");
+		}
+
+		return url;
+	}
+
+	private async postJson<T>(
+		url: URL,
+		init: Omit<RequestInit, "method" | "redirect" | "signal">,
+		errorKind: "credentials" | "admin",
+	): Promise<T> {
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+
+		try {
+			const response = await this.fetchImpl(url, {
+				...init,
+				method: "POST",
+				redirect: "manual",
+				signal: controller.signal,
+			});
+			if (response.status >= 300 && response.status < 400) {
+				throw this.requestError(errorKind, "Shopify redirect was rejected.");
+			}
+			if (!response.ok) {
+				throw this.requestError(
+					errorKind,
+					`Shopify request failed with status ${response.status}.`,
+				);
+			}
+
+			const contentLength = Number.parseInt(
+				response.headers.get("content-length") ?? "0",
+				10,
+			);
+			if (contentLength > this.maxResponseBytes) {
+				throw this.requestError(errorKind, "Shopify response was too large.");
+			}
+
+			const reader = response.body?.getReader();
+			if (!reader) {
+				throw this.requestError(
+					errorKind,
+					"Shopify returned an empty response.",
+				);
+			}
+			const chunks: Uint8Array[] = [];
+			let size = 0;
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				size += value.byteLength;
+				if (size > this.maxResponseBytes) {
+					await reader.cancel();
+					throw this.requestError(errorKind, "Shopify response was too large.");
+				}
+				chunks.push(value);
+			}
+
+			const bytes = new Uint8Array(size);
+			let offset = 0;
+			for (const chunk of chunks) {
+				bytes.set(chunk, offset);
+				offset += chunk.byteLength;
+			}
+			try {
+				return JSON.parse(new TextDecoder().decode(bytes)) as T;
+			} catch {
+				throw this.requestError(errorKind, "Shopify returned invalid JSON.");
+			}
+		} catch (error) {
+			if (controller.signal.aborted) {
+				throw this.requestError(errorKind, "Shopify request timed out.");
+			}
+			throw error;
+		} finally {
+			clearTimeout(timeout);
+		}
+	}
+
+	private requestError(
+		errorKind: "credentials" | "admin",
+		message: string,
+	): ShopifyCredentialsError | ShopifyAdminApiError {
+		return errorKind === "credentials"
+			? new ShopifyCredentialsError(message)
+			: new ShopifyAdminApiError(message);
 	}
 }

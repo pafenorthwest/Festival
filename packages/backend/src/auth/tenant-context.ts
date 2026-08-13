@@ -7,6 +7,7 @@ import {
 } from "@festival/common";
 import type { Context, MiddlewareHandler } from "hono";
 import { AppError } from "../errors/app-error.js";
+import { jsonError } from "../errors/json-error.js";
 import type {
 	MembershipWithOrganization,
 	OrganizationRepository,
@@ -36,13 +37,7 @@ export type ApiVariables = {
 type ApiContext = Context<{ Variables: Partial<ApiVariables> }>;
 
 export function toJsonError(c: Context, error: unknown) {
-	if (error instanceof AppError) {
-		c.status(error.status as 400 | 401 | 403 | 404 | 409 | 500);
-		return c.json({ error: error.message });
-	}
-
-	c.status(500);
-	return c.json({ error: (error as Error).message });
+	return jsonError(c, error);
 }
 
 function parseBearerToken(c: Context): string | null {
@@ -73,12 +68,8 @@ export async function readIdentity(
 
 	try {
 		return await authVerifier.verify(token);
-	} catch (error) {
-		if (error instanceof AppError) {
-			throw error;
-		}
-
-		throw new AppError((error as Error).message, 401);
+	} catch {
+		throw new AppError("Firebase authentication failed.", 401);
 	}
 }
 

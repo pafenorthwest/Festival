@@ -435,7 +435,7 @@ describe("organization routes", () => {
 		);
 		expect(invalid.status).toBe(401);
 		await expect(invalid.json()).resolves.toMatchObject({
-			error: "Invalid token",
+			error: "Firebase authentication failed.",
 		});
 	});
 
@@ -1245,140 +1245,19 @@ describe("organization routes", () => {
 		]);
 	});
 
-	it("publicly lists current Shopify membership product data without Shopify metadata", async () => {
-		const { app, repository, encryptor, shopifyProductClient } =
+	it("returns 403 before public membership requests reach repository or Shopify", async () => {
+		const { app, repository, shopifyProductClient } =
 			await createTestAppWithMembershipProducts();
-		await createOrganizationViaApi(app);
-		const organization = await saveVerifiedShopifyIntegration(
-			repository,
-			encryptor,
-		);
-		await repository.createMembershipProductRecord({
-			organizationId: organization.id,
-			membershipType: "teacher",
-			entitlementPeriod: "1_year",
-			shopifyProductGid: "gid://shopify/Product/generated",
-			shopifyVariantGid: "gid://shopify/ProductVariant/generated",
-			productNameSnapshot: "Old Snapshot",
-		});
-		shopifyProductClient.readResponse = [
-			shopifyProduct({
-				title: "Current Teacher Membership",
-				description: "Current Shopify description.",
-			}),
-		];
+		const repositorySpy = spyOn(repository, "findOrganizationBySlug");
+		const shopifySpy = spyOn(shopifyProductClient, "readProductsByGid");
 
 		const response = await app.fetch(
 			new Request("http://test/api/organizations/pafe/membership-products"),
 		);
 
-		expect(response.status).toBe(200);
-		const data = (await response.json()) as {
-			organization: { slug: string; name: string };
-			membershipProducts: Array<Record<string, unknown>>;
-		};
-		expect(data.organization).toMatchObject({
-			slug: "pafe",
-			name: "Festival Admins",
-		});
-		expect(data.membershipProducts[0]).toMatchObject({
-			id: expect.any(String),
-			name: "Current Teacher Membership",
-			description: "Current Shopify description.",
-			variantName: "Standard",
-			membershipType: "teacher",
-			entitlementPeriod: "1_year",
-			price: { amount: "75.00", currencyCode: "USD" },
-			status: "ACTIVE",
-		});
-		expect(data.membershipProducts[0]).not.toHaveProperty("shopifyProductGid");
-		expect(data.membershipProducts[0]).not.toHaveProperty("shopifyVariantGid");
-		expect(shopifyProductClient.readProductGids).toEqual([
-			["gid://shopify/Product/generated"],
-		]);
-	});
-
-	it("returns an unavailable API error when Shopify product data is missing", async () => {
-		const { app, repository, encryptor, shopifyProductClient } =
-			await createTestAppWithMembershipProducts();
-		await createOrganizationViaApi(app);
-		const organization = await saveVerifiedShopifyIntegration(
-			repository,
-			encryptor,
-		);
-		await repository.createMembershipProductRecord({
-			organizationId: organization.id,
-			membershipType: "teacher",
-			entitlementPeriod: "1_year",
-			shopifyProductGid: "gid://shopify/Product/missing",
-			shopifyVariantGid: "gid://shopify/ProductVariant/generated",
-			productNameSnapshot: "Old Snapshot",
-		});
-		shopifyProductClient.readResponse = [];
-		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
-
-		try {
-			const response = await app.fetch(
-				new Request("http://test/api/organizations/pafe/membership-products"),
-			);
-
-			expect(response.status).toBe(502);
-			await expect(response.json()).resolves.toMatchObject({
-				error:
-					"Membership information is temporarily unavailable. Please try again later.",
-			});
-			expect(errorSpy).toHaveBeenCalledWith(
-				"Public membership product listing failed.",
-				expect.objectContaining({
-					operation: "shopify.membershipProducts.publicList",
-					organizationSlug: "pafe",
-					errorMessage: "Shopify membership product was not found.",
-				}),
-			);
-		} finally {
-			errorSpy.mockRestore();
-		}
-	});
-
-	it("returns an unavailable API error when Shopify reads fail", async () => {
-		const { app, repository, encryptor, shopifyProductClient } =
-			await createTestAppWithMembershipProducts();
-		await createOrganizationViaApi(app);
-		const organization = await saveVerifiedShopifyIntegration(
-			repository,
-			encryptor,
-		);
-		await repository.createMembershipProductRecord({
-			organizationId: organization.id,
-			membershipType: "teacher",
-			entitlementPeriod: "1_year",
-			shopifyProductGid: "gid://shopify/Product/generated",
-			shopifyVariantGid: "gid://shopify/ProductVariant/generated",
-			productNameSnapshot: "Old Snapshot",
-		});
-		shopifyProductClient.readError = new Error("Shopify is unavailable.");
-		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
-
-		try {
-			const response = await app.fetch(
-				new Request("http://test/api/organizations/pafe/membership-products"),
-			);
-
-			expect(response.status).toBe(502);
-			await expect(response.json()).resolves.toMatchObject({
-				error:
-					"Membership information is temporarily unavailable. Please try again later.",
-			});
-			expect(errorSpy).toHaveBeenCalledWith(
-				"Public membership product listing failed.",
-				expect.objectContaining({
-					operation: "shopify.membershipProducts.publicList",
-					organizationSlug: "pafe",
-					errorMessage: "Shopify is unavailable.",
-				}),
-			);
-		} finally {
-			errorSpy.mockRestore();
-		}
+		expect(response.status).toBe(403);
+		expect(await response.json()).toEqual({ error: "Forbidden." });
+		expect(repositorySpy).not.toHaveBeenCalled();
+		expect(shopifySpy).not.toHaveBeenCalled();
 	});
 });

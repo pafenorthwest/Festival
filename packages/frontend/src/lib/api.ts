@@ -47,8 +47,16 @@ async function requestJson<T>(
 	return payload as T;
 }
 
-export function getSession(idToken?: string | null) {
-	return requestJson<SessionResponse>("/api/session", undefined, idToken);
+export function getBootstrap() {
+	return requestJson<SessionResponse>("/api/bootstrap");
+}
+
+export function getFirebaseSession(idToken: string) {
+	return requestJson<SessionResponse>(
+		"/api/firebase-session",
+		undefined,
+		idToken,
+	);
 }
 
 export function getMemberships(idToken: string) {

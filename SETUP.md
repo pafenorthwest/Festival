@@ -1,6 +1,6 @@
 # Festival Setup
 
-This guide documents the primary local setup path for Festival: a real Firebase project plus a local PostgreSQL instance. Firebase emulator settings are included only as optional notes because the checked-in app currently assumes the real-project path first.
+This guide documents the primary local setup path for Festival: a real Firebase project plus a local PostgreSQL instance. Firebase emulator settings are included only as optional notes because the checked-in app currently assumes the real-project path first. Review [SECURITY.md](SECURITY.md) before exposing nginx or applying the documented operator-managed firewall posture.
 
 ## Requirements
 
@@ -181,6 +181,7 @@ These values come from the Firebase web app configuration. See the official [Fir
 | Variable | Required | Notes |
 | --- | --- | --- |
 | `FRONT_API_BASE` | yes for split frontend/backend local dev | Set to `http://localhost:3000` when the frontend runs on `5173` and the backend runs on `3000`. |
+| `FRONT_PUBLIC_ORIGIN` | optional | Public HTTP(S) origin used to derive Vite's allowed host and HMR WebSocket endpoint when nginx fronts the development server. Leave unset for ordinary localhost development. |
 | `FRONT_FIREBASE_API_KEY` | yes | Firebase web app API key. |
 | `FRONT_FIREBASE_AUTH_DOMAIN` | yes | Usually `<project-id>.firebaseapp.com`. |
 | `FRONT_FIREBASE_PROJECT_ID` | yes | Firebase project ID exposed to the web app. |
@@ -237,6 +238,8 @@ These values are part of the approved setup contract for this repo, even though 
 | `AUTH_REQUIRE_EMAIL_VERIFIED` | yes | Use `true` unless you intentionally want a looser local policy. |
 | `FIREBASE_AUTH_EMULATOR_HOST` | optional | Leave commented out unless both frontend and backend are intentionally using the Firebase Auth emulator. If this variable is present while using real Firebase Auth, the backend Admin SDK can reject real ID tokens with invalid-signature errors. |
 | `FIREBASE_USE_EMULATOR` | optional | Dev-only toggle, default `false` for the primary setup path. |
+| `API_ALLOWED_ORIGINS` | optional | Comma-separated exact browser origins. Development defaults allow HTTP ports `5172`, `5173`, and `8080` on `localhost`, `127.0.0.1`, and `[::1]`. |
+| `TRUST_PROXY_HEADERS` | optional | Defaults to `false`; use `true` only when the backend is private behind a trusted nginx that replaces forwarding headers. |
 
 For the primary local setup path with a real Firebase project, make sure the backend `.env` does not define `FIREBASE_AUTH_EMULATOR_HOST`:
 
@@ -401,6 +404,86 @@ bun run prod
 ```
 
 `bun run prod:backend` starts only the compiled backend.
+
+### 7.1 Reverse proxy a public HTTPS host to the Vite development server
+
+The production frontend is normally built and served as static files. If a
+public HTTPS hostname temporarily fronts the Vite development server instead,
+nginx must proxy both HTTP requests and Vite's hot-module-reload WebSocket.
+
+In `packages/frontend/.env.local`, set the public origin and keep browser API
+calls on that same origin so they follow the reverse-proxy boundary:
+
+```dotenv
+FRONT_PUBLIC_ORIGIN=https://festival.example
+FRONT_API_BASE=
+```
+
+`FRONT_PUBLIC_ORIGIN` must contain only an HTTP(S) origin: scheme, hostname,
+and an optional port, with no path. The Vite configuration derives
+`allowedHosts`, the `ws` or `wss` HMR protocol, hostname, and browser-facing
+port from this value. For example, an HTTPS origin without an explicit port
+uses secure WebSockets on port `443`. Leave the variable unset for ordinary
+localhost development.
+
+Vite reads these values when it starts, so restart the frontend after changing
+them. A `FRONT_API_BASE` value such as `http://localhost:3000` makes a remotely
+loaded browser call that browser's own loopback address and results in
+mixed-content or CORS failures.
+
+In nginx's `http` context, map WebSocket upgrade requests to the appropriate
+connection value:
+
+```nginx
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+```
+
+Then add a location like the following inside the HTTPS `server` block for the
+public Festival hostname:
+
+```nginx
+location / {
+    # Use 127.0.0.1 when nginx and Vite run on the same host. If they run on
+    # separate hosts, replace it with the Vite host's actual private address.
+    set $frontend_upstream http://127.0.0.1:5173;
+
+    proxy_pass $frontend_upstream;
+    proxy_http_version 1.1;
+
+    # Preserve the public-facing hostname, protocol, and client address.
+    proxy_set_header Host              $host;
+    proxy_set_header X-Forwarded-Host  $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Port  $server_port;
+    proxy_set_header X-Real-IP          $remote_addr;
+    proxy_set_header X-Forwarded-For    $proxy_add_x_forwarded_for;
+
+    # Forward Vite hot-module-reload WebSocket connections.
+    proxy_set_header Upgrade    $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+
+    # Allow Firebase's cross-origin sign-in popup to report that it closed.
+    add_header Cross-Origin-Opener-Policy "same-origin-allow-popups" always;
+
+    # Optional: rewrite an absolute redirect from the private Vite upstream.
+    proxy_redirect http://127.0.0.1:5173/ https://$host/;
+}
+```
+
+Do not use a CIDR network address such as `10.0.0.0` as the upstream unless it
+is actually assigned to the Vite host. Use that host's concrete address.
+
+The environment-derived HMR client port is the browser-facing port, not Vite's
+private port `5173`. After changing nginx, validate and reload it, then restart
+Vite:
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+```
 
 ## 8. Sanity checks
 

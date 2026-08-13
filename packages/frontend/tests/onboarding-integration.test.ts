@@ -7,11 +7,12 @@ import {
 	createMembershipProduct,
 	createOrganization,
 	dismissWelcome,
+	getBootstrap,
+	getFirebaseSession,
 	getInvite,
 	getMembershipProducts,
 	getMemberships,
 	getOrganization,
-	getSession,
 	getShopifySettings,
 	saveShopifySettings,
 } from "../src/lib/api.js";
@@ -89,7 +90,8 @@ describe("organization onboarding integration", () => {
 		expect(source).toContain("completePasswordlessEmailLinkSignIn");
 		expect(source).toContain("subscribeToAuthChanges");
 		expect(source).toContain("logoutCurrentUser");
-		expect(source).toContain("getSession");
+		expect(source).toContain("getBootstrap");
+		expect(source).toContain("getFirebaseSession");
 		expect(source).toContain("getMemberships");
 		expect(source).toContain("createOrganization");
 		expect(source).toContain("createInvite");
@@ -147,7 +149,8 @@ describe("organization onboarding integration", () => {
 	it("sends bearer tokens through the existing API helpers", async () => {
 		mockFetch({ ok: true });
 
-		await getSession("token-1");
+		await getBootstrap();
+		await getFirebaseSession("token-1");
 		await getMemberships("token-2");
 		await createOrganization("token-3", {
 			name: "Festival Admins",
@@ -179,6 +182,7 @@ describe("organization onboarding integration", () => {
 		expect(
 			fetchCalls.map((call) => call.init?.headers as Record<string, string>),
 		).toEqual([
+			expect.not.objectContaining({ Authorization: expect.any(String) }),
 			expect.objectContaining({ Authorization: "Bearer token-1" }),
 			expect.objectContaining({ Authorization: "Bearer token-2" }),
 			expect.objectContaining({ Authorization: "Bearer token-3" }),
@@ -196,7 +200,8 @@ describe("organization onboarding integration", () => {
 	it("calls the expected Hono API paths for onboarding integration", async () => {
 		mockFetch({ ok: true });
 
-		await getSession("token");
+		await getBootstrap();
+		await getFirebaseSession("token");
 		await getMemberships("token");
 		await createOrganization("token", {
 			name: "Festival Admins",
@@ -225,7 +230,8 @@ describe("organization onboarding integration", () => {
 		});
 
 		expect(fetchCalls.map((call) => call.url)).toEqual([
-			"/api/session",
+			"/api/bootstrap",
+			"/api/firebase-session",
 			"/api/memberships",
 			"/api/organizations",
 			"/api/invites",

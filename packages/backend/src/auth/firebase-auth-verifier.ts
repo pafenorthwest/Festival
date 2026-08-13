@@ -52,10 +52,7 @@ export function createFirebaseAuthVerifier(env: AppEnv): AuthVerifier {
 					throw error;
 				}
 
-				throw new AppError(
-					`Failed to verify Firebase ID token: ${(error as Error).message}`,
-					401,
-				);
+				throw new AppError("Firebase authentication failed.", 401);
 			}
 		},
 	};
