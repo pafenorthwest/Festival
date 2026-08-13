@@ -1,11 +1,8 @@
 # Risk Acceptance
 
-- Owner:
-- Justification:
-- Expiry: YYYY-MM-DD
+- Owner: Not applicable
+- Justification: No unresolved actionable findings require risk acceptance.
+- Expiry: Not applicable
 
 ## Unresolved actionable findings
-- File:
-- Line range:
-- Severity:
-- Explanation:
+- None.
