@@ -5,7 +5,8 @@ export interface AppEnv {
 	firebaseProjectId?: string;
 	firebaseClientEmail?: string;
 	firebasePrivateKey?: string;
-	aesEncryptionKey?: string;
+	festivalSecretKeysJson?: string;
+	festivalActiveSecretKeyId?: string;
 	allowedApiOrigins?: string[];
 	trustProxyHeaders?: boolean;
 }
@@ -85,7 +86,9 @@ export function loadEnv(options?: {
 		firebaseProjectId,
 		firebaseClientEmail: process.env.FIREBASE_CLIENT_EMAIL?.trim(),
 		firebasePrivateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
-		aesEncryptionKey: process.env.AES_ENCRYPTION_KEY?.trim(),
+		festivalSecretKeysJson: process.env.FESTIVAL_SECRET_KEYS_JSON?.trim(),
+		festivalActiveSecretKeyId:
+			process.env.FESTIVAL_ACTIVE_SECRET_KEY_ID?.trim(),
 		allowedApiOrigins: parseAllowedApiOrigins(process.env.API_ALLOWED_ORIGINS),
 		trustProxyHeaders: process.env.TRUST_PROXY_HEADERS === "true",
 	};

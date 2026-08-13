@@ -84,7 +84,9 @@ integration with:
 
 - `store_domain`: a `*.myshopify.com` store domain.
 - `client_id`: the app client ID used for Shopify Admin API access.
-- `client_secret`: stored encrypted server-side using `AES_ENCRYPTION_KEY`.
+- `client_secret`: stored encrypted server-side using the tenant-bound Shopify
+  keyring configured by `FESTIVAL_SECRET_KEYS_JSON` and
+  `FESTIVAL_ACTIVE_SECRET_KEY_ID`.
 - `verification_status = ok`: required before the admin membership form can
   create products.
 

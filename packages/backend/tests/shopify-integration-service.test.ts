@@ -1,6 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
-import { AesSecretEncryptor } from "../src/shopify/encryption.js";
+import {
+	SHOPIFY_CLIENT_SECRET_PURPOSE,
+	ShopifySecretKeyring,
+} from "../src/shopify/encryption.js";
 import { ShopifyIntegrationService } from "../src/shopify/shopify-integration-service.js";
 import type {
 	ShopifyConnectivityTester,
@@ -8,6 +11,15 @@ import type {
 } from "../src/shopify/types.js";
 
 const TEST_KEY = Buffer.alloc(32, 7).toString("base64");
+
+function createKeyring() {
+	const keyring = ShopifySecretKeyring.fromEnvironment(
+		JSON.stringify({ test: TEST_KEY }),
+		"test",
+	);
+	if (!keyring) throw new Error("Expected configured keyring.");
+	return keyring;
+}
 
 class FakeShopifyTester implements ShopifyConnectivityTester {
 	readonly calls: ShopifyCredentials[] = [];
@@ -52,12 +64,20 @@ async function createTenant(repository: InMemoryOrganizationRepository) {
 
 describe("ShopifyIntegrationService", () => {
 	it("encrypts and decrypts secrets with AES-256-GCM", () => {
-		const encryptor = new AesSecretEncryptor(TEST_KEY);
+		const encryptor = createKeyring();
 
-		const encrypted = encryptor.encrypt("client-secret");
+		const encrypted = encryptor.encrypt("client-secret", {
+			organizationId: "organization-a",
+			purpose: SHOPIFY_CLIENT_SECRET_PURPOSE,
+		});
 
-		expect(encrypted).not.toContain("client-secret");
-		expect(encryptor.decrypt(encrypted)).toBe("client-secret");
+		expect(JSON.parse(encrypted).ciphertext).not.toContain("client-secret");
+		expect(
+			encryptor.decrypt(encrypted, {
+				organizationId: "organization-a",
+				purpose: SHOPIFY_CLIENT_SECRET_PURPOSE,
+			}),
+		).toBe("client-secret");
 	});
 
 	it("saves credentials before marking a failed verification", async () => {
@@ -65,7 +85,7 @@ describe("ShopifyIntegrationService", () => {
 		const tester = new FakeShopifyTester(true);
 		const service = new ShopifyIntegrationService(
 			repository,
-			new AesSecretEncryptor(TEST_KEY),
+			createKeyring(),
 			tester,
 		);
 		const tenant = await createTenant(repository);
@@ -84,8 +104,13 @@ describe("ShopifyIntegrationService", () => {
 		expect(response.settings.hasClientSecret).toBeTrue();
 		expect(JSON.stringify(response)).not.toContain("client-secret");
 		expect(JSON.stringify(response)).not.toContain("client-secret-canary");
+		expect(JSON.stringify(response)).not.toContain(
+			stored?.encryptedClientSecret ?? "missing-envelope-canary",
+		);
 		expect(stored?.storeDomain).toBe("example.myshopify.com");
-		expect(stored?.encryptedClientSecret).not.toContain("client-secret");
+		expect(
+			JSON.parse(stored?.encryptedClientSecret ?? "{}").ciphertext,
+		).not.toContain("client-secret");
 		expect(tester.calls[0]).toEqual({
 			storeDomain: "example.myshopify.com",
 			clientId: "client-id",
@@ -96,7 +121,7 @@ describe("ShopifyIntegrationService", () => {
 	it("retains an existing encrypted secret when the field is blank", async () => {
 		const repository = new InMemoryOrganizationRepository();
 		const tester = new FakeShopifyTester();
-		const encryptor = new AesSecretEncryptor(TEST_KEY);
+		const encryptor = createKeyring();
 		const service = new ShopifyIntegrationService(
 			repository,
 			encryptor,
@@ -131,5 +156,50 @@ describe("ShopifyIntegrationService", () => {
 			clientSecret: "first-secret",
 		});
 		expect(retained?.verificationStatus).toBe("ok");
+	});
+
+	it("rejects a client-secret envelope copied to another tenant", async () => {
+		const repository = new InMemoryOrganizationRepository();
+		const tester = new FakeShopifyTester();
+		const secretKeyring = createKeyring();
+		const service = new ShopifyIntegrationService(
+			repository,
+			secretKeyring,
+			tester,
+		);
+		const sourceTenant = await createTenant(repository);
+		const targetOrganization = await repository.createOrganization({
+			name: "Other Festival",
+			slug: "other",
+		});
+		const copiedEnvelope = secretKeyring.encrypt("client-secret", {
+			organizationId: sourceTenant.organization.id,
+			purpose: SHOPIFY_CLIENT_SECRET_PURPOSE,
+		});
+		await repository.upsertShopifyIntegration({
+			organizationId: targetOrganization.id,
+			storeDomain: "other.myshopify.com",
+			clientId: "client-id",
+			encryptedClientSecret: copiedEnvelope,
+		});
+
+		await expect(
+			service.saveAndTestForTenant(
+				{
+					...sourceTenant,
+					organization: targetOrganization,
+					membership: {
+						...sourceTenant.membership,
+						organizationId: targetOrganization.id,
+					},
+				},
+				{
+					storeUrl: "other.myshopify.com",
+					clientId: "client-id",
+					clientSecret: "",
+				},
+			),
+		).rejects.toThrow("Shopify encrypted secret context does not match.");
+		expect(tester.calls).toHaveLength(0);
 	});
 });

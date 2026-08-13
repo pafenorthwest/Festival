@@ -8,7 +8,8 @@ This document is the authoritative description of Festival's currently enforced 
 - Firebase authenticates Festival administrators and staff. Firebase identity alone does not grant organization access.
 - The Festival backend resolves organization membership and role from server-side records. Browser-supplied organization, role, ownership, Shopify identifiers, and credentials are not authority.
 - Only an authorized Festival Admin operation may load an organization's encrypted Shopify client secret and call the Shopify Admin API.
-- One deployment `AES_ENCRYPTION_KEY` currently encrypts Shopify client secrets for all organizations. The database association selected after tenant authorization maps each ciphertext to its organization; the encryption key itself does not establish tenant scope. Encryption-key rotation is tracked separately and is not implemented here.
+- One deployment-wide AES-256-GCM keyring encrypts Shopify client secrets. It is configured with `FESTIVAL_SECRET_KEYS_JSON` and `FESTIVAL_ACTIVE_SECRET_KEY_ID`. Each ciphertext authenticates the organization ID and fixed `shopify-client-secret` purpose as additional authenticated data, so copying an encrypted secret to another organization fails decryption. New writes use the active key; retained previous keys remain available for reads. Re-encryption and safe key retirement are not implemented, so operators must not remove a key while stored ciphertext still references it.
+- *Note: When both keyring variables are absent, the backend starts with Shopify services disabled. Partial or invalid keyring configuration causes startup to fail.*
 
 ```mermaid
 flowchart LR

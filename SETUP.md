@@ -200,7 +200,7 @@ These values come from the Firebase project and service-account setup. See the o
 
 #### Backend encryption
 
-The backend encrypts stored integration secrets before writing them to PostgreSQL. Local and deployed environments must provide an AES-256 key as Base64.
+The backend encrypts stored Shopify integration secrets before writing them to PostgreSQL. Configure a deployment-wide AES-256-GCM keyring when Shopify services should be enabled.
 
 Generate a new key with:
 
@@ -208,13 +208,18 @@ Generate a new key with:
 openssl rand -base64 32
 ```
 
-Then set the generated value in the repo-root `.env`:
+Assign the generated value to an approved key ID and set both variables in the repo-root `.env`:
 
 ```dotenv
-AES_ENCRYPTION_KEY=replace-with-generated-base64-key
+FESTIVAL_SECRET_KEYS_JSON={"development-key":"replace-with-generated-base64-key"}
+FESTIVAL_ACTIVE_SECRET_KEY_ID=development-key
 ```
 
-`AES_ENCRYPTION_KEY` must decode to exactly 32 bytes. Do not commit the generated value.
+Key IDs must match `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`, and each value must be canonical Base64 that decodes to exactly 32 bytes. Do not commit generated values. When both variables are absent, the backend starts with Shopify services disabled. A partial or invalid configuration fails backend startup.
+
+New ciphertext uses the active key. To switch keys, add the new key to `FESTIVAL_SECRET_KEYS_JSON`, select it with `FESTIVAL_ACTIVE_SECRET_KEY_ID`, and restart the backend. Keep previous keys configured so existing ciphertext remains readable. Stored-record re-encryption and safe key retirement are not implemented in this phase, and Shopify credential rotation and access-token cache invalidation remain separate work.
+
+Legacy ciphertext is intentionally unsupported for the current localhost-development phase; wipe the development database after replacing the legacy configuration. Never log the keyring configuration, plaintext secrets, or encrypted envelopes.
 
 #### Shopify Dev Dashboard app
 

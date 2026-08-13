@@ -9,7 +9,10 @@ import type {
 	ProductRecord,
 	ShopifyIntegrationRecord,
 } from "../repo/organization-repository.js";
-import type { AesSecretEncryptor } from "./encryption.js";
+import {
+	SHOPIFY_CLIENT_SECRET_PURPOSE,
+	type ShopifySecretKeyring,
+} from "./encryption.js";
 import { ShopifyIntegrationError } from "./errors.js";
 import type {
 	ShopifyCredentials,
@@ -137,7 +140,7 @@ function toSummary(
 export class ShopifyMembershipProductService {
 	constructor(
 		private readonly repository: OrganizationRepository,
-		private readonly encryptor: AesSecretEncryptor,
+		private readonly secretKeyring: ShopifySecretKeyring,
 		private readonly shopifyClient: ShopifyMembershipProductClient,
 		private readonly cleanupFailureLogger: ShopifyCleanupFailureLogger = consoleCleanupFailureLogger,
 	) {}
@@ -255,7 +258,13 @@ export class ShopifyMembershipProductService {
 		return {
 			storeDomain: integration.storeDomain,
 			clientId: integration.clientId,
-			clientSecret: this.encryptor.decrypt(integration.encryptedClientSecret),
+			clientSecret: this.secretKeyring.decrypt(
+				integration.encryptedClientSecret,
+				{
+					organizationId,
+					purpose: SHOPIFY_CLIENT_SECRET_PURPOSE,
+				},
+			),
 		};
 	}
 

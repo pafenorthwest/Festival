@@ -14,7 +14,7 @@ import { assertRouteSecurityInventory } from "./routes/route-security.js";
 import { apiRequestSecurity } from "./security/request-security.js";
 import { OrganizationService } from "./services/organization-service.js";
 import { ShopifyAdminApiClient } from "./shopify/admin-api-client.js";
-import { AesSecretEncryptor } from "./shopify/encryption.js";
+import { ShopifySecretKeyring } from "./shopify/encryption.js";
 import type { ShopifyIntegrationService } from "./shopify/shopify-integration-service.js";
 import { ShopifyIntegrationService as DefaultShopifyIntegrationService } from "./shopify/shopify-integration-service.js";
 import { ShopifyMembershipProductService } from "./shopify/shopify-membership-product-service.js";
@@ -63,24 +63,25 @@ export async function createApp(options: CreateAppOptions = {}) {
 	await appUserRepository.ensureReady();
 	const organizationService = new OrganizationService(repository);
 	const shopifyAdminApiClient = new ShopifyAdminApiClient();
-	const encryptor = env.aesEncryptionKey
-		? new AesSecretEncryptor(env.aesEncryptionKey)
-		: undefined;
+	const secretKeyring = ShopifySecretKeyring.fromEnvironment(
+		env.festivalSecretKeysJson,
+		env.festivalActiveSecretKeyId,
+	);
 	const shopifyIntegrationService =
 		options.shopifyIntegrationService ??
-		(encryptor
+		(secretKeyring
 			? new DefaultShopifyIntegrationService(
 					repository,
-					encryptor,
+					secretKeyring,
 					shopifyAdminApiClient,
 				)
 			: undefined);
 	const shopifyMembershipProductService =
 		options.shopifyMembershipProductService ??
-		(encryptor
+		(secretKeyring
 			? new ShopifyMembershipProductService(
 					repository,
-					encryptor,
+					secretKeyring,
 					shopifyAdminApiClient,
 				)
 			: undefined);

@@ -11,7 +11,10 @@ import type {
 	CreateMembershipProductRecordInput,
 	ProductRecord,
 } from "../src/repo/organization-repository.js";
-import { AesSecretEncryptor } from "../src/shopify/encryption.js";
+import {
+	SHOPIFY_CLIENT_SECRET_PURPOSE,
+	ShopifySecretKeyring,
+} from "../src/shopify/encryption.js";
 import { ShopifyIntegrationService } from "../src/shopify/shopify-integration-service.js";
 import { ShopifyMembershipProductService } from "../src/shopify/shopify-membership-product-service.js";
 import type {
@@ -22,6 +25,15 @@ import type {
 } from "../src/shopify/types.js";
 
 const TEST_AES_KEY = Buffer.alloc(32, 3).toString("base64");
+
+function createKeyring() {
+	const keyring = ShopifySecretKeyring.fromEnvironment(
+		JSON.stringify({ test: TEST_AES_KEY }),
+		"test",
+	);
+	if (!keyring) throw new Error("Expected configured keyring.");
+	return keyring;
+}
 
 class FakeAuthVerifier implements AuthVerifier {
 	constructor(private readonly users: Record<string, AuthenticatedUser>) {}
@@ -160,7 +172,7 @@ async function createTestAppWithShopify() {
 		}),
 		shopifyIntegrationService: new ShopifyIntegrationService(
 			repository,
-			new AesSecretEncryptor(TEST_AES_KEY),
+			createKeyring(),
 			shopifyTester,
 		),
 	});
@@ -172,7 +184,7 @@ async function createTestAppWithMembershipProducts(
 	repository: InMemoryOrganizationRepository = new InMemoryOrganizationRepository(),
 ) {
 	const shopifyProductClient = new FakeShopifyProductClient();
-	const encryptor = new AesSecretEncryptor(TEST_AES_KEY);
+	const encryptor = createKeyring();
 	const app = await createApp({
 		env: { port: 3000 },
 		repository,
@@ -239,7 +251,7 @@ async function createOrganizationViaApi(
 
 async function saveVerifiedShopifyIntegration(
 	repository: InMemoryOrganizationRepository,
-	encryptor: AesSecretEncryptor,
+	encryptor: ShopifySecretKeyring,
 ) {
 	const organization = await repository.findOrganizationBySlug("pafe");
 	if (!organization) {
@@ -250,7 +262,10 @@ async function saveVerifiedShopifyIntegration(
 		organizationId: organization.id,
 		storeDomain: "example.myshopify.com",
 		clientId: "client-id",
-		encryptedClientSecret: encryptor.encrypt("client-secret"),
+		encryptedClientSecret: encryptor.encrypt("client-secret", {
+			organizationId: organization.id,
+			purpose: SHOPIFY_CLIENT_SECRET_PURPOSE,
+		}),
 	});
 	await repository.updateShopifyVerification({
 		organizationId: organization.id,
@@ -263,6 +278,77 @@ async function saveVerifiedShopifyIntegration(
 }
 
 describe("organization routes", () => {
+	it("starts without a keyring but keeps Shopify services unavailable", async () => {
+		const { app } = await createTestApp();
+		await createOrganizationViaApi(app);
+
+		const response = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/shopify",
+				withAuth("admin"),
+			),
+		);
+
+		expect(response.status).toBe(503);
+		await expect(response.json()).resolves.toEqual({
+			error: "Shopify integration is not configured.",
+		});
+	});
+
+	it("fails application startup for partial or invalid keyring configuration", async () => {
+		const authVerifier = new FakeAuthVerifier({});
+		await expect(
+			createApp({
+				env: {
+					port: 3000,
+					festivalSecretKeysJson: JSON.stringify({ test: TEST_AES_KEY }),
+				},
+				repository: new InMemoryOrganizationRepository(),
+				authVerifier,
+			}),
+		).rejects.toThrow("Shopify secret keyring configuration is invalid.");
+		await expect(
+			createApp({
+				env: {
+					port: 3000,
+					festivalSecretKeysJson: "{}",
+					festivalActiveSecretKeyId: "test",
+				},
+				repository: new InMemoryOrganizationRepository(),
+				authVerifier,
+			}),
+		).rejects.toThrow("Shopify secret keyring configuration is invalid.");
+	});
+
+	it("constructs Shopify services from a valid keyring configuration", async () => {
+		const { app } = await createApp({
+			env: {
+				port: 3000,
+				festivalSecretKeysJson: JSON.stringify({ test: TEST_AES_KEY }),
+				festivalActiveSecretKeyId: "test",
+			},
+			repository: new InMemoryOrganizationRepository(),
+			authVerifier: new FakeAuthVerifier({
+				admin: {
+					uid: "uid-admin",
+					email: "admin@example.com",
+					displayName: "Admin User",
+				},
+			}),
+		});
+		await createOrganizationViaApi(app);
+
+		const response = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/shopify",
+				withAuth("admin"),
+			),
+		);
+
+		expect(response.status).toBe(200);
+		await expect(response.json()).resolves.toEqual({ settings: null });
+	});
+
 	it("creates an organization and records the creator as Admin", async () => {
 		const { app } = await createTestApp();
 		const payload: CreateOrganizationInput = {
