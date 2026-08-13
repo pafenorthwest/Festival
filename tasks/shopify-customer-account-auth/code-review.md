@@ -1,0 +1,101 @@
+# Code Review
+- Task name: shopify-customer-account-auth
+- Findings status: none
+
+## Context
+- Base branch: main
+- Diff command: `git diff --cached; git diff; inspect listed untracked files`
+- Changed files:
+  - `README.md`
+  - `SETUP.md`
+  - `docker/nginx.festival.conf`
+  - `goals/shopify-customer-account-auth/establish-goals.v0.md`
+  - `goals/shopify-customer-account-auth/establish-goals.v1.md`
+  - `goals/shopify-customer-account-auth/establish-goals.v2.md`
+  - `goals/shopify-customer-account-auth/goals.v0.md`
+  - `goals/shopify-customer-account-auth/goals.v1.md`
+  - `goals/shopify-customer-account-auth/goals.v2.md`
+  - `goals/task-manifest.csv`
+  - `nginx/festival.conf`
+  - `packages/backend/src/app.ts`
+  - `packages/backend/src/config/env.ts`
+  - `packages/backend/src/customer/customer-account-repository.ts`
+  - `packages/backend/src/customer/customer-account-service.ts`
+  - `packages/backend/src/customer/in-memory-customer-account-repository.ts`
+  - `packages/backend/src/customer/postgres-customer-account-repository.ts`
+  - `packages/backend/src/routes/api-router.ts`
+  - `packages/backend/src/routes/route-security.ts`
+  - `packages/backend/src/shopify/encryption.ts`
+  - `packages/backend/tests/customer-account-repository.test.ts`
+  - `packages/backend/tests/customer-account-routes.test.ts`
+  - `packages/backend/tests/customer-account-service.test.ts`
+  - `packages/backend/tests/nginx-security.test.ts`
+  - `packages/common/src/customer-account.ts`
+  - `packages/common/src/index.ts`
+  - `packages/common/tests/customer-account.test.ts`
+  - `packages/frontend/src/App.tsx`
+  - `packages/frontend/src/components/CustomerAccountAdminCard.tsx`
+  - `packages/frontend/src/lib/api.ts`
+  - `packages/frontend/src/lib/routes.ts`
+  - `packages/frontend/src/pages/AdminIntegrationsPage.tsx`
+  - `packages/frontend/src/pages/CustomerAccountPage.tsx`
+  - `packages/frontend/tests/customer-account.test.ts`
+  - `packages/frontend/tests/routes.test.ts`
+  - `tasks/shopify-customer-account-auth/spec.md`
+- Citation candidates (verify before use):
+  - `README.md:112-141`
+  - `SETUP.md:246-301`
+  - `docker/nginx.festival.conf:65-65`
+  - `docker/nginx.festival.conf:70-87`
+  - `goals/task-manifest.csv:2-8`
+  - `nginx/festival.conf:81-81`
+  - `nginx/festival.conf:86-103`
+  - `packages/backend/src/app.ts:123-123`
+  - `packages/backend/src/app.ts:125-125`
+  - `packages/backend/src/app.ts:141-141`
+  - `packages/backend/src/app.ts:33-34`
+  - `packages/backend/src/app.ts:6-8`
+  - `packages/backend/src/app.ts:95-114`
+  - `packages/backend/src/config/env.ts:106-114`
+  - `packages/backend/src/config/env.ts:12-14`
+  - `packages/backend/src/config/env.ts:44-52`
+  - `packages/backend/src/routes/api-router.ts:100-100`
+  - `packages/backend/src/routes/api-router.ts:21-24`
+  - `packages/backend/src/routes/api-router.ts:384-543`
+  - `packages/backend/src/routes/api-router.ts:8-8`
+  - `packages/backend/src/routes/api-router.ts:87-94`
+  - `packages/backend/src/routes/route-security.ts:34-68`
+  - `packages/backend/src/routes/route-security.ts:7-9`
+  - `packages/backend/src/shopify/encryption.ts:134-138`
+  - `packages/backend/src/shopify/encryption.ts:16-24`
+  - `packages/backend/src/shopify/encryption.ts:203-207`
+  - `packages/backend/src/shopify/encryption.ts:217-217`
+  - `packages/backend/src/shopify/encryption.ts:28-28`
+  - `packages/backend/src/shopify/encryption.ts:59-59`
+  - `packages/backend/tests/nginx-security.test.ts:25-25`
+  - `packages/backend/tests/nginx-security.test.ts:27-29`
+  - `packages/common/src/index.ts:2-2`
+  - `packages/frontend/src/App.tsx:12-12`
+  - `packages/frontend/src/App.tsx:46-48`
+  - `packages/frontend/src/lib/api.ts:11-13`
+  - `packages/frontend/src/lib/api.ts:21-22`
+  - `packages/frontend/src/lib/api.ts:38-38`
+  - `packages/frontend/src/lib/api.ts:56-105`
+  - `packages/frontend/src/lib/routes.ts:26-29`
+  - `packages/frontend/src/lib/routes.ts:7-7`
+  - `packages/frontend/src/lib/routes.ts:74-80`
+  - `packages/frontend/src/pages/AdminIntegrationsPage.tsx:237-237`
+  - `packages/frontend/src/pages/AdminIntegrationsPage.tsx:5-5`
+  - `packages/frontend/tests/routes.test.ts:40-43`
+  - `packages/frontend/tests/routes.test.ts:8-8`
+  - `packages/frontend/tests/routes.test.ts:83-85`
+
+## Findings JSON
+```json
+[]
+```
+
+## Verdict
+- Verdict: patch is correct
+- Confidence: 0.94
+- Justification: The final diff implements the locked tenant-separated confidential Customer Account BFF, encrypted persistence, signed OIDC validation, one-time state/nonce, issuer and tenant binding, secure opaque cookie, serialized refresh, protected-data fail-closed DTOs, CSRF/origin logout, exact route inventory/nginx boundaries, minimal UI, and required documentation. Review-identified same-origin cookie routing and mid-session issuer-binding gaps were fixed and covered by tests. Pinned formatting, build, and all 199 tests pass; no actionable regression remains.

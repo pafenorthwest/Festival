@@ -9,6 +9,9 @@ export interface AppEnv {
 	festivalActiveSecretKeyId?: string;
 	allowedApiOrigins?: string[];
 	trustProxyHeaders?: boolean;
+	publicOrigin?: string;
+	customerSessionIdleDays?: number;
+	customerSessionAbsoluteDays?: number;
 }
 
 const LOCAL_API_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
@@ -35,6 +38,15 @@ function parseRequiredEnv(name: string): string {
 		throw new Error(`Missing required environment variable: ${name}`);
 	}
 
+	return value;
+}
+
+function parsePositiveNumber(name: string, fallback: number): number {
+	const raw = process.env[name]?.trim();
+	if (!raw) return fallback;
+	const value = Number(raw);
+	if (!Number.isFinite(value) || value <= 0)
+		throw new Error(`Invalid ${name} value: ${raw}`);
 	return value;
 }
 
@@ -91,5 +103,14 @@ export function loadEnv(options?: {
 			process.env.FESTIVAL_ACTIVE_SECRET_KEY_ID?.trim(),
 		allowedApiOrigins: parseAllowedApiOrigins(process.env.API_ALLOWED_ORIGINS),
 		trustProxyHeaders: process.env.TRUST_PROXY_HEADERS === "true",
+		publicOrigin: process.env.FESTIVAL_PUBLIC_ORIGIN?.trim(),
+		customerSessionIdleDays: parsePositiveNumber(
+			"CUSTOMER_SESSION_IDLE_DAYS",
+			7,
+		),
+		customerSessionAbsoluteDays: parsePositiveNumber(
+			"CUSTOMER_SESSION_ABSOLUTE_DAYS",
+			30,
+		),
 	};
 }

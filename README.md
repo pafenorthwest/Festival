@@ -109,6 +109,36 @@ from `/org/:slug/admin/memberships`, confirm the Shopify product has a single
 Shopify-backed name, description, and price. Do not commit development-store
 credentials or tokens.
 
+### Shopify Customer Account BFF
+
+Public customers use Shopify's new Customer Accounts through Festival's Hono
+backend-for-frontend. This identity is separate from Firebase Admin identity.
+Organization Admins configure it in the distinct **Shopify Customer Accounts**
+section at `/org/:slug/admin/integrations`; Customer Account credentials are not
+the Shopify Admin API credentials described above.
+
+The Admin enters the Headless storefront/account domain, Customer Account client
+ID, and replace-only client secret. **Save & Verify** validates Shopify's OIDC and
+Customer Account discovery documents and displays the exact server-derived
+callback and logout return URLs to configure in Shopify. It does not impersonate
+or sign in a customer. The tenant store must use new customer accounts, have the
+Headless channel configured, and permit `customer_read_orders`.
+
+Customers visit `/org/:slug/account`. OAuth credentials and Shopify access,
+refresh, and ID tokens remain encrypted in PostgreSQL and server-side; the
+browser receives only an opaque `Secure`, `HttpOnly`, `SameSite=Lax` Festival
+cookie. The initial UI exposes a non-identifying session state and an allowlisted
+order view (number/date, totals/currency, financial and fulfillment status,
+cancellation/refund summary, and line items). Name, address, email, phone, raw
+GraphQL responses, and ownership selectors are excluded.
+
+Production order access requires Shopify protected-customer-data configuration
+or approval in addition to the Headless permission. Festival fails closed when
+Shopify denies or redacts protected order data. Auth start/callback rate limiting
+is intentionally deferred until benchmarking and load testing establish an
+evidence-based policy; do not interpret the platform's 500 requests/second
+performance target as an authentication throttle.
+
 ## Commands
 - `bun install`
 - `bun run dev:frontend`

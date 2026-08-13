@@ -243,6 +243,62 @@ sudo install -m 0600 -o <festival-service-user> -g <festival-service-user> /dev/
 
 Festival appends minimal NDJSON mutation records and fails the mutation when the destination cannot be opened before the Shopify call. Deployment operations—not the application—must configure rotation, retention, disk-usage monitoring, access review, and any host-level aggregation. Do not ingest this audit stream into the Festival database.
 
+#### Shopify Customer Accounts (Headless)
+
+Customer authentication uses a confidential Customer Account client through the
+Festival BFF. It is separate from both Firebase and the Shopify Admin API client.
+
+1. Enable Shopify's new customer accounts for the tenant store and install the
+   Headless channel.
+2. Create/configure the Customer Account client and enable the minimum order
+   permission (`customer_read_orders`). Do not reuse Admin API credentials.
+3. Configure protected customer data in Shopify. The initial Festival DTO uses
+   Level 1 order data and intentionally excludes name, address, email, and phone.
+   Production access can require Shopify review/approval; development-store rules
+   differ. Festival treats Shopify denial or field redaction as unavailable order
+   access and does not provide a manual approval override.
+4. Set `FESTIVAL_PUBLIC_ORIGIN` to the externally visible Festival origin. In
+   production it must be HTTPS. Start the backend, open
+   `/org/:slug/admin/integrations`, and use the **Shopify Customer Accounts** card.
+5. Enter the storefront/account domain, Customer Account client ID, and client
+   secret, then choose **Save & Verify**. Copy the displayed callback and logout
+   return URLs exactly into Shopify. The callback is shared but its one-time state
+   binds it to the tenant; return targets are restricted to `/org/:slug/account`.
+
+Customer Account client secrets and customer tokens use distinct tenant-bound
+AES-256-GCM purposes under `FESTIVAL_SECRET_KEYS_JSON`. Saving or rotating the
+Customer Account credentials increments that integration's version and revokes
+its existing Festival customer sessions. Never place these credentials or tokens
+in frontend environment files, browser storage, logs, screenshots, or support
+messages.
+
+Configure Festival's session caps with:
+
+```dotenv
+FESTIVAL_PUBLIC_ORIGIN=https://festival.example.com
+CUSTOMER_SESSION_IDLE_DAYS=7
+CUSTOMER_SESSION_ABSOLUTE_DAYS=30
+```
+
+Both duration values must be positive, the idle cap cannot exceed the absolute
+cap, and applicable Shopify token expiry shortens the session. This phase assumes
+one backend process and serializes refresh within that process; do not deploy
+multiple active backend replicas until distributed refresh coordination is
+implemented.
+
+For local testing, use a Shopify development store with a test customer and at
+least one order. Set `FESTIVAL_PUBLIC_ORIGIN` to an HTTPS tunnel origin registered
+in Shopify (plain `http://localhost` is accepted by Festival but normally cannot
+complete Shopify's hosted callback). Sign in at `/org/:slug/account`, verify only
+the allowlisted order fields are rendered, test logout, and confirm neither API
+responses nor logs contain authorization codes, cookies, Shopify tokens, or
+unnecessary customer PII.
+
+Auth start/callback rate limiting is deliberately postponed. The 500
+requests/second performance target is too high to be a meaningful auth control;
+benchmarking and load testing must establish separate caller/tenant-aware limits
+before rate limiting is enabled.
+
 #### Auth and local dev behavior
 
 These values are part of the approved setup contract for this repo, even though not every one is read directly by the current code paths yet.

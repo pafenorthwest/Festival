@@ -1,7 +1,8 @@
 number,taskname,first_create_date,first_create_hhmmss,first_create_git_hash
-1,add-shopify-setup-instructions,2026-08-13,160258,62022fe
-2,fix-admin-membership-product-list,2026-08-13,160258,62022fe
-3,improve-shopify-scope-readiness-messaging,2026-08-13,160258,62022fe
-4,normalize-shopify-implied-read-scopes,2026-08-13,160258,62022fe
-5,tenant-shopify-admin-auth,2026-08-13,160258,62022fe
-6,tenant-bound-shopify-secret-keyring,2026-08-13,051953,5a3d16c
+1,shopify-customer-account-auth,2026-08-13,000000,-------
+2,tenant-bound-shopify-secret-keyring,2026-08-13,051953,5a3d16c
+3,add-shopify-setup-instructions,2026-08-13,160258,62022fe
+4,fix-admin-membership-product-list,2026-08-13,160258,62022fe
+5,improve-shopify-scope-readiness-messaging,2026-08-13,160258,62022fe
+6,normalize-shopify-implied-read-scopes,2026-08-13,160258,62022fe
+7,tenant-shopify-admin-auth,2026-08-13,160258,62022fe

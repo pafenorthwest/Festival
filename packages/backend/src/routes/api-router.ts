@@ -5,6 +5,7 @@ import type {
 	CreateOrganizationInput,
 } from "@festival/common";
 import { Hono } from "hono";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import {
 	type ApiVariables,
 	assertTenantRole,
@@ -17,6 +18,10 @@ import {
 	toJsonError,
 } from "../auth/tenant-context.js";
 import type { AuthVerifier } from "../auth/types.js";
+import {
+	CUSTOMER_SESSION_COOKIE,
+	type CustomerAccountService,
+} from "../customer/customer-account-service.js";
 import { AppError } from "../errors/app-error.js";
 import type { OrganizationService } from "../services/organization-service.js";
 import type { ShopifyIntegrationService } from "../shopify/shopify-integration-service.js";
@@ -79,11 +84,20 @@ function assertNoForbiddenMembershipProductFields(payload: unknown): void {
 	}
 }
 
+function assertNoBearerPrincipal(value: string | undefined): void {
+	if (value !== undefined)
+		throw new AppError(
+			"Bearer authorization is not accepted on customer routes.",
+			400,
+		);
+}
+
 export function buildApiRouter(
 	organizationService: OrganizationService,
 	authVerifier: AuthVerifier,
 	shopifyIntegrationService?: ShopifyIntegrationService,
 	shopifyMembershipProductService?: ShopifyMembershipProductService,
+	customerAccountService?: CustomerAccountService,
 ): Hono<{ Variables: Partial<ApiVariables> }> {
 	const router = new Hono<{ Variables: Partial<ApiVariables> }>();
 	const repository = organizationService.repository;
@@ -366,6 +380,166 @@ export function buildApiRouter(
 			}
 		},
 	);
+
+	router.get(
+		"/organizations/:slug/admin/shopify-customer-account",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				if (!customerAccountService)
+					throw new AppError(
+						"Customer Account integration is not configured.",
+						503,
+					);
+				const tenant = getRequiredTenant(c);
+				return c.json(
+					await customerAccountService.getSettings(
+						tenant.organization.id,
+						tenant.organization.slug,
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.post(
+		"/organizations/:slug/admin/shopify-customer-account",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				if (!customerAccountService)
+					throw new AppError(
+						"Customer Account integration is not configured.",
+						503,
+					);
+				const tenant = getRequiredTenant(c);
+				return c.json(
+					await customerAccountService.saveAndVerify(
+						tenant.organization.id,
+						tenant.organization.slug,
+						await c.req.json(),
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.get("/organizations/:slug/customer-auth/start", async (c) => {
+		try {
+			assertNoBearerPrincipal(c.req.header("Authorization"));
+			if (!customerAccountService)
+				throw new AppError(
+					"Customer Account integration is not configured.",
+					503,
+				);
+			return c.redirect(
+				await customerAccountService.start(
+					c.req.param("slug"),
+					c.req.query("returnTo"),
+				),
+			);
+		} catch (error) {
+			return toJsonError(c, error);
+		}
+	});
+
+	router.get("/customer-auth/callback", async (c) => {
+		try {
+			assertNoBearerPrincipal(c.req.header("Authorization"));
+			if (!customerAccountService)
+				throw new AppError(
+					"Customer Account integration is not configured.",
+					503,
+				);
+			const result = await customerAccountService.callback(
+				c.req.query("state"),
+				c.req.query("code"),
+			);
+			setCookie(c, CUSTOMER_SESSION_COOKIE, result.sessionId, {
+				httpOnly: true,
+				secure: true,
+				sameSite: "Lax",
+				path: "/api/",
+				maxAge: result.maxAgeSeconds,
+			});
+			return c.redirect(result.returnTo);
+		} catch (error) {
+			return toJsonError(c, error);
+		}
+	});
+
+	router.get("/organizations/:slug/customer/session", async (c) => {
+		try {
+			assertNoBearerPrincipal(c.req.header("Authorization"));
+			if (!customerAccountService)
+				throw new AppError(
+					"Customer Account integration is not configured.",
+					503,
+				);
+			return c.json(
+				await customerAccountService.session(
+					c.req.param("slug"),
+					getCookie(c, CUSTOMER_SESSION_COOKIE),
+				),
+			);
+		} catch (error) {
+			return toJsonError(c, error);
+		}
+	});
+
+	router.get("/organizations/:slug/customer/orders", async (c) => {
+		try {
+			assertNoBearerPrincipal(c.req.header("Authorization"));
+			if (!customerAccountService)
+				throw new AppError(
+					"Customer Account integration is not configured.",
+					503,
+				);
+			return c.json(
+				await customerAccountService.orders(
+					c.req.param("slug"),
+					getCookie(c, CUSTOMER_SESSION_COOKIE),
+					c.req.query("after"),
+				),
+			);
+		} catch (error) {
+			return toJsonError(c, error);
+		}
+	});
+
+	router.post("/organizations/:slug/customer/logout", async (c) => {
+		try {
+			assertNoBearerPrincipal(c.req.header("Authorization"));
+			if (!customerAccountService)
+				throw new AppError(
+					"Customer Account integration is not configured.",
+					503,
+				);
+			const body = await c.req.parseBody();
+			const referer = c.req.header("Referer");
+			const requestOrigin =
+				c.req.header("Origin") ??
+				(referer ? new URL(referer).origin : undefined);
+			const redirect = await customerAccountService.logout(
+				c.req.param("slug"),
+				getCookie(c, CUSTOMER_SESSION_COOKIE),
+				typeof body.csrfToken === "string" ? body.csrfToken : undefined,
+				requestOrigin,
+			);
+			deleteCookie(c, CUSTOMER_SESSION_COOKIE, { path: "/api/", secure: true });
+			return c.redirect(redirect);
+		} catch (error) {
+			return toJsonError(c, error);
+		}
+	});
 
 	router.get(
 		"/organizations/:slug/admin/membership-products",

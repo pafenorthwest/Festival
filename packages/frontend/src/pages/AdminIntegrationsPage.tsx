@@ -2,6 +2,7 @@ import type { ShopifyCapabilityDiagnostics } from "@festival/common";
 import { Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { AccessDeniedPanel } from "../components/AccessDeniedPanel.js";
+import { CustomerAccountAdminCard } from "../components/CustomerAccountAdminCard.js";
 
 interface AdminIntegrationsPageProps {
 	app: FestivalAppController;
@@ -233,6 +234,7 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 					</button>
 				</form>
 			</section>
+			<CustomerAccountAdminCard app={props.app} />
 		</Show>
 	);
 }
