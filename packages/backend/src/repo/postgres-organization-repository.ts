@@ -10,6 +10,8 @@ import type {
 	OrganizationRecord,
 	OrganizationRole,
 	OrganizationUserRecord,
+	ShopifyCapabilityDiagnostics,
+	ShopifyFailureCategory,
 	ShopifyVerificationStatus,
 } from "@festival/common";
 import { sql } from "bun";
@@ -26,6 +28,7 @@ import type {
 	UpdateShopifyVerificationInput,
 	UpsertShopifyIntegrationInput,
 } from "./organization-repository.js";
+import { ShopifyShopOwnershipError } from "./organization-repository.js";
 
 interface MembershipRow {
 	id: string;
@@ -70,11 +73,42 @@ interface ShopifyIntegrationRow {
 	client_id: string;
 	encrypted_client_secret: string;
 	verification_status: ShopifyVerificationStatus;
+	verified_shop_gid: string | null;
+	verified_shop_domain: string | null;
+	granted_scopes: string[];
+	can_read_products: boolean;
+	can_write_products: boolean;
+	can_read_orders: boolean;
+	integration_version: number | string;
 	verified_at: string | null;
 	last_tested_at: string | null;
 	last_error: string | null;
+	last_failure_category: ShopifyFailureCategory | null;
 	created_at: string;
 	updated_at: string;
+}
+
+function capabilityDiagnostics(
+	row: ShopifyIntegrationRow,
+): ShopifyCapabilityDiagnostics {
+	return {
+		read_products: row.can_read_products ? "granted" : "missing",
+		write_products: row.can_write_products ? "granted" : "missing",
+		read_orders: row.can_read_orders ? "granted" : "missing",
+		write_orders: "disabled",
+	};
+}
+
+function throwTranslatedShopifyOwnershipError(error: unknown): never {
+	if (
+		error &&
+		typeof error === "object" &&
+		(("errno" in error && (error as { errno?: string }).errno === "23505") ||
+			("code" in error && (error as { code?: string }).code === "23505"))
+	) {
+		throw new ShopifyShopOwnershipError();
+	}
+	throw error;
 }
 
 interface ProductRow {
@@ -147,15 +181,32 @@ function mapFestival(row: FestivalRow): FestivalRecord {
 function mapShopifyIntegration(
 	row: ShopifyIntegrationRow,
 ): ShopifyIntegrationRecord {
+	const capabilities = capabilityDiagnostics(row);
+	const integrationVersion = Number(row.integration_version);
+	if (!Number.isSafeInteger(integrationVersion) || integrationVersion <= 0) {
+		throw new Error("Shopify integration version is invalid.");
+	}
+	const verificationMetadataComplete = Boolean(
+		row.verified_shop_gid && row.verified_shop_domain && row.verified_at,
+	);
 	return {
 		organizationId: row.organization_id,
 		storeDomain: row.store_domain,
 		clientId: row.client_id,
 		encryptedClientSecret: row.encrypted_client_secret,
-		verificationStatus: row.verification_status,
+		verificationStatus:
+			row.verification_status === "ok" && !verificationMetadataComplete
+				? "failed"
+				: row.verification_status,
+		verifiedShopGid: row.verified_shop_gid ?? undefined,
+		verifiedShopDomain: row.verified_shop_domain ?? undefined,
+		grantedScopes: [...(row.granted_scopes ?? [])],
+		capabilities,
+		integrationVersion,
 		verifiedAtIso: row.verified_at ?? undefined,
 		lastTestedAtIso: row.last_tested_at ?? undefined,
 		lastError: row.last_error ?? undefined,
+		lastFailureCategory: row.last_failure_category ?? undefined,
 		createdAtIso: row.created_at,
 		updatedAtIso: row.updated_at,
 	};
@@ -287,9 +338,17 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				client_id TEXT NOT NULL,
 				encrypted_client_secret TEXT NOT NULL,
 				verification_status TEXT NOT NULL DEFAULT 'unknown',
+				verified_shop_gid TEXT NULL,
+				verified_shop_domain TEXT NULL,
+				granted_scopes TEXT[] NOT NULL DEFAULT '{}',
+				can_read_products BOOLEAN NOT NULL DEFAULT FALSE,
+				can_write_products BOOLEAN NOT NULL DEFAULT FALSE,
+				can_read_orders BOOLEAN NOT NULL DEFAULT FALSE,
+				integration_version BIGINT NOT NULL DEFAULT 1,
 				verified_at TIMESTAMPTZ NULL,
 				last_tested_at TIMESTAMPTZ NULL,
 				last_error TEXT NULL,
+				last_failure_category TEXT NULL,
 				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 			);
@@ -326,11 +385,80 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				ADD COLUMN IF NOT EXISTS disassociated BOOLEAN NOT NULL DEFAULT FALSE;
 
 			ALTER TABLE ${schema}.shopify_integrations
+				ADD COLUMN IF NOT EXISTS verified_shop_gid TEXT NULL,
+				ADD COLUMN IF NOT EXISTS verified_shop_domain TEXT NULL,
+				ADD COLUMN IF NOT EXISTS granted_scopes TEXT[] NOT NULL DEFAULT '{}',
+				ADD COLUMN IF NOT EXISTS can_read_products BOOLEAN NOT NULL DEFAULT FALSE,
+				ADD COLUMN IF NOT EXISTS can_write_products BOOLEAN NOT NULL DEFAULT FALSE,
+				ADD COLUMN IF NOT EXISTS can_read_orders BOOLEAN NOT NULL DEFAULT FALSE,
+				ADD COLUMN IF NOT EXISTS integration_version BIGINT NOT NULL DEFAULT 1,
+				ADD COLUMN IF NOT EXISTS last_failure_category TEXT NULL,
 				DROP COLUMN IF EXISTS encrypted_offline_access_token,
-				DROP COLUMN IF EXISTS granted_scopes,
 				DROP COLUMN IF EXISTS installed_at,
 				DROP COLUMN IF EXISTS oauth_state,
 				DROP COLUMN IF EXISTS oauth_state_created_at;
+
+			ALTER TABLE ${schema}.shopify_integrations
+				DROP CONSTRAINT IF EXISTS shopify_integrations_verification_status_check,
+				DROP CONSTRAINT IF EXISTS shopify_integrations_failure_category_check,
+				DROP CONSTRAINT IF EXISTS shopify_integrations_version_check;
+
+			ALTER TABLE ${schema}.shopify_integrations
+				ADD CONSTRAINT shopify_integrations_verification_status_check
+					CHECK (verification_status IN ('unknown', 'ok', 'failed')),
+				ADD CONSTRAINT shopify_integrations_failure_category_check
+					CHECK (
+						last_failure_category IS NULL OR last_failure_category IN (
+							'credentials',
+							'identity_mismatch',
+							'shop_ownership_conflict',
+							'missing_scope',
+							'transport',
+							'upstream'
+						)
+					),
+				ADD CONSTRAINT shopify_integrations_version_check
+					CHECK (integration_version > 0);
+
+			CREATE OR REPLACE FUNCTION ${schema}.enforce_shopify_shop_ownership()
+			RETURNS TRIGGER AS $$
+			BEGIN
+				PERFORM pg_advisory_xact_lock(hashtextextended(NEW.store_domain, 0));
+				IF NEW.verified_shop_domain IS NOT NULL THEN
+					PERFORM pg_advisory_xact_lock(
+						hashtextextended(NEW.verified_shop_domain, 0)
+					);
+				END IF;
+				IF EXISTS (
+					SELECT 1
+					FROM ${schema}.shopify_integrations existing
+					WHERE existing.organization_id <> NEW.organization_id
+						AND (
+							existing.store_domain = NEW.store_domain
+							OR existing.verified_shop_domain = NEW.store_domain
+							OR (
+								NEW.verified_shop_domain IS NOT NULL
+								AND (
+									existing.store_domain = NEW.verified_shop_domain
+									OR existing.verified_shop_domain = NEW.verified_shop_domain
+								)
+							)
+						)
+				) THEN
+					RAISE EXCEPTION 'Shopify shop ownership conflict'
+						USING ERRCODE = '23505';
+				END IF;
+				RETURN NEW;
+			END;
+			$$ LANGUAGE plpgsql;
+
+			DROP TRIGGER IF EXISTS enforce_shopify_shop_ownership
+				ON ${schema}.shopify_integrations;
+			CREATE TRIGGER enforce_shopify_shop_ownership
+				BEFORE INSERT OR UPDATE OF store_domain, verified_shop_domain
+				ON ${schema}.shopify_integrations
+				FOR EACH ROW
+				EXECUTE FUNCTION ${schema}.enforce_shopify_shop_ownership();
 
 			ALTER TABLE ${schema}.memberships
 				DROP CONSTRAINT IF EXISTS memberships_user_id_key;
@@ -343,6 +471,17 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 
 			CREATE UNIQUE INDEX IF NOT EXISTS idx_festivals_org_name_lower
 				ON ${schema}.festivals (organization_id, LOWER(name));
+
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_shopify_integrations_store_domain
+				ON ${schema}.shopify_integrations (store_domain);
+
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_shopify_integrations_verified_domain
+				ON ${schema}.shopify_integrations (verified_shop_domain)
+				WHERE verified_shop_domain IS NOT NULL;
+
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_shopify_integrations_verified_gid
+				ON ${schema}.shopify_integrations (verified_shop_gid)
+				WHERE verified_shop_gid IS NOT NULL;
 
 			CREATE INDEX IF NOT EXISTS idx_products_organization_id
 				ON ${schema}.products (organization_id);
@@ -930,9 +1069,17 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				client_id,
 				encrypted_client_secret,
 				verification_status,
+				verified_shop_gid,
+				verified_shop_domain,
+				granted_scopes,
+				can_read_products,
+				can_write_products,
+				can_read_orders,
+				integration_version,
 				verified_at,
 				last_tested_at,
 				last_error,
+				last_failure_category,
 				created_at,
 				updated_at
 			 FROM ${this.schema}.shopify_integrations
@@ -949,8 +1096,10 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 	): Promise<ShopifyIntegrationRecord> {
 		await this.ensureReady();
 
-		const [row] = (await sql.unsafe(
-			`INSERT INTO ${this.schema}.shopify_integrations (
+		let row: ShopifyIntegrationRow | undefined;
+		try {
+			[row] = (await sql.unsafe(
+				`INSERT INTO ${this.schema}.shopify_integrations (
 				organization_id,
 				store_domain,
 				client_id,
@@ -959,16 +1108,25 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				verified_at,
 				last_tested_at,
 				last_error,
+				last_failure_category,
 				updated_at
-			) VALUES ($1, $2, $3, $4, 'unknown', NULL, NULL, NULL, NOW())
+			) VALUES ($1, $2, $3, $4, 'unknown', NULL, NULL, NULL, NULL, NOW())
 			ON CONFLICT (organization_id) DO UPDATE SET
 				store_domain = EXCLUDED.store_domain,
 				client_id = EXCLUDED.client_id,
 				encrypted_client_secret = EXCLUDED.encrypted_client_secret,
 				verification_status = 'unknown',
+				verified_shop_gid = NULL,
+				verified_shop_domain = NULL,
+				granted_scopes = '{}',
+				can_read_products = FALSE,
+				can_write_products = FALSE,
+				can_read_orders = FALSE,
+				integration_version = ${this.schema}.shopify_integrations.integration_version + 1,
 				verified_at = NULL,
 				last_tested_at = NULL,
 				last_error = NULL,
+				last_failure_category = NULL,
 				updated_at = NOW()
 			RETURNING
 				organization_id,
@@ -976,18 +1134,32 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				client_id,
 				encrypted_client_secret,
 				verification_status,
+				verified_shop_gid,
+				verified_shop_domain,
+				granted_scopes,
+				can_read_products,
+				can_write_products,
+				can_read_orders,
+				integration_version,
 				verified_at,
 				last_tested_at,
 				last_error,
+				last_failure_category,
 				created_at,
 				updated_at`,
-			[
-				input.organizationId,
-				input.storeDomain,
-				input.clientId,
-				input.encryptedClientSecret,
-			],
-		)) as ShopifyIntegrationRow[];
+				[
+					input.organizationId,
+					input.storeDomain,
+					input.clientId,
+					input.encryptedClientSecret,
+				],
+			)) as ShopifyIntegrationRow[];
+		} catch (error) {
+			throwTranslatedShopifyOwnershipError(error);
+		}
+		if (!row) {
+			throw new Error("Shopify integration upsert returned no record.");
+		}
 
 		return mapShopifyIntegration(row);
 	}
@@ -996,14 +1168,30 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		input: UpdateShopifyVerificationInput,
 	): Promise<ShopifyIntegrationRecord> {
 		await this.ensureReady();
+		const grantedScopes = input.grantedScopes ?? [];
+		if (grantedScopes.some((scope) => !/^[a-z][a-z0-9_]*$/.test(scope))) {
+			throw new Error("Shopify granted scope data is invalid.");
+		}
 
-		const [row] = (await sql.unsafe(
-			`UPDATE ${this.schema}.shopify_integrations
+		let row: ShopifyIntegrationRow | undefined;
+		try {
+			[row] = (await sql.unsafe(
+				`UPDATE ${this.schema}.shopify_integrations
 			 SET
 				verification_status = $2,
-				verified_at = $3,
-				last_tested_at = $4,
-				last_error = $5,
+				verified_shop_gid = $3,
+				verified_shop_domain = $4,
+				granted_scopes = COALESCE(
+					string_to_array(NULLIF($5, ''), ','),
+					ARRAY[]::TEXT[]
+				),
+				can_read_products = $6,
+				can_write_products = $7,
+				can_read_orders = $8,
+				verified_at = $9,
+				last_tested_at = $10,
+				last_error = $11,
+				last_failure_category = $12,
 				updated_at = NOW()
 			 WHERE organization_id = $1
 			 RETURNING
@@ -1012,19 +1200,37 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				client_id,
 				encrypted_client_secret,
 				verification_status,
+				verified_shop_gid,
+				verified_shop_domain,
+				granted_scopes,
+				can_read_products,
+				can_write_products,
+				can_read_orders,
+				integration_version,
 				verified_at,
 				last_tested_at,
 				last_error,
+				last_failure_category,
 				created_at,
 				updated_at`,
-			[
-				input.organizationId,
-				input.verificationStatus,
-				input.verifiedAtIso ?? null,
-				input.lastTestedAtIso,
-				input.lastError ?? null,
-			],
-		)) as ShopifyIntegrationRow[];
+				[
+					input.organizationId,
+					input.verificationStatus,
+					input.verifiedShopGid ?? null,
+					input.verifiedShopDomain ?? null,
+					grantedScopes.join(","),
+					input.capabilities?.read_products === "granted",
+					input.capabilities?.write_products === "granted",
+					input.capabilities?.read_orders === "granted",
+					input.verifiedAtIso ?? null,
+					input.lastTestedAtIso,
+					input.lastError ?? null,
+					input.lastFailureCategory ?? null,
+				],
+			)) as ShopifyIntegrationRow[];
+		} catch (error) {
+			throwTranslatedShopifyOwnershipError(error);
+		}
 
 		if (!row) {
 			throw new Error("Shopify integration not found.");

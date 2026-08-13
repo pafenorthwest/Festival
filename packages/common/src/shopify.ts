@@ -7,14 +7,75 @@ export const SHOPIFY_VERIFICATION_STATUSES = [
 export type ShopifyVerificationStatus =
 	(typeof SHOPIFY_VERIFICATION_STATUSES)[number];
 
+export const SHOPIFY_ADMIN_CAPABILITIES = [
+	"read_products",
+	"write_products",
+	"read_orders",
+	"write_orders",
+] as const;
+
+export type ShopifyAdminCapability =
+	(typeof SHOPIFY_ADMIN_CAPABILITIES)[number];
+export type ShopifyCapabilityStatus = "granted" | "missing" | "disabled";
+export type ShopifyCapabilityDiagnostics = Record<
+	ShopifyAdminCapability,
+	ShopifyCapabilityStatus
+>;
+
+export const EMPTY_SHOPIFY_CAPABILITIES: ShopifyCapabilityDiagnostics = {
+	read_products: "missing",
+	write_products: "missing",
+	read_orders: "missing",
+	write_orders: "disabled",
+};
+
+export function normalizeEffectiveShopifyScopes(
+	grantedScopes: readonly string[],
+): string[] {
+	const scopes = new Set(grantedScopes);
+	if (scopes.has("write_products")) {
+		scopes.add("read_products");
+	}
+	return [...scopes].sort();
+}
+
+export function deriveShopifyCapabilities(
+	grantedScopes: readonly string[],
+): ShopifyCapabilityDiagnostics {
+	const scopes = new Set(normalizeEffectiveShopifyScopes(grantedScopes));
+	return {
+		read_products: scopes.has("read_products") ? "granted" : "missing",
+		write_products: scopes.has("write_products") ? "granted" : "missing",
+		read_orders: scopes.has("read_orders") ? "granted" : "missing",
+		write_orders: "disabled",
+	};
+}
+
+export const SHOPIFY_FAILURE_CATEGORIES = [
+	"credentials",
+	"identity_mismatch",
+	"shop_ownership_conflict",
+	"missing_scope",
+	"transport",
+	"upstream",
+] as const;
+
+export type ShopifyFailureCategory =
+	(typeof SHOPIFY_FAILURE_CATEGORIES)[number];
+
 export interface ShopifyIntegrationSettings {
 	storeDomain: string;
 	clientId: string;
 	hasClientSecret: boolean;
 	verificationStatus: ShopifyVerificationStatus;
+	verifiedShopGid?: string;
+	verifiedShopDomain?: string;
+	capabilities: ShopifyCapabilityDiagnostics;
+	integrationVersion: number;
 	verifiedAtIso?: string;
 	lastTestedAtIso?: string;
 	lastError?: string;
+	lastFailureCategory?: ShopifyFailureCategory;
 	updatedAtIso: string;
 }
 

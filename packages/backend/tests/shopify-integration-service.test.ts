@@ -4,10 +4,15 @@ import {
 	SHOPIFY_CLIENT_SECRET_PURPOSE,
 	ShopifySecretKeyring,
 } from "../src/shopify/encryption.js";
+import {
+	ShopifyAdminApiError,
+	ShopifyIdentityError,
+} from "../src/shopify/errors.js";
 import { ShopifyIntegrationService } from "../src/shopify/shopify-integration-service.js";
 import type {
 	ShopifyConnectivityTester,
 	ShopifyCredentials,
+	ShopifyVerificationResult,
 } from "../src/shopify/types.js";
 
 const TEST_KEY = Buffer.alloc(32, 7).toString("base64");
@@ -23,14 +28,37 @@ function createKeyring() {
 
 class FakeShopifyTester implements ShopifyConnectivityTester {
 	readonly calls: ShopifyCredentials[] = [];
+	readonly invalidations: Array<{
+		organizationId: string;
+		integrationVersion: number;
+	}> = [];
 
-	constructor(private readonly shouldFail = false) {}
+	constructor(
+		private readonly shouldFail = false,
+		private readonly result?: ShopifyVerificationResult,
+	) {}
 
-	async testCredentials(credentials: ShopifyCredentials): Promise<void> {
+	async testCredentials(
+		credentials: ShopifyCredentials,
+	): Promise<ShopifyVerificationResult> {
 		this.calls.push(credentials);
 		if (this.shouldFail) {
 			throw new Error("Invalid Shopify credentials: client-secret-canary");
 		}
+		return (
+			this.result ?? {
+				shopGid: "gid://shopify/Shop/1",
+				shopDomain: credentials.storeDomain,
+				grantedScopes: ["read_products", "write_products", "read_orders"],
+			}
+		);
+	}
+
+	invalidateIntegration(
+		organizationId: string,
+		integrationVersion: number,
+	): void {
+		this.invalidations.push({ organizationId, integrationVersion });
 	}
 }
 
@@ -112,9 +140,11 @@ describe("ShopifyIntegrationService", () => {
 			JSON.parse(stored?.encryptedClientSecret ?? "{}").ciphertext,
 		).not.toContain("client-secret");
 		expect(tester.calls[0]).toEqual({
+			organizationId: tenant.organization.id,
 			storeDomain: "example.myshopify.com",
 			clientId: "client-id",
 			clientSecret: "client-secret",
+			integrationVersion: 1,
 		});
 	});
 
@@ -151,10 +181,18 @@ describe("ShopifyIntegrationService", () => {
 			initial?.encryptedClientSecret,
 		);
 		expect(tester.calls[1]).toEqual({
+			organizationId: tenant.organization.id,
 			storeDomain: "example.myshopify.com",
 			clientId: "client-id-2",
 			clientSecret: "first-secret",
+			integrationVersion: 2,
 		});
+		expect(tester.invalidations).toEqual([
+			{
+				organizationId: tenant.organization.id,
+				integrationVersion: 1,
+			},
+		]);
 		expect(retained?.verificationStatus).toBe("ok");
 	});
 
@@ -201,5 +239,97 @@ describe("ShopifyIntegrationService", () => {
 			),
 		).rejects.toThrow("Shopify encrypted secret context does not match.");
 		expect(tester.calls).toHaveLength(0);
+	});
+
+	it("verifies identity while preserving independent missing-scope diagnostics", async () => {
+		const repository = new InMemoryOrganizationRepository();
+		const tester = new FakeShopifyTester(false, {
+			shopGid: "gid://shopify/Shop/1",
+			shopDomain: "example.myshopify.com",
+			grantedScopes: ["read_products", "read_orders"],
+		});
+		const service = new ShopifyIntegrationService(
+			repository,
+			createKeyring(),
+			tester,
+		);
+		const tenant = await createTenant(repository);
+		const response = await service.saveAndTestForTenant(tenant, {
+			storeUrl: "example.myshopify.com",
+			clientId: "client-id",
+			clientSecret: "client-secret",
+		});
+
+		expect(response.settings).toMatchObject({
+			verificationStatus: "ok",
+			verifiedShopGid: "gid://shopify/Shop/1",
+			verifiedShopDomain: "example.myshopify.com",
+			capabilities: {
+				read_products: "granted",
+				write_products: "missing",
+				read_orders: "granted",
+				write_orders: "disabled",
+			},
+		});
+		expect(response.settings.lastFailureCategory).toBeUndefined();
+		expect(response.settings.lastError).toBeUndefined();
+		expect("grantedScopes" in response.settings).toBeFalse();
+
+		const stored = await repository.getShopifyIntegration(
+			tenant.organization.id,
+		);
+		expect(stored?.grantedScopes).toEqual(["read_products", "read_orders"]);
+	});
+
+	it("preserves typed Admin authorization failure categories", async () => {
+		class UnauthorizedShopTester implements ShopifyConnectivityTester {
+			async testCredentials(): Promise<ShopifyVerificationResult> {
+				throw new ShopifyAdminApiError(
+					"Shopify authorization failed.",
+					{},
+					"credentials",
+				);
+			}
+		}
+		const repository = new InMemoryOrganizationRepository();
+		const service = new ShopifyIntegrationService(
+			repository,
+			createKeyring(),
+			new UnauthorizedShopTester(),
+		);
+		const tenant = await createTenant(repository);
+		const response = await service.saveAndTestForTenant(tenant, {
+			storeUrl: "example.myshopify.com",
+			clientId: "client-id",
+			clientSecret: "client-secret",
+		});
+
+		expect(response.settings).toMatchObject({
+			verificationStatus: "failed",
+			lastFailureCategory: "credentials",
+			lastError: "Shopify verification failed.",
+		});
+	});
+
+	it("classifies wrong-shop failures without exposing raw identity errors", async () => {
+		class WrongShopTester implements ShopifyConnectivityTester {
+			async testCredentials(): Promise<ShopifyVerificationResult> {
+				throw new ShopifyIdentityError();
+			}
+		}
+		const repository = new InMemoryOrganizationRepository();
+		const service = new ShopifyIntegrationService(
+			repository,
+			createKeyring(),
+			new WrongShopTester(),
+		);
+		const tenant = await createTenant(repository);
+		const response = await service.saveAndTestForTenant(tenant, {
+			storeUrl: "example.myshopify.com",
+			clientId: "client-id",
+			clientSecret: "client-secret",
+		});
+		expect(response.settings.lastFailureCategory).toBe("identity_mismatch");
+		expect(JSON.stringify(response)).not.toContain("different shop identity");
 	});
 });

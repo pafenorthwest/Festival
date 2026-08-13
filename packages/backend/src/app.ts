@@ -14,6 +14,7 @@ import { assertRouteSecurityInventory } from "./routes/route-security.js";
 import { apiRequestSecurity } from "./security/request-security.js";
 import { OrganizationService } from "./services/organization-service.js";
 import { ShopifyAdminApiClient } from "./shopify/admin-api-client.js";
+import { FileShopifyMutationAuditWriter } from "./shopify/admin-mutation-audit.js";
 import { ShopifySecretKeyring } from "./shopify/encryption.js";
 import type { ShopifyIntegrationService } from "./shopify/shopify-integration-service.js";
 import { ShopifyIntegrationService as DefaultShopifyIntegrationService } from "./shopify/shopify-integration-service.js";
@@ -83,6 +84,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 					repository,
 					secretKeyring,
 					shopifyAdminApiClient,
+					new FileShopifyMutationAuditWriter(),
 				)
 			: undefined);
 

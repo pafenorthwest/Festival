@@ -17,6 +17,9 @@ function formatOption(value: string): string {
 export function AdminMembershipProductsPage(
 	props: AdminMembershipProductsPageProps,
 ) {
+	const shopifyIntegrationVerified = () =>
+		props.app.shopifySettings()?.verificationStatus === "ok";
+
 	return (
 		<Show
 			when={props.app.isAdminMember()}
@@ -105,15 +108,13 @@ export function AdminMembershipProductsPage(
 								</p>
 							</div>
 							<span
-								class={`shopify-status shopify-status-${props.app.shopifySettings()?.verificationStatus ?? "unknown"}`}
+								class={`shopify-status ${props.app.shopifyPrerequisiteMet() ? "shopify-status-ok" : "shopify-status-not-ready"}`}
 							>
-								{props.app.shopifyPrerequisiteMet()
-									? "Ready"
-									: "Setup Required"}
+								{props.app.shopifyPrerequisiteMet() ? "Ready" : "Not Ready"}
 							</span>
 						</div>
 
-						<Show when={!props.app.shopifyPrerequisiteMet()}>
+						<Show when={!shopifyIntegrationVerified()}>
 							<div class="membership-prerequisite" role="status">
 								<p>
 									Verified Shopify integration is required before creating

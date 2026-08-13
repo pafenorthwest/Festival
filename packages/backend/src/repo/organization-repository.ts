@@ -8,6 +8,8 @@ import type {
 	OrganizationMembershipRecord,
 	OrganizationRecord,
 	OrganizationUserRecord,
+	ShopifyCapabilityDiagnostics,
+	ShopifyFailureCategory,
 	ShopifyVerificationStatus,
 } from "@festival/common";
 
@@ -50,9 +52,15 @@ export interface ShopifyIntegrationRecord {
 	clientId: string;
 	encryptedClientSecret: string;
 	verificationStatus: ShopifyVerificationStatus;
+	verifiedShopGid?: string;
+	verifiedShopDomain?: string;
+	grantedScopes: string[];
+	capabilities: ShopifyCapabilityDiagnostics;
+	integrationVersion: number;
 	verifiedAtIso?: string;
 	lastTestedAtIso?: string;
 	lastError?: string;
+	lastFailureCategory?: ShopifyFailureCategory;
 	createdAtIso: string;
 	updatedAtIso: string;
 }
@@ -64,12 +72,36 @@ export interface UpsertShopifyIntegrationInput {
 	encryptedClientSecret: string;
 }
 
-export interface UpdateShopifyVerificationInput {
+interface UpdateShopifyVerificationBase {
 	organizationId: string;
-	verificationStatus: Exclude<ShopifyVerificationStatus, "unknown">;
-	verifiedAtIso?: string;
 	lastTestedAtIso: string;
 	lastError?: string;
+	lastFailureCategory?: ShopifyFailureCategory;
+}
+
+export type UpdateShopifyVerificationInput =
+	| (UpdateShopifyVerificationBase & {
+			verificationStatus: "ok";
+			verifiedAtIso: string;
+			verifiedShopGid: string;
+			verifiedShopDomain: string;
+			grantedScopes: string[];
+			capabilities: ShopifyCapabilityDiagnostics;
+	  })
+	| (UpdateShopifyVerificationBase & {
+			verificationStatus: "failed";
+			verifiedAtIso?: undefined;
+			verifiedShopGid?: undefined;
+			verifiedShopDomain?: undefined;
+			grantedScopes?: undefined;
+			capabilities?: undefined;
+	  });
+
+export class ShopifyShopOwnershipError extends Error {
+	constructor() {
+		super("Shopify shop is already assigned to another organization.");
+		this.name = "ShopifyShopOwnershipError";
+	}
 }
 
 export interface ProductRecord {

@@ -87,13 +87,21 @@ integration with:
 - `client_secret`: stored encrypted server-side using the tenant-bound Shopify
   keyring configured by `FESTIVAL_SECRET_KEYS_JSON` and
   `FESTIVAL_ACTIVE_SECRET_KEY_ID`.
-- `verification_status = ok`: required before the admin membership form can
-  create products.
+- `verification_status = ok`: confirms the canonical shop identity. The admin
+  membership form can create products only when the independently reported
+  `read_products` and `write_products` capabilities are both granted.
 
 The browser calls only Festival backend APIs. Shopify Admin API credentials,
 tokens, and raw Admin responses must remain server-side. The backend uses the
-saved organization integration and the pinned Admin GraphQL API path already
-implemented in the Shopify backend client.
+saved organization integration and Shopify Admin GraphQL `2026-07`. Access
+tokens are held only in an early-expiry, process-local cache keyed by the full
+tenant integration identity and are invalidated when credentials are saved or
+rotated.
+
+Every attempted Shopify product mutation writes one minimal audit record to
+`/var/log/festival/shopify-admin-audit.ndjson`. Deployment operations must
+provision that path and own log rotation and retention; Festival does not store
+these records in PostgreSQL or rotate the file itself.
 
 Manual release validation for a development store should create one membership
 from `/org/:slug/admin/memberships`, confirm the Shopify product has a single

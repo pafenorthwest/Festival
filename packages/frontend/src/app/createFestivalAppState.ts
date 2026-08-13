@@ -205,9 +205,14 @@ export function createFestivalAppState() {
 	const membershipProductValidationMessage = createMemo(() =>
 		membershipProductValidation().errors.join(" "),
 	);
-	const shopifyPrerequisiteMet = createMemo(
-		() => shopifySettings()?.verificationStatus === "ok",
-	);
+	const shopifyPrerequisiteMet = createMemo(() => {
+		const settings = shopifySettings();
+		return (
+			settings?.verificationStatus === "ok" &&
+			settings.capabilities.read_products === "granted" &&
+			settings.capabilities.write_products === "granted"
+		);
+	});
 	const isAdminRoute = createMemo(() =>
 		ADMIN_ROUTE_KINDS.some((kind) => kind === route().kind),
 	);

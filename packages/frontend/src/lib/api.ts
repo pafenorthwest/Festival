@@ -128,6 +128,14 @@ export function getMembershipProducts(slug: string) {
 	);
 }
 
+export function getAdminMembershipProducts(idToken: string, slug: string) {
+	return requestJson<MembershipProductsListResponse>(
+		`/api/organizations/${slug}/admin/membership-products`,
+		undefined,
+		idToken,
+	);
+}
+
 export function createMembershipProduct(
 	idToken: string,
 	slug: string,

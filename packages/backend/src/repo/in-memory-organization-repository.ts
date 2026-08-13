@@ -8,8 +8,8 @@ import type {
 	OrganizationMembershipRecord,
 	OrganizationRecord,
 	OrganizationUserRecord,
-	ShopifyVerificationStatus,
 } from "@festival/common";
+import { EMPTY_SHOPIFY_CAPABILITIES } from "@festival/common";
 import type {
 	CreateFestivalRecordInput,
 	CreateInviteRecordInput,
@@ -23,6 +23,7 @@ import type {
 	UpdateShopifyVerificationInput,
 	UpsertShopifyIntegrationInput,
 } from "./organization-repository.js";
+import { ShopifyShopOwnershipError } from "./organization-repository.js";
 
 export class InMemoryOrganizationRepository implements OrganizationRepository {
 	private readonly users = new Map<string, OrganizationUserRecord>();
@@ -431,6 +432,16 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		input: UpsertShopifyIntegrationInput,
 	): Promise<ShopifyIntegrationRecord> {
 		const existing = this.shopifyIntegrations.get(input.organizationId);
+		if (
+			[...this.shopifyIntegrations.values()].some(
+				(integration) =>
+					integration.organizationId !== input.organizationId &&
+					(integration.storeDomain === input.storeDomain ||
+						integration.verifiedShopDomain === input.storeDomain),
+			)
+		) {
+			throw new ShopifyShopOwnershipError();
+		}
 		const now = new Date().toISOString();
 		const record: ShopifyIntegrationRecord = {
 			organizationId: input.organizationId,
@@ -438,6 +449,9 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			clientId: input.clientId,
 			encryptedClientSecret: input.encryptedClientSecret,
 			verificationStatus: "unknown",
+			grantedScopes: [],
+			capabilities: { ...EMPTY_SHOPIFY_CAPABILITIES },
+			integrationVersion: (existing?.integrationVersion ?? 0) + 1,
 			createdAtIso: existing?.createdAtIso ?? now,
 			updatedAtIso: now,
 		};
@@ -453,13 +467,38 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		if (!existing) {
 			throw new Error("Shopify integration not found.");
 		}
+		if (
+			input.verificationStatus === "ok" &&
+			[...this.shopifyIntegrations.values()].some(
+				(integration) =>
+					integration.organizationId !== input.organizationId &&
+					(integration.storeDomain === input.verifiedShopDomain ||
+						integration.verifiedShopDomain === input.verifiedShopDomain ||
+						integration.verifiedShopGid === input.verifiedShopGid),
+			)
+		) {
+			throw new ShopifyShopOwnershipError();
+		}
 
 		const record: ShopifyIntegrationRecord = {
 			...existing,
-			verificationStatus: input.verificationStatus as ShopifyVerificationStatus,
+			verificationStatus: input.verificationStatus,
+			verifiedShopGid:
+				input.verificationStatus === "ok" ? input.verifiedShopGid : undefined,
+			verifiedShopDomain:
+				input.verificationStatus === "ok"
+					? input.verifiedShopDomain
+					: undefined,
+			grantedScopes:
+				input.verificationStatus === "ok" ? [...input.grantedScopes] : [],
+			capabilities:
+				input.verificationStatus === "ok"
+					? { ...input.capabilities }
+					: { ...EMPTY_SHOPIFY_CAPABILITIES },
 			verifiedAtIso: input.verifiedAtIso,
 			lastTestedAtIso: input.lastTestedAtIso,
 			lastError: input.lastError,
+			lastFailureCategory: input.lastFailureCategory,
 			updatedAtIso: new Date().toISOString(),
 		};
 
