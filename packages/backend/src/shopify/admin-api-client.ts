@@ -1,14 +1,21 @@
-import { createHash } from "node:crypto";
+import { normalizeEffectiveShopifyScopes } from "@festival/common";
 import {
 	ShopifyAdminApiError,
 	ShopifyCredentialsError,
+	ShopifyIdentityError,
+	ShopifyIntegrationError,
+	ShopifyScopeError,
+	ShopifyTransportError,
 	ShopifyUserError,
 } from "./errors.js";
 import type {
+	ShopifyAdminOperationContext,
+	ShopifyAdminResult,
 	ShopifyConnectivityTester,
 	ShopifyCredentials,
 	ShopifyMembershipProductClient,
 	ShopifyProductDetails,
+	ShopifyVerificationResult,
 } from "./types.js";
 
 const SHOPIFY_ADMIN_API_VERSION = "2026-07";
@@ -24,6 +31,7 @@ interface ShopifyAdminApiClientOptions {
 	fetch?: ShopifyFetch;
 	requestTimeoutMs?: number;
 	maxResponseBytes?: number;
+	now?: () => number;
 }
 
 interface AccessTokenResponse {
@@ -34,7 +42,13 @@ interface AccessTokenResponse {
 
 interface CachedAccessToken {
 	accessToken: string;
+	grantedScopes: string[];
 	expiresAtMs: number;
+}
+
+interface AcquiredAccessToken {
+	accessToken: string;
+	grantedScopes: string[];
 }
 
 const ACCESS_TOKEN_EXPIRY_SAFETY_MS = 60_000;
@@ -123,12 +137,18 @@ function mapProductNode(
 	};
 }
 
-function throwIfUserErrors(userErrors: ShopifyUserErrorPayload[] = []): void {
+function throwIfUserErrors(
+	userErrors: ShopifyUserErrorPayload[] = [],
+	requestId?: string,
+): void {
 	if (userErrors.length === 0) {
 		return;
 	}
 
-	throw new ShopifyUserError("Shopify rejected the product operation.");
+	throw new ShopifyUserError(
+		"Shopify rejected the product operation.",
+		requestId,
+	);
 }
 
 export class ShopifyAdminApiClient
@@ -138,6 +158,7 @@ export class ShopifyAdminApiClient
 	private readonly fetchImpl: ShopifyFetch;
 	private readonly requestTimeoutMs: number;
 	private readonly maxResponseBytes: number;
+	private readonly now: () => number;
 
 	constructor(options: ShopifyAdminApiClientOptions = {}) {
 		this.fetchImpl = options.fetch ?? ((input, init) => fetch(input, init));
@@ -145,15 +166,18 @@ export class ShopifyAdminApiClient
 			options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
 		this.maxResponseBytes =
 			options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
+		this.now = options.now ?? Date.now;
 	}
 
-	async testCredentials(credentials: ShopifyCredentials): Promise<void> {
-		const accessToken = await this.fetchAccessToken(credentials, true);
-		const payload = await this.graphqlRequest<{
+	async testCredentials(
+		credentials: ShopifyCredentials,
+	): Promise<ShopifyVerificationResult> {
+		const token = await this.fetchAccessToken(credentials, true);
+		const { value: payload } = await this.graphqlRequest<{
 			shop?: { id?: string; myshopifyDomain?: string };
 		}>(
 			credentials.storeDomain,
-			accessToken,
+			token.accessToken,
 			`
 			query TestShopifyConnection {
 				shop {
@@ -164,26 +188,56 @@ export class ShopifyAdminApiClient
 		`,
 		);
 
-		if (!payload.shop?.id) {
+		if (!payload.shop?.id || !payload.shop.myshopifyDomain) {
 			throw new ShopifyCredentialsError(
 				"Shopify Admin API test returned no shop data.",
 			);
 		}
+		if (
+			payload.shop.myshopifyDomain.toLowerCase() !== credentials.storeDomain
+		) {
+			throw new ShopifyIdentityError();
+		}
+
+		return {
+			shopGid: payload.shop.id,
+			shopDomain: payload.shop.myshopifyDomain.toLowerCase(),
+			grantedScopes: token.grantedScopes,
+		};
+	}
+
+	invalidateIntegration(
+		organizationId: string,
+		integrationVersion: number,
+	): void {
+		for (const key of this.accessTokens.keys()) {
+			if (
+				key.startsWith(`${organizationId}\u0000`) &&
+				key.endsWith(`\u0000${integrationVersion}`)
+			) {
+				this.accessTokens.delete(key);
+			}
+		}
 	}
 
 	async createProduct(
-		credentials: ShopifyCredentials,
+		context: ShopifyAdminOperationContext,
 		input: {
 			name: string;
 			description?: string;
 		},
-	): Promise<ShopifyProductDetails> {
-		const accessToken = await this.fetchAccessToken(credentials);
+	): Promise<ShopifyAdminResult<ShopifyProductDetails>> {
+		this.assertOperationContext(context, "write_products");
+		const { credentials } = context;
+		const { accessToken } = await this.fetchOperationAccessToken(
+			context,
+			"write_products",
+		);
 		const shopCurrencyCode = await this.fetchShopCurrencyCode(
 			credentials.storeDomain,
 			accessToken,
 		);
-		const payload = await this.graphqlRequest<{
+		const response = await this.graphqlRequest<{
 			productCreate?: {
 				product?: ShopifyProductNode;
 				userErrors?: ShopifyUserErrorPayload[];
@@ -235,30 +289,39 @@ export class ShopifyAdminApiClient
 			},
 		);
 
-		throwIfUserErrors(payload.productCreate?.userErrors);
+		const payload = response.value;
+		throwIfUserErrors(payload.productCreate?.userErrors, response.requestId);
 		if (!payload.productCreate?.product) {
 			throw new ShopifyAdminApiError(
 				"Shopify product creation returned no product.",
 			);
 		}
 
-		return mapProductNode(payload.productCreate.product, shopCurrencyCode);
+		return {
+			value: mapProductNode(payload.productCreate.product, shopCurrencyCode),
+			requestId: response.requestId,
+		};
 	}
 
 	async updateVariantPrice(
-		credentials: ShopifyCredentials,
+		context: ShopifyAdminOperationContext,
 		input: {
 			productId: string;
 			variantId: string;
 			price: string;
 		},
-	): Promise<ShopifyProductDetails> {
-		const accessToken = await this.fetchAccessToken(credentials);
+	): Promise<ShopifyAdminResult<ShopifyProductDetails>> {
+		this.assertOperationContext(context, "write_products");
+		const { credentials } = context;
+		const { accessToken } = await this.fetchOperationAccessToken(
+			context,
+			"write_products",
+		);
 		const shopCurrencyCode = await this.fetchShopCurrencyCode(
 			credentials.storeDomain,
 			accessToken,
 		);
-		const payload = await this.graphqlRequest<{
+		const response = await this.graphqlRequest<{
 			productVariantsBulkUpdate?: {
 				product?: ShopifyProductNode;
 				userErrors?: ShopifyUserErrorPayload[];
@@ -310,33 +373,45 @@ export class ShopifyAdminApiClient
 			},
 		);
 
-		throwIfUserErrors(payload.productVariantsBulkUpdate?.userErrors);
+		const payload = response.value;
+		throwIfUserErrors(
+			payload.productVariantsBulkUpdate?.userErrors,
+			response.requestId,
+		);
 		if (!payload.productVariantsBulkUpdate?.product) {
 			throw new ShopifyAdminApiError(
 				"Shopify variant update returned no product.",
 			);
 		}
 
-		return mapProductNode(
-			payload.productVariantsBulkUpdate.product,
-			shopCurrencyCode,
-		);
+		return {
+			value: mapProductNode(
+				payload.productVariantsBulkUpdate.product,
+				shopCurrencyCode,
+			),
+			requestId: response.requestId,
+		};
 	}
 
 	async readProductsByGid(
-		credentials: ShopifyCredentials,
+		context: ShopifyAdminOperationContext,
 		productGids: string[],
-	): Promise<ShopifyProductDetails[]> {
+	): Promise<ShopifyAdminResult<ShopifyProductDetails[]>> {
+		this.assertOperationContext(context, "read_products");
 		if (productGids.length === 0) {
-			return [];
+			return { value: [] };
 		}
 
-		const accessToken = await this.fetchAccessToken(credentials);
+		const { credentials } = context;
+		const { accessToken } = await this.fetchOperationAccessToken(
+			context,
+			"read_products",
+		);
 		const shopCurrencyCode = await this.fetchShopCurrencyCode(
 			credentials.storeDomain,
 			accessToken,
 		);
-		const payload = await this.graphqlRequest<{
+		const response = await this.graphqlRequest<{
 			nodes?: Array<ShopifyProductNode | null>;
 		}>(
 			credentials.storeDomain,
@@ -370,17 +445,25 @@ export class ShopifyAdminApiClient
 			{ ids: productGids },
 		);
 
-		return (payload.nodes ?? [])
-			.filter((node): node is ShopifyProductNode => Boolean(node))
-			.map((node) => mapProductNode(node, shopCurrencyCode));
+		return {
+			value: (response.value.nodes ?? [])
+				.filter((node): node is ShopifyProductNode => Boolean(node))
+				.map((node) => mapProductNode(node, shopCurrencyCode)),
+			requestId: response.requestId,
+		};
 	}
 
 	async deleteProduct(
-		credentials: ShopifyCredentials,
+		context: ShopifyAdminOperationContext,
 		productGid: string,
-	): Promise<void> {
-		const accessToken = await this.fetchAccessToken(credentials);
-		const payload = await this.graphqlRequest<{
+	): Promise<ShopifyAdminResult<void>> {
+		this.assertOperationContext(context, "write_products");
+		const { credentials } = context;
+		const { accessToken } = await this.fetchOperationAccessToken(
+			context,
+			"write_products",
+		);
+		const response = await this.graphqlRequest<{
 			productDelete?: {
 				deletedProductId?: string;
 				userErrors?: ShopifyUserErrorPayload[];
@@ -402,24 +485,65 @@ export class ShopifyAdminApiClient
 			{ input: { id: productGid } },
 		);
 
-		throwIfUserErrors(payload.productDelete?.userErrors);
+		throwIfUserErrors(
+			response.value.productDelete?.userErrors,
+			response.requestId,
+		);
+		if (response.value.productDelete?.deletedProductId !== productGid) {
+			throw new ShopifyAdminApiError(
+				"Shopify product deletion returned no matching product.",
+				{ requestId: response.requestId },
+			);
+		}
+		return { value: undefined, requestId: response.requestId };
+	}
+
+	private assertOperationContext(
+		context: ShopifyAdminOperationContext,
+		requiredCapability: "read_products" | "write_products",
+	): void {
+		if (
+			context.capability !== requiredCapability ||
+			!context.grantedScopes.includes(requiredCapability) ||
+			context.organizationId !== context.credentials.organizationId ||
+			context.integrationVersion !== context.credentials.integrationVersion ||
+			context.verifiedShopDomain !== context.credentials.storeDomain
+		) {
+			throw new ShopifyCredentialsError(
+				"Shopify operation context is not authorized.",
+			);
+		}
+	}
+
+	private async fetchOperationAccessToken(
+		context: ShopifyAdminOperationContext,
+		requiredCapability: "read_products" | "write_products",
+	): Promise<AcquiredAccessToken> {
+		const token = await this.fetchAccessToken(context.credentials);
+		if (!token.grantedScopes.includes(requiredCapability)) {
+			throw new ShopifyScopeError();
+		}
+		return token;
 	}
 
 	private async fetchAccessToken(
 		credentials: ShopifyCredentials,
 		forceRefresh = false,
-	): Promise<string> {
+	): Promise<AcquiredAccessToken> {
 		const cacheKey = this.accessTokenCacheKey(credentials);
 		const cached = this.accessTokens.get(cacheKey);
 		if (
 			!forceRefresh &&
 			cached &&
-			cached.expiresAtMs - ACCESS_TOKEN_EXPIRY_SAFETY_MS > Date.now()
+			cached.expiresAtMs - ACCESS_TOKEN_EXPIRY_SAFETY_MS > this.now()
 		) {
-			return cached.accessToken;
+			return {
+				accessToken: cached.accessToken,
+				grantedScopes: [...cached.grantedScopes],
+			};
 		}
 
-		const payload = await this.postJson<AccessTokenResponse>(
+		const { value: payload } = await this.postJson<AccessTokenResponse>(
 			this.shopifyUrl(credentials.storeDomain, "/admin/oauth/access_token"),
 			{
 				headers: {
@@ -440,33 +564,67 @@ export class ShopifyAdminApiClient
 			);
 		}
 		if (
-			typeof payload.expires_in === "number" &&
-			Number.isFinite(payload.expires_in) &&
-			payload.expires_in > 0
+			typeof payload.expires_in !== "number" ||
+			!Number.isFinite(payload.expires_in) ||
+			payload.expires_in <= 0
 		) {
-			this.accessTokens.set(cacheKey, {
-				accessToken: payload.access_token,
-				expiresAtMs: Date.now() + payload.expires_in * 1_000,
-			});
-		} else {
-			this.accessTokens.delete(cacheKey);
+			throw new ShopifyCredentialsError(
+				"Shopify token response included an invalid expiry.",
+			);
 		}
+		const grantedScopes = this.normalizeGrantedScopes(payload.scope);
+		this.accessTokens.set(cacheKey, {
+			accessToken: payload.access_token,
+			grantedScopes,
+			expiresAtMs: this.now() + payload.expires_in * 1_000,
+		});
 
-		return payload.access_token;
+		return { accessToken: payload.access_token, grantedScopes };
 	}
 
 	private accessTokenCacheKey(credentials: ShopifyCredentials): string {
-		const secretFingerprint = createHash("sha256")
-			.update(credentials.clientSecret)
-			.digest("base64url");
-		return `${credentials.storeDomain}:${credentials.clientId}:${secretFingerprint}`;
+		if (
+			!credentials.organizationId ||
+			!Number.isSafeInteger(credentials.integrationVersion) ||
+			credentials.integrationVersion <= 0
+		) {
+			throw new ShopifyCredentialsError(
+				"Shopify integration identity is invalid.",
+			);
+		}
+		return [
+			credentials.organizationId,
+			credentials.storeDomain,
+			credentials.clientId,
+			String(credentials.integrationVersion),
+		].join("\u0000");
+	}
+
+	private normalizeGrantedScopes(scope: unknown): string[] {
+		if (typeof scope !== "string") {
+			throw new ShopifyCredentialsError(
+				"Shopify token response did not include granted scopes.",
+			);
+		}
+		const scopes = [...new Set(scope.split(",").map((value) => value.trim()))]
+			.filter(Boolean)
+			.sort();
+		if (
+			scopes.length === 0 ||
+			scopes.some((value) => !/^[a-z][a-z0-9_]*$/.test(value))
+		) {
+			throw new ShopifyCredentialsError(
+				"Shopify token response included invalid granted scopes.",
+			);
+		}
+		return normalizeEffectiveShopifyScopes(scopes);
 	}
 
 	private async fetchShopCurrencyCode(
 		storeDomain: string,
 		accessToken: string,
 	): Promise<string> {
-		const payload = await this.graphqlRequest<{
+		const { value: payload } = await this.graphqlRequest<{
 			shop?: { currencyCode?: string };
 		}>(
 			storeDomain,
@@ -494,8 +652,8 @@ export class ShopifyAdminApiClient
 		accessToken: string,
 		query: string,
 		variables: Record<string, unknown> = {},
-	): Promise<TData> {
-		const payload = await this.postJson<GraphqlResponse<TData>>(
+	): Promise<ShopifyAdminResult<TData>> {
+		const response = await this.postJson<GraphqlResponse<TData>>(
 			this.shopifyUrl(
 				storeDomain,
 				`/admin/api/${SHOPIFY_ADMIN_API_VERSION}/graphql.json`,
@@ -510,15 +668,20 @@ export class ShopifyAdminApiClient
 			"admin",
 		);
 
+		const payload = response.value;
 		if (payload.errors && payload.errors.length > 0) {
-			throw new ShopifyAdminApiError("Shopify Admin API returned an error.");
+			throw new ShopifyAdminApiError("Shopify Admin API returned an error.", {
+				requestId: response.requestId,
+			});
 		}
 
 		if (!payload.data) {
-			throw new ShopifyAdminApiError("Shopify Admin API returned no data.");
+			throw new ShopifyAdminApiError("Shopify Admin API returned no data.", {
+				requestId: response.requestId,
+			});
 		}
 
-		return payload.data;
+		return { value: payload.data, requestId: response.requestId };
 	}
 
 	private shopifyUrl(storeDomain: string, path: string): URL {
@@ -546,7 +709,7 @@ export class ShopifyAdminApiClient
 		url: URL,
 		init: Omit<RequestInit, "method" | "redirect" | "signal">,
 		errorKind: "credentials" | "admin",
-	): Promise<T> {
+	): Promise<ShopifyAdminResult<T>> {
 		const controller = new AbortController();
 		const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
 
@@ -561,9 +724,27 @@ export class ShopifyAdminApiClient
 				throw this.requestError(errorKind, "Shopify redirect was rejected.");
 			}
 			if (!response.ok) {
+				const requestId =
+					response.headers.get("x-request-id") ??
+					response.headers.get("x-shopify-request-id") ??
+					undefined;
+				const retryAfter = Number.parseInt(
+					response.headers.get("retry-after") ?? "",
+					10,
+				);
 				throw this.requestError(
 					errorKind,
-					`Shopify request failed with status ${response.status}.`,
+					response.status === 401 || response.status === 403
+						? "Shopify authorization failed."
+						: response.status === 429
+							? "Shopify request was throttled."
+							: "Shopify upstream request failed.",
+					{
+						requestId,
+						retryAfterSeconds: Number.isFinite(retryAfter)
+							? retryAfter
+							: undefined,
+					},
 				);
 			}
 
@@ -602,15 +783,24 @@ export class ShopifyAdminApiClient
 				offset += chunk.byteLength;
 			}
 			try {
-				return JSON.parse(new TextDecoder().decode(bytes)) as T;
+				return {
+					value: JSON.parse(new TextDecoder().decode(bytes)) as T,
+					requestId:
+						response.headers.get("x-request-id") ??
+						response.headers.get("x-shopify-request-id") ??
+						undefined,
+				};
 			} catch {
 				throw this.requestError(errorKind, "Shopify returned invalid JSON.");
 			}
 		} catch (error) {
 			if (controller.signal.aborted) {
-				throw this.requestError(errorKind, "Shopify request timed out.");
+				throw new ShopifyTransportError("Shopify request timed out.");
 			}
-			throw error;
+			if (error instanceof ShopifyIntegrationError) {
+				throw error;
+			}
+			throw new ShopifyTransportError();
 		} finally {
 			clearTimeout(timeout);
 		}
@@ -619,9 +809,16 @@ export class ShopifyAdminApiClient
 	private requestError(
 		errorKind: "credentials" | "admin",
 		message: string,
+		metadata: { requestId?: string; retryAfterSeconds?: number } = {},
 	): ShopifyCredentialsError | ShopifyAdminApiError {
 		return errorKind === "credentials"
 			? new ShopifyCredentialsError(message)
-			: new ShopifyAdminApiError(message);
+			: new ShopifyAdminApiError(
+					message,
+					metadata,
+					message === "Shopify authorization failed."
+						? "credentials"
+						: "upstream",
+				);
 	}
 }

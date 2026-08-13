@@ -3,7 +3,9 @@ import { ShopifyAdminApiClient } from "../src/shopify/admin-api-client.js";
 import {
 	ShopifyAdminApiError,
 	ShopifyCredentialsError,
+	ShopifyUserError,
 } from "../src/shopify/errors.js";
+import { assertShopifyOrderReadAllowed } from "../src/shopify/types.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -13,9 +15,21 @@ afterEach(() => {
 
 describe("ShopifyAdminApiClient", () => {
 	const credentials = {
+		organizationId: "organization-1",
 		storeDomain: "example.myshopify.com",
 		clientId: "client-id",
 		clientSecret: "client-secret",
+		integrationVersion: 1,
+	};
+	const operationContext = {
+		organizationId: credentials.organizationId,
+		firebaseActorUid: "firebase-admin-uid",
+		verifiedShopGid: "gid://shopify/Shop/1",
+		verifiedShopDomain: credentials.storeDomain,
+		integrationVersion: credentials.integrationVersion,
+		grantedScopes: ["read_products", "write_products", "read_orders"],
+		capability: "read_products" as const,
+		credentials,
 	};
 
 	it("reuses an unexpired access token for product reads", async () => {
@@ -28,6 +42,7 @@ describe("ShopifyAdminApiClient", () => {
 				return Response.json({
 					access_token: "short-lived-token",
 					expires_in: 86_399,
+					scope: "read_products,write_products,read_orders",
 				});
 			}
 
@@ -42,14 +57,18 @@ describe("ShopifyAdminApiClient", () => {
 		}) as typeof fetch;
 
 		const client = new ShopifyAdminApiClient();
-		await client.readProductsByGid(credentials, ["gid://shopify/Product/1"]);
-		await client.readProductsByGid(credentials, ["gid://shopify/Product/1"]);
+		await client.readProductsByGid(operationContext, [
+			"gid://shopify/Product/1",
+		]);
+		await client.readProductsByGid(operationContext, [
+			"gid://shopify/Product/1",
+		]);
 
 		expect(tokenRequests).toBe(1);
 		expect(graphqlRequests).toBe(4);
 	});
 
-	it("does not reuse a token after the client secret changes", async () => {
+	it("does not reuse a token after the integration version changes", async () => {
 		let tokenRequests = 0;
 		globalThis.fetch = (async (input, init) => {
 			const url = input instanceof Request ? input.url : input.toString();
@@ -58,6 +77,7 @@ describe("ShopifyAdminApiClient", () => {
 				return Response.json({
 					access_token: `short-lived-token-${tokenRequests}`,
 					expires_in: 86_399,
+					scope: "read_products,write_products,read_orders",
 				});
 			}
 
@@ -68,11 +88,18 @@ describe("ShopifyAdminApiClient", () => {
 		}) as typeof fetch;
 
 		const client = new ShopifyAdminApiClient();
-		await client.readProductsByGid(credentials, ["gid://shopify/Product/1"]);
+		await client.readProductsByGid(operationContext, [
+			"gid://shopify/Product/1",
+		]);
 		await client.readProductsByGid(
 			{
-				...credentials,
-				clientSecret: "rotated-client-secret",
+				...operationContext,
+				integrationVersion: 2,
+				credentials: {
+					...credentials,
+					clientSecret: "rotated-client-secret",
+					integrationVersion: 2,
+				},
 			},
 			["gid://shopify/Product/1"],
 		);
@@ -90,13 +117,25 @@ describe("ShopifyAdminApiClient", () => {
 		});
 
 		await expect(
-			client.readProductsByGid({ ...credentials, storeDomain: "127.0.0.1" }, [
-				"gid://shopify/Product/1",
-			]),
+			client.readProductsByGid(
+				{
+					...operationContext,
+					verifiedShopDomain: "127.0.0.1",
+					credentials: { ...credentials, storeDomain: "127.0.0.1" },
+				},
+				["gid://shopify/Product/1"],
+			),
 		).rejects.toBeInstanceOf(ShopifyCredentialsError);
 		await expect(
 			client.readProductsByGid(
-				{ ...credentials, storeDomain: "evil.test@example.myshopify.com" },
+				{
+					...operationContext,
+					verifiedShopDomain: "evil.test@example.myshopify.com",
+					credentials: {
+						...credentials,
+						storeDomain: "evil.test@example.myshopify.com",
+					},
+				},
 				["gid://shopify/Product/1"],
 			),
 		).rejects.toBeInstanceOf(ShopifyCredentialsError);
@@ -167,7 +206,11 @@ describe("ShopifyAdminApiClient", () => {
 			fetch: async () => {
 				call += 1;
 				return call === 1
-					? Response.json({ access_token: "token", expires_in: 3600 })
+					? Response.json({
+							access_token: "token",
+							expires_in: 3600,
+							scope: "read_products,write_products",
+						})
 					: new Response("upstream failure", { status: 500 });
 			},
 		});
@@ -175,5 +218,406 @@ describe("ShopifyAdminApiClient", () => {
 		await expect(client.testCredentials(credentials)).rejects.toBeInstanceOf(
 			ShopifyAdminApiError,
 		);
+	});
+
+	it("forces verification refresh, expands implied reads, validates shop identity, and requests no scopes", async () => {
+		let tokenRequests = 0;
+		const tokenBodies: string[] = [];
+		const client = new ShopifyAdminApiClient({
+			fetch: async (input, init) => {
+				const url = input.toString();
+				if (url.endsWith("/admin/oauth/access_token")) {
+					tokenRequests += 1;
+					tokenBodies.push(String(init?.body));
+					return Response.json({
+						access_token: `token-${tokenRequests}`,
+						expires_in: 3600,
+						scope: "read_orders,write_products",
+					});
+				}
+				expect(url).toContain("/admin/api/2026-07/graphql.json");
+				return Response.json({
+					data: {
+						shop: {
+							id: "gid://shopify/Shop/1",
+							myshopifyDomain: "example.myshopify.com",
+						},
+					},
+				});
+			},
+		});
+
+		await expect(client.testCredentials(credentials)).resolves.toEqual({
+			shopGid: "gid://shopify/Shop/1",
+			shopDomain: "example.myshopify.com",
+			grantedScopes: ["read_orders", "read_products", "write_products"],
+		});
+		await client.testCredentials(credentials);
+		expect(tokenRequests).toBe(2);
+		expect(tokenBodies.every((body) => !body.includes("scope"))).toBeTrue();
+	});
+
+	it("authorizes product reads through write_products implied access", async () => {
+		const client = new ShopifyAdminApiClient({
+			fetch: async (input, init) => {
+				if (input.toString().endsWith("/admin/oauth/access_token")) {
+					return Response.json({
+						access_token: "write-products-token",
+						expires_in: 3600,
+						scope: "read_orders,write_products",
+					});
+				}
+				const query = JSON.parse(String(init?.body)).query as string;
+				return query.includes("ReadShopCurrency")
+					? Response.json({ data: { shop: { currencyCode: "USD" } } })
+					: Response.json({ data: { nodes: [] } });
+			},
+		});
+
+		await expect(
+			client.readProductsByGid(operationContext, ["gid://shopify/Product/1"]),
+		).resolves.toEqual({ value: [] });
+	});
+
+	it("rejects a different shop identity", async () => {
+		let call = 0;
+		const client = new ShopifyAdminApiClient({
+			fetch: async () => {
+				call += 1;
+				return call === 1
+					? Response.json({
+							access_token: "token",
+							expires_in: 3600,
+							scope: "read_products,write_products",
+						})
+					: Response.json({
+							data: {
+								shop: {
+									id: "gid://shopify/Shop/2",
+									myshopifyDomain: "other.myshopify.com",
+								},
+							},
+						});
+			},
+		});
+		await expect(client.testCredentials(credentials)).rejects.toMatchObject({
+			failureCategory: "identity_mismatch",
+		});
+	});
+
+	it("fails closed for missing, non-positive, and non-finite expiry", async () => {
+		for (const expires_in of [undefined, 0, -1, Number.POSITIVE_INFINITY]) {
+			const client = new ShopifyAdminApiClient({
+				fetch: async () =>
+					Response.json({
+						access_token: "token",
+						expires_in,
+						scope: "read_products,write_products",
+					}),
+			});
+			await expect(client.testCredentials(credentials)).rejects.toThrow(
+				"invalid expiry",
+			);
+		}
+		const missingTokenClient = new ShopifyAdminApiClient({
+			fetch: async () =>
+				Response.json({
+					expires_in: 3600,
+					scope: "read_products",
+				}),
+		});
+		await expect(
+			missingTokenClient.testCredentials(credentials),
+		).rejects.toThrow("did not include an access token");
+	});
+
+	it("refreshes at the early-expiry margin and after exact invalidation", async () => {
+		let now = 0;
+		let tokenRequests = 0;
+		const client = new ShopifyAdminApiClient({
+			now: () => now,
+			fetch: async (input, init) => {
+				if (input.toString().endsWith("/admin/oauth/access_token")) {
+					tokenRequests += 1;
+					return Response.json({
+						access_token: `token-${tokenRequests}`,
+						expires_in: 120,
+						scope: "read_products,write_products",
+					});
+				}
+				const query = JSON.parse(String(init?.body)).query as string;
+				return query.includes("ReadShopCurrency")
+					? Response.json({ data: { shop: { currencyCode: "USD" } } })
+					: Response.json({ data: { nodes: [] } });
+			},
+		});
+		await client.readProductsByGid(operationContext, [
+			"gid://shopify/Product/1",
+		]);
+		now = 60_001;
+		await client.readProductsByGid(operationContext, [
+			"gid://shopify/Product/1",
+		]);
+		client.invalidateIntegration("organization-1", 1);
+		await client.readProductsByGid(operationContext, [
+			"gid://shopify/Product/1",
+		]);
+		expect(tokenRequests).toBe(3);
+	});
+
+	it("isolates cache entries by Festival organization", async () => {
+		let tokenRequests = 0;
+		const client = new ShopifyAdminApiClient({
+			fetch: async (input, init) => {
+				if (input.toString().endsWith("/admin/oauth/access_token")) {
+					tokenRequests += 1;
+					return Response.json({
+						access_token: `token-${tokenRequests}`,
+						expires_in: 3600,
+						scope: "read_products",
+					});
+				}
+				const query = JSON.parse(String(init?.body)).query as string;
+				return query.includes("ReadShopCurrency")
+					? Response.json({ data: { shop: { currencyCode: "USD" } } })
+					: Response.json({ data: { nodes: [] } });
+			},
+		});
+		await client.readProductsByGid(operationContext, [
+			"gid://shopify/Product/1",
+		]);
+		await client.readProductsByGid(
+			{
+				...operationContext,
+				organizationId: "organization-2",
+				credentials: { ...credentials, organizationId: "organization-2" },
+			},
+			["gid://shopify/Product/1"],
+		);
+		expect(tokenRequests).toBe(2);
+	});
+
+	it("denies missing capabilities and older order windows before transport", async () => {
+		let fetchCalls = 0;
+		const client = new ShopifyAdminApiClient({
+			fetch: async () => {
+				fetchCalls += 1;
+				return Response.json({});
+			},
+		});
+		await expect(
+			client.readProductsByGid(
+				{ ...operationContext, grantedScopes: [], capability: "read_products" },
+				["gid://shopify/Product/1"],
+			),
+		).rejects.toThrow("not authorized");
+		expect(fetchCalls).toBe(0);
+		const revokedScopeClient = new ShopifyAdminApiClient({
+			fetch: async () => {
+				fetchCalls += 1;
+				return Response.json({
+					access_token: "token-with-revoked-read-scope",
+					expires_in: 3600,
+					scope: "read_orders",
+				});
+			},
+		});
+		await expect(
+			revokedScopeClient.readProductsByGid(operationContext, [
+				"gid://shopify/Product/1",
+			]),
+		).rejects.toMatchObject({ failureCategory: "missing_scope" });
+		expect(fetchCalls).toBe(1);
+
+		const orderContext = {
+			...operationContext,
+			capability: "read_orders" as const,
+		};
+		expect(() =>
+			assertShopifyOrderReadAllowed(
+				orderContext,
+				new Date("2026-06-01T00:00:00.000Z"),
+				new Date("2026-08-12T00:00:00.000Z"),
+			),
+		).toThrow("most recent 60 days");
+		expect(() =>
+			assertShopifyOrderReadAllowed(
+				{ ...orderContext, grantedScopes: [] },
+				new Date("2026-08-01T00:00:00.000Z"),
+				new Date("2026-08-12T00:00:00.000Z"),
+			),
+		).toThrow("not granted");
+	});
+
+	it("captures bounded request IDs without exposing raw upstream bodies", async () => {
+		let call = 0;
+		const client = new ShopifyAdminApiClient({
+			fetch: async () => {
+				call += 1;
+				if (call === 1) {
+					return Response.json({
+						access_token: "secret-token-canary",
+						expires_in: 3600,
+						scope: "read_products",
+					});
+				}
+				if (call === 2) {
+					return Response.json({ data: { shop: { currencyCode: "USD" } } });
+				}
+				return new Response("raw-upstream-secret-canary", {
+					status: 403,
+					headers: { "x-request-id": "shopify-request-403" },
+				});
+			},
+		});
+		try {
+			await client.readProductsByGid(operationContext, [
+				"gid://shopify/Product/1",
+			]);
+			throw new Error("Expected request to fail.");
+		} catch (error) {
+			expect(error).toMatchObject({
+				message: "Shopify authorization failed.",
+				requestId: "shopify-request-403",
+			});
+			expect(JSON.stringify(error)).not.toContain("canary");
+		}
+	});
+
+	it("rejects product deletions that do not confirm the requested product", async () => {
+		let call = 0;
+		const client = new ShopifyAdminApiClient({
+			fetch: async () => {
+				call += 1;
+				if (call === 1) {
+					return Response.json({
+						access_token: "token",
+						expires_in: 3600,
+						scope: "write_products",
+					});
+				}
+				return Response.json(
+					{
+						data: {
+							productDelete: {
+								deletedProductId: "gid://shopify/Product/other",
+								userErrors: [],
+							},
+						},
+					},
+					{ headers: { "x-request-id": "request-delete-mismatch" } },
+				);
+			},
+		});
+
+		await expect(
+			client.deleteProduct(
+				{ ...operationContext, capability: "write_products" },
+				"gid://shopify/Product/requested",
+			),
+		).rejects.toMatchObject({
+			message: "Shopify product deletion returned no matching product.",
+			requestId: "request-delete-mismatch",
+		});
+	});
+
+	it("classifies token authorization, throttling, GraphQL, and user errors", async () => {
+		const unauthorized = new ShopifyAdminApiClient({
+			fetch: async () =>
+				new Response("credential-secret-canary", { status: 401 }),
+		});
+		await expect(
+			unauthorized.testCredentials(credentials),
+		).rejects.toMatchObject({ failureCategory: "credentials" });
+
+		let throttledCall = 0;
+		const throttled = new ShopifyAdminApiClient({
+			fetch: async () => {
+				throttledCall += 1;
+				if (throttledCall === 1) {
+					return Response.json({
+						access_token: "token",
+						expires_in: 3600,
+						scope: "read_products",
+					});
+				}
+				if (throttledCall === 2) {
+					return Response.json({ data: { shop: { currencyCode: "USD" } } });
+				}
+				return new Response("throttle-secret-canary", {
+					status: 429,
+					headers: {
+						"retry-after": "12",
+						"x-shopify-request-id": "request-throttled",
+					},
+				});
+			},
+		});
+		await expect(
+			throttled.readProductsByGid(operationContext, [
+				"gid://shopify/Product/1",
+			]),
+		).rejects.toMatchObject({
+			message: "Shopify request was throttled.",
+			failureCategory: "upstream",
+			requestId: "request-throttled",
+			retryAfterSeconds: 12,
+		});
+
+		let graphqlCall = 0;
+		const graphqlFailure = new ShopifyAdminApiClient({
+			fetch: async () => {
+				graphqlCall += 1;
+				return graphqlCall === 1
+					? Response.json({
+							access_token: "token",
+							expires_in: 3600,
+							scope: "read_products,write_products",
+						})
+					: Response.json(
+							{ errors: [{ message: "raw-graphql-secret-canary" }] },
+							{ headers: { "x-request-id": "request-graphql" } },
+						);
+			},
+		});
+		await expect(
+			graphqlFailure.testCredentials(credentials),
+		).rejects.toMatchObject({
+			message: "Shopify Admin API returned an error.",
+			requestId: "request-graphql",
+		});
+
+		let mutationCall = 0;
+		const mutationFailure = new ShopifyAdminApiClient({
+			fetch: async () => {
+				mutationCall += 1;
+				if (mutationCall === 1) {
+					return Response.json({
+						access_token: "token",
+						expires_in: 3600,
+						scope: "read_products,write_products",
+					});
+				}
+				if (mutationCall === 2) {
+					return Response.json({ data: { shop: { currencyCode: "USD" } } });
+				}
+				return Response.json(
+					{
+						data: {
+							productCreate: {
+								userErrors: [{ message: "raw-user-secret-canary" }],
+							},
+						},
+					},
+					{ headers: { "x-request-id": "request-user-error" } },
+				);
+			},
+		});
+		await expect(
+			mutationFailure.createProduct(
+				{ ...operationContext, capability: "write_products" },
+				{ name: "Membership" },
+			),
+		).rejects.toBeInstanceOf(ShopifyUserError);
 	});
 });

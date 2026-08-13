@@ -1,11 +1,45 @@
 import { describe, expect, it } from "bun:test";
 import {
+	deriveShopifyCapabilities,
+	normalizeEffectiveShopifyScopes,
 	normalizeShopifyStoreDomain,
 	validateMembershipProductInput,
 	validateShopifySettingsInput,
 } from "../src/shopify.js";
 
 describe("Shopify settings contract", () => {
+	it("normalizes Shopify write access to include its implied read access", () => {
+		expect(
+			normalizeEffectiveShopifyScopes([
+				"write_products",
+				"read_orders",
+				"write_products",
+			]),
+		).toEqual(["read_orders", "read_products", "write_products"]);
+		expect(
+			deriveShopifyCapabilities(["read_orders", "write_products"]),
+		).toEqual({
+			read_products: "granted",
+			write_products: "granted",
+			read_orders: "granted",
+			write_orders: "disabled",
+		});
+	});
+
+	it("derives bounded capabilities without enabling future order writes", () => {
+		expect(
+			deriveShopifyCapabilities([
+				"write_orders",
+				"read_products",
+				"unknown_future_scope",
+			]),
+		).toEqual({
+			read_products: "granted",
+			write_products: "missing",
+			read_orders: "missing",
+			write_orders: "disabled",
+		});
+	});
 	it("normalizes Shopify store URLs to myshopify.com domains", () => {
 		expect(
 			normalizeShopifyStoreDomain(

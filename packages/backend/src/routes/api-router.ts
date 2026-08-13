@@ -31,7 +31,37 @@ const FORBIDDEN_MEMBERSHIP_PRODUCT_FIELDS = [
 	"clientId",
 	"clientSecret",
 	"credentials",
+	"shopGid",
+	"verifiedShopGid",
+	"verifiedShopDomain",
+	"grantedScopes",
+	"scope",
+	"capability",
+	"accessToken",
+	"token",
+	"integrationVersion",
 ] as const;
+
+const ALLOWED_SHOPIFY_SETTINGS_FIELDS = new Set([
+	"storeUrl",
+	"clientId",
+	"clientSecret",
+]);
+
+function assertNoExtraShopifySettingsFields(payload: unknown): void {
+	if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+		return;
+	}
+	const extraFields = Object.keys(payload).filter(
+		(field) => !ALLOWED_SHOPIFY_SETTINGS_FIELDS.has(field),
+	);
+	if (extraFields.length > 0) {
+		throw new AppError(
+			`Shopify settings cannot include browser-controlled fields: ${extraFields.join(", ")}.`,
+			400,
+		);
+	}
+}
 
 function assertNoForbiddenMembershipProductFields(payload: unknown): void {
 	if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
@@ -324,12 +354,35 @@ export function buildApiRouter(
 				}
 
 				const payload = await c.req.json();
+				assertNoExtraShopifySettingsFields(payload);
 				return c.json(
 					await shopifyIntegrationService.saveAndTestForTenant(
 						getRequiredTenant(c),
 						payload,
 					),
 				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.get(
+		"/organizations/:slug/admin/membership-products",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				if (!shopifyMembershipProductService) {
+					throw new AppError("Shopify integration is not configured.", 503);
+				}
+
+				const membershipProducts =
+					await shopifyMembershipProductService.listMembershipProductsForOrganization(
+						getRequiredTenant(c),
+					);
+				return c.json({ membershipProducts });
 			} catch (error) {
 				return toJsonError(c, error);
 			}
@@ -351,7 +404,7 @@ export function buildApiRouter(
 				assertNoForbiddenMembershipProductFields(payload);
 				const membershipProduct =
 					await shopifyMembershipProductService.createMembershipProduct(
-						getRequiredTenant(c).organization,
+						getRequiredTenant(c),
 						payload,
 					);
 				c.status(201);

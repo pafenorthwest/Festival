@@ -1,11 +1,16 @@
 import { describe, expect, it } from "bun:test";
 import type { OrganizationRecord } from "@festival/common";
+import type { TenantContext } from "../src/auth/tenant-context.js";
 import { AppError } from "../src/errors/app-error.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
 import type {
 	CreateMembershipProductRecordInput,
 	ProductRecord,
 } from "../src/repo/organization-repository.js";
+import type {
+	ShopifyMutationAuditInput,
+	ShopifyMutationAuditWriter,
+} from "../src/shopify/admin-mutation-audit.js";
 import {
 	SHOPIFY_CLIENT_SECRET_PURPOSE,
 	ShopifySecretKeyring,
@@ -13,7 +18,8 @@ import {
 import { ShopifyUserError } from "../src/shopify/errors.js";
 import { ShopifyMembershipProductService } from "../src/shopify/shopify-membership-product-service.js";
 import type {
-	ShopifyCredentials,
+	ShopifyAdminOperationContext,
+	ShopifyAdminResult,
 	ShopifyMembershipProductClient,
 	ShopifyProductDetails,
 } from "../src/shopify/types.js";
@@ -76,38 +82,61 @@ class FakeShopifyProductClient implements ShopifyMembershipProductClient {
 	deleteError: Error | null = null;
 
 	async createProduct(
-		_credentials: ShopifyCredentials,
-	): Promise<ShopifyProductDetails> {
+		_context: ShopifyAdminOperationContext,
+	): Promise<ShopifyAdminResult<ShopifyProductDetails>> {
 		this.createCalls += 1;
 		if (this.createError) {
 			throw this.createError;
 		}
 
-		return this.createResponse;
+		return { value: this.createResponse, requestId: "request-create" };
 	}
 
 	async updateVariantPrice(
-		_credentials: ShopifyCredentials,
-	): Promise<ShopifyProductDetails> {
-		return this.updateResponse;
+		_context: ShopifyAdminOperationContext,
+	): Promise<ShopifyAdminResult<ShopifyProductDetails>> {
+		return { value: this.updateResponse, requestId: "request-update" };
 	}
 
 	async readProductsByGid(
-		_credentials: ShopifyCredentials,
+		_context: ShopifyAdminOperationContext,
 		productGids: string[],
-	): Promise<ShopifyProductDetails[]> {
+	): Promise<ShopifyAdminResult<ShopifyProductDetails[]>> {
 		this.readProductGids.push(productGids);
-		return this.readResponse;
+		return { value: this.readResponse, requestId: "request-read" };
 	}
 
 	async deleteProduct(
-		_credentials: ShopifyCredentials,
+		_context: ShopifyAdminOperationContext,
 		productGid: string,
-	): Promise<void> {
+	): Promise<ShopifyAdminResult<void>> {
 		this.deletedProductGids.push(productGid);
 		if (this.deleteError) {
 			throw this.deleteError;
 		}
+		return { value: undefined, requestId: "request-delete" };
+	}
+}
+
+class FakeAuditWriter implements ShopifyMutationAuditWriter {
+	readonly records: ShopifyMutationAuditInput[] = [];
+	readyCalls = 0;
+
+	async ensureReady(): Promise<void> {
+		this.readyCalls += 1;
+	}
+
+	async append(input: ShopifyMutationAuditInput): Promise<void> {
+		this.records.push(input);
+	}
+}
+
+class UnavailableAuditWriter implements ShopifyMutationAuditWriter {
+	async ensureReady(): Promise<void> {
+		throw new Error("audit destination unavailable");
+	}
+	async append(): Promise<void> {
+		throw new Error("audit destination unavailable");
 	}
 }
 
@@ -146,6 +175,34 @@ async function createOrganization(repository: InMemoryOrganizationRepository) {
 	});
 }
 
+function tenantFor(organization: OrganizationRecord): TenantContext {
+	return {
+		identity: {
+			uid: "firebase-admin-uid",
+			email: "admin@example.com",
+			displayName: "Admin User",
+		},
+		user: {
+			id: "user-1",
+			firebaseUid: "firebase-admin-uid",
+			email: "admin@example.com",
+			displayName: "Admin User",
+			disassociated: false,
+			createdAtIso: new Date().toISOString(),
+		},
+		organization,
+		membership: {
+			id: "membership-1",
+			organizationId: organization.id,
+			userId: "user-1",
+			role: "Admin",
+			joinedAtIso: new Date().toISOString(),
+			origin: "creator",
+		},
+		role: "Admin",
+	};
+}
+
 async function saveIntegration(
 	repository: InMemoryOrganizationRepository,
 	organization: OrganizationRecord,
@@ -161,13 +218,30 @@ async function saveIntegration(
 			purpose: SHOPIFY_CLIENT_SECRET_PURPOSE,
 		}),
 	});
-	await repository.updateShopifyVerification({
-		organizationId: organization.id,
-		verificationStatus: status,
-		verifiedAtIso: status === "ok" ? new Date().toISOString() : undefined,
-		lastTestedAtIso: new Date().toISOString(),
-		lastError: status === "failed" ? "Invalid credentials." : undefined,
-	});
+	if (status === "ok") {
+		await repository.updateShopifyVerification({
+			organizationId: organization.id,
+			verificationStatus: "ok",
+			verifiedAtIso: new Date().toISOString(),
+			lastTestedAtIso: new Date().toISOString(),
+			verifiedShopGid: "gid://shopify/Shop/1",
+			verifiedShopDomain: "example.myshopify.com",
+			grantedScopes: ["read_products", "write_products", "read_orders"],
+			capabilities: {
+				read_products: "granted",
+				write_products: "granted",
+				read_orders: "granted",
+				write_orders: "disabled",
+			},
+		});
+	} else {
+		await repository.updateShopifyVerification({
+			organizationId: organization.id,
+			verificationStatus: "failed",
+			lastTestedAtIso: new Date().toISOString(),
+			lastError: "Invalid credentials.",
+		});
+	}
 
 	return encryptor;
 }
@@ -178,14 +252,16 @@ describe("ShopifyMembershipProductService", () => {
 		const organization = await createOrganization(repository);
 		const encryptor = await saveIntegration(repository, organization);
 		const client = new FakeShopifyProductClient();
+		const audit = new FakeAuditWriter();
 		const service = new ShopifyMembershipProductService(
 			repository,
 			encryptor,
 			client,
+			audit,
 		);
 
 		const created = await service.createMembershipProduct(
-			organization,
+			tenantFor(organization),
 			membershipInput(),
 		);
 
@@ -200,6 +276,25 @@ describe("ShopifyMembershipProductService", () => {
 		await expect(
 			repository.listMembershipProductRecords(organization.id),
 		).resolves.toHaveLength(1);
+		expect(audit.readyCalls).toBe(2);
+		expect(
+			audit.records.map(({ operation, requestId, result }) => ({
+				operation,
+				requestId,
+				result,
+			})),
+		).toEqual([
+			{
+				operation: "productCreate",
+				requestId: "request-create",
+				result: "success",
+			},
+			{
+				operation: "productVariantUpdate",
+				requestId: "request-update",
+				result: "success",
+			},
+		]);
 	});
 
 	it("lists current Shopify data for local membership product records", async () => {
@@ -225,10 +320,12 @@ describe("ShopifyMembershipProductService", () => {
 			repository,
 			encryptor,
 			client,
+			new FakeAuditWriter(),
 		);
 
-		const products =
-			await service.listMembershipProductsForOrganization(organization);
+		const products = await service.listMembershipProductsForOrganization(
+			tenantFor(organization),
+		);
 
 		expect(client.readProductGids).toEqual([
 			["gid://shopify/Product/not-a-number"],
@@ -245,11 +342,12 @@ describe("ShopifyMembershipProductService", () => {
 			missingRepository,
 			encryptor,
 			new FakeShopifyProductClient(),
+			new FakeAuditWriter(),
 		);
 
 		await expect(
 			missingService.createMembershipProduct(
-				missingOrganization,
+				tenantFor(missingOrganization),
 				membershipInput(),
 			),
 		).rejects.toThrow("Shopify integration is not configured.");
@@ -265,11 +363,12 @@ describe("ShopifyMembershipProductService", () => {
 			failedRepository,
 			failedEncryptor,
 			new FakeShopifyProductClient(),
+			new FakeAuditWriter(),
 		);
 
 		await expect(
 			failedService.createMembershipProduct(
-				failedOrganization,
+				tenantFor(failedOrganization),
 				membershipInput(),
 			),
 		).rejects.toThrow("Shopify integration has not been verified.");
@@ -280,15 +379,23 @@ describe("ShopifyMembershipProductService", () => {
 		const organization = await createOrganization(repository);
 		const encryptor = await saveIntegration(repository, organization);
 		const client = new FakeShopifyProductClient();
-		client.createError = new ShopifyUserError("Title has already been taken.");
+		client.createError = new ShopifyUserError(
+			"Title has already been taken.",
+			"request-failed",
+		);
+		const audit = new FakeAuditWriter();
 		const service = new ShopifyMembershipProductService(
 			repository,
 			encryptor,
 			client,
+			audit,
 		);
 
 		try {
-			await service.createMembershipProduct(organization, membershipInput());
+			await service.createMembershipProduct(
+				tenantFor(organization),
+				membershipInput(),
+			);
 			throw new Error("Expected service to reject.");
 		} catch (error) {
 			expect(error).toBeInstanceOf(AppError);
@@ -297,6 +404,15 @@ describe("ShopifyMembershipProductService", () => {
 				"Shopify membership product operation failed.",
 			);
 		}
+		expect(audit.records).toHaveLength(1);
+		expect(audit.records[0]).toMatchObject({
+			firebaseActorUid: "firebase-admin-uid",
+			organizationId: organization.id,
+			operation: "productCreate",
+			requestId: "request-failed",
+			result: "failure",
+			failureCategory: "upstream",
+		});
 	});
 
 	it("rejects unsupported product variant shapes", async () => {
@@ -304,15 +420,20 @@ describe("ShopifyMembershipProductService", () => {
 		const organization = await createOrganization(repository);
 		const encryptor = await saveIntegration(repository, organization);
 		const client = new FakeShopifyProductClient();
+		const audit = new FakeAuditWriter();
 		const service = new ShopifyMembershipProductService(
 			repository,
 			encryptor,
 			client,
+			audit,
 		);
 
 		client.createResponse = shopifyProduct({ variants: [] });
 		await expect(
-			service.createMembershipProduct(organization, membershipInput()),
+			service.createMembershipProduct(
+				tenantFor(organization),
+				membershipInput(),
+			),
 		).rejects.toThrow("exactly one variant");
 
 		client.createResponse = shopifyProduct({
@@ -325,7 +446,10 @@ describe("ShopifyMembershipProductService", () => {
 			],
 		});
 		await expect(
-			service.createMembershipProduct(organization, membershipInput()),
+			service.createMembershipProduct(
+				tenantFor(organization),
+				membershipInput(),
+			),
 		).rejects.toThrow("exactly one variant");
 
 		client.createResponse = shopifyProduct({
@@ -337,7 +461,10 @@ describe("ShopifyMembershipProductService", () => {
 			],
 		});
 		await expect(
-			service.createMembershipProduct(organization, membershipInput()),
+			service.createMembershipProduct(
+				tenantFor(organization),
+				membershipInput(),
+			),
 		).rejects.toThrow("Plan = Standard");
 	});
 
@@ -346,17 +473,27 @@ describe("ShopifyMembershipProductService", () => {
 		const organization = await createOrganization(repository);
 		const encryptor = await saveIntegration(repository, organization);
 		const client = new FakeShopifyProductClient();
+		const audit = new FakeAuditWriter();
 		const service = new ShopifyMembershipProductService(
 			repository,
 			encryptor,
 			client,
+			audit,
 		);
 
 		await expect(
-			service.createMembershipProduct(organization, membershipInput()),
+			service.createMembershipProduct(
+				tenantFor(organization),
+				membershipInput(),
+			),
 		).rejects.toThrow("Shopify membership product operation failed.");
 		expect(client.deletedProductGids).toEqual([
 			"gid://shopify/Product/not-a-number",
+		]);
+		expect(audit.records.map((record) => record.operation)).toEqual([
+			"productCreate",
+			"productVariantUpdate",
+			"productDelete",
 		]);
 	});
 
@@ -373,11 +510,15 @@ describe("ShopifyMembershipProductService", () => {
 			repository,
 			encryptor,
 			client,
+			new FakeAuditWriter(),
 			logger,
 		);
 
 		await expect(
-			service.createMembershipProduct(organization, membershipInput()),
+			service.createMembershipProduct(
+				tenantFor(organization),
+				membershipInput(),
+			),
 		).rejects.toThrow("Shopify membership product operation failed.");
 		expect(logger.errors).toEqual([
 			{
@@ -418,17 +559,50 @@ describe("ShopifyMembershipProductService", () => {
 			verificationStatus: "ok",
 			verifiedAtIso: new Date().toISOString(),
 			lastTestedAtIso: new Date().toISOString(),
+			verifiedShopGid: "gid://shopify/Shop/2",
+			verifiedShopDomain: "other.myshopify.com",
+			grantedScopes: ["read_products", "write_products"],
+			capabilities: {
+				read_products: "granted",
+				write_products: "granted",
+				read_orders: "missing",
+				write_orders: "disabled",
+			},
 		});
 		const client = new FakeShopifyProductClient();
 		const service = new ShopifyMembershipProductService(
 			repository,
 			secretKeyring,
 			client,
+			new FakeAuditWriter(),
 		);
 
 		await expect(
-			service.createMembershipProduct(targetOrganization, membershipInput()),
+			service.createMembershipProduct(
+				tenantFor(targetOrganization),
+				membershipInput(),
+			),
 		).rejects.toThrow("Shopify encrypted secret context does not match.");
+		expect(client.createCalls).toBe(0);
+	});
+
+	it("does not attempt a mutation when the audit destination is unavailable", async () => {
+		const repository = new InMemoryOrganizationRepository();
+		const organization = await createOrganization(repository);
+		const encryptor = await saveIntegration(repository, organization);
+		const client = new FakeShopifyProductClient();
+		const service = new ShopifyMembershipProductService(
+			repository,
+			encryptor,
+			client,
+			new UnavailableAuditWriter(),
+		);
+		await expect(
+			service.createMembershipProduct(
+				tenantFor(organization),
+				membershipInput(),
+			),
+		).rejects.toThrow("Shopify membership product operation failed.");
 		expect(client.createCalls).toBe(0);
 	});
 });

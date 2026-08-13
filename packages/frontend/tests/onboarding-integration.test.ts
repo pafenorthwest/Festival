@@ -7,6 +7,7 @@ import {
 	createMembershipProduct,
 	createOrganization,
 	dismissWelcome,
+	getAdminMembershipProducts,
 	getBootstrap,
 	getFirebaseSession,
 	getInvite,
@@ -16,6 +17,10 @@ import {
 	getShopifySettings,
 	saveShopifySettings,
 } from "../src/lib/api.js";
+import {
+	buildShopifyAppUrl,
+	missingRequiredShopifyScopes,
+} from "../src/pages/AdminIntegrationsPage.js";
 
 let fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
 
@@ -79,6 +84,78 @@ async function readFrontendSource(): Promise<string> {
 }
 
 describe("organization onboarding integration", () => {
+	it("shows the issue 81 Shopify setup instructions before the integration form", async () => {
+		const pageSource = await Bun.file(
+			"src/pages/AdminIntegrationsPage.tsx",
+		).text();
+		const setupIndex = pageSource.indexOf("Shopify app setup instructions");
+		const integrationIndex = pageSource.indexOf("Shopify Integration");
+
+		expect(setupIndex).toBeGreaterThanOrEqual(0);
+		expect(integrationIndex).toBeGreaterThan(setupIndex);
+		expect(pageSource).toContain(
+			'<details class="panel flow-panel shopify-setup-card" open>',
+		);
+		expect(pageSource).toContain(
+			"<summary>Shopify app setup instructions</summary>",
+		);
+		expect(pageSource).toContain("PAFE Test 2026-08");
+		expect(pageSource).toContain("read_orders,read_products,write_products");
+		expect(pageSource).toContain("Use legacy install flow");
+		expect(pageSource).toContain("Embedded");
+		expect(pageSource).toContain("Webhooks API version");
+		expect(pageSource).toContain("2026-07");
+		expect(pageSource).toContain("window.location.origin");
+		expect(pageSource).toContain("route.slug");
+		expect(pageSource).toContain("Production Shopify app URLs must use HTTPS.");
+		expect(pageSource).not.toContain("localStorage");
+		expect(pageSource).not.toContain("clipboard");
+		expect(buildShopifyAppUrl("https://festival.passmore.xyz", "new")).toBe(
+			"https://festival.passmore.xyz/org/new/admin",
+		);
+	});
+
+	it("shows only safe Shopify identity and capability diagnostics", async () => {
+		const source = await readFrontendSource();
+		expect(source).toContain("Verified shop:");
+		expect(source).toContain("Product reads:");
+		expect(source).toContain("Product writes:");
+		expect(source).toContain("Order reads:");
+		expect(source).toContain("settings.capabilities.read_products");
+		expect(source).toContain("settings.capabilities.write_products");
+		expect(source).not.toContain("settings.grantedScopes");
+		expect(source).not.toContain("accessToken");
+	});
+
+	it("warns when a verified Shopify integration is missing required scopes", async () => {
+		const source = await readFrontendSource();
+		const styles = await Bun.file("src/styles.css").text();
+
+		expect(
+			missingRequiredShopifyScopes({
+				read_products: "granted",
+				write_products: "missing",
+				read_orders: "missing",
+				write_orders: "disabled",
+			}),
+		).toEqual(["write_products", "read_orders"]);
+		expect(
+			missingRequiredShopifyScopes({
+				read_products: "granted",
+				write_products: "granted",
+				read_orders: "granted",
+				write_orders: "disabled",
+			}),
+		).toEqual([]);
+		expect(source).toContain(
+			"Shopify is verified, but required scopes are missing.",
+		);
+		expect(source).toContain('settings.verificationStatus === "ok"');
+		expect(source).toContain("Missing scopes:");
+		expect(source).toContain("then run Save &amp; Test again");
+		expect(source).toContain('class="shopify-warning-banner" role="alert"');
+		expect(styles).toContain(".shopify-warning-banner");
+	});
 	it("keeps issue 22 wired to router, Firebase auth helpers, and API helpers", async () => {
 		const source = await readFrontendSource();
 
@@ -216,6 +293,7 @@ describe("organization onboarding integration", () => {
 		await acceptInvite("token", "invite-token", { name: "Pat Reviewer" });
 		await getOrganization("token", "pafe");
 		await getMembershipProducts("pafe");
+		await getAdminMembershipProducts("token", "pafe");
 		await createMembershipProduct("token", "pafe", {
 			name: "Teacher Membership",
 			price: "75.00",
@@ -239,6 +317,7 @@ describe("organization onboarding integration", () => {
 			"/api/invites/invite-token/accept",
 			"/api/organizations/pafe",
 			"/api/organizations/pafe/membership-products",
+			"/api/organizations/pafe/admin/membership-products",
 			"/api/organizations/pafe/admin/membership-products",
 			"/api/organizations/pafe/admin/shopify",
 			"/api/organizations/pafe/admin/shopify",
@@ -354,7 +433,8 @@ describe("organization onboarding integration", () => {
 		expect(source).toContain("admin/memberships");
 		expect(source).toContain("Only Admin members can manage memberships.");
 		expect(source).toContain("props.app.isAdminMember()");
-		expect(source).toContain("getMembershipProducts(slug)");
+		expect(source).toContain("getAdminMembershipProducts(token, slug)");
+		expect(source).toContain("getIdToken(state.firebaseUser())");
 		expect(source).toContain("createMembershipProduct(token");
 		expect(source).toContain("admin/membership-products");
 		expect(source).not.toContain("SHOPIFY_ADMIN_ACCESS_TOKEN");
@@ -363,9 +443,21 @@ describe("organization onboarding integration", () => {
 
 	it("covers issue 70 admin membership create states in source", async () => {
 		const source = await readFrontendSource();
+		const pageSource = await Bun.file(
+			"src/pages/AdminMembershipProductsPage.tsx",
+		).text();
 
 		expect(source).toContain("Verified Shopify integration is required");
 		expect(source).toContain("shopifyPrerequisiteMet");
+		expect(pageSource).toContain(
+			'props.app.shopifySettings()?.verificationStatus === "ok"',
+		);
+		expect(pageSource).toContain(
+			'props.app.shopifyPrerequisiteMet() ? "Ready" : "Not Ready"',
+		);
+		expect(pageSource).toContain("shopify-status-not-ready");
+		expect(pageSource).toContain("<Show when={!shopifyIntegrationVerified()}>");
+		expect(pageSource).toContain("!props.app.shopifyPrerequisiteMet() ||");
 		expect(source).toContain("Membership product created.");
 		expect(source).toContain("Plan: Standard");
 		expect(source).toContain("isCreatingMembershipProduct()");
@@ -384,6 +476,11 @@ describe("organization onboarding integration", () => {
 		let loading = false;
 		let loadError = "";
 		const state = {
+			firebaseUser() {
+				return {
+					getIdToken: () => Promise.resolve("firebase-token"),
+				};
+			},
 			setIsLoadingMembershipProducts(value: boolean) {
 				loading = value;
 			},

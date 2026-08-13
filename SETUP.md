@@ -217,7 +217,7 @@ FESTIVAL_ACTIVE_SECRET_KEY_ID=development-key
 
 Key IDs must match `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`, and each value must be canonical Base64 that decodes to exactly 32 bytes. Do not commit generated values. When both variables are absent, the backend starts with Shopify services disabled. A partial or invalid configuration fails backend startup.
 
-New ciphertext uses the active key. To switch keys, add the new key to `FESTIVAL_SECRET_KEYS_JSON`, select it with `FESTIVAL_ACTIVE_SECRET_KEY_ID`, and restart the backend. Keep previous keys configured so existing ciphertext remains readable. Stored-record re-encryption and safe key retirement are not implemented in this phase, and Shopify credential rotation and access-token cache invalidation remain separate work.
+New ciphertext uses the active key. To switch keys, add the new key to `FESTIVAL_SECRET_KEYS_JSON`, select it with `FESTIVAL_ACTIVE_SECRET_KEY_ID`, and restart the backend. Keep previous keys configured so existing ciphertext remains readable. Stored-record re-encryption and safe key retirement are not implemented in this phase. Saving or replacing a Shopify app credential advances its tenant integration version, forces re-verification, and invalidates the superseded process-local access-token cache entry. MUST BE SINGLE LINE, otherwise JSon parsing won't parse.
 
 Legacy ciphertext is intentionally unsupported for the current localhost-development phase; wipe the development database after replacing the legacy configuration. Never log the keyring configuration, plaintext secrets, or encrypted envelopes.
 
@@ -230,7 +230,18 @@ In the Shopify Dev Dashboard:
 - Release the version.
 - Install the app on the target store from the app Home tab.
 
-In Festival's organization admin page, enter the store's `*.myshopify.com` domain plus the app Client ID and Client secret. The backend requests short-lived Shopify access tokens as needed and does not persist those tokens.
+In Festival's organization admin page, enter the store's `*.myshopify.com` domain plus the app Client ID and Client secret. The backend uses Admin GraphQL `2026-07`, verifies the returned canonical shop and already-granted scopes, and does not request scopes during token exchange. Short-lived access tokens remain only in an early-expiry process-local cache and are never persisted.
+
+#### Shopify mutation audit file
+
+Before enabling Shopify product mutations, provision `/var/log/festival/shopify-admin-audit.ndjson` for the backend service account. Replace `<festival-service-user>` with the deployment's unprivileged backend user:
+
+```bash
+sudo install -d -m 0750 -o <festival-service-user> -g <festival-service-user> /var/log/festival
+sudo install -m 0600 -o <festival-service-user> -g <festival-service-user> /dev/null /var/log/festival/shopify-admin-audit.ndjson
+```
+
+Festival appends minimal NDJSON mutation records and fails the mutation when the destination cannot be opened before the Shopify call. Deployment operations—not the application—must configure rotation, retention, disk-usage monitoring, access review, and any host-level aggregation. Do not ingest this audit stream into the Festival database.
 
 #### Auth and local dev behavior
 

@@ -1,20 +1,28 @@
 import type {
 	MembershipProductSummary,
-	OrganizationRecord,
+	ShopifyAdminCapability,
+	ShopifyFailureCategory,
 } from "@festival/common";
 import { validateMembershipProductInput } from "@festival/common";
+import type { TenantContext } from "../auth/tenant-context.js";
 import { AppError } from "../errors/app-error.js";
 import type {
 	OrganizationRepository,
 	ProductRecord,
 	ShopifyIntegrationRecord,
 } from "../repo/organization-repository.js";
+import type {
+	ShopifyMutationAuditOperation,
+	ShopifyMutationAuditWriter,
+} from "./admin-mutation-audit.js";
 import {
 	SHOPIFY_CLIENT_SECRET_PURPOSE,
 	type ShopifySecretKeyring,
 } from "./encryption.js";
 import { ShopifyIntegrationError } from "./errors.js";
 import type {
+	ShopifyAdminOperationContext,
+	ShopifyAdminResult,
 	ShopifyCredentials,
 	ShopifyMembershipProductClient,
 	ShopifyProductDetails,
@@ -34,10 +42,8 @@ export interface ShopifyCleanupFailureLogger {
 	): void;
 }
 
-const consoleCleanupFailureLogger: ShopifyCleanupFailureLogger = {
-	error(message, context) {
-		console.error(message, context);
-	},
+const silentCleanupFailureLogger: ShopifyCleanupFailureLogger = {
+	error() {},
 };
 
 function isValidPrice(value: string): boolean {
@@ -142,11 +148,12 @@ export class ShopifyMembershipProductService {
 		private readonly repository: OrganizationRepository,
 		private readonly secretKeyring: ShopifySecretKeyring,
 		private readonly shopifyClient: ShopifyMembershipProductClient,
-		private readonly cleanupFailureLogger: ShopifyCleanupFailureLogger = consoleCleanupFailureLogger,
+		private readonly mutationAudit: ShopifyMutationAuditWriter,
+		private readonly cleanupFailureLogger: ShopifyCleanupFailureLogger = silentCleanupFailureLogger,
 	) {}
 
 	async createMembershipProduct(
-		organization: OrganizationRecord,
+		tenant: TenantContext,
 		input: unknown,
 	): Promise<MembershipProductSummary> {
 		const validation = validateMembershipProductInput(input);
@@ -154,29 +161,47 @@ export class ShopifyMembershipProductService {
 			throw new AppError(validation.errors.join(" "), 400);
 		}
 
-		const credentials = await this.loadVerifiedCredentials(organization.id);
+		const writeContext = await this.loadOperationContext(
+			tenant,
+			"write_products",
+		);
+		const readContext = await this.loadOperationContext(
+			tenant,
+			"read_products",
+		);
 		let createdProduct: ShopifyProductDetails | null = null;
 
 		try {
-			createdProduct = await this.shopifyClient.createProduct(credentials, {
-				name: validation.input.name,
-				description: validation.input.description,
-			});
-			let variant = assertSupportedProductShape(createdProduct);
-
-			const pricedProduct = await this.shopifyClient.updateVariantPrice(
-				credentials,
-				{
-					productId: createdProduct.id,
-					variantId: variant.id,
-					price: validation.input.price,
+			createdProduct = await this.attemptMutation(
+				writeContext,
+				"productCreate",
+				() =>
+					this.shopifyClient.createProduct(writeContext, {
+						name: validation.input.name,
+						description: validation.input.description,
+					}),
+				(product) => {
+					createdProduct = product;
 				},
 			);
-			variant = assertSupportedProductShape(pricedProduct, createdProduct.id);
-			const [confirmedProduct] = await this.shopifyClient.readProductsByGid(
-				credentials,
-				[pricedProduct.id],
+			let variant = assertSupportedProductShape(createdProduct);
+
+			const pricedProduct = await this.attemptMutation(
+				writeContext,
+				"productVariantUpdate",
+				() =>
+					this.shopifyClient.updateVariantPrice(writeContext, {
+						productId: createdProduct?.id ?? "",
+						variantId: variant.id,
+						price: validation.input.price,
+					}),
 			);
+			variant = assertSupportedProductShape(pricedProduct, createdProduct.id);
+			const { value: confirmedProducts } =
+				await this.shopifyClient.readProductsByGid(readContext, [
+					pricedProduct.id,
+				]);
+			const [confirmedProduct] = confirmedProducts;
 			if (!confirmedProduct) {
 				throw new AppError("Shopify membership product was not found.", 502);
 			}
@@ -186,7 +211,7 @@ export class ShopifyMembershipProductService {
 			);
 
 			const record = await this.repository.createMembershipProductRecord({
-				organizationId: organization.id,
+				organizationId: tenant.organization.id,
 				membershipType: validation.input.membershipType,
 				entitlementPeriod: validation.input.entitlementPeriod,
 				shopifyProductGid: confirmedProduct.id,
@@ -197,7 +222,7 @@ export class ShopifyMembershipProductService {
 			return toSummary(record, confirmedProduct, variant);
 		} catch (error) {
 			if (createdProduct) {
-				await this.tryCleanupProduct(credentials, createdProduct.id);
+				await this.tryCleanupProduct(writeContext, createdProduct.id);
 			}
 
 			throw toAppError(error);
@@ -205,19 +230,19 @@ export class ShopifyMembershipProductService {
 	}
 
 	async listMembershipProductsForOrganization(
-		organization: OrganizationRecord,
+		tenant: TenantContext,
 	): Promise<MembershipProductSummary[]> {
 		const records = await this.repository.listMembershipProductRecords(
-			organization.id,
+			tenant.organization.id,
 		);
 		if (records.length === 0) {
 			return [];
 		}
 
-		const credentials = await this.loadVerifiedCredentials(organization.id);
+		const context = await this.loadOperationContext(tenant, "read_products");
 		try {
-			const products = await this.shopifyClient.readProductsByGid(
-				credentials,
+			const { value: products } = await this.shopifyClient.readProductsByGid(
+				context,
 				records.map((record) => record.shopifyProductGid),
 			);
 			const productsByGid = new Map(
@@ -248,14 +273,17 @@ export class ShopifyMembershipProductService {
 		}
 	}
 
-	private async loadVerifiedCredentials(
-		organizationId: string,
-	): Promise<ShopifyCredentials> {
+	private async loadOperationContext(
+		tenant: TenantContext,
+		capability: ShopifyAdminCapability,
+	): Promise<ShopifyAdminOperationContext> {
+		const organizationId = tenant.organization.id;
 		const integration =
 			await this.repository.getShopifyIntegration(organizationId);
-		this.assertVerifiedIntegration(integration);
+		this.assertVerifiedIntegration(integration, capability);
 
-		return {
+		const credentials: ShopifyCredentials = {
+			organizationId,
 			storeDomain: integration.storeDomain,
 			clientId: integration.clientId,
 			clientSecret: this.secretKeyring.decrypt(
@@ -265,27 +293,96 @@ export class ShopifyMembershipProductService {
 					purpose: SHOPIFY_CLIENT_SECRET_PURPOSE,
 				},
 			),
+			integrationVersion: integration.integrationVersion,
+		};
+		return {
+			organizationId,
+			firebaseActorUid: tenant.identity.uid,
+			verifiedShopGid: integration.verifiedShopGid,
+			verifiedShopDomain: integration.verifiedShopDomain,
+			integrationVersion: integration.integrationVersion,
+			grantedScopes: [...integration.grantedScopes],
+			capability,
+			credentials,
 		};
 	}
 
 	private assertVerifiedIntegration(
 		integration: ShopifyIntegrationRecord | null,
-	): asserts integration is ShopifyIntegrationRecord {
+		capability: ShopifyAdminCapability,
+	): asserts integration is ShopifyIntegrationRecord & {
+		verifiedShopGid: string;
+		verifiedShopDomain: string;
+	} {
 		if (!integration) {
 			throw new AppError("Shopify integration is not configured.", 409);
 		}
 
-		if (integration.verificationStatus !== "ok") {
+		if (
+			integration.verificationStatus !== "ok" ||
+			!integration.verifiedShopGid ||
+			!integration.verifiedShopDomain
+		) {
 			throw new AppError("Shopify integration has not been verified.", 409);
+		}
+		if (integration.capabilities[capability] !== "granted") {
+			throw new AppError(
+				"Shopify integration does not grant the required capability.",
+				409,
+			);
 		}
 	}
 
+	private async attemptMutation<T>(
+		context: ShopifyAdminOperationContext,
+		operation: ShopifyMutationAuditOperation,
+		attempt: () => Promise<ShopifyAdminResult<T>>,
+		onMutationSucceeded?: (value: T) => void,
+	): Promise<T> {
+		const auditAttempt = {
+			timestampIso: new Date().toISOString(),
+			firebaseActorUid: context.firebaseActorUid,
+			organizationId: context.organizationId,
+			operation,
+		};
+		await this.mutationAudit.ensureReady(auditAttempt);
+		let response: ShopifyAdminResult<T>;
+		try {
+			response = await attempt();
+		} catch (error) {
+			const requestId =
+				error instanceof ShopifyIntegrationError ? error.requestId : undefined;
+			await this.mutationAudit.append({
+				...auditAttempt,
+				requestId,
+				result: "failure",
+				failureCategory: this.failureCategory(error),
+			});
+			throw error;
+		}
+		onMutationSucceeded?.(response.value);
+		await this.mutationAudit.append({
+			...auditAttempt,
+			requestId: response.requestId,
+			result: "success",
+		});
+		return response.value;
+	}
+
+	private failureCategory(error: unknown): ShopifyFailureCategory {
+		return error instanceof ShopifyIntegrationError
+			? error.failureCategory
+			: "transport";
+	}
+
 	private async tryCleanupProduct(
-		credentials: ShopifyCredentials,
+		context: ShopifyAdminOperationContext,
 		productGid: string,
 	): Promise<void> {
 		try {
-			await this.shopifyClient.deleteProduct(credentials, productGid);
+			await this.attemptMutation(context, "productDelete", () =>
+				this.shopifyClient.deleteProduct(context, productGid),
+			);
 		} catch (error) {
 			this.cleanupFailureLogger.error(
 				"Shopify membership product cleanup failed after local persistence failure.",

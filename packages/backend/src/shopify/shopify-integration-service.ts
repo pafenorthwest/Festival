@@ -1,19 +1,25 @@
 import type {
 	SaveShopifyIntegrationResponse,
+	ShopifyFailureCategory,
 	ShopifyIntegrationSettings,
 	ShopifyIntegrationSettingsResponse,
 } from "@festival/common";
-import { validateShopifySettingsInput } from "@festival/common";
+import {
+	deriveShopifyCapabilities,
+	validateShopifySettingsInput,
+} from "@festival/common";
 import type { TenantContext } from "../auth/tenant-context.js";
 import { AppError } from "../errors/app-error.js";
 import type {
 	OrganizationRepository,
 	ShopifyIntegrationRecord,
 } from "../repo/organization-repository.js";
+import { ShopifyShopOwnershipError } from "../repo/organization-repository.js";
 import {
 	SHOPIFY_CLIENT_SECRET_PURPOSE,
 	type ShopifySecretKeyring,
 } from "./encryption.js";
+import { ShopifyIntegrationError } from "./errors.js";
 import type { ShopifyConnectivityTester } from "./types.js";
 
 function toPublicSettings(
@@ -24,15 +30,30 @@ function toPublicSettings(
 		clientId: record.clientId,
 		hasClientSecret: true,
 		verificationStatus: record.verificationStatus,
+		verifiedShopGid: record.verifiedShopGid,
+		verifiedShopDomain: record.verifiedShopDomain,
+		capabilities: { ...record.capabilities },
+		integrationVersion: record.integrationVersion,
 		verifiedAtIso: record.verifiedAtIso,
 		lastTestedAtIso: record.lastTestedAtIso,
 		lastError: record.lastError,
+		lastFailureCategory: record.lastFailureCategory,
 		updatedAtIso: record.updatedAtIso,
 	};
 }
 
 function publicErrorMessage(_error: unknown): string {
 	return "Shopify verification failed.";
+}
+
+function failureCategory(error: unknown): ShopifyFailureCategory {
+	if (error instanceof ShopifyShopOwnershipError) {
+		return "shop_ownership_conflict";
+	}
+	if (error instanceof ShopifyIntegrationError) {
+		return error.failureCategory;
+	}
+	return "transport";
 }
 
 export class ShopifyIntegrationService {
@@ -97,26 +118,47 @@ export class ShopifyIntegrationService {
 			throw new AppError("Shopify client secret is required.", 400);
 		}
 
-		await this.repository.upsertShopifyIntegration({
-			organizationId: tenant.organization.id,
-			storeDomain: validation.storeDomain,
-			clientId: validation.clientId,
-			encryptedClientSecret,
-		});
+		let saved: ShopifyIntegrationRecord;
+		try {
+			saved = await this.repository.upsertShopifyIntegration({
+				organizationId: tenant.organization.id,
+				storeDomain: validation.storeDomain,
+				clientId: validation.clientId,
+				encryptedClientSecret,
+			});
+		} catch (error) {
+			if (error instanceof ShopifyShopOwnershipError) {
+				throw new AppError(error.message, 409);
+			}
+			throw error;
+		}
+		if (existing) {
+			this.connectivityTester.invalidateIntegration?.(
+				tenant.organization.id,
+				existing.integrationVersion,
+			);
+		}
 
 		const lastTestedAtIso = new Date().toISOString();
 		try {
-			await this.connectivityTester.testCredentials({
+			const result = await this.connectivityTester.testCredentials({
+				organizationId: tenant.organization.id,
 				storeDomain: validation.storeDomain,
 				clientId: validation.clientId,
 				clientSecret,
+				integrationVersion: saved.integrationVersion,
 			});
+			const capabilities = deriveShopifyCapabilities(result.grantedScopes);
 
 			const verified = await this.repository.updateShopifyVerification({
 				organizationId: tenant.organization.id,
 				verificationStatus: "ok",
 				verifiedAtIso: lastTestedAtIso,
 				lastTestedAtIso,
+				verifiedShopGid: result.shopGid,
+				verifiedShopDomain: result.shopDomain,
+				grantedScopes: result.grantedScopes,
+				capabilities,
 			});
 
 			return { settings: toPublicSettings(verified) };
@@ -126,6 +168,7 @@ export class ShopifyIntegrationService {
 				verificationStatus: "failed",
 				lastTestedAtIso,
 				lastError: publicErrorMessage(error),
+				lastFailureCategory: failureCategory(error),
 			});
 
 			return { settings: toPublicSettings(failed) };

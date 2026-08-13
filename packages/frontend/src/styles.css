@@ -472,6 +472,56 @@ form.shopify-integration-card {
 	gap: 0.8rem;
 }
 
+.shopify-setup-card {
+	padding: 0;
+}
+
+.shopify-setup-card summary {
+	padding: 1rem 1.4rem;
+	cursor: pointer;
+	font-weight: 700;
+}
+
+.shopify-setup-card[open] summary {
+	border-bottom: 1px solid var(--bullet-panel-border);
+}
+
+.shopify-setup-content {
+	display: grid;
+	gap: 0.9rem;
+	padding: 0 1.4rem 1.4rem;
+}
+
+.shopify-setup-content p,
+.shopify-setup-values {
+	margin: 0;
+}
+
+.shopify-setup-values {
+	display: grid;
+	gap: 0.65rem;
+}
+
+.shopify-setup-values div {
+	display: grid;
+	grid-template-columns: minmax(10rem, 0.45fr) minmax(0, 1fr);
+	gap: 0.75rem;
+}
+
+.shopify-setup-values dt {
+	font-weight: 700;
+}
+
+.shopify-setup-values dd {
+	margin: 0;
+	overflow-wrap: anywhere;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.shopify-setup-note {
+	color: var(--bullet-soft-ink);
+}
+
 .shopify-card-header {
 	display: flex;
 	justify-content: space-between;
@@ -512,6 +562,24 @@ form.shopify-integration-card {
 
 .shopify-status-unknown {
 	background: #6b7280;
+}
+
+.shopify-status-not-ready {
+	background: #6b7280;
+}
+
+.shopify-warning-banner {
+	display: grid;
+	gap: 0.35rem;
+	padding: 0.85rem 1rem;
+	border: 1px solid #d97706;
+	border-radius: 8px;
+	background: #fffbeb;
+	color: #92400e;
+}
+
+.shopify-warning-banner p {
+	margin: 0;
 }
 
 .shopify-error-text {
@@ -786,5 +854,10 @@ form.shopify-integration-card {
 
 	.admin-page-header {
 		flex-direction: column;
+	}
+
+	.shopify-setup-values div {
+		grid-template-columns: 1fr;
+		gap: 0.2rem;
 	}
 }

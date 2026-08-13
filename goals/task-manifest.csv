@@ -1,3 +1,7 @@
 number,taskname,first_create_date,first_create_hhmmss,first_create_git_hash
-1,tenant-bound-shopify-secret-keyring,2026-08-13,051953,5a3d16c
-2,tenant-shopify-admin-auth,2026-08-13,000000,-------
+1,add-shopify-setup-instructions,2026-08-13,000000,-------
+2,fix-admin-membership-product-list,2026-08-13,000000,-------
+3,improve-shopify-scope-readiness-messaging,2026-08-13,000000,-------
+4,normalize-shopify-implied-read-scopes,2026-08-13,000000,-------
+5,tenant-shopify-admin-auth,2026-08-13,000000,-------
+6,tenant-bound-shopify-secret-keyring,2026-08-13,051953,5a3d16c

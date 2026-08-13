@@ -66,8 +66,9 @@ The jump-host nginx configuration is out of scope because its topology is deploy
 
 - Current Admin calls construct their own `https://<store>.myshopify.com` token and pinned GraphQL URLs. Festival rejects non-canonical hosts, credentials in URLs, ports, unsafe redirects, timeouts, oversized responses, and malformed JSON.
 - No generic GraphQL proxy exists. Each backend operation supplies its own query and variables.
-- Client secrets are encrypted at rest, decrypted only in backend memory after tenant/Admin authorization, and excluded from API responses. Access tokens are short-lived and backend-only.
-- Unexpected application errors return stable sanitized messages. Logs must not contain bearer tokens, cookies, Firebase credentials, Shopify client secrets/access tokens, ciphertext, request bodies, sensitive upstream payloads, or customer email data. Current cleanup logs retain only a fixed operation category and error class.
+- Client secrets are encrypted at rest, decrypted only in backend memory after tenant/Admin authorization, and excluded from API responses. Access tokens are short-lived, backend-only, and held only in a tenant-bound early-expiry process cache. Saving credentials forces verification and invalidates the superseded integration version.
+- Unexpected application errors return stable sanitized messages. Logs must not contain bearer tokens, cookies, Firebase credentials, Shopify client secrets/access tokens, ciphertext, request bodies, sensitive upstream payloads, or customer email data. There is no routine Shopify success/error console logging.
+- Each attempted Shopify product mutation appends one bounded NDJSON record to `/var/log/festival/shopify-admin-audit.ndjson`: timestamp, exact verified Firebase actor UID, Festival organization ID, operation, Shopify request ID when returned, result, and bounded failure category. Firebase UIDs follow Firebase's non-empty 128-character contract and are JSON-escaped; organization and request IDs use separate validators; the complete prospective record is validated before mutation and serialized records are capped at 2,048 bytes. The application does not store these records in PostgreSQL or manage rotation/retention, and an unavailable destination fails explicitly.
 
 If credentials may be exposed, stop the affected integration, revoke or rotate the Shopify app credential in Shopify, disable or revoke affected Firebase accounts/sessions where relevant, rotate Festival deployment secrets, and review safe metadata logs. Do not copy suspected secret values into tickets or logs. Re-enable the integration only after verification with replacement credentials.
 
@@ -112,9 +113,9 @@ curl --fail --silent http://127.0.0.1:8080/healthz
 
 Confirm from an external test host that only approved public ports answer, and confirm from the host/private network that nginx can reach the backend while the Internet cannot. Keep provider-console access and a tested UFW disable/revert procedure available before changing remote firewall rules.
 
-## Deferred issue #79 boundaries
+## Deferred security boundaries
 
-The following remain deferred and must not be inferred from current controls: Shopify Customer Account OAuth and customer cookie sessions; CSRF; public catalog/Storefront replacement; cart, checkout, order, refund, and entitlement workflows; webhook HMAC, replay, deduplication, and queues; event-bus consumers; reconciliation workers; internal job APIs; metrics/readiness/debug APIs; financial-action step-up controls; distributed rate limiting; deployment automation; issue #75 token/scope/credential rotation; and encryption-keyring rotation.
+The following remain deferred and must not be inferred from current controls: Shopify Customer Account OAuth and customer cookie sessions; CSRF; public catalog/Storefront replacement; cart, checkout, order mutation/refund, and entitlement workflows; webhook HMAC, replay, deduplication, and queues; event-bus consumers; reconciliation workers; internal job APIs; metrics/readiness/debug APIs; financial-action step-up controls; distributed rate limiting; deployment automation; application-managed audit rotation; and encryption-keyring rotation.
 
 Future implementations require their own route classification, least-privilege nginx exposure, abuse controls, secret/redaction tests, and issue #79 checklist evidence.
 

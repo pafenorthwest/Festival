@@ -1,12 +1,12 @@
 import type { SessionResponse } from "@festival/common";
 import type { User } from "firebase/auth";
 import {
+	getAdminMembershipProducts,
 	getAdminUsers,
 	getBootstrap,
 	getFestivals,
 	getFirebaseSession,
 	getInvite,
-	getMembershipProducts,
 	getMemberships,
 	getOrganization,
 	getShopifySettings,
@@ -100,12 +100,17 @@ export function createFestivalDataLoaders(state: FestivalAppState) {
 	}
 
 	async function loadMembershipProducts(slug: string) {
+		const token = await getIdToken(state.firebaseUser());
+		if (!token) {
+			return;
+		}
+
 		state.setIsLoadingMembershipProducts(true);
 		state.setMembershipProducts([]);
 		state.setMembershipProductsLoadError("");
 
 		try {
-			const response = await getMembershipProducts(slug);
+			const response = await getAdminMembershipProducts(token, slug);
 			state.setMembershipProducts(response.membershipProducts);
 		} catch {
 			state.setMembershipProductsLoadError(
