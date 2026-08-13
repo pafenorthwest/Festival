@@ -6,6 +6,26 @@ export interface AppEnv {
 	firebaseClientEmail?: string;
 	firebasePrivateKey?: string;
 	aesEncryptionKey?: string;
+	allowedApiOrigins?: string[];
+	trustProxyHeaders?: boolean;
+}
+
+const LOCAL_API_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
+const LOCAL_API_PORTS = [5172, 5173, 8080];
+
+export const LOCAL_API_ORIGINS = LOCAL_API_HOSTS.flatMap((host) =>
+	LOCAL_API_PORTS.map((port) => `http://${host}:${port}`),
+);
+
+function parseAllowedApiOrigins(value: string | undefined): string[] {
+	if (!value?.trim()) {
+		return LOCAL_API_ORIGINS;
+	}
+
+	return value
+		.split(",")
+		.map((origin) => origin.trim())
+		.filter(Boolean);
 }
 
 function parseRequiredEnv(name: string): string {
@@ -66,5 +86,7 @@ export function loadEnv(options?: {
 		firebaseClientEmail: process.env.FIREBASE_CLIENT_EMAIL?.trim(),
 		firebasePrivateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
 		aesEncryptionKey: process.env.AES_ENCRYPTION_KEY?.trim(),
+		allowedApiOrigins: parseAllowedApiOrigins(process.env.API_ALLOWED_ORIGINS),
+		trustProxyHeaders: process.env.TRUST_PROXY_HEADERS === "true",
 	};
 }

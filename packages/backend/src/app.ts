@@ -2,8 +2,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { createFirebaseAuthVerifier } from "./auth/firebase-auth-verifier.js";
 import type { AuthVerifier } from "./auth/types.js";
-import type { AppEnv } from "./config/env.js";
-import { loadEnv } from "./config/env.js";
+import { type AppEnv, LOCAL_API_ORIGINS, loadEnv } from "./config/env.js";
 import type { AppUserRepository } from "./repo/app-user-repository.js";
 import { InMemoryAppUserRepository } from "./repo/in-memory-app-user-repository.js";
 import type { OrganizationRepository } from "./repo/organization-repository.js";
@@ -11,6 +10,8 @@ import { PostgresAppUserRepository } from "./repo/postgres-app-user-repository.j
 import { PostgresOrganizationRepository } from "./repo/postgres-organization-repository.js";
 import { buildApiRouter } from "./routes/api-router.js";
 import { buildAuthRouter } from "./routes/auth-router.js";
+import { assertRouteSecurityInventory } from "./routes/route-security.js";
+import { apiRequestSecurity } from "./security/request-security.js";
 import { OrganizationService } from "./services/organization-service.js";
 import { ShopifyAdminApiClient } from "./shopify/admin-api-client.js";
 import { AesSecretEncryptor } from "./shopify/encryption.js";
@@ -26,11 +27,6 @@ export interface CreateAppOptions {
 	shopifyIntegrationService?: ShopifyIntegrationService;
 	shopifyMembershipProductService?: ShopifyMembershipProductService;
 }
-
-const allowedApiOrigins = new Set([
-	"http://localhost:5173",
-	"http://127.0.0.1:5173",
-]);
 
 export async function createApp(options: CreateAppOptions = {}) {
 	const env =
@@ -90,6 +86,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 			: undefined);
 
 	const app = new Hono();
+	const allowedApiOrigins = new Set(env.allowedApiOrigins ?? LOCAL_API_ORIGINS);
 
 	app.use(
 		"/api/*",
@@ -99,6 +96,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 			allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
 		}),
 	);
+	app.use("/api/*", apiRequestSecurity());
 
 	app.get("/health", (c) => {
 		return c.json({ status: "ok" });
@@ -113,7 +111,15 @@ export async function createApp(options: CreateAppOptions = {}) {
 			shopifyMembershipProductService,
 		),
 	);
-	app.route("/api/v1/auth", buildAuthRouter(authVerifier, appUserRepository));
+	app.route(
+		"/api/v1/auth",
+		buildAuthRouter(
+			authVerifier,
+			appUserRepository,
+			env.trustProxyHeaders ?? false,
+		),
+	);
+	assertRouteSecurityInventory(app.routes);
 
 	return { app, env };
 }

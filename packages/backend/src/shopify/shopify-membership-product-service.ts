@@ -26,9 +26,7 @@ export interface ShopifyCleanupFailureLogger {
 		message: string,
 		context: {
 			operation: "shopify.membershipProduct.cleanup";
-			shopifyProductGid: string;
 			errorName?: string;
-			errorMessage?: string;
 		},
 	): void;
 }
@@ -48,12 +46,8 @@ function toAppError(error: unknown): AppError {
 		return error;
 	}
 
-	if (error instanceof ShopifyIntegrationError) {
-		return new AppError(error.message, 502);
-	}
-
-	if (error instanceof Error) {
-		return new AppError(error.message, 502);
+	if (error instanceof ShopifyIntegrationError || error instanceof Error) {
+		return new AppError("Shopify membership product operation failed.", 502);
 	}
 
 	return new AppError("Shopify membership product operation failed.", 502);
@@ -288,9 +282,7 @@ export class ShopifyMembershipProductService {
 				"Shopify membership product cleanup failed after local persistence failure.",
 				{
 					operation: "shopify.membershipProduct.cleanup",
-					shopifyProductGid: productGid,
 					errorName: error instanceof Error ? error.name : undefined,
-					errorMessage: error instanceof Error ? error.message : undefined,
 				},
 			);
 		}

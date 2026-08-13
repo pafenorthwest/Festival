@@ -17,7 +17,7 @@ class FakeShopifyTester implements ShopifyConnectivityTester {
 	async testCredentials(credentials: ShopifyCredentials): Promise<void> {
 		this.calls.push(credentials);
 		if (this.shouldFail) {
-			throw new Error("Invalid Shopify credentials.");
+			throw new Error("Invalid Shopify credentials: client-secret-canary");
 		}
 	}
 }
@@ -80,8 +80,10 @@ describe("ShopifyIntegrationService", () => {
 		);
 
 		expect(response.settings.verificationStatus).toBe("failed");
+		expect(response.settings.lastError).toBe("Shopify verification failed.");
 		expect(response.settings.hasClientSecret).toBeTrue();
 		expect(JSON.stringify(response)).not.toContain("client-secret");
+		expect(JSON.stringify(response)).not.toContain("client-secret-canary");
 		expect(stored?.storeDomain).toBe("example.myshopify.com");
 		expect(stored?.encryptedClientSecret).not.toContain("client-secret");
 		expect(tester.calls[0]).toEqual({

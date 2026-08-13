@@ -10,7 +10,6 @@ import {
 	assertTenantRole,
 	getRequiredIdentity,
 	getRequiredTenant,
-	readIdentity,
 	requireAuth,
 	requireTenant,
 	requireTenantRole,
@@ -33,9 +32,6 @@ const FORBIDDEN_MEMBERSHIP_PRODUCT_FIELDS = [
 	"clientSecret",
 	"credentials",
 ] as const;
-
-const PUBLIC_MEMBERSHIP_PRODUCTS_UNAVAILABLE_MESSAGE =
-	"Membership information is temporarily unavailable. Please try again later.";
 
 function assertNoForbiddenMembershipProductFields(payload: unknown): void {
 	if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
@@ -62,11 +58,25 @@ export function buildApiRouter(
 	const router = new Hono<{ Variables: Partial<ApiVariables> }>();
 	const repository = organizationService.repository;
 
-	router.get("/session", async (c) => {
+	router.get("/bootstrap", async (c) => {
 		try {
-			const identity = await readIdentity(c, authVerifier);
+			if (c.req.header("Authorization") !== undefined) {
+				throw new AppError(
+					"Authorization is not accepted on the bootstrap route.",
+					400,
+				);
+			}
+
+			return c.json(await organizationService.getSession());
+		} catch (error) {
+			return toJsonError(c, error);
+		}
+	});
+
+	router.get("/firebase-session", requireAuth(authVerifier), async (c) => {
+		try {
 			return c.json(
-				await organizationService.getSession(identity ?? undefined),
+				await organizationService.getSession(getRequiredIdentity(c)),
 			);
 		} catch (error) {
 			return toJsonError(c, error);
@@ -353,57 +363,8 @@ export function buildApiRouter(
 	);
 
 	router.get("/organizations/:slug/membership-products", async (c) => {
-		try {
-			if (!shopifyMembershipProductService) {
-				throw new AppError("AES_ENCRYPTION_KEY is required.", 500);
-			}
-
-			const organization = await repository.findOrganizationBySlug(
-				c.req.param("slug"),
-			);
-			if (!organization) {
-				throw new AppError("Organization not found.", 404);
-			}
-
-			const membershipProducts =
-				await shopifyMembershipProductService.listMembershipProductsForOrganization(
-					organization,
-				);
-
-			return c.json({
-				organization: {
-					id: organization.id,
-					slug: organization.slug,
-					name: organization.name,
-				},
-				membershipProducts: membershipProducts.map(
-					({
-						shopifyProductGid: _shopifyProductGid,
-						shopifyVariantGid: _shopifyVariantGid,
-						...membershipProduct
-					}) => membershipProduct,
-				),
-			});
-		} catch (error) {
-			if (
-				error instanceof AppError &&
-				error.status === 404 &&
-				error.message === "Organization not found."
-			) {
-				return toJsonError(c, error);
-			}
-
-			console.error("Public membership product listing failed.", {
-				operation: "shopify.membershipProducts.publicList",
-				organizationSlug: c.req.param("slug"),
-				errorName: error instanceof Error ? error.name : undefined,
-				errorMessage: error instanceof Error ? error.message : undefined,
-			});
-			c.status(502);
-			return c.json({
-				error: PUBLIC_MEMBERSHIP_PRODUCTS_UNAVAILABLE_MESSAGE,
-			});
-		}
+		c.status(403);
+		return c.json({ error: "Forbidden." });
 	});
 
 	return router;

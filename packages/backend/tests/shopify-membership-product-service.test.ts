@@ -102,9 +102,7 @@ class FakeCleanupFailureLogger {
 		message: string;
 		context: {
 			operation: "shopify.membershipProduct.cleanup";
-			shopifyProductGid: string;
 			errorName?: string;
-			errorMessage?: string;
 		};
 	}> = [];
 
@@ -112,9 +110,7 @@ class FakeCleanupFailureLogger {
 		message: string,
 		context: {
 			operation: "shopify.membershipProduct.cleanup";
-			shopifyProductGid: string;
 			errorName?: string;
-			errorMessage?: string;
 		},
 	): void {
 		this.errors.push({ message, context });
@@ -280,7 +276,9 @@ describe("ShopifyMembershipProductService", () => {
 		} catch (error) {
 			expect(error).toBeInstanceOf(AppError);
 			expect((error as AppError).status).toBe(502);
-			expect((error as Error).message).toBe("Title has already been taken.");
+			expect((error as Error).message).toBe(
+				"Shopify membership product operation failed.",
+			);
 		}
 	});
 
@@ -339,18 +337,20 @@ describe("ShopifyMembershipProductService", () => {
 
 		await expect(
 			service.createMembershipProduct(organization, membershipInput()),
-		).rejects.toThrow("database unavailable");
+		).rejects.toThrow("Shopify membership product operation failed.");
 		expect(client.deletedProductGids).toEqual([
 			"gid://shopify/Product/not-a-number",
 		]);
 	});
 
-	it("logs the Shopify Product GID when cleanup fails", async () => {
+	it("logs only bounded cleanup failure metadata", async () => {
 		const repository = new FailingProductRepository();
 		const organization = await createOrganization(repository);
 		const encryptor = await saveIntegration(repository, organization);
 		const client = new FakeShopifyProductClient();
-		client.deleteError = new Error("cleanup unavailable");
+		client.deleteError = new Error(
+			"cleanup unavailable client-secret-canary bearer-canary cookie-canary",
+		);
 		const logger = new FakeCleanupFailureLogger();
 		const service = new ShopifyMembershipProductService(
 			repository,
@@ -361,18 +361,20 @@ describe("ShopifyMembershipProductService", () => {
 
 		await expect(
 			service.createMembershipProduct(organization, membershipInput()),
-		).rejects.toThrow("database unavailable");
+		).rejects.toThrow("Shopify membership product operation failed.");
 		expect(logger.errors).toEqual([
 			{
 				message:
 					"Shopify membership product cleanup failed after local persistence failure.",
 				context: {
 					operation: "shopify.membershipProduct.cleanup",
-					shopifyProductGid: "gid://shopify/Product/not-a-number",
 					errorName: "Error",
-					errorMessage: "cleanup unavailable",
 				},
 			},
 		]);
+		const capturedLog = JSON.stringify(logger.errors);
+		expect(capturedLog).not.toContain("client-secret-canary");
+		expect(capturedLog).not.toContain("bearer-canary");
+		expect(capturedLog).not.toContain("cookie-canary");
 	});
 });

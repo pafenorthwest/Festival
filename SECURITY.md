@@ -1,0 +1,122 @@
+# Festival Security Policy
+
+This document is the authoritative description of Festival's currently enforced trust boundaries. It distinguishes implemented controls from operator-applied deployment settings and deferred work. It does not claim that the development Docker Compose topology is production hardened.
+
+## Current trust model
+
+- The browser receives the SolidJS frontend from nginx and calls only Festival `/api` routes.
+- Firebase authenticates Festival administrators and staff. Firebase identity alone does not grant organization access.
+- The Festival backend resolves organization membership and role from server-side records. Browser-supplied organization, role, ownership, Shopify identifiers, and credentials are not authority.
+- Only an authorized Festival Admin operation may load an organization's encrypted Shopify client secret and call the Shopify Admin API.
+- One deployment `AES_ENCRYPTION_KEY` currently encrypts Shopify client secrets for all organizations. The database association selected after tenant authorization maps each ciphertext to its organization; the encryption key itself does not establish tenant scope. Encryption-key rotation is tracked separately and is not implemented here.
+
+```mermaid
+flowchart LR
+    A["Organization Admin browser"] -->|"Firebase ID token"| N["Public nginx and frontend"]
+    N -->|"Approved /api route"| B["Private Festival BFF"]
+    B -->|"Verify token"| F["Firebase Admin SDK"]
+    F -->|"Verified uid and email"| B
+    B --> T["Festival tenant membership and Admin-role check"]
+    T -->|"Authorized organization ID"| R["Organization-scoped encrypted Shopify credentials"]
+    R -->|"Decrypt only in backend memory"| B
+    B -->|"Client-credentials token request"| S["Canonical HTTPS Shopify store"]
+    S -->|"Short-lived access token"| B
+    B -->|"Task-specific Admin GraphQL request"| S
+    S -->|"Bounded response"| B
+    B -->|"Sanitized Festival response"| A
+```
+
+Firebase authenticates the Admin to Festival. It does not authenticate the browser to Shopify. Shopify client secrets and access tokens remain in the private backend boundary and must never be sent to the frontend.
+
+## Current route authentication inventory
+
+| Class | Current routes | Enforcement |
+| --- | --- | --- |
+| Public | `GET /api/bootstrap`, `GET /api/invites/:token`, disabled `GET /api/organizations/:slug/membership-products` | Bootstrap rejects every `Authorization` header. The Shopify-backed membership route returns 403 before repository or Shopify access. |
+| Firebase | `GET /api/firebase-session`, `POST /api/organizations`, `GET /api/memberships`, `POST /api/invites/:token/accept`, `/api/v1/auth/sync`, `/api/v1/auth/login-event`, `/api/v1/auth/me` | A valid Firebase bearer token is required. A Firebase session does not require organization membership. |
+| Tenant | `GET /api/organizations/:slug`, `POST /api/organizations/:slug/welcome/dismiss` | Firebase identity plus membership in the route organization is required. |
+| Admin | `/api/invites`, organization Admin users, invites, festivals, Shopify settings, and membership-product mutation routes | Firebase identity, matching tenant membership, and Festival `Admin` role are required. |
+| Private health | Backend `GET /health` | Available only on the private backend listener. Public nginx does not proxy it. |
+
+Backend startup compares every registered route with the declared inventory and fails when a route is missing or declared twice. Adding a route requires updating the inventory, nginx policy when public access is intended, tests, and this document.
+
+## Browser and BFF controls
+
+- Browser origins are exact values from `API_ALLOWED_ORIGINS`, a comma-separated list. Local development defaults allow HTTP ports `5172`, `5173`, and `8080` on `localhost`, IPv4 loopback (`127.0.0.1`), and IPv6 loopback (`[::1]`). Wildcard credentialed CORS is not allowed.
+- Current API mutation bodies must be JSON and are limited to 64 KiB. Hono route registration and nginx allow only the methods used today.
+- Festival does not use a shared process-wide request limiter: that design would unfairly combine all callers and conflict with the expected traffic profile. Production rate limiting is deferred to an edge or distributed implementation partitioned by appropriate caller and operation keys.
+- Firebase authentication, tenant authorization, and Admin authorization remain application decisions. CORS, nginx, source IP, and any future rate-limit success never grant access.
+- `TRUST_PROXY_HEADERS` defaults to false. Set it to `true` only when the backend is reachable exclusively through a trusted nginx that replaces `X-Real-IP` and `X-Forwarded-*`; never enable it on a directly public backend.
+
+## Nginx and health boundary
+
+Both repository configurations enforce the same policy with different upstreams:
+
+- `nginx/festival.conf` is the host-nginx option and proxies to `127.0.0.1:3000`.
+- `docker/nginx.festival.conf` is the container-nginx option and proxies to `backend:3000` on the private container network.
+
+Nginx permits only current API path/method combinations, denies unknown `/api`, webhook, internal, metrics, readiness, debug, and backend-health paths, and applies SPA fallback only after those denials. It replaces forwarding headers, bounds request/header timing and size, and logs only remote address, method, path without query string, status, response bytes, and duration. It never logs authorization, cookies, bodies, or query strings.
+
+Public `GET /healthz` is an nginx-owned rollup returning exactly `{"status":"ok"}`. It does not query or expose backend dependency state, versions, tenant data, configuration, readiness detail, or diagnostics.
+
+The jump-host nginx configuration is out of scope because its topology is deployment-specific. An outer proxy must preserve the same default-deny intent and must not make ports `3000` or `5432` public.
+
+## Shopify egress and secret handling
+
+- Current Admin calls construct their own `https://<store>.myshopify.com` token and pinned GraphQL URLs. Festival rejects non-canonical hosts, credentials in URLs, ports, unsafe redirects, timeouts, oversized responses, and malformed JSON.
+- No generic GraphQL proxy exists. Each backend operation supplies its own query and variables.
+- Client secrets are encrypted at rest, decrypted only in backend memory after tenant/Admin authorization, and excluded from API responses. Access tokens are short-lived and backend-only.
+- Unexpected application errors return stable sanitized messages. Logs must not contain bearer tokens, cookies, Firebase credentials, Shopify client secrets/access tokens, ciphertext, request bodies, sensitive upstream payloads, or customer email data. Current cleanup logs retain only a fixed operation category and error class.
+
+If credentials may be exposed, stop the affected integration, revoke or rotate the Shopify app credential in Shopify, disable or revoke affected Firebase accounts/sessions where relevant, rotate Festival deployment secrets, and review safe metadata logs. Do not copy suspected secret values into tickets or logs. Re-enable the integration only after verification with replacement credentials.
+
+## Operator-applied UFW settings
+
+Festival does not run `sudo`, invoke UFW, mutate host firewall state, reload nginx, or apply these settings automatically. The following is a reviewable template for a privileged operator with console/recovery access. Replace placeholders before use and preserve an existing management session while validating.
+
+Expected `/etc/default/ufw` setting:
+
+```text
+IPV6=yes
+```
+
+Baseline command template (run through the operator's approved privilege workflow):
+
+```bash
+ufw default deny incoming
+ufw default allow outgoing
+ufw allow from <TRUSTED_MANAGEMENT_CIDR> to any port 22 proto tcp
+ufw allow 80/tcp
+ufw allow 443/tcp
+ufw deny 3000/tcp
+ufw deny 5432/tcp
+ufw deny 8080/tcp
+ufw enable
+```
+
+Apply equivalent IPv4 and IPv6 intent. If nginx itself is intentionally exposed on `8080` instead of being reached through ports 80/443, replace the `8080` deny with the narrowly required allow. Do not expose backend `3000` or PostgreSQL `5432`. Restrict SSH to the actual management CIDR; do not blindly apply the placeholder.
+
+For host nginx, bind the backend to loopback and expose only the selected nginx public ports. For container nginx, publish only the frontend/nginx port and keep backend/PostgreSQL on private Docker networks. Docker-published ports can bypass assumptions about UFW because Docker manages its own packet-filter rules; review Docker's `DOCKER-USER` chain and the platform firewall. The checked-in Compose files publish development ports and are not evidence of a hardened deployment.
+
+Operator verification and recovery commands:
+
+```bash
+ufw status verbose
+ufw status numbered
+ss -lntup
+iptables -S DOCKER-USER
+ip6tables -S
+curl --fail --silent http://127.0.0.1:8080/healthz
+```
+
+Confirm from an external test host that only approved public ports answer, and confirm from the host/private network that nginx can reach the backend while the Internet cannot. Keep provider-console access and a tested UFW disable/revert procedure available before changing remote firewall rules.
+
+## Deferred issue #79 boundaries
+
+The following remain deferred and must not be inferred from current controls: Shopify Customer Account OAuth and customer cookie sessions; CSRF; public catalog/Storefront replacement; cart, checkout, order, refund, and entitlement workflows; webhook HMAC, replay, deduplication, and queues; event-bus consumers; reconciliation workers; internal job APIs; metrics/readiness/debug APIs; financial-action step-up controls; distributed rate limiting; deployment automation; issue #75 token/scope/credential rotation; and encryption-keyring rotation.
+
+Future implementations require their own route classification, least-privilege nginx exposure, abuse controls, secret/redaction tests, and issue #79 checklist evidence.
+
+## Verification
+
+Repository verification is `bun run format:check`, `bun run build`, and `bun run test`. Nginx policy is tested by deterministic config inspection; this security slice does not run containers, reload nginx, apply UFW, or perform external probes.

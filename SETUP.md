@@ -1,6 +1,6 @@
 # Festival Setup
 
-This guide documents the primary local setup path for Festival: a real Firebase project plus a local PostgreSQL instance. Firebase emulator settings are included only as optional notes because the checked-in app currently assumes the real-project path first.
+This guide documents the primary local setup path for Festival: a real Firebase project plus a local PostgreSQL instance. Firebase emulator settings are included only as optional notes because the checked-in app currently assumes the real-project path first. Review [SECURITY.md](SECURITY.md) before exposing nginx or applying the documented operator-managed firewall posture.
 
 ## Requirements
 
@@ -238,6 +238,8 @@ These values are part of the approved setup contract for this repo, even though 
 | `AUTH_REQUIRE_EMAIL_VERIFIED` | yes | Use `true` unless you intentionally want a looser local policy. |
 | `FIREBASE_AUTH_EMULATOR_HOST` | optional | Leave commented out unless both frontend and backend are intentionally using the Firebase Auth emulator. If this variable is present while using real Firebase Auth, the backend Admin SDK can reject real ID tokens with invalid-signature errors. |
 | `FIREBASE_USE_EMULATOR` | optional | Dev-only toggle, default `false` for the primary setup path. |
+| `API_ALLOWED_ORIGINS` | optional | Comma-separated exact browser origins. Development defaults allow HTTP ports `5172`, `5173`, and `8080` on `localhost`, `127.0.0.1`, and `[::1]`. |
+| `TRUST_PROXY_HEADERS` | optional | Defaults to `false`; use `true` only when the backend is private behind a trusted nginx that replaces forwarding headers. |
 
 For the primary local setup path with a real Firebase project, make sure the backend `.env` does not define `FIREBASE_AUTH_EMULATOR_HOST`:
 

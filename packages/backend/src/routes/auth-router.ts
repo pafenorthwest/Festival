@@ -10,6 +10,7 @@ import type { Context, MiddlewareHandler } from "hono";
 import { Hono } from "hono";
 import type { AuthVerifier } from "../auth/types.js";
 import { AppError } from "../errors/app-error.js";
+import { jsonError as safeJsonError } from "../errors/json-error.js";
 import type { AppUserRepository } from "../repo/app-user-repository.js";
 import { appUserInputFromIdentity } from "../repo/app-user-repository.js";
 
@@ -33,13 +34,7 @@ function appUserPayload(user: {
 }
 
 function jsonError(c: Context, error: unknown) {
-	if (error instanceof AppError) {
-		c.status(error.status as 400 | 401 | 403 | 404 | 409 | 500);
-		return c.json({ error: error.message });
-	}
-
-	c.status(500);
-	return c.json({ error: (error as Error).message });
+	return safeJsonError(c, error);
 }
 
 function bearerToken(c: Context): string {
@@ -48,8 +43,8 @@ function bearerToken(c: Context): string {
 		throw new AppError("Authentication required.", 401);
 	}
 
-	const [scheme, token] = header.split(" ");
-	if (scheme !== "Bearer" || !token) {
+	const [scheme, token, extra] = header.split(" ");
+	if (scheme !== "Bearer" || !token || extra) {
 		throw new AppError(
 			"Authorization header must use Bearer token format.",
 			401,
@@ -66,15 +61,8 @@ function requireFirebaseAuth(
 		try {
 			try {
 				c.set("firebaseIdentity", await authVerifier.verify(bearerToken(c)));
-			} catch (error) {
-				if (error instanceof AppError) {
-					throw error;
-				}
-
-				throw new AppError(
-					`Failed to verify Firebase ID token: ${(error as Error).message}`,
-					401,
-				);
+			} catch {
+				throw new AppError("Firebase authentication failed.", 401);
 			}
 			await next();
 		} catch (error) {
@@ -126,7 +114,11 @@ async function readLoginEventInput(c: Context): Promise<LoginEventInput> {
 	return { provider };
 }
 
-function requestIp(c: Context): string | undefined {
+function requestIp(c: Context, trustProxyHeaders: boolean): string | undefined {
+	if (!trustProxyHeaders) {
+		return undefined;
+	}
+
 	const forwardedFor = c.req.header("x-forwarded-for")?.split(",")[0]?.trim();
 	if (forwardedFor) {
 		return forwardedFor;
@@ -138,6 +130,7 @@ function requestIp(c: Context): string | undefined {
 export function buildAuthRouter(
 	authVerifier: AuthVerifier,
 	appUserRepository: AppUserRepository,
+	trustProxyHeaders = false,
 ): Hono<{ Variables: AuthVariables }> {
 	const router = new Hono<{ Variables: AuthVariables }>();
 	const firebaseAuth = requireFirebaseAuth(authVerifier);
@@ -161,8 +154,9 @@ export function buildAuthRouter(
 				userId: c.var.appUser.id,
 				firebaseUid: c.var.firebaseIdentity.uid,
 				provider: payload.provider,
-				ipAddress: requestIp(c),
-				userAgent: c.req.header("user-agent")?.trim() || undefined,
+				ipAddress: requestIp(c, trustProxyHeaders),
+				userAgent:
+					c.req.header("user-agent")?.trim().slice(0, 256) || undefined,
 			});
 
 			return c.json({ status: "ok" } satisfies LoginEventResponse);
