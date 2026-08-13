@@ -46,4 +46,4 @@
 - Build: passed — `bun run build` (common/backend TypeScript and frontend Vite production build)
 - Tests: passed — `bun run test` (21 common, 151 backend, 27 frontend; 199 total)
 - Code review: passed — no findings, `patch is correct`, confidence 0.94
-- Clean merge: pending
+- Clean merge: passed — `git-clean-merge-check.sh main eric/basic-customer-auth` (`CLEAN MERGE`, fast-forward)
