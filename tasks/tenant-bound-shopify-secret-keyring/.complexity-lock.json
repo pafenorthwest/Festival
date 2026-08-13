@@ -1,0 +1,23 @@
+{
+  "selected_signals_path": "/Users/eric/pafenorthwest/Festival/tasks/tenant-bound-shopify-secret-keyring/complexity-signals.json",
+  "selected_signals_sha256": "037ce05eebe6221dcc5485e4f130d379d773d61445aae7abbaf52b32c07ca902",
+  "score_script_path": "/Users/eric/.codex/scripts/complexity-score.sh",
+  "score_script_sha256": "45a062dd25a8938ad1fba76e1be65815c40d7d722a20ff07c22c74ed0e479699",
+  "ranges": {
+    "goals": {
+      "min": 8,
+      "max": 13
+    },
+    "phases": {
+      "min": 6,
+      "max": 9
+    }
+  },
+  "recommended": {
+    "goals": 11,
+    "phases": 9
+  },
+  "complexity_input": "@tasks/tenant-bound-shopify-secret-keyring/complexity-signals.json",
+  "complexity_descriptor": "scored:L4 (cross-system)",
+  "captured_at": "2026-08-13T04:54:59Z"
+}

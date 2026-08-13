@@ -298,7 +298,7 @@ export function buildApiRouter(
 		async (c) => {
 			try {
 				if (!shopifyIntegrationService) {
-					throw new AppError("AES_ENCRYPTION_KEY is required.", 500);
+					throw new AppError("Shopify integration is not configured.", 503);
 				}
 
 				return c.json(
@@ -320,7 +320,7 @@ export function buildApiRouter(
 		async (c) => {
 			try {
 				if (!shopifyIntegrationService) {
-					throw new AppError("AES_ENCRYPTION_KEY is required.", 500);
+					throw new AppError("Shopify integration is not configured.", 503);
 				}
 
 				const payload = await c.req.json();
@@ -344,7 +344,7 @@ export function buildApiRouter(
 		async (c) => {
 			try {
 				if (!shopifyMembershipProductService) {
-					throw new AppError("AES_ENCRYPTION_KEY is required.", 500);
+					throw new AppError("Shopify integration is not configured.", 503);
 				}
 
 				const payload = await c.req.json();

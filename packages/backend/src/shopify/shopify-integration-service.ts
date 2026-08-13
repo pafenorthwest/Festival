@@ -10,7 +10,10 @@ import type {
 	OrganizationRepository,
 	ShopifyIntegrationRecord,
 } from "../repo/organization-repository.js";
-import type { AesSecretEncryptor } from "./encryption.js";
+import {
+	SHOPIFY_CLIENT_SECRET_PURPOSE,
+	type ShopifySecretKeyring,
+} from "./encryption.js";
 import type { ShopifyConnectivityTester } from "./types.js";
 
 function toPublicSettings(
@@ -35,7 +38,7 @@ function publicErrorMessage(_error: unknown): string {
 export class ShopifyIntegrationService {
 	constructor(
 		private readonly repository: OrganizationRepository,
-		private readonly encryptor: AesSecretEncryptor,
+		private readonly secretKeyring: ShopifySecretKeyring,
 		private readonly connectivityTester: ShopifyConnectivityTester,
 	) {}
 
@@ -75,14 +78,20 @@ export class ShopifyIntegrationService {
 		const clientSecret = secretWasProvided
 			? validation.clientSecret
 			: existing
-				? this.encryptor.decrypt(existing.encryptedClientSecret)
+				? this.secretKeyring.decrypt(existing.encryptedClientSecret, {
+						organizationId: tenant.organization.id,
+						purpose: SHOPIFY_CLIENT_SECRET_PURPOSE,
+					})
 				: undefined;
 		if (!clientSecret) {
 			throw new AppError("Shopify client secret is required.", 400);
 		}
 
 		const encryptedClientSecret = secretWasProvided
-			? this.encryptor.encrypt(clientSecret)
+			? this.secretKeyring.encrypt(clientSecret, {
+					organizationId: tenant.organization.id,
+					purpose: SHOPIFY_CLIENT_SECRET_PURPOSE,
+				})
 			: existing?.encryptedClientSecret;
 		if (!encryptedClientSecret) {
 			throw new AppError("Shopify client secret is required.", 400);

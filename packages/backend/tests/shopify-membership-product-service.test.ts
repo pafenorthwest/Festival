@@ -6,7 +6,10 @@ import type {
 	CreateMembershipProductRecordInput,
 	ProductRecord,
 } from "../src/repo/organization-repository.js";
-import { AesSecretEncryptor } from "../src/shopify/encryption.js";
+import {
+	SHOPIFY_CLIENT_SECRET_PURPOSE,
+	ShopifySecretKeyring,
+} from "../src/shopify/encryption.js";
 import { ShopifyUserError } from "../src/shopify/errors.js";
 import { ShopifyMembershipProductService } from "../src/shopify/shopify-membership-product-service.js";
 import type {
@@ -16,6 +19,15 @@ import type {
 } from "../src/shopify/types.js";
 
 const TEST_KEY = Buffer.alloc(32, 8).toString("base64");
+
+function createKeyring() {
+	const keyring = ShopifySecretKeyring.fromEnvironment(
+		JSON.stringify({ test: TEST_KEY }),
+		"test",
+	);
+	if (!keyring) throw new Error("Expected configured keyring.");
+	return keyring;
+}
 
 function membershipInput() {
 	return {
@@ -54,6 +66,7 @@ function shopifyProduct(
 }
 
 class FakeShopifyProductClient implements ShopifyMembershipProductClient {
+	createCalls = 0;
 	readonly deletedProductGids: string[] = [];
 	readonly readProductGids: string[][] = [];
 	createResponse = shopifyProduct();
@@ -65,6 +78,7 @@ class FakeShopifyProductClient implements ShopifyMembershipProductClient {
 	async createProduct(
 		_credentials: ShopifyCredentials,
 	): Promise<ShopifyProductDetails> {
+		this.createCalls += 1;
 		if (this.createError) {
 			throw this.createError;
 		}
@@ -137,12 +151,15 @@ async function saveIntegration(
 	organization: OrganizationRecord,
 	status: "ok" | "failed" = "ok",
 ) {
-	const encryptor = new AesSecretEncryptor(TEST_KEY);
+	const encryptor = createKeyring();
 	await repository.upsertShopifyIntegration({
 		organizationId: organization.id,
 		storeDomain: "example.myshopify.com",
 		clientId: "client-id",
-		encryptedClientSecret: encryptor.encrypt("client-secret"),
+		encryptedClientSecret: encryptor.encrypt("client-secret", {
+			organizationId: organization.id,
+			purpose: SHOPIFY_CLIENT_SECRET_PURPOSE,
+		}),
 	});
 	await repository.updateShopifyVerification({
 		organizationId: organization.id,
@@ -223,7 +240,7 @@ describe("ShopifyMembershipProductService", () => {
 	it("rejects missing and unverified Shopify integrations", async () => {
 		const missingRepository = new InMemoryOrganizationRepository();
 		const missingOrganization = await createOrganization(missingRepository);
-		const encryptor = new AesSecretEncryptor(TEST_KEY);
+		const encryptor = createKeyring();
 		const missingService = new ShopifyMembershipProductService(
 			missingRepository,
 			encryptor,
@@ -376,5 +393,42 @@ describe("ShopifyMembershipProductService", () => {
 		expect(capturedLog).not.toContain("client-secret-canary");
 		expect(capturedLog).not.toContain("bearer-canary");
 		expect(capturedLog).not.toContain("cookie-canary");
+	});
+
+	it("rejects a client-secret envelope copied from another tenant before Shopify", async () => {
+		const repository = new InMemoryOrganizationRepository();
+		const sourceOrganization = await createOrganization(repository);
+		const targetOrganization = await repository.createOrganization({
+			name: "Other Festival",
+			slug: "other",
+		});
+		const secretKeyring = createKeyring();
+		const copiedEnvelope = secretKeyring.encrypt("client-secret", {
+			organizationId: sourceOrganization.id,
+			purpose: SHOPIFY_CLIENT_SECRET_PURPOSE,
+		});
+		await repository.upsertShopifyIntegration({
+			organizationId: targetOrganization.id,
+			storeDomain: "other.myshopify.com",
+			clientId: "client-id",
+			encryptedClientSecret: copiedEnvelope,
+		});
+		await repository.updateShopifyVerification({
+			organizationId: targetOrganization.id,
+			verificationStatus: "ok",
+			verifiedAtIso: new Date().toISOString(),
+			lastTestedAtIso: new Date().toISOString(),
+		});
+		const client = new FakeShopifyProductClient();
+		const service = new ShopifyMembershipProductService(
+			repository,
+			secretKeyring,
+			client,
+		);
+
+		await expect(
+			service.createMembershipProduct(targetOrganization, membershipInput()),
+		).rejects.toThrow("Shopify encrypted secret context does not match.");
+		expect(client.createCalls).toBe(0);
 	});
 });

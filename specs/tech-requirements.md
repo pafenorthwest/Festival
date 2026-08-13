@@ -24,6 +24,9 @@ This document records the baseline Hono and SolidJS practices for the Phase 0 on
 - Use Shopify Dev Dashboard app install plus client credentials grant for backend Shopify Admin API access.
 - Configure Shopify access scopes in released Dev Dashboard app versions; do not request scopes from Festival token calls.
 - Request Shopify access tokens server-side only when needed, use them transiently, and do not persist access tokens in Festival storage.
+- Encrypt Shopify client secrets with the deployment-wide AES-256-GCM keyring configured by `FESTIVAL_SECRET_KEYS_JSON` and `FESTIVAL_ACTIVE_SECRET_KEY_ID`. Bind every envelope to its organization ID and the fixed `shopify-client-secret` purpose as authenticated additional data.
+- Use the active key for new ciphertext and retain previous configured keys for reads. Legacy ciphertext, stored-record re-encryption, and safe key retirement are not supported in this phase.
+- Permit startup with Shopify services disabled only when both keyring variables are absent; reject partial or invalid configuration at startup.
 - Keep Shopify HTTP/API details, token requests, endpoint construction, response parsing, and Shopify-specific errors inside the dedicated backend Shopify module.
 - Keep `/api/...` reserved for Festival internal APIs that use Firebase authentication and tenant authorization.
 
