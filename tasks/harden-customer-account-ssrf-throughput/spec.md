@@ -33,18 +33,19 @@
 
 - Delivered:
   - Customer Account-only HTTPS transport with complete resolved-address validation, DNS-to-connection pinning, hostname TLS verification/authority, redirect denial, response bounds, and connection pools scoped to DNS leases.
+  - Review fix: DNS lease retirement now removes expired pools from new use immediately while deferring `Agent.destroy()` until every already-started response has finished consuming its body; explicit lifecycle state, fail-fast balance checks, and detailed concurrency comments document the invariant.
   - Bounded LRU DNS, tenant/integration discovery, and issuer/JWKS caches with configured TTL/byte/entry bounds, same-key single-flight, fail-closed expiry/error behavior, immediate integration invalidation, unknown-key refresh, and safe aggregate metrics.
   - Deterministic adversarial, concurrency, invalidation, rotation, and cache-bound tests plus a mocked-Shopify session-creation benchmark.
   - README and SETUP documentation for the security model, defaults, controls, observability, single-process limitation, tradeoffs, and benchmark procedure.
 - Exceptions: None
 - Deferred work: None
-- Dirty-worktree decision: continue — preflight found only the approved v0/v1 goal artifacts, this task scaffold, and their manifest update on the task-specific `eric/SSRF-validation` branch.
+- Dirty-worktree decision: continue — the review-fix preflight found only the expected `code-review.md` update that recorded the actionable DNS lease lifecycle finding on the task-specific `eric/SSRF-validation` branch.
 
 ## Quality gate results
 
 - Lint: passed — `bun run format:check`
 - Build: passed — `bun run build`
-- Tests: passed — `bun run test` (209 tests: 21 common, 161 backend, 27 frontend)
-- Performance: passed — `bun run benchmark:customer-account-cache`; latest warm run 2,289/s and 5.53 ms p95 versus uncached 2,182/s and 6.75 ms p95, with DNS/discovery/JWKS calls reduced from 20/20/10 to 1/0/1.
-- Code review: passed — `code-review-validate.sh harden-customer-account-ssrf-throughput validate main` returned `READY`, verdict `patch is correct`, confidence 0.94.
+- Tests: passed — `bun run test` (210 tests: 21 common, 162 backend, 27 frontend), including concurrent response streaming across metrics-triggered DNS expiry.
+- Performance: passed — `bun run benchmark:customer-account-cache`; latest warm run 1,554/s and 8.86 ms p95 versus uncached 828/s and 34.06 ms p95, with DNS/discovery/JWKS calls reduced from 20/20/10 to 1/0/1.
+- Code review: pending rerun after resolving the recorded DNS lease lifecycle finding.
 - Clean merge: pending `land-the-plan` stage.

@@ -76,6 +76,68 @@ describe("CustomerAccountTransport", () => {
 		expect(resolves).toBe(2);
 	});
 
+	it("retires an expired pool without aborting a response already in flight", async () => {
+		let now = 0;
+		let resolves = 0;
+		let releaseFirstBody: (() => void) | undefined;
+		let markFirstBodyStarted: (() => void) | undefined;
+		const firstBodyStarted = new Promise<void>((resolve) => {
+			markFirstBodyStarted = resolve;
+		});
+		const firstBodyReleased = new Promise<void>((resolve) => {
+			releaseFirstBody = resolve;
+		});
+		const agents: Agent[] = [];
+		const destroyCalls = new Map<Agent, number>();
+		const transport = new CustomerAccountTransport({
+			now: () => now,
+			dnsTtlMs: 1_000,
+			resolver: async () => {
+				resolves++;
+				return [{ address: "8.8.8.8", family: 4, ttlSeconds: 1 }];
+			},
+			requester: async (_url, _answer, agent) => {
+				if (!destroyCalls.has(agent)) {
+					agents.push(agent);
+					destroyCalls.set(agent, 0);
+					const destroy = agent.destroy.bind(agent);
+					agent.destroy = () => {
+						destroyCalls.set(agent, (destroyCalls.get(agent) ?? 0) + 1);
+						destroy();
+					};
+				}
+				if (agents.length !== 1) return raw({ request: "second" });
+				return {
+					status: 200,
+					body: (async function* () {
+						markFirstBodyStarted?.();
+						await firstBodyReleased;
+						yield Buffer.from(JSON.stringify({ request: "first" }));
+					})(),
+				};
+			},
+		});
+		const url = new URL("https://store.example.com/metadata");
+		const first = transport.json(url, "store.example.com");
+		await firstBodyStarted;
+
+		now = 1_001;
+		/* A metrics read expires cache entries and must not kill the active socket. */
+		expect(transport.metrics().expirations).toBe(1);
+		expect(destroyCalls.get(agents[0] as Agent)).toBe(0);
+		expect(await transport.json(url, "store.example.com")).toEqual({
+			request: "second",
+		});
+		expect(agents).toHaveLength(2);
+		expect(destroyCalls.get(agents[0] as Agent)).toBe(0);
+
+		releaseFirstBody?.();
+		expect(await first).toEqual({ request: "first" });
+		expect(destroyCalls.get(agents[0] as Agent)).toBe(1);
+		expect(destroyCalls.get(agents[1] as Agent)).toBe(0);
+		expect(resolves).toBe(2);
+	});
+
 	it("rejects a mixed safe/private answer set before opening a request", async () => {
 		let requests = 0;
 		const transport = new CustomerAccountTransport({

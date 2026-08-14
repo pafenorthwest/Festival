@@ -18,6 +18,16 @@ interface DnsLease {
 	answers: DnsAnswer[];
 	agent: Agent;
 	next: number;
+	/**
+	 * A cache lease can expire while a response that selected it is still being
+	 * consumed. Keep an explicit request count instead of treating cache removal
+	 * as proof that the agent is idle.
+	 */
+	activeRequests: number;
+	/** Retired leases are unavailable to new requests but may still be in use. */
+	retired: boolean;
+	/** Prevent repeated Agent.destroy() calls as concurrent requests release. */
+	destroyed: boolean;
 }
 
 export interface CustomerAccountRawResponse {
@@ -185,8 +195,52 @@ export class CustomerAccountTransport {
 			maxEntryBytes: options.maxEntryBytes ?? DEFAULT_ENTRY_BYTES,
 			maxTotalBytes: options.maxTotalBytes ?? DEFAULT_TOTAL_BYTES,
 			now: options.now,
-			onEvict: (lease) => lease.agent.destroy(),
+			/*
+			 * Removing a lease from the cache is sufficient to stop new requests from
+			 * selecting it. Agent.destroy() is deliberately deferred when a request is
+			 * active because Node destroys sockets in both the idle and active pools.
+			 * Destroying here unconditionally would let a TTL rollover, LRU eviction, or
+			 * metrics scrape abort an unrelated response that is still streaming.
+			 */
+			onEvict: (lease) => this.retireLease(lease),
 		});
+	}
+
+	private retireLease(lease: DnsLease) {
+		lease.retired = true;
+		this.destroyRetiredLeaseIfIdle(lease);
+	}
+
+	private destroyRetiredLeaseIfIdle(lease: DnsLease) {
+		/*
+		 * Retirement and destruction are separate lifecycle events. Retirement is
+		 * immediate at DNS expiry, preserving the security boundary: no later request
+		 * can reuse an address or connection validated by the old DNS answer. Physical
+		 * destruction waits only for requests that already acquired the lease, and the
+		 * final releaser closes both idle keep-alive sockets and its completed socket.
+		 */
+		if (lease.retired && lease.activeRequests === 0 && !lease.destroyed) {
+			lease.destroyed = true;
+			lease.agent.destroy();
+		}
+	}
+
+	private acquireLease(lease: DnsLease) {
+		/*
+		 * lease() and this increment execute in the same JavaScript continuation, so
+		 * cache expiry cannot interleave between selection and acquisition. A retired
+		 * lease here would therefore indicate an internal lifecycle violation.
+		 */
+		if (lease.retired)
+			throw new Error("Customer Account DNS lease is already retired.");
+		lease.activeRequests++;
+	}
+
+	private releaseLease(lease: DnsLease) {
+		if (lease.activeRequests <= 0)
+			throw new Error("Customer Account DNS lease release is unbalanced.");
+		lease.activeRequests--;
+		this.destroyRetiredLeaseIfIdle(lease);
 	}
 
 	assertDestination(url: URL, configuredDomain: string) {
@@ -217,8 +271,11 @@ export class CustomerAccountTransport {
 			return {
 				value: {
 					answers,
-					agent: new Agent({ keepAlive: true, timeout: ttlMs }),
+					agent: new Agent({ keepAlive: true }),
 					next: 0,
+					activeRequests: 0,
+					retired: false,
+					destroyed: false,
 				},
 				ttlMs,
 				bytes,
@@ -229,36 +286,50 @@ export class CustomerAccountTransport {
 	async json(url: URL, configuredDomain: string, init?: RequestInit) {
 		this.assertDestination(url, configuredDomain);
 		const lease = await this.lease(url.hostname.toLowerCase());
-		const answer = lease.answers[lease.next++ % lease.answers.length];
-		if (!answer) throw new Error("Unsafe Customer Account DNS response.");
-		const response = await this.requester(url, answer, lease.agent, init);
-		if (response.status < 200 || response.status >= 300) {
-			response.cancel?.();
-			throw new Error("Customer Account upstream request failed.");
-		}
-		if (
-			response.contentLength !== undefined &&
-			response.contentLength > MAX_RESPONSE_BYTES
-		) {
-			response.cancel?.();
-			throw new Error("Customer Account response is too large.");
-		}
-		const chunks: Uint8Array[] = [];
-		let bytes = 0;
-		for await (const chunk of response.body) {
-			bytes += chunk.byteLength;
-			if (bytes > MAX_RESPONSE_BYTES) {
+		this.acquireLease(lease);
+		try {
+			/*
+			 * Hold the lease through complete body consumption, not merely until response
+			 * headers arrive. The HTTPS agent still owns the active socket while the async
+			 * body is streaming, so releasing at headers would reintroduce the rollover
+			 * race this lifecycle is designed to prevent.
+			 */
+			const answer = lease.answers[lease.next++ % lease.answers.length];
+			if (!answer) throw new Error("Unsafe Customer Account DNS response.");
+			const response = await this.requester(url, answer, lease.agent, init);
+			if (response.status < 200 || response.status >= 300) {
+				response.cancel?.();
+				throw new Error("Customer Account upstream request failed.");
+			}
+			if (
+				response.contentLength !== undefined &&
+				response.contentLength > MAX_RESPONSE_BYTES
+			) {
 				response.cancel?.();
 				throw new Error("Customer Account response is too large.");
 			}
-			chunks.push(chunk);
+			const chunks: Uint8Array[] = [];
+			let bytes = 0;
+			for await (const chunk of response.body) {
+				bytes += chunk.byteLength;
+				if (bytes > MAX_RESPONSE_BYTES) {
+					response.cancel?.();
+					throw new Error("Customer Account response is too large.");
+				}
+				chunks.push(chunk);
+			}
+			const parsed: unknown = JSON.parse(
+				Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString(
+					"utf8",
+				),
+			);
+			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+				throw new Error("Customer Account response is invalid.");
+			return parsed as Record<string, unknown>;
+		} finally {
+			/* Every requester, stream, size, and parse failure releases exactly once. */
+			this.releaseLease(lease);
 		}
-		const parsed: unknown = JSON.parse(
-			Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8"),
-		);
-		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-			throw new Error("Customer Account response is invalid.");
-		return parsed as Record<string, unknown>;
 	}
 
 	metrics() {
