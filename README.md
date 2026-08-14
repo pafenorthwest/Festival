@@ -109,6 +109,55 @@ from `/org/:slug/admin/memberships`, confirm the Shopify product has a single
 Shopify-backed name, description, and price. Do not commit development-store
 credentials or tokens.
 
+### Shopify Customer Account BFF
+
+Public customers use Shopify's new Customer Accounts through Festival's Hono
+backend-for-frontend. This identity is separate from Firebase Admin identity.
+Organization Admins configure it in the distinct **Shopify Customer Accounts**
+section at `/org/:slug/admin/integrations`; Customer Account credentials are not
+the Shopify Admin API credentials described above.
+
+The Admin enters the Headless storefront/account domain, Customer Account client
+ID, and replace-only client secret. **Save & Verify** validates Shopify's OIDC and
+Customer Account discovery documents and displays the exact server-derived
+callback and logout return URLs to configure in Shopify. It does not impersonate
+or sign in a customer. The tenant store must use new customer accounts, have the
+Headless channel configured, and permit `customer_read_orders`.
+
+Customers visit `/org/:slug/account`. OAuth credentials and Shopify access,
+refresh, and ID tokens remain encrypted in PostgreSQL and server-side; the
+browser receives only an opaque `Secure`, `HttpOnly`, `SameSite=Lax` Festival
+cookie. The initial UI exposes a non-identifying session state and an allowlisted
+order view (number/date, totals/currency, financial and fulfillment status,
+cancellation/refund summary, and line items). Name, address, email, phone, raw
+GraphQL responses, and ownership selectors are excluded.
+
+Production order access requires Shopify protected-customer-data configuration
+or approval in addition to the Headless permission. Festival fails closed when
+Shopify denies or redacts protected order data. Auth start/callback rate limiting
+is intentionally deferred until benchmarking and load testing establish an
+evidence-based policy; do not interpret the platform's 500 requests/second
+performance target as an authentication throttle.
+
+Customer Account discovery, token, JWKS, and GraphQL calls use a dedicated
+fail-closed outbound transport. It accepts only HTTPS endpoints on the configured
+storefront or an allowlisted Shopify hostname, rejects redirects and non-global
+IPv4/IPv6 answers, and pins TLS connections to the validated DNS answer while
+retaining hostname certificate verification and HTTP authority. DNS leases and
+their keep-alive pools expire together, preventing a later DNS answer from
+reusing an earlier validation.
+
+Process-local bounded LRU caches retain only validated DNS answers, discovery
+metadata, and approved signing keys. Defaults are 1,024 entries per cache, a
+60-second DNS ceiling (shortened by authoritative TTL), five minutes for
+discovery and JWKS, 256 KiB per entry, and 16 MiB total retained payload. Saving
+an integration invalidates its discovery metadata immediately; an unknown JWT
+key ID triggers one coalesced JWKS refresh. Expired or failed entries are never
+served stale. These caches exchange bounded memory for less DNS, JSON parsing,
+and signature-key preparation; they do not cache tokens, sessions, customer
+identity, orders, or GraphQL responses and are not shared between backend
+processes.
+
 ## Commands
 - `bun install`
 - `bun run dev:frontend`
@@ -119,6 +168,7 @@ credentials or tokens.
 - `bun run format:check`
 - `bun run build`
 - `bun run test`
+- `bun run benchmark:customer-account-cache`
 
 ## Docker Compose
 

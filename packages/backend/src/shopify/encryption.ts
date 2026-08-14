@@ -13,10 +13,19 @@ const CANONICAL_BASE64_PATTERN =
 	/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
 export const SHOPIFY_CLIENT_SECRET_PURPOSE = "shopify-client-secret" as const;
+export const SHOPIFY_CUSTOMER_CLIENT_SECRET_PURPOSE =
+	"shopify-customer-client-secret" as const;
+export const SHOPIFY_CUSTOMER_TOKENS_PURPOSE =
+	"shopify-customer-tokens" as const;
+
+export type ShopifySecretPurpose =
+	| typeof SHOPIFY_CLIENT_SECRET_PURPOSE
+	| typeof SHOPIFY_CUSTOMER_CLIENT_SECRET_PURPOSE
+	| typeof SHOPIFY_CUSTOMER_TOKENS_PURPOSE;
 
 export interface ShopifyClientSecretContext {
 	organizationId: string;
-	purpose: typeof SHOPIFY_CLIENT_SECRET_PURPOSE;
+	purpose: ShopifySecretPurpose;
 }
 
 export type ShopifySecretKeyringErrorCode =
@@ -47,7 +56,7 @@ interface ShopifySecretEnvelope {
 	version: typeof ENVELOPE_VERSION;
 	keyId: string;
 	organizationId: string;
-	purpose: typeof SHOPIFY_CLIENT_SECRET_PURPOSE;
+	purpose: ShopifySecretPurpose;
 	iv: string;
 	tag: string;
 	ciphertext: string;
@@ -122,7 +131,11 @@ function assertContext(
 		context.organizationId.length === 0 ||
 		context.organizationId.length > MAX_ORGANIZATION_ID_CHARACTERS ||
 		containsControlCharacter(context.organizationId) ||
-		context.purpose !== SHOPIFY_CLIENT_SECRET_PURPOSE
+		![
+			SHOPIFY_CLIENT_SECRET_PURPOSE,
+			SHOPIFY_CUSTOMER_CLIENT_SECRET_PURPOSE,
+			SHOPIFY_CUSTOMER_TOKENS_PURPOSE,
+		].includes(context.purpose)
 	) {
 		throw new ShopifySecretKeyringError("invalid_context");
 	}
@@ -187,7 +200,11 @@ function parseEnvelope(serialized: string): {
 		!KEY_ID_PATTERN.test(candidate.keyId) ||
 		typeof candidate.organizationId !== "string" ||
 		typeof candidate.purpose !== "string" ||
-		candidate.purpose !== SHOPIFY_CLIENT_SECRET_PURPOSE ||
+		![
+			SHOPIFY_CLIENT_SECRET_PURPOSE,
+			SHOPIFY_CUSTOMER_CLIENT_SECRET_PURPOSE,
+			SHOPIFY_CUSTOMER_TOKENS_PURPOSE,
+		].includes(candidate.purpose as ShopifySecretPurpose) ||
 		typeof candidate.iv !== "string" ||
 		typeof candidate.tag !== "string" ||
 		typeof candidate.ciphertext !== "string"
@@ -197,7 +214,7 @@ function parseEnvelope(serialized: string): {
 
 	assertContext({
 		organizationId: candidate.organizationId,
-		purpose: candidate.purpose,
+		purpose: candidate.purpose as ShopifySecretPurpose,
 	});
 	const iv = decodeCanonicalBase64(candidate.iv, IV_BYTES);
 	const tag = decodeCanonicalBase64(candidate.tag, AUTH_TAG_BYTES);

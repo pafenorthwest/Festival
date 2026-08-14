@@ -9,6 +9,7 @@ import { AdminIntegrationsPage } from "./pages/AdminIntegrationsPage.js";
 import { AdminMembershipProductsPage } from "./pages/AdminMembershipProductsPage.js";
 import { AdminUsersPage } from "./pages/AdminUsersPage.js";
 import { CreateOrganizationPage } from "./pages/CreateOrganizationPage.js";
+import { CustomerAccountPage } from "./pages/CustomerAccountPage.js";
 import { HomePage } from "./pages/HomePage.js";
 import { InviteLandingPage } from "./pages/InviteLandingPage.js";
 import { MembershipPage } from "./pages/MembershipPage.js";
@@ -41,6 +42,9 @@ export default function App() {
 				</Match>
 				<Match when={app.route().kind === "org-membership"}>
 					<MembershipPage app={app} />
+				</Match>
+				<Match when={app.route().kind === "org-customer-account"}>
+					<CustomerAccountPage slug={(app.route() as { slug: string }).slug} />
 				</Match>
 				<Match when={app.route().kind === "org-admin"}>
 					<AdminHomePage app={app} />

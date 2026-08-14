@@ -3,6 +3,9 @@ import { cors } from "hono/cors";
 import { createFirebaseAuthVerifier } from "./auth/firebase-auth-verifier.js";
 import type { AuthVerifier } from "./auth/types.js";
 import { type AppEnv, LOCAL_API_ORIGINS, loadEnv } from "./config/env.js";
+import type { CustomerAccountRepository } from "./customer/customer-account-repository.js";
+import { CustomerAccountService } from "./customer/customer-account-service.js";
+import { PostgresCustomerAccountRepository } from "./customer/postgres-customer-account-repository.js";
 import type { AppUserRepository } from "./repo/app-user-repository.js";
 import { InMemoryAppUserRepository } from "./repo/in-memory-app-user-repository.js";
 import type { OrganizationRepository } from "./repo/organization-repository.js";
@@ -27,6 +30,8 @@ export interface CreateAppOptions {
 	authVerifier?: AuthVerifier;
 	shopifyIntegrationService?: ShopifyIntegrationService;
 	shopifyMembershipProductService?: ShopifyMembershipProductService;
+	customerAccountRepository?: CustomerAccountRepository;
+	customerAccountService?: CustomerAccountService;
 }
 
 export async function createApp(options: CreateAppOptions = {}) {
@@ -87,6 +92,46 @@ export async function createApp(options: CreateAppOptions = {}) {
 					new FileShopifyMutationAuditWriter(),
 				)
 			: undefined);
+	const customerAccountRepository =
+		options.customerAccountRepository ??
+		(env.databaseSchema
+			? new PostgresCustomerAccountRepository(env.databaseSchema)
+			: undefined);
+	if (customerAccountRepository) await customerAccountRepository.ensureReady();
+	const customerAccountService =
+		options.customerAccountService ??
+		(secretKeyring && customerAccountRepository && env.publicOrigin
+			? new CustomerAccountService(
+					customerAccountRepository,
+					repository,
+					secretKeyring,
+					{
+						publicOrigin: env.publicOrigin,
+						idleDays: env.customerSessionIdleDays,
+						absoluteDays: env.customerSessionAbsoluteDays,
+						transportOptions: {
+							dnsMaxEntries: env.customerDnsCacheMaxEntries,
+							dnsTtlMs: (env.customerDnsCacheTtlSeconds ?? 60) * 1_000,
+							maxEntryBytes: env.customerCacheMaxEntryBytes,
+							maxTotalBytes: Math.floor(
+								(env.customerCacheMaxTotalBytes ?? 16 * 1_024 * 1_024) / 4,
+							),
+						},
+						discoveryCacheMaxEntries: env.customerDiscoveryCacheMaxEntries,
+						discoveryCacheTtlMs:
+							(env.customerDiscoveryCacheTtlSeconds ?? 300) * 1_000,
+						discoveryCacheMaxTotalBytes: Math.floor(
+							(env.customerCacheMaxTotalBytes ?? 16 * 1_024 * 1_024) / 4,
+						),
+						jwksCacheMaxEntries: env.customerJwksCacheMaxEntries,
+						jwksCacheTtlMs: (env.customerJwksCacheTtlSeconds ?? 300) * 1_000,
+						jwksCacheMaxTotalBytes: Math.floor(
+							(env.customerCacheMaxTotalBytes ?? 16 * 1_024 * 1_024) / 2,
+						),
+						cacheMaxEntryBytes: env.customerCacheMaxEntryBytes,
+					},
+				)
+			: undefined);
 
 	const app = new Hono();
 	const allowedApiOrigins = new Set(env.allowedApiOrigins ?? LOCAL_API_ORIGINS);
@@ -95,8 +140,9 @@ export async function createApp(options: CreateAppOptions = {}) {
 		"/api/*",
 		cors({
 			origin: (origin) => (allowedApiOrigins.has(origin) ? origin : undefined),
-			allowHeaders: ["Authorization", "Content-Type"],
+			allowHeaders: ["Authorization", "Content-Type", "X-CSRF-Token"],
 			allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
+			credentials: true,
 		}),
 	);
 	app.use("/api/*", apiRequestSecurity());
@@ -112,6 +158,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 			authVerifier,
 			shopifyIntegrationService,
 			shopifyMembershipProductService,
+			customerAccountService,
 		),
 	);
 	app.route(

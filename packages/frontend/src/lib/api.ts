@@ -8,6 +8,9 @@ import type {
 	CreateMembershipProductResponse,
 	CreateOrganizationInput,
 	CreateOrganizationResponse,
+	CustomerAccountSettingsResponse,
+	CustomerOrdersResponse,
+	CustomerSessionResponse,
 	DismissWelcomeResponse,
 	InviteSummary,
 	MembershipProductsListResponse,
@@ -15,6 +18,8 @@ import type {
 	OrganizationFestivalListResponse,
 	OrganizationLandingResponse,
 	OrganizationMembershipListResponse,
+	SaveCustomerAccountSettingsInput,
+	SaveCustomerAccountSettingsResponse,
 	SaveShopifyIntegrationInput,
 	SaveShopifyIntegrationResponse,
 	SessionResponse,
@@ -27,9 +32,11 @@ async function requestJson<T>(
 	path: string,
 	init?: RequestInit,
 	idToken?: string | null,
+	base = API_BASE,
 ): Promise<T> {
-	const response = await fetch(`${API_BASE}${path}`, {
+	const response = await fetch(`${base}${path}`, {
 		...init,
+		credentials: "include",
 		headers: {
 			"Content-Type": "application/json",
 			...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
@@ -45,6 +52,62 @@ async function requestJson<T>(
 	}
 
 	return payload as T;
+}
+
+export function getCustomerAccountSettings(idToken: string, slug: string) {
+	return requestJson<CustomerAccountSettingsResponse>(
+		`/api/organizations/${slug}/admin/shopify-customer-account`,
+		undefined,
+		idToken,
+	);
+}
+
+export function saveCustomerAccountSettings(
+	idToken: string,
+	slug: string,
+	input: SaveCustomerAccountSettingsInput,
+) {
+	return requestJson<SaveCustomerAccountSettingsResponse>(
+		`/api/organizations/${slug}/admin/shopify-customer-account`,
+		{ method: "POST", body: JSON.stringify(input) },
+		idToken,
+	);
+}
+
+export function customerSignInPath(slug: string) {
+	const returnTo = `/org/${slug}/account`;
+	return `/api/organizations/${slug}/customer-auth/start?returnTo=${encodeURIComponent(returnTo)}`;
+}
+
+export function getCustomerSession(slug: string) {
+	return requestJson<CustomerSessionResponse>(
+		`/api/organizations/${slug}/customer/session`,
+		undefined,
+		undefined,
+		"",
+	);
+}
+
+export function getCustomerOrders(slug: string, after?: string) {
+	return requestJson<CustomerOrdersResponse>(
+		`/api/organizations/${slug}/customer/orders${after ? `?after=${encodeURIComponent(after)}` : ""}`,
+		undefined,
+		undefined,
+		"",
+	);
+}
+
+export function logoutCustomer(slug: string, csrfToken: string): void {
+	const form = document.createElement("form");
+	form.method = "POST";
+	form.action = `/api/organizations/${slug}/customer/logout`;
+	const input = document.createElement("input");
+	input.type = "hidden";
+	input.name = "csrfToken";
+	input.value = csrfToken;
+	form.append(input);
+	document.body.append(form);
+	form.submit();
 }
 
 export function getBootstrap() {

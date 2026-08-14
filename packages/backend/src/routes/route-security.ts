@@ -4,6 +4,9 @@ export const ROUTE_AUTHENTICATION_CLASSES = [
 	"tenant",
 	"admin",
 	"private-health",
+	"customer-auth-start",
+	"customer-oauth-callback",
+	"customer",
 ] as const;
 
 export type RouteAuthenticationClass =
@@ -27,6 +30,41 @@ export const CURRENT_ROUTE_SECURITY = [
 		method: "POST",
 		path: "/api/organizations",
 		authenticationClass: "firebase",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/admin/shopify-customer-account",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/shopify-customer-account",
+		authenticationClass: "admin",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/customer-auth/start",
+		authenticationClass: "customer-auth-start",
+	},
+	{
+		method: "GET",
+		path: "/api/customer-auth/callback",
+		authenticationClass: "customer-oauth-callback",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/customer/session",
+		authenticationClass: "customer",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/customer/orders",
+		authenticationClass: "customer",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/customer/logout",
+		authenticationClass: "customer",
 	},
 	{ method: "GET", path: "/api/memberships", authenticationClass: "firebase" },
 	{ method: "POST", path: "/api/invites", authenticationClass: "admin" },
