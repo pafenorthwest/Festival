@@ -603,6 +603,15 @@ export class CustomerAccountService {
 		}
 		return { session: s, integration };
 	}
+	private sessionTouch(session: CustomerSessionRecord, seenAt: Date) {
+		return {
+			sessionId: session.sessionId,
+			organizationId: session.organizationId,
+			integrationVersion: session.integrationVersion,
+			seenAtIso: seenAt.toISOString(),
+			idleCutoffIso: new Date(seenAt.getTime() - this.idleMs).toISOString(),
+		};
+	}
 	private async access(
 		session: CustomerSessionRecord,
 		integration: CustomerAccountIntegrationRecord,
@@ -617,7 +626,12 @@ export class CustomerAccountService {
 		if (!pending) {
 			pending = (async () => {
 				const latest = await this.repository.getSession(session.sessionId);
-				if (!latest) throw new AppError("Customer session is invalid.", 401);
+				if (
+					!latest ||
+					latest.revokedAtIso ||
+					latest.integrationVersion !== integration.integrationVersion
+				)
+					throw new AppError("Customer session is invalid.", 401);
 				const current = this.decrypt(latest);
 				if (
 					new Date(current.accessExpiresAtIso).getTime() >
@@ -640,20 +654,22 @@ export class CustomerAccountService {
 					);
 					if (next.idToken !== current.idToken)
 						await this.verifyIdToken(next.idToken, integration, oidc);
-					const updated = {
-						...latest,
-						encryptedTokens: this.keyring.encrypt(JSON.stringify(next), {
+					const seenAt = this.now();
+					const replacementEncryptedTokens = this.keyring.encrypt(
+						JSON.stringify(next),
+						{
 							organizationId: latest.organizationId,
 							purpose: SHOPIFY_CUSTOMER_TOKENS_PURPOSE,
-						}),
-						lastSeenAtIso: this.now().toISOString(),
-						expiresAtIso:
-							next.refreshExpiresAtIso &&
-							new Date(next.refreshExpiresAtIso) < new Date(latest.expiresAtIso)
-								? next.refreshExpiresAtIso
-								: latest.expiresAtIso,
-					};
-					await this.repository.updateSession(updated);
+						},
+					);
+					const updated = await this.repository.replaceSessionTokens({
+						...this.sessionTouch(latest, seenAt),
+						expectedEncryptedTokens: latest.encryptedTokens,
+						replacementEncryptedTokens,
+						replacementExpiresAtIso:
+							next.refreshExpiresAtIso ?? latest.expiresAtIso,
+					});
+					if (!updated) throw new AppError("Customer session is invalid.", 401);
 					return updated;
 				} catch {
 					await this.repository.revokeSession(
@@ -677,15 +693,15 @@ export class CustomerAccountService {
 		if (!org || !sessionId) return { session: { authenticated: false } };
 		try {
 			const { session } = await this.validSession(sessionId, org.id);
-			await this.repository.updateSession({
-				...session,
-				lastSeenAtIso: this.now().toISOString(),
-			});
+			const touched = await this.repository.touchSession(
+				this.sessionTouch(session, this.now()),
+			);
+			if (!touched) throw new AppError("Customer session is invalid.", 401);
 			return {
 				session: {
 					authenticated: true,
-					csrfToken: session.csrfToken,
-					expiresAtIso: session.expiresAtIso,
+					csrfToken: touched.csrfToken,
+					expiresAtIso: touched.expiresAtIso,
 				},
 			};
 		} catch (error) {
@@ -776,10 +792,10 @@ export class CustomerAccountService {
 				}),
 			};
 		});
-		await this.repository.updateSession({
-			...session,
-			lastSeenAtIso: this.now().toISOString(),
-		});
+		const touched = await this.repository.touchSession(
+			this.sessionTouch(session, this.now()),
+		);
+		if (!touched) throw new AppError("Customer session is invalid.", 401);
 		return {
 			orders,
 			pageInfo: {
