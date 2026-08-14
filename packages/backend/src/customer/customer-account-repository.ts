@@ -33,6 +33,21 @@ export interface CustomerSessionRecord {
 	revokedAtIso?: string;
 }
 
+export interface CustomerSessionTouchInput {
+	sessionId: string;
+	organizationId: string;
+	integrationVersion: number;
+	seenAtIso: string;
+	idleCutoffIso: string;
+}
+
+export interface CustomerSessionTokenReplacementInput
+	extends CustomerSessionTouchInput {
+	expectedEncryptedTokens: string;
+	replacementEncryptedTokens: string;
+	replacementExpiresAtIso: string;
+}
+
 export interface CustomerAccountRepository {
 	ensureReady(): Promise<void>;
 	getIntegration(
@@ -63,7 +78,12 @@ export interface CustomerAccountRepository {
 	): Promise<CustomerOAuthStateRecord | null>;
 	createSession(session: CustomerSessionRecord): Promise<void>;
 	getSession(sessionId: string): Promise<CustomerSessionRecord | null>;
-	updateSession(session: CustomerSessionRecord): Promise<void>;
+	touchSession(
+		input: CustomerSessionTouchInput,
+	): Promise<CustomerSessionRecord | null>;
+	replaceSessionTokens(
+		input: CustomerSessionTokenReplacementInput,
+	): Promise<CustomerSessionRecord | null>;
 	revokeSession(sessionId: string, revokedAtIso: string): Promise<void>;
 	revokeOrganizationSessions(
 		organizationId: string,

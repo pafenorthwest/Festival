@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { generateKeyPairSync, sign } from "node:crypto";
+import type {
+	CustomerSessionTokenReplacementInput,
+	CustomerSessionTouchInput,
+} from "../src/customer/customer-account-repository.js";
 import { CustomerAccountService } from "../src/customer/customer-account-service.js";
 import { CustomerAccountTransport } from "../src/customer/customer-account-transport.js";
 import { InMemoryCustomerAccountRepository } from "../src/customer/in-memory-customer-account-repository.js";
@@ -56,8 +60,37 @@ function transportFor(fetcher: typeof fetch, now: () => Date) {
 		},
 	});
 }
+class PausedTouchRepository extends InMemoryCustomerAccountRepository {
+	private markStarted!: () => void;
+	private markReplaced!: () => void;
+	private resume!: () => void;
+	readonly started = new Promise<void>((resolve) => {
+		this.markStarted = resolve;
+	});
+	private released = new Promise<void>((resolve) => {
+		this.resume = resolve;
+	});
+	readonly replaced = new Promise<void>((resolve) => {
+		this.markReplaced = resolve;
+	});
+	release() {
+		this.resume();
+	}
+	override async touchSession(input: CustomerSessionTouchInput) {
+		this.markStarted();
+		await this.released;
+		return super.touchSession(input);
+	}
+	override async replaceSessionTokens(
+		input: CustomerSessionTokenReplacementInput,
+	) {
+		const updated = await super.replaceSessionTokens(input);
+		this.markReplaced();
+		return updated;
+	}
+}
 
-async function fixture() {
+async function fixture(repository = new InMemoryCustomerAccountRepository()) {
 	const organizations = new InMemoryOrganizationRepository();
 	const org = await organizations.createOrganization({
 		name: "Festival",
@@ -67,7 +100,6 @@ async function fixture() {
 		name: "Other",
 		slug: "other",
 	});
-	const repository = new InMemoryCustomerAccountRepository();
 	let nonce = "";
 	let tokenCalls = 0;
 	let denyOrders = false;
@@ -312,6 +344,41 @@ describe("CustomerAccountService", () => {
 		expect(f.tokenCalls()).toBe(2);
 		const stored = await f.repository.getSession(auth.sessionId);
 		expect(stored?.encryptedTokens).not.toContain("refresh-2");
+	});
+	it("cannot resurrect a session revoked while its activity touch is pending", async () => {
+		const repository = new PausedTouchRepository();
+		const f = await fixture(repository);
+		const auth = await f.authenticate();
+		const pending = f.service.session("festival", auth.sessionId);
+		await repository.started;
+		await repository.revokeSession(auth.sessionId, new Date().toISOString());
+		repository.release();
+		expect((await pending).session.authenticated).toBe(false);
+		expect(
+			(await repository.getSession(auth.sessionId))?.revokedAtIso,
+		).toBeDefined();
+	});
+	it("does not let a pending activity touch overwrite rotated tokens", async () => {
+		const repository = new PausedTouchRepository();
+		const f = await fixture(repository);
+		const auth = await f.authenticate();
+		const pendingSession = f.service.session("festival", auth.sessionId);
+		await repository.started;
+		f.setNow(new Date(Date.now() + 61_000));
+		const pendingOrders = f.service.orders("festival", auth.sessionId);
+		await repository.replaced;
+		repository.release();
+		expect((await pendingSession).session.authenticated).toBe(true);
+		await pendingOrders;
+		const stored = await repository.getSession(auth.sessionId);
+		if (!stored) throw new Error("session");
+		const tokens = JSON.parse(
+			f.keyring.decrypt(stored.encryptedTokens, {
+				organizationId: f.org.id,
+				purpose: SHOPIFY_CUSTOMER_TOKENS_PURPOSE,
+			}),
+		);
+		expect(tokens.accessToken).toBe("access-2");
 	});
 	it("invalidates a session when later discovery resolves to a different Shopify issuer", async () => {
 		const f = await fixture();

@@ -3,7 +3,17 @@ import type {
 	CustomerAccountRepository,
 	CustomerOAuthStateRecord,
 	CustomerSessionRecord,
+	CustomerSessionTokenReplacementInput,
+	CustomerSessionTouchInput,
 } from "./customer-account-repository.js";
+
+function laterIso(left: string, right: string) {
+	return new Date(left) >= new Date(right) ? left : right;
+}
+
+function earlierIso(left: string, right: string) {
+	return new Date(left) <= new Date(right) ? left : right;
+}
 
 export class InMemoryCustomerAccountRepository
 	implements CustomerAccountRepository
@@ -72,18 +82,53 @@ export class InMemoryCustomerAccountRepository
 	async getSession(id: string) {
 		return this.sessions.get(id) ?? null;
 	}
-	async updateSession(session: CustomerSessionRecord) {
-		if (!this.sessions.has(session.sessionId))
-			throw new Error("Customer session not found.");
-		this.sessions.set(session.sessionId, session);
+	private activeSession(input: CustomerSessionTouchInput) {
+		const session = this.sessions.get(input.sessionId);
+		if (
+			!session ||
+			session.organizationId !== input.organizationId ||
+			session.integrationVersion !== input.integrationVersion ||
+			session.revokedAtIso ||
+			new Date(session.expiresAtIso) <= new Date(input.seenAtIso) ||
+			new Date(session.lastSeenAtIso) <= new Date(input.idleCutoffIso)
+		)
+			return null;
+		return session;
+	}
+	async touchSession(input: CustomerSessionTouchInput) {
+		const session = this.activeSession(input);
+		if (!session) return null;
+		const touched = {
+			...session,
+			lastSeenAtIso: laterIso(session.lastSeenAtIso, input.seenAtIso),
+		};
+		this.sessions.set(session.sessionId, touched);
+		return touched;
+	}
+	async replaceSessionTokens(input: CustomerSessionTokenReplacementInput) {
+		const session = this.activeSession(input);
+		if (!session || session.encryptedTokens !== input.expectedEncryptedTokens)
+			return null;
+		const updated = {
+			...session,
+			encryptedTokens: input.replacementEncryptedTokens,
+			lastSeenAtIso: laterIso(session.lastSeenAtIso, input.seenAtIso),
+			expiresAtIso: earlierIso(
+				session.expiresAtIso,
+				input.replacementExpiresAtIso,
+			),
+		};
+		this.sessions.set(session.sessionId, updated);
+		return updated;
 	}
 	async revokeSession(id: string, at: string) {
 		const session = this.sessions.get(id);
-		if (session) this.sessions.set(id, { ...session, revokedAtIso: at });
+		if (session && !session.revokedAtIso)
+			this.sessions.set(id, { ...session, revokedAtIso: at });
 	}
 	async revokeOrganizationSessions(org: string, at: string) {
 		for (const [id, session] of this.sessions)
-			if (session.organizationId === org)
+			if (session.organizationId === org && !session.revokedAtIso)
 				this.sessions.set(id, { ...session, revokedAtIso: at });
 	}
 }

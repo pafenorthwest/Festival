@@ -35,7 +35,7 @@
 
 ## Delivery
 
-- Delivered: separate tenant-scoped Customer Account configuration and PostgreSQL persistence; validated OIDC/API discovery; confidential authorization-code callback; signed ID-token validation; one-time state/nonce; encrypted token/session storage; opaque secure cookie; single-process serialized refresh; tenant/credential rotation invalidation; CSRF/origin-protected logout; allowlisted order DTO and protected-data denial; distinct Admin setup card; minimal customer account page; nginx routes; README/SETUP guidance; focused automated coverage.
+- Delivered: separate tenant-scoped Customer Account configuration and PostgreSQL persistence; validated OIDC/API discovery; confidential authorization-code callback; signed ID-token validation; one-time state/nonce; encrypted token/session storage; opaque secure cookie; single-process serialized refresh; tenant/credential rotation invalidation; atomic activity touches and compare-and-swap token replacement that cannot undo revocation or rotation; transactional PostgreSQL credential rotation/session revocation; CSRF/origin-protected logout; allowlisted order DTO and protected-data denial; distinct Admin setup card; minimal customer account page; nginx routes; README/SETUP guidance; focused automated coverage.
 - Exceptions: None from the locked goals. The intentional issue #76/#79 rate-limit deferral remains documented and is not claimed as delivered.
 - Deferred work: evidence-based auth rate limits after benchmarking/load testing; multi-replica distributed refresh coordination; all issue #77/#78 cart, checkout, webhook, reconciliation, financial, and entitlement work.
 - Dirty-worktree decision: continue — preflight found only the approved goal artifacts, generated task scaffold, and their manifest update; no unrelated user changes are present.
@@ -44,6 +44,6 @@
 
 - Lint: passed — `bun run format:check` (106 files, no fixes required)
 - Build: passed — `bun run build` (common/backend TypeScript and frontend Vite production build)
-- Tests: passed — `bun run test` (21 common, 151 backend, 27 frontend; 199 total)
-- Code review: passed — no findings, `patch is correct`, confidence 0.94
-- Clean merge: passed — `git-clean-merge-check.sh main eric/basic-customer-auth` (`CLEAN MERGE`, fast-forward)
+- Tests: passed — `bun run test` (21 common, 155 backend, 27 frontend; 203 total)
+- Code review: blocked — the session stale-write finding is resolved and regression-tested; five separately reported findings remain outside this approved correction.
+- Clean merge: pending after the remaining review findings and final review are complete.
