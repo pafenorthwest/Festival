@@ -4,6 +4,8 @@ import type {
 	CustomerAccountRepository,
 	CustomerOAuthStateRecord,
 	CustomerSessionRecord,
+	CustomerSessionTokenReplacementInput,
+	CustomerSessionTouchInput,
 } from "./customer-account-repository.js";
 
 interface IntegrationRow {
@@ -125,19 +127,22 @@ export class PostgresCustomerAccountRepository
 		>,
 	) {
 		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`INSERT INTO ${this.schema}.shopify_customer_account_integrations (organization_id,storefront_domain,client_id,encrypted_client_secret) VALUES ($1,$2,$3,$4) ON CONFLICT (organization_id) DO UPDATE SET storefront_domain=EXCLUDED.storefront_domain,client_id=EXCLUDED.client_id,encrypted_client_secret=EXCLUDED.encrypted_client_secret,readiness='unknown',can_read_orders=FALSE,integration_version=${this.schema}.shopify_customer_account_integrations.integration_version+1,verified_at=NULL,last_error=NULL,updated_at=NOW() RETURNING *`,
-			[
-				input.organizationId,
-				input.storefrontDomain,
-				input.clientId,
-				input.encryptedClientSecret,
-			],
-		)) as IntegrationRow[];
-		await this.revokeOrganizationSessions(
-			input.organizationId,
-			new Date().toISOString(),
-		);
+		const rows = await sql.begin(async (transaction) => {
+			const updated = (await transaction.unsafe(
+				`INSERT INTO ${this.schema}.shopify_customer_account_integrations (organization_id,storefront_domain,client_id,encrypted_client_secret) VALUES ($1,$2,$3,$4) ON CONFLICT (organization_id) DO UPDATE SET storefront_domain=EXCLUDED.storefront_domain,client_id=EXCLUDED.client_id,encrypted_client_secret=EXCLUDED.encrypted_client_secret,readiness='unknown',can_read_orders=FALSE,integration_version=${this.schema}.shopify_customer_account_integrations.integration_version+1,verified_at=NULL,last_error=NULL,updated_at=NOW() RETURNING *`,
+				[
+					input.organizationId,
+					input.storefrontDomain,
+					input.clientId,
+					input.encryptedClientSecret,
+				],
+			)) as IntegrationRow[];
+			await transaction.unsafe(
+				`UPDATE ${this.schema}.shopify_customer_sessions SET revoked_at=$2 WHERE organization_id=$1 AND revoked_at IS NULL`,
+				[input.organizationId, new Date().toISOString()],
+			);
+			return updated;
+		});
 		return integration(rows[0]);
 	}
 	async setIntegrationReadiness(
@@ -212,18 +217,36 @@ export class PostgresCustomerAccountRepository
 		)) as SessionRow[];
 		return rows[0] ? session(rows[0]) : null;
 	}
-	async updateSession(s: CustomerSessionRecord) {
+	async touchSession(input: CustomerSessionTouchInput) {
 		await this.ensureReady();
-		await sql.unsafe(
-			`UPDATE ${this.schema}.shopify_customer_sessions SET encrypted_tokens=$2,last_seen_at=$3,expires_at=$4,revoked_at=$5 WHERE session_id=$1`,
+		const rows = (await sql.unsafe(
+			`UPDATE ${this.schema}.shopify_customer_sessions SET last_seen_at=GREATEST(last_seen_at,$4) WHERE session_id=$1 AND organization_id=$2 AND integration_version=$3 AND revoked_at IS NULL AND expires_at>$4 AND last_seen_at>$5 RETURNING *`,
 			[
-				s.sessionId,
-				s.encryptedTokens,
-				s.lastSeenAtIso,
-				s.expiresAtIso,
-				s.revokedAtIso ?? null,
+				input.sessionId,
+				input.organizationId,
+				input.integrationVersion,
+				input.seenAtIso,
+				input.idleCutoffIso,
 			],
-		);
+		)) as SessionRow[];
+		return rows[0] ? session(rows[0]) : null;
+	}
+	async replaceSessionTokens(input: CustomerSessionTokenReplacementInput) {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`UPDATE ${this.schema}.shopify_customer_sessions SET encrypted_tokens=$5,last_seen_at=GREATEST(last_seen_at,$6),expires_at=LEAST(expires_at,$7) WHERE session_id=$1 AND organization_id=$2 AND integration_version=$3 AND encrypted_tokens=$4 AND revoked_at IS NULL AND expires_at>$6 AND last_seen_at>$8 RETURNING *`,
+			[
+				input.sessionId,
+				input.organizationId,
+				input.integrationVersion,
+				input.expectedEncryptedTokens,
+				input.replacementEncryptedTokens,
+				input.seenAtIso,
+				input.replacementExpiresAtIso,
+				input.idleCutoffIso,
+			],
+		)) as SessionRow[];
+		return rows[0] ? session(rows[0]) : null;
 	}
 	async revokeSession(id: string, at: string) {
 		await this.ensureReady();
