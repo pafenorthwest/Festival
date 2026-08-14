@@ -12,6 +12,14 @@ export interface AppEnv {
 	publicOrigin?: string;
 	customerSessionIdleDays?: number;
 	customerSessionAbsoluteDays?: number;
+	customerDnsCacheMaxEntries?: number;
+	customerDnsCacheTtlSeconds?: number;
+	customerDiscoveryCacheMaxEntries?: number;
+	customerDiscoveryCacheTtlSeconds?: number;
+	customerJwksCacheMaxEntries?: number;
+	customerJwksCacheTtlSeconds?: number;
+	customerCacheMaxEntryBytes?: number;
+	customerCacheMaxTotalBytes?: number;
 }
 
 const LOCAL_API_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
@@ -47,6 +55,13 @@ function parsePositiveNumber(name: string, fallback: number): number {
 	const value = Number(raw);
 	if (!Number.isFinite(value) || value <= 0)
 		throw new Error(`Invalid ${name} value: ${raw}`);
+	return value;
+}
+
+function parsePositiveInteger(name: string, fallback: number): number {
+	const value = parsePositiveNumber(name, fallback);
+	if (!Number.isInteger(value))
+		throw new Error(`Invalid ${name} value: ${value}`);
 	return value;
 }
 
@@ -111,6 +126,38 @@ export function loadEnv(options?: {
 		customerSessionAbsoluteDays: parsePositiveNumber(
 			"CUSTOMER_SESSION_ABSOLUTE_DAYS",
 			30,
+		),
+		customerDnsCacheMaxEntries: parsePositiveInteger(
+			"CUSTOMER_DNS_CACHE_MAX_ENTRIES",
+			1_024,
+		),
+		customerDnsCacheTtlSeconds: parsePositiveNumber(
+			"CUSTOMER_DNS_CACHE_TTL_SECONDS",
+			60,
+		),
+		customerDiscoveryCacheMaxEntries: parsePositiveInteger(
+			"CUSTOMER_DISCOVERY_CACHE_MAX_ENTRIES",
+			1_024,
+		),
+		customerDiscoveryCacheTtlSeconds: parsePositiveNumber(
+			"CUSTOMER_DISCOVERY_CACHE_TTL_SECONDS",
+			300,
+		),
+		customerJwksCacheMaxEntries: parsePositiveInteger(
+			"CUSTOMER_JWKS_CACHE_MAX_ENTRIES",
+			1_024,
+		),
+		customerJwksCacheTtlSeconds: parsePositiveNumber(
+			"CUSTOMER_JWKS_CACHE_TTL_SECONDS",
+			300,
+		),
+		customerCacheMaxEntryBytes: parsePositiveInteger(
+			"CUSTOMER_CACHE_MAX_ENTRY_BYTES",
+			256 * 1_024,
+		),
+		customerCacheMaxTotalBytes: parsePositiveInteger(
+			"CUSTOMER_CACHE_MAX_TOTAL_BYTES",
+			16 * 1_024 * 1_024,
 		),
 	};
 }

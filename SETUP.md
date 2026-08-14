@@ -278,6 +278,14 @@ Configure Festival's session caps with:
 FESTIVAL_PUBLIC_ORIGIN=https://festival.example.com
 CUSTOMER_SESSION_IDLE_DAYS=7
 CUSTOMER_SESSION_ABSOLUTE_DAYS=30
+CUSTOMER_DNS_CACHE_MAX_ENTRIES=1024
+CUSTOMER_DNS_CACHE_TTL_SECONDS=60
+CUSTOMER_DISCOVERY_CACHE_MAX_ENTRIES=1024
+CUSTOMER_DISCOVERY_CACHE_TTL_SECONDS=300
+CUSTOMER_JWKS_CACHE_MAX_ENTRIES=1024
+CUSTOMER_JWKS_CACHE_TTL_SECONDS=300
+CUSTOMER_CACHE_MAX_ENTRY_BYTES=262144
+CUSTOMER_CACHE_MAX_TOTAL_BYTES=16777216
 ```
 
 Both duration values must be positive, the idle cap cannot exceed the absolute
@@ -285,6 +293,39 @@ cap, and applicable Shopify token expiry shortens the session. This phase assume
 one backend process and serializes refresh within that process; do not deploy
 multiple active backend replicas until distributed refresh coordination is
 implemented.
+
+The cache byte total is divided between DNS (25%), discovery (25%), and JWKS
+(50%); every entry must also fit the per-entry limit. Lower limits reduce memory
+at the cost of more DNS resolution, metadata parsing, and signing-key imports.
+All caches use deterministic LRU eviction and same-key single-flight. They are
+strictly process-local: replicas do not share cache state or refresh locks.
+Credential/configuration saves increment the integration version and immediately
+invalidate that tenant's discovery entry. DNS is never retained beyond the lower
+of the configured ceiling and authoritative TTL, and its keep-alive connection
+pool is destroyed with the lease. Discovery/JWKS failures, invalid schemas,
+unsafe addresses, oversized responses, and expired entries fail closed without
+stale fallback.
+
+The service exposes only aggregate cache counters/gauges (`hits`, `misses`,
+`coalesced`, `evictions`, `expirations`, `errors`, `entries`, and
+`retainedBytes`) to backend instrumentation. Cache keys, domains, tokens,
+customer IDs, queries, and payloads must not be logged or exported as metric
+labels.
+
+Run the deterministic relative benchmark with:
+
+```bash
+bun run benchmark:customer-account-cache
+```
+
+It uses mocked Shopify DNS and responses at concurrency 12 and reports uncached
+and warm-cache Festival-controlled throughput, p50/p95 latency, CPU, heap delta,
+DNS/discovery/JWKS call counts, and cache bounds. It fails if the warm run
+regresses throughput or p95 or performs redundant discovery/JWKS calls. This is
+not a claim about Shopify capacity or end-to-end production throughput. The
+recorded 2026-08-14 local run processed 120 session creations per mode: warm
+throughput was 2,270/s versus 2,125/s uncached, warm p95 was 5.94 ms versus 6.94
+ms, and warm DNS/discovery/JWKS calls were 1/0/1 versus 20/20/10.
 
 For local testing, use a Shopify development store with a test customer and at
 least one order. Set `FESTIVAL_PUBLIC_ORIGIN` to an HTTPS tunnel origin registered

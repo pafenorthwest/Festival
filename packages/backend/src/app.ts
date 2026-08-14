@@ -109,6 +109,26 @@ export async function createApp(options: CreateAppOptions = {}) {
 						publicOrigin: env.publicOrigin,
 						idleDays: env.customerSessionIdleDays,
 						absoluteDays: env.customerSessionAbsoluteDays,
+						transportOptions: {
+							dnsMaxEntries: env.customerDnsCacheMaxEntries,
+							dnsTtlMs: (env.customerDnsCacheTtlSeconds ?? 60) * 1_000,
+							maxEntryBytes: env.customerCacheMaxEntryBytes,
+							maxTotalBytes: Math.floor(
+								(env.customerCacheMaxTotalBytes ?? 16 * 1_024 * 1_024) / 4,
+							),
+						},
+						discoveryCacheMaxEntries: env.customerDiscoveryCacheMaxEntries,
+						discoveryCacheTtlMs:
+							(env.customerDiscoveryCacheTtlSeconds ?? 300) * 1_000,
+						discoveryCacheMaxTotalBytes: Math.floor(
+							(env.customerCacheMaxTotalBytes ?? 16 * 1_024 * 1_024) / 4,
+						),
+						jwksCacheMaxEntries: env.customerJwksCacheMaxEntries,
+						jwksCacheTtlMs: (env.customerJwksCacheTtlSeconds ?? 300) * 1_000,
+						jwksCacheMaxTotalBytes: Math.floor(
+							(env.customerCacheMaxTotalBytes ?? 16 * 1_024 * 1_024) / 2,
+						),
+						cacheMaxEntryBytes: env.customerCacheMaxEntryBytes,
 					},
 				)
 			: undefined);
