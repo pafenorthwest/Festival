@@ -30,6 +30,7 @@
     "test:common": "bun run --cwd packages/common test",
     "test:backend": "bun run --cwd packages/backend test",
     "test:frontend": "bun run --cwd packages/frontend test"
+		,"benchmark:customer-account-cache": "bun packages/backend/scripts/benchmark-customer-account-cache.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.9",

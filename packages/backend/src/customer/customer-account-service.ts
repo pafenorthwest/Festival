@@ -5,7 +5,6 @@ import {
 	randomUUID,
 	verify as verifySignature,
 } from "node:crypto";
-import { lookup } from "node:dns/promises";
 import type {
 	CustomerAccountSettings,
 	CustomerOrdersResponse,
@@ -23,15 +22,22 @@ import {
 	SHOPIFY_CUSTOMER_TOKENS_PURPOSE,
 	type ShopifySecretKeyring,
 } from "../shopify/encryption.js";
+import { BoundedAsyncCache, type CacheMetrics } from "./bounded-async-cache.js";
 import type {
 	CustomerAccountIntegrationRecord,
 	CustomerAccountRepository,
 	CustomerSessionRecord,
 } from "./customer-account-repository.js";
+import {
+	CustomerAccountTransport,
+	type CustomerAccountTransportOptions,
+} from "./customer-account-transport.js";
 
 const OAUTH_STATE_TTL_MS = 10 * 60_000;
-const MAX_RESPONSE_BYTES = 512 * 1024;
-const REQUEST_TIMEOUT_MS = 10_000;
+const DEFAULT_CACHE_TTL_MS = 5 * 60_000;
+const DEFAULT_CACHE_ENTRY_BYTES = 256 * 1024;
+const DEFAULT_DISCOVERY_CACHE_BYTES = 4 * 1024 * 1024;
+const DEFAULT_JWKS_CACHE_BYTES = 8 * 1024 * 1024;
 export const CUSTOMER_SESSION_COOKIE = "festival_customer_session";
 
 interface Discovery {
@@ -60,7 +66,6 @@ interface TokenResponse {
 	expires_in?: unknown;
 	refresh_token_expires_in?: unknown;
 }
-type Resolver = (hostname: string) => Promise<readonly string[]>;
 type JsonRecord = Record<string, unknown>;
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -79,11 +84,6 @@ function hash(value: string) {
 function safeError() {
 	return new AppError("Customer Account authentication is unavailable.", 503);
 }
-function privateAddress(address: string) {
-	return /^(127\.|10\.|0\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1$|fc|fd|fe80)/i.test(
-		address,
-	);
-}
 function decodePart(value: string): Record<string, unknown> {
 	try {
 		return JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
@@ -95,6 +95,13 @@ function audienceIncludes(value: unknown, clientId: string) {
 	return (
 		value === clientId || (Array.isArray(value) && value.includes(clientId))
 	);
+}
+function hasExplicitAuthorityPort(value: string) {
+	const authority = /^https:\/\/([^/]+)/i.exec(value)?.[1] ?? "";
+	const host = authority.includes("@")
+		? (authority.split("@").at(-1) ?? "")
+		: authority;
+	return host.startsWith("[") || /:\d+$/.test(host);
 }
 function money(value: unknown) {
 	if (
@@ -110,19 +117,32 @@ export interface CustomerAccountServiceOptions {
 	publicOrigin: string;
 	idleDays?: number;
 	absoluteDays?: number;
-	fetch?: typeof fetch;
-	resolve?: Resolver;
 	now?: () => Date;
+	transport?: CustomerAccountTransport;
+	transportOptions?: CustomerAccountTransportOptions;
+	discoveryCacheMaxEntries?: number;
+	discoveryCacheTtlMs?: number;
+	discoveryCacheMaxTotalBytes?: number;
+	jwksCacheMaxEntries?: number;
+	jwksCacheTtlMs?: number;
+	jwksCacheMaxTotalBytes?: number;
+	cacheMaxEntryBytes?: number;
 }
 
 export class CustomerAccountService {
-	private fetcher: typeof fetch;
-	private resolver: Resolver;
 	private now: () => Date;
 	private refreshes = new Map<string, Promise<CustomerSessionRecord>>();
 	private publicOrigin: string;
 	private idleMs: number;
 	private absoluteMs: number;
+	private transport: CustomerAccountTransport;
+	private discoveryTtlMs: number;
+	private jwksTtlMs: number;
+	private discoveryCache: BoundedAsyncCache<
+		string,
+		{ oidc: Discovery; api: ApiDiscovery }
+	>;
+	private jwksCache: BoundedAsyncCache<string, readonly JsonRecord[]>;
 	constructor(
 		private repository: CustomerAccountRepository,
 		private organizations: OrganizationRepository,
@@ -145,12 +165,27 @@ export class CustomerAccountService {
 			this.idleMs > this.absoluteMs
 		)
 			throw new Error("Customer session caps are invalid.");
-		this.fetcher = options.fetch ?? fetch;
-		this.resolver =
-			options.resolve ??
-			(async (hostname) =>
-				(await lookup(hostname, { all: true })).map((entry) => entry.address));
 		this.now = options.now ?? (() => new Date());
+		this.transport =
+			options.transport ??
+			new CustomerAccountTransport(options.transportOptions);
+		this.discoveryTtlMs = options.discoveryCacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
+		this.jwksTtlMs = options.jwksCacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
+		const maxEntryBytes =
+			options.cacheMaxEntryBytes ?? DEFAULT_CACHE_ENTRY_BYTES;
+		this.discoveryCache = new BoundedAsyncCache({
+			maxEntries: options.discoveryCacheMaxEntries ?? 1_024,
+			maxEntryBytes,
+			maxTotalBytes:
+				options.discoveryCacheMaxTotalBytes ?? DEFAULT_DISCOVERY_CACHE_BYTES,
+			now: () => this.now().getTime(),
+		});
+		this.jwksCache = new BoundedAsyncCache({
+			maxEntries: options.jwksCacheMaxEntries ?? 1_024,
+			maxEntryBytes,
+			maxTotalBytes: options.jwksCacheMaxTotalBytes ?? DEFAULT_JWKS_CACHE_BYTES,
+			now: () => this.now().getTime(),
+		});
 	}
 	private urls(slug: string) {
 		return {
@@ -205,14 +240,17 @@ export class CustomerAccountService {
 			organizationId,
 			purpose: SHOPIFY_CUSTOMER_CLIENT_SECRET_PURPOSE,
 		});
-		await this.repository.upsertIntegration({
+		const saved = await this.repository.upsertIntegration({
 			organizationId,
 			storefrontDomain: parsed.storefrontDomain,
 			clientId: parsed.clientId,
 			encryptedClientSecret: encrypted,
 		});
+		this.discoveryCache.deleteWhere((key) =>
+			key.startsWith(`${organizationId}\0`),
+		);
 		try {
-			await this.discover(parsed.storefrontDomain);
+			await this.discover(saved);
 			const updated = await this.repository.setIntegrationReadiness(
 				organizationId,
 				{
@@ -234,50 +272,24 @@ export class CustomerAccountService {
 			return { settings: this.settings(updated, slug) };
 		}
 	}
-	private async assertFetchUrl(url: URL, configuredDomain: string) {
-		if (url.protocol !== "https:" || url.username || url.password || url.port)
-			throw safeError();
-		const host = url.hostname.toLowerCase();
-		if (
-			host !== configuredDomain &&
-			!host.endsWith(".shopify.com") &&
-			!host.endsWith(".myshopify.com")
-		)
-			throw safeError();
-		if (/^\d+\.\d+\.\d+\.\d+$/.test(host) || host.includes(":"))
-			throw safeError();
-		const addresses = await this.resolver(host);
-		if (!addresses.length || addresses.some(privateAddress)) throw safeError();
-	}
 	private async json(
 		url: URL,
 		configuredDomain: string,
 		init?: RequestInit,
 	): Promise<JsonRecord> {
-		await this.assertFetchUrl(url, configuredDomain);
-		const response = await this.fetcher(url, {
-			...init,
-			redirect: "error",
-			signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-			headers: {
-				"User-Agent": "Festival-Customer-BFF/1.0",
-				...(init?.headers ?? {}),
-			},
-		});
-		if (!response.ok) throw safeError();
-		const length = Number(response.headers.get("content-length") ?? "0");
-		if (length > MAX_RESPONSE_BYTES) throw safeError();
-		const text = await response.text();
-		if (Buffer.byteLength(text) > MAX_RESPONSE_BYTES) throw safeError();
 		try {
-			const parsed: unknown = JSON.parse(text);
-			if (!isRecord(parsed)) throw safeError();
-			return parsed;
+			return await this.transport.json(url, configuredDomain, {
+				...init,
+				headers: {
+					"User-Agent": "Festival-Customer-BFF/1.0",
+					...(init?.headers ?? {}),
+				},
+			});
 		} catch {
 			throw safeError();
 		}
 	}
-	private async discover(
+	private async loadDiscovery(
 		domain: string,
 	): Promise<{ oidc: Discovery; api: ApiDiscovery }> {
 		const [oidcCandidate, apiCandidate] = await Promise.all([
@@ -307,20 +319,44 @@ export class CustomerAccountService {
 			oidc.end_session_endpoint,
 			oidc.jwks_uri,
 			api.graphql_api,
-		])
-			await this.assertFetchUrl(new URL(endpoint), domain);
+		]) {
+			if (hasExplicitAuthorityPort(endpoint)) throw safeError();
+			this.transport.assertDestination(new URL(endpoint), domain);
+		}
 		const graph = new URL(api.graphql_api);
 		if (
 			!graph.pathname.includes(`/customer/api/${CUSTOMER_ACCOUNT_API_VERSION}/`)
 		)
 			throw safeError();
 		const issuer = new URL(oidc.issuer);
+		const issuerHost = issuer.hostname.toLowerCase();
 		if (
 			issuer.protocol !== "https:" ||
-			(!issuer.hostname.endsWith("shopify.com") && issuer.hostname !== domain)
+			issuer.username ||
+			issuer.password ||
+			issuer.port ||
+			hasExplicitAuthorityPort(oidc.issuer) ||
+			(issuerHost !== domain.toLowerCase() &&
+				issuerHost !== "shopify.com" &&
+				!issuerHost.endsWith(".shopify.com"))
 		)
 			throw safeError();
 		return { oidc, api };
+	}
+	private async discover(integration: CustomerAccountIntegrationRecord) {
+		const key = `${integration.organizationId}\0${integration.integrationVersion}\0${integration.storefrontDomain}`;
+		try {
+			return await this.discoveryCache.getOrLoad(key, async () => {
+				const value = await this.loadDiscovery(integration.storefrontDomain);
+				return {
+					value,
+					ttlMs: this.discoveryTtlMs,
+					bytes: Buffer.byteLength(JSON.stringify(value)),
+				};
+			});
+		} catch {
+			throw safeError();
+		}
 	}
 	async start(slug: string, returnTo?: string) {
 		const organization = await this.organizations.findOrganizationBySlug(slug);
@@ -341,7 +377,7 @@ export class CustomerAccountService {
 				this.now().getTime() + OAUTH_STATE_TTL_MS,
 			).toISOString(),
 		});
-		const { oidc } = await this.discover(integration.storefrontDomain);
+		const { oidc } = await this.discover(integration);
 		const url = new URL(oidc.authorization_endpoint);
 		url.search = new URLSearchParams({
 			scope: "openid email customer-account-api:full",
@@ -423,23 +459,25 @@ export class CustomerAccountService {
 			claims = decodePart(encodedClaims);
 		if (header.alg !== "RS256" || typeof header.kid !== "string")
 			throw new AppError("Customer authentication response is invalid.", 401);
-		const jwks = await this.json(
-			new URL(discovery.jwks_uri),
-			integration.storefrontDomain,
-		);
-		const jwk = Array.isArray(jwks.keys)
-			? jwks.keys.find(
-					(key: unknown) => isRecord(key) && key.kid === header.kid,
-				)
-			: undefined;
+		let keys = await this.signingKeys(integration, discovery);
+		let jwk = keys.find((key) => key.kid === header.kid);
+		if (!jwk) {
+			keys = await this.signingKeys(integration, discovery, true);
+			jwk = keys.find((key) => key.kid === header.kid);
+		}
 		if (!jwk)
 			throw new AppError("Customer authentication response is invalid.", 401);
-		const valid = verifySignature(
-			"RSA-SHA256",
-			Buffer.from(`${encodedHeader}.${encodedClaims}`),
-			createPublicKey({ key: jwk as JsonWebKey, format: "jwk" }),
-			Buffer.from(encodedSignature, "base64url"),
-		);
+		let valid = false;
+		try {
+			valid = verifySignature(
+				"RSA-SHA256",
+				Buffer.from(`${encodedHeader}.${encodedClaims}`),
+				createPublicKey({ key: jwk as JsonWebKey, format: "jwk" }),
+				Buffer.from(encodedSignature, "base64url"),
+			);
+		} catch {
+			throw new AppError("Customer authentication response is invalid.", 401);
+		}
 		if (
 			!valid ||
 			claims.iss !== discovery.issuer ||
@@ -450,6 +488,49 @@ export class CustomerAccountService {
 		)
 			throw new AppError("Customer authentication response is invalid.", 401);
 		return claims;
+	}
+	private async signingKeys(
+		integration: CustomerAccountIntegrationRecord,
+		discovery: Discovery,
+		force = false,
+	) {
+		const key = `${discovery.issuer}\0${discovery.jwks_uri}`;
+		return this.jwksCache.getOrLoad(
+			key,
+			async () => {
+				const payload = await this.json(
+					new URL(discovery.jwks_uri),
+					integration.storefrontDomain,
+				);
+				if (!Array.isArray(payload.keys)) throw safeError();
+				const value = payload.keys.filter(
+					(candidate): candidate is JsonRecord =>
+						isRecord(candidate) &&
+						typeof candidate.kid === "string" &&
+						candidate.kty === "RSA" &&
+						(candidate.alg === undefined || candidate.alg === "RS256") &&
+						(candidate.use === undefined || candidate.use === "sig"),
+				);
+				if (!value.length) throw safeError();
+				return {
+					value,
+					ttlMs: this.jwksTtlMs,
+					bytes: Buffer.byteLength(JSON.stringify(value)),
+				};
+			},
+			force,
+		);
+	}
+	cacheMetrics(): {
+		dns: CacheMetrics;
+		discovery: CacheMetrics;
+		jwks: CacheMetrics;
+	} {
+		return {
+			dns: this.transport.metrics(),
+			discovery: this.discoveryCache.metrics(),
+			jwks: this.jwksCache.metrics(),
+		};
 	}
 	private async customerGid(
 		integration: CustomerAccountIntegrationRecord,
@@ -508,7 +589,7 @@ export class CustomerAccountService {
 		);
 		if (!org || org.id !== state.organizationId)
 			throw new AppError("Customer authentication response is invalid.", 401);
-		const discovered = await this.discover(integration.storefrontDomain);
+		const discovered = await this.discover(integration);
 		const bundle = await this.tokens(
 			integration,
 			discovered.oidc,
@@ -638,7 +719,7 @@ export class CustomerAccountService {
 					this.now().getTime() + 30_000
 				)
 					return latest;
-				const { oidc } = await this.discover(integration.storefrontDomain);
+				const { oidc } = await this.discover(integration);
 				try {
 					if (oidc.issuer !== current.issuer)
 						throw new AppError("Customer session is invalid.", 401);
@@ -722,9 +803,7 @@ export class CustomerAccountService {
 			valid.session,
 			valid.integration,
 		);
-		const { api, oidc } = await this.discover(
-			valid.integration.storefrontDomain,
-		);
+		const { api, oidc } = await this.discover(valid.integration);
 		if (oidc.issuer !== bundle.issuer) {
 			await this.repository.revokeSession(
 				session.sessionId,
@@ -823,7 +902,7 @@ export class CustomerAccountService {
 		if (!csrf || csrf !== session.csrfToken || origin !== this.publicOrigin)
 			throw new AppError("CSRF validation failed.", 403);
 		const bundle = this.decrypt(session);
-		const { oidc } = await this.discover(integration.storefrontDomain);
+		const { oidc } = await this.discover(integration);
 		if (oidc.issuer !== bundle.issuer) {
 			await this.repository.revokeSession(sessionId, this.now().toISOString());
 			throw new AppError("Customer session is invalid.", 401);

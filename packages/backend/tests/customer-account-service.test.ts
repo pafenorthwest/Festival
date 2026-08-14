@@ -5,6 +5,7 @@ import type {
 	CustomerSessionTouchInput,
 } from "../src/customer/customer-account-repository.js";
 import { CustomerAccountService } from "../src/customer/customer-account-service.js";
+import { CustomerAccountTransport } from "../src/customer/customer-account-transport.js";
 import { InMemoryCustomerAccountRepository } from "../src/customer/in-memory-customer-account-repository.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
 import {
@@ -15,10 +16,14 @@ import {
 const keys = generateKeyPairSync("rsa", { modulusLength: 2048 });
 const jwk = keys.publicKey.export({ format: "jwk" });
 const issuer = "https://shopify.com/authentication/shop-1";
-function jwt(nonce?: string, overrides: Record<string, unknown> = {}) {
-	const header = Buffer.from(
-		JSON.stringify({ alg: "RS256", kid: "test" }),
-	).toString("base64url");
+function jwt(
+	nonce?: string,
+	overrides: Record<string, unknown> = {},
+	kid = "test",
+) {
+	const header = Buffer.from(JSON.stringify({ alg: "RS256", kid })).toString(
+		"base64url",
+	);
 	const payload = Buffer.from(
 		JSON.stringify({
 			iss: issuer,
@@ -38,6 +43,23 @@ function response(value: unknown, status = 200) {
 	});
 }
 
+function transportFor(fetcher: typeof fetch, now: () => Date) {
+	return new CustomerAccountTransport({
+		resolver: async () => [{ address: "8.8.8.8", family: 4, ttlSeconds: 60 }],
+		now: () => now().getTime(),
+		requester: async (url, _answer, _agent, init) => {
+			const result = await fetcher(url, init);
+			const bytes = new Uint8Array(await result.arrayBuffer());
+			return {
+				status: result.status,
+				contentLength: bytes.byteLength,
+				body: (async function* () {
+					yield bytes;
+				})(),
+			};
+		},
+	});
+}
 class PausedTouchRepository extends InMemoryCustomerAccountRepository {
 	private markStarted!: () => void;
 	private markReplaced!: () => void;
@@ -82,27 +104,38 @@ async function fixture(repository = new InMemoryCustomerAccountRepository()) {
 	let tokenCalls = 0;
 	let denyOrders = false;
 	let tokenClaims: Record<string, unknown> = {};
+	let tokenKid = "test";
+	let jwksKid = "test";
+	let jwksCalls = 0;
+	let discoveryCalls = 0;
 	let discoveryIssuer = issuer;
+	let authorizationEndpoint = "https://accounts.shopify.com/auth";
 	let now = new Date();
 	const fetcher: typeof fetch = async (input, init) => {
 		const url = new URL(input.toString());
-		if (url.pathname === "/.well-known/openid-configuration")
+		if (url.pathname === "/.well-known/openid-configuration") {
+			discoveryCalls++;
 			return response({
 				issuer: discoveryIssuer,
-				authorization_endpoint: "https://accounts.shopify.com/auth",
+				authorization_endpoint: authorizationEndpoint,
 				token_endpoint: "https://accounts.shopify.com/token",
 				end_session_endpoint: "https://accounts.shopify.com/logout",
 				jwks_uri: "https://accounts.shopify.com/jwks",
 			});
-		if (url.pathname === "/.well-known/customer-account-api")
+		}
+		if (url.pathname === "/.well-known/customer-account-api") {
+			discoveryCalls++;
 			return response({
 				graphql_api:
 					"https://accounts.shopify.com/customer/api/2026-07/graphql",
 			});
-		if (url.pathname === "/jwks")
+		}
+		if (url.pathname === "/jwks") {
+			jwksCalls++;
 			return response({
-				keys: [{ ...jwk, kid: "test", alg: "RS256", use: "sig" }],
+				keys: [{ ...jwk, kid: jwksKid, alg: "RS256", use: "sig" }],
 			});
+		}
 		if (url.pathname === "/token") {
 			tokenCalls++;
 			const body = String(init?.body);
@@ -110,7 +143,7 @@ async function fixture(repository = new InMemoryCustomerAccountRepository()) {
 				access_token: `access-${tokenCalls}`,
 				refresh_token: `refresh-${tokenCalls}`,
 				...(body.includes("authorization_code")
-					? { id_token: jwt(nonce, tokenClaims) }
+					? { id_token: jwt(nonce, tokenClaims, tokenKid) }
 					: {}),
 				expires_in: 60,
 			});
@@ -172,8 +205,7 @@ async function fixture(repository = new InMemoryCustomerAccountRepository()) {
 		keyring,
 		{
 			publicOrigin: "https://festival.example.com",
-			fetch: fetcher,
-			resolve: async () => ["203.0.113.10"],
+			transport: transportFor(fetcher, () => now),
 			now: () => now,
 		},
 	);
@@ -209,10 +241,19 @@ async function fixture(repository = new InMemoryCustomerAccountRepository()) {
 		setTokenClaims: (value: Record<string, unknown>) => {
 			tokenClaims = value;
 		},
+		setSigningKid: (value: string) => {
+			tokenKid = value;
+			jwksKid = value;
+		},
 		setDiscoveryIssuer: (value: string) => {
 			discoveryIssuer = value;
 		},
+		setAuthorizationEndpoint: (value: string) => {
+			authorizationEndpoint = value;
+		},
 		tokenCalls: () => tokenCalls,
+		discoveryCalls: () => discoveryCalls,
+		jwksCalls: () => jwksCalls,
 	};
 }
 
@@ -343,6 +384,7 @@ describe("CustomerAccountService", () => {
 		const f = await fixture();
 		const auth = await f.authenticate();
 		f.setDiscoveryIssuer("https://shopify.com/authentication/shop-2");
+		f.setNow(new Date(Date.now() + 6 * 60_000));
 		await expect(f.service.orders("festival", auth.sessionId)).rejects.toThrow(
 			"invalid",
 		);
@@ -382,6 +424,28 @@ describe("CustomerAccountService", () => {
 				.authenticated,
 		).toBe(false);
 	});
+	it("reuses metadata, refreshes an unknown signing key once, and invalidates on integration change", async () => {
+		const f = await fixture();
+		expect(f.discoveryCalls()).toBe(2);
+		await Promise.all([f.begin(), f.begin(), f.begin()]);
+		expect(f.discoveryCalls()).toBe(2);
+		await f.authenticate();
+		await f.authenticate();
+		expect(f.jwksCalls()).toBe(1);
+		f.setSigningKid("rotated");
+		await f.authenticate();
+		expect(f.jwksCalls()).toBe(2);
+		const result = await f.service.saveAndVerify(f.org.id, "festival", {
+			storefrontDomain: "store.example.com",
+			clientId: "customer-client",
+			clientSecret: "customer-secret",
+		});
+		expect(result.settings.readiness).toBe("ready");
+		expect(f.discoveryCalls()).toBe(4);
+		expect(JSON.stringify(f.service.cacheMetrics())).not.toContain(
+			"store.example.com",
+		);
+	});
 	it("rejects unsafe discovery destinations", async () => {
 		const f = await fixture();
 		const result = await f.service.saveAndVerify(f.other.id, "other", {
@@ -390,5 +454,12 @@ describe("CustomerAccountService", () => {
 			clientSecret: "secret",
 		});
 		expect(result.settings.readiness).toBe("failed");
+		f.setAuthorizationEndpoint("https://accounts.shopify.com:443/auth");
+		const explicitPort = await f.service.saveAndVerify(f.org.id, "festival", {
+			storefrontDomain: "store.example.com",
+			clientId: "customer-client",
+			clientSecret: "secret",
+		});
+		expect(explicitPort.settings.readiness).toBe("failed");
 	});
 });

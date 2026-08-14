@@ -139,6 +139,25 @@ is intentionally deferred until benchmarking and load testing establish an
 evidence-based policy; do not interpret the platform's 500 requests/second
 performance target as an authentication throttle.
 
+Customer Account discovery, token, JWKS, and GraphQL calls use a dedicated
+fail-closed outbound transport. It accepts only HTTPS endpoints on the configured
+storefront or an allowlisted Shopify hostname, rejects redirects and non-global
+IPv4/IPv6 answers, and pins TLS connections to the validated DNS answer while
+retaining hostname certificate verification and HTTP authority. DNS leases and
+their keep-alive pools expire together, preventing a later DNS answer from
+reusing an earlier validation.
+
+Process-local bounded LRU caches retain only validated DNS answers, discovery
+metadata, and approved signing keys. Defaults are 1,024 entries per cache, a
+60-second DNS ceiling (shortened by authoritative TTL), five minutes for
+discovery and JWKS, 256 KiB per entry, and 16 MiB total retained payload. Saving
+an integration invalidates its discovery metadata immediately; an unknown JWT
+key ID triggers one coalesced JWKS refresh. Expired or failed entries are never
+served stale. These caches exchange bounded memory for less DNS, JSON parsing,
+and signature-key preparation; they do not cache tokens, sessions, customer
+identity, orders, or GraphQL responses and are not shared between backend
+processes.
+
 ## Commands
 - `bun install`
 - `bun run dev:frontend`
@@ -149,6 +168,7 @@ performance target as an authentication throttle.
 - `bun run format:check`
 - `bun run build`
 - `bun run test`
+- `bun run benchmark:customer-account-cache`
 
 ## Docker Compose
 
