@@ -7,3 +7,4 @@ number,taskname,first_create_date,first_create_hhmmss,first_create_git_hash
 6,normalize-shopify-implied-read-scopes,2026-08-13,160258,62022fe
 7,tenant-shopify-admin-auth,2026-08-13,160258,62022fe
 8,harden-customer-account-ssrf-throughput,2026-08-14,000000,-------
+9,teacher-membership-mvp-issue-organization,2026-08-15,000000,-------
