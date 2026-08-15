@@ -56,4 +56,4 @@
 - Build: pass — `bun run build`
 - Tests: pass — `bun run test` (222 tests)
 - Code review: pass — no findings, `patch is correct` at 0.94 confidence
-- Clean merge: pending `land-the-plan`
+- Clean merge: pass — fast-forward against `main`
