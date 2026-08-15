@@ -14,6 +14,13 @@ describe("customer account frontend boundary", () => {
 	it("keeps customer calls behind API helpers and renders only the allowlisted order DTO", () => {
 		expect(page).toContain("getCustomerSession");
 		expect(page).toContain("getCustomerOrders");
+		expect(page).toContain("getCustomerProfile");
+		expect(page).toContain("updateCustomerProfile");
+		expect(page).toContain("void loadOrders().catch");
+		expect(page).not.toContain("const [, profileResponse] = await Promise.all");
+		expect(page).toContain("Mailing address");
+		expect(page).toContain("These details are stored in Festival");
+		expect(page).toContain("Shopify.");
 		expect(page).toContain("order.financialStatus");
 		expect(page).toContain("order.fulfillmentStatus");
 		expect(page).not.toMatch(
@@ -22,6 +29,8 @@ describe("customer account frontend boundary", () => {
 		expect(api).toContain('credentials: "include"');
 		expect(api).toContain("form.action = `/api/organizations/");
 		expect(api).toContain("/customer/logout`;");
+		expect(api).toContain("/customer/profile");
+		expect(api).toContain('"X-CSRF-Token": csrfToken');
 	});
 	it("keeps Customer Account Admin credentials separate and replace-only", () => {
 		expect(admin).toContain("Shopify Customer Accounts");

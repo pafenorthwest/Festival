@@ -1,0 +1,135 @@
+# Code Review
+- Task name: festival-customer-identity-account-foundation
+- Findings status: none
+
+## Context
+- Base branch: main
+- Diff command: `git diff --cached; git diff; inspect listed untracked files`
+- Changed files:
+  - `README.md`
+  - `SECURITY.md`
+  - `docker/nginx.festival.conf`
+  - `goals/festival-customer-identity-account-foundation/establish-goals.v0.md`
+  - `goals/festival-customer-identity-account-foundation/establish-goals.v1.md`
+  - `goals/festival-customer-identity-account-foundation/establish-goals.v2.md`
+  - `goals/festival-customer-identity-account-foundation/goals.v0.md`
+  - `goals/festival-customer-identity-account-foundation/goals.v1.md`
+  - `goals/festival-customer-identity-account-foundation/goals.v2.md`
+  - `goals/task-manifest.csv`
+  - `nginx/festival.conf`
+  - `packages/backend/src/customer/customer-account-repository.ts`
+  - `packages/backend/src/customer/customer-account-service.ts`
+  - `packages/backend/src/customer/in-memory-customer-account-repository.ts`
+  - `packages/backend/src/customer/postgres-customer-account-repository.ts`
+  - `packages/backend/src/routes/api-router.ts`
+  - `packages/backend/src/routes/route-security.ts`
+  - `packages/backend/src/security/request-security.ts`
+  - `packages/backend/tests/customer-account-repository.test.ts`
+  - `packages/backend/tests/customer-account-routes.test.ts`
+  - `packages/backend/tests/customer-account-service.test.ts`
+  - `packages/backend/tests/nginx-security.test.ts`
+  - `packages/common/src/customer-account.ts`
+  - `packages/common/tests/customer-account.test.ts`
+  - `packages/frontend/src/lib/api.ts`
+  - `packages/frontend/src/pages/CustomerAccountPage.tsx`
+  - `packages/frontend/tests/customer-account.test.ts`
+  - `tasks/festival-customer-identity-account-foundation/code-review.md`
+  - `tasks/festival-customer-identity-account-foundation/spec.md`
+- Citation candidates (verify before use):
+  - `README.md:130-144`
+  - `SECURITY.md:123-123`
+  - `SECURITY.md:40-41`
+  - `SECURITY.md:50-52`
+  - `docker/nginx.festival.conf:70-74`
+  - `docker/nginx.festival.conf:93-98`
+  - `goals/task-manifest.csv:10-11`
+  - `nginx/festival.conf:109-114`
+  - `nginx/festival.conf:86-90`
+  - `packages/backend/src/customer/customer-account-repository.ts:1-49`
+  - `packages/backend/src/customer/customer-account-repository.ts:129-134`
+  - `packages/backend/src/customer/customer-account-repository.ts:136-163`
+  - `packages/backend/src/customer/customer-account-repository.ts:74-74`
+  - `packages/backend/src/customer/customer-account-service.ts:124-148`
+  - `packages/backend/src/customer/customer-account-service.ts:13-14`
+  - `packages/backend/src/customer/customer-account-service.ts:17-17`
+  - `packages/backend/src/customer/customer-account-service.ts:21-21`
+  - `packages/backend/src/customer/customer-account-service.ts:23-23`
+  - `packages/backend/src/customer/customer-account-service.ts:37-37`
+  - `packages/backend/src/customer/customer-account-service.ts:662-662`
+  - `packages/backend/src/customer/customer-account-service.ts:710-717`
+  - `packages/backend/src/customer/customer-account-service.ts:726-726`
+  - `packages/backend/src/customer/customer-account-service.ts:834-962`
+  - `packages/backend/src/customer/customer-account-service.ts:9-10`
+  - `packages/backend/src/customer/in-memory-customer-account-repository.ts:1-1`
+  - `packages/backend/src/customer/in-memory-customer-account-repository.ts:102-128`
+  - `packages/backend/src/customer/in-memory-customer-account-repository.ts:12-13`
+  - `packages/backend/src/customer/in-memory-customer-account-repository.ts:133-240`
+  - `packages/backend/src/customer/in-memory-customer-account-repository.ts:3-3`
+  - `packages/backend/src/customer/in-memory-customer-account-repository.ts:30-46`
+  - `packages/backend/src/customer/in-memory-customer-account-repository.ts:7-8`
+  - `packages/backend/src/customer/postgres-customer-account-repository.ts:1-2`
+  - `packages/backend/src/customer/postgres-customer-account-repository.ts:106-144`
+  - `packages/backend/src/customer/postgres-customer-account-repository.ts:13-14`
+  - `packages/backend/src/customer/postgres-customer-account-repository.ts:169-181`
+  - `packages/backend/src/customer/postgres-customer-account-repository.ts:184-184`
+  - `packages/backend/src/customer/postgres-customer-account-repository.ts:188-222`
+  - `packages/backend/src/customer/postgres-customer-account-repository.ts:224-226`
+  - `packages/backend/src/customer/postgres-customer-account-repository.ts:312-312`
+  - `packages/backend/src/customer/postgres-customer-account-repository.ts:314-347`
+  - `packages/backend/src/customer/postgres-customer-account-repository.ts:32-32`
+  - `packages/backend/src/customer/postgres-customer-account-repository.ts:357-476`
+  - `packages/backend/src/customer/postgres-customer-account-repository.ts:43-61`
+  - `packages/backend/src/customer/postgres-customer-account-repository.ts:5-5`
+  - `packages/backend/src/customer/postgres-customer-account-repository.ts:9-9`
+  - `packages/backend/src/customer/postgres-customer-account-repository.ts:93-93`
+  - `packages/backend/src/routes/api-router.ts:498-542`
+  - `packages/backend/src/routes/api-router.ts:589-638`
+  - `packages/backend/src/routes/route-security.ts:59-68`
+  - `packages/backend/src/routes/route-security.ts:74-83`
+  - `packages/backend/src/security/request-security.ts:40-43`
+  - `packages/backend/src/security/request-security.ts:47-49`
+  - `packages/backend/src/security/request-security.ts:50-50`
+  - `packages/backend/src/security/request-security.ts:54-58`
+  - `packages/backend/tests/customer-account-repository.test.ts:125-134`
+  - `packages/backend/tests/customer-account-repository.test.ts:140-231`
+  - `packages/backend/tests/customer-account-repository.test.ts:18-24`
+  - `packages/backend/tests/customer-account-repository.test.ts:44-44`
+  - `packages/backend/tests/customer-account-repository.test.ts:57-57`
+  - `packages/backend/tests/customer-account-repository.test.ts:82-82`
+  - `packages/backend/tests/customer-account-routes.test.ts:10-16`
+  - `packages/backend/tests/customer-account-routes.test.ts:107-107`
+  - `packages/backend/tests/customer-account-routes.test.ts:134-184`
+  - `packages/backend/tests/customer-account-routes.test.ts:19-19`
+  - `packages/backend/tests/customer-account-routes.test.ts:192-219`
+  - `packages/backend/tests/customer-account-routes.test.ts:43-72`
+  - `packages/backend/tests/customer-account-routes.test.ts:75-75`
+  - `packages/backend/tests/customer-account-routes.test.ts:77-102`
+  - `packages/backend/tests/customer-account-service.test.ts:310-450`
+  - `packages/backend/tests/nginx-security.test.ts:27-27`
+  - `packages/backend/tests/nginx-security.test.ts:31-31`
+  - `packages/common/src/customer-account.ts:44-166`
+  - `packages/common/tests/customer-account.test.ts:38-87`
+  - `packages/common/tests/customer-account.test.ts:5-5`
+  - `packages/frontend/src/lib/api.ts:102-127`
+  - `packages/frontend/src/lib/api.ts:13-13`
+  - `packages/frontend/src/lib/api.ts:28-28`
+  - `packages/frontend/src/pages/CustomerAccountPage.tsx:10-10`
+  - `packages/frontend/src/pages/CustomerAccountPage.tsx:13-13`
+  - `packages/frontend/src/pages/CustomerAccountPage.tsx:137-224`
+  - `packages/frontend/src/pages/CustomerAccountPage.tsx:23-23`
+  - `packages/frontend/src/pages/CustomerAccountPage.tsx:25-38`
+  - `packages/frontend/src/pages/CustomerAccountPage.tsx:4-4`
+  - `packages/frontend/src/pages/CustomerAccountPage.tsx:53-70`
+  - `packages/frontend/src/pages/CustomerAccountPage.tsx:88-120`
+  - `packages/frontend/tests/customer-account.test.ts:17-23`
+  - `packages/frontend/tests/customer-account.test.ts:32-33`
+
+## Findings JSON
+```json
+[]
+```
+
+## Verdict
+- Verdict: patch is correct
+- Confidence: 0.94
+- Justification: The change atomically binds verified Shopify identities to tenant-scoped customers, preserves existing sessions through an idempotent backfill, enforces local field authority and consent-gated Admin access, keeps customer DTOs allowlisted, and adds focused authorization, migration-contract, provenance, audit, proxy, and UI coverage. No actionable correctness, security, performance, maintainability, or developer-experience regression was found.

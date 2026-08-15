@@ -10,6 +10,7 @@ import type {
 	CreateOrganizationResponse,
 	CustomerAccountSettingsResponse,
 	CustomerOrdersResponse,
+	CustomerProfileResponse,
 	CustomerSessionResponse,
 	DismissWelcomeResponse,
 	InviteSummary,
@@ -24,6 +25,7 @@ import type {
 	SaveShopifyIntegrationResponse,
 	SessionResponse,
 	ShopifyIntegrationSettingsResponse,
+	UpdateCustomerProfileInput,
 } from "@festival/common";
 
 const API_BASE = import.meta.env.FRONT_API_BASE ?? "";
@@ -92,6 +94,32 @@ export function getCustomerOrders(slug: string, after?: string) {
 	return requestJson<CustomerOrdersResponse>(
 		`/api/organizations/${slug}/customer/orders${after ? `?after=${encodeURIComponent(after)}` : ""}`,
 		undefined,
+		undefined,
+		"",
+	);
+}
+
+export function getCustomerProfile(slug: string) {
+	return requestJson<CustomerProfileResponse>(
+		`/api/organizations/${slug}/customer/profile`,
+		undefined,
+		undefined,
+		"",
+	);
+}
+
+export function updateCustomerProfile(
+	slug: string,
+	csrfToken: string,
+	input: UpdateCustomerProfileInput,
+) {
+	return requestJson<CustomerProfileResponse>(
+		`/api/organizations/${slug}/customer/profile`,
+		{
+			method: "POST",
+			headers: { "X-CSRF-Token": csrfToken },
+			body: JSON.stringify(input),
+		},
 		undefined,
 		"",
 	);

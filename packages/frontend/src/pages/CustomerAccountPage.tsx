@@ -1,13 +1,16 @@
 import type {
 	CustomerOrderSummary,
 	CustomerSessionProfile,
+	UpdateCustomerProfileInput,
 } from "@festival/common";
 import { createSignal, For, onMount, Show } from "solid-js";
 import {
 	customerSignInPath,
 	getCustomerOrders,
+	getCustomerProfile,
 	getCustomerSession,
 	logoutCustomer,
+	updateCustomerProfile,
 } from "../lib/api.js";
 
 export function CustomerAccountPage(props: { slug: string }) {
@@ -17,7 +20,22 @@ export function CustomerAccountPage(props: { slug: string }) {
 	const [orders, setOrders] = createSignal<CustomerOrderSummary[]>([]);
 	const [next, setNext] = createSignal<string | null>(null);
 	const [error, setError] = createSignal("");
+	const [status, setStatus] = createSignal("");
 	const [loading, setLoading] = createSignal(true);
+	const [savingProfile, setSavingProfile] = createSignal(false);
+	const [profile, setProfile] = createSignal<UpdateCustomerProfileInput>({
+		name: "",
+		email: "",
+		mailingAddress: {
+			line1: "",
+			line2: "",
+			city: "",
+			region: "",
+			postalCode: "",
+			countryCode: "",
+		},
+		phone: "",
+	});
 	async function loadOrders(after?: string) {
 		const response = await getCustomerOrders(props.slug, after);
 		setOrders((current) =>
@@ -32,7 +50,24 @@ export function CustomerAccountPage(props: { slug: string }) {
 					const response = await getCustomerSession(props.slug);
 					if (response.session.authenticated) {
 						setSession(response.session);
-						await loadOrders();
+						void loadOrders().catch((error) =>
+							setError((error as Error).message),
+						);
+						const profileResponse = await getCustomerProfile(props.slug);
+						const current = profileResponse.profile;
+						setProfile({
+							name: current.name ?? "",
+							email: current.email ?? "",
+							mailingAddress: {
+								line1: current.mailingAddress?.line1 ?? "",
+								line2: current.mailingAddress?.line2 ?? "",
+								city: current.mailingAddress?.city ?? "",
+								region: current.mailingAddress?.region ?? "",
+								postalCode: current.mailingAddress?.postalCode ?? "",
+								countryCode: current.mailingAddress?.countryCode ?? "",
+							},
+							phone: current.phone ?? "",
+						});
 					}
 				} catch (error) {
 					setError((error as Error).message);
@@ -48,6 +83,39 @@ export function CustomerAccountPage(props: { slug: string }) {
 			logoutCustomer(props.slug, current.csrfToken);
 		} catch (error) {
 			setError((error as Error).message);
+		}
+	}
+	async function saveProfile(event: SubmitEvent) {
+		event.preventDefault();
+		const current = session();
+		if (!current) return;
+		setError("");
+		setStatus("");
+		setSavingProfile(true);
+		try {
+			const response = await updateCustomerProfile(
+				props.slug,
+				current.csrfToken,
+				profile(),
+			);
+			setProfile({
+				name: response.profile.name ?? "",
+				email: response.profile.email ?? "",
+				mailingAddress: {
+					line1: response.profile.mailingAddress?.line1 ?? "",
+					line2: response.profile.mailingAddress?.line2 ?? "",
+					city: response.profile.mailingAddress?.city ?? "",
+					region: response.profile.mailingAddress?.region ?? "",
+					postalCode: response.profile.mailingAddress?.postalCode ?? "",
+					countryCode: response.profile.mailingAddress?.countryCode ?? "",
+				},
+				phone: response.profile.phone ?? "",
+			});
+			setStatus("Profile saved in Festival.");
+		} catch (error) {
+			setError((error as Error).message);
+		} finally {
+			setSavingProfile(false);
 		}
 	}
 	return (
@@ -66,6 +134,94 @@ export function CustomerAccountPage(props: { slug: string }) {
 					}
 				>
 					<p>Your Shopify customer session is active.</p>
+					<form
+						class="flow-panel"
+						onSubmit={(event) => void saveProfile(event)}
+					>
+						<h2>Festival profile</h2>
+						<p class="muted">
+							These details are stored in Festival. Changes here do not update
+							Shopify.
+						</p>
+						<label>
+							<span>Name</span>
+							<input
+								required
+								value={profile().name}
+								onInput={(event) =>
+									setProfile((current) => ({
+										...current,
+										name: event.currentTarget.value,
+									}))
+								}
+							/>
+						</label>
+						<label>
+							<span>Email</span>
+							<input
+								type="email"
+								required
+								value={profile().email}
+								onInput={(event) =>
+									setProfile((current) => ({
+										...current,
+										email: event.currentTarget.value,
+									}))
+								}
+							/>
+						</label>
+						<label>
+							<span>Phone</span>
+							<input
+								type="tel"
+								required
+								value={profile().phone}
+								onInput={(event) =>
+									setProfile((current) => ({
+										...current,
+										phone: event.currentTarget.value,
+									}))
+								}
+							/>
+						</label>
+						<fieldset>
+							<legend>Mailing address</legend>
+							{(
+								[
+									["line1", "Address line 1"],
+									["line2", "Address line 2"],
+									["city", "City"],
+									["region", "State or region"],
+									["postalCode", "Postal code"],
+									["countryCode", "Two-letter country code"],
+								] as const
+							).map(([field, label]) => (
+								<label>
+									<span>{label}</span>
+									<input
+										required={field !== "line2"}
+										maxlength={field === "countryCode" ? 2 : undefined}
+										value={profile().mailingAddress[field] ?? ""}
+										onInput={(event) =>
+											setProfile((current) => ({
+												...current,
+												mailingAddress: {
+													...current.mailingAddress,
+													[field]: event.currentTarget.value,
+												},
+											}))
+										}
+									/>
+								</label>
+							))}
+						</fieldset>
+						<button type="submit" disabled={savingProfile()}>
+							{savingProfile() ? "Saving…" : "Save Festival profile"}
+						</button>
+					</form>
+					<Show when={status()}>
+						{(message) => <p role="status">{message()}</p>}
+					</Show>
 					<button
 						type="button"
 						class="secondary-button"

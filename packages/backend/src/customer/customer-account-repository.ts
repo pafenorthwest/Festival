@@ -1,3 +1,52 @@
+import type {
+	CustomerMailingAddress,
+	UpdateCustomerProfileInput,
+} from "@festival/common";
+
+export type CustomerProfileSource = "shopify" | "festival";
+
+export interface CustomerProfileFieldRecord<T> {
+	value: T | null;
+	source: CustomerProfileSource | null;
+	updatedAtIso: string | null;
+}
+
+export interface FestivalCustomerRecord {
+	id: string;
+	organizationId: string;
+	shopifyCustomerGid: string;
+	name: CustomerProfileFieldRecord<string>;
+	email: CustomerProfileFieldRecord<string>;
+	mailingAddress: CustomerProfileFieldRecord<CustomerMailingAddress>;
+	phone: CustomerProfileFieldRecord<string>;
+	createdAtIso: string;
+	updatedAtIso: string;
+}
+
+export interface CustomerStaffAccessConsentRecord {
+	customerId: string;
+	organizationId: string;
+	privacyNoticeVersion: string;
+	consentedAtIso: string;
+}
+
+export interface CustomerProfileAccessAuditRecord {
+	organizationId: string;
+	actorUid: string;
+	action: "view" | "search";
+	targetCustomerId?: string;
+	resultCount?: number;
+	occurredAtIso: string;
+}
+
+export interface ApplyCustomerProfileInput {
+	customerId: string;
+	organizationId: string;
+	source: CustomerProfileSource;
+	updatedAtIso: string;
+	profile: Partial<UpdateCustomerProfileInput>;
+}
+
 export interface CustomerAccountIntegrationRecord {
 	organizationId: string;
 	storefrontDomain: string;
@@ -22,6 +71,7 @@ export interface CustomerOAuthStateRecord {
 
 export interface CustomerSessionRecord {
 	sessionId: string;
+	customerId: string;
 	organizationId: string;
 	shopifyCustomerGid: string;
 	encryptedTokens: string;
@@ -76,8 +126,41 @@ export interface CustomerAccountRepository {
 		stateHash: string,
 		nowIso: string,
 	): Promise<CustomerOAuthStateRecord | null>;
-	createSession(session: CustomerSessionRecord): Promise<void>;
+	createCustomerSession(
+		session: Omit<CustomerSessionRecord, "customerId">,
+	): Promise<{
+		customer: FestivalCustomerRecord;
+		session: CustomerSessionRecord;
+	}>;
 	getSession(sessionId: string): Promise<CustomerSessionRecord | null>;
+	getCustomer(
+		organizationId: string,
+		customerId: string,
+	): Promise<FestivalCustomerRecord | null>;
+	getCustomerByShopifyGid(
+		organizationId: string,
+		shopifyCustomerGid: string,
+	): Promise<FestivalCustomerRecord | null>;
+	applyCustomerProfile(
+		input: ApplyCustomerProfileInput,
+	): Promise<FestivalCustomerRecord | null>;
+	recordStaffAccessConsent(
+		consent: CustomerStaffAccessConsentRecord,
+	): Promise<CustomerStaffAccessConsentRecord>;
+	getConsentedCustomer(
+		organizationId: string,
+		customerId: string,
+		privacyNoticeVersion: string,
+	): Promise<FestivalCustomerRecord | null>;
+	searchConsentedCustomers(
+		organizationId: string,
+		query: string,
+		privacyNoticeVersion: string,
+		limit: number,
+	): Promise<FestivalCustomerRecord[]>;
+	recordCustomerProfileAccessAudit(
+		audit: CustomerProfileAccessAuditRecord,
+	): Promise<void>;
 	touchSession(
 		input: CustomerSessionTouchInput,
 	): Promise<CustomerSessionRecord | null>;
