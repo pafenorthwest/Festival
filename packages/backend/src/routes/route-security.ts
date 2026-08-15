@@ -58,8 +58,28 @@ export const CURRENT_ROUTE_SECURITY = [
 	},
 	{
 		method: "GET",
+		path: "/api/organizations/:slug/customer/profile",
+		authenticationClass: "customer",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/customer/profile",
+		authenticationClass: "customer",
+	},
+	{
+		method: "GET",
 		path: "/api/organizations/:slug/customer/orders",
 		authenticationClass: "customer",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/admin/customers",
+		authenticationClass: "admin",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/admin/customers/:customerId",
+		authenticationClass: "admin",
 	},
 	{
 		method: "POST",

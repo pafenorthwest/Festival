@@ -37,18 +37,24 @@ async function requestBodyIsTooLarge(c: Context): Promise<boolean> {
 
 export function apiRequestSecurity(): MiddlewareHandler {
 	return async (c, next) => {
+		const isCustomerLogout =
+			/^\/api\/organizations\/[^/]+\/customer\/logout$/.test(c.req.path);
+		const isCustomerProfile =
+			/^\/api\/organizations\/[^/]+\/customer\/profile$/.test(c.req.path);
 		if (
 			c.req.method === "POST" &&
 			c.req.raw.body &&
-			c.req.header("Authorization") !== undefined
+			(c.req.header("Authorization") !== undefined ||
+				isCustomerLogout ||
+				isCustomerProfile)
 		) {
-			const contentType = c.req.header("content-type")?.toLowerCase() ?? "";
-			if (!contentType.startsWith("application/json")) {
-				return c.json({ error: "Content-Type must be application/json." }, 415);
-			}
-
 			if (await requestBodyIsTooLarge(c)) {
 				return c.json({ error: "Request body is too large." }, 413);
+			}
+
+			const contentType = c.req.header("content-type")?.toLowerCase() ?? "";
+			if (!isCustomerLogout && !contentType.startsWith("application/json")) {
+				return c.json({ error: "Content-Type must be application/json." }, 415);
 			}
 		}
 

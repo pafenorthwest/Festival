@@ -127,10 +127,21 @@ Headless channel configured, and permit `customer_read_orders`.
 Customers visit `/org/:slug/account`. OAuth credentials and Shopify access,
 refresh, and ID tokens remain encrypted in PostgreSQL and server-side; the
 browser receives only an opaque `Secure`, `HttpOnly`, `SameSite=Lax` Festival
-cookie. The initial UI exposes a non-identifying session state and an allowlisted
-order view (number/date, totals/currency, financial and fulfillment status,
-cancellation/refund summary, and line items). Name, address, email, phone, raw
-GraphQL responses, and ownership selectors are excluded.
+cookie. The Account UI exposes a non-identifying session state, Festival's local
+copy of the customer's name, email, structured mailing address, and phone, plus
+an allowlisted order view (number/date, totals/currency, financial and
+fulfillment status, cancellation/refund summary, and line items). Customer
+profile edits do not mutate Shopify. Raw GraphQL responses, Shopify customer
+IDs, Festival's internal customer ID, and ownership selectors are excluded.
+
+Festival resolves or creates the organization-scoped customer atomically during
+the verified OAuth callback before creating the session. Profile fields track
+their source and update time so a later Shopify projection can fill blank or
+Shopify-sourced fields without overwriting Festival-edited fields. Organization
+Admin profile search and detail APIs return only customers who consented to the
+current privacy-notice version and write PII-free access audit records. The
+checkout flow that captures that consent is owned by issue #77; no staff search
+UI is included here.
 
 Production order access requires Shopify protected-customer-data configuration
 or approval in addition to the Headless permission. Festival fails closed when

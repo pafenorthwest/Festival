@@ -41,6 +41,129 @@ export interface CustomerSessionResponse {
 	session: CustomerSessionProfile | { authenticated: false };
 }
 
+export const CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION =
+	"festival-customer-profile-v1" as const;
+
+export interface CustomerMailingAddress {
+	line1: string;
+	line2?: string;
+	city: string;
+	region: string;
+	postalCode: string;
+	countryCode: string;
+}
+
+export interface CustomerProfile {
+	name: string | null;
+	email: string | null;
+	mailingAddress: CustomerMailingAddress | null;
+	phone: string | null;
+	updatedAtIso: string | null;
+}
+
+export interface CustomerProfileResponse {
+	profile: CustomerProfile;
+}
+
+export interface UpdateCustomerProfileInput {
+	name: string;
+	email: string;
+	mailingAddress: CustomerMailingAddress;
+	phone: string;
+}
+
+export interface AdminCustomerProfileSummary {
+	customerId: string;
+	profile: CustomerProfile;
+}
+
+export interface AdminCustomerSearchResult {
+	customerId: string;
+	name: string | null;
+	email: string | null;
+	phone: string | null;
+}
+
+export interface AdminCustomerSearchResponse {
+	customers: AdminCustomerSearchResult[];
+}
+
+const PROFILE_TEXT_LIMIT = 255;
+const PROFILE_ADDRESS_LIMIT = 512;
+const PROFILE_PHONE_PATTERN = /^\+?[0-9][0-9 ().-]{5,30}$/;
+const PROFILE_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function requiredText(
+	value: unknown,
+	label: string,
+	maxLength = PROFILE_TEXT_LIMIT,
+): string {
+	if (typeof value !== "string") throw new Error(`${label} is required.`);
+	const normalized = value.trim();
+	if (!normalized) throw new Error(`${label} is required.`);
+	if (normalized.length > maxLength) throw new Error(`${label} is too long.`);
+	return normalized;
+}
+
+export function validateCustomerProfileInput(
+	input: unknown,
+): UpdateCustomerProfileInput {
+	if (!input || typeof input !== "object" || Array.isArray(input))
+		throw new Error("Customer profile is invalid.");
+	const candidate = input as Record<string, unknown>;
+	const allowed = new Set(["name", "email", "mailingAddress", "phone"]);
+	if (Object.keys(candidate).some((key) => !allowed.has(key)))
+		throw new Error("Customer profile contains unsupported fields.");
+	const email = requiredText(candidate.email, "Email").toLowerCase();
+	if (!PROFILE_EMAIL_PATTERN.test(email)) throw new Error("Email is invalid.");
+	const phone = requiredText(candidate.phone, "Phone");
+	if (!PROFILE_PHONE_PATTERN.test(phone)) throw new Error("Phone is invalid.");
+	if (
+		!candidate.mailingAddress ||
+		typeof candidate.mailingAddress !== "object" ||
+		Array.isArray(candidate.mailingAddress)
+	)
+		throw new Error("Mailing address is required.");
+	const address = candidate.mailingAddress as Record<string, unknown>;
+	const addressAllowed = new Set([
+		"line1",
+		"line2",
+		"city",
+		"region",
+		"postalCode",
+		"countryCode",
+	]);
+	if (Object.keys(address).some((key) => !addressAllowed.has(key)))
+		throw new Error("Mailing address contains unsupported fields.");
+	const countryCode = requiredText(
+		address.countryCode,
+		"Country code",
+	).toUpperCase();
+	if (!/^[A-Z]{2}$/.test(countryCode))
+		throw new Error("Country code is invalid.");
+	const line2 =
+		typeof address.line2 === "string" ? address.line2.trim() : undefined;
+	if (line2 && line2.length > PROFILE_ADDRESS_LIMIT)
+		throw new Error("Address line 2 is too long.");
+	return {
+		name: requiredText(candidate.name, "Name"),
+		email,
+		phone,
+		mailingAddress: {
+			line1: requiredText(
+				address.line1,
+				"Address line 1",
+				PROFILE_ADDRESS_LIMIT,
+			),
+			...(line2 ? { line2 } : {}),
+			city: requiredText(address.city, "City"),
+			region: requiredText(address.region, "Region"),
+			postalCode: requiredText(address.postalCode, "Postal code"),
+			countryCode,
+		},
+	};
+}
+
 export interface CustomerMoney {
 	amount: string;
 	currencyCode: string;

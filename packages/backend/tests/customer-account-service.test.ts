@@ -307,6 +307,147 @@ describe("CustomerAccountService", () => {
 		});
 		expect(JSON.stringify(orders)).not.toContain("gid://shopify/Customer");
 	});
+	it("resolves one durable customer before every session and exposes only the local profile", async () => {
+		const f = await fixture();
+		const first = await f.authenticate();
+		const second = await f.authenticate();
+		const firstSession = await f.repository.getSession(first.sessionId);
+		const secondSession = await f.repository.getSession(second.sessionId);
+		expect(firstSession?.customerId).toBe(secondSession?.customerId);
+		if (!firstSession) throw new Error("session");
+
+		const customer = await f.repository.getCustomer(
+			f.org.id,
+			firstSession.customerId,
+		);
+		expect(customer?.shopifyCustomerGid).toBe("gid://shopify/Customer/42");
+		const initial = await f.service.customerProfile(
+			"festival",
+			first.sessionId,
+		);
+		expect(initial).toEqual({
+			profile: {
+				name: null,
+				email: null,
+				mailingAddress: null,
+				phone: null,
+				updatedAtIso: customer?.updatedAtIso,
+			},
+		});
+		expect(initial).not.toHaveProperty("customerId");
+		expect(JSON.stringify(initial)).not.toContain("gid://shopify/Customer");
+	});
+	it("protects Festival profile edits and gates audited Admin access on consent", async () => {
+		const f = await fixture();
+		const auth = await f.authenticate();
+		const storedSession = await f.repository.getSession(auth.sessionId);
+		if (!storedSession) throw new Error("session");
+		await f.repository.applyCustomerProfile({
+			organizationId: f.org.id,
+			customerId: storedSession.customerId,
+			source: "shopify",
+			updatedAtIso: "2026-08-01T00:00:00.000Z",
+			profile: { name: "Shopify Name", email: "shopify@example.com" },
+		});
+		const session = await f.service.session("festival", auth.sessionId);
+		if (!session.session.authenticated) throw new Error("session");
+		await expect(
+			f.service.updateCustomerProfile(
+				"festival",
+				auth.sessionId,
+				"wrong",
+				"https://festival.example.com",
+				{},
+			),
+		).rejects.toThrow("CSRF");
+		const updated = await f.service.updateCustomerProfile(
+			"festival",
+			auth.sessionId,
+			session.session.csrfToken,
+			"https://festival.example.com",
+			{
+				name: " Local Name ",
+				email: "LOCAL@EXAMPLE.COM",
+				phone: "+1 555 0100",
+				mailingAddress: {
+					line1: "1 Main St",
+					city: "Seattle",
+					region: "WA",
+					postalCode: "98101",
+					countryCode: "us",
+				},
+			},
+		);
+		expect(updated.profile.name).toBe("Local Name");
+		expect(updated.profile.email).toBe("local@example.com");
+		expect(updated.profile.mailingAddress?.countryCode).toBe("US");
+		await f.repository.applyCustomerProfile({
+			organizationId: f.org.id,
+			customerId: storedSession.customerId,
+			source: "shopify",
+			updatedAtIso: "2026-09-01T00:00:00.000Z",
+			profile: { name: "Later Shopify Name", email: "later@example.com" },
+		});
+		expect(
+			(await f.service.customerProfile("festival", auth.sessionId)).profile
+				.name,
+		).toBe("Local Name");
+
+		await expect(
+			f.service.adminCustomerProfile(
+				f.org.id,
+				storedSession.customerId,
+				"admin-uid",
+			),
+		).rejects.toThrow("not found");
+		expect(
+			(await f.service.searchAdminCustomers(f.org.id, "Local", "admin-uid"))
+				.customers,
+		).toEqual([]);
+		await f.service.recordStaffAccessConsent(
+			"festival",
+			auth.sessionId,
+			session.session.csrfToken,
+			"https://festival.example.com",
+		);
+		const visible = await f.service.adminCustomerProfile(
+			f.org.id,
+			storedSession.customerId,
+			"admin-uid",
+		);
+		expect(visible.customerId).toBe(storedSession.customerId);
+		const search = await f.service.searchAdminCustomers(
+			f.org.id,
+			"555",
+			"admin-uid",
+		);
+		expect(search.customers).toHaveLength(1);
+		expect(search.customers[0]).not.toHaveProperty("mailingAddress");
+		expect(search.customers[0]).not.toHaveProperty("profile");
+		expect(f.repository.profileAccessAudits).toEqual([
+			{
+				organizationId: f.org.id,
+				actorUid: "admin-uid",
+				action: "search",
+				resultCount: 0,
+				occurredAtIso: expect.any(String),
+			},
+			{
+				organizationId: f.org.id,
+				actorUid: "admin-uid",
+				action: "view",
+				targetCustomerId: storedSession.customerId,
+				occurredAtIso: expect.any(String),
+			},
+			{
+				organizationId: f.org.id,
+				actorUid: "admin-uid",
+				action: "search",
+				resultCount: 1,
+				occurredAtIso: expect.any(String),
+			},
+		]);
+	});
 	it("rejects replay, nonce, issuer, audience, and open-return-target failures", async () => {
 		const replayFixture = await fixture();
 		const replayUrl = await replayFixture.begin();

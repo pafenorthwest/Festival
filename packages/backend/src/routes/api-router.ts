@@ -495,6 +495,51 @@ export function buildApiRouter(
 		}
 	});
 
+	router.get("/organizations/:slug/customer/profile", async (c) => {
+		try {
+			assertNoBearerPrincipal(c.req.header("Authorization"));
+			if (!customerAccountService)
+				throw new AppError(
+					"Customer Account integration is not configured.",
+					503,
+				);
+			return c.json(
+				await customerAccountService.customerProfile(
+					c.req.param("slug"),
+					getCookie(c, CUSTOMER_SESSION_COOKIE),
+				),
+			);
+		} catch (error) {
+			return toJsonError(c, error);
+		}
+	});
+
+	router.post("/organizations/:slug/customer/profile", async (c) => {
+		try {
+			assertNoBearerPrincipal(c.req.header("Authorization"));
+			if (!customerAccountService)
+				throw new AppError(
+					"Customer Account integration is not configured.",
+					503,
+				);
+			const referer = c.req.header("Referer");
+			const requestOrigin =
+				c.req.header("Origin") ??
+				(referer ? new URL(referer).origin : undefined);
+			return c.json(
+				await customerAccountService.updateCustomerProfile(
+					c.req.param("slug"),
+					getCookie(c, CUSTOMER_SESSION_COOKIE),
+					c.req.header("X-CSRF-Token"),
+					requestOrigin,
+					await c.req.json(),
+				),
+			);
+		} catch (error) {
+			return toJsonError(c, error);
+		}
+	});
+
 	router.get("/organizations/:slug/customer/orders", async (c) => {
 		try {
 			assertNoBearerPrincipal(c.req.header("Authorization"));
@@ -540,6 +585,56 @@ export function buildApiRouter(
 			return toJsonError(c, error);
 		}
 	});
+
+	router.get(
+		"/organizations/:slug/admin/customers",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				if (!customerAccountService)
+					throw new AppError(
+						"Customer Account integration is not configured.",
+						503,
+					);
+				return c.json(
+					await customerAccountService.searchAdminCustomers(
+						getRequiredTenant(c).organization.id,
+						c.req.query("query"),
+						getRequiredIdentity(c).uid,
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.get(
+		"/organizations/:slug/admin/customers/:customerId",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				if (!customerAccountService)
+					throw new AppError(
+						"Customer Account integration is not configured.",
+						503,
+					);
+				return c.json(
+					await customerAccountService.adminCustomerProfile(
+						getRequiredTenant(c).organization.id,
+						c.req.param("customerId"),
+						getRequiredIdentity(c).uid,
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
 
 	router.get(
 		"/organizations/:slug/admin/membership-products",

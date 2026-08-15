@@ -6,14 +6,21 @@ import {
 	verify as verifySignature,
 } from "node:crypto";
 import type {
+	AdminCustomerProfileSummary,
+	AdminCustomerSearchResponse,
 	CustomerAccountSettings,
 	CustomerOrdersResponse,
+	CustomerProfile,
+	CustomerProfileResponse,
 	CustomerSessionResponse,
 	SaveCustomerAccountSettingsResponse,
+	UpdateCustomerProfileInput,
 } from "@festival/common";
 import {
 	CUSTOMER_ACCOUNT_API_VERSION,
+	CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION,
 	validateCustomerAccountSettings,
+	validateCustomerProfileInput,
 } from "@festival/common";
 import { AppError } from "../errors/app-error.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
@@ -27,6 +34,7 @@ import type {
 	CustomerAccountIntegrationRecord,
 	CustomerAccountRepository,
 	CustomerSessionRecord,
+	FestivalCustomerRecord,
 } from "./customer-account-repository.js";
 import {
 	CustomerAccountTransport,
@@ -111,6 +119,31 @@ function money(value: unknown) {
 	)
 		throw safeError();
 	return { amount: value.amount, currencyCode: value.currencyCode };
+}
+
+function profile(record: FestivalCustomerRecord): CustomerProfile {
+	return {
+		name: record.name.value,
+		email: record.email.value,
+		mailingAddress: record.mailingAddress.value,
+		phone: record.phone.value,
+		updatedAtIso: record.updatedAtIso,
+	};
+}
+
+function adminProfile(
+	record: FestivalCustomerRecord,
+): AdminCustomerProfileSummary {
+	return { customerId: record.id, profile: profile(record) };
+}
+
+function adminSearchResult(record: FestivalCustomerRecord) {
+	return {
+		customerId: record.id,
+		name: record.name.value,
+		email: record.email.value,
+		phone: record.phone.value,
+	};
 }
 
 export interface CustomerAccountServiceOptions {
@@ -626,7 +659,7 @@ export class CustomerAccountService {
 			organizationId: org.id,
 			purpose: SHOPIFY_CUSTOMER_TOKENS_PURPOSE,
 		});
-		await this.repository.createSession({
+		await this.repository.createCustomerSession({
 			sessionId,
 			organizationId: org.id,
 			shopifyCustomerGid: customerGid,
@@ -674,6 +707,14 @@ export class CustomerAccountService {
 				await this.repository.revokeSession(s.sessionId, now.toISOString());
 			throw new AppError("Customer session is invalid.", 401);
 		}
+		const customer = await this.repository.getCustomer(
+			organizationId,
+			s.customerId,
+		);
+		if (!customer || customer.shopifyCustomerGid !== s.shopifyCustomerGid) {
+			await this.repository.revokeSession(s.sessionId, now.toISOString());
+			throw new AppError("Customer session is invalid.", 401);
+		}
 		const integration = await this.repository.getIntegration(organizationId);
 		if (
 			!integration ||
@@ -682,7 +723,7 @@ export class CustomerAccountService {
 			await this.repository.revokeSession(s.sessionId, now.toISOString());
 			throw new AppError("Customer session is invalid.", 401);
 		}
-		return { session: s, integration };
+		return { session: s, integration, customer };
 	}
 	private sessionTouch(session: CustomerSessionRecord, seenAt: Date) {
 		return {
@@ -789,6 +830,135 @@ export class CustomerAccountService {
 			if (!(error instanceof AppError) || error.status !== 401) throw error;
 			return { session: { authenticated: false } };
 		}
+	}
+	async customerProfile(
+		slug: string,
+		sessionId: string | undefined,
+	): Promise<CustomerProfileResponse> {
+		const org = await this.organizations.findOrganizationBySlug(slug);
+		if (!org || !sessionId)
+			throw new AppError("Customer session is invalid.", 401);
+		const valid = await this.validSession(sessionId, org.id);
+		const touched = await this.repository.touchSession(
+			this.sessionTouch(valid.session, this.now()),
+		);
+		if (!touched) throw new AppError("Customer session is invalid.", 401);
+		return { profile: profile(valid.customer) };
+	}
+	async updateCustomerProfile(
+		slug: string,
+		sessionId: string | undefined,
+		csrf: string | undefined,
+		origin: string | undefined,
+		input: unknown,
+	): Promise<CustomerProfileResponse> {
+		const org = await this.organizations.findOrganizationBySlug(slug);
+		if (!org || !sessionId)
+			throw new AppError("Customer session is invalid.", 401);
+		const valid = await this.validSession(sessionId, org.id);
+		if (
+			!csrf ||
+			csrf !== valid.session.csrfToken ||
+			origin !== this.publicOrigin
+		)
+			throw new AppError("CSRF validation failed.", 403);
+		let parsed: UpdateCustomerProfileInput;
+		try {
+			parsed = validateCustomerProfileInput(input);
+		} catch (error) {
+			throw new AppError(
+				error instanceof Error ? error.message : "Customer profile is invalid.",
+				400,
+			);
+		}
+		const now = this.now();
+		const touched = await this.repository.touchSession(
+			this.sessionTouch(valid.session, now),
+		);
+		if (!touched) throw new AppError("Customer session is invalid.", 401);
+		const updated = await this.repository.applyCustomerProfile({
+			customerId: valid.customer.id,
+			organizationId: org.id,
+			source: "festival",
+			updatedAtIso: now.toISOString(),
+			profile: parsed,
+		});
+		if (!updated) throw new AppError("Customer session is invalid.", 401);
+		return { profile: profile(updated) };
+	}
+	async recordStaffAccessConsent(
+		slug: string,
+		sessionId: string | undefined,
+		csrf: string | undefined,
+		origin: string | undefined,
+	) {
+		const org = await this.organizations.findOrganizationBySlug(slug);
+		if (!org || !sessionId)
+			throw new AppError("Customer session is invalid.", 401);
+		const valid = await this.validSession(sessionId, org.id);
+		if (
+			!csrf ||
+			csrf !== valid.session.csrfToken ||
+			origin !== this.publicOrigin
+		)
+			throw new AppError("CSRF validation failed.", 403);
+		const now = this.now();
+		const touched = await this.repository.touchSession(
+			this.sessionTouch(valid.session, now),
+		);
+		if (!touched) throw new AppError("Customer session is invalid.", 401);
+		return this.repository.recordStaffAccessConsent({
+			customerId: valid.customer.id,
+			organizationId: org.id,
+			privacyNoticeVersion: CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION,
+			consentedAtIso: now.toISOString(),
+		});
+	}
+	async adminCustomerProfile(
+		organizationId: string,
+		customerId: string,
+		actorUid: string,
+	): Promise<AdminCustomerProfileSummary> {
+		const customer = await this.repository.getConsentedCustomer(
+			organizationId,
+			customerId,
+			CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION,
+		);
+		if (!customer) throw new AppError("Customer not found.", 404);
+		await this.repository.recordCustomerProfileAccessAudit({
+			organizationId,
+			actorUid,
+			action: "view",
+			targetCustomerId: customer.id,
+			occurredAtIso: this.now().toISOString(),
+		});
+		return adminProfile(customer);
+	}
+	async searchAdminCustomers(
+		organizationId: string,
+		query: string | undefined,
+		actorUid: string,
+	): Promise<AdminCustomerSearchResponse> {
+		const normalized = query?.trim() ?? "";
+		if (normalized.length < 2 || normalized.length > 100)
+			throw new AppError(
+				"Customer search must contain 2 to 100 characters.",
+				400,
+			);
+		const customers = await this.repository.searchConsentedCustomers(
+			organizationId,
+			normalized,
+			CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION,
+			20,
+		);
+		await this.repository.recordCustomerProfileAccessAudit({
+			organizationId,
+			actorUid,
+			action: "search",
+			resultCount: customers.length,
+			occurredAtIso: this.now().toISOString(),
+		});
+		return { customers: customers.map(adminSearchResult) };
 	}
 	async orders(
 		slug: string,

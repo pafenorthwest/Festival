@@ -15,6 +15,13 @@ function session(now: string) {
 	};
 }
 
+async function createSession(
+	repo: InMemoryCustomerAccountRepository,
+	now: string,
+) {
+	return (await repo.createCustomerSession(session(now))).session;
+}
+
 describe("customer account repository contract", () => {
 	it("consumes OAuth state once and revokes sessions when credentials rotate", async () => {
 		const repo = new InMemoryCustomerAccountRepository();
@@ -34,7 +41,7 @@ describe("customer account repository contract", () => {
 			clientId: "one",
 			encryptedClientSecret: "encrypted-one",
 		});
-		await repo.createSession(session(now));
+		await createSession(repo, now);
 		const rotated = await repo.upsertIntegration({
 			organizationId: "org",
 			storefrontDomain: "store.example.com",
@@ -47,8 +54,7 @@ describe("customer account repository contract", () => {
 	it("does not let stale touches or token replacements undo revocation", async () => {
 		const repo = new InMemoryCustomerAccountRepository();
 		const now = new Date().toISOString();
-		const initial = session(now);
-		await repo.createSession(initial);
+		const initial = await createSession(repo, now);
 		await repo.revokeSession("session", now);
 		const mutation = {
 			sessionId: "session",
@@ -73,8 +79,7 @@ describe("customer account repository contract", () => {
 	it("preserves rotated tokens across later session touches", async () => {
 		const repo = new InMemoryCustomerAccountRepository();
 		const now = new Date().toISOString();
-		const initial = session(now);
-		await repo.createSession(initial);
+		const initial = await createSession(repo, now);
 		const seenAtIso = new Date(new Date(now).getTime() + 1_000).toISOString();
 		const mutation = {
 			sessionId: "session",
@@ -117,10 +122,112 @@ describe("customer account repository contract", () => {
 		expect(source).toContain("shopify_customer_account_integrations");
 		expect(source).toContain("shopify_customer_oauth_states");
 		expect(source).toContain("shopify_customer_sessions");
+		expect(source).toContain("festival_customers");
+		expect(source).toContain("festival_customer_staff_consents");
+		expect(source).toContain("festival_customer_profile_access_audit");
+		expect(source).toContain("customer_id");
+		expect(source).toContain(
+			"ON CONFLICT (organization_id,shopify_customer_gid)",
+		);
+		expect(source).toContain("ALTER COLUMN customer_id SET NOT NULL");
+		expect(source).toContain("chr(31)");
+		expect(source).not.toContain("E'\\\\000'");
 		expect(source).toContain("encrypted_tokens");
 		expect(source).not.toContain("access_token TEXT");
 		expect(source).toContain("revoked_at IS NULL");
 		expect(source).toContain("encrypted_tokens=$4");
 		expect(source).toContain("sql.begin");
+		expect(source).not.toContain("festival_entitlements");
+		expect(source).not.toContain("festival_orders");
+	});
+	it("resolves concurrent sessions to one tenant customer", async () => {
+		const repo = new InMemoryCustomerAccountRepository();
+		const now = new Date().toISOString();
+		const [first, second] = await Promise.all([
+			repo.createCustomerSession(session(now)),
+			repo.createCustomerSession({ ...session(now), sessionId: "session-2" }),
+		]);
+		expect(first.customer.id).toBe(second.customer.id);
+		expect(first.session.customerId).toBe(first.customer.id);
+		expect(second.session.customerId).toBe(first.customer.id);
+		const differentShopifyIdentity = await repo.createCustomerSession({
+			...session(now),
+			sessionId: "session-3",
+			shopifyCustomerGid: "gid://shopify/Customer/2",
+		});
+		const differentTenant = await repo.createCustomerSession({
+			...session(now),
+			sessionId: "session-4",
+			organizationId: "other",
+		});
+		expect(differentShopifyIdentity.customer.id).not.toBe(first.customer.id);
+		expect(differentTenant.customer.id).not.toBe(first.customer.id);
+	});
+	it("preserves Festival edits and hides unconsented profiles from Admin search", async () => {
+		const repo = new InMemoryCustomerAccountRepository();
+		const now = new Date().toISOString();
+		const { customer } = await repo.createCustomerSession(session(now));
+		const profile = {
+			name: "Festival Name",
+			email: "festival@example.com",
+			phone: "+1 555 0100",
+			mailingAddress: {
+				line1: "1 Main St",
+				city: "Seattle",
+				region: "WA",
+				postalCode: "98101",
+				countryCode: "US",
+			},
+		};
+		await repo.applyCustomerProfile({
+			customerId: customer.id,
+			organizationId: customer.organizationId,
+			source: "festival",
+			updatedAtIso: now,
+			profile,
+		});
+		await repo.applyCustomerProfile({
+			customerId: customer.id,
+			organizationId: customer.organizationId,
+			source: "shopify",
+			updatedAtIso: new Date(Date.now() + 1000).toISOString(),
+			profile: { name: "Shopify Name", email: "shopify@example.com" },
+		});
+		expect(
+			(await repo.getCustomer(customer.organizationId, customer.id))?.name
+				.value,
+		).toBe("Festival Name");
+		expect(
+			await repo.searchConsentedCustomers(
+				customer.organizationId,
+				"Festival",
+				"notice-v1",
+				20,
+			),
+		).toEqual([]);
+		const consent = await repo.recordStaffAccessConsent({
+			customerId: customer.id,
+			organizationId: customer.organizationId,
+			privacyNoticeVersion: "notice-v1",
+			consentedAtIso: now,
+		});
+		const repeated = await repo.recordStaffAccessConsent({
+			customerId: customer.id,
+			organizationId: customer.organizationId,
+			privacyNoticeVersion: "notice-v1",
+			consentedAtIso: new Date(Date.now() + 1000).toISOString(),
+		});
+		expect(repeated).toEqual(consent);
+		expect(
+			await repo.searchConsentedCustomers(
+				customer.organizationId,
+				"festival@example",
+				"notice-v1",
+				20,
+			),
+		).toHaveLength(1);
+		expect(
+			await repo.getConsentedCustomer("other", customer.id, "notice-v1"),
+		).toBeNull();
 	});
 });
