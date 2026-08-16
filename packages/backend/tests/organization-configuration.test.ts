@@ -190,4 +190,35 @@ describe("organization division and timezone configuration", () => {
 		);
 		expect(nonAdmin.status).toBe(403);
 	});
+
+	it("sanitizes unexpected repository failures while preserving invalid-order responses", async () => {
+		const { app, repository } = await setup();
+		const created = await app.request(
+			"/api/organizations/pafe/admin/divisions",
+			request("admin", "POST", { displayName: "Strings" }),
+		);
+		expect(created.status).toBe(201);
+
+		const invalidOrder = await app.request(
+			"/api/organizations/pafe/admin/divisions/reorder",
+			request("admin", "POST", { divisionIds: [] }),
+		);
+		expect(invalidOrder.status).toBe(400);
+		expect(await invalidOrder.json()).toEqual({
+			error:
+				"Division order must contain every organization division exactly once.",
+		});
+
+		repository.reorderDivisions = async () => {
+			throw new Error("database connection details");
+		};
+		const repositoryFailure = await app.request(
+			"/api/organizations/pafe/admin/divisions/reorder",
+			request("admin", "POST", { divisionIds: [] }),
+		);
+		expect(repositoryFailure.status).toBe(500);
+		expect(await repositoryFailure.json()).toEqual({
+			error: "Internal server error.",
+		});
+	});
 });

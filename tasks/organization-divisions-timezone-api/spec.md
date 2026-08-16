@@ -34,7 +34,7 @@
 
 ## Delivery
 
-- Delivered: Common DTOs and validators; Organization timezone default/migration; division persistence and ordering; Admin list/create/update/reorder and timezone routes; public active-only division route; tenant/role/field allowlisting; downstream selectable-division guard; focused automated coverage.
+- Delivered: Common DTOs and validators; Organization timezone default/migration; division persistence and ordering; Admin list/create/update/reorder and timezone routes; public active-only division route; tenant/role/field allowlisting; downstream selectable-division guard; known invalid reorder failures return 400 while unexpected repository failures remain sanitized 500 responses; focused automated coverage.
 - Exceptions: None.
 - Deferred work: UI remains in issue #25. Issues #77 and #92 consume the delivered public DTO and selectable-division guard when their purchase and entitlement records are implemented.
 - Dirty-worktree decision: continue; preserve the unrelated pre-existing untracked `tasks/festival-customer-identity-account-foundation/skill-friction-retrospective.md` and isolate this task's changes by path.
@@ -43,6 +43,6 @@
 
 - Lint: passed (`bun run lint`)
 - Build: passed (`bun run build`)
-- Tests: passed (`bun run test`; 226 total: 24 common, 175 backend, 27 frontend)
-- Code review: passed (`patch is correct`, confidence 0.94, no findings)
+- Tests: passed (`bun run test`; 227 total: 24 common, 176 backend, 27 frontend)
+- Code review: pending final review after the repository-error response correction.
 - Clean merge: passed against `main` by fast-forward

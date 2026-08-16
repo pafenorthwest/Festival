@@ -316,10 +316,14 @@ export class OrganizationService {
 				),
 			};
 		} catch (error) {
-			throw new AppError(
-				error instanceof Error ? error.message : "Invalid division order.",
-				400,
-			);
+			if (
+				error instanceof Error &&
+				error.message ===
+					"Division order must contain every organization division exactly once."
+			) {
+				throw new AppError(error.message, 400);
+			}
+			throw error;
 		}
 	}
 
