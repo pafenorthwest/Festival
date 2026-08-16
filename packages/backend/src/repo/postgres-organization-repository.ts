@@ -5,6 +5,7 @@ import type {
 	MembershipEntitlementPeriod,
 	MembershipProductType,
 	OrganizationAdminUserEntry,
+	OrganizationDivision,
 	OrganizationInviteRecord,
 	OrganizationMembershipRecord,
 	OrganizationRecord,
@@ -41,6 +42,7 @@ interface MembershipRow {
 	organization_name: string;
 	organization_slug: string;
 	organization_created_at: string;
+	organization_timezone: string;
 }
 
 interface InviteRow {
@@ -55,6 +57,7 @@ interface InviteRow {
 	organization_name: string;
 	organization_slug: string;
 	organization_created_at: string;
+	organization_timezone: string;
 }
 
 interface FestivalRow {
@@ -65,6 +68,16 @@ interface FestivalRow {
 	start_date: string;
 	end_date: string;
 	created_at: string;
+}
+
+interface DivisionRow {
+	id: string;
+	organization_id: string;
+	display_name: string;
+	is_active: boolean;
+	display_order: number;
+	created_at: string;
+	updated_at: string;
 }
 
 interface ShopifyIntegrationRow {
@@ -139,12 +152,26 @@ function mapOrganization(row: {
 	name: string;
 	slug: string;
 	created_at: string;
+	timezone?: string;
 }): OrganizationRecord {
 	return {
 		id: row.id,
 		name: row.name,
 		slug: row.slug,
+		timezone: row.timezone ?? "UTC",
 		createdAtIso: row.created_at,
+	};
+}
+
+function mapDivision(row: DivisionRow): OrganizationDivision {
+	return {
+		id: row.id,
+		organizationId: row.organization_id,
+		displayName: row.display_name,
+		isActive: row.is_active,
+		displayOrder: row.display_order,
+		createdAtIso: row.created_at,
+		updatedAtIso: row.updated_at,
 	};
 }
 
@@ -242,6 +269,7 @@ function mapMembership(row: MembershipRow): MembershipWithOrganization {
 			id: row.organization_id,
 			name: row.organization_name,
 			slug: row.organization_slug,
+			timezone: row.organization_timezone,
 			createdAtIso: row.organization_created_at,
 		},
 	};
@@ -263,6 +291,7 @@ function mapInvite(row: InviteRow): InviteWithOrganization {
 			id: row.organization_id,
 			name: row.organization_name,
 			slug: row.organization_slug,
+			timezone: row.organization_timezone,
 			createdAtIso: row.organization_created_at,
 		},
 	};
@@ -289,7 +318,19 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				id TEXT PRIMARY KEY,
 				name TEXT NOT NULL UNIQUE,
 				slug TEXT NOT NULL UNIQUE,
+				timezone TEXT NOT NULL DEFAULT 'UTC',
 				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			);
+
+			CREATE TABLE IF NOT EXISTS ${schema}.organization_divisions (
+				id TEXT PRIMARY KEY,
+				organization_id TEXT NOT NULL REFERENCES ${schema}.organizations (id) ON DELETE RESTRICT,
+				display_name TEXT NOT NULL,
+				normalized_name TEXT NOT NULL,
+				is_active BOOLEAN NOT NULL DEFAULT TRUE,
+				display_order INTEGER NOT NULL CHECK (display_order >= 0),
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 			);
 
 			CREATE TABLE IF NOT EXISTS ${schema}.users (
@@ -383,6 +424,15 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 
 			ALTER TABLE ${schema}.users
 				ADD COLUMN IF NOT EXISTS disassociated BOOLEAN NOT NULL DEFAULT FALSE;
+
+			ALTER TABLE ${schema}.organizations
+				ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'UTC';
+
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_organization_divisions_name
+				ON ${schema}.organization_divisions (organization_id, normalized_name);
+
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_organization_divisions_order
+				ON ${schema}.organization_divisions (organization_id, display_order);
 
 			ALTER TABLE ${schema}.shopify_integrations
 				ADD COLUMN IF NOT EXISTS verified_shop_gid TEXT NULL,
@@ -579,7 +629,8 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				m.welcome_dismissed_at,
 				o.name AS organization_name,
 				o.slug AS organization_slug,
-				o.created_at AS organization_created_at
+				o.created_at AS organization_created_at,
+				o.timezone AS organization_timezone
 			 FROM ${this.schema}.memberships m
 			 JOIN ${this.schema}.organizations o
 			   ON o.id = m.organization_id
@@ -608,7 +659,8 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				m.welcome_dismissed_at,
 				o.name AS organization_name,
 				o.slug AS organization_slug,
-				o.created_at AS organization_created_at
+				o.created_at AS organization_created_at,
+				o.timezone AS organization_timezone
 			 FROM ${this.schema}.memberships m
 			 JOIN ${this.schema}.organizations o
 			   ON o.id = m.organization_id
@@ -627,7 +679,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		await this.ensureReady();
 
 		const rows = (await sql.unsafe(
-			`SELECT id, name, slug, created_at
+			`SELECT id, name, slug, timezone, created_at
 			 FROM ${this.schema}.organizations
 			 WHERE slug = $1
 			 LIMIT 1`,
@@ -636,6 +688,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			id: string;
 			name: string;
 			slug: string;
+			timezone: string;
 			created_at: string;
 		}>;
 
@@ -648,7 +701,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		await this.ensureReady();
 
 		const rows = (await sql.unsafe(
-			`SELECT id, name, slug, created_at
+			`SELECT id, name, slug, timezone, created_at
 			 FROM ${this.schema}.organizations
 			 WHERE LOWER(name) = LOWER($1)
 			 LIMIT 1`,
@@ -657,6 +710,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			id: string;
 			name: string;
 			slug: string;
+			timezone: string;
 			created_at: string;
 		}>;
 
@@ -672,16 +726,176 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		const [row] = (await sql.unsafe(
 			`INSERT INTO ${this.schema}.organizations (id, name, slug)
 			 VALUES ($1, $2, $3)
-			 RETURNING id, name, slug, created_at`,
+			 RETURNING id, name, slug, timezone, created_at`,
 			[randomUUID(), input.name, input.slug],
 		)) as Array<{
 			id: string;
 			name: string;
 			slug: string;
+			timezone: string;
 			created_at: string;
 		}>;
 
 		return mapOrganization(row);
+	}
+
+	async listDivisions(
+		organizationId: string,
+		activeOnly = false,
+	): Promise<OrganizationDivision[]> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT id, organization_id, display_name, is_active, display_order, created_at, updated_at
+			 FROM ${this.schema}.organization_divisions
+			 WHERE organization_id = $1 AND ($2::boolean = FALSE OR is_active = TRUE)
+			 ORDER BY display_order ASC, id ASC`,
+			[organizationId, activeOnly],
+		)) as DivisionRow[];
+		return rows.map(mapDivision);
+	}
+
+	async createDivision(input: {
+		organizationId: string;
+		displayName: string;
+		normalizedName: string;
+	}): Promise<OrganizationDivision> {
+		await this.ensureReady();
+		try {
+			return await sql.begin(async (transaction) => {
+				await transaction.unsafe(
+					"SELECT pg_advisory_xact_lock(hashtextextended($1, 24))",
+					[input.organizationId],
+				);
+				const [row] = (await transaction.unsafe(
+					`INSERT INTO ${this.schema}.organization_divisions (
+						id, organization_id, display_name, normalized_name, display_order
+					) VALUES (
+						$1, $2, $3, $4,
+						(SELECT COUNT(*)::integer FROM ${this.schema}.organization_divisions WHERE organization_id = $2)
+					)
+					RETURNING id, organization_id, display_name, is_active, display_order, created_at, updated_at`,
+					[
+						randomUUID(),
+						input.organizationId,
+						input.displayName,
+						input.normalizedName,
+					],
+				)) as DivisionRow[];
+				return mapDivision(row);
+			});
+		} catch (error) {
+			if (
+				error &&
+				typeof error === "object" &&
+				"code" in error &&
+				(error as { code?: string }).code === "23505"
+			) {
+				throw new Error("Division display name already exists.");
+			}
+			throw error;
+		}
+	}
+
+	async updateDivision(input: {
+		organizationId: string;
+		divisionId: string;
+		displayName?: string;
+		normalizedName?: string;
+		isActive?: boolean;
+	}): Promise<OrganizationDivision | null> {
+		await this.ensureReady();
+		try {
+			const rows = (await sql.unsafe(
+				`UPDATE ${this.schema}.organization_divisions
+				 SET display_name = COALESCE($3, display_name),
+				     normalized_name = COALESCE($4, normalized_name),
+				     is_active = COALESCE($5, is_active),
+				     updated_at = NOW()
+				 WHERE id = $1 AND organization_id = $2
+				 RETURNING id, organization_id, display_name, is_active, display_order, created_at, updated_at`,
+				[
+					input.divisionId,
+					input.organizationId,
+					input.displayName ?? null,
+					input.normalizedName ?? null,
+					input.isActive ?? null,
+				],
+			)) as DivisionRow[];
+			return rows[0] ? mapDivision(rows[0]) : null;
+		} catch (error) {
+			if (
+				error &&
+				typeof error === "object" &&
+				"code" in error &&
+				(error as { code?: string }).code === "23505"
+			) {
+				throw new Error("Division display name already exists.");
+			}
+			throw error;
+		}
+	}
+
+	async reorderDivisions(
+		organizationId: string,
+		divisionIds: string[],
+	): Promise<OrganizationDivision[]> {
+		await this.ensureReady();
+		await sql.begin(async (transaction) => {
+			await transaction.unsafe(
+				"SELECT pg_advisory_xact_lock(hashtextextended($1, 24))",
+				[organizationId],
+			);
+			const current = (await transaction.unsafe(
+				`SELECT id FROM ${this.schema}.organization_divisions WHERE organization_id = $1`,
+				[organizationId],
+			)) as Array<{ id: string }>;
+			if (
+				current.length !== divisionIds.length ||
+				new Set(divisionIds).size !== divisionIds.length ||
+				divisionIds.some(
+					(id) => !current.some((division) => division.id === id),
+				)
+			) {
+				throw new Error(
+					"Division order must contain every organization division exactly once.",
+				);
+			}
+			// Offset first to avoid transient violations of the per-Organization order index.
+			await transaction.unsafe(
+				`UPDATE ${this.schema}.organization_divisions SET display_order = display_order + 1000000 WHERE organization_id = $1`,
+				[organizationId],
+			);
+			for (const [displayOrder, divisionId] of divisionIds.entries()) {
+				await transaction.unsafe(
+					`UPDATE ${this.schema}.organization_divisions SET display_order = $3, updated_at = NOW() WHERE id = $1 AND organization_id = $2`,
+					[divisionId, organizationId, displayOrder],
+				);
+			}
+		});
+		return this.listDivisions(organizationId);
+	}
+
+	async getOrganizationTimezone(organizationId: string): Promise<string> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT timezone FROM ${this.schema}.organizations WHERE id = $1 LIMIT 1`,
+			[organizationId],
+		)) as Array<{ timezone: string }>;
+		if (!rows[0]) throw new Error("Organization not found.");
+		return rows[0].timezone;
+	}
+
+	async updateOrganizationTimezone(
+		organizationId: string,
+		timezone: string,
+	): Promise<string> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`UPDATE ${this.schema}.organizations SET timezone = $2 WHERE id = $1 RETURNING timezone`,
+			[organizationId, timezone],
+		)) as Array<{ timezone: string }>;
+		if (!rows[0]) throw new Error("Organization not found.");
+		return rows[0].timezone;
 	}
 
 	async createMembership(
@@ -804,7 +1018,8 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				i.accepted_at,
 				o.name AS organization_name,
 				o.slug AS organization_slug,
-				o.created_at AS organization_created_at
+				o.created_at AS organization_created_at,
+				o.timezone AS organization_timezone
 			 FROM ${this.schema}.invites i
 			 JOIN ${this.schema}.organizations o
 			   ON o.id = i.organization_id

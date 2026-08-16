@@ -4,6 +4,7 @@ import type {
 	FestivalRecord,
 	MembershipProductType,
 	OrganizationAdminUserEntry,
+	OrganizationDivision,
 	OrganizationInviteRecord,
 	OrganizationMembershipRecord,
 	OrganizationRecord,
@@ -45,6 +46,10 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		ShopifyIntegrationRecord
 	>();
 	private readonly products = new Map<string, ProductRecord>();
+	private readonly divisions = new Map<
+		string,
+		OrganizationDivision & { normalizedName: string }
+	>();
 
 	async ensureReady(): Promise<void> {}
 
@@ -176,6 +181,7 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			id: randomUUID(),
 			name: input.name,
 			slug: input.slug,
+			timezone: "UTC",
 			createdAtIso: new Date().toISOString(),
 		};
 
@@ -186,6 +192,131 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			organization.id,
 		);
 		return organization;
+	}
+
+	async listDivisions(
+		organizationId: string,
+		activeOnly = false,
+	): Promise<OrganizationDivision[]> {
+		return this.orderedDivisions(organizationId, activeOnly);
+	}
+
+	private orderedDivisions(
+		organizationId: string,
+		activeOnly = false,
+	): OrganizationDivision[] {
+		return [...this.divisions.values()]
+			.filter(
+				(division) =>
+					division.organizationId === organizationId &&
+					(!activeOnly || division.isActive),
+			)
+			.sort(
+				(a, b) => a.displayOrder - b.displayOrder || a.id.localeCompare(b.id),
+			)
+			.map(({ normalizedName: _normalizedName, ...division }) => division);
+	}
+
+	async createDivision(input: {
+		organizationId: string;
+		displayName: string;
+		normalizedName: string;
+	}): Promise<OrganizationDivision> {
+		if (
+			[...this.divisions.values()].some(
+				(division) =>
+					division.organizationId === input.organizationId &&
+					division.normalizedName === input.normalizedName,
+			)
+		) {
+			throw new Error("Division display name already exists.");
+		}
+		const now = new Date().toISOString();
+		const division = {
+			id: randomUUID(),
+			organizationId: input.organizationId,
+			displayName: input.displayName,
+			normalizedName: input.normalizedName,
+			isActive: true,
+			displayOrder: this.orderedDivisions(input.organizationId).length,
+			createdAtIso: now,
+			updatedAtIso: now,
+		};
+		this.divisions.set(division.id, division);
+		const { normalizedName: _normalizedName, ...result } = division;
+		return result;
+	}
+
+	async updateDivision(input: {
+		organizationId: string;
+		divisionId: string;
+		displayName?: string;
+		normalizedName?: string;
+		isActive?: boolean;
+	}): Promise<OrganizationDivision | null> {
+		const current = this.divisions.get(input.divisionId);
+		if (!current || current.organizationId !== input.organizationId)
+			return null;
+		if (
+			input.normalizedName &&
+			[...this.divisions.values()].some(
+				(division) =>
+					division.id !== current.id &&
+					division.organizationId === input.organizationId &&
+					division.normalizedName === input.normalizedName,
+			)
+		) {
+			throw new Error("Division display name already exists.");
+		}
+		const updated = {
+			...current,
+			displayName: input.displayName ?? current.displayName,
+			normalizedName: input.normalizedName ?? current.normalizedName,
+			isActive: input.isActive ?? current.isActive,
+			updatedAtIso: new Date().toISOString(),
+		};
+		this.divisions.set(updated.id, updated);
+		const { normalizedName: _normalizedName, ...result } = updated;
+		return result;
+	}
+
+	async reorderDivisions(
+		organizationId: string,
+		divisionIds: string[],
+	): Promise<OrganizationDivision[]> {
+		const current = this.orderedDivisions(organizationId);
+		if (
+			current.length !== divisionIds.length ||
+			new Set(divisionIds).size !== divisionIds.length ||
+			divisionIds.some((id) => !current.some((division) => division.id === id))
+		) {
+			throw new Error(
+				"Division order must contain every organization division exactly once.",
+			);
+		}
+		const now = new Date().toISOString();
+		divisionIds.forEach((id, displayOrder) => {
+			const division = this.divisions.get(id);
+			if (!division) throw new Error("Division not found.");
+			this.divisions.set(id, { ...division, displayOrder, updatedAtIso: now });
+		});
+		return this.orderedDivisions(organizationId);
+	}
+
+	async getOrganizationTimezone(organizationId: string): Promise<string> {
+		const organization = this.organizations.get(organizationId);
+		if (!organization) throw new Error("Organization not found.");
+		return organization.timezone;
+	}
+
+	async updateOrganizationTimezone(
+		organizationId: string,
+		timezone: string,
+	): Promise<string> {
+		const organization = this.organizations.get(organizationId);
+		if (!organization) throw new Error("Organization not found.");
+		this.organizations.set(organizationId, { ...organization, timezone });
+		return timezone;
 	}
 
 	async createMembership(

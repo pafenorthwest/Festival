@@ -18,7 +18,84 @@ export interface OrganizationRecord {
 	id: string;
 	name: string;
 	slug: string;
+	timezone: string;
 	createdAtIso: string;
+}
+
+export interface OrganizationDivision {
+	id: string;
+	organizationId: string;
+	displayName: string;
+	isActive: boolean;
+	displayOrder: number;
+	createdAtIso: string;
+	updatedAtIso: string;
+}
+
+export interface PublicOrganizationDivision {
+	id: string;
+	displayName: string;
+	displayOrder: number;
+}
+
+export interface OrganizationDivisionListResponse {
+	divisions: OrganizationDivision[];
+}
+
+export interface PublicOrganizationDivisionListResponse {
+	divisions: PublicOrganizationDivision[];
+}
+
+export interface OrganizationTimezoneResponse {
+	timezone: string;
+}
+
+export interface CreateOrganizationDivisionInput {
+	displayName: string;
+}
+
+export interface UpdateOrganizationDivisionInput {
+	displayName?: string;
+	isActive?: boolean;
+}
+
+export interface ReorderOrganizationDivisionsInput {
+	divisionIds: string[];
+}
+
+export interface UpdateOrganizationTimezoneInput {
+	timezone: string;
+}
+
+export function normalizeDivisionName(value: string): string {
+	return value.normalize("NFKC").trim().replace(/\s+/g, " ");
+}
+
+export function divisionNameUniquenessKey(value: string): string {
+	return normalizeDivisionName(value).toLocaleLowerCase("en-US");
+}
+
+export function validateDivisionName(value: unknown): string {
+	if (typeof value !== "string") {
+		throw new Error("Division display name is required.");
+	}
+	const normalized = normalizeDivisionName(value);
+	if (!normalized) throw new Error("Division display name is required.");
+	if (normalized.length > 100) {
+		throw new Error("Division display name must be 100 characters or fewer.");
+	}
+	return normalized;
+}
+
+export function isValidIanaTimezone(value: unknown): value is string {
+	if (typeof value !== "string" || value.trim() !== value || !value)
+		return false;
+	try {
+		new Intl.DateTimeFormat("en-US", { timeZone: value }).format();
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 export interface OrganizationUserRecord {

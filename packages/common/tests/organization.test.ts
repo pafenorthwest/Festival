@@ -1,6 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import {
 	deriveDisplayName,
+	divisionNameUniquenessKey,
+	isValidIanaTimezone,
+	normalizeDivisionName,
 	ORGANIZATION_ROLES,
 	validateFestivalDates,
 	validateFestivalName,
@@ -52,6 +55,13 @@ describe("organization helpers", () => {
 			"Concert Chair",
 			"Read Only",
 		]);
+	});
+
+	it("normalizes division names and validates IANA timezones", () => {
+		expect(normalizeDivisionName("  High   Strings ")).toBe("High Strings");
+		expect(divisionNameUniquenessKey("HIGH STRINGS")).toBe("high strings");
+		expect(isValidIanaTimezone("America/Los_Angeles")).toBeTrue();
+		expect(isValidIanaTimezone("Pacific/Nowhere")).toBeFalse();
 	});
 
 	it("prefers explicit invite acceptance names", () => {

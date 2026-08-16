@@ -7,23 +7,31 @@ import {
 	type CreateFestivalResponse,
 	type CreateInviteInput,
 	type CreateInviteResponse,
+	type CreateOrganizationDivisionInput,
 	type CreateOrganizationInput,
 	type CreateOrganizationResponse,
 	type DismissWelcomeResponse,
 	deriveDisplayName,
+	divisionNameUniquenessKey,
 	type FestivalRecord,
 	type FestivalSummary,
 	type InviteSummary,
 	isOrganizationRole,
+	isValidIanaTimezone,
 	type OrganizationAdminUsersResponse,
+	type OrganizationDivision,
 	type OrganizationFestivalListResponse,
 	type OrganizationLandingResponse,
 	type OrganizationMembershipListResponse,
 	type OrganizationMembershipRecord,
 	type OrganizationRecord,
 	type OrganizationSession,
+	type ReorderOrganizationDivisionsInput,
 	type SessionMembership,
 	type SessionResponse,
+	type UpdateOrganizationDivisionInput,
+	type UpdateOrganizationTimezoneInput,
+	validateDivisionName,
 	validateFestivalDates,
 	validateFestivalName,
 	validateOrganizationName,
@@ -179,6 +187,200 @@ export class OrganizationService {
 			organization,
 			membership: toSessionMembership({ membership, organization }),
 		};
+	}
+
+	async listDivisionsForTenant(tenant: TenantContext) {
+		return {
+			divisions: await this.repository.listDivisions(tenant.organization.id),
+		};
+	}
+
+	async listPublicDivisions(organizationSlug: string) {
+		const organization =
+			await this.repository.findOrganizationBySlug(organizationSlug);
+		if (!organization) throw new AppError("Organization not found.", 404);
+		return {
+			divisions: (
+				await this.repository.listDivisions(organization.id, true)
+			).map(({ id, displayName, displayOrder }) => ({
+				id,
+				displayName,
+				displayOrder,
+			})),
+		};
+	}
+
+	async requireSelectableDivision(organizationId: string, divisionId: string) {
+		const division = (
+			await this.repository.listDivisions(organizationId, true)
+		).find((candidate) => candidate.id === divisionId);
+		if (!division) {
+			throw new AppError("Division is not available for a new purchase.", 400);
+		}
+		return division;
+	}
+
+	async createDivisionForTenant(
+		tenant: TenantContext,
+		input: CreateOrganizationDivisionInput,
+	) {
+		const displayName = this.requireDivisionName(input?.displayName);
+		await this.assertUniqueDivisionName(tenant.organization.id, displayName);
+		try {
+			return {
+				division: await this.repository.createDivision({
+					organizationId: tenant.organization.id,
+					displayName,
+					normalizedName: divisionNameUniquenessKey(displayName),
+				}),
+			};
+		} catch (error) {
+			if (
+				error instanceof Error &&
+				error.message === "Division display name already exists."
+			) {
+				throw new AppError(error.message, 409);
+			}
+			throw error;
+		}
+	}
+
+	async updateDivisionForTenant(
+		tenant: TenantContext,
+		divisionId: string,
+		input: UpdateOrganizationDivisionInput,
+	) {
+		if (!input || typeof input !== "object")
+			throw new AppError("Division update is required.", 400);
+		if (input.displayName === undefined && input.isActive === undefined) {
+			throw new AppError(
+				"Division update must include displayName or isActive.",
+				400,
+			);
+		}
+		if (input.isActive !== undefined && typeof input.isActive !== "boolean") {
+			throw new AppError("Division active state must be a boolean.", 400);
+		}
+		const displayName =
+			input.displayName === undefined
+				? undefined
+				: this.requireDivisionName(input.displayName);
+		if (displayName !== undefined) {
+			await this.assertUniqueDivisionName(
+				tenant.organization.id,
+				displayName,
+				divisionId,
+			);
+		}
+		let division: OrganizationDivision | null;
+		try {
+			division = await this.repository.updateDivision({
+				organizationId: tenant.organization.id,
+				divisionId,
+				displayName,
+				normalizedName:
+					displayName === undefined
+						? undefined
+						: divisionNameUniquenessKey(displayName),
+				isActive: input.isActive,
+			});
+		} catch (error) {
+			if (
+				error instanceof Error &&
+				error.message === "Division display name already exists."
+			) {
+				throw new AppError(error.message, 409);
+			}
+			throw error;
+		}
+		if (!division) throw new AppError("Division not found.", 404);
+		return { division };
+	}
+
+	async reorderDivisionsForTenant(
+		tenant: TenantContext,
+		input: ReorderOrganizationDivisionsInput,
+	) {
+		if (
+			!input ||
+			!Array.isArray(input.divisionIds) ||
+			input.divisionIds.some((id) => typeof id !== "string")
+		) {
+			throw new AppError("divisionIds must be an array of division IDs.", 400);
+		}
+		try {
+			return {
+				divisions: await this.repository.reorderDivisions(
+					tenant.organization.id,
+					input.divisionIds,
+				),
+			};
+		} catch (error) {
+			if (
+				error instanceof Error &&
+				error.message ===
+					"Division order must contain every organization division exactly once."
+			) {
+				throw new AppError(error.message, 400);
+			}
+			throw error;
+		}
+	}
+
+	async getTimezoneForTenant(tenant: TenantContext) {
+		return {
+			timezone: await this.repository.getOrganizationTimezone(
+				tenant.organization.id,
+			),
+		};
+	}
+
+	async updateTimezoneForTenant(
+		tenant: TenantContext,
+		input: UpdateOrganizationTimezoneInput,
+	) {
+		if (!input || !isValidIanaTimezone(input.timezone)) {
+			throw new AppError(
+				"Organization timezone must be a valid IANA timezone.",
+				400,
+			);
+		}
+		return {
+			timezone: await this.repository.updateOrganizationTimezone(
+				tenant.organization.id,
+				input.timezone,
+			),
+		};
+	}
+
+	private requireDivisionName(value: unknown): string {
+		try {
+			return validateDivisionName(value);
+		} catch (error) {
+			throw new AppError(
+				error instanceof Error
+					? error.message
+					: "Invalid division display name.",
+				400,
+			);
+		}
+	}
+
+	private async assertUniqueDivisionName(
+		organizationId: string,
+		displayName: string,
+		excludingId?: string,
+	): Promise<void> {
+		const key = divisionNameUniquenessKey(displayName);
+		const duplicate = (
+			await this.repository.listDivisions(organizationId)
+		).some(
+			(division) =>
+				division.id !== excludingId &&
+				divisionNameUniquenessKey(division.displayName) === key,
+		);
+		if (duplicate)
+			throw new AppError("Division display name already exists.", 409);
 	}
 
 	async createInvite(

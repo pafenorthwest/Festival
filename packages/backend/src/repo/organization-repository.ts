@@ -4,6 +4,7 @@ import type {
 	MembershipEntitlementPeriod,
 	MembershipProductType,
 	OrganizationAdminUserEntry,
+	OrganizationDivision,
 	OrganizationInviteRecord,
 	OrganizationMembershipRecord,
 	OrganizationRecord,
@@ -145,6 +146,31 @@ export interface OrganizationRepository {
 		name: string;
 		slug: string;
 	}): Promise<OrganizationRecord>;
+	listDivisions(
+		organizationId: string,
+		activeOnly?: boolean,
+	): Promise<OrganizationDivision[]>;
+	createDivision(input: {
+		organizationId: string;
+		displayName: string;
+		normalizedName: string;
+	}): Promise<OrganizationDivision>;
+	updateDivision(input: {
+		organizationId: string;
+		divisionId: string;
+		displayName?: string;
+		normalizedName?: string;
+		isActive?: boolean;
+	}): Promise<OrganizationDivision | null>;
+	reorderDivisions(
+		organizationId: string,
+		divisionIds: string[],
+	): Promise<OrganizationDivision[]>;
+	getOrganizationTimezone(organizationId: string): Promise<string>;
+	updateOrganizationTimezone(
+		organizationId: string,
+		timezone: string,
+	): Promise<string>;
 	createMembership(
 		input: CreateMembershipInput,
 	): Promise<OrganizationMembershipRecord>;

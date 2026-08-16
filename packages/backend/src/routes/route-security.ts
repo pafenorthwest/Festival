@@ -131,6 +131,41 @@ export const CURRENT_ROUTE_SECURITY = [
 	},
 	{
 		method: "GET",
+		path: "/api/organizations/:slug/divisions",
+		authenticationClass: "public",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/admin/divisions",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/divisions",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/divisions/reorder",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/divisions/:divisionId",
+		authenticationClass: "admin",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/admin/timezone",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/timezone",
+		authenticationClass: "admin",
+	},
+	{
+		method: "GET",
 		path: "/api/organizations/:slug/admin/shopify",
 		authenticationClass: "admin",
 	},
