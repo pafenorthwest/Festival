@@ -4,6 +4,8 @@ import {
 	listIanaTimezones,
 	moveDivisionIds,
 } from "../src/app/adminDivisions.js";
+import type { FestivalAppState } from "../src/app/createFestivalAppState.js";
+import { createFestivalDataLoaders } from "../src/app/createFestivalDataLoaders.js";
 import {
 	createAdminDivision,
 	getAdminDivisions,
@@ -14,6 +16,7 @@ import {
 } from "../src/lib/api.js";
 
 let fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+const originalFetch = globalThis.fetch;
 
 function mockFetch() {
 	fetchCalls = [];
@@ -36,6 +39,7 @@ function mockFetch() {
 
 afterEach(() => {
 	fetchCalls = [];
+	globalThis.fetch = originalFetch;
 });
 
 describe("Admin divisions frontend contract", () => {
@@ -117,6 +121,90 @@ describe("Admin divisions frontend contract", () => {
 		await expect(
 			createAdminDivision("token", "pafe", { displayName: "strings" }),
 		).rejects.toThrow("Division display name already exists.");
+	});
+
+	it("keeps an older token lookup from superseding a newer configuration load", async () => {
+		let resolveOlderToken: ((token: string) => void) | undefined;
+		const olderUser = {
+			getIdToken: () =>
+				new Promise<string>((resolve) => {
+					resolveOlderToken = resolve;
+				}),
+		};
+		const newerUser = {
+			getIdToken: () => Promise.resolve("newer-token"),
+		};
+		let currentUser = olderUser;
+		let divisions: Array<{ displayName: string }> = [];
+		let isLoading = false;
+
+		globalThis.fetch = ((url: string | URL | Request, init?: RequestInit) => {
+			const requestUrl =
+				typeof url === "string"
+					? url
+					: url instanceof URL
+						? url.toString()
+						: url.url;
+			fetchCalls.push({ url: requestUrl, init });
+			const authorization = (init?.headers as Record<string, string>)
+				.Authorization;
+			const isNewerRequest = authorization === "Bearer newer-token";
+			const body = requestUrl.endsWith("/timezone")
+				? { timezone: "UTC" }
+				: {
+						divisions: [
+							{
+								id: isNewerRequest ? "newer-division" : "older-division",
+								organizationId: "organization-1",
+								displayName: isNewerRequest
+									? "Newer division"
+									: "Older division",
+								isActive: true,
+								displayOrder: 0,
+								createdAtIso: "2026-08-15T00:00:00.000Z",
+								updatedAtIso: "2026-08-15T00:00:00.000Z",
+							},
+						],
+					};
+			return Promise.resolve(
+				new Response(JSON.stringify(body), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+			);
+		}) as typeof fetch;
+
+		const state = {
+			firebaseUser: () => currentUser,
+			route: () => ({ kind: "org-admin-divisions", slug: "pafe" }),
+			setIsLoadingDivisionConfiguration: (value: boolean) => {
+				isLoading = value;
+			},
+			setDivisionConfigurationLoadError: () => undefined,
+			setDivisions: (value: Array<{ displayName: string }>) => {
+				divisions = value;
+			},
+			setDivisionRenameDrafts: () => undefined,
+			setOrganizationTimezone: () => undefined,
+			setTimezoneDraft: () => undefined,
+		} as unknown as FestivalAppState;
+		const loaders = createFestivalDataLoaders(state);
+
+		const olderLoad = loaders.loadDivisionConfiguration("pafe");
+		currentUser = newerUser;
+		await loaders.loadDivisionConfiguration("pafe");
+		resolveOlderToken?.("older-token");
+		await olderLoad;
+
+		expect(divisions.map((division) => division.displayName)).toEqual([
+			"Newer division",
+		]);
+		expect(isLoading).toBe(false);
+		expect(
+			fetchCalls.map((call) =>
+				(call.init?.headers as Record<string, string>).Authorization,
+			),
+		).toEqual(["Bearer newer-token", "Bearer newer-token"]);
 	});
 
 	it("renders the locked workflow states and guards all mutations", async () => {

@@ -34,15 +34,15 @@
 
 ## Delivery
 
-- Delivered: Organization Admin Divisions card and dedicated route/page; trusted tenant Admin API helpers; server-backed list/create/rename/activation/reorder workflows; IANA timezone selection and persistence; historical-purchase guidance; explicit loading, empty, saving, validation, conflict, authorization, success, and backend-failure states; responsive styling and focused frontend coverage.
+- Delivered: Organization Admin Divisions card and dedicated route/page; trusted tenant Admin API helpers; server-backed list/create/rename/activation/reorder workflows; IANA timezone selection and persistence; historical-purchase guidance; explicit loading, empty, saving, validation, conflict, authorization, success, and backend-failure states; responsive styling; focused frontend coverage; and request ordering allocated before asynchronous token retrieval so older loads cannot supersede newer configuration.
 - Exceptions: None
 - Deferred work: None
-- Dirty-worktree decision: continue; the existing uncommitted goal/task artifacts belong to this task and will be isolated by path.
+- Dirty-worktree decision: continue; preserve the user's untracked root `AGENTS.md` and isolate this fix to the Admin Divisions loader, focused test, and task record.
 
 ## Quality gate results
 
 - Lint: passed (`bun run lint`)
 - Build: passed (`bun run build`)
-- Tests: passed (`bun run test`; 231 total: 24 common, 176 backend, 31 frontend)
+- Tests: passed (`bun run test`; 232 total: 24 common, 176 backend, 32 frontend)
 - Code review: passed (`patch is correct`, confidence 0.93, no findings after correcting stale overlapping-load handling)
 - Clean merge: passed against `main` by fast-forward

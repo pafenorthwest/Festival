@@ -116,12 +116,18 @@ export function createFestivalDataLoaders(state: FestivalAppState) {
 	}
 
 	async function loadDivisionConfiguration(slug: string) {
+		const loadVersion = ++divisionConfigurationLoadVersion;
 		const token = await getIdToken(state.firebaseUser());
 		if (!token) {
+			if (isCurrentDivisionConfigurationLoad(loadVersion, slug)) {
+				state.setIsLoadingDivisionConfiguration(false);
+			}
+			return;
+		}
+		if (!isCurrentDivisionConfigurationLoad(loadVersion, slug)) {
 			return;
 		}
 
-		const loadVersion = ++divisionConfigurationLoadVersion;
 		state.setIsLoadingDivisionConfiguration(true);
 		state.setDivisionConfigurationLoadError("");
 		state.setDivisions([]);
