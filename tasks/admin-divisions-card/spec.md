@@ -45,4 +45,4 @@
 - Build: passed (`bun run build`)
 - Tests: passed (`bun run test`; 231 total: 24 common, 176 backend, 31 frontend)
 - Code review: passed (`patch is correct`, confidence 0.93, no findings after correcting stale overlapping-load handling)
-- Clean merge: pending
+- Clean merge: passed against `main` by fast-forward
