@@ -53,6 +53,24 @@ const ALLOWED_SHOPIFY_SETTINGS_FIELDS = new Set([
 	"clientSecret",
 ]);
 
+function assertAllowedFields(
+	payload: unknown,
+	allowed: readonly string[],
+	label: string,
+): void {
+	if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
+	const allowedFields = new Set(allowed);
+	const extraFields = Object.keys(payload).filter(
+		(field) => !allowedFields.has(field),
+	);
+	if (extraFields.length > 0) {
+		throw new AppError(
+			`${label} cannot include browser-controlled fields: ${extraFields.join(", ")}.`,
+			400,
+		);
+	}
+}
+
 function assertNoExtraShopifySettingsFields(payload: unknown): void {
 	if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
 		return;
@@ -324,6 +342,148 @@ export function buildApiRouter(
 				c.status(201);
 				return c.json(
 					await organizationService.createFestivalForTenant(
+						getRequiredTenant(c),
+						payload,
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.get("/organizations/:slug/divisions", async (c) => {
+		try {
+			return c.json(
+				await organizationService.listPublicDivisions(c.req.param("slug")),
+			);
+		} catch (error) {
+			return toJsonError(c, error);
+		}
+	});
+
+	router.get(
+		"/organizations/:slug/admin/divisions",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				return c.json(
+					await organizationService.listDivisionsForTenant(
+						getRequiredTenant(c),
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.post(
+		"/organizations/:slug/admin/divisions",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				const payload = await c.req.json();
+				assertAllowedFields(
+					payload,
+					["displayName"],
+					"Division create request",
+				);
+				c.status(201);
+				return c.json(
+					await organizationService.createDivisionForTenant(
+						getRequiredTenant(c),
+						payload,
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.post(
+		"/organizations/:slug/admin/divisions/reorder",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				const payload = await c.req.json();
+				assertAllowedFields(
+					payload,
+					["divisionIds"],
+					"Division reorder request",
+				);
+				return c.json(
+					await organizationService.reorderDivisionsForTenant(
+						getRequiredTenant(c),
+						payload,
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.post(
+		"/organizations/:slug/admin/divisions/:divisionId",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				const payload = await c.req.json();
+				assertAllowedFields(
+					payload,
+					["displayName", "isActive"],
+					"Division update request",
+				);
+				return c.json(
+					await organizationService.updateDivisionForTenant(
+						getRequiredTenant(c),
+						c.req.param("divisionId"),
+						payload,
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.get(
+		"/organizations/:slug/admin/timezone",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				return c.json(
+					await organizationService.getTimezoneForTenant(getRequiredTenant(c)),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.post(
+		"/organizations/:slug/admin/timezone",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				const payload = await c.req.json();
+				assertAllowedFields(payload, ["timezone"], "Timezone update request");
+				return c.json(
+					await organizationService.updateTimezoneForTenant(
 						getRequiredTenant(c),
 						payload,
 					),
