@@ -1,8 +1,8 @@
 import { Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import {
-	buildOrgAdminFestivalsPath,
 	buildOrgAdminDivisionsPath,
+	buildOrgAdminFestivalsPath,
 	buildOrgAdminIntegrationsPath,
 	buildOrgAdminMembershipsPath,
 	buildOrgAdminUsersPath,

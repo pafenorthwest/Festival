@@ -201,8 +201,8 @@ describe("Admin divisions frontend contract", () => {
 		]);
 		expect(isLoading).toBe(false);
 		expect(
-			fetchCalls.map((call) =>
-				(call.init?.headers as Record<string, string>).Authorization,
+			fetchCalls.map(
+				(call) => (call.init?.headers as Record<string, string>).Authorization,
 			),
 		).toEqual(["Bearer newer-token", "Bearer newer-token"]);
 	});

@@ -1,6 +1,5 @@
 import type { OrganizationAdminUserEntry } from "@festival/common";
-import { validateDivisionName } from "@festival/common";
-import { validateFestivalDates } from "@festival/common";
+import { validateDivisionName, validateFestivalDates } from "@festival/common";
 import {
 	acceptInvite,
 	cancelAdminInvite,

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import {
 	buildInvitePath,
-	buildOrgAdminFestivalsPath,
 	buildOrgAdminDivisionsPath,
+	buildOrgAdminFestivalsPath,
 	buildOrgAdminIntegrationsPath,
 	buildOrgAdminMembershipsPath,
 	buildOrgAdminUsersPath,
