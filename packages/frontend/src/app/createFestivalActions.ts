@@ -1,15 +1,19 @@
 import type { OrganizationAdminUserEntry } from "@festival/common";
-import { validateFestivalDates } from "@festival/common";
+import { validateDivisionName, validateFestivalDates } from "@festival/common";
 import {
 	acceptInvite,
 	cancelAdminInvite,
+	createAdminDivision,
 	createFestival,
 	createInvite,
 	createMembershipProduct,
 	createOrganization,
 	deleteAdminMembership,
 	dismissWelcome,
+	reorderAdminDivisions,
 	saveShopifySettings,
+	updateAdminDivision,
+	updateAdminTimezone,
 } from "../lib/api.js";
 import {
 	clearPendingIntent,
@@ -18,6 +22,10 @@ import {
 	signInWithGoogle,
 } from "../lib/firebase-auth.js";
 import { buildOrgPath } from "../lib/routes.js";
+import {
+	divisionNameValidationError,
+	moveDivisionIds,
+} from "./adminDivisions.js";
 import type { SignInModalKind } from "./appTypes.js";
 import type { FestivalAppState } from "./createFestivalAppState.js";
 import {
@@ -412,6 +420,211 @@ export function createFestivalActions(
 		}
 	}
 
+	async function handleReloadDivisionConfiguration() {
+		const currentRoute = state.route();
+		if (currentRoute.kind !== "org-admin-divisions" || !state.isAdminMember()) {
+			return;
+		}
+		await loaders.loadDivisionConfiguration(currentRoute.slug);
+	}
+
+	async function handleCreateDivision() {
+		const user = state.firebaseUser();
+		const currentRoute = state.route();
+		if (
+			!user ||
+			currentRoute.kind !== "org-admin-divisions" ||
+			!state.isAdminMember() ||
+			state.isDivisionMutationPending()
+		) {
+			return;
+		}
+
+		state.setCreateDivisionAttempted(true);
+		const validationError = divisionNameValidationError(
+			state.divisionNameDraft(),
+		);
+		if (validationError) {
+			state.setErrorMessage(validationError);
+			return;
+		}
+
+		state.setIsDivisionMutationPending(true);
+		state.clearMessages();
+		try {
+			const token = await user.getIdToken();
+			const displayName = validateDivisionName(state.divisionNameDraft());
+			const response = await createAdminDivision(token, currentRoute.slug, {
+				displayName,
+			});
+			state.setDivisions((current) => [...current, response.division]);
+			state.setDivisionRenameDrafts((current) => ({
+				...current,
+				[response.division.id]: response.division.displayName,
+			}));
+			state.setDivisionNameDraft("");
+			state.setCreateDivisionAttempted(false);
+			state.setStatusMessage(`${response.division.displayName} created.`);
+		} catch (error) {
+			state.setErrorMessage((error as Error).message);
+		} finally {
+			state.setIsDivisionMutationPending(false);
+		}
+	}
+
+	async function handleRenameDivision(divisionId: string) {
+		const user = state.firebaseUser();
+		const currentRoute = state.route();
+		if (
+			!user ||
+			currentRoute.kind !== "org-admin-divisions" ||
+			!state.isAdminMember() ||
+			state.isDivisionMutationPending()
+		) {
+			return;
+		}
+
+		const draft = state.divisionRenameDrafts()[divisionId] ?? "";
+		const validationError = divisionNameValidationError(draft);
+		if (validationError) {
+			state.setErrorMessage(validationError);
+			return;
+		}
+
+		state.setIsDivisionMutationPending(true);
+		state.clearMessages();
+		try {
+			const token = await user.getIdToken();
+			const response = await updateAdminDivision(
+				token,
+				currentRoute.slug,
+				divisionId,
+				{ displayName: validateDivisionName(draft) },
+			);
+			state.setDivisions((current) =>
+				current.map((division) =>
+					division.id === divisionId ? response.division : division,
+				),
+			);
+			state.setDivisionRenameDrafts((current) => ({
+				...current,
+				[divisionId]: response.division.displayName,
+			}));
+			state.setStatusMessage(`${response.division.displayName} renamed.`);
+		} catch (error) {
+			state.setErrorMessage((error as Error).message);
+		} finally {
+			state.setIsDivisionMutationPending(false);
+		}
+	}
+
+	async function handleSetDivisionActive(
+		divisionId: string,
+		isActive: boolean,
+	) {
+		const user = state.firebaseUser();
+		const currentRoute = state.route();
+		if (
+			!user ||
+			currentRoute.kind !== "org-admin-divisions" ||
+			!state.isAdminMember() ||
+			state.isDivisionMutationPending()
+		) {
+			return;
+		}
+
+		state.setIsDivisionMutationPending(true);
+		state.clearMessages();
+		try {
+			const token = await user.getIdToken();
+			const response = await updateAdminDivision(
+				token,
+				currentRoute.slug,
+				divisionId,
+				{ isActive },
+			);
+			state.setDivisions((current) =>
+				current.map((division) =>
+					division.id === divisionId ? response.division : division,
+				),
+			);
+			state.setStatusMessage(
+				`${response.division.displayName} ${isActive ? "activated" : "deactivated"}.`,
+			);
+		} catch (error) {
+			state.setErrorMessage((error as Error).message);
+		} finally {
+			state.setIsDivisionMutationPending(false);
+		}
+	}
+
+	async function handleMoveDivision(divisionId: string, direction: -1 | 1) {
+		const user = state.firebaseUser();
+		const currentRoute = state.route();
+		if (
+			!user ||
+			currentRoute.kind !== "org-admin-divisions" ||
+			!state.isAdminMember() ||
+			state.isDivisionMutationPending()
+		) {
+			return;
+		}
+
+		const nextIds = moveDivisionIds(
+			state.divisions().map((division) => division.id),
+			divisionId,
+			direction,
+		);
+		if (!nextIds) {
+			return;
+		}
+
+		state.setIsDivisionMutationPending(true);
+		state.clearMessages();
+		try {
+			const token = await user.getIdToken();
+			const response = await reorderAdminDivisions(token, currentRoute.slug, {
+				divisionIds: nextIds,
+			});
+			state.setDivisions(response.divisions);
+			state.setStatusMessage("Division order saved.");
+		} catch (error) {
+			state.setErrorMessage((error as Error).message);
+		} finally {
+			state.setIsDivisionMutationPending(false);
+		}
+	}
+
+	async function handleSaveOrganizationTimezone() {
+		const user = state.firebaseUser();
+		const currentRoute = state.route();
+		if (
+			!user ||
+			currentRoute.kind !== "org-admin-divisions" ||
+			!state.isAdminMember() ||
+			state.isDivisionMutationPending()
+		) {
+			return;
+		}
+
+		state.setIsDivisionMutationPending(true);
+		state.clearMessages();
+		try {
+			const token = await user.getIdToken();
+			const response = await updateAdminTimezone(token, currentRoute.slug, {
+				timezone: state.timezoneDraft(),
+			});
+			state.setOrganizationTimezone(response.timezone);
+			state.setTimezoneDraft(response.timezone);
+			state.setStatusMessage("Organization timezone saved.");
+		} catch (error) {
+			state.setTimezoneDraft(state.organizationTimezone());
+			state.setErrorMessage((error as Error).message);
+		} finally {
+			state.setIsDivisionMutationPending(false);
+		}
+	}
+
 	async function handleAcceptInvite() {
 		const user = state.firebaseUser();
 		const token = state.currentInviteToken();
@@ -496,12 +709,18 @@ export function createFestivalActions(
 		handleCreateMembershipProduct,
 		handleCreateInvite,
 		handleCreateOrganization,
+		handleCreateDivision,
 		handleDeleteAdminUser,
 		handleDismissWelcome,
 		handleGoogleSignIn,
 		handleLogout,
+		handleMoveDivision,
 		handlePasswordlessSignIn,
+		handleReloadDivisionConfiguration,
+		handleRenameDivision,
+		handleSaveOrganizationTimezone,
 		handleSaveShopifySettings,
+		handleSetDivisionActive,
 	};
 }
 

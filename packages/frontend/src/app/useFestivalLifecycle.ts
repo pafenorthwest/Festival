@@ -115,7 +115,8 @@ export function useFestivalLifecycle(
 				currentRoute.kind === "org-admin-users" ||
 				currentRoute.kind === "org-admin-integrations" ||
 				currentRoute.kind === "org-admin-memberships" ||
-				currentRoute.kind === "org-admin-festivals") &&
+				currentRoute.kind === "org-admin-festivals" ||
+				currentRoute.kind === "org-admin-divisions") &&
 			currentRoute.slug &&
 			state.firebaseUser()
 		) {
@@ -158,6 +159,11 @@ export function useFestivalLifecycle(
 
 		if (currentRoute.kind === "org-admin-festivals") {
 			void loaders.loadFestivals(currentRoute.slug);
+			return;
+		}
+
+		if (currentRoute.kind === "org-admin-divisions") {
+			void loaders.loadDivisionConfiguration(currentRoute.slug);
 			return;
 		}
 

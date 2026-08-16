@@ -6,6 +6,7 @@ import type {
 	CreateInviteResponse,
 	CreateMembershipProductInput,
 	CreateMembershipProductResponse,
+	CreateOrganizationDivisionInput,
 	CreateOrganizationInput,
 	CreateOrganizationResponse,
 	CustomerAccountSettingsResponse,
@@ -16,9 +17,13 @@ import type {
 	InviteSummary,
 	MembershipProductsListResponse,
 	OrganizationAdminUsersResponse,
+	OrganizationDivision,
+	OrganizationDivisionListResponse,
 	OrganizationFestivalListResponse,
 	OrganizationLandingResponse,
 	OrganizationMembershipListResponse,
+	OrganizationTimezoneResponse,
+	ReorderOrganizationDivisionsInput,
 	SaveCustomerAccountSettingsInput,
 	SaveCustomerAccountSettingsResponse,
 	SaveShopifyIntegrationInput,
@@ -26,6 +31,8 @@ import type {
 	SessionResponse,
 	ShopifyIntegrationSettingsResponse,
 	UpdateCustomerProfileInput,
+	UpdateOrganizationDivisionInput,
+	UpdateOrganizationTimezoneInput,
 } from "@festival/common";
 
 const API_BASE = import.meta.env.FRONT_API_BASE ?? "";
@@ -307,6 +314,71 @@ export function createFestival(
 			method: "POST",
 			body: JSON.stringify(input),
 		},
+		idToken,
+	);
+}
+
+export function getAdminDivisions(idToken: string, slug: string) {
+	return requestJson<OrganizationDivisionListResponse>(
+		`/api/organizations/${slug}/admin/divisions`,
+		undefined,
+		idToken,
+	);
+}
+
+export function createAdminDivision(
+	idToken: string,
+	slug: string,
+	input: CreateOrganizationDivisionInput,
+) {
+	return requestJson<{ division: OrganizationDivision }>(
+		`/api/organizations/${slug}/admin/divisions`,
+		{ method: "POST", body: JSON.stringify(input) },
+		idToken,
+	);
+}
+
+export function updateAdminDivision(
+	idToken: string,
+	slug: string,
+	divisionId: string,
+	input: UpdateOrganizationDivisionInput,
+) {
+	return requestJson<{ division: OrganizationDivision }>(
+		`/api/organizations/${slug}/admin/divisions/${divisionId}`,
+		{ method: "POST", body: JSON.stringify(input) },
+		idToken,
+	);
+}
+
+export function reorderAdminDivisions(
+	idToken: string,
+	slug: string,
+	input: ReorderOrganizationDivisionsInput,
+) {
+	return requestJson<OrganizationDivisionListResponse>(
+		`/api/organizations/${slug}/admin/divisions/reorder`,
+		{ method: "POST", body: JSON.stringify(input) },
+		idToken,
+	);
+}
+
+export function getAdminTimezone(idToken: string, slug: string) {
+	return requestJson<OrganizationTimezoneResponse>(
+		`/api/organizations/${slug}/admin/timezone`,
+		undefined,
+		idToken,
+	);
+}
+
+export function updateAdminTimezone(
+	idToken: string,
+	slug: string,
+	input: UpdateOrganizationTimezoneInput,
+) {
+	return requestJson<OrganizationTimezoneResponse>(
+		`/api/organizations/${slug}/admin/timezone`,
+		{ method: "POST", body: JSON.stringify(input) },
 		idToken,
 	);
 }

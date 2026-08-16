@@ -1,6 +1,7 @@
 import { Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import {
+	buildOrgAdminDivisionsPath,
 	buildOrgAdminFestivalsPath,
 	buildOrgAdminIntegrationsPath,
 	buildOrgAdminMembershipsPath,
@@ -38,6 +39,21 @@ export function AdminHomePage(props: AdminHomePageProps) {
 			</Show>
 
 			<div class="admin-card-grid">
+				<button
+					type="button"
+					class="admin-workflow-card"
+					disabled={!props.app.isAdminMember()}
+					onClick={() => {
+						const membership = props.app.sessionMembership();
+						if (!membership || !props.app.isAdminMember()) return;
+						props.app.navigate(
+							buildOrgAdminDivisionsPath(membership.organizationSlug),
+						);
+					}}
+				>
+					<strong>Divisions</strong>
+					<span>Manage divisions and the entitlement timezone.</span>
+				</button>
 				<button
 					type="button"
 					class="admin-workflow-card"

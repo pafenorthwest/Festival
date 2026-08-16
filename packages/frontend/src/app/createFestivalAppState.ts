@@ -3,6 +3,7 @@ import type {
 	InviteSummary,
 	MembershipProductSummary,
 	OrganizationAdminUserEntry,
+	OrganizationDivision,
 	OrganizationLandingResponse,
 	SessionMembership,
 	SessionResponse,
@@ -35,6 +36,7 @@ const ADMIN_ROUTE_KINDS = [
 	"org-admin-integrations",
 	"org-admin-memberships",
 	"org-admin-festivals",
+	"org-admin-divisions",
 ] as const;
 
 export const INVITE_FEEDBACK_DURATION_MS = 2200;
@@ -60,6 +62,21 @@ export function createFestivalAppState() {
 		OrganizationAdminUserEntry[]
 	>([]);
 	const [festivals, setFestivals] = createSignal<FestivalSummary[]>([]);
+	const [divisions, setDivisions] = createSignal<OrganizationDivision[]>([]);
+	const [divisionNameDraft, setDivisionNameDraft] = createSignal("");
+	const [divisionRenameDrafts, setDivisionRenameDrafts] = createSignal<
+		Record<string, string>
+	>({});
+	const [createDivisionAttempted, setCreateDivisionAttempted] =
+		createSignal(false);
+	const [isLoadingDivisionConfiguration, setIsLoadingDivisionConfiguration] =
+		createSignal(false);
+	const [divisionConfigurationLoadError, setDivisionConfigurationLoadError] =
+		createSignal("");
+	const [isDivisionMutationPending, setIsDivisionMutationPending] =
+		createSignal(false);
+	const [organizationTimezone, setOrganizationTimezone] = createSignal("");
+	const [timezoneDraft, setTimezoneDraft] = createSignal("");
 	const [membershipProducts, setMembershipProducts] = createSignal<
 		MembershipProductSummary[]
 	>([]);
@@ -221,7 +238,8 @@ export function createFestivalAppState() {
 			route().kind === "org-admin-users" ||
 			route().kind === "org-admin-integrations" ||
 			route().kind === "org-admin-memberships" ||
-			route().kind === "org-admin-festivals",
+			route().kind === "org-admin-festivals" ||
+			route().kind === "org-admin-divisions",
 	);
 	const adminBreadcrumb = createMemo(() => {
 		switch (route().kind) {
@@ -233,6 +251,8 @@ export function createFestivalAppState() {
 				return "Admin > Memberships";
 			case "org-admin-festivals":
 				return "Admin > Festivals";
+			case "org-admin-divisions":
+				return "Admin > Divisions";
 			default:
 				return "Admin";
 		}
@@ -294,6 +314,15 @@ export function createFestivalAppState() {
 		setCreatedInvites([]);
 		setAdminUsers([]);
 		setFestivals([]);
+		setDivisions([]);
+		setDivisionNameDraft("");
+		setDivisionRenameDrafts({});
+		setCreateDivisionAttempted(false);
+		setIsLoadingDivisionConfiguration(false);
+		setDivisionConfigurationLoadError("");
+		setIsDivisionMutationPending(false);
+		setOrganizationTimezone("");
+		setTimezoneDraft("");
 		setMembershipProducts([]);
 		setIsLoadingMembershipProducts(false);
 		setMembershipProductsLoadError("");
@@ -370,6 +399,11 @@ export function createFestivalAppState() {
 		closeSignInModal,
 		createdInvites,
 		createdOrganizationSlug,
+		createDivisionAttempted,
+		divisionConfigurationLoadError,
+		divisionNameDraft,
+		divisionRenameDrafts,
+		divisions,
 		errorMessage,
 		festivalDraft,
 		festivalNameValidation,
@@ -387,6 +421,8 @@ export function createFestivalAppState() {
 		isAdminRoute,
 		isAdminSubRoute,
 		isCreatingMembershipProduct,
+		isDivisionMutationPending,
+		isLoadingDivisionConfiguration,
 		isLoadingMembershipProducts,
 		isShopifyTesting,
 		isBusy,
@@ -400,6 +436,7 @@ export function createFestivalAppState() {
 		openSignInModal,
 		organization,
 		organizationCreated,
+		organizationTimezone,
 		organizationName,
 		organizationShortName,
 		organizationValidationErrors,
@@ -411,11 +448,16 @@ export function createFestivalAppState() {
 		sessionMembership,
 		setAdminUsers,
 		setCreateFestivalAttempted,
+		setCreateDivisionAttempted,
 		setCreateMembershipProductAttempted,
 		setCreateOrganizationAttempted,
 		setCreatedInvites,
 		setCreatedOrganizationSlug,
 		setErrorMessage,
+		setDivisionConfigurationLoadError,
+		setDivisionNameDraft,
+		setDivisionRenameDrafts,
+		setDivisions,
 		setFestivalDraft,
 		setFestivalNameTouched,
 		setFestivals,
@@ -426,6 +468,8 @@ export function createFestivalAppState() {
 		setInviteName,
 		setInvitePanelRef,
 		setIsBusy,
+		setIsDivisionMutationPending,
+		setIsLoadingDivisionConfiguration,
 		setIsCreatingMembershipProduct,
 		setIsLoadingMembershipProducts,
 		setIsShopifyTesting,
@@ -438,6 +482,7 @@ export function createFestivalAppState() {
 		setOrganizationNameTouched,
 		setOrganizationShortName,
 		setOrganizationShortNameTouched,
+		setOrganizationTimezone,
 		setSession,
 		setShopifyDraft,
 		setShopifySettings,
@@ -445,6 +490,7 @@ export function createFestivalAppState() {
 		setSignInModalKind,
 		setSignInStep,
 		setStatusMessage,
+		setTimezoneDraft,
 		shouldShowFestivalNameValidation,
 		shouldShowMembershipProductValidation,
 		shouldShowOrganizationValidation,
@@ -457,6 +503,7 @@ export function createFestivalAppState() {
 		shopifyDraft,
 		shopifySettings,
 		statusMessage,
+		timezoneDraft,
 		currentInviteToken,
 	};
 }

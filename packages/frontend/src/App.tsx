@@ -3,6 +3,7 @@ import { useFestivalAppController } from "./app/useFestivalAppController.js";
 import { AppBanners } from "./components/AppBanners.js";
 import { AppHeader } from "./components/AppHeader.js";
 import { SignInModal } from "./components/SignInModal.js";
+import { AdminDivisionsPage } from "./pages/AdminDivisionsPage.js";
 import { AdminFestivalsPage } from "./pages/AdminFestivalsPage.js";
 import { AdminHomePage } from "./pages/AdminHomePage.js";
 import { AdminIntegrationsPage } from "./pages/AdminIntegrationsPage.js";
@@ -60,6 +61,9 @@ export default function App() {
 				</Match>
 				<Match when={app.route().kind === "org-admin-festivals"}>
 					<AdminFestivalsPage app={app} />
+				</Match>
+				<Match when={app.route().kind === "org-admin-divisions"}>
+					<AdminDivisionsPage app={app} />
 				</Match>
 			</Switch>
 
