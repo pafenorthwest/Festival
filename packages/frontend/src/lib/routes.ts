@@ -9,7 +9,8 @@ export type AppRoute =
 	| { kind: "org-admin-users"; slug: string }
 	| { kind: "org-admin-integrations"; slug: string }
 	| { kind: "org-admin-memberships"; slug: string }
-	| { kind: "org-admin-festivals"; slug: string };
+	| { kind: "org-admin-festivals"; slug: string }
+	| { kind: "org-admin-divisions"; slug: string };
 
 export function buildOrgPath(slug: string): string {
 	return `/org/${slug}/admin`;
@@ -41,6 +42,10 @@ export function buildOrgAdminMembershipsPath(slug: string): string {
 
 export function buildOrgAdminFestivalsPath(slug: string): string {
 	return `/org/${slug}/admin/festivals`;
+}
+
+export function buildOrgAdminDivisionsPath(slug: string): string {
+	return `/org/${slug}/admin/divisions`;
 }
 
 export function buildInvitePath(token: string): string {
@@ -115,6 +120,16 @@ export function parseRoute(pathname: string): AppRoute {
 		return {
 			kind: "org-admin-festivals",
 			slug: orgAdminFestivalsMatch[1] ?? "",
+		};
+	}
+
+	const orgAdminDivisionsMatch = pathname.match(
+		/^\/org\/([^/]+)\/admin\/divisions$/,
+	);
+	if (orgAdminDivisionsMatch) {
+		return {
+			kind: "org-admin-divisions",
+			slug: orgAdminDivisionsMatch[1] ?? "",
 		};
 	}
 

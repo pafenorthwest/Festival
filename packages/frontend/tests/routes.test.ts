@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
 	buildInvitePath,
 	buildOrgAdminFestivalsPath,
+	buildOrgAdminDivisionsPath,
 	buildOrgAdminIntegrationsPath,
 	buildOrgAdminMembershipsPath,
 	buildOrgAdminUsersPath,
@@ -61,6 +62,10 @@ describe("route helpers", () => {
 			kind: "org-admin-festivals",
 			slug: "festival-admins",
 		});
+		expect(parseRoute("/org/festival-admins/admin/divisions")).toEqual({
+			kind: "org-admin-divisions",
+			slug: "festival-admins",
+		});
 	});
 
 	it("parses invite routes", () => {
@@ -94,6 +99,9 @@ describe("route helpers", () => {
 		);
 		expect(buildOrgAdminFestivalsPath("festival-admins")).toBe(
 			"/org/festival-admins/admin/festivals",
+		);
+		expect(buildOrgAdminDivisionsPath("festival-admins")).toBe(
+			"/org/festival-admins/admin/divisions",
 		);
 		expect(buildOrgPath("second-festival")).toBe("/org/second-festival/admin");
 		expect(buildInvitePath("abc123")).toBe("/invite/abc123");

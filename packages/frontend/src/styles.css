@@ -818,6 +818,87 @@ form.shopify-integration-card {
 	grid-template-columns: 1fr;
 }
 
+.division-admin-layout,
+.division-list-panel,
+.division-list,
+.division-row,
+.division-load-error,
+.division-history-note {
+	display: grid;
+	gap: 0.85rem;
+}
+
+.division-admin-header h2,
+.division-admin-header p,
+.division-list-panel h3,
+.division-history-note p,
+.division-load-error p {
+	margin: 0;
+}
+
+.division-list {
+	list-style: none;
+	padding: 0;
+	margin: 0;
+}
+
+.division-row {
+	padding: 1rem;
+	border: 1px solid var(--bullet-panel-border);
+	border-radius: 12px;
+	background: rgba(255, 255, 255, 0.7);
+}
+
+.division-row-heading,
+.division-actions {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 0.65rem;
+}
+
+.division-row-heading {
+	justify-content: space-between;
+}
+
+.division-actions button {
+	padding: 0.65rem 0.85rem;
+}
+
+.division-status {
+	padding: 0.3rem 0.55rem;
+	border-radius: 999px;
+	color: white;
+	font-size: 0.82rem;
+	font-weight: 700;
+}
+
+.division-status-active {
+	background: var(--bullet-success);
+}
+
+.division-status-inactive {
+	background: #6b7280;
+}
+
+.division-history-note {
+	border-color: rgba(182, 135, 44, 0.4);
+	background: rgba(255, 251, 235, 0.84);
+}
+
+.division-load-error,
+.field-error {
+	color: var(--bullet-error);
+}
+
+.division-load-error button {
+	width: fit-content;
+}
+
+.field-error {
+	margin: 0;
+}
+
 @media (max-width: 760px) {
 	.membership-admin-layout,
 	.membership-admin-controls,
