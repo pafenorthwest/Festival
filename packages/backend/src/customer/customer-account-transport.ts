@@ -249,7 +249,9 @@ export class CustomerAccountTransport {
 		const host = url.hostname.toLowerCase();
 		const domain = configuredDomain.toLowerCase();
 		const allowedShopifyHost =
-			host.endsWith(".shopify.com") || host.endsWith(".myshopify.com");
+			host === "shopify.com" ||
+			host.endsWith(".shopify.com") ||
+			host.endsWith(".myshopify.com");
 		if (
 			(host !== domain && !allowedShopifyHost) ||
 			/^\d+\.\d+\.\d+\.\d+$/.test(host) ||
