@@ -188,6 +188,26 @@ describe("CustomerAccountTransport", () => {
 		expect(requests).toBe(1);
 	});
 
+	it("allows Shopify's root host without allowing suffix lookalikes", () => {
+		const transport = new CustomerAccountTransport();
+		for (const url of [
+			"https://shopify.com/authentication/shop-1/oauth/authorize",
+			"https://accounts.shopify.com/authentication/shop-1/oauth/token",
+			"https://store.myshopify.com/customer/api/2026-07/graphql",
+		])
+			expect(() =>
+				transport.assertDestination(new URL(url), "store.myshopify.com"),
+			).not.toThrow();
+
+		for (const url of [
+			"https://evilshopify.com/auth",
+			"https://shopify.com.example.com/auth",
+		])
+			expect(() =>
+				transport.assertDestination(new URL(url), "store.myshopify.com"),
+			).toThrow("Unsafe Customer Account destination.");
+	});
+
 	it("does not cache a failed DNS validation", async () => {
 		let resolves = 0;
 		const transport = new CustomerAccountTransport({
