@@ -1,8 +1,4 @@
-import type {
-	MembershipEntitlementPeriod,
-	MembershipProductType,
-	OrganizationRole,
-} from "@festival/common";
+import type { OrganizationRole } from "@festival/common";
 
 export interface InviteDraft {
 	email: string;
@@ -32,8 +28,6 @@ export interface MembershipProductDraft {
 	name: string;
 	description: string;
 	price: string;
-	membershipType: MembershipProductType;
-	entitlementPeriod: MembershipEntitlementPeriod;
 }
 
 export type SignInModalKind = "create-org" | "invite";

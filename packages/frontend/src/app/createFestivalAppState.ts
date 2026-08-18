@@ -121,8 +121,6 @@ export function createFestivalAppState() {
 			name: "",
 			description: "",
 			price: "",
-			membershipType: "teacher",
-			entitlementPeriod: "1_year",
 		});
 	const [festivalNameTouched, setFestivalNameTouched] = createSignal(false);
 	const [createFestivalAttempted, setCreateFestivalAttempted] =
@@ -351,8 +349,6 @@ export function createFestivalAppState() {
 			name: "",
 			description: "",
 			price: "",
-			membershipType: "teacher",
-			entitlementPeriod: "1_year",
 		});
 		setFestivalNameTouched(false);
 		setCreateFestivalAttempted(false);

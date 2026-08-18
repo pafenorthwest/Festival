@@ -1,8 +1,9 @@
 import type {
 	AuthenticatedUser,
+	CreateEntitlementGrantSnapshotInput,
+	EntitlementClass,
+	EntitlementGrantSnapshot,
 	FestivalRecord,
-	MembershipEntitlementPeriod,
-	MembershipProductType,
 	OrganizationAdminUserEntry,
 	OrganizationDivision,
 	OrganizationInviteRecord,
@@ -109,8 +110,9 @@ export interface ProductRecord {
 	id: string;
 	organizationId: string;
 	productCategory: "membership";
-	membershipType: MembershipProductType;
-	entitlementPeriod: MembershipEntitlementPeriod;
+	entitlementClass: EntitlementClass;
+	durationDays: number;
+	isActive: boolean;
 	shopifyProductGid: string;
 	shopifyVariantGid: string;
 	productNameSnapshot: string;
@@ -120,8 +122,9 @@ export interface ProductRecord {
 
 export interface CreateMembershipProductRecordInput {
 	organizationId: string;
-	membershipType: MembershipProductType;
-	entitlementPeriod: MembershipEntitlementPeriod;
+	entitlementClass: EntitlementClass;
+	durationDays: number;
+	isActive: boolean;
 	shopifyProductGid: string;
 	shopifyVariantGid: string;
 	productNameSnapshot: string;
@@ -214,12 +217,19 @@ export interface OrganizationRepository {
 	createMembershipProductRecord(
 		input: CreateMembershipProductRecordInput,
 	): Promise<ProductRecord>;
+	updateMembershipProductRecord(input: {
+		organizationId: string;
+		productId: string;
+		productNameSnapshot?: string;
+		durationDays?: number;
+		isActive?: boolean;
+	}): Promise<ProductRecord | null>;
 	listMembershipProductRecords(
 		organizationId: string,
 	): Promise<ProductRecord[]>;
-	findMembershipProductRecordByType(
+	findMembershipProductRecordByClass(
 		organizationId: string,
-		membershipType: MembershipProductType,
+		entitlementClass: EntitlementClass,
 	): Promise<ProductRecord | null>;
 	findProductRecordByShopifyProductGid(
 		shopifyProductGid: string,
@@ -227,4 +237,11 @@ export interface OrganizationRepository {
 	findProductRecordByShopifyVariantGid(
 		shopifyVariantGid: string,
 	): Promise<ProductRecord | null>;
+	createEntitlementGrantSnapshot(
+		input: CreateEntitlementGrantSnapshotInput,
+	): Promise<EntitlementGrantSnapshot>;
+	listEntitlementGrantSnapshots(
+		organizationId: string,
+		customerId: string,
+	): Promise<EntitlementGrantSnapshot[]>;
 }

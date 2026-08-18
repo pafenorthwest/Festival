@@ -1,0 +1,152 @@
+# Code Review
+- Task name: teacher-membership-offering-entitlement-domain-model
+- Findings status: none
+
+## Context
+- Base branch: main
+- Diff command: `git diff --cached; git diff; inspect listed untracked files`
+- Changed files:
+  - `goals/task-manifest.csv`
+  - `goals/teacher-membership-offering-entitlement-domain-model/establish-goals.v0.md`
+  - `goals/teacher-membership-offering-entitlement-domain-model/establish-goals.v1.md`
+  - `goals/teacher-membership-offering-entitlement-domain-model/goals.v0.md`
+  - `goals/teacher-membership-offering-entitlement-domain-model/goals.v1.md`
+  - `packages/backend/src/repo/in-memory-organization-repository.ts`
+  - `packages/backend/src/repo/organization-repository.ts`
+  - `packages/backend/src/repo/postgres-organization-repository.ts`
+  - `packages/backend/src/routes/api-router.ts`
+  - `packages/backend/src/shopify/shopify-membership-product-service.ts`
+  - `packages/backend/tests/organization-routes.test.ts`
+  - `packages/backend/tests/product-repository.test.ts`
+  - `packages/backend/tests/shopify-membership-product-service.test.ts`
+  - `packages/common/src/entitlements.ts`
+  - `packages/common/src/index.ts`
+  - `packages/common/src/shopify.ts`
+  - `packages/common/tests/entitlements.test.ts`
+  - `packages/common/tests/shopify.test.ts`
+  - `packages/frontend/src/app/appTypes.ts`
+  - `packages/frontend/src/app/createFestivalActions.ts`
+  - `packages/frontend/src/app/createFestivalAppState.ts`
+  - `packages/frontend/src/pages/AdminMembershipProductsPage.tsx`
+  - `packages/frontend/src/pages/MembershipPage.tsx`
+  - `packages/frontend/tests/onboarding-integration.test.ts`
+  - `tasks/teacher-membership-offering-entitlement-domain-model/code-review.md`
+  - `tasks/teacher-membership-offering-entitlement-domain-model/spec.md`
+- Citation candidates (verify before use):
+  - `goals/task-manifest.csv:14-15`
+  - `packages/backend/src/repo/in-memory-organization-repository.ts:15-20`
+  - `packages/backend/src/repo/in-memory-organization-repository.ts:4-6`
+  - `packages/backend/src/repo/in-memory-organization-repository.ts:56-59`
+  - `packages/backend/src/repo/in-memory-organization-repository.ts:654-659`
+  - `packages/backend/src/repo/in-memory-organization-repository.ts:665-667`
+  - `packages/backend/src/repo/in-memory-organization-repository.ts:688-688`
+  - `packages/backend/src/repo/in-memory-organization-repository.ts:693-695`
+  - `packages/backend/src/repo/in-memory-organization-repository.ts:7-7`
+  - `packages/backend/src/repo/in-memory-organization-repository.ts:719-758`
+  - `packages/backend/src/repo/in-memory-organization-repository.ts:760-760`
+  - `packages/backend/src/repo/in-memory-organization-repository.ts:767-768`
+  - `packages/backend/src/repo/in-memory-organization-repository.ts:792-839`
+  - `packages/backend/src/repo/organization-repository.ts:113-115`
+  - `packages/backend/src/repo/organization-repository.ts:125-127`
+  - `packages/backend/src/repo/organization-repository.ts:220-226`
+  - `packages/backend/src/repo/organization-repository.ts:230-230`
+  - `packages/backend/src/repo/organization-repository.ts:232-232`
+  - `packages/backend/src/repo/organization-repository.ts:240-246`
+  - `packages/backend/src/repo/organization-repository.ts:3-5`
+  - `packages/backend/src/repo/organization-repository.ts:6-6`
+  - `packages/backend/src/repo/postgres-organization-repository.ts:137-139`
+  - `packages/backend/src/repo/postgres-organization-repository.ts:147-166`
+  - `packages/backend/src/repo/postgres-organization-repository.ts:1591-1593`
+  - `packages/backend/src/repo/postgres-organization-repository.ts:1598-1598`
+  - `packages/backend/src/repo/postgres-organization-repository.ts:1603-1605`
+  - `packages/backend/src/repo/postgres-organization-repository.ts:1614-1616`
+  - `packages/backend/src/repo/postgres-organization-repository.ts:1626-1667`
+  - `packages/backend/src/repo/postgres-organization-repository.ts:1678-1680`
+  - `packages/backend/src/repo/postgres-organization-repository.ts:1696-1696`
+  - `packages/backend/src/repo/postgres-organization-repository.ts:1698-1698`
+  - `packages/backend/src/repo/postgres-organization-repository.ts:1707-1709`
+  - `packages/backend/src/repo/postgres-organization-repository.ts:1718-1719`
+  - `packages/backend/src/repo/postgres-organization-repository.ts:1721-1721`
+  - `packages/backend/src/repo/postgres-organization-repository.ts:1737-1739`
+  - `packages/backend/src/repo/postgres-organization-repository.ts:1764-1766`
+  - `packages/backend/src/repo/postgres-organization-repository.ts:1780-1890`
+  - `packages/backend/src/repo/postgres-organization-repository.ts:20-23`
+  - `packages/backend/src/repo/postgres-organization-repository.ts:205-230`
+  - `packages/backend/src/repo/postgres-organization-repository.ts:296-297`
+  - `packages/backend/src/repo/postgres-organization-repository.ts:302-304`
+  - `packages/backend/src/repo/postgres-organization-repository.ts:4-7`
+  - `packages/backend/src/repo/postgres-organization-repository.ts:459-461`
+  - `packages/backend/src/repo/postgres-organization-repository.ts:469-541`
+  - `packages/backend/src/repo/postgres-organization-repository.ts:667-674`
+  - `packages/backend/src/repo/postgres-organization-repository.ts:8-8`
+  - `packages/backend/src/routes/api-router.ts:29-29`
+  - `packages/backend/src/routes/api-router.ts:70-73`
+  - `packages/backend/src/routes/api-router.ts:74-74`
+  - `packages/backend/src/shopify/shopify-membership-product-service.ts:137-137`
+  - `packages/backend/src/shopify/shopify-membership-product-service.ts:142-144`
+  - `packages/backend/src/shopify/shopify-membership-product-service.ts:220-222`
+  - `packages/backend/src/shopify/shopify-membership-product-service.ts:6-10`
+  - `packages/backend/tests/organization-routes.test.ts:1292-1294`
+  - `packages/backend/tests/organization-routes.test.ts:1312-1314`
+  - `packages/backend/tests/organization-routes.test.ts:1430-1432`
+  - `packages/backend/tests/organization-routes.test.ts:1441-1443`
+  - `packages/backend/tests/organization-routes.test.ts:1454-1456`
+  - `packages/backend/tests/organization-routes.test.ts:251-251`
+  - `packages/backend/tests/product-repository.test.ts:14-38`
+  - `packages/backend/tests/product-repository.test.ts:2-3`
+  - `packages/backend/tests/product-repository.test.ts:205-207`
+  - `packages/backend/tests/product-repository.test.ts:216-218`
+  - `packages/backend/tests/product-repository.test.ts:232-234`
+  - `packages/backend/tests/product-repository.test.ts:243-245`
+  - `packages/backend/tests/product-repository.test.ts:253-253`
+  - `packages/backend/tests/product-repository.test.ts:259-261`
+  - `packages/backend/tests/product-repository.test.ts:270-272`
+  - `packages/backend/tests/product-repository.test.ts:280-301`
+  - `packages/backend/tests/product-repository.test.ts:45-47`
+  - `packages/backend/tests/product-repository.test.ts:57-60`
+  - `packages/backend/tests/product-repository.test.ts:74-198`
+  - `packages/backend/tests/shopify-membership-product-service.test.ts:273-275`
+  - `packages/backend/tests/shopify-membership-product-service.test.ts:279-285`
+  - `packages/backend/tests/shopify-membership-product-service.test.ts:313-315`
+  - `packages/backend/tests/shopify-membership-product-service.test.ts:341-341`
+  - `packages/backend/tests/shopify-membership-product-service.test.ts:343-347`
+  - `packages/backend/tests/shopify-membership-product-service.test.ts:42-42`
+  - `packages/common/src/index.ts:4-4`
+  - `packages/common/src/shopify.ts:103-103`
+  - `packages/common/src/shopify.ts:120-120`
+  - `packages/common/src/shopify.ts:130-132`
+  - `packages/common/src/shopify.ts:151-156`
+  - `packages/common/src/shopify.ts:224-224`
+  - `packages/common/src/shopify.ts:238-238`
+  - `packages/common/src/shopify.ts:266-266`
+  - `packages/common/src/shopify.ts:281-282`
+  - `packages/common/tests/shopify.test.ts:106-117`
+  - `packages/common/tests/shopify.test.ts:123-123`
+  - `packages/common/tests/shopify.test.ts:131-131`
+  - `packages/common/tests/shopify.test.ts:140-140`
+  - `packages/common/tests/shopify.test.ts:150-150`
+  - `packages/common/tests/shopify.test.ts:156-156`
+  - `packages/common/tests/shopify.test.ts:160-165`
+  - `packages/common/tests/shopify.test.ts:168-168`
+  - `packages/common/tests/shopify.test.ts:4-4`
+  - `packages/frontend/src/app/appTypes.ts:1-1`
+  - `packages/frontend/src/app/appTypes.ts:30-30`
+  - `packages/frontend/src/app/createFestivalActions.ts:374-374`
+  - `packages/frontend/src/app/createFestivalAppState.ts:123-123`
+  - `packages/frontend/src/app/createFestivalAppState.ts:351-351`
+  - `packages/frontend/src/pages/AdminMembershipProductsPage.tsx:191-191`
+  - `packages/frontend/src/pages/AdminMembershipProductsPage.tsx:77-78`
+  - `packages/frontend/src/pages/MembershipPage.tsx:10-10`
+  - `packages/frontend/src/pages/MembershipPage.tsx:68-68`
+  - `packages/frontend/tests/onboarding-integration.test.ts:247-247`
+  - `packages/frontend/tests/onboarding-integration.test.ts:297-297`
+
+## Findings JSON
+```json
+[]
+```
+
+## Verdict
+- Verdict: patch is correct
+- Confidence: 0.98
+- Justification: Shared validation now enforces end-date/duration equality and rejects offset-less paid timestamps. The operator explicitly accepted the weaker PostgreSQL date-ordering constraint and the test-only in-memory concurrent-create limitation as documented exceptions; production constructs the PostgreSQL repository, whose partial unique index enforces one active offering. No remaining actionable findings were identified in the current diff.
