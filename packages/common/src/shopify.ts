@@ -101,19 +101,6 @@ export interface ShopifySettingsValidation {
 	clientSecret?: string;
 }
 
-export const MEMBERSHIP_PRODUCT_TYPES = ["teacher", "accompanist"] as const;
-
-export type MembershipProductType = (typeof MEMBERSHIP_PRODUCT_TYPES)[number];
-
-export const MEMBERSHIP_ENTITLEMENT_PERIODS = [
-	"1_day",
-	"1_month",
-	"1_year",
-] as const;
-
-export type MembershipEntitlementPeriod =
-	(typeof MEMBERSHIP_ENTITLEMENT_PERIODS)[number];
-
 export const SHOPIFY_PRODUCT_STATUSES = [
 	"ACTIVE",
 	"DRAFT",
@@ -131,8 +118,6 @@ export interface CreateMembershipProductInput {
 	name: string;
 	description?: string;
 	price: string;
-	membershipType: MembershipProductType;
-	entitlementPeriod: MembershipEntitlementPeriod;
 }
 
 export interface MembershipProductSummary {
@@ -142,8 +127,9 @@ export interface MembershipProductSummary {
 	shopifyProductGid?: string;
 	shopifyVariantGid?: string;
 	variantName: "Standard";
-	membershipType: MembershipProductType;
-	entitlementPeriod: MembershipEntitlementPeriod;
+	entitlementClass: EntitlementClass;
+	durationDays: number;
+	isActive: boolean;
 	price: MoneyPayload;
 	status?: ShopifyProductStatus;
 	createdAtIso: string;
@@ -160,6 +146,12 @@ export interface MembershipProductsListResponse {
 		name: string;
 	};
 	membershipProducts: MembershipProductSummary[];
+}
+
+export function isMembershipProductPurchasable(
+	membershipProduct: Pick<MembershipProductSummary, "isActive" | "status">,
+): boolean {
+	return membershipProduct.isActive && membershipProduct.status === "ACTIVE";
 }
 
 export type MembershipProductValidation =
@@ -230,20 +222,6 @@ export function validateShopifySettingsInput(
 	};
 }
 
-function isMembershipProductType(
-	value: string,
-): value is MembershipProductType {
-	return MEMBERSHIP_PRODUCT_TYPES.includes(value as MembershipProductType);
-}
-
-function isMembershipEntitlementPeriod(
-	value: string,
-): value is MembershipEntitlementPeriod {
-	return MEMBERSHIP_ENTITLEMENT_PERIODS.includes(
-		value as MembershipEntitlementPeriod,
-	);
-}
-
 export function validateMembershipProductInput(
 	input: unknown,
 ): MembershipProductValidation {
@@ -258,14 +236,6 @@ export function validateMembershipProductInput(
 			: undefined;
 	const price =
 		typeof candidate.price === "string" ? candidate.price.trim() : "";
-	const membershipType =
-		typeof candidate.membershipType === "string"
-			? candidate.membershipType
-			: "";
-	const entitlementPeriod =
-		typeof candidate.entitlementPeriod === "string"
-			? candidate.entitlementPeriod
-			: "";
 	const errors: string[] = [];
 	const normalizedInput: Partial<CreateMembershipProductInput> = {
 		name,
@@ -294,20 +264,6 @@ export function validateMembershipProductInput(
 		);
 	}
 
-	if (isMembershipProductType(membershipType)) {
-		normalizedInput.membershipType = membershipType;
-	} else {
-		errors.push("Membership product type must be teacher or accompanist.");
-	}
-
-	if (isMembershipEntitlementPeriod(entitlementPeriod)) {
-		normalizedInput.entitlementPeriod = entitlementPeriod;
-	} else {
-		errors.push(
-			"Membership entitlement period must be 1_day, 1_month, or 1_year.",
-		);
-	}
-
 	if (errors.length > 0) {
 		return {
 			valid: false,
@@ -322,3 +278,5 @@ export function validateMembershipProductInput(
 		input: normalizedInput as CreateMembershipProductInput,
 	};
 }
+
+import type { EntitlementClass } from "./entitlements.js";

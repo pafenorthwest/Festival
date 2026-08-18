@@ -74,8 +74,8 @@ export function AdminMembershipProductsPage(
 												<div>
 													<strong>{membershipProduct.name}</strong>
 													<span>
-														{formatOption(membershipProduct.membershipType)} ·{" "}
-														{formatOption(membershipProduct.entitlementPeriod)}
+														{formatOption(membershipProduct.entitlementClass)} ·{" "}
+														{membershipProduct.durationDays} days
 													</span>
 												</div>
 												<div class="admin-membership-meta">
@@ -188,45 +188,7 @@ export function AdminMembershipProductsPage(
 								}
 							/>
 						</label>
-						<div class="membership-admin-controls">
-							<label class="field">
-								<span>Type</span>
-								<select
-									value={props.app.membershipProductDraft().membershipType}
-									onInput={(event) =>
-										props.app.setMembershipProductDraft((current) => ({
-											...current,
-											membershipType: event.currentTarget.value as
-												| "teacher"
-												| "accompanist",
-										}))
-									}
-								>
-									<option value="teacher">Teacher</option>
-									<option value="accompanist">Accompanist</option>
-								</select>
-							</label>
-							<label class="field">
-								<span>Entitlement</span>
-								<select
-									value={props.app.membershipProductDraft().entitlementPeriod}
-									onInput={(event) =>
-										props.app.setMembershipProductDraft((current) => ({
-											...current,
-											entitlementPeriod: event.currentTarget.value as
-												| "1_day"
-												| "1_month"
-												| "1_year",
-										}))
-									}
-								>
-									<option value="1_day">1 day</option>
-									<option value="1_month">1 month</option>
-									<option value="1_year">1 year</option>
-								</select>
-							</label>
-						</div>
-						<p class="muted">Plan: Standard</p>
+						<p class="muted">Teacher Membership · 365 days · Plan: Standard</p>
 						<Show when={props.app.shouldShowMembershipProductValidation()}>
 							<p class="shopify-error-text">
 								{props.app.membershipProductValidationMessage()}

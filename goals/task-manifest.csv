@@ -11,3 +11,4 @@ number,taskname,first_create_date,first_create_hhmmss,first_create_git_hash
 10,teacher-membership-mvp-issue-organization,2026-08-15,000000,-------
 11,admin-divisions-card,2026-08-16,000000,-------
 12,organization-divisions-timezone-api,2026-08-16,000000,-------
+14,teacher-membership-offering-entitlement-domain-model,2026-08-18,000000,-------

@@ -245,8 +245,6 @@ describe("organization onboarding integration", () => {
 			name: "Teacher Membership",
 			description: "Annual membership",
 			price: "75.00",
-			membershipType: "teacher",
-			entitlementPeriod: "1_year",
 		});
 		await dismissWelcome("token-7", "pafe");
 		await getShopifySettings("token-9", "pafe");
@@ -297,8 +295,6 @@ describe("organization onboarding integration", () => {
 		await createMembershipProduct("token", "pafe", {
 			name: "Teacher Membership",
 			price: "75.00",
-			membershipType: "teacher",
-			entitlementPeriod: "1_year",
 		});
 		await getShopifySettings("token", "pafe");
 		await saveShopifySettings("token", "pafe", {

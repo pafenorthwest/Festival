@@ -7,7 +7,7 @@ interface MembershipPageProps {
 	app: FestivalAppController;
 }
 
-function formatMembershipType(value: string): string {
+function formatEntitlementClass(value: string): string {
 	return value
 		.split("_")
 		.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
@@ -65,7 +65,7 @@ export function MembershipPage(props: MembershipPageProps) {
 						<article class="membership-product-card">
 							<div>
 								<p class="membership-product-type">
-									{formatMembershipType(membershipProduct.membershipType)}
+									{formatEntitlementClass(membershipProduct.entitlementClass)}
 								</p>
 								<h2>{membershipProduct.name}</h2>
 							</div>

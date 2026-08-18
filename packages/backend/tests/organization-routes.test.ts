@@ -249,8 +249,6 @@ function membershipProductPayload(overrides: Record<string, unknown> = {}) {
 		name: "Teacher Membership",
 		description: "Annual membership for teachers.",
 		price: "75.00",
-		membershipType: "teacher",
-		entitlementPeriod: "1_year",
 		...overrides,
 	};
 }
@@ -1291,8 +1289,9 @@ describe("organization routes", () => {
 		);
 		await repository.createMembershipProductRecord({
 			organizationId: organization.id,
-			membershipType: "teacher",
-			entitlementPeriod: "1_year",
+			entitlementClass: "teacher_membership",
+			durationDays: 365,
+			isActive: true,
 			shopifyProductGid: "gid://shopify/Product/generated",
 			shopifyVariantGid: "gid://shopify/ProductVariant/generated",
 			productNameSnapshot: "Teacher Membership",
@@ -1310,8 +1309,9 @@ describe("organization routes", () => {
 			membershipProducts: [
 				{
 					name: "Teacher Membership",
-					membershipType: "teacher",
-					entitlementPeriod: "1_year",
+					entitlementClass: "teacher_membership",
+					durationDays: 365,
+					isActive: true,
 					shopifyProductGid: "gid://shopify/Product/generated",
 					shopifyVariantGid: "gid://shopify/ProductVariant/generated",
 					price: { amount: "75.00", currencyCode: "USD" },
@@ -1427,6 +1427,9 @@ describe("organization routes", () => {
 				shopifyProductGid: string;
 				shopifyVariantGid: string;
 				variantName: string;
+				entitlementClass: string;
+				durationDays: number;
+				isActive: boolean;
 				price: { amount: string; currencyCode: string };
 			};
 		};
@@ -1435,6 +1438,9 @@ describe("organization routes", () => {
 			shopifyProductGid: "gid://shopify/Product/generated",
 			shopifyVariantGid: "gid://shopify/ProductVariant/generated",
 			variantName: "Standard",
+			entitlementClass: "teacher_membership",
+			durationDays: 365,
+			isActive: true,
 			price: { amount: "75.00", currencyCode: "USD" },
 		});
 		expect(shopifyProductClient.readProductGids).toEqual([
@@ -1445,6 +1451,9 @@ describe("organization routes", () => {
 		);
 		expect(records).toHaveLength(1);
 		expect(records[0]).toMatchObject({
+			entitlementClass: "teacher_membership",
+			durationDays: 365,
+			isActive: true,
 			shopifyProductGid: "gid://shopify/Product/generated",
 			shopifyVariantGid: "gid://shopify/ProductVariant/generated",
 			productNameSnapshot: "Teacher Membership",

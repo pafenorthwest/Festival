@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type {
 	AuthenticatedUser,
+	CreateEntitlementGrantSnapshotInput,
+	EntitlementClass,
+	EntitlementGrantSnapshot,
 	FestivalRecord,
-	MembershipProductType,
 	OrganizationAdminUserEntry,
 	OrganizationDivision,
 	OrganizationInviteRecord,
@@ -10,7 +12,12 @@ import type {
 	OrganizationRecord,
 	OrganizationUserRecord,
 } from "@festival/common";
-import { EMPTY_SHOPIFY_CAPABILITIES } from "@festival/common";
+import {
+	assertValidEntitlementDurationDays,
+	assertValidEntitlementGrantSnapshotInput,
+	EMPTY_SHOPIFY_CAPABILITIES,
+	TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+} from "@festival/common";
 import type {
 	CreateFestivalRecordInput,
 	CreateInviteRecordInput,
@@ -46,6 +53,10 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		ShopifyIntegrationRecord
 	>();
 	private readonly products = new Map<string, ProductRecord>();
+	private readonly entitlementGrants = new Map<
+		string,
+		EntitlementGrantSnapshot
+	>();
 	private readonly divisions = new Map<
 		string,
 		OrganizationDivision & { normalizedName: string }
@@ -640,12 +651,20 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 	async createMembershipProductRecord(
 		input: CreateMembershipProductRecordInput,
 	): Promise<ProductRecord> {
+		if (!this.organizations.has(input.organizationId)) {
+			throw new Error("Organization not found.");
+		}
+		if (input.entitlementClass !== TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS) {
+			throw new Error("Entitlement class must be teacher_membership.");
+		}
 		if (
 			[...this.products.values()].some(
 				(product) =>
 					product.organizationId === input.organizationId &&
 					product.productCategory === "membership" &&
-					product.membershipType === input.membershipType,
+					product.entitlementClass === input.entitlementClass &&
+					product.isActive &&
+					input.isActive,
 			)
 		) {
 			throw new Error(
@@ -666,12 +685,14 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		}
 
 		const now = new Date().toISOString();
+		assertValidEntitlementDurationDays(input.durationDays);
 		const record: ProductRecord = {
 			id: randomUUID(),
 			organizationId: input.organizationId,
 			productCategory: "membership",
-			membershipType: input.membershipType,
-			entitlementPeriod: input.entitlementPeriod,
+			entitlementClass: input.entitlementClass,
+			durationDays: input.durationDays,
+			isActive: input.isActive,
 			shopifyProductGid: input.shopifyProductGid,
 			shopifyVariantGid: input.shopifyVariantGid,
 			productNameSnapshot: input.productNameSnapshot,
@@ -695,16 +716,56 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			.sort((a, b) => a.createdAtIso.localeCompare(b.createdAtIso));
 	}
 
-	async findMembershipProductRecordByType(
+	async updateMembershipProductRecord(input: {
+		organizationId: string;
+		productId: string;
+		productNameSnapshot?: string;
+		durationDays?: number;
+		isActive?: boolean;
+	}): Promise<ProductRecord | null> {
+		const current = this.products.get(input.productId);
+		if (!current || current.organizationId !== input.organizationId)
+			return null;
+		if (input.durationDays !== undefined) {
+			assertValidEntitlementDurationDays(input.durationDays);
+		}
+		if (
+			input.isActive === true &&
+			[...this.products.values()].some(
+				(product) =>
+					product.id !== current.id &&
+					product.organizationId === input.organizationId &&
+					product.entitlementClass === current.entitlementClass &&
+					product.isActive,
+			)
+		) {
+			throw new Error(
+				"Membership product already exists for this organization.",
+			);
+		}
+		const updated: ProductRecord = {
+			...current,
+			productNameSnapshot:
+				input.productNameSnapshot ?? current.productNameSnapshot,
+			durationDays: input.durationDays ?? current.durationDays,
+			isActive: input.isActive ?? current.isActive,
+			updatedAtIso: new Date().toISOString(),
+		};
+		this.products.set(updated.id, updated);
+		return { ...updated };
+	}
+
+	async findMembershipProductRecordByClass(
 		organizationId: string,
-		membershipType: MembershipProductType,
+		entitlementClass: EntitlementClass,
 	): Promise<ProductRecord | null> {
 		return (
 			[...this.products.values()].find(
 				(product) =>
 					product.organizationId === organizationId &&
 					product.productCategory === "membership" &&
-					product.membershipType === membershipType,
+					product.entitlementClass === entitlementClass &&
+					product.isActive,
 			) ?? null
 		);
 	}
@@ -727,5 +788,53 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 				(product) => product.shopifyVariantGid === shopifyVariantGid,
 			) ?? null
 		);
+	}
+
+	async createEntitlementGrantSnapshot(
+		input: CreateEntitlementGrantSnapshotInput,
+	): Promise<EntitlementGrantSnapshot> {
+		assertValidEntitlementGrantSnapshotInput(input);
+		const offering = this.products.get(input.offeringId);
+		if (!offering || offering.organizationId !== input.organizationId) {
+			throw new Error(
+				"Entitlement offering was not found for this Organization.",
+			);
+		}
+		const division = this.divisions.get(input.divisionId);
+		if (!division || division.organizationId !== input.organizationId) {
+			throw new Error(
+				"Entitlement division was not found for this Organization.",
+			);
+		}
+		if (
+			[...this.entitlementGrants.values()].some(
+				(grant) =>
+					grant.checkoutIntentId === input.checkoutIntentId ||
+					grant.shopifyOrderLineGid === input.shopifyOrderLineGid,
+			)
+		) {
+			throw new Error("Entitlement grant correlation is already recorded.");
+		}
+		const record: EntitlementGrantSnapshot = Object.freeze({
+			...input,
+			id: randomUUID(),
+			createdAtIso: new Date().toISOString(),
+		});
+		this.entitlementGrants.set(record.id, record);
+		return { ...record };
+	}
+
+	async listEntitlementGrantSnapshots(
+		organizationId: string,
+		customerId: string,
+	): Promise<EntitlementGrantSnapshot[]> {
+		return [...this.entitlementGrants.values()]
+			.filter(
+				(grant) =>
+					grant.organizationId === organizationId &&
+					grant.customerId === customerId,
+			)
+			.sort((a, b) => a.createdAtIso.localeCompare(b.createdAtIso))
+			.map((grant) => ({ ...grant }));
 	}
 }

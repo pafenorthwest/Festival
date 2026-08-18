@@ -372,8 +372,6 @@ export function createFestivalActions(
 				name: "",
 				description: "",
 				price: "",
-				membershipType: "teacher",
-				entitlementPeriod: "1_year",
 			});
 			state.setCreateMembershipProductAttempted(false);
 			await loaders.loadMembershipProducts(currentRoute.slug);

@@ -3,7 +3,11 @@ import type {
 	ShopifyAdminCapability,
 	ShopifyFailureCategory,
 } from "@festival/common";
-import { validateMembershipProductInput } from "@festival/common";
+import {
+	INITIAL_TEACHER_MEMBERSHIP_DURATION_DAYS,
+	TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+	validateMembershipProductInput,
+} from "@festival/common";
 import type { TenantContext } from "../auth/tenant-context.js";
 import { AppError } from "../errors/app-error.js";
 import type {
@@ -130,13 +134,14 @@ function toSummary(
 ): MembershipProductSummary {
 	return {
 		id: record.id,
-		name: product.title,
+		name: record.productNameSnapshot,
 		description: product.description,
 		shopifyProductGid: product.id,
 		shopifyVariantGid: variant.id,
 		variantName: FIXED_OPTION_VALUE,
-		membershipType: record.membershipType,
-		entitlementPeriod: record.entitlementPeriod,
+		entitlementClass: record.entitlementClass,
+		durationDays: record.durationDays,
+		isActive: record.isActive,
 		price: variant.price,
 		status: product.status,
 		createdAtIso: record.createdAtIso,
@@ -212,8 +217,9 @@ export class ShopifyMembershipProductService {
 
 			const record = await this.repository.createMembershipProductRecord({
 				organizationId: tenant.organization.id,
-				membershipType: validation.input.membershipType,
-				entitlementPeriod: validation.input.entitlementPeriod,
+				entitlementClass: TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+				durationDays: INITIAL_TEACHER_MEMBERSHIP_DURATION_DAYS,
+				isActive: true,
 				shopifyProductGid: confirmedProduct.id,
 				shopifyVariantGid: variant.id,
 				productNameSnapshot: confirmedProduct.title,

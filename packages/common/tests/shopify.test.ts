@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
 	deriveShopifyCapabilities,
+	isMembershipProductPurchasable,
 	normalizeEffectiveShopifyScopes,
 	normalizeShopifyStoreDomain,
 	validateMembershipProductInput,
@@ -102,14 +103,24 @@ describe("Shopify settings contract", () => {
 });
 
 describe("Shopify membership product contract", () => {
+	it("requires both Festival and current Shopify availability", () => {
+		expect(
+			isMembershipProductPurchasable({ isActive: true, status: "ACTIVE" }),
+		).toBeTrue();
+		expect(
+			isMembershipProductPurchasable({ isActive: false, status: "ACTIVE" }),
+		).toBeFalse();
+		expect(
+			isMembershipProductPurchasable({ isActive: true, status: "DRAFT" }),
+		).toBeFalse();
+	});
+
 	it("normalizes valid membership product creation input", () => {
 		expect(
 			validateMembershipProductInput({
 				name: " Teacher Membership ",
 				description: " Annual membership. ",
 				price: "75.00",
-				membershipType: "teacher",
-				entitlementPeriod: "1_year",
 			}),
 		).toEqual({
 			valid: true,
@@ -118,8 +129,6 @@ describe("Shopify membership product contract", () => {
 				name: "Teacher Membership",
 				description: "Annual membership.",
 				price: "75.00",
-				membershipType: "teacher",
-				entitlementPeriod: "1_year",
 			},
 		});
 	});
@@ -129,8 +138,6 @@ describe("Shopify membership product contract", () => {
 			validateMembershipProductInput({
 				name: " ",
 				price: "75.00",
-				membershipType: "teacher",
-				entitlementPeriod: "1_year",
 			}).errors,
 		).toContain("Membership product name is required.");
 	});
@@ -141,25 +148,24 @@ describe("Shopify membership product contract", () => {
 				validateMembershipProductInput({
 					name: "Teacher Membership",
 					price,
-					membershipType: "teacher",
-					entitlementPeriod: "1_year",
 				}).valid,
 			).toBeFalse();
 		}
 	});
 
-	it("rejects unsupported membership product options", () => {
+	it("does not accept entitlement authority fields from browser input", () => {
 		const result = validateMembershipProductInput({
 			name: "Teacher Membership",
 			price: "75.00",
-			membershipType: "student",
-			entitlementPeriod: "2_years",
+			organizationId: "attacker-org",
+			entitlementClass: "attacker_class",
+			durationDays: 1,
+			shopifyProductGid: "gid://shopify/Product/attacker",
+			shopifyVariantGid: "gid://shopify/ProductVariant/attacker",
+			currencyCode: "ZZZ",
 		});
 
-		expect(result.errors).toEqual([
-			"Membership product type must be teacher or accompanist.",
-			"Membership entitlement period must be 1_day, 1_month, or 1_year.",
-		]);
+		expect(result.valid).toBeTrue();
 		expect(result.input).toEqual({
 			name: "Teacher Membership",
 			price: "75.00",

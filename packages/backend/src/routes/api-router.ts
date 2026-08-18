@@ -27,26 +27,6 @@ import type { OrganizationService } from "../services/organization-service.js";
 import type { ShopifyIntegrationService } from "../shopify/shopify-integration-service.js";
 import type { ShopifyMembershipProductService } from "../shopify/shopify-membership-product-service.js";
 
-const FORBIDDEN_MEMBERSHIP_PRODUCT_FIELDS = [
-	"organizationId",
-	"shopifyProductGid",
-	"shopifyVariantGid",
-	"variantName",
-	"storeDomain",
-	"clientId",
-	"clientSecret",
-	"credentials",
-	"shopGid",
-	"verifiedShopGid",
-	"verifiedShopDomain",
-	"grantedScopes",
-	"scope",
-	"capability",
-	"accessToken",
-	"token",
-	"integrationVersion",
-] as const;
-
 const ALLOWED_SHOPIFY_SETTINGS_FIELDS = new Set([
 	"storeUrl",
 	"clientId",
@@ -87,19 +67,11 @@ function assertNoExtraShopifySettingsFields(payload: unknown): void {
 }
 
 function assertNoForbiddenMembershipProductFields(payload: unknown): void {
-	if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-		return;
-	}
-
-	const forbiddenFields = FORBIDDEN_MEMBERSHIP_PRODUCT_FIELDS.filter((field) =>
-		Object.hasOwn(payload, field),
+	assertAllowedFields(
+		payload,
+		["name", "description", "price"],
+		"Membership product request",
 	);
-	if (forbiddenFields.length > 0) {
-		throw new AppError(
-			`Membership product request cannot include browser-controlled fields: ${forbiddenFields.join(", ")}.`,
-			400,
-		);
-	}
 }
 
 function assertNoBearerPrincipal(value: string | undefined): void {

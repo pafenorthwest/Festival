@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type {
 	AuthenticatedUser,
+	CreateEntitlementGrantSnapshotInput,
+	EntitlementClass,
+	EntitlementGrantSnapshot,
+	EntitlementGrantStatus,
 	FestivalRecord,
-	MembershipEntitlementPeriod,
-	MembershipProductType,
 	OrganizationAdminUserEntry,
 	OrganizationDivision,
 	OrganizationInviteRecord,
@@ -14,6 +16,10 @@ import type {
 	ShopifyCapabilityDiagnostics,
 	ShopifyFailureCategory,
 	ShopifyVerificationStatus,
+} from "@festival/common";
+import {
+	assertValidEntitlementDurationDays,
+	assertValidEntitlementGrantSnapshotInput,
 } from "@festival/common";
 import { sql } from "bun";
 import type {
@@ -128,13 +134,34 @@ interface ProductRow {
 	id: string;
 	organization_id: string;
 	product_category: "membership";
-	membership_type: MembershipProductType;
-	entitlement_period: MembershipEntitlementPeriod;
+	entitlement_class: EntitlementClass;
+	duration_days: number;
+	is_active: boolean;
 	shopify_product_gid: string;
 	shopify_variant_gid: string;
 	product_name_snapshot: string;
 	created_at: string;
 	updated_at: string;
+}
+
+interface EntitlementGrantRow {
+	id: string;
+	organization_id: string;
+	customer_id: string;
+	entitlement_class: EntitlementClass;
+	offering_id: string;
+	duration_days: number;
+	division_id: string;
+	division_name_snapshot: string;
+	paid_amount: string;
+	paid_currency_code: string;
+	checkout_intent_id: string;
+	shopify_order_gid: string;
+	shopify_order_line_gid: string;
+	starts_on: string;
+	ends_on: string;
+	status: EntitlementGrantStatus;
+	created_at: string;
 }
 
 function sanitizeSchemaName(schema: string): string {
@@ -173,6 +200,32 @@ function mapDivision(row: DivisionRow): OrganizationDivision {
 		createdAtIso: row.created_at,
 		updatedAtIso: row.updated_at,
 	};
+}
+
+function mapEntitlementGrant(
+	row: EntitlementGrantRow,
+): EntitlementGrantSnapshot {
+	const grant: EntitlementGrantSnapshot = {
+		id: row.id,
+		organizationId: row.organization_id,
+		customerId: row.customer_id,
+		entitlementClass: row.entitlement_class,
+		offeringId: row.offering_id,
+		durationDays: Number(row.duration_days),
+		divisionId: row.division_id,
+		divisionNameSnapshot: row.division_name_snapshot,
+		paidAmount: row.paid_amount,
+		paidCurrencyCode: row.paid_currency_code,
+		checkoutIntentId: row.checkout_intent_id,
+		shopifyOrderGid: row.shopify_order_gid,
+		shopifyOrderLineGid: row.shopify_order_line_gid,
+		startsOn: row.starts_on,
+		endsOn: row.ends_on,
+		status: row.status,
+		createdAtIso: row.created_at,
+	};
+	assertValidEntitlementGrantSnapshotInput(grant);
+	return grant;
 }
 
 function mapUser(row: {
@@ -240,12 +293,15 @@ function mapShopifyIntegration(
 }
 
 function mapProduct(row: ProductRow): ProductRecord {
+	const durationDays = Number(row.duration_days);
+	assertValidEntitlementDurationDays(durationDays);
 	return {
 		id: row.id,
 		organizationId: row.organization_id,
 		productCategory: row.product_category,
-		membershipType: row.membership_type,
-		entitlementPeriod: row.entitlement_period,
+		entitlementClass: row.entitlement_class,
+		durationDays,
+		isActive: row.is_active,
 		shopifyProductGid: row.shopify_product_gid,
 		shopifyVariantGid: row.shopify_variant_gid,
 		productNameSnapshot: row.product_name_snapshot,
@@ -400,6 +456,9 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				product_category TEXT NOT NULL,
 				membership_type TEXT NULL,
 				entitlement_period TEXT NULL,
+				entitlement_class TEXT NOT NULL,
+				duration_days INTEGER NOT NULL,
+				is_active BOOLEAN NOT NULL DEFAULT TRUE,
 				shopify_product_gid TEXT NOT NULL,
 				shopify_variant_gid TEXT NOT NULL,
 				product_name_snapshot TEXT NOT NULL,
@@ -407,19 +466,79 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 				CONSTRAINT products_product_category_check
 					CHECK (product_category IN ('membership')),
-				CONSTRAINT products_membership_type_check
-					CHECK (
-						membership_type IS NULL OR membership_type IN ('teacher', 'accompanist')
-					),
-				CONSTRAINT products_entitlement_period_check
-					CHECK (
-						entitlement_period IS NULL OR entitlement_period IN ('1_day', '1_month', '1_year')
-					),
-				CONSTRAINT products_membership_fields_check
-					CHECK (
-						product_category <> 'membership'
-						OR (membership_type IS NOT NULL AND entitlement_period IS NOT NULL)
-					)
+				CONSTRAINT products_entitlement_class_check
+					CHECK (entitlement_class = 'teacher_membership'),
+				CONSTRAINT products_duration_days_check
+					CHECK (duration_days > 0 AND duration_days <= 36500)
+			);
+
+			ALTER TABLE ${schema}.products
+				ADD COLUMN IF NOT EXISTS entitlement_class TEXT NULL,
+				ADD COLUMN IF NOT EXISTS duration_days INTEGER NULL,
+				ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+
+			UPDATE ${schema}.products
+			SET is_active = FALSE
+			WHERE entitlement_class IS NULL
+				AND membership_type IS NOT NULL
+				AND membership_type <> 'teacher';
+
+			UPDATE ${schema}.products
+			SET
+				entitlement_class = COALESCE(entitlement_class, 'teacher_membership'),
+				duration_days = COALESCE(
+					duration_days,
+					CASE entitlement_period
+						WHEN '1_day' THEN 1
+						WHEN '1_month' THEN 30
+						WHEN '1_year' THEN 365
+						ELSE 365
+					END
+				)
+			WHERE product_category = 'membership';
+
+			ALTER TABLE ${schema}.products
+				ALTER COLUMN entitlement_class SET NOT NULL,
+				ALTER COLUMN duration_days SET NOT NULL,
+				DROP CONSTRAINT IF EXISTS products_membership_type_check,
+				DROP CONSTRAINT IF EXISTS products_entitlement_period_check,
+				DROP CONSTRAINT IF EXISTS products_membership_fields_check,
+				DROP CONSTRAINT IF EXISTS products_entitlement_class_check,
+				DROP CONSTRAINT IF EXISTS products_duration_days_check;
+
+			ALTER TABLE ${schema}.products
+				ADD CONSTRAINT products_entitlement_class_check
+					CHECK (entitlement_class = 'teacher_membership'),
+				ADD CONSTRAINT products_duration_days_check
+					CHECK (duration_days > 0 AND duration_days <= 36500);
+
+			CREATE TABLE IF NOT EXISTS ${schema}.entitlement_grants (
+				id TEXT PRIMARY KEY,
+				organization_id TEXT NOT NULL REFERENCES ${schema}.organizations (id) ON DELETE CASCADE,
+				customer_id TEXT NOT NULL,
+				entitlement_class TEXT NOT NULL,
+				offering_id TEXT NOT NULL REFERENCES ${schema}.products (id),
+				duration_days INTEGER NOT NULL,
+				division_id TEXT NOT NULL REFERENCES ${schema}.organization_divisions (id),
+				division_name_snapshot TEXT NOT NULL,
+				paid_amount TEXT NOT NULL,
+				paid_currency_code TEXT NOT NULL,
+				checkout_intent_id TEXT NOT NULL UNIQUE,
+				shopify_order_gid TEXT NOT NULL,
+				shopify_order_line_gid TEXT NOT NULL UNIQUE,
+				starts_on DATE NOT NULL,
+				ends_on DATE NOT NULL,
+				status TEXT NOT NULL,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				CONSTRAINT entitlement_grants_class_check
+					CHECK (entitlement_class = 'teacher_membership'),
+				CONSTRAINT entitlement_grants_duration_check
+					CHECK (duration_days > 0 AND duration_days <= 36500),
+				CONSTRAINT entitlement_grants_currency_check
+					CHECK (paid_currency_code ~ '^[A-Z]{3}$'),
+				CONSTRAINT entitlement_grants_dates_check CHECK (ends_on > starts_on),
+				CONSTRAINT entitlement_grants_status_check
+					CHECK (status IN ('active', 'expired', 'revoked'))
 			);
 
 			ALTER TABLE ${schema}.users
@@ -545,9 +664,14 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			CREATE UNIQUE INDEX IF NOT EXISTS idx_products_shopify_product_variant_gid
 				ON ${schema}.products (shopify_product_gid, shopify_variant_gid);
 
-			CREATE UNIQUE INDEX IF NOT EXISTS idx_products_org_membership_type
-				ON ${schema}.products (organization_id, membership_type)
-				WHERE product_category = 'membership';
+			DROP INDEX IF EXISTS ${schema}.idx_products_org_membership_type;
+
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_products_org_active_entitlement_class
+				ON ${schema}.products (organization_id, entitlement_class)
+				WHERE product_category = 'membership' AND is_active;
+
+			CREATE INDEX IF NOT EXISTS idx_entitlement_grants_tenant_customer
+				ON ${schema}.entitlement_grants (organization_id, customer_id, created_at);
 		`);
 	}
 
@@ -1464,19 +1588,21 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				id,
 				organization_id,
 				product_category,
-				membership_type,
-				entitlement_period,
+				entitlement_class,
+				duration_days,
+				is_active,
 				shopify_product_gid,
 				shopify_variant_gid,
 				product_name_snapshot,
 				updated_at
-			) VALUES ($1, $2, 'membership', $3, $4, $5, $6, $7, NOW())
+			) VALUES ($1, $2, 'membership', $3, $4, $5, $6, $7, $8, NOW())
 			RETURNING
 				id,
 				organization_id,
 				product_category,
-				membership_type,
-				entitlement_period,
+				entitlement_class,
+				duration_days,
+				is_active,
 				shopify_product_gid,
 				shopify_variant_gid,
 				product_name_snapshot,
@@ -1485,8 +1611,9 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			[
 				randomUUID(),
 				input.organizationId,
-				input.membershipType,
-				input.entitlementPeriod,
+				input.entitlementClass,
+				input.durationDays,
+				input.isActive,
 				input.shopifyProductGid,
 				input.shopifyVariantGid,
 				input.productNameSnapshot,
@@ -1494,6 +1621,48 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		)) as ProductRow[];
 
 		return mapProduct(row);
+	}
+
+	async updateMembershipProductRecord(input: {
+		organizationId: string;
+		productId: string;
+		productNameSnapshot?: string;
+		durationDays?: number;
+		isActive?: boolean;
+	}): Promise<ProductRecord | null> {
+		await this.ensureReady();
+		if (input.durationDays !== undefined) {
+			assertValidEntitlementDurationDays(input.durationDays);
+		}
+		const rows = (await sql.unsafe(
+			`UPDATE ${this.schema}.products
+			 SET
+				product_name_snapshot = COALESCE($3, product_name_snapshot),
+				duration_days = COALESCE($4, duration_days),
+				is_active = COALESCE($5, is_active),
+				updated_at = NOW()
+			 WHERE id = $1 AND organization_id = $2
+			 RETURNING
+				id,
+				organization_id,
+				product_category,
+				entitlement_class,
+				duration_days,
+				is_active,
+				shopify_product_gid,
+				shopify_variant_gid,
+				product_name_snapshot,
+				created_at,
+				updated_at`,
+			[
+				input.productId,
+				input.organizationId,
+				input.productNameSnapshot ?? null,
+				input.durationDays ?? null,
+				input.isActive ?? null,
+			],
+		)) as ProductRow[];
+		return rows[0] ? mapProduct(rows[0]) : null;
 	}
 
 	async listMembershipProductRecords(
@@ -1506,8 +1675,9 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				id,
 				organization_id,
 				product_category,
-				membership_type,
-				entitlement_period,
+				entitlement_class,
+				duration_days,
+				is_active,
 				shopify_product_gid,
 				shopify_variant_gid,
 				product_name_snapshot,
@@ -1523,9 +1693,9 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		return rows.map(mapProduct);
 	}
 
-	async findMembershipProductRecordByType(
+	async findMembershipProductRecordByClass(
 		organizationId: string,
-		membershipType: MembershipProductType,
+		entitlementClass: EntitlementClass,
 	): Promise<ProductRecord | null> {
 		await this.ensureReady();
 
@@ -1534,8 +1704,9 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				id,
 				organization_id,
 				product_category,
-				membership_type,
-				entitlement_period,
+				entitlement_class,
+				duration_days,
+				is_active,
 				shopify_product_gid,
 				shopify_variant_gid,
 				product_name_snapshot,
@@ -1544,9 +1715,10 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			 FROM ${this.schema}.products
 			 WHERE organization_id = $1
 			   AND product_category = 'membership'
-			   AND membership_type = $2
+			   AND entitlement_class = $2
+			   AND is_active
 			 LIMIT 1`,
-			[organizationId, membershipType],
+			[organizationId, entitlementClass],
 		)) as ProductRow[];
 
 		return rows[0] ? mapProduct(rows[0]) : null;
@@ -1562,8 +1734,9 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				id,
 				organization_id,
 				product_category,
-				membership_type,
-				entitlement_period,
+				entitlement_class,
+				duration_days,
+				is_active,
 				shopify_product_gid,
 				shopify_variant_gid,
 				product_name_snapshot,
@@ -1588,8 +1761,9 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				id,
 				organization_id,
 				product_category,
-				membership_type,
-				entitlement_period,
+				entitlement_class,
+				duration_days,
+				is_active,
 				shopify_product_gid,
 				shopify_variant_gid,
 				product_name_snapshot,
@@ -1602,5 +1776,116 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		)) as ProductRow[];
 
 		return rows[0] ? mapProduct(rows[0]) : null;
+	}
+
+	async createEntitlementGrantSnapshot(
+		input: CreateEntitlementGrantSnapshotInput,
+	): Promise<EntitlementGrantSnapshot> {
+		await this.ensureReady();
+		assertValidEntitlementGrantSnapshotInput(input);
+
+		const rows = (await sql.unsafe(
+			`INSERT INTO ${this.schema}.entitlement_grants (
+				id,
+				organization_id,
+				customer_id,
+				entitlement_class,
+				offering_id,
+				duration_days,
+				division_id,
+				division_name_snapshot,
+				paid_amount,
+				paid_currency_code,
+				checkout_intent_id,
+				shopify_order_gid,
+				shopify_order_line_gid,
+				starts_on,
+				ends_on,
+				status
+			)
+			SELECT
+				$1, $2, $3, $4, $5, $6, $7, $8,
+				$9, $10, $11, $12, $13, $14::date, $15::date, $16
+			FROM ${this.schema}.products offering
+			JOIN ${this.schema}.organization_divisions division ON division.id = $7
+			WHERE offering.id = $5
+				AND offering.organization_id = $2
+				AND division.organization_id = $2
+			RETURNING
+				id,
+				organization_id,
+				customer_id,
+				entitlement_class,
+				offering_id,
+				duration_days,
+				division_id,
+				division_name_snapshot,
+				paid_amount,
+				paid_currency_code,
+				checkout_intent_id,
+				shopify_order_gid,
+				shopify_order_line_gid,
+				starts_on::text,
+				ends_on::text,
+				status,
+				created_at`,
+			[
+				randomUUID(),
+				input.organizationId,
+				input.customerId,
+				input.entitlementClass,
+				input.offeringId,
+				input.durationDays,
+				input.divisionId,
+				input.divisionNameSnapshot,
+				input.paidAmount,
+				input.paidCurrencyCode,
+				input.checkoutIntentId,
+				input.shopifyOrderGid,
+				input.shopifyOrderLineGid,
+				input.startsOn,
+				input.endsOn,
+				input.status,
+			],
+		)) as EntitlementGrantRow[];
+
+		if (!rows[0]) {
+			throw new Error(
+				"Entitlement offering or division was not found for this Organization.",
+			);
+		}
+		return mapEntitlementGrant(rows[0]);
+	}
+
+	async listEntitlementGrantSnapshots(
+		organizationId: string,
+		customerId: string,
+	): Promise<EntitlementGrantSnapshot[]> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT
+				id,
+				organization_id,
+				customer_id,
+				entitlement_class,
+				offering_id,
+				duration_days,
+				division_id,
+				division_name_snapshot,
+				paid_amount,
+				paid_currency_code,
+				checkout_intent_id,
+				shopify_order_gid,
+				shopify_order_line_gid,
+				starts_on::text,
+				ends_on::text,
+				status,
+				created_at
+			 FROM ${this.schema}.entitlement_grants
+			 WHERE organization_id = $1 AND customer_id = $2
+			 ORDER BY created_at ASC`,
+			[organizationId, customerId],
+		)) as EntitlementGrantRow[];
+		return rows.map(mapEntitlementGrant);
 	}
 }

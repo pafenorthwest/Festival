@@ -40,8 +40,6 @@ function membershipInput() {
 		name: "Teacher Membership",
 		description: "Annual membership for teachers.",
 		price: "75.00",
-		membershipType: "teacher",
-		entitlementPeriod: "1_year",
 	};
 }
 
@@ -272,10 +270,19 @@ describe("ShopifyMembershipProductService", () => {
 			"gid://shopify/ProductVariant/not-a-number-either",
 		);
 		expect(created.variantName).toBe("Standard");
+		expect(created.entitlementClass).toBe("teacher_membership");
+		expect(created.durationDays).toBe(365);
+		expect(created.isActive).toBeTrue();
 		expect(created.price).toEqual({ amount: "75.00", currencyCode: "USD" });
 		await expect(
 			repository.listMembershipProductRecords(organization.id),
-		).resolves.toHaveLength(1);
+		).resolves.toMatchObject([
+			{
+				entitlementClass: "teacher_membership",
+				durationDays: 365,
+				isActive: true,
+			},
+		]);
 		expect(audit.readyCalls).toBe(2);
 		expect(
 			audit.records.map(({ operation, requestId, result }) => ({
@@ -303,8 +310,9 @@ describe("ShopifyMembershipProductService", () => {
 		const encryptor = await saveIntegration(repository, organization);
 		await repository.createMembershipProductRecord({
 			organizationId: organization.id,
-			membershipType: "teacher",
-			entitlementPeriod: "1_year",
+			entitlementClass: "teacher_membership",
+			durationDays: 365,
+			isActive: true,
 			shopifyProductGid: "gid://shopify/Product/not-a-number",
 			shopifyVariantGid: "gid://shopify/ProductVariant/not-a-number-either",
 			productNameSnapshot: "Old Snapshot",
@@ -330,8 +338,13 @@ describe("ShopifyMembershipProductService", () => {
 		expect(client.readProductGids).toEqual([
 			["gid://shopify/Product/not-a-number"],
 		]);
-		expect(products[0]?.name).toBe("Current Shopify Title");
+		expect(products[0]?.name).toBe("Old Snapshot");
 		expect(products[0]?.description).toBe("Current Shopify description.");
+		expect(products[0]?.price).toEqual({
+			amount: "75.00",
+			currencyCode: "USD",
+		});
+		expect(products[0]?.status).toBe("ACTIVE");
 	});
 
 	it("rejects missing and unverified Shopify integrations", async () => {
