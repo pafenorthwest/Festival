@@ -44,4 +44,4 @@
 - Build: passed — `bun run build`
 - Tests: passed — `bun run test` (30 common, 180 backend, and 32 frontend tests)
 - Code review: passed — no actionable findings; patch is correct with 0.98 confidence and the two operator-accepted exceptions above
-- Clean merge: pending
+- Clean merge: passed — fast-forward integration with `main`
