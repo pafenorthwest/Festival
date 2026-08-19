@@ -27,6 +27,7 @@ describe("repository nginx security policy", () => {
 				"admin/customers",
 				"customer-auth/callback",
 				"customer-auth/start|customer/session|customer/orders",
+				"customer/membership-purchase/[^/]+",
 				"customer/logout",
 				"customer/profile",
 				"v1/auth/sync",

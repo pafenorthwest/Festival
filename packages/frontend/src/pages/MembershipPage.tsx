@@ -1,6 +1,13 @@
-import { createResource, For, Show } from "solid-js";
+import type { PublicMembershipProductSummary } from "@festival/common";
+import { createResource, createSignal, For, onMount, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
-import { getMembershipProducts } from "../lib/api.js";
+import {
+	customerMembershipPurchaseSignInPath,
+	getCustomerSession,
+	getMembershipProducts,
+	resumeCustomerMembershipPurchase,
+} from "../lib/api.js";
+import { buildOrgMembershipPath } from "../lib/routes.js";
 import { sanitizeShopifyDescriptionHtml } from "../lib/sanitize-html.js";
 
 interface MembershipPageProps {
@@ -15,6 +22,11 @@ function formatEntitlementClass(value: string): string {
 }
 
 export function MembershipPage(props: MembershipPageProps) {
+	const [purchaseError, setPurchaseError] = createSignal("");
+	const [purchaseStatus, setPurchaseStatus] = createSignal("");
+	const [pendingOfferingId, setPendingOfferingId] = createSignal<string | null>(
+		null,
+	);
 	const [response] = createResource(
 		() => {
 			const route = props.app.route();
@@ -28,6 +40,72 @@ export function MembershipPage(props: MembershipPageProps) {
 			return getMembershipProducts(slug);
 		},
 	);
+
+	async function continuePurchase(slug: string, offeringId: string) {
+		const resumed = await resumeCustomerMembershipPurchase(slug, offeringId);
+		if (
+			resumed.selection.organizationSlug !== slug ||
+			resumed.selection.offeringId !== offeringId
+		) {
+			throw new Error("Membership selection could not be resumed.");
+		}
+		window.history.replaceState(
+			null,
+			"",
+			`${buildOrgMembershipPath(slug)}?purchase=${encodeURIComponent(offeringId)}`,
+		);
+		setPurchaseStatus(
+			"Your Teacher Membership selection is authenticated and ready to continue.",
+		);
+	}
+
+	async function purchase(membershipProduct: PublicMembershipProductSummary) {
+		const route = props.app.route();
+		if (route.kind !== "org-membership") return;
+		setPurchaseError("");
+		setPurchaseStatus("");
+		setPendingOfferingId(membershipProduct.id);
+		try {
+			const customer = await getCustomerSession(route.slug);
+			if (!customer.session.authenticated) {
+				window.location.assign(
+					customerMembershipPurchaseSignInPath(
+						route.slug,
+						membershipProduct.id,
+					),
+				);
+				return;
+			}
+			await continuePurchase(route.slug, membershipProduct.id);
+		} catch {
+			setPurchaseError(
+				"Customer authentication or membership selection could not be resumed. Please try again.",
+			);
+		} finally {
+			setPendingOfferingId(null);
+		}
+	}
+
+	onMount(() => {
+		const route = props.app.route();
+		const query = new URLSearchParams(window.location.search);
+		if (query.get("purchaseError") === "authentication") {
+			setPurchaseError(
+				"Customer authentication was not completed. Please try again.",
+			);
+			return;
+		}
+		const offeringId = query.get("purchase");
+		if (route.kind !== "org-membership" || !offeringId) return;
+		setPendingOfferingId(offeringId);
+		void continuePurchase(route.slug, offeringId)
+			.catch(() => {
+				setPurchaseError(
+					"Customer authentication or membership selection could not be resumed. Please try again.",
+				);
+			})
+			.finally(() => setPendingOfferingId(null));
+	});
 
 	return (
 		<section class="panel membership-page">
@@ -46,6 +124,17 @@ export function MembershipPage(props: MembershipPageProps) {
 				<div class="membership-unavailable" role="status">
 					Membership information is temporarily unavailable. Please try again
 					later.
+				</div>
+			</Show>
+
+			<Show when={purchaseError()}>
+				<div class="membership-unavailable" role="alert">
+					{purchaseError()}
+				</div>
+			</Show>
+			<Show when={purchaseStatus()}>
+				<div class="membership-purchase-status" role="status">
+					{purchaseStatus()}
 				</div>
 			</Show>
 
@@ -82,7 +171,20 @@ export function MembershipPage(props: MembershipPageProps) {
 									{membershipProduct.price.amount}{" "}
 									{membershipProduct.price.currencyCode}
 								</strong>
-								<span>{membershipProduct.status ?? "Unavailable"}</span>
+								<button
+									type="button"
+									disabled={
+										!membershipProduct.available ||
+										pendingOfferingId() === membershipProduct.id
+									}
+									onClick={() => void purchase(membershipProduct)}
+								>
+									{membershipProduct.available
+										? pendingOfferingId() === membershipProduct.id
+											? "Continuing…"
+											: "Purchase"
+										: "Unavailable"}
+								</button>
 							</div>
 						</article>
 					)}

@@ -148,6 +148,32 @@ export interface MembershipProductsListResponse {
 	membershipProducts: MembershipProductSummary[];
 }
 
+export interface PublicMembershipProductSummary {
+	id: string;
+	name: string;
+	description?: string;
+	entitlementClass: typeof TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS;
+	durationDays: number;
+	available: boolean;
+	price: MoneyPayload;
+}
+
+export interface PublicMembershipProductsListResponse {
+	organization: {
+		slug: string;
+		name: string;
+	};
+	membershipProducts: PublicMembershipProductSummary[];
+}
+
+export interface MembershipPurchaseSelectionResponse {
+	selection: {
+		offeringId: string;
+		organizationSlug: string;
+		entitlementClass: typeof TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS;
+	};
+}
+
 export function isMembershipProductPurchasable(
 	membershipProduct: Pick<MembershipProductSummary, "isActive" | "status">,
 ): boolean {
@@ -279,4 +305,7 @@ export function validateMembershipProductInput(
 	};
 }
 
-import type { EntitlementClass } from "./entitlements.js";
+import type {
+	EntitlementClass,
+	TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+} from "./entitlements.js";

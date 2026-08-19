@@ -6,6 +6,7 @@ import {
 	createInvite,
 	createMembershipProduct,
 	createOrganization,
+	customerMembershipPurchaseSignInPath,
 	dismissWelcome,
 	getAdminMembershipProducts,
 	getBootstrap,
@@ -15,6 +16,7 @@ import {
 	getMemberships,
 	getOrganization,
 	getShopifySettings,
+	resumeCustomerMembershipPurchase,
 	saveShopifySettings,
 } from "../src/lib/api.js";
 import {
@@ -335,6 +337,42 @@ describe("organization onboarding integration", () => {
 		expect(source).toContain("ALLOWED_TAGS");
 		expect(source).toContain("ALLOWED_ATTR");
 		expect(source).toContain("innerHTML={sanitizeShopifyDescriptionHtml(");
+	});
+
+	it("starts customer authentication or resumes the same local offering without cart mutation", async () => {
+		const page = await Bun.file("src/pages/MembershipPage.tsx").text();
+		const api = await Bun.file("src/lib/api.ts").text();
+		expect(page).toContain('"Purchase"');
+		expect(page).toContain("getCustomerSession(route.slug)");
+		expect(page).toContain("customerMembershipPurchaseSignInPath(");
+		expect(page).toContain(
+			"resumeCustomerMembershipPurchase(slug, offeringId)",
+		);
+		expect(page).toContain("Customer authentication or membership selection");
+		expect(page).toContain("Customer authentication was not completed");
+		expect(page).toContain("membershipProduct.available");
+		expect(page).not.toMatch(/cartCreate|checkoutUrl|shopifyVariantGid/);
+		expect(api).toContain("customer/membership-purchase/");
+		expect(customerMembershipPurchaseSignInPath("pafe", "offering_123")).toBe(
+			"/api/organizations/pafe/customer-auth/start?offering=offering_123",
+		);
+
+		mockFetch({
+			selection: {
+				offeringId: "offering_123",
+				organizationSlug: "pafe",
+				entitlementClass: "teacher_membership",
+			},
+		});
+		await resumeCustomerMembershipPurchase("pafe", "offering_123");
+		expect(fetchCalls).toEqual([
+			expect.objectContaining({
+				url: "/api/organizations/pafe/customer/membership-purchase/offering_123",
+			}),
+		]);
+		expect(
+			(fetchCalls[0]?.init?.headers as Record<string, string>).Authorization,
+		).toBeUndefined();
 	});
 
 	it("surfaces Shopify settings load failures on both admin pages", async () => {

@@ -66,6 +66,7 @@ export interface CustomerOAuthStateRecord {
 	organizationId: string;
 	nonce: string;
 	returnTo: string;
+	offeringId?: string;
 	expiresAtIso: string;
 }
 

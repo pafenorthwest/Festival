@@ -1430,6 +1430,21 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		return rows[0] ? mapShopifyIntegration(rows[0]) : null;
 	}
 
+	async getPublicShopifyCatalogDomain(
+		organizationId: string,
+	): Promise<string | null> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT verified_shop_domain
+			 FROM ${this.schema}.shopify_integrations
+			 WHERE organization_id = $1
+			   AND verification_status = 'ok'
+			 LIMIT 1`,
+			[organizationId],
+		)) as Array<{ verified_shop_domain: string | null }>;
+		return rows[0]?.verified_shop_domain ?? null;
+	}
+
 	async upsertShopifyIntegration(
 		input: UpsertShopifyIntegrationInput,
 	): Promise<ShopifyIntegrationRecord> {

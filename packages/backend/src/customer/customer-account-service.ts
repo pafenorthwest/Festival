@@ -391,12 +391,17 @@ export class CustomerAccountService {
 			throw safeError();
 		}
 	}
-	async start(slug: string, returnTo?: string) {
+	async start(slug: string, returnTo?: string, offeringId?: string) {
 		const organization = await this.organizations.findOrganizationBySlug(slug);
 		if (!organization) throw new AppError("Organization not found.", 404);
 		const integration = await this.repository.getIntegration(organization.id);
 		if (!integration || integration.readiness !== "ready") throw safeError();
-		const expected = `/org/${slug}/account`;
+		if (offeringId && !/^[A-Za-z0-9_-]{1,128}$/.test(offeringId)) {
+			throw new AppError("Membership selection is invalid.", 400);
+		}
+		const expected = offeringId
+			? `/org/${slug}/membership?purchase=${encodeURIComponent(offeringId)}`
+			: `/org/${slug}/account`;
 		if (returnTo && returnTo !== expected)
 			throw new AppError("Return target is invalid.", 400);
 		const state = randomOpaque(),
@@ -406,6 +411,7 @@ export class CustomerAccountService {
 			organizationId: organization.id,
 			nonce,
 			returnTo: expected,
+			offeringId,
 			expiresAtIso: new Date(
 				this.now().getTime() + OAUTH_STATE_TTL_MS,
 			).toISOString(),
@@ -604,7 +610,11 @@ export class CustomerAccountService {
 			throw new AppError("Customer order access is unavailable.", 403);
 		return result;
 	}
-	async callback(stateValue: string | undefined, code: string | undefined) {
+	async callback(
+		stateValue: string | undefined,
+		code: string | undefined,
+		validateOffering?: (slug: string, offeringId: string) => Promise<unknown>,
+	) {
 		if (!stateValue || !code)
 			throw new AppError("Customer authentication response is invalid.", 400);
 		const state = await this.repository.consumeOAuthState(
@@ -622,6 +632,10 @@ export class CustomerAccountService {
 		);
 		if (!org || org.id !== state.organizationId)
 			throw new AppError("Customer authentication response is invalid.", 401);
+		if (state.offeringId) {
+			if (!validateOffering) throw safeError();
+			await validateOffering(org.slug, state.offeringId);
+		}
 		const discovered = await this.discover(integration);
 		const bundle = await this.tokens(
 			integration,
@@ -673,11 +687,34 @@ export class CustomerAccountService {
 		return {
 			sessionId,
 			returnTo: state.returnTo,
+			organizationSlug: org.slug,
+			offeringId: state.offeringId,
 			maxAgeSeconds: Math.max(
 				1,
 				Math.floor((expiresAt.getTime() - now.getTime()) / 1000),
 			),
 		};
+	}
+
+	async authenticationFailure(stateValue: string | undefined) {
+		if (!stateValue) {
+			throw new AppError("Customer authentication response is invalid.", 400);
+		}
+		const state = await this.repository.consumeOAuthState(
+			hash(stateValue),
+			this.now().toISOString(),
+		);
+		if (!state) {
+			throw new AppError("Customer authentication response is invalid.", 400);
+		}
+		const slug = state.returnTo.split("/")[2] ?? "";
+		const organization = await this.organizations.findOrganizationBySlug(slug);
+		if (!organization || organization.id !== state.organizationId) {
+			throw new AppError("Customer authentication response is invalid.", 401);
+		}
+		return state.offeringId
+			? `/org/${organization.slug}/membership?purchaseError=authentication`
+			: `/org/${organization.slug}/account?authError=authentication`;
 	}
 	private decrypt(session: CustomerSessionRecord): TokenBundle {
 		try {

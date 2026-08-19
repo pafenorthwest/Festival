@@ -166,6 +166,18 @@ export class ShopifyMembershipProductService {
 			throw new AppError(validation.errors.join(" "), 400);
 		}
 
+		const existingOffering =
+			await this.repository.findMembershipProductRecordByClass(
+				tenant.organization.id,
+				TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+			);
+		if (existingOffering) {
+			throw new AppError(
+				"An active Teacher Membership already exists for this organization.",
+				409,
+			);
+		}
+
 		const writeContext = await this.loadOperationContext(
 			tenant,
 			"write_products",

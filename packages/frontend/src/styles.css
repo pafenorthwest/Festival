@@ -277,6 +277,14 @@ button.compact-header-button {
 	color: var(--bullet-soft-ink);
 }
 
+.membership-purchase-status {
+	padding: 1rem;
+	border: 1px solid rgba(68, 89, 214, 0.28);
+	border-radius: 8px;
+	background: rgba(68, 89, 214, 0.08);
+	color: var(--bullet-soft-ink);
+}
+
 .membership-unavailable {
 	padding: 1rem;
 	border: 1px solid rgba(185, 77, 54, 0.28);

@@ -64,6 +64,7 @@ interface StateRow {
 	organization_id: string;
 	nonce: string;
 	return_to: string;
+	offering_id: string | null;
 	expires_at: string;
 }
 
@@ -162,10 +163,11 @@ export class PostgresCustomerAccountRepository
 			can_read_orders BOOLEAN NOT NULL DEFAULT FALSE, integration_version BIGINT NOT NULL DEFAULT 1 CHECK (integration_version > 0),
 			verified_at TIMESTAMPTZ NULL, last_error TEXT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
-		CREATE TABLE IF NOT EXISTS ${this.schema}.shopify_customer_oauth_states (
-			state_hash TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES ${this.schema}.organizations(id) ON DELETE CASCADE,
-			nonce TEXT NOT NULL, return_to TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL
-		);
+			CREATE TABLE IF NOT EXISTS ${this.schema}.shopify_customer_oauth_states (
+				state_hash TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES ${this.schema}.organizations(id) ON DELETE CASCADE,
+				nonce TEXT NOT NULL, return_to TEXT NOT NULL, offering_id TEXT NULL, expires_at TIMESTAMPTZ NOT NULL
+			);
+			ALTER TABLE ${this.schema}.shopify_customer_oauth_states ADD COLUMN IF NOT EXISTS offering_id TEXT NULL;
 		CREATE TABLE IF NOT EXISTS ${this.schema}.festival_customers (
 			id TEXT PRIMARY KEY,
 			organization_id TEXT NOT NULL REFERENCES ${this.schema}.organizations(id) ON DELETE CASCADE,
@@ -288,8 +290,15 @@ export class PostgresCustomerAccountRepository
 	async putOAuthState(s: CustomerOAuthStateRecord) {
 		await this.ensureReady();
 		await sql.unsafe(
-			`INSERT INTO ${this.schema}.shopify_customer_oauth_states(state_hash,organization_id,nonce,return_to,expires_at) VALUES($1,$2,$3,$4,$5)`,
-			[s.stateHash, s.organizationId, s.nonce, s.returnTo, s.expiresAtIso],
+			`INSERT INTO ${this.schema}.shopify_customer_oauth_states(state_hash,organization_id,nonce,return_to,offering_id,expires_at) VALUES($1,$2,$3,$4,$5,$6)`,
+			[
+				s.stateHash,
+				s.organizationId,
+				s.nonce,
+				s.returnTo,
+				s.offeringId ?? null,
+				s.expiresAtIso,
+			],
 		);
 	}
 	async consumeOAuthState(hash: string, now: string) {
@@ -305,6 +314,7 @@ export class PostgresCustomerAccountRepository
 					organizationId: r.organization_id,
 					nonce: r.nonce,
 					returnTo: r.return_to,
+					offeringId: r.offering_id ?? undefined,
 					expiresAtIso: r.expires_at,
 				}
 			: null;

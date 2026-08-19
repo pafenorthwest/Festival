@@ -16,6 +16,7 @@ import type {
 	DismissWelcomeResponse,
 	InviteSummary,
 	MembershipProductsListResponse,
+	MembershipPurchaseSelectionResponse,
 	OrganizationAdminUsersResponse,
 	OrganizationDivision,
 	OrganizationDivisionListResponse,
@@ -23,6 +24,7 @@ import type {
 	OrganizationLandingResponse,
 	OrganizationMembershipListResponse,
 	OrganizationTimezoneResponse,
+	PublicMembershipProductsListResponse,
 	ReorderOrganizationDivisionsInput,
 	SaveCustomerAccountSettingsInput,
 	SaveCustomerAccountSettingsResponse,
@@ -86,6 +88,13 @@ export function saveCustomerAccountSettings(
 export function customerSignInPath(slug: string) {
 	const returnTo = `/org/${slug}/account`;
 	return `/api/organizations/${slug}/customer-auth/start?returnTo=${encodeURIComponent(returnTo)}`;
+}
+
+export function customerMembershipPurchaseSignInPath(
+	slug: string,
+	offeringId: string,
+) {
+	return `/api/organizations/${encodeURIComponent(slug)}/customer-auth/start?offering=${encodeURIComponent(offeringId)}`;
 }
 
 export function getCustomerSession(slug: string) {
@@ -221,8 +230,20 @@ export function getOrganization(idToken: string, slug: string) {
 }
 
 export function getMembershipProducts(slug: string) {
-	return requestJson<MembershipProductsListResponse>(
+	return requestJson<PublicMembershipProductsListResponse>(
 		`/api/organizations/${slug}/membership-products`,
+	);
+}
+
+export function resumeCustomerMembershipPurchase(
+	slug: string,
+	offeringId: string,
+) {
+	return requestJson<MembershipPurchaseSelectionResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/membership-purchase/${encodeURIComponent(offeringId)}`,
+		undefined,
+		undefined,
+		"",
 	);
 }
 

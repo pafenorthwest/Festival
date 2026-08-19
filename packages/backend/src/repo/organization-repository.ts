@@ -208,6 +208,7 @@ export interface OrganizationRepository {
 	getShopifyIntegration(
 		organizationId: string,
 	): Promise<ShopifyIntegrationRecord | null>;
+	getPublicShopifyCatalogDomain(organizationId: string): Promise<string | null>;
 	upsertShopifyIntegration(
 		input: UpsertShopifyIntegrationInput,
 	): Promise<ShopifyIntegrationRecord>;

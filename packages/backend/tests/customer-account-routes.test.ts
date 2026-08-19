@@ -3,7 +3,9 @@ import type { AuthenticatedUser } from "@festival/common";
 import { createApp } from "../src/app.js";
 import type { AuthVerifier } from "../src/auth/types.js";
 import type { CustomerAccountService } from "../src/customer/customer-account-service.js";
+import { AppError } from "../src/errors/app-error.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
+import type { PublicMembershipProductService } from "../src/shopify/public-membership-product-service.js";
 
 class Auth implements AuthVerifier {
 	async verify(token: string): Promise<AuthenticatedUser> {
@@ -72,7 +74,10 @@ function service(overrides: Record<string, unknown> = {}) {
 		...overrides,
 	} as unknown as CustomerAccountService;
 }
-async function app(customerAccountService = service()) {
+async function app(
+	customerAccountService = service(),
+	publicMembershipProductService?: PublicMembershipProductService,
+) {
 	const repository = new InMemoryOrganizationRepository();
 	const organization = await repository.createOrganization({
 		name: "Festival",
@@ -105,6 +110,7 @@ async function app(customerAccountService = service()) {
 		repository,
 		authVerifier: new Auth(),
 		customerAccountService,
+		publicMembershipProductService,
 	});
 	return created.app;
 }
@@ -238,5 +244,154 @@ describe("customer account routes", () => {
 		expect(response.headers.get("set-cookie")).toContain(
 			"festival_customer_session=",
 		);
+	});
+	it("validates a local offering before auth start and again before callback cookie issuance", async () => {
+		const resolutions: Array<[string, string]> = [];
+		const publicService = {
+			resolvePurchasable: async (slug: string, offeringId: string) => {
+				resolutions.push([slug, offeringId]);
+				return {
+					selection: {
+						offeringId,
+						organizationSlug: slug,
+						entitlementClass: "teacher_membership" as const,
+					},
+				};
+			},
+		} as unknown as PublicMembershipProductService;
+		let startArguments: unknown[] = [];
+		const a = await app(
+			service({
+				start: async (...args: unknown[]) => {
+					startArguments = args;
+					return "https://accounts.shopify.com/auth";
+				},
+				callback: async (...args: unknown[]) => {
+					const validate = args[2] as (
+						slug: string,
+						offeringId: string,
+					) => Promise<unknown>;
+					await validate("festival", "offering_123");
+					return {
+						sessionId: "opaque-session",
+						returnTo: "/org/festival/membership?purchase=offering_123",
+						organizationSlug: "festival",
+						offeringId: "offering_123",
+						maxAgeSeconds: 3600,
+					};
+				},
+			}),
+			publicService,
+		);
+		const start = await a.request(
+			"/api/organizations/festival/customer-auth/start?offering=offering_123",
+		);
+		expect(start.status).toBe(302);
+		expect(startArguments).toEqual(["festival", undefined, "offering_123"]);
+		const callback = await a.request(
+			"/api/customer-auth/callback?state=state&code=code",
+		);
+		expect(callback.status).toBe(302);
+		expect(callback.headers.get("location")).toBe(
+			"/org/festival/membership?purchase=offering_123",
+		);
+		expect(resolutions).toEqual([
+			["festival", "offering_123"],
+			["festival", "offering_123"],
+		]);
+
+		const unsupported = await a.request(
+			"/api/organizations/festival/customer-auth/start?shopifyVariantGid=gid%3A%2F%2Fshopify%2FProductVariant%2F1",
+		);
+		expect(unsupported.status).toBe(400);
+		const duplicate = await a.request(
+			"/api/organizations/festival/customer-auth/start?offering=offering_123&offering=offering_456",
+		);
+		expect(duplicate.status).toBe(400);
+	});
+
+	it("denies anonymous purchase continuation and returns only a revalidated local selection", async () => {
+		const calls: Array<[string, string]> = [];
+		const publicService = {
+			resolvePurchasable: async (slug: string, offeringId: string) => {
+				calls.push([slug, offeringId]);
+				return {
+					selection: {
+						offeringId,
+						organizationSlug: slug,
+						entitlementClass: "teacher_membership" as const,
+					},
+				};
+			},
+		} as unknown as PublicMembershipProductService;
+		const a = await app(service(), publicService);
+		const anonymous = await a.request(
+			"/api/organizations/festival/customer/membership-purchase/offering_123",
+		);
+		expect(anonymous.status).toBe(401);
+		expect(calls).toHaveLength(0);
+		const authenticated = await a.request(
+			"/api/organizations/festival/customer/membership-purchase/offering_123",
+			{ headers: { Cookie: "festival_customer_session=opaque-session" } },
+		);
+		expect(authenticated.status).toBe(200);
+		expect(authenticated.headers.get("cache-control")).toBe("no-store");
+		expect(await authenticated.json()).toEqual({
+			selection: {
+				offeringId: "offering_123",
+				organizationSlug: "festival",
+				entitlementClass: "teacher_membership",
+			},
+		});
+		expect(calls).toEqual([["festival", "offering_123"]]);
+	});
+
+	it("does not issue a session cookie when callback offering revalidation fails", async () => {
+		const publicService = {
+			resolvePurchasable: async () => {
+				throw new AppError("Membership selection is unavailable.", 409);
+			},
+		} as unknown as PublicMembershipProductService;
+		const a = await app(
+			service({
+				callback: async (...args: unknown[]) => {
+					const validate = args[2] as (
+						slug: string,
+						offeringId: string,
+					) => Promise<unknown>;
+					await validate("festival", "offering_123");
+					return {
+						sessionId: "must-not-be-issued",
+						returnTo: "/org/festival/membership?purchase=offering_123",
+						organizationSlug: "festival",
+						offeringId: "offering_123",
+						maxAgeSeconds: 3600,
+					};
+				},
+			}),
+			publicService,
+		);
+		const response = await a.request(
+			"/api/customer-auth/callback?state=state&code=code",
+		);
+		expect(response.status).toBe(409);
+		expect(response.headers.get("set-cookie")).toBeNull();
+	});
+
+	it("redirects an OAuth denial to a safe local failure state without a cookie", async () => {
+		const a = await app(
+			service({
+				authenticationFailure: async () =>
+					"/org/festival/membership?purchaseError=authentication",
+			}),
+		);
+		const response = await a.request(
+			"/api/customer-auth/callback?error=access_denied&state=opaque-state",
+		);
+		expect(response.status).toBe(302);
+		expect(response.headers.get("location")).toBe(
+			"/org/festival/membership?purchaseError=authentication",
+		);
+		expect(response.headers.get("set-cookie")).toBeNull();
 	});
 });

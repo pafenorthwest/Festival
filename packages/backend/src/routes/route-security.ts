@@ -13,7 +13,7 @@ export type RouteAuthenticationClass =
 	(typeof ROUTE_AUTHENTICATION_CLASSES)[number];
 
 export interface RouteSecurityDeclaration {
-	method: "GET" | "POST" | "DELETE";
+	method: "GET" | "HEAD" | "POST" | "DELETE";
 	path: string;
 	authenticationClass: RouteAuthenticationClass;
 }
@@ -54,6 +54,11 @@ export const CURRENT_ROUTE_SECURITY = [
 	{
 		method: "GET",
 		path: "/api/organizations/:slug/customer/session",
+		authenticationClass: "customer",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/customer/membership-purchase/:offeringId",
 		authenticationClass: "customer",
 	},
 	{
@@ -186,6 +191,11 @@ export const CURRENT_ROUTE_SECURITY = [
 	},
 	{
 		method: "GET",
+		path: "/api/organizations/:slug/membership-products",
+		authenticationClass: "public",
+	},
+	{
+		method: "HEAD",
 		path: "/api/organizations/:slug/membership-products",
 		authenticationClass: "public",
 	},

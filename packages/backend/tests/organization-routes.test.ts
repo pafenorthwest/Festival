@@ -19,8 +19,13 @@ import {
 	SHOPIFY_CLIENT_SECRET_PURPOSE,
 	ShopifySecretKeyring,
 } from "../src/shopify/encryption.js";
+import { PublicMembershipProductService } from "../src/shopify/public-membership-product-service.js";
 import { ShopifyIntegrationService } from "../src/shopify/shopify-integration-service.js";
 import { ShopifyMembershipProductService } from "../src/shopify/shopify-membership-product-service.js";
+import type {
+	PublicShopifyCatalogProduct,
+	ShopifyPublicCatalogClient,
+} from "../src/shopify/shopify-public-catalog-client.js";
 import type {
 	ShopifyAdminOperationContext,
 	ShopifyAdminResult,
@@ -141,6 +146,26 @@ class FakeShopifyProductClient implements ShopifyMembershipProductClient {
 	}
 }
 
+class FakePublicCatalogClient implements ShopifyPublicCatalogClient {
+	readonly calls: Array<{ domain: string; productGid: string }> = [];
+	product: PublicShopifyCatalogProduct | null = {
+		id: "gid://shopify/Product/generated",
+		title: "Current Teacher Membership",
+		description: "Current public Shopify description.",
+		availableForSale: true,
+		variant: {
+			id: "gid://shopify/ProductVariant/generated",
+			availableForSale: true,
+			price: { amount: "75.00", currencyCode: "USD" },
+		},
+	};
+
+	async readProduct(domain: string, productGid: string) {
+		this.calls.push({ domain, productGid });
+		return this.product;
+	}
+}
+
 class FailingMembershipProductRepository extends InMemoryOrganizationRepository {
 	async createMembershipProductRecord(
 		_input: CreateMembershipProductRecordInput,
@@ -206,6 +231,8 @@ async function createTestAppWithMembershipProducts(
 	repository: InMemoryOrganizationRepository = new InMemoryOrganizationRepository(),
 ) {
 	const shopifyProductClient = new FakeShopifyProductClient();
+	const publicCatalogClient = new FakePublicCatalogClient();
+	const auditWriter = new FakeAuditWriter();
 	const encryptor = createKeyring();
 	const app = await createApp({
 		env: { port: 3000 },
@@ -226,11 +253,22 @@ async function createTestAppWithMembershipProducts(
 			repository,
 			encryptor,
 			shopifyProductClient,
-			new FakeAuditWriter(),
+			auditWriter,
+		),
+		publicMembershipProductService: new PublicMembershipProductService(
+			repository,
+			publicCatalogClient,
 		),
 	});
 
-	return { ...app, repository, encryptor, shopifyProductClient };
+	return {
+		...app,
+		repository,
+		encryptor,
+		shopifyProductClient,
+		publicCatalogClient,
+		auditWriter,
+	};
 }
 
 function withAuth(token: string, init?: RequestInit): RequestInit {
@@ -1460,6 +1498,48 @@ describe("organization routes", () => {
 		});
 	});
 
+	it("returns an explicit conflict for a duplicate active Teacher Membership before Shopify", async () => {
+		const { app, repository, encryptor, shopifyProductClient, auditWriter } =
+			await createTestAppWithMembershipProducts();
+		await createOrganizationViaApi(app);
+		const organization = await saveVerifiedShopifyIntegration(
+			repository,
+			encryptor,
+		);
+		await repository.createMembershipProductRecord({
+			organizationId: organization.id,
+			entitlementClass: "teacher_membership",
+			durationDays: 365,
+			isActive: true,
+			shopifyProductGid: "gid://shopify/Product/existing",
+			shopifyVariantGid: "gid://shopify/ProductVariant/existing",
+			productNameSnapshot: "Existing Teacher Membership",
+		});
+		const createSpy = spyOn(shopifyProductClient, "createProduct");
+		const updateSpy = spyOn(shopifyProductClient, "updateVariantPrice");
+		const deleteSpy = spyOn(shopifyProductClient, "deleteProduct");
+
+		const response = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/membership-products",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify(membershipProductPayload()),
+				}),
+			),
+		);
+
+		expect(response.status).toBe(409);
+		await expect(response.json()).resolves.toEqual({
+			error:
+				"An active Teacher Membership already exists for this organization.",
+		});
+		expect(createSpy).not.toHaveBeenCalled();
+		expect(updateSpy).not.toHaveBeenCalled();
+		expect(deleteSpy).not.toHaveBeenCalled();
+		expect(auditWriter.records).toHaveLength(0);
+	});
+
 	it("cleans up the Shopify product when route persistence fails", async () => {
 		const repository = new FailingMembershipProductRepository();
 		const { app, encryptor, shopifyProductClient } =
@@ -1483,19 +1563,93 @@ describe("organization routes", () => {
 		]);
 	});
 
-	it("returns 403 before public membership requests reach repository or Shopify", async () => {
-		const { app, repository, shopifyProductClient } =
-			await createTestAppWithMembershipProducts();
-		const repositorySpy = spyOn(repository, "findOrganizationBySlug");
+	it("returns the allowlisted current Teacher Membership through the credential-free public catalog", async () => {
+		const {
+			app,
+			repository,
+			encryptor,
+			shopifyProductClient,
+			publicCatalogClient,
+		} = await createTestAppWithMembershipProducts();
+		await createOrganizationViaApi(app);
+		const organization = await saveVerifiedShopifyIntegration(
+			repository,
+			encryptor,
+		);
+		const offering = await repository.createMembershipProductRecord({
+			organizationId: organization.id,
+			entitlementClass: "teacher_membership",
+			durationDays: 365,
+			isActive: true,
+			shopifyProductGid: "gid://shopify/Product/generated",
+			shopifyVariantGid: "gid://shopify/ProductVariant/generated",
+			productNameSnapshot: "Stale local name",
+		});
 		const shopifySpy = spyOn(shopifyProductClient, "readProductsByGid");
 
 		const response = await app.fetch(
 			new Request("http://test/api/organizations/pafe/membership-products"),
 		);
 
-		expect(response.status).toBe(403);
-		expect(await response.json()).toEqual({ error: "Forbidden." });
-		expect(repositorySpy).not.toHaveBeenCalled();
+		expect(response.status).toBe(200);
+		expect(response.headers.get("cache-control")).toBe("no-store");
+		const payload = await response.json();
+		expect(payload).toEqual({
+			organization: { slug: "pafe", name: "Festival Admins" },
+			membershipProducts: [
+				{
+					id: offering.id,
+					name: "Current Teacher Membership",
+					description: "Current public Shopify description.",
+					entitlementClass: "teacher_membership",
+					durationDays: 365,
+					available: true,
+					price: { amount: "75.00", currencyCode: "USD" },
+				},
+			],
+		});
+		expect(JSON.stringify(payload)).not.toMatch(
+			/shopifyProductGid|shopifyVariantGid|organizationId|clientSecret|token|customer/i,
+		);
+		expect(publicCatalogClient.calls).toEqual([
+			{
+				domain: "example.myshopify.com",
+				productGid: "gid://shopify/Product/generated",
+			},
+		]);
 		expect(shopifySpy).not.toHaveBeenCalled();
+
+		const head = await app.fetch(
+			new Request("http://test/api/organizations/pafe/membership-products", {
+				method: "HEAD",
+			}),
+		);
+		expect(head.status).toBe(200);
+		expect(await head.text()).toBe("");
+	});
+
+	it("rejects credentials and bodies on the public membership route", async () => {
+		const { app, publicCatalogClient } =
+			await createTestAppWithMembershipProducts();
+		const bearer = await app.fetch(
+			new Request("http://test/api/organizations/pafe/membership-products", {
+				headers: { Authorization: "Bearer admin" },
+			}),
+		);
+		expect(bearer.status).toBe(400);
+		const body = await app.fetch(
+			new Request("http://test/api/organizations/pafe/membership-products", {
+				method: "GET",
+				headers: { "Content-Length": "1" },
+			}),
+		);
+		expect(body.status).toBe(400);
+		const invalidLength = await app.fetch(
+			new Request("http://test/api/organizations/pafe/membership-products", {
+				headers: { "Content-Length": "invalid" },
+			}),
+		);
+		expect(invalidLength.status).toBe(400);
+		expect(publicCatalogClient.calls).toHaveLength(0);
 	});
 });

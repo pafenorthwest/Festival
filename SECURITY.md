@@ -33,11 +33,11 @@ Firebase authenticates the Admin to Festival. It does not authenticate the brows
 
 | Class | Current routes | Enforcement |
 | --- | --- | --- |
-| Public | `GET /api/bootstrap`, `GET /api/invites/:token`, disabled `GET /api/organizations/:slug/membership-products` | Bootstrap rejects every `Authorization` header. The Shopify-backed membership route returns 403 before repository or Shopify access. |
+| Public | `GET /api/bootstrap`, `GET /api/invites/:token`, and `GET`/`HEAD /api/organizations/:slug/membership-products` | The membership route rejects authorization headers and request bodies, resolves only the Organization's active local Teacher Membership offering, reads current public product facts through Shopify's tokenless Storefront API, returns an allowlisted DTO, and sets `Cache-Control: no-store`. |
 | Firebase | `GET /api/firebase-session`, `POST /api/organizations`, `GET /api/memberships`, `POST /api/invites/:token/accept`, `/api/v1/auth/sync`, `/api/v1/auth/login-event`, `/api/v1/auth/me` | A valid Firebase bearer token is required. A Firebase session does not require organization membership. |
 | Tenant | `GET /api/organizations/:slug`, `POST /api/organizations/:slug/welcome/dismiss` | Firebase identity plus membership in the route organization is required. |
 | Admin | `/api/invites`, organization Admin users, invites, festivals, Shopify settings, and membership-product mutation routes | Firebase identity, matching tenant membership, and Festival `Admin` role are required. |
-| Customer | Customer auth start/callback, session, profile, orders, and logout routes | Shopify authenticates the customer. Festival stores only an opaque, tenant-bound cookie in the browser. Profile mutations require the session CSRF token and exact Festival origin; Firebase bearer tokens are rejected. |
+| Customer | Customer auth start/callback, session, membership-purchase resume, profile, orders, and logout routes | Shopify authenticates the customer. Festival stores only an opaque, tenant-bound cookie in the browser. Purchase resume preserves one local offering in consumed OAuth state and revalidates it before token exchange and again for authenticated continuation. Profile mutations require the session CSRF token and exact Festival origin; Firebase bearer tokens are rejected. |
 | Customer-profile Admin | `GET /api/organizations/:slug/admin/customers` and `GET /api/organizations/:slug/admin/customers/:customerId` | Firebase identity, matching tenant membership, and Festival `Admin` role are required. Only customers who consented to the current privacy-notice version are searchable or viewable. |
 | Private health | Backend `GET /health` | Available only on the private backend listener. Public nginx does not proxy it. |
 
@@ -47,6 +47,7 @@ Backend startup compares every registered route with the declared inventory and 
 
 - Browser origins are exact values from `API_ALLOWED_ORIGINS`, a comma-separated list. Local development defaults allow HTTP ports `5172`, `5173`, and `8080` on `localhost`, IPv4 loopback (`127.0.0.1`), and IPv6 loopback (`[::1]`). Wildcard credentialed CORS is not allowed.
 - Current API mutation bodies must be JSON and are limited to 64 KiB. Hono route registration and nginx allow only the methods used today.
+- The public membership listing accepts no body, is `GET`/`HEAD` only, emits a single bounded Teacher Membership DTO, caps the tokenless Shopify response at 64 KiB, and uses no-store caching so an unavailable upstream never falls back to a stale price.
 - Festival customer profiles contain the latest name, email, structured mailing address, and phone in ordinary tenant-bound database fields so authorized staff search is possible. Application-level field encryption is intentionally not used. Profile responses use explicit allowlists and never expose the internal Festival customer ID to the customer. Logs must not contain profile bodies, search query strings, email addresses, phone numbers, mailing addresses, Shopify customer IDs, session cookies, or CSRF tokens.
 - A Shopify customer GID is authoritative only for resolving the organization-scoped Festival customer during the verified OAuth callback. Festival profile edits are locally authoritative per field; later Shopify projections may fill blank or Shopify-sourced fields but cannot overwrite Festival-edited fields. A different Shopify customer GID creates a different Festival customer and is never auto-merged.
 - Organization Admin profile view and search require versioned customer consent. Successful searches and views append database audit records containing organization, Firebase actor UID, operation, timestamp, target customer ID for a view, and result count for a search. Search text and profile PII are not recorded in the audit row.
@@ -69,6 +70,7 @@ The jump-host nginx configuration is out of scope because its topology is deploy
 
 ## Shopify egress and secret handling
 
+- Public Teacher Membership reads use the canonical verified `*.myshopify.com` domain selected without loading the encrypted Admin credential. The tokenless Storefront request sends no Storefront token, Admin token, Customer Account token, client secret, or authorization header; it disables redirects, bounds time and response size, and accepts only the expected product/variant/price shape.
 - Current Admin calls construct their own `https://<store>.myshopify.com` token and pinned GraphQL URLs. Festival rejects non-canonical hosts, credentials in URLs, ports, unsafe redirects, timeouts, oversized responses, and malformed JSON.
 - No generic GraphQL proxy exists. Each backend operation supplies its own query and variables.
 - Client secrets are encrypted at rest, decrypted only in backend memory after tenant/Admin authorization, and excluded from API responses. Access tokens are short-lived, backend-only, and held only in a tenant-bound early-expiry process cache. Saving credentials forces verification and invalidates the superseded integration version.
@@ -120,7 +122,7 @@ Confirm from an external test host that only approved public ports answer, and c
 
 ## Deferred security boundaries
 
-The following remain deferred and must not be inferred from current controls: public catalog/Storefront replacement; cart, checkout, order mutation/refund, entitlement workflows, and checkout-time consent capture; customer merge, consent withdrawal, and profile deletion/anonymization workflows; staff customer-search UI; webhook HMAC, replay, deduplication, and queues; event-bus consumers; reconciliation workers; internal job APIs; metrics/readiness/debug APIs; financial-action step-up controls; distributed rate limiting; deployment automation; application-managed audit rotation; and encryption-keyring rotation.
+The following remain deferred and must not be inferred from current controls: cart, checkout, order mutation/refund, entitlement workflows, and checkout-time consent capture; customer merge, consent withdrawal, and profile deletion/anonymization workflows; staff customer-search UI; webhook HMAC, replay, deduplication, and queues; event-bus consumers; reconciliation workers; internal job APIs; metrics/readiness/debug APIs; financial-action step-up controls; distributed rate limiting; deployment automation; application-managed audit rotation; and encryption-keyring rotation.
 
 Future implementations require their own route classification, least-privilege nginx exposure, abuse controls, secret/redaction tests, and issue #79 checklist evidence.
 
