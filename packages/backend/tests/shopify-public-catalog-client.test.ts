@@ -113,6 +113,25 @@ describe("tokenless Shopify public catalog client", () => {
 		);
 	});
 
+	it("sends a configured private Storefront token without exposing it in failures", async () => {
+		let requestInit: RequestInit | undefined;
+		const client = new TokenlessShopifyPublicCatalogClient((async (
+			_url,
+			init,
+		) => {
+			requestInit = init;
+			return Response.json(payload());
+		}) as typeof fetch);
+		await client.readProduct(
+			"festival.myshopify.com",
+			"gid://shopify/Product/123",
+			"private-storefront-token",
+		);
+		expect(requestInit?.headers).toMatchObject({
+			"Shopify-Storefront-Private-Token": "private-storefront-token",
+		});
+	});
+
 	it("fails closed for unsafe destinations, oversized payloads, and malformed Shopify data", async () => {
 		const never = new TokenlessShopifyPublicCatalogClient((async () => {
 			throw new Error("must not fetch");

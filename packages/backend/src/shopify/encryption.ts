@@ -13,6 +13,8 @@ const CANONICAL_BASE64_PATTERN =
 	/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
 export const SHOPIFY_CLIENT_SECRET_PURPOSE = "shopify-client-secret" as const;
+export const SHOPIFY_STOREFRONT_PRIVATE_TOKEN_PURPOSE =
+	"shopify-storefront-private-token" as const;
 export const SHOPIFY_CUSTOMER_CLIENT_SECRET_PURPOSE =
 	"shopify-customer-client-secret" as const;
 export const SHOPIFY_CUSTOMER_TOKENS_PURPOSE =
@@ -20,6 +22,7 @@ export const SHOPIFY_CUSTOMER_TOKENS_PURPOSE =
 
 export type ShopifySecretPurpose =
 	| typeof SHOPIFY_CLIENT_SECRET_PURPOSE
+	| typeof SHOPIFY_STOREFRONT_PRIVATE_TOKEN_PURPOSE
 	| typeof SHOPIFY_CUSTOMER_CLIENT_SECRET_PURPOSE
 	| typeof SHOPIFY_CUSTOMER_TOKENS_PURPOSE;
 
@@ -133,6 +136,7 @@ function assertContext(
 		containsControlCharacter(context.organizationId) ||
 		![
 			SHOPIFY_CLIENT_SECRET_PURPOSE,
+			SHOPIFY_STOREFRONT_PRIVATE_TOKEN_PURPOSE,
 			SHOPIFY_CUSTOMER_CLIENT_SECRET_PURPOSE,
 			SHOPIFY_CUSTOMER_TOKENS_PURPOSE,
 		].includes(context.purpose)
@@ -202,6 +206,7 @@ function parseEnvelope(serialized: string): {
 		typeof candidate.purpose !== "string" ||
 		![
 			SHOPIFY_CLIENT_SECRET_PURPOSE,
+			SHOPIFY_STOREFRONT_PRIVATE_TOKEN_PURPOSE,
 			SHOPIFY_CUSTOMER_CLIENT_SECRET_PURPOSE,
 			SHOPIFY_CUSTOMER_TOKENS_PURPOSE,
 		].includes(candidate.purpose as ShopifySecretPurpose) ||

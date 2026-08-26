@@ -100,12 +100,17 @@ export async function createApp(options: CreateAppOptions = {}) {
 	const shopifyPublicCatalogClient = new TokenlessShopifyPublicCatalogClient();
 	const publicMembershipProductService =
 		options.publicMembershipProductService ??
-		new PublicMembershipProductService(repository, shopifyPublicCatalogClient);
+		new PublicMembershipProductService(
+			repository,
+			shopifyPublicCatalogClient,
+			secretKeyring ?? undefined,
+		);
 	const shopifyIntegrationDiagnosticService =
 		options.shopifyIntegrationDiagnosticService ??
 		new ShopifyIntegrationDiagnosticService(
 			repository,
 			shopifyPublicCatalogClient,
+			secretKeyring ?? undefined,
 		);
 	const customerAccountRepository =
 		options.customerAccountRepository ??

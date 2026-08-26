@@ -267,6 +267,26 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 							}
 						/>
 					</label>
+					<label class="field">
+						<span>Headless private Storefront token</span>
+						<input
+							type="password"
+							autocomplete="new-password"
+							placeholder={
+								props.app.shopifySettings()?.hasStorefrontPrivateToken
+									? "Leave blank to keep existing token"
+									: "Optional"
+							}
+							value={props.app.shopifyDraft().storefrontPrivateToken}
+							onInput={(event) =>
+								props.app.setShopifyDraft((current) => ({
+									...current,
+									storefrontPrivateToken: event.currentTarget.value,
+								}))
+							}
+						/>
+						<small>Stored securely and used only by Festival’s backend.</small>
+					</label>
 					<Show when={props.app.shopifySettings()?.lastError} keyed>
 						{(lastError) => <p class="shopify-error-text">{lastError}</p>}
 					</Show>

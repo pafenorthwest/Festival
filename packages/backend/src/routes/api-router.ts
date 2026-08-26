@@ -33,6 +33,7 @@ const ALLOWED_SHOPIFY_SETTINGS_FIELDS = new Set([
 	"storeUrl",
 	"clientId",
 	"clientSecret",
+	"storefrontPrivateToken",
 ]);
 
 function assertAllowedFields(

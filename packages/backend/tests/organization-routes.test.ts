@@ -1144,6 +1144,7 @@ describe("organization routes", () => {
 						storeUrl: "https://example.myshopify.com/admin",
 						clientId: "client-id",
 						clientSecret: "client-secret",
+						storefrontPrivateToken: "private-storefront-token",
 					}),
 				}),
 			),
@@ -1164,6 +1165,7 @@ describe("organization routes", () => {
 			storeDomain: "example.myshopify.com",
 			clientId: "client-id",
 			hasClientSecret: true,
+			hasStorefrontPrivateToken: true,
 			verificationStatus: "ok",
 		});
 		expect(shopifyTester.calls[0]).toMatchObject({

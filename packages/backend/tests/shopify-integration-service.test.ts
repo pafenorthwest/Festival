@@ -196,6 +196,49 @@ describe("ShopifyIntegrationService", () => {
 		expect(retained?.verificationStatus).toBe("ok");
 	});
 
+	it("encrypts and retains the optional private Storefront token", async () => {
+		const repository = new InMemoryOrganizationRepository();
+		const keyring = createKeyring();
+		const service = new ShopifyIntegrationService(
+			repository,
+			keyring,
+			new FakeShopifyTester(),
+		);
+		const tenant = await createTenant(repository);
+
+		const first = await service.saveAndTestForTenant(tenant, {
+			storeUrl: "example.myshopify.com",
+			clientId: "client-id",
+			clientSecret: "client-secret",
+			storefrontPrivateToken: "private-token",
+		});
+		const stored = await repository.getShopifyIntegration(
+			tenant.organization.id,
+		);
+		expect(first.settings.hasStorefrontPrivateToken).toBeTrue();
+		expect(stored?.encryptedStorefrontPrivateToken).toBeTruthy();
+		expect(JSON.stringify(first)).not.toContain("private-token");
+		expect(
+			keyring.decrypt(stored?.encryptedStorefrontPrivateToken ?? "", {
+				organizationId: tenant.organization.id,
+				purpose: "shopify-storefront-private-token",
+			}),
+		).toBe("private-token");
+
+		await service.saveAndTestForTenant(tenant, {
+			storeUrl: "example.myshopify.com",
+			clientId: "client-id",
+			clientSecret: "",
+			storefrontPrivateToken: "",
+		});
+		const retained = await repository.getShopifyIntegration(
+			tenant.organization.id,
+		);
+		expect(retained?.encryptedStorefrontPrivateToken).toBe(
+			stored?.encryptedStorefrontPrivateToken,
+		);
+	});
+
 	it("rejects a client-secret envelope copied to another tenant", async () => {
 		const repository = new InMemoryOrganizationRepository();
 		const tester = new FakeShopifyTester();

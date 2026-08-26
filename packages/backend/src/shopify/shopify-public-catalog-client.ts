@@ -24,6 +24,7 @@ export interface ShopifyPublicCatalogClient {
 	readProduct(
 		shopDomain: string,
 		productGid: string,
+		storefrontPrivateToken?: string,
 	): Promise<PublicShopifyCatalogProduct | null>;
 }
 
@@ -32,6 +33,7 @@ export type ShopifyPublicStorefrontAccessResult = "passed" | "locked";
 export interface ShopifyPublicStorefrontDiagnosticClient {
 	diagnosePublicStorefrontAccess(
 		shopDomain: string,
+		storefrontPrivateToken?: string,
 	): Promise<ShopifyPublicStorefrontAccessResult>;
 }
 
@@ -110,12 +112,15 @@ export class TokenlessShopifyPublicCatalogClient
 
 	async diagnosePublicStorefrontAccess(
 		shopDomain: string,
+		storefrontPrivateToken?: string,
 	): Promise<ShopifyPublicStorefrontAccessResult> {
 		const response = await this.graphqlRequest(
 			shopDomain,
 			`query FestivalPublicStorefrontDiagnostic {
 				shop { name }
 			}`,
+			{},
+			storefrontPrivateToken,
 		);
 		if (!isRecord(response.payload)) throw unavailable();
 		if (!response.ok) {
@@ -149,6 +154,7 @@ export class TokenlessShopifyPublicCatalogClient
 	async readProduct(
 		shopDomain: string,
 		productGid: string,
+		storefrontPrivateToken?: string,
 	): Promise<PublicShopifyCatalogProduct | null> {
 		if (!SHOPIFY_GID_PATTERN.test(productGid)) throw unavailable();
 		const response = await this.graphqlRequest(
@@ -160,6 +166,7 @@ export class TokenlessShopifyPublicCatalogClient
 				}
 			}`,
 			{ id: productGid },
+			storefrontPrivateToken,
 		);
 		if (!response.ok || !isRecord(response.payload)) throw unavailable();
 		const payload = response.payload;
@@ -176,6 +183,7 @@ export class TokenlessShopifyPublicCatalogClient
 		shopDomain: string,
 		query: string,
 		variables: Record<string, unknown> = {},
+		storefrontPrivateToken?: string,
 	): Promise<{ ok: boolean; status: number; payload: unknown }> {
 		const domain = assertPublicShopDomain(shopDomain);
 		const controller = new AbortController();
@@ -190,6 +198,9 @@ export class TokenlessShopifyPublicCatalogClient
 					headers: {
 						"Content-Type": "application/json",
 						"User-Agent": "Festival-Public-Catalog/1.0",
+						...(storefrontPrivateToken
+							? { "Shopify-Storefront-Private-Token": storefrontPrivateToken }
+							: {}),
 					},
 					body: JSON.stringify({
 						query,

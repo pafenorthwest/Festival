@@ -399,12 +399,14 @@ export function createFestivalActions(
 				storeUrl: draft.storeUrl,
 				clientId: draft.clientId,
 				clientSecret: draft.clientSecret,
+				storefrontPrivateToken: draft.storefrontPrivateToken,
 			});
 			state.setShopifySettings(response.settings);
 			state.setShopifyDraft({
 				storeUrl: response.settings.storeDomain,
 				clientId: response.settings.clientId,
 				clientSecret: "",
+				storefrontPrivateToken: "",
 			});
 			state.setStatusMessage(
 				response.settings.verificationStatus === "ok"

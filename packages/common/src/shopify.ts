@@ -67,6 +67,7 @@ export interface ShopifyIntegrationSettings {
 	storeDomain: string;
 	clientId: string;
 	hasClientSecret: boolean;
+	hasStorefrontPrivateToken: boolean;
 	verificationStatus: ShopifyVerificationStatus;
 	verifiedShopGid?: string;
 	verifiedShopDomain?: string;
@@ -87,6 +88,7 @@ export interface SaveShopifyIntegrationInput {
 	storeUrl: string;
 	clientId: string;
 	clientSecret?: string;
+	storefrontPrivateToken?: string;
 }
 
 export interface SaveShopifyIntegrationResponse {
@@ -116,6 +118,7 @@ export interface ShopifySettingsValidation {
 	storeDomain: string;
 	clientId: string;
 	clientSecret?: string;
+	storefrontPrivateToken?: string;
 }
 
 export const SHOPIFY_PRODUCT_STATUSES = [
@@ -239,6 +242,10 @@ export function validateShopifySettingsInput(
 		typeof candidate.clientSecret === "string"
 			? candidate.clientSecret.trim()
 			: undefined;
+	const storefrontPrivateToken =
+		typeof candidate.storefrontPrivateToken === "string"
+			? candidate.storefrontPrivateToken.trim()
+			: undefined;
 	const storeDomain = normalizeShopifyStoreDomain(storeUrl);
 	const errors: string[] = [];
 
@@ -262,6 +269,7 @@ export function validateShopifySettingsInput(
 		storeDomain,
 		clientId,
 		clientSecret,
+		storefrontPrivateToken,
 	};
 }
 

@@ -17,6 +17,7 @@ import type {
 import { ShopifyShopOwnershipError } from "../repo/organization-repository.js";
 import {
 	SHOPIFY_CLIENT_SECRET_PURPOSE,
+	SHOPIFY_STOREFRONT_PRIVATE_TOKEN_PURPOSE,
 	type ShopifySecretKeyring,
 } from "./encryption.js";
 import { ShopifyIntegrationError } from "./errors.js";
@@ -29,6 +30,7 @@ function toPublicSettings(
 		storeDomain: record.storeDomain,
 		clientId: record.clientId,
 		hasClientSecret: true,
+		hasStorefrontPrivateToken: Boolean(record.encryptedStorefrontPrivateToken),
 		verificationStatus: record.verificationStatus,
 		verifiedShopGid: record.verifiedShopGid,
 		verifiedShopDomain: record.verifiedShopDomain,
@@ -84,7 +86,10 @@ export class ShopifyIntegrationService {
 		);
 		const candidate =
 			input && typeof input === "object"
-				? (input as { clientSecret?: unknown })
+				? (input as {
+						clientSecret?: unknown;
+						storefrontPrivateToken?: unknown;
+					})
 				: {};
 		const secretWasProvided =
 			typeof candidate.clientSecret === "string" &&
@@ -104,6 +109,17 @@ export class ShopifyIntegrationService {
 						purpose: SHOPIFY_CLIENT_SECRET_PURPOSE,
 					})
 				: undefined;
+		const storefrontTokenWasProvided =
+			typeof candidate.storefrontPrivateToken === "string" &&
+			Boolean(candidate.storefrontPrivateToken.trim());
+		const storefrontPrivateToken = storefrontTokenWasProvided
+			? validation.storefrontPrivateToken
+			: existing?.encryptedStorefrontPrivateToken
+				? this.secretKeyring.decrypt(existing.encryptedStorefrontPrivateToken, {
+						organizationId: tenant.organization.id,
+						purpose: SHOPIFY_STOREFRONT_PRIVATE_TOKEN_PURPOSE,
+					})
+				: undefined;
 		if (!clientSecret) {
 			throw new AppError("Shopify client secret is required.", 400);
 		}
@@ -117,6 +133,12 @@ export class ShopifyIntegrationService {
 		if (!encryptedClientSecret) {
 			throw new AppError("Shopify client secret is required.", 400);
 		}
+		const encryptedStorefrontPrivateToken = storefrontTokenWasProvided
+			? this.secretKeyring.encrypt(storefrontPrivateToken ?? "", {
+					organizationId: tenant.organization.id,
+					purpose: SHOPIFY_STOREFRONT_PRIVATE_TOKEN_PURPOSE,
+				})
+			: existing?.encryptedStorefrontPrivateToken;
 
 		let saved: ShopifyIntegrationRecord;
 		try {
@@ -125,6 +147,7 @@ export class ShopifyIntegrationService {
 				storeDomain: validation.storeDomain,
 				clientId: validation.clientId,
 				encryptedClientSecret,
+				encryptedStorefrontPrivateToken,
 			});
 		} catch (error) {
 			if (error instanceof ShopifyShopOwnershipError) {

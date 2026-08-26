@@ -15,3 +15,4 @@ number,taskname,first_create_date,first_create_hhmmss,first_create_git_hash
 14,duplicate-membership-conflict-error,2026-08-19,000000,-------
 15,issue-93-public-teacher-membership-auth-resume,2026-08-19,000000,-------
 16,shopify-integration-public-storefront-diagnostic,2026-08-19,000000,-------
+17,shopify-headless-private-token,2026-08-26,000000,-------

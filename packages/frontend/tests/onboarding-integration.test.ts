@@ -130,6 +130,13 @@ describe("organization onboarding integration", () => {
 		expect(source).not.toContain("accessToken");
 	});
 
+	it("wires the private Storefront token as a server-only replaceable field", async () => {
+		const source = await Bun.file("src/pages/AdminIntegrationsPage.tsx").text();
+		expect(source).toContain("Headless private Storefront token");
+		expect(source).toContain("hasStorefrontPrivateToken");
+		expect(source).toContain("Leave blank to keep existing token");
+	});
+
 	it("warns when a verified Shopify integration is missing required scopes", async () => {
 		const source = await readFrontendSource();
 		const styles = await Bun.file("src/styles.css").text();

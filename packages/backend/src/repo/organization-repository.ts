@@ -53,6 +53,7 @@ export interface ShopifyIntegrationRecord {
 	storeDomain: string;
 	clientId: string;
 	encryptedClientSecret: string;
+	encryptedStorefrontPrivateToken?: string;
 	verificationStatus: ShopifyVerificationStatus;
 	verifiedShopGid?: string;
 	verifiedShopDomain?: string;
@@ -72,6 +73,7 @@ export interface UpsertShopifyIntegrationInput {
 	storeDomain: string;
 	clientId: string;
 	encryptedClientSecret: string;
+	encryptedStorefrontPrivateToken?: string;
 }
 
 interface UpdateShopifyVerificationBase {

@@ -6,13 +6,34 @@ import type {
 import { TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS } from "@festival/common";
 import { AppError } from "../errors/app-error.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
+import {
+	SHOPIFY_STOREFRONT_PRIVATE_TOKEN_PURPOSE,
+	type ShopifySecretKeyring,
+} from "./encryption.js";
 import type { ShopifyPublicCatalogClient } from "./shopify-public-catalog-client.js";
 
 export class PublicMembershipProductService {
 	constructor(
 		private readonly repository: OrganizationRepository,
 		private readonly catalog: ShopifyPublicCatalogClient,
+		private readonly secretKeyring?: ShopifySecretKeyring,
 	) {}
+
+	private async storefrontToken(
+		organizationId: string,
+	): Promise<string | undefined> {
+		if (!this.secretKeyring) return undefined;
+		const integration =
+			await this.repository.getShopifyIntegration(organizationId);
+		if (!integration?.encryptedStorefrontPrivateToken) return undefined;
+		return this.secretKeyring.decrypt(
+			integration.encryptedStorefrontPrivateToken,
+			{
+				organizationId,
+				purpose: SHOPIFY_STOREFRONT_PRIVATE_TOKEN_PURPOSE,
+			},
+		);
+	}
 
 	async list(slug: string): Promise<PublicMembershipProductsListResponse> {
 		const organization = await this.repository.findOrganizationBySlug(slug);
@@ -38,6 +59,7 @@ export class PublicMembershipProductService {
 		const product = await this.catalog.readProduct(
 			domain,
 			offering.shopifyProductGid,
+			await this.storefrontToken(organization.id),
 		);
 		if (!product) {
 			throw new AppError(

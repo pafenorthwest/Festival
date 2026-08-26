@@ -599,6 +599,7 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			storeDomain: input.storeDomain,
 			clientId: input.clientId,
 			encryptedClientSecret: input.encryptedClientSecret,
+			encryptedStorefrontPrivateToken: input.encryptedStorefrontPrivateToken,
 			verificationStatus: "unknown",
 			grantedScopes: [],
 			capabilities: { ...EMPTY_SHOPIFY_CAPABILITIES },
