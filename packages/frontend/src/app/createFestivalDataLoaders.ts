@@ -198,6 +198,7 @@ export function createFestivalDataLoaders(state: FestivalAppState) {
 			storeUrl: response.settings?.storeDomain ?? "",
 			clientId: response.settings?.clientId ?? "",
 			clientSecret: "",
+			storefrontPrivateToken: "",
 		});
 	}
 

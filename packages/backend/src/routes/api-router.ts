@@ -4,7 +4,7 @@ import type {
 	CreateInviteInput,
 	CreateOrganizationInput,
 } from "@festival/common";
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import {
 	type ApiVariables,
@@ -24,6 +24,8 @@ import {
 } from "../customer/customer-account-service.js";
 import { AppError } from "../errors/app-error.js";
 import type { OrganizationService } from "../services/organization-service.js";
+import type { PublicMembershipProductService } from "../shopify/public-membership-product-service.js";
+import type { ShopifyIntegrationDiagnosticService } from "../shopify/shopify-integration-diagnostic-service.js";
 import type { ShopifyIntegrationService } from "../shopify/shopify-integration-service.js";
 import type { ShopifyMembershipProductService } from "../shopify/shopify-membership-product-service.js";
 
@@ -31,6 +33,7 @@ const ALLOWED_SHOPIFY_SETTINGS_FIELDS = new Set([
 	"storeUrl",
 	"clientId",
 	"clientSecret",
+	"storefrontPrivateToken",
 ]);
 
 function assertAllowedFields(
@@ -82,12 +85,58 @@ function assertNoBearerPrincipal(value: string | undefined): void {
 		);
 }
 
+function assertBodylessPublicRead(
+	authorization: string | undefined,
+	contentLength: string | undefined,
+	hasBody: boolean,
+): void {
+	if (authorization !== undefined) {
+		throw new AppError(
+			"Authorization is not accepted on this public route.",
+			400,
+		);
+	}
+	if (hasBody || (contentLength !== undefined && !/^0+$/.test(contentLength))) {
+		throw new AppError(
+			"Request body is not accepted on this public route.",
+			400,
+		);
+	}
+}
+
+function assertBodylessDiagnostic(
+	contentLength: string | undefined,
+	hasBody: boolean,
+): void {
+	if (hasBody || (contentLength !== undefined && !/^0+$/.test(contentLength))) {
+		throw new AppError("Request body is not accepted for diagnostics.", 400);
+	}
+}
+
+function assertAllowedCustomerAuthStartQuery(url: string): void {
+	const allowed = new Set(["returnTo", "offering"]);
+	const params = new URL(url).searchParams;
+	const unsupported = [...params.keys()].filter((key) => !allowed.has(key));
+	const duplicates = [...allowed].filter(
+		(key) => params.getAll(key).length > 1,
+	);
+	if (unsupported.length || duplicates.length) {
+		const fields = [...new Set([...unsupported, ...duplicates])];
+		throw new AppError(
+			`Customer authentication request contains unsupported fields: ${fields.join(", ")}.`,
+			400,
+		);
+	}
+}
+
 export function buildApiRouter(
 	organizationService: OrganizationService,
 	authVerifier: AuthVerifier,
 	shopifyIntegrationService?: ShopifyIntegrationService,
 	shopifyMembershipProductService?: ShopifyMembershipProductService,
 	customerAccountService?: CustomerAccountService,
+	publicMembershipProductService?: PublicMembershipProductService,
+	shopifyIntegrationDiagnosticService?: ShopifyIntegrationDiagnosticService,
 ): Hono<{ Variables: Partial<ApiVariables> }> {
 	const router = new Hono<{ Variables: Partial<ApiVariables> }>();
 	const repository = organizationService.repository;
@@ -513,6 +562,31 @@ export function buildApiRouter(
 		},
 	);
 
+	router.post(
+		"/organizations/:slug/admin/shopify/diagnostics",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				assertBodylessDiagnostic(
+					c.req.header("Content-Length"),
+					c.req.raw.body !== null,
+				);
+				if (!shopifyIntegrationDiagnosticService) {
+					throw new AppError("Shopify diagnostics are unavailable.", 503);
+				}
+				return c.json(
+					await shopifyIntegrationDiagnosticService.runForTenant(
+						getRequiredTenant(c),
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
 	router.get(
 		"/organizations/:slug/admin/shopify-customer-account",
 		requireAuth(authVerifier),
@@ -567,15 +641,26 @@ export function buildApiRouter(
 	router.get("/organizations/:slug/customer-auth/start", async (c) => {
 		try {
 			assertNoBearerPrincipal(c.req.header("Authorization"));
+			assertAllowedCustomerAuthStartQuery(c.req.url);
 			if (!customerAccountService)
 				throw new AppError(
 					"Customer Account integration is not configured.",
 					503,
 				);
+			const offeringId = c.req.query("offering");
+			if (offeringId) {
+				if (!publicMembershipProductService)
+					throw new AppError("Membership information is unavailable.", 503);
+				await publicMembershipProductService.resolvePurchasable(
+					c.req.param("slug"),
+					offeringId,
+				);
+			}
 			return c.redirect(
 				await customerAccountService.start(
 					c.req.param("slug"),
 					c.req.query("returnTo"),
+					offeringId,
 				),
 			);
 		} catch (error) {
@@ -591,9 +676,24 @@ export function buildApiRouter(
 					"Customer Account integration is not configured.",
 					503,
 				);
+			if (c.req.query("error") && !c.req.query("code")) {
+				return c.redirect(
+					await customerAccountService.authenticationFailure(
+						c.req.query("state"),
+					),
+				);
+			}
 			const result = await customerAccountService.callback(
 				c.req.query("state"),
 				c.req.query("code"),
+				async (slug, offeringId) => {
+					if (!publicMembershipProductService)
+						throw new AppError("Membership information is unavailable.", 503);
+					await publicMembershipProductService.resolvePurchasable(
+						slug,
+						offeringId,
+					);
+				},
 			);
 			setCookie(c, CUSTOMER_SESSION_COOKIE, result.sessionId, {
 				httpOnly: true,
@@ -626,6 +726,33 @@ export function buildApiRouter(
 			return toJsonError(c, error);
 		}
 	});
+
+	router.get(
+		"/organizations/:slug/customer/membership-purchase/:offeringId",
+		async (c) => {
+			try {
+				assertNoBearerPrincipal(c.req.header("Authorization"));
+				if (!customerAccountService || !publicMembershipProductService)
+					throw new AppError("Membership purchase is unavailable.", 503);
+				const session = await customerAccountService.session(
+					c.req.param("slug"),
+					getCookie(c, CUSTOMER_SESSION_COOKIE),
+				);
+				if (!session.session.authenticated) {
+					throw new AppError("Customer session is invalid.", 401);
+				}
+				c.header("Cache-Control", "no-store");
+				return c.json(
+					await publicMembershipProductService.resolvePurchasable(
+						c.req.param("slug"),
+						c.req.param("offeringId"),
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
 
 	router.get("/organizations/:slug/customer/profile", async (c) => {
 		try {
@@ -816,9 +943,35 @@ export function buildApiRouter(
 		},
 	);
 
-	router.get("/organizations/:slug/membership-products", async (c) => {
-		c.status(403);
-		return c.json({ error: "Forbidden." });
+	const publicMembershipProducts = async (
+		c: Context<{ Variables: Partial<ApiVariables> }>,
+	) => {
+		try {
+			assertBodylessPublicRead(
+				c.req.header("Authorization"),
+				c.req.header("Content-Length"),
+				c.req.raw.body !== null,
+			);
+			if (!publicMembershipProductService)
+				throw new AppError("Membership information is unavailable.", 503);
+			const slug = c.req.param("slug");
+			if (!slug) throw new AppError("Organization is required.", 400);
+			c.header("Cache-Control", "no-store");
+			return c.json(await publicMembershipProductService.list(slug));
+		} catch (error) {
+			return toJsonError(c, error);
+		}
+	};
+	router.get(
+		"/organizations/:slug/membership-products",
+		publicMembershipProducts,
+	);
+	router.on("HEAD", "/organizations/:slug/membership-products", async (c) => {
+		const response = await publicMembershipProducts(c);
+		return new Response(null, {
+			status: response.status,
+			headers: response.headers,
+		});
 	});
 
 	return router;

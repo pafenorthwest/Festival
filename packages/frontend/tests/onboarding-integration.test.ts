@@ -6,6 +6,7 @@ import {
 	createInvite,
 	createMembershipProduct,
 	createOrganization,
+	customerMembershipPurchaseSignInPath,
 	dismissWelcome,
 	getAdminMembershipProducts,
 	getBootstrap,
@@ -15,6 +16,8 @@ import {
 	getMemberships,
 	getOrganization,
 	getShopifySettings,
+	resumeCustomerMembershipPurchase,
+	runShopifyDiagnostics,
 	saveShopifySettings,
 } from "../src/lib/api.js";
 import {
@@ -125,6 +128,13 @@ describe("organization onboarding integration", () => {
 		expect(source).toContain("settings.capabilities.write_products");
 		expect(source).not.toContain("settings.grantedScopes");
 		expect(source).not.toContain("accessToken");
+	});
+
+	it("wires the private Storefront token as a server-only replaceable field", async () => {
+		const source = await Bun.file("src/pages/AdminIntegrationsPage.tsx").text();
+		expect(source).toContain("Headless private Storefront token");
+		expect(source).toContain("hasStorefrontPrivateToken");
+		expect(source).toContain("Leave blank to keep existing token");
 	});
 
 	it("warns when a verified Shopify integration is missing required scopes", async () => {
@@ -253,6 +263,7 @@ describe("organization onboarding integration", () => {
 			clientId: "client-id",
 			clientSecret: "client-secret",
 		});
+		await runShopifyDiagnostics("token-11", "pafe");
 
 		expect(
 			fetchCalls.map((call) => call.init?.headers as Record<string, string>),
@@ -269,6 +280,7 @@ describe("organization onboarding integration", () => {
 			expect.objectContaining({ Authorization: "Bearer token-7" }),
 			expect.objectContaining({ Authorization: "Bearer token-9" }),
 			expect.objectContaining({ Authorization: "Bearer token-10" }),
+			expect.objectContaining({ Authorization: "Bearer token-11" }),
 		]);
 	});
 
@@ -302,6 +314,7 @@ describe("organization onboarding integration", () => {
 			clientId: "client-id",
 			clientSecret: "client-secret",
 		});
+		await runShopifyDiagnostics("token", "pafe");
 
 		expect(fetchCalls.map((call) => call.url)).toEqual([
 			"/api/bootstrap",
@@ -317,7 +330,33 @@ describe("organization onboarding integration", () => {
 			"/api/organizations/pafe/admin/membership-products",
 			"/api/organizations/pafe/admin/shopify",
 			"/api/organizations/pafe/admin/shopify",
+			"/api/organizations/pafe/admin/shopify/diagnostics",
 		]);
+		expect(fetchCalls.at(-1)?.init).toMatchObject({ method: "POST" });
+		expect(fetchCalls.at(-1)?.init?.body).toBeUndefined();
+	});
+
+	it("renders transient Shopify diagnostic states without changing verification readiness", async () => {
+		const pageSource = await Bun.file(
+			"src/pages/AdminIntegrationsPage.tsx",
+		).text();
+		const styles = await Bun.file("src/styles.css").text();
+
+		expect(pageSource).toContain("Run diagnostics");
+		expect(pageSource).toContain("Running diagnostics…");
+		expect(pageSource).toContain("No diagnostics run yet.");
+		expect(pageSource).toContain("Checking public Storefront access…");
+		expect(pageSource).toContain('result.status === "passed"');
+		expect(pageSource).toContain("Action required");
+		expect(pageSource).toContain("Diagnostics unavailable");
+		expect(pageSource).toContain('settings?.verificationStatus === "ok"');
+		expect(pageSource).toContain("Boolean(settings.verifiedShopDomain)");
+		expect(pageSource).toContain("setDiagnosticResult(null)");
+		expect(pageSource).toContain('setDiagnosticError("")');
+		expect(styles).toContain(".shopify-diagnostics");
+		expect(styles).toContain(".shopify-diagnostic-passed");
+		expect(styles).toContain(".shopify-diagnostic-failed");
+		expect(styles).toContain(".shopify-diagnostic-error");
 	});
 
 	it("wires the public membership page through the backend API only", async () => {
@@ -335,6 +374,42 @@ describe("organization onboarding integration", () => {
 		expect(source).toContain("ALLOWED_TAGS");
 		expect(source).toContain("ALLOWED_ATTR");
 		expect(source).toContain("innerHTML={sanitizeShopifyDescriptionHtml(");
+	});
+
+	it("starts customer authentication or resumes the same local offering without cart mutation", async () => {
+		const page = await Bun.file("src/pages/MembershipPage.tsx").text();
+		const api = await Bun.file("src/lib/api.ts").text();
+		expect(page).toContain('"Purchase"');
+		expect(page).toContain("getCustomerSession(route.slug)");
+		expect(page).toContain("customerMembershipPurchaseSignInPath(");
+		expect(page).toContain(
+			"resumeCustomerMembershipPurchase(slug, offeringId)",
+		);
+		expect(page).toContain("Customer authentication or membership selection");
+		expect(page).toContain("Customer authentication was not completed");
+		expect(page).toContain("membershipProduct.available");
+		expect(page).not.toMatch(/cartCreate|checkoutUrl|shopifyVariantGid/);
+		expect(api).toContain("customer/membership-purchase/");
+		expect(customerMembershipPurchaseSignInPath("pafe", "offering_123")).toBe(
+			"/api/organizations/pafe/customer-auth/start?offering=offering_123",
+		);
+
+		mockFetch({
+			selection: {
+				offeringId: "offering_123",
+				organizationSlug: "pafe",
+				entitlementClass: "teacher_membership",
+			},
+		});
+		await resumeCustomerMembershipPurchase("pafe", "offering_123");
+		expect(fetchCalls).toEqual([
+			expect.objectContaining({
+				url: "/api/organizations/pafe/customer/membership-purchase/offering_123",
+			}),
+		]);
+		expect(
+			(fetchCalls[0]?.init?.headers as Record<string, string>).Authorization,
+		).toBeUndefined();
 	});
 
 	it("surfaces Shopify settings load failures on both admin pages", async () => {

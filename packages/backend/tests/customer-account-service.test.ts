@@ -214,8 +214,8 @@ async function fixture(repository = new InMemoryCustomerAccountRepository()) {
 		clientId: "customer-client",
 		clientSecret: "customer-secret",
 	});
-	async function begin() {
-		const authorization = await service.start("festival");
+	async function begin(returnTo?: string, offeringId?: string) {
+		const authorization = await service.start("festival", returnTo, offeringId);
 		const authUrl = new URL(authorization);
 		nonce = authUrl.searchParams.get("nonce") ?? "";
 		return authUrl;
@@ -473,6 +473,58 @@ describe("CustomerAccountService", () => {
 		await expect(
 			target.service.start("festival", "https://evil.example/callback"),
 		).rejects.toThrow("Return target");
+	});
+	it("preserves one bounded local offering in one-time tenant OAuth state", async () => {
+		const f = await fixture();
+		const authUrl = await f.begin(undefined, "offering_123");
+		const result = await f.service.callback(
+			authUrl.searchParams.get("state") ?? "",
+			"code-1",
+			async () => {},
+		);
+		expect(result).toMatchObject({
+			organizationSlug: "festival",
+			offeringId: "offering_123",
+			returnTo: "/org/festival/membership?purchase=offering_123",
+		});
+		await expect(
+			f.service.callback(authUrl.searchParams.get("state") ?? "", "code-1"),
+		).rejects.toThrow("invalid");
+		await expect(
+			f.service.start("festival", undefined, "gid://shopify/Product/1"),
+		).rejects.toThrow("selection is invalid");
+		await expect(
+			f.service.start(
+				"festival",
+				"/org/other/membership?purchase=offering_123",
+				"offering_123",
+			),
+		).rejects.toThrow("Return target is invalid");
+	});
+	it("consumes purchase OAuth state and returns a safe local authentication-failure target", async () => {
+		const f = await fixture();
+		const authUrl = await f.begin(undefined, "offering_123");
+		const state = authUrl.searchParams.get("state") ?? "";
+		expect(await f.service.authenticationFailure(state)).toBe(
+			"/org/festival/membership?purchaseError=authentication",
+		);
+		await expect(f.service.authenticationFailure(state)).rejects.toThrow(
+			"invalid",
+		);
+	});
+	it("revalidates a resumed offering before token exchange or session creation", async () => {
+		const f = await fixture();
+		const authUrl = await f.begin(undefined, "offering_123");
+		await expect(
+			f.service.callback(
+				authUrl.searchParams.get("state") ?? "",
+				"code-1",
+				async () => {
+					throw new Error("offering changed");
+				},
+			),
+		).rejects.toThrow("offering changed");
+		expect(f.tokenCalls()).toBe(0);
 	});
 	it("serializes refresh within one backend process and rotates encrypted tokens", async () => {
 		const f = await fixture();

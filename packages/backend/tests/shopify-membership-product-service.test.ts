@@ -304,6 +304,48 @@ describe("ShopifyMembershipProductService", () => {
 		]);
 	});
 
+	it("rejects an existing active Teacher Membership before Shopify or audit access", async () => {
+		const repository = new InMemoryOrganizationRepository();
+		const organization = await createOrganization(repository);
+		const encryptor = await saveIntegration(repository, organization);
+		await repository.createMembershipProductRecord({
+			organizationId: organization.id,
+			entitlementClass: "teacher_membership",
+			durationDays: 365,
+			isActive: true,
+			shopifyProductGid: "gid://shopify/Product/existing",
+			shopifyVariantGid: "gid://shopify/ProductVariant/existing",
+			productNameSnapshot: "Existing Teacher Membership",
+		});
+		const client = new FakeShopifyProductClient();
+		const audit = new FakeAuditWriter();
+		const service = new ShopifyMembershipProductService(
+			repository,
+			encryptor,
+			client,
+			audit,
+		);
+
+		try {
+			await service.createMembershipProduct(
+				tenantFor(organization),
+				membershipInput(),
+			);
+			throw new Error("Expected service to reject.");
+		} catch (error) {
+			expect(error).toBeInstanceOf(AppError);
+			expect((error as AppError).status).toBe(409);
+			expect((error as Error).message).toBe(
+				"An active Teacher Membership already exists for this organization.",
+			);
+		}
+		expect(client.createCalls).toBe(0);
+		expect(client.readProductGids).toHaveLength(0);
+		expect(client.deletedProductGids).toHaveLength(0);
+		expect(audit.readyCalls).toBe(0);
+		expect(audit.records).toHaveLength(0);
+	});
+
 	it("lists current Shopify data for local membership product records", async () => {
 		const repository = new InMemoryOrganizationRepository();
 		const organization = await createOrganization(repository);

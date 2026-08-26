@@ -1,8 +1,12 @@
-import type { ShopifyCapabilityDiagnostics } from "@festival/common";
-import { Show } from "solid-js";
+import type {
+	ShopifyCapabilityDiagnostics,
+	ShopifyIntegrationDiagnosticCheck,
+} from "@festival/common";
+import { createSignal, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { AccessDeniedPanel } from "../components/AccessDeniedPanel.js";
 import { CustomerAccountAdminCard } from "../components/CustomerAccountAdminCard.js";
+import { runShopifyDiagnostics } from "../lib/api.js";
 
 interface AdminIntegrationsPageProps {
 	app: FestivalAppController;
@@ -54,6 +58,50 @@ function currentShopifyAppUrl(app: FestivalAppController): string {
 }
 
 export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
+	const [isRunningDiagnostics, setIsRunningDiagnostics] = createSignal(false);
+	const [diagnosticResult, setDiagnosticResult] =
+		createSignal<ShopifyIntegrationDiagnosticCheck | null>(null);
+	const [diagnosticError, setDiagnosticError] = createSignal("");
+	const diagnosticsAvailable = () => {
+		const settings = props.app.shopifySettings();
+		return (
+			settings?.verificationStatus === "ok" &&
+			Boolean(settings.verifiedShopDomain)
+		);
+	};
+
+	async function handleRunDiagnostics() {
+		const user = props.app.firebaseUser();
+		const route = props.app.route();
+		if (
+			!user ||
+			route.kind !== "org-admin-integrations" ||
+			!diagnosticsAvailable() ||
+			isRunningDiagnostics()
+		) {
+			return;
+		}
+
+		setIsRunningDiagnostics(true);
+		setDiagnosticResult(null);
+		setDiagnosticError("");
+		try {
+			const response = await runShopifyDiagnostics(
+				await user.getIdToken(),
+				route.slug,
+			);
+			const check = response.checks.find(
+				(candidate) => candidate.id === "public_storefront_access",
+			);
+			if (!check) throw new Error("Shopify diagnostics returned no result.");
+			setDiagnosticResult(check);
+		} catch (error) {
+			setDiagnosticError((error as Error).message);
+		} finally {
+			setIsRunningDiagnostics(false);
+		}
+	}
+
 	return (
 		<Show
 			when={props.app.isAdminMember()}
@@ -104,6 +152,8 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 					class="shopify-integration-card"
 					onSubmit={(event) => {
 						event.preventDefault();
+						setDiagnosticResult(null);
+						setDiagnosticError("");
 						void props.app.handleSaveShopifySettings();
 					}}
 				>
@@ -217,6 +267,26 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 							}
 						/>
 					</label>
+					<label class="field">
+						<span>Headless private Storefront token</span>
+						<input
+							type="password"
+							autocomplete="new-password"
+							placeholder={
+								props.app.shopifySettings()?.hasStorefrontPrivateToken
+									? "Leave blank to keep existing token"
+									: "Optional"
+							}
+							value={props.app.shopifyDraft().storefrontPrivateToken}
+							onInput={(event) =>
+								props.app.setShopifyDraft((current) => ({
+									...current,
+									storefrontPrivateToken: event.currentTarget.value,
+								}))
+							}
+						/>
+						<small>Stored securely and used only by Festival’s backend.</small>
+					</label>
 					<Show when={props.app.shopifySettings()?.lastError} keyed>
 						{(lastError) => <p class="shopify-error-text">{lastError}</p>}
 					</Show>
@@ -232,6 +302,68 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 							<span>Testing</span>
 						</Show>
 					</button>
+					<section
+						class="shopify-diagnostics"
+						aria-labelledby="shopify-diagnostics-title"
+					>
+						<div>
+							<h3 id="shopify-diagnostics-title">Diagnostics</h3>
+							<p>Check conditions required outside Shopify Admin API setup.</p>
+						</div>
+						<button
+							type="button"
+							class="secondary-button"
+							disabled={!diagnosticsAvailable() || isRunningDiagnostics()}
+							onClick={() => void handleRunDiagnostics()}
+						>
+							{isRunningDiagnostics()
+								? "Running diagnostics…"
+								: "Run diagnostics"}
+						</button>
+						<Show when={!diagnosticsAvailable()}>
+							<p class="muted">
+								Save and verify the Shopify integration before running
+								diagnostics.
+							</p>
+						</Show>
+						<Show
+							when={
+								diagnosticsAvailable() &&
+								!isRunningDiagnostics() &&
+								!diagnosticResult() &&
+								!diagnosticError()
+							}
+						>
+							<p class="muted">No diagnostics run yet.</p>
+						</Show>
+						<Show when={isRunningDiagnostics()}>
+							<p role="status">Checking public Storefront access…</p>
+						</Show>
+						<Show when={diagnosticResult()} keyed>
+							{(result) => (
+								<div
+									class={`shopify-diagnostic-result shopify-diagnostic-${result.status}`}
+									role={result.status === "passed" ? "status" : "alert"}
+								>
+									<strong>
+										{result.status === "passed" ? "Passed" : "Action required"}
+									</strong>
+									<p>{result.message}</p>
+								</div>
+							)}
+						</Show>
+						<Show when={diagnosticError()} keyed>
+							{(message) => (
+								<div
+									class="shopify-diagnostic-result shopify-diagnostic-error"
+									role="alert"
+								>
+									<strong>Diagnostics unavailable</strong>
+									<p>{message}</p>
+								</div>
+							)}
+						</Show>
+					</section>
 				</form>
 			</section>
 			<CustomerAccountAdminCard app={props.app} />

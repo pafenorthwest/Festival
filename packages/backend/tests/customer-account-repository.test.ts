@@ -31,9 +31,12 @@ describe("customer account repository contract", () => {
 			organizationId: "org",
 			nonce: "nonce",
 			returnTo: "/org/festival/account",
+			offeringId: "offering_123",
 			expiresAtIso: new Date(Date.now() + 10000).toISOString(),
 		});
-		expect(await repo.consumeOAuthState("hash", now)).not.toBeNull();
+		expect(await repo.consumeOAuthState("hash", now)).toMatchObject({
+			offeringId: "offering_123",
+		});
 		expect(await repo.consumeOAuthState("hash", now)).toBeNull();
 		await repo.upsertIntegration({
 			organizationId: "org",
@@ -121,6 +124,7 @@ describe("customer account repository contract", () => {
 		).text();
 		expect(source).toContain("shopify_customer_account_integrations");
 		expect(source).toContain("shopify_customer_oauth_states");
+		expect(source).toContain("offering_id TEXT NULL");
 		expect(source).toContain("shopify_customer_sessions");
 		expect(source).toContain("festival_customers");
 		expect(source).toContain("festival_customer_staff_consents");

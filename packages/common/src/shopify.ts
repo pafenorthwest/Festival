@@ -67,6 +67,7 @@ export interface ShopifyIntegrationSettings {
 	storeDomain: string;
 	clientId: string;
 	hasClientSecret: boolean;
+	hasStorefrontPrivateToken: boolean;
 	verificationStatus: ShopifyVerificationStatus;
 	verifiedShopGid?: string;
 	verifiedShopDomain?: string;
@@ -87,10 +88,28 @@ export interface SaveShopifyIntegrationInput {
 	storeUrl: string;
 	clientId: string;
 	clientSecret?: string;
+	storefrontPrivateToken?: string;
 }
 
 export interface SaveShopifyIntegrationResponse {
 	settings: ShopifyIntegrationSettings;
+}
+
+export const SHOPIFY_INTEGRATION_DIAGNOSTIC_IDS = [
+	"public_storefront_access",
+] as const;
+
+export type ShopifyIntegrationDiagnosticId =
+	(typeof SHOPIFY_INTEGRATION_DIAGNOSTIC_IDS)[number];
+
+export interface ShopifyIntegrationDiagnosticCheck {
+	id: ShopifyIntegrationDiagnosticId;
+	status: "passed" | "failed";
+	message: string;
+}
+
+export interface ShopifyIntegrationDiagnosticsResponse {
+	checks: ShopifyIntegrationDiagnosticCheck[];
 }
 
 export interface ShopifySettingsValidation {
@@ -99,6 +118,7 @@ export interface ShopifySettingsValidation {
 	storeDomain: string;
 	clientId: string;
 	clientSecret?: string;
+	storefrontPrivateToken?: string;
 }
 
 export const SHOPIFY_PRODUCT_STATUSES = [
@@ -146,6 +166,32 @@ export interface MembershipProductsListResponse {
 		name: string;
 	};
 	membershipProducts: MembershipProductSummary[];
+}
+
+export interface PublicMembershipProductSummary {
+	id: string;
+	name: string;
+	description?: string;
+	entitlementClass: typeof TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS;
+	durationDays: number;
+	available: boolean;
+	price: MoneyPayload;
+}
+
+export interface PublicMembershipProductsListResponse {
+	organization: {
+		slug: string;
+		name: string;
+	};
+	membershipProducts: PublicMembershipProductSummary[];
+}
+
+export interface MembershipPurchaseSelectionResponse {
+	selection: {
+		offeringId: string;
+		organizationSlug: string;
+		entitlementClass: typeof TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS;
+	};
 }
 
 export function isMembershipProductPurchasable(
@@ -196,6 +242,10 @@ export function validateShopifySettingsInput(
 		typeof candidate.clientSecret === "string"
 			? candidate.clientSecret.trim()
 			: undefined;
+	const storefrontPrivateToken =
+		typeof candidate.storefrontPrivateToken === "string"
+			? candidate.storefrontPrivateToken.trim()
+			: undefined;
 	const storeDomain = normalizeShopifyStoreDomain(storeUrl);
 	const errors: string[] = [];
 
@@ -219,6 +269,7 @@ export function validateShopifySettingsInput(
 		storeDomain,
 		clientId,
 		clientSecret,
+		storefrontPrivateToken,
 	};
 }
 
@@ -279,4 +330,7 @@ export function validateMembershipProductInput(
 	};
 }
 
-import type { EntitlementClass } from "./entitlements.js";
+import type {
+	EntitlementClass,
+	TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+} from "./entitlements.js";

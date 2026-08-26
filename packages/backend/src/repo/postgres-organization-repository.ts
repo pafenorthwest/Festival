@@ -91,6 +91,7 @@ interface ShopifyIntegrationRow {
 	store_domain: string;
 	client_id: string;
 	encrypted_client_secret: string;
+	encrypted_storefront_private_token: string | null;
 	verification_status: ShopifyVerificationStatus;
 	verified_shop_gid: string | null;
 	verified_shop_domain: string | null;
@@ -274,6 +275,8 @@ function mapShopifyIntegration(
 		storeDomain: row.store_domain,
 		clientId: row.client_id,
 		encryptedClientSecret: row.encrypted_client_secret,
+		encryptedStorefrontPrivateToken:
+			row.encrypted_storefront_private_token ?? undefined,
 		verificationStatus:
 			row.verification_status === "ok" && !verificationMetadataComplete
 				? "failed"
@@ -434,6 +437,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				store_domain TEXT NOT NULL,
 				client_id TEXT NOT NULL,
 				encrypted_client_secret TEXT NOT NULL,
+				encrypted_storefront_private_token TEXT NULL,
 				verification_status TEXT NOT NULL DEFAULT 'unknown',
 				verified_shop_gid TEXT NULL,
 				verified_shop_domain TEXT NULL,
@@ -552,6 +556,9 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 
 			CREATE UNIQUE INDEX IF NOT EXISTS idx_organization_divisions_order
 				ON ${schema}.organization_divisions (organization_id, display_order);
+
+			ALTER TABLE ${schema}.shopify_integrations
+				ADD COLUMN IF NOT EXISTS encrypted_storefront_private_token TEXT NULL;
 
 			ALTER TABLE ${schema}.shopify_integrations
 				ADD COLUMN IF NOT EXISTS verified_shop_gid TEXT NULL,
@@ -1407,6 +1414,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				store_domain,
 				client_id,
 				encrypted_client_secret,
+				encrypted_storefront_private_token,
 				verification_status,
 				verified_shop_gid,
 				verified_shop_domain,
@@ -1430,6 +1438,21 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		return rows[0] ? mapShopifyIntegration(rows[0]) : null;
 	}
 
+	async getPublicShopifyCatalogDomain(
+		organizationId: string,
+	): Promise<string | null> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT verified_shop_domain
+			 FROM ${this.schema}.shopify_integrations
+			 WHERE organization_id = $1
+			   AND verification_status = 'ok'
+			 LIMIT 1`,
+			[organizationId],
+		)) as Array<{ verified_shop_domain: string | null }>;
+		return rows[0]?.verified_shop_domain ?? null;
+	}
+
 	async upsertShopifyIntegration(
 		input: UpsertShopifyIntegrationInput,
 	): Promise<ShopifyIntegrationRecord> {
@@ -1443,17 +1466,19 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				store_domain,
 				client_id,
 				encrypted_client_secret,
+				encrypted_storefront_private_token,
 				verification_status,
 				verified_at,
 				last_tested_at,
 				last_error,
 				last_failure_category,
 				updated_at
-			) VALUES ($1, $2, $3, $4, 'unknown', NULL, NULL, NULL, NULL, NOW())
+			) VALUES ($1, $2, $3, $4, $5, 'unknown', NULL, NULL, NULL, NULL, NOW())
 			ON CONFLICT (organization_id) DO UPDATE SET
 				store_domain = EXCLUDED.store_domain,
 				client_id = EXCLUDED.client_id,
 				encrypted_client_secret = EXCLUDED.encrypted_client_secret,
+				encrypted_storefront_private_token = EXCLUDED.encrypted_storefront_private_token,
 				verification_status = 'unknown',
 				verified_shop_gid = NULL,
 				verified_shop_domain = NULL,
@@ -1472,6 +1497,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				store_domain,
 				client_id,
 				encrypted_client_secret,
+				encrypted_storefront_private_token,
 				verification_status,
 				verified_shop_gid,
 				verified_shop_domain,
@@ -1491,6 +1517,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 					input.storeDomain,
 					input.clientId,
 					input.encryptedClientSecret,
+					input.encryptedStorefrontPrivateToken ?? null,
 				],
 			)) as ShopifyIntegrationRow[];
 		} catch (error) {

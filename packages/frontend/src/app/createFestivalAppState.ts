@@ -90,6 +90,7 @@ export function createFestivalAppState() {
 		storeUrl: "",
 		clientId: "",
 		clientSecret: "",
+		storefrontPrivateToken: "",
 	});
 	const [isShopifyTesting, setIsShopifyTesting] = createSignal(false);
 	const [signInModalKind, setSignInModalKind] =
@@ -329,6 +330,7 @@ export function createFestivalAppState() {
 			storeUrl: "",
 			clientId: "",
 			clientSecret: "",
+			storefrontPrivateToken: "",
 		});
 		setIsShopifyTesting(false);
 		setOrganizationName("");

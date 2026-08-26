@@ -22,6 +22,7 @@ export interface ShopifyDraft {
 	storeUrl: string;
 	clientId: string;
 	clientSecret: string;
+	storefrontPrivateToken: string;
 }
 
 export interface MembershipProductDraft {

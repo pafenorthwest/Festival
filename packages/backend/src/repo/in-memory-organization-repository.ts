@@ -570,6 +570,15 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		return this.shopifyIntegrations.get(organizationId) ?? null;
 	}
 
+	async getPublicShopifyCatalogDomain(
+		organizationId: string,
+	): Promise<string | null> {
+		const integration = this.shopifyIntegrations.get(organizationId);
+		return integration?.verificationStatus === "ok"
+			? (integration.verifiedShopDomain ?? null)
+			: null;
+	}
+
 	async upsertShopifyIntegration(
 		input: UpsertShopifyIntegrationInput,
 	): Promise<ShopifyIntegrationRecord> {
@@ -590,6 +599,7 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			storeDomain: input.storeDomain,
 			clientId: input.clientId,
 			encryptedClientSecret: input.encryptedClientSecret,
+			encryptedStorefrontPrivateToken: input.encryptedStorefrontPrivateToken,
 			verificationStatus: "unknown",
 			grantedScopes: [],
 			capabilities: { ...EMPTY_SHOPIFY_CAPABILITIES },
