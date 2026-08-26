@@ -43,4 +43,4 @@
 - Build: passed (`bun run build`)
 - Tests: passed (`bun run test`; 30 common, 199 backend, 34 frontend)
 - Code review: passed; no actionable findings (confidence 0.94)
-- Clean merge: pending
+- Clean merge: passed (`main` into `ericp/teacher-membership-flow`; fast-forward)
