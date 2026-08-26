@@ -25,6 +25,7 @@ import {
 import { AppError } from "../errors/app-error.js";
 import type { OrganizationService } from "../services/organization-service.js";
 import type { PublicMembershipProductService } from "../shopify/public-membership-product-service.js";
+import type { ShopifyIntegrationDiagnosticService } from "../shopify/shopify-integration-diagnostic-service.js";
 import type { ShopifyIntegrationService } from "../shopify/shopify-integration-service.js";
 import type { ShopifyMembershipProductService } from "../shopify/shopify-membership-product-service.js";
 
@@ -102,6 +103,15 @@ function assertBodylessPublicRead(
 	}
 }
 
+function assertBodylessDiagnostic(
+	contentLength: string | undefined,
+	hasBody: boolean,
+): void {
+	if (hasBody || (contentLength !== undefined && !/^0+$/.test(contentLength))) {
+		throw new AppError("Request body is not accepted for diagnostics.", 400);
+	}
+}
+
 function assertAllowedCustomerAuthStartQuery(url: string): void {
 	const allowed = new Set(["returnTo", "offering"]);
 	const params = new URL(url).searchParams;
@@ -125,6 +135,7 @@ export function buildApiRouter(
 	shopifyMembershipProductService?: ShopifyMembershipProductService,
 	customerAccountService?: CustomerAccountService,
 	publicMembershipProductService?: PublicMembershipProductService,
+	shopifyIntegrationDiagnosticService?: ShopifyIntegrationDiagnosticService,
 ): Hono<{ Variables: Partial<ApiVariables> }> {
 	const router = new Hono<{ Variables: Partial<ApiVariables> }>();
 	const repository = organizationService.repository;
@@ -542,6 +553,31 @@ export function buildApiRouter(
 					await shopifyIntegrationService.saveAndTestForTenant(
 						getRequiredTenant(c),
 						payload,
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.post(
+		"/organizations/:slug/admin/shopify/diagnostics",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				assertBodylessDiagnostic(
+					c.req.header("Content-Length"),
+					c.req.raw.body !== null,
+				);
+				if (!shopifyIntegrationDiagnosticService) {
+					throw new AppError("Shopify diagnostics are unavailable.", 503);
+				}
+				return c.json(
+					await shopifyIntegrationDiagnosticService.runForTenant(
+						getRequiredTenant(c),
 					),
 				);
 			} catch (error) {

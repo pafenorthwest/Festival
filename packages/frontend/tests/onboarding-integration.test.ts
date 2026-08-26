@@ -17,6 +17,7 @@ import {
 	getOrganization,
 	getShopifySettings,
 	resumeCustomerMembershipPurchase,
+	runShopifyDiagnostics,
 	saveShopifySettings,
 } from "../src/lib/api.js";
 import {
@@ -255,6 +256,7 @@ describe("organization onboarding integration", () => {
 			clientId: "client-id",
 			clientSecret: "client-secret",
 		});
+		await runShopifyDiagnostics("token-11", "pafe");
 
 		expect(
 			fetchCalls.map((call) => call.init?.headers as Record<string, string>),
@@ -271,6 +273,7 @@ describe("organization onboarding integration", () => {
 			expect.objectContaining({ Authorization: "Bearer token-7" }),
 			expect.objectContaining({ Authorization: "Bearer token-9" }),
 			expect.objectContaining({ Authorization: "Bearer token-10" }),
+			expect.objectContaining({ Authorization: "Bearer token-11" }),
 		]);
 	});
 
@@ -304,6 +307,7 @@ describe("organization onboarding integration", () => {
 			clientId: "client-id",
 			clientSecret: "client-secret",
 		});
+		await runShopifyDiagnostics("token", "pafe");
 
 		expect(fetchCalls.map((call) => call.url)).toEqual([
 			"/api/bootstrap",
@@ -319,7 +323,33 @@ describe("organization onboarding integration", () => {
 			"/api/organizations/pafe/admin/membership-products",
 			"/api/organizations/pafe/admin/shopify",
 			"/api/organizations/pafe/admin/shopify",
+			"/api/organizations/pafe/admin/shopify/diagnostics",
 		]);
+		expect(fetchCalls.at(-1)?.init).toMatchObject({ method: "POST" });
+		expect(fetchCalls.at(-1)?.init?.body).toBeUndefined();
+	});
+
+	it("renders transient Shopify diagnostic states without changing verification readiness", async () => {
+		const pageSource = await Bun.file(
+			"src/pages/AdminIntegrationsPage.tsx",
+		).text();
+		const styles = await Bun.file("src/styles.css").text();
+
+		expect(pageSource).toContain("Run diagnostics");
+		expect(pageSource).toContain("Running diagnostics…");
+		expect(pageSource).toContain("No diagnostics run yet.");
+		expect(pageSource).toContain("Checking public Storefront access…");
+		expect(pageSource).toContain('result.status === "passed"');
+		expect(pageSource).toContain("Action required");
+		expect(pageSource).toContain("Diagnostics unavailable");
+		expect(pageSource).toContain('settings?.verificationStatus === "ok"');
+		expect(pageSource).toContain("Boolean(settings.verifiedShopDomain)");
+		expect(pageSource).toContain("setDiagnosticResult(null)");
+		expect(pageSource).toContain('setDiagnosticError("")');
+		expect(styles).toContain(".shopify-diagnostics");
+		expect(styles).toContain(".shopify-diagnostic-passed");
+		expect(styles).toContain(".shopify-diagnostic-failed");
+		expect(styles).toContain(".shopify-diagnostic-error");
 	});
 
 	it("wires the public membership page through the backend API only", async () => {

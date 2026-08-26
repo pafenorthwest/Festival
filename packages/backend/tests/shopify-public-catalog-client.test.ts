@@ -25,6 +25,62 @@ function payload(overrides: Record<string, unknown> = {}) {
 }
 
 describe("tokenless Shopify public catalog client", () => {
+	it("diagnoses public Storefront access without credentials and classifies a locked store", async () => {
+		let requestInit: RequestInit | undefined;
+		const available = new TokenlessShopifyPublicCatalogClient((async (
+			_url,
+			init,
+		) => {
+			requestInit = init;
+			return Response.json({ data: { shop: { name: "Festival Shop" } } });
+		}) as typeof fetch);
+		await expect(
+			available.diagnosePublicStorefrontAccess("festival.myshopify.com"),
+		).resolves.toBe("passed");
+		expect(requestInit?.redirect).toBe("error");
+		expect(requestInit?.body).toContain("FestivalPublicStorefrontDiagnostic");
+		expect(JSON.stringify(requestInit?.headers)).not.toMatch(
+			/token|authorization|secret/i,
+		);
+
+		const locked = new TokenlessShopifyPublicCatalogClient((async () =>
+			Response.json(
+				{
+					errors: [
+						{
+							message: "Online Store channel is locked.",
+							detail: "sensitive-upstream-canary",
+						},
+					],
+				},
+				{ status: 400 },
+			)) as typeof fetch);
+		await expect(
+			locked.diagnosePublicStorefrontAccess("festival.myshopify.com"),
+		).resolves.toBe("locked");
+	});
+
+	it("sanitizes unexpected public Storefront diagnostic failures", async () => {
+		const client = new TokenlessShopifyPublicCatalogClient((async () =>
+			Response.json(
+				{
+					errors: [{ message: "unexpected sensitive-upstream-canary failure" }],
+				},
+				{ status: 500 },
+			)) as typeof fetch);
+		try {
+			await client.diagnosePublicStorefrontAccess("festival.myshopify.com");
+			throw new Error("Expected diagnostic to reject.");
+		} catch (error) {
+			expect((error as Error).message).toBe(
+				"Membership information is temporarily unavailable.",
+			);
+			expect((error as Error).message).not.toContain(
+				"sensitive-upstream-canary",
+			);
+		}
+	});
+
 	it("reads a bounded current product without sending a Storefront or Admin credential", async () => {
 		let requestUrl = "";
 		let requestInit: RequestInit | undefined;

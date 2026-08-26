@@ -23,6 +23,7 @@ describe("repository nginx security policy", () => {
 				"invites",
 				"admin/users",
 				"admin/(?:festivals|shopify|shopify-customer-account)",
+				"admin/shopify/diagnostics",
 				"admin/membership-products",
 				"admin/customers",
 				"customer-auth/callback",

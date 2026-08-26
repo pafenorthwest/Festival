@@ -20,11 +20,14 @@ import {
 	ShopifySecretKeyring,
 } from "../src/shopify/encryption.js";
 import { PublicMembershipProductService } from "../src/shopify/public-membership-product-service.js";
+import { ShopifyIntegrationDiagnosticService } from "../src/shopify/shopify-integration-diagnostic-service.js";
 import { ShopifyIntegrationService } from "../src/shopify/shopify-integration-service.js";
 import { ShopifyMembershipProductService } from "../src/shopify/shopify-membership-product-service.js";
 import type {
 	PublicShopifyCatalogProduct,
 	ShopifyPublicCatalogClient,
+	ShopifyPublicStorefrontAccessResult,
+	ShopifyPublicStorefrontDiagnosticClient,
 } from "../src/shopify/shopify-public-catalog-client.js";
 import type {
 	ShopifyAdminOperationContext,
@@ -73,6 +76,20 @@ class FakeShopifyTester implements ShopifyConnectivityTester {
 			shopDomain: credentials.storeDomain,
 			grantedScopes: ["read_products", "write_products", "read_orders"],
 		};
+	}
+}
+
+class FakePublicStorefrontDiagnosticClient
+	implements ShopifyPublicStorefrontDiagnosticClient
+{
+	readonly domains: string[] = [];
+	result: ShopifyPublicStorefrontAccessResult = "passed";
+
+	async diagnosePublicStorefrontAccess(
+		domain: string,
+	): Promise<ShopifyPublicStorefrontAccessResult> {
+		this.domains.push(domain);
+		return this.result;
 	}
 }
 
@@ -202,6 +219,7 @@ async function createTestApp() {
 async function createTestAppWithShopify() {
 	const repository = new InMemoryOrganizationRepository();
 	const shopifyTester = new FakeShopifyTester();
+	const diagnosticClient = new FakePublicStorefrontDiagnosticClient();
 	const app = await createApp({
 		env: { port: 3000 },
 		repository,
@@ -222,9 +240,11 @@ async function createTestAppWithShopify() {
 			createKeyring(),
 			shopifyTester,
 		),
+		shopifyIntegrationDiagnosticService:
+			new ShopifyIntegrationDiagnosticService(repository, diagnosticClient),
 	});
 
-	return { ...app, shopifyTester };
+	return { ...app, shopifyTester, diagnosticClient };
 }
 
 async function createTestAppWithMembershipProducts(
@@ -1164,6 +1184,78 @@ describe("organization routes", () => {
 
 		expect(getResponse.status).toBe(200);
 		expect(getBody).not.toContain("client-secret");
+	});
+
+	it("runs bodyless Admin-only Shopify diagnostics for the verified tenant domain", async () => {
+		const { app, diagnosticClient } = await createTestAppWithShopify();
+		await createOrganizationViaApi(app);
+		const saveResponse = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/shopify",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						storeUrl: "https://example.myshopify.com/admin",
+						clientId: "client-id",
+						clientSecret: "client-secret",
+					}),
+				}),
+			),
+		);
+		expect(saveResponse.status).toBe(200);
+
+		const diagnosticUrl =
+			"http://test/api/organizations/pafe/admin/shopify/diagnostics";
+		const unauthenticated = await app.fetch(
+			new Request(diagnosticUrl, { method: "POST" }),
+		);
+		expect(unauthenticated.status).toBe(401);
+		const outsider = await app.fetch(
+			new Request(diagnosticUrl, withAuth("outsider", { method: "POST" })),
+		);
+		expect(outsider.status).toBe(403);
+		const browserAuthority = await app.fetch(
+			new Request(
+				diagnosticUrl,
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({ domain: "attacker.myshopify.com" }),
+				}),
+			),
+		);
+		expect(browserAuthority.status).toBe(400);
+		expect(diagnosticClient.domains).toHaveLength(0);
+
+		const passed = await app.fetch(
+			new Request(diagnosticUrl, withAuth("admin", { method: "POST" })),
+		);
+		expect(passed.status).toBe(200);
+		await expect(passed.json()).resolves.toEqual({
+			checks: [
+				{
+					id: "public_storefront_access",
+					status: "passed",
+					message: "Public Storefront access is available.",
+				},
+			],
+		});
+		expect(diagnosticClient.domains).toEqual(["example.myshopify.com"]);
+
+		diagnosticClient.result = "locked";
+		const locked = await app.fetch(
+			new Request(diagnosticUrl, withAuth("admin", { method: "POST" })),
+		);
+		expect(locked.status).toBe(200);
+		await expect(locked.json()).resolves.toEqual({
+			checks: [
+				{
+					id: "public_storefront_access",
+					status: "failed",
+					message:
+						"Shopify's Online Store channel is locked. Public membership browsing is unavailable until the storefront is publicly accessible.",
+				},
+			],
+		});
 	});
 
 	it("rejects malformed Shopify settings payloads with validation errors", async () => {

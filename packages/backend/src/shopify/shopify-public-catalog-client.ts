@@ -27,6 +27,14 @@ export interface ShopifyPublicCatalogClient {
 	): Promise<PublicShopifyCatalogProduct | null>;
 }
 
+export type ShopifyPublicStorefrontAccessResult = "passed" | "locked";
+
+export interface ShopifyPublicStorefrontDiagnosticClient {
+	diagnosePublicStorefrontAccess(
+		shopDomain: string,
+	): Promise<ShopifyPublicStorefrontAccessResult>;
+}
+
 type Fetch = typeof fetch;
 
 function unavailable(): AppError {
@@ -96,15 +104,79 @@ function parseProduct(value: unknown): PublicShopifyCatalogProduct | null {
 }
 
 export class TokenlessShopifyPublicCatalogClient
-	implements ShopifyPublicCatalogClient
+	implements ShopifyPublicCatalogClient, ShopifyPublicStorefrontDiagnosticClient
 {
 	constructor(private readonly request: Fetch = fetch) {}
+
+	async diagnosePublicStorefrontAccess(
+		shopDomain: string,
+	): Promise<ShopifyPublicStorefrontAccessResult> {
+		const response = await this.graphqlRequest(
+			shopDomain,
+			`query FestivalPublicStorefrontDiagnostic {
+				shop { name }
+			}`,
+		);
+		if (!isRecord(response.payload)) throw unavailable();
+		if (!response.ok) {
+			const errors = response.payload.errors;
+			if (
+				response.status === 400 &&
+				Array.isArray(errors) &&
+				errors.some(
+					(error) =>
+						isRecord(error) &&
+						error.message === "Online Store channel is locked.",
+				)
+			) {
+				return "locked";
+			}
+			throw unavailable();
+		}
+		if (response.payload.errors !== undefined) throw unavailable();
+		const data = response.payload.data;
+		if (
+			!isRecord(data) ||
+			!isRecord(data.shop) ||
+			typeof data.shop.name !== "string" ||
+			data.shop.name.length === 0
+		) {
+			throw unavailable();
+		}
+		return "passed";
+	}
 
 	async readProduct(
 		shopDomain: string,
 		productGid: string,
 	): Promise<PublicShopifyCatalogProduct | null> {
 		if (!SHOPIFY_GID_PATTERN.test(productGid)) throw unavailable();
+		const response = await this.graphqlRequest(
+			shopDomain,
+			`query FestivalPublicMembership($id: ID!) {
+				product(id: $id) {
+					id title description availableForSale
+					variants(first: 2) { nodes { id availableForSale price { amount currencyCode } } }
+				}
+			}`,
+			{ id: productGid },
+		);
+		if (!response.ok || !isRecord(response.payload)) throw unavailable();
+		const payload = response.payload;
+		if (payload.errors !== undefined) throw unavailable();
+		const data = payload.data;
+		if (!isRecord(data)) throw unavailable();
+		const product = data.product;
+		if (product === null) return null;
+		if (!isRecord(product) || !isRecord(product.variants)) throw unavailable();
+		return parseProduct({ ...product, variants: product.variants.nodes });
+	}
+
+	private async graphqlRequest(
+		shopDomain: string,
+		query: string,
+		variables: Record<string, unknown> = {},
+	): Promise<{ ok: boolean; status: number; payload: unknown }> {
 		const domain = assertPublicShopDomain(shopDomain);
 		const controller = new AbortController();
 		const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -120,13 +192,8 @@ export class TokenlessShopifyPublicCatalogClient
 						"User-Agent": "Festival-Public-Catalog/1.0",
 					},
 					body: JSON.stringify({
-						query: `query FestivalPublicMembership($id: ID!) {
-							product(id: $id) {
-								id title description availableForSale
-								variants(first: 2) { nodes { id availableForSale price { amount currencyCode } } }
-							}
-						}`,
-						variables: { id: productGid },
+						query,
+						variables,
 					}),
 				},
 			);
@@ -134,20 +201,11 @@ export class TokenlessShopifyPublicCatalogClient
 				response.headers.get("content-length") ?? "0",
 				10,
 			);
-			if (!response.ok || declaredSize > MAX_RESPONSE_BYTES)
-				throw unavailable();
+			if (declaredSize > MAX_RESPONSE_BYTES) throw unavailable();
 			const bytes = new Uint8Array(await response.arrayBuffer());
 			if (bytes.byteLength > MAX_RESPONSE_BYTES) throw unavailable();
 			const payload = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
-			if (!isRecord(payload) || payload.errors !== undefined)
-				throw unavailable();
-			const data = payload.data;
-			if (!isRecord(data)) throw unavailable();
-			const product = data.product;
-			if (product === null) return null;
-			if (!isRecord(product) || !isRecord(product.variants))
-				throw unavailable();
-			return parseProduct({ ...product, variants: product.variants.nodes });
+			return { ok: response.ok, status: response.status, payload };
 		} catch (error) {
 			if (error instanceof AppError) throw error;
 			throw unavailable();

@@ -93,6 +93,23 @@ export interface SaveShopifyIntegrationResponse {
 	settings: ShopifyIntegrationSettings;
 }
 
+export const SHOPIFY_INTEGRATION_DIAGNOSTIC_IDS = [
+	"public_storefront_access",
+] as const;
+
+export type ShopifyIntegrationDiagnosticId =
+	(typeof SHOPIFY_INTEGRATION_DIAGNOSTIC_IDS)[number];
+
+export interface ShopifyIntegrationDiagnosticCheck {
+	id: ShopifyIntegrationDiagnosticId;
+	status: "passed" | "failed";
+	message: string;
+}
+
+export interface ShopifyIntegrationDiagnosticsResponse {
+	checks: ShopifyIntegrationDiagnosticCheck[];
+}
+
 export interface ShopifySettingsValidation {
 	valid: boolean;
 	errors: string[];

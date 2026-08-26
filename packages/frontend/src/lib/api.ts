@@ -31,6 +31,7 @@ import type {
 	SaveShopifyIntegrationInput,
 	SaveShopifyIntegrationResponse,
 	SessionResponse,
+	ShopifyIntegrationDiagnosticsResponse,
 	ShopifyIntegrationSettingsResponse,
 	UpdateCustomerProfileInput,
 	UpdateOrganizationDivisionInput,
@@ -423,6 +424,14 @@ export function saveShopifySettings(
 			method: "POST",
 			body: JSON.stringify(input),
 		},
+		idToken,
+	);
+}
+
+export function runShopifyDiagnostics(idToken: string, slug: string) {
+	return requestJson<ShopifyIntegrationDiagnosticsResponse>(
+		`/api/organizations/${slug}/admin/shopify/diagnostics`,
+		{ method: "POST" },
 		idToken,
 	);
 }

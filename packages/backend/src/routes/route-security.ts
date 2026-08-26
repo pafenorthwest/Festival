@@ -180,6 +180,11 @@ export const CURRENT_ROUTE_SECURITY = [
 		authenticationClass: "admin",
 	},
 	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/shopify/diagnostics",
+		authenticationClass: "admin",
+	},
+	{
 		method: "GET",
 		path: "/api/organizations/:slug/admin/membership-products",
 		authenticationClass: "admin",

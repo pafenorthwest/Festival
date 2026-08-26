@@ -20,6 +20,7 @@ import { ShopifyAdminApiClient } from "./shopify/admin-api-client.js";
 import { FileShopifyMutationAuditWriter } from "./shopify/admin-mutation-audit.js";
 import { ShopifySecretKeyring } from "./shopify/encryption.js";
 import { PublicMembershipProductService } from "./shopify/public-membership-product-service.js";
+import { ShopifyIntegrationDiagnosticService } from "./shopify/shopify-integration-diagnostic-service.js";
 import type { ShopifyIntegrationService } from "./shopify/shopify-integration-service.js";
 import { ShopifyIntegrationService as DefaultShopifyIntegrationService } from "./shopify/shopify-integration-service.js";
 import { ShopifyMembershipProductService } from "./shopify/shopify-membership-product-service.js";
@@ -33,6 +34,7 @@ export interface CreateAppOptions {
 	shopifyIntegrationService?: ShopifyIntegrationService;
 	shopifyMembershipProductService?: ShopifyMembershipProductService;
 	publicMembershipProductService?: PublicMembershipProductService;
+	shopifyIntegrationDiagnosticService?: ShopifyIntegrationDiagnosticService;
 	customerAccountRepository?: CustomerAccountRepository;
 	customerAccountService?: CustomerAccountService;
 }
@@ -95,11 +97,15 @@ export async function createApp(options: CreateAppOptions = {}) {
 					new FileShopifyMutationAuditWriter(),
 				)
 			: undefined);
+	const shopifyPublicCatalogClient = new TokenlessShopifyPublicCatalogClient();
 	const publicMembershipProductService =
 		options.publicMembershipProductService ??
-		new PublicMembershipProductService(
+		new PublicMembershipProductService(repository, shopifyPublicCatalogClient);
+	const shopifyIntegrationDiagnosticService =
+		options.shopifyIntegrationDiagnosticService ??
+		new ShopifyIntegrationDiagnosticService(
 			repository,
-			new TokenlessShopifyPublicCatalogClient(),
+			shopifyPublicCatalogClient,
 		);
 	const customerAccountRepository =
 		options.customerAccountRepository ??
@@ -169,6 +175,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 			shopifyMembershipProductService,
 			customerAccountService,
 			publicMembershipProductService,
+			shopifyIntegrationDiagnosticService,
 		),
 	);
 	app.route(
