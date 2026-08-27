@@ -42,4 +42,4 @@
 - Build: passed (`bun run build`)
 - Tests: passed (`bun run test`)
 - Code review: passed (no actionable findings; confidence 0.86)
-- Clean merge: pending
+- Clean merge: passed against `main` (fast-forward)
