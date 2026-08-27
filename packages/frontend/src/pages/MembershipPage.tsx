@@ -112,7 +112,16 @@ export function MembershipPage(props: MembershipPageProps) {
 		const offeringId = query.get("purchase");
 		if (route.kind !== "org-membership" || !offeringId) return;
 		setPendingOfferingId(offeringId);
-		void continuePurchase(route.slug, offeringId)
+		void getCustomerSession(route.slug)
+			.then((customer) => {
+				if (!customer.session.authenticated)
+					throw new Error("Customer session is invalid.");
+				return continuePurchase(
+					route.slug,
+					offeringId,
+					customer.session.csrfToken,
+				);
+			})
 			.catch(() => {
 				setPurchaseError(
 					"Customer authentication or membership selection could not be resumed. Please try again.",

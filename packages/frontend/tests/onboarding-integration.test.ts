@@ -389,6 +389,7 @@ describe("organization onboarding integration", () => {
 		expect(page).toContain("Customer authentication was not completed");
 		expect(page).toContain("membershipProduct.available");
 		expect(page).toContain("startCustomerCheckout(");
+		expect(page).toContain("customer.session.csrfToken");
 		expect(page).not.toMatch(/cartCreate|shopifyVariantGid/);
 		expect(api).toContain("customer/membership-purchase/");
 		expect(api).toContain("/customer/checkout");
