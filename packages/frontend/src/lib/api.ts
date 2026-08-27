@@ -248,6 +248,23 @@ export function resumeCustomerMembershipPurchase(
 	);
 }
 
+export function startCustomerCheckout(
+	slug: string,
+	csrfToken: string,
+	offeringId: string,
+) {
+	return requestJson<{ checkoutUrl: string }>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/checkout`,
+		{
+			method: "POST",
+			headers: { "X-CSRF-Token": csrfToken },
+			body: JSON.stringify({ offeringId }),
+		},
+		undefined,
+		"",
+	);
+}
+
 export function getAdminMembershipProducts(idToken: string, slug: string) {
 	return requestJson<MembershipProductsListResponse>(
 		`/api/organizations/${slug}/admin/membership-products`,

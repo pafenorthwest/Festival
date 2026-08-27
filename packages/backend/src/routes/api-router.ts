@@ -18,6 +18,7 @@ import {
 	toJsonError,
 } from "../auth/tenant-context.js";
 import type { AuthVerifier } from "../auth/types.js";
+import type { MembershipCheckoutService } from "../checkout/membership-checkout-service.js";
 import {
 	CUSTOMER_SESSION_COOKIE,
 	type CustomerAccountService,
@@ -137,6 +138,7 @@ export function buildApiRouter(
 	customerAccountService?: CustomerAccountService,
 	publicMembershipProductService?: PublicMembershipProductService,
 	shopifyIntegrationDiagnosticService?: ShopifyIntegrationDiagnosticService,
+	membershipCheckoutService?: MembershipCheckoutService,
 ): Hono<{ Variables: Partial<ApiVariables> }> {
 	const router = new Hono<{ Variables: Partial<ApiVariables> }>();
 	const repository = organizationService.repository;
@@ -753,6 +755,48 @@ export function buildApiRouter(
 			}
 		},
 	);
+
+	router.post("/organizations/:slug/customer/checkout", async (c) => {
+		try {
+			assertNoBearerPrincipal(c.req.header("Authorization"));
+			if (!customerAccountService || !membershipCheckoutService)
+				throw new AppError("Membership checkout is unavailable.", 503);
+			const payload = await c.req.json();
+			assertAllowedFields(payload, ["offeringId"], "Checkout request");
+			if (
+				!payload ||
+				typeof payload !== "object" ||
+				Array.isArray(payload) ||
+				typeof (payload as { offeringId?: unknown }).offeringId !== "string"
+			)
+				throw new AppError("Checkout request is invalid.", 400);
+			const referer = c.req.header("Referer");
+			let requestOrigin = c.req.header("Origin");
+			if (!requestOrigin && referer) {
+				try {
+					requestOrigin = new URL(referer).origin;
+				} catch {
+					throw new AppError("CSRF validation failed.", 403);
+				}
+			}
+			const access = await customerAccountService.checkoutAccess(
+				c.req.param("slug"),
+				getCookie(c, CUSTOMER_SESSION_COOKIE),
+				c.req.header("X-CSRF-Token"),
+				requestOrigin,
+			);
+			c.header("Cache-Control", "no-store");
+			return c.json(
+				await membershipCheckoutService.start({
+					...access,
+					buyerAccessToken: access.shopifyCustomerAccessToken,
+					offeringId: (payload as { offeringId: string }).offeringId,
+				}),
+			);
+		} catch (error) {
+			return toJsonError(c, error);
+		}
+	});
 
 	router.get("/organizations/:slug/customer/profile", async (c) => {
 		try {

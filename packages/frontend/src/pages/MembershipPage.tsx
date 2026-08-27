@@ -6,6 +6,7 @@ import {
 	getCustomerSession,
 	getMembershipProducts,
 	resumeCustomerMembershipPurchase,
+	startCustomerCheckout,
 } from "../lib/api.js";
 import { buildOrgMembershipPath } from "../lib/routes.js";
 import { sanitizeShopifyDescriptionHtml } from "../lib/sanitize-html.js";
@@ -41,7 +42,11 @@ export function MembershipPage(props: MembershipPageProps) {
 		},
 	);
 
-	async function continuePurchase(slug: string, offeringId: string) {
+	async function continuePurchase(
+		slug: string,
+		offeringId: string,
+		csrfToken?: string,
+	) {
 		const resumed = await resumeCustomerMembershipPurchase(slug, offeringId);
 		if (
 			resumed.selection.organizationSlug !== slug ||
@@ -54,9 +59,14 @@ export function MembershipPage(props: MembershipPageProps) {
 			"",
 			`${buildOrgMembershipPath(slug)}?purchase=${encodeURIComponent(offeringId)}`,
 		);
-		setPurchaseStatus(
-			"Your Teacher Membership selection is authenticated and ready to continue.",
-		);
+		if (!csrfToken) {
+			setPurchaseStatus(
+				"Your Teacher Membership selection is authenticated and ready to continue.",
+			);
+			return;
+		}
+		const checkout = await startCustomerCheckout(slug, csrfToken, offeringId);
+		window.location.assign(checkout.checkoutUrl);
 	}
 
 	async function purchase(membershipProduct: PublicMembershipProductSummary) {
@@ -76,7 +86,11 @@ export function MembershipPage(props: MembershipPageProps) {
 				);
 				return;
 			}
-			await continuePurchase(route.slug, membershipProduct.id);
+			await continuePurchase(
+				route.slug,
+				membershipProduct.id,
+				customer.session.csrfToken,
+			);
 		} catch {
 			setPurchaseError(
 				"Customer authentication or membership selection could not be resumed. Please try again.",

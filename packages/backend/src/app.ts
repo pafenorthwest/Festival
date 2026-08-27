@@ -2,6 +2,13 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { createFirebaseAuthVerifier } from "./auth/firebase-auth-verifier.js";
 import type { AuthVerifier } from "./auth/types.js";
+import {
+	type CheckoutRepository,
+	InMemoryCheckoutRepository,
+} from "./checkout/checkout-repository.js";
+import { MembershipCheckoutService } from "./checkout/membership-checkout-service.js";
+import { PostgresCheckoutRepository } from "./checkout/postgres-checkout-repository.js";
+import { ShopifyMembershipCheckoutClient } from "./checkout/shopify-membership-checkout-client.js";
 import { type AppEnv, LOCAL_API_ORIGINS, loadEnv } from "./config/env.js";
 import type { CustomerAccountRepository } from "./customer/customer-account-repository.js";
 import { CustomerAccountService } from "./customer/customer-account-service.js";
@@ -37,6 +44,8 @@ export interface CreateAppOptions {
 	shopifyIntegrationDiagnosticService?: ShopifyIntegrationDiagnosticService;
 	customerAccountRepository?: CustomerAccountRepository;
 	customerAccountService?: CustomerAccountService;
+	checkoutRepository?: CheckoutRepository;
+	membershipCheckoutService?: MembershipCheckoutService;
 }
 
 export async function createApp(options: CreateAppOptions = {}) {
@@ -152,6 +161,23 @@ export async function createApp(options: CreateAppOptions = {}) {
 					},
 				)
 			: undefined);
+	const checkoutRepository =
+		options.checkoutRepository ??
+		(env.databaseSchema
+			? new PostgresCheckoutRepository(env.databaseSchema)
+			: new InMemoryCheckoutRepository());
+	if (checkoutRepository instanceof PostgresCheckoutRepository)
+		await checkoutRepository.ensureReady();
+	const membershipCheckoutService =
+		options.membershipCheckoutService ??
+		(secretKeyring
+			? new MembershipCheckoutService(
+					repository,
+					publicMembershipProductService,
+					checkoutRepository,
+					new ShopifyMembershipCheckoutClient(repository, secretKeyring),
+				)
+			: undefined);
 
 	const app = new Hono();
 	const allowedApiOrigins = new Set(env.allowedApiOrigins ?? LOCAL_API_ORIGINS);
@@ -181,6 +207,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 			customerAccountService,
 			publicMembershipProductService,
 			shopifyIntegrationDiagnosticService,
+			membershipCheckoutService,
 		),
 	);
 	app.route(
