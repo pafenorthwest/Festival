@@ -8,6 +8,8 @@ export type CheckoutCartStatus =
 export type CheckoutIntentStatus =
 	| "creating"
 	| "ready"
+	| "checkout_started"
+	| "failed"
 	| "expired"
 	| "superseded";
 
@@ -29,6 +31,8 @@ export interface CheckoutIntentRecord {
 	correlationId: string;
 	organizationId: string;
 	customerId: string;
+	sessionId: string;
+	idempotencyKey: string;
 	offeringId: string;
 	entitlementClass: "teacher_membership";
 	durationDays: number;
@@ -43,19 +47,33 @@ export interface CheckoutIntentRecord {
 	createdAtIso: string;
 }
 
+export type CheckoutIntentOutcome =
+	| { kind: "created"; intent: CheckoutIntentRecord }
+	| { kind: "in_progress" }
+	| { kind: "ready"; intent: CheckoutIntentRecord; cart: CheckoutCartRecord }
+	| { kind: "expired" }
+	| { kind: "failed" };
+
 export interface CheckoutRepository {
+	getOutcome(input: {
+		organizationId: string;
+		customerId: string;
+		sessionId: string;
+		idempotencyKey: string;
+	}): Promise<Exclude<CheckoutIntentOutcome, { kind: "created" }> | null>;
 	createIntent(
 		record: Omit<
 			CheckoutIntentRecord,
 			"id" | "correlationId" | "cartReference" | "createdAtIso" | "status"
 		>,
-	): Promise<CheckoutIntentRecord>;
+	): Promise<CheckoutIntentOutcome>;
 	attachCart(
 		input: Omit<CheckoutCartRecord, "reference" | "createdAtIso" | "status"> & {
 			intentId: string;
 		},
 	): Promise<CheckoutCartRecord>;
 	markCheckoutStarted(intentId: string): Promise<void>;
+	markFailed(intentId: string): Promise<void>;
 	getCart(
 		reference: string,
 		organizationId: string,
@@ -68,17 +86,51 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 	private readonly carts = new Map<string, CheckoutCartRecord>();
 	private readonly intents = new Map<string, CheckoutIntentRecord>();
 
+	async getOutcome(input: {
+		organizationId: string;
+		customerId: string;
+		sessionId: string;
+		idempotencyKey: string;
+	}) {
+		const intent = [...this.intents.values()].find(
+			(value) =>
+				value.organizationId === input.organizationId &&
+				value.customerId === input.customerId &&
+				value.sessionId === input.sessionId &&
+				value.idempotencyKey === input.idempotencyKey,
+		);
+		return intent ? this.outcomeFor(intent) : null;
+	}
+
 	async createIntent(
 		record: Omit<
 			CheckoutIntentRecord,
 			"id" | "correlationId" | "cartReference" | "createdAtIso" | "status"
 		>,
 	) {
+		const existing = [...this.intents.values()].find(
+			(intent) =>
+				intent.organizationId === record.organizationId &&
+				intent.customerId === record.customerId &&
+				intent.sessionId === record.sessionId &&
+				intent.idempotencyKey === record.idempotencyKey,
+		);
+		if (existing) return this.outcomeFor(existing);
 		for (const intent of this.intents.values()) {
 			if (
 				intent.organizationId === record.organizationId &&
 				intent.customerId === record.customerId &&
-				(intent.status === "creating" || intent.status === "ready")
+				intent.status === "creating" &&
+				intent.expiresAtIso > new Date().toISOString()
+			) {
+				return { kind: "in_progress" as const };
+			}
+		}
+		for (const intent of this.intents.values()) {
+			if (
+				intent.organizationId === record.organizationId &&
+				intent.customerId === record.customerId &&
+				intent.status === "ready"
 			) {
 				intent.status = "superseded";
 				if (intent.cartReference) {
@@ -96,7 +148,7 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 			createdAtIso: new Date().toISOString(),
 		};
 		this.intents.set(value.id, value);
-		return { ...value };
+		return { kind: "created" as const, intent: { ...value } };
 	}
 
 	async attachCart(
@@ -121,13 +173,26 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 
 	async markCheckoutStarted(intentId: string) {
 		const intent = this.intents.get(intentId);
-		if (!intent || intent.status !== "ready")
+		if (
+			!intent ||
+			(intent.status !== "ready" && intent.status !== "checkout_started")
+		)
 			throw new Error("Checkout intent is not ready.");
-		intent.status = "superseded";
+		intent.status = "checkout_started";
 		const cart = intent.cartReference
 			? this.carts.get(intent.cartReference)
 			: undefined;
 		if (cart) cart.status = "checkout_started";
+	}
+
+	async markFailed(intentId: string) {
+		const intent = this.intents.get(intentId);
+		if (!intent) return;
+		intent.status = "failed";
+		if (intent.cartReference) {
+			const cart = this.carts.get(intent.cartReference);
+			if (cart) cart.status = "superseded";
+		}
 	}
 
 	async getCart(
@@ -147,5 +212,26 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		)
 			return null;
 		return { ...cart };
+	}
+
+	private outcomeFor(
+		intent: CheckoutIntentRecord,
+	): Exclude<CheckoutIntentOutcome, { kind: "created" }> {
+		if (intent.expiresAtIso <= new Date().toISOString())
+			return { kind: "expired" };
+		if (intent.status === "creating") return { kind: "in_progress" };
+		if (intent.status === "failed") return { kind: "failed" };
+		const cart = intent.cartReference
+			? this.carts.get(intent.cartReference)
+			: undefined;
+		if (
+			cart &&
+			(intent.status === "ready" || intent.status === "checkout_started") &&
+			cart.expiresAtIso > new Date().toISOString() &&
+			cart.status !== "expired" &&
+			cart.status !== "superseded"
+		)
+			return { kind: "ready", intent: { ...intent }, cart: { ...cart } };
+		return { kind: "failed" };
 	}
 }

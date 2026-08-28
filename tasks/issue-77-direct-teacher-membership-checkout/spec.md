@@ -2,7 +2,7 @@
 
 ## Goal reference
 
-- `goals/issue-77-direct-teacher-membership-checkout/goals.v2.md` (locked)
+- `goals/issue-77-direct-teacher-membership-checkout/goals.v4.md` (locked)
 
 ## Scope
 
@@ -21,7 +21,7 @@
 
 ## Approach
 
-- Extend the existing #93 trusted selection boundary and existing Shopify integration/customer-session patterns. Keep authority and secrets server-side. Use the locked 30-minute replace-and-preserve lifecycle and local intent/cart saga; the checkout host must exactly match the tenant's HTTPS `storeDomain`.
+- Extend the existing #93 trusted selection boundary and existing Shopify integration/customer-session patterns. Keep authority and secrets server-side. Use the locked 30-minute local intent/cart saga, organization/customer/session/key-scoped idempotency outcomes, 409 `checkout_in_progress`, terminal-failure replay, and ready-cart replacement; the checkout host must exactly match the tenant's HTTPS `storeDomain`.
 
 ## Verification commands
 
@@ -31,7 +31,7 @@
 
 ## Delivery
 
-- Delivered: customer-session checkout BFF wiring, intent-first cart creation, opaque correlation attribute, server-only private Storefront token use, opaque cart persistence, fresh checkout retrieval, exact persisted-store-domain URL validation, and Processing return UI.
+- Delivered: customer-session checkout BFF wiring, intent-first cart creation, opaque correlation attribute, server-only private Storefront token use, opaque cart persistence, fresh checkout retrieval, exact persisted-store-domain URL validation, Processing return UI, and explicit checkout outcome UX.
 - Exceptions: None.
 - Deferred work: duplicate-purchase prevention, webhook/order correlation, validation, and entitlement issuance belong to #78; the Shopify cart carries only `festival_checkout_intent_id` as its opaque correlation attribute.
 - Dirty-worktree decision: continue; isolate from unrelated `.codex/scripts/gh-auth-check.sh` and `token` changes. The goal/manifest/task artifacts belong to this task.
@@ -40,6 +40,6 @@
 
 - Lint: passed (`bun run format:check && bun run lint`)
 - Build: passed (`bun run build`)
-- Tests: passed (`bun run test`)
+- Tests: passed (`bun run test`; backend 216, frontend 35)
 - Code review: passed (no actionable findings; confidence 0.86)
 - Clean merge: passed against `main` (fast-forward)

@@ -761,6 +761,14 @@ export function buildApiRouter(
 			assertNoBearerPrincipal(c.req.header("Authorization"));
 			if (!customerAccountService || !membershipCheckoutService)
 				throw new AppError("Membership checkout is unavailable.", 503);
+			const idempotencyKey = c.req.header("Idempotency-Key");
+			if (
+				!idempotencyKey ||
+				!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+					idempotencyKey,
+				)
+			)
+				throw new AppError("Checkout request is invalid.", 400);
 			const payload = await c.req.json();
 			assertAllowedFields(payload, ["offeringId"], "Checkout request");
 			if (
@@ -790,6 +798,7 @@ export function buildApiRouter(
 				await membershipCheckoutService.start({
 					...access,
 					buyerAccessToken: access.shopifyCustomerAccessToken,
+					idempotencyKey,
 					offeringId: (payload as { offeringId: string }).offeringId,
 				}),
 			);

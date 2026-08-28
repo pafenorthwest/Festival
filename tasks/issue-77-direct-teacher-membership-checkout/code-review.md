@@ -65,3 +65,11 @@
 - Verdict: patch is correct
 - Confidence: 0.86
 - Justification: The checkout BFF derives organization, customer, session, integration version, and buyer token server-side; Shopify receives only the opaque correlation attribute. The Storefront client uses the existing DNS-pinned transport and the returned checkout URL must be HTTPS on the persisted tenant store domain. No actionable regression was identified.
+
+## Final v4 review
+
+- Diff reviewed: `35a0b5afcb9459b8cb74864654d551e66c1b1eb7..HEAD` plus the current v4 working-tree changes.
+- Findings JSON: `[]`
+- Verdict: patch is correct
+- Confidence: 0.88
+- Justification: The v4 outcome state is persisted under a scoped idempotency key, local PostgreSQL serialization ends before Shopify I/O, `checkout_started` is written before the external checkout-URL query, and any later failure is durably replayed as a safe terminal outcome. Frontend behavior receives only bounded error codes and no cart or credential data.

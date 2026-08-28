@@ -2,6 +2,7 @@ import type { PublicMembershipProductSummary } from "@festival/common";
 import { createResource, createSignal, For, onMount, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import {
+	ApiError,
 	customerMembershipPurchaseSignInPath,
 	getCustomerSession,
 	getMembershipProducts,
@@ -13,6 +14,23 @@ import { sanitizeShopifyDescriptionHtml } from "../lib/sanitize-html.js";
 
 interface MembershipPageProps {
 	app: FestivalAppController;
+}
+
+function purchaseErrorMessage(error: unknown): string {
+	if (!(error instanceof ApiError))
+		return "Customer authentication or membership selection could not be resumed. Please try again.";
+	switch (error.code) {
+		case "checkout_in_progress":
+			return "Your checkout is still being prepared. Please wait a moment before trying again.";
+		case "checkout_expired":
+			return "This checkout expired before it could continue. Start a new checkout.";
+		case "checkout_retryable_upstream":
+			return "Shopify checkout is temporarily unavailable. Please try again.";
+		case "checkout_terminal_failure":
+			return "This checkout attempt cannot continue. Start a new checkout.";
+		default:
+			return error.message;
+	}
 }
 
 function formatEntitlementClass(value: string): string {
@@ -65,8 +83,28 @@ export function MembershipPage(props: MembershipPageProps) {
 			);
 			return;
 		}
-		const checkout = await startCustomerCheckout(slug, csrfToken, offeringId);
-		window.location.assign(checkout.checkoutUrl);
+		const storageKey = `festival-checkout:${slug}:${offeringId}`;
+		const idempotencyKey =
+			sessionStorage.getItem(storageKey) ?? crypto.randomUUID();
+		sessionStorage.setItem(storageKey, idempotencyKey);
+		try {
+			const checkout = await startCustomerCheckout(
+				slug,
+				csrfToken,
+				offeringId,
+				idempotencyKey,
+			);
+			sessionStorage.removeItem(storageKey);
+			window.location.assign(checkout.checkoutUrl);
+		} catch (error) {
+			if (
+				error instanceof ApiError &&
+				(error.code === "checkout_expired" ||
+					error.code === "checkout_terminal_failure")
+			)
+				sessionStorage.removeItem(storageKey);
+			throw error;
+		}
 	}
 
 	async function purchase(membershipProduct: PublicMembershipProductSummary) {
@@ -91,10 +129,8 @@ export function MembershipPage(props: MembershipPageProps) {
 				membershipProduct.id,
 				customer.session.csrfToken,
 			);
-		} catch {
-			setPurchaseError(
-				"Customer authentication or membership selection could not be resumed. Please try again.",
-			);
+		} catch (error) {
+			setPurchaseError(purchaseErrorMessage(error));
 		} finally {
 			setPendingOfferingId(null);
 		}
@@ -122,10 +158,8 @@ export function MembershipPage(props: MembershipPageProps) {
 					customer.session.csrfToken,
 				);
 			})
-			.catch(() => {
-				setPurchaseError(
-					"Customer authentication or membership selection could not be resumed. Please try again.",
-				);
+			.catch((error) => {
+				setPurchaseError(purchaseErrorMessage(error));
 			})
 			.finally(() => setPendingOfferingId(null));
 	});

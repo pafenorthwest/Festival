@@ -49,4 +49,60 @@ describe("ShopifyMembershipCheckoutClient", () => {
 		expect(body).toContain("opaque-intent");
 		expect(body).not.toContain("private-token");
 	});
+
+	it("normalizes Storefront user errors, warnings, and invalid carts", async () => {
+		let response: unknown = {
+			data: {
+				cartCreate: {
+					cart: { id: "gid://shopify/Cart/private" },
+					userErrors: [{ message: "no" }],
+					warnings: [],
+				},
+			},
+		};
+		const transport = new CustomerAccountTransport({
+			resolver: async () => [{ address: "8.8.8.8", family: 4, ttlSeconds: 60 }],
+			requester: async () => ({
+				status: 200,
+				body: (async function* () {
+					yield new TextEncoder().encode(JSON.stringify(response));
+				})(),
+			}),
+		});
+		const client = new ShopifyMembershipCheckoutClient(
+			{
+				getShopifyIntegration: async () => ({
+					storeDomain: "festival.myshopify.com",
+					encryptedStorefrontPrivateToken: "ciphertext",
+				}),
+			} as never,
+			{ decrypt: () => "private-token" } as never,
+			transport,
+		);
+		const create = () =>
+			client.createCart({
+				organizationId: "org",
+				shopifyVariantGid: "gid://shopify/ProductVariant/1",
+				buyerAccessToken: "customer-token",
+				correlationId: "opaque-intent",
+			});
+		await expect(create()).rejects.toMatchObject({ status: 503 });
+		response = {
+			data: {
+				cartCreate: {
+					cart: { id: "gid://shopify/Cart/private" },
+					userErrors: [],
+					warnings: [{ message: "warning" }],
+				},
+			},
+		};
+		await expect(create()).rejects.toMatchObject({ status: 503 });
+		response = { data: { cart: null } };
+		await expect(
+			client.checkout({
+				organizationId: "org",
+				shopifyCartId: "gid://shopify/Cart/private",
+			}),
+		).rejects.toMatchObject({ status: 503 });
+	});
 });
