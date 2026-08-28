@@ -46,6 +46,14 @@ export function CustomerAccountPage(props: { slug: string }) {
 	onMount(
 		() =>
 			void (async () => {
+				if (
+					new URLSearchParams(window.location.search).get("checkout") ===
+					"processing"
+				) {
+					setStatus(
+						"Your checkout is processing. Payment and membership status will be confirmed separately.",
+					);
+				}
 				try {
 					const response = await getCustomerSession(props.slug);
 					if (response.session.authenticated) {

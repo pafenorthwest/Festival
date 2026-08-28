@@ -868,6 +868,44 @@ export class CustomerAccountService {
 			return { session: { authenticated: false } };
 		}
 	}
+	/**
+	 * Internal commerce boundary. This deliberately stays out of the HTTP DTOs:
+	 * callers receive the Shopify token only to attach it server-side to a
+	 * Storefront buyer identity.
+	 */
+	async checkoutAccess(
+		slug: string,
+		sessionId: string | undefined,
+		csrf: string | undefined,
+		origin: string | undefined,
+	) {
+		const org = await this.organizations.findOrganizationBySlug(slug);
+		if (!org || !sessionId)
+			throw new AppError("Customer session is invalid.", 401);
+		const valid = await this.validSession(sessionId, org.id);
+		if (
+			!csrf ||
+			csrf !== valid.session.csrfToken ||
+			origin !== this.publicOrigin
+		)
+			throw new AppError("CSRF validation failed.", 403);
+		const { session, bundle } = await this.access(
+			valid.session,
+			valid.integration,
+		);
+		const touched = await this.repository.touchSession(
+			this.sessionTouch(session, this.now()),
+		);
+		if (!touched) throw new AppError("Customer session is invalid.", 401);
+		return {
+			organizationId: org.id,
+			organizationSlug: org.slug,
+			customerId: valid.customer.id,
+			sessionId: touched.sessionId,
+			integrationVersion: touched.integrationVersion,
+			shopifyCustomerAccessToken: bundle.accessToken,
+		};
+	}
 	async customerProfile(
 		slug: string,
 		sessionId: string | undefined,

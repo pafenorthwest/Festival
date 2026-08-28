@@ -62,6 +62,11 @@ export const CURRENT_ROUTE_SECURITY = [
 		authenticationClass: "customer",
 	},
 	{
+		method: "POST",
+		path: "/api/organizations/:slug/customer/checkout",
+		authenticationClass: "customer",
+	},
+	{
 		method: "GET",
 		path: "/api/organizations/:slug/customer/profile",
 		authenticationClass: "customer",

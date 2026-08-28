@@ -40,6 +40,16 @@ import type {
 
 const API_BASE = import.meta.env.FRONT_API_BASE ?? "";
 
+export class ApiError extends Error {
+	constructor(
+		message: string,
+		readonly status: number,
+		readonly code?: string,
+	) {
+		super(message);
+	}
+}
+
 async function requestJson<T>(
 	path: string,
 	init?: RequestInit,
@@ -56,10 +66,14 @@ async function requestJson<T>(
 		},
 	});
 
-	const payload = (await response.json()) as T | { error?: string };
+	const payload = (await response.json()) as
+		| T
+		| { error?: string; code?: string };
 	if (!response.ok) {
-		throw new Error(
+		throw new ApiError(
 			(payload as { error?: string }).error ?? `Request failed for ${path}`,
+			response.status,
+			(payload as { code?: string }).code,
 		);
 	}
 
@@ -243,6 +257,27 @@ export function resumeCustomerMembershipPurchase(
 	return requestJson<MembershipPurchaseSelectionResponse>(
 		`/api/organizations/${encodeURIComponent(slug)}/customer/membership-purchase/${encodeURIComponent(offeringId)}`,
 		undefined,
+		undefined,
+		"",
+	);
+}
+
+export function startCustomerCheckout(
+	slug: string,
+	csrfToken: string,
+	offeringId: string,
+	idempotencyKey: string,
+) {
+	return requestJson<{ checkoutUrl: string }>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/checkout`,
+		{
+			method: "POST",
+			headers: {
+				"X-CSRF-Token": csrfToken,
+				"Idempotency-Key": idempotencyKey,
+			},
+			body: JSON.stringify({ offeringId }),
+		},
 		undefined,
 		"",
 	);

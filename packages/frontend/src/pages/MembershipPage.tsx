@@ -2,16 +2,35 @@ import type { PublicMembershipProductSummary } from "@festival/common";
 import { createResource, createSignal, For, onMount, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import {
+	ApiError,
 	customerMembershipPurchaseSignInPath,
 	getCustomerSession,
 	getMembershipProducts,
 	resumeCustomerMembershipPurchase,
+	startCustomerCheckout,
 } from "../lib/api.js";
 import { buildOrgMembershipPath } from "../lib/routes.js";
 import { sanitizeShopifyDescriptionHtml } from "../lib/sanitize-html.js";
 
 interface MembershipPageProps {
 	app: FestivalAppController;
+}
+
+function purchaseErrorMessage(error: unknown): string {
+	if (!(error instanceof ApiError))
+		return "Customer authentication or membership selection could not be resumed. Please try again.";
+	switch (error.code) {
+		case "checkout_in_progress":
+			return "Your checkout is still being prepared. Please wait a moment before trying again.";
+		case "checkout_expired":
+			return "This checkout expired before it could continue. Start a new checkout.";
+		case "checkout_retryable_upstream":
+			return "Shopify checkout is temporarily unavailable. Please try again.";
+		case "checkout_terminal_failure":
+			return "This checkout attempt cannot continue. Start a new checkout.";
+		default:
+			return error.message;
+	}
 }
 
 function formatEntitlementClass(value: string): string {
@@ -41,7 +60,11 @@ export function MembershipPage(props: MembershipPageProps) {
 		},
 	);
 
-	async function continuePurchase(slug: string, offeringId: string) {
+	async function continuePurchase(
+		slug: string,
+		offeringId: string,
+		csrfToken?: string,
+	) {
 		const resumed = await resumeCustomerMembershipPurchase(slug, offeringId);
 		if (
 			resumed.selection.organizationSlug !== slug ||
@@ -54,9 +77,34 @@ export function MembershipPage(props: MembershipPageProps) {
 			"",
 			`${buildOrgMembershipPath(slug)}?purchase=${encodeURIComponent(offeringId)}`,
 		);
-		setPurchaseStatus(
-			"Your Teacher Membership selection is authenticated and ready to continue.",
-		);
+		if (!csrfToken) {
+			setPurchaseStatus(
+				"Your Teacher Membership selection is authenticated and ready to continue.",
+			);
+			return;
+		}
+		const storageKey = `festival-checkout:${slug}:${offeringId}`;
+		const idempotencyKey =
+			sessionStorage.getItem(storageKey) ?? crypto.randomUUID();
+		sessionStorage.setItem(storageKey, idempotencyKey);
+		try {
+			const checkout = await startCustomerCheckout(
+				slug,
+				csrfToken,
+				offeringId,
+				idempotencyKey,
+			);
+			sessionStorage.removeItem(storageKey);
+			window.location.assign(checkout.checkoutUrl);
+		} catch (error) {
+			if (
+				error instanceof ApiError &&
+				(error.code === "checkout_expired" ||
+					error.code === "checkout_terminal_failure")
+			)
+				sessionStorage.removeItem(storageKey);
+			throw error;
+		}
 	}
 
 	async function purchase(membershipProduct: PublicMembershipProductSummary) {
@@ -76,11 +124,13 @@ export function MembershipPage(props: MembershipPageProps) {
 				);
 				return;
 			}
-			await continuePurchase(route.slug, membershipProduct.id);
-		} catch {
-			setPurchaseError(
-				"Customer authentication or membership selection could not be resumed. Please try again.",
+			await continuePurchase(
+				route.slug,
+				membershipProduct.id,
+				customer.session.csrfToken,
 			);
+		} catch (error) {
+			setPurchaseError(purchaseErrorMessage(error));
 		} finally {
 			setPendingOfferingId(null);
 		}
@@ -98,11 +148,18 @@ export function MembershipPage(props: MembershipPageProps) {
 		const offeringId = query.get("purchase");
 		if (route.kind !== "org-membership" || !offeringId) return;
 		setPendingOfferingId(offeringId);
-		void continuePurchase(route.slug, offeringId)
-			.catch(() => {
-				setPurchaseError(
-					"Customer authentication or membership selection could not be resumed. Please try again.",
+		void getCustomerSession(route.slug)
+			.then((customer) => {
+				if (!customer.session.authenticated)
+					throw new Error("Customer session is invalid.");
+				return continuePurchase(
+					route.slug,
+					offeringId,
+					customer.session.csrfToken,
 				);
+			})
+			.catch((error) => {
+				setPurchaseError(purchaseErrorMessage(error));
 			})
 			.finally(() => setPendingOfferingId(null));
 	});

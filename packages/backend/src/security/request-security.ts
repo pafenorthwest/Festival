@@ -41,12 +41,15 @@ export function apiRequestSecurity(): MiddlewareHandler {
 			/^\/api\/organizations\/[^/]+\/customer\/logout$/.test(c.req.path);
 		const isCustomerProfile =
 			/^\/api\/organizations\/[^/]+\/customer\/profile$/.test(c.req.path);
+		const isCustomerCheckout =
+			/^\/api\/organizations\/[^/]+\/customer\/checkout$/.test(c.req.path);
 		if (
 			c.req.method === "POST" &&
 			c.req.raw.body &&
 			(c.req.header("Authorization") !== undefined ||
 				isCustomerLogout ||
-				isCustomerProfile)
+				isCustomerProfile ||
+				isCustomerCheckout)
 		) {
 			if (await requestBodyIsTooLarge(c)) {
 				return c.json({ error: "Request body is too large." }, 413);

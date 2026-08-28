@@ -376,7 +376,7 @@ describe("organization onboarding integration", () => {
 		expect(source).toContain("innerHTML={sanitizeShopifyDescriptionHtml(");
 	});
 
-	it("starts customer authentication or resumes the same local offering without cart mutation", async () => {
+	it("starts customer authentication then calls the server-only checkout endpoint", async () => {
 		const page = await Bun.file("src/pages/MembershipPage.tsx").text();
 		const api = await Bun.file("src/lib/api.ts").text();
 		expect(page).toContain('"Purchase"');
@@ -388,8 +388,17 @@ describe("organization onboarding integration", () => {
 		expect(page).toContain("Customer authentication or membership selection");
 		expect(page).toContain("Customer authentication was not completed");
 		expect(page).toContain("membershipProduct.available");
-		expect(page).not.toMatch(/cartCreate|checkoutUrl|shopifyVariantGid/);
+		expect(page).toContain("startCustomerCheckout(");
+		expect(page).toContain("customer.session.csrfToken");
+		expect(page).toContain("checkout_in_progress");
+		expect(page).toContain("checkout_expired");
+		expect(page).toContain("checkout_retryable_upstream");
+		expect(page).toContain("checkout_terminal_failure");
+		expect(page).toContain("Start a new checkout.");
+		expect(page).not.toMatch(/cartCreate|shopifyVariantGid/);
 		expect(api).toContain("customer/membership-purchase/");
+		expect(api).toContain("/customer/checkout");
+		expect(api).toContain("Idempotency-Key");
 		expect(customerMembershipPurchaseSignInPath("pafe", "offering_123")).toBe(
 			"/api/organizations/pafe/customer-auth/start?offering=offering_123",
 		);
