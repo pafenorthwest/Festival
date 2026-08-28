@@ -73,3 +73,27 @@
 - Verdict: patch is correct
 - Confidence: 0.88
 - Justification: The v4 outcome state is persisted under a scoped idempotency key, local PostgreSQL serialization ends before Shopify I/O, `checkout_started` is written before the external checkout-URL query, and any later failure is durably replayed as a safe terminal outcome. Frontend behavior receives only bounded error codes and no cart or credential data.
+
+## Review against origin/main
+
+- Diff reviewed: `35a0b5afcb9459b8cb74864654d551e66c1b1eb7..HEAD`.
+- Findings status: complete
+
+## Findings JSON
+
+```json
+[
+  {
+    "file": "packages/backend/src/checkout/membership-checkout-service.ts",
+    "line_range": "204-205",
+    "severity": "medium",
+    "explanation": "The validation compares URL.hostname, which omits the port. A URL such as https://festival.myshopify.com:444/checkouts/... therefore passes even though it is not on the configured HTTPS store domain. Reject non-default ports (or compare url.host to the configured host) before returning the redirect URL."
+  }
+]
+```
+
+## Verdict
+
+- Verdict: patch is incorrect
+- Confidence: 0.93
+- Justification: The externally returned checkout redirect does not enforce an exact configured store-domain authority because an arbitrary explicit port is accepted.

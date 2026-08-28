@@ -59,6 +59,7 @@ describe("membership checkout service", () => {
 		};
 		const checkout = new InMemoryCheckoutRepository();
 		let cartCreated = 0;
+		let checkoutRequests = 0;
 		const service = new MembershipCheckoutService(
 			organizations,
 			new PublicMembershipProductService(organizations, catalog),
@@ -70,9 +71,13 @@ describe("membership checkout service", () => {
 					return { shopifyCartId: "gid://shopify/Cart/private" };
 				},
 				async checkout() {
+					checkoutRequests += 1;
 					expect(cartCreated).toBeGreaterThan(0);
 					return {
-						checkoutUrl: "https://festival.myshopify.com/checkouts/fresh",
+						checkoutUrl:
+							checkoutRequests > 2
+								? "https://festival.myshopify.com:444/checkouts/fresh"
+								: "https://festival.myshopify.com/checkouts/fresh",
 					};
 				},
 			},
@@ -94,6 +99,12 @@ describe("membership checkout service", () => {
 			checkoutUrl: "https://festival.myshopify.com/checkouts/fresh",
 		});
 		expect(cartCreated).toBe(1);
+		await expect(
+			service.start({
+				...input,
+				idempotencyKey: "00000000-0000-4000-8000-000000000003",
+			}),
+		).rejects.toMatchObject({ code: "checkout_retryable_upstream" });
 	});
 
 	it("records a terminal failure and never redirects when cart persistence fails", async () => {

@@ -100,7 +100,7 @@ repo_slug_from_origin() {
     return 2
   fi
 
-  printf '%s\n' "${remote_url}" | sed -nE 's#^.*github\.com[:/]([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(\.git)?$#\1#p' | head -n 1
+  printf '%s\n' "${remote_url}" |  sed -E 's#^.*github\.com[:/]##; s#\.git$##' | head -n 1
 }
 
 resolve_repo_slug() {

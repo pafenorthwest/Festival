@@ -201,7 +201,9 @@ function isAllowedCheckoutUrl(value: string, storeDomain: string): boolean {
 	try {
 		const url = new URL(value);
 		return (
-			url.protocol === "https:" && url.hostname === storeDomain.toLowerCase()
+			url.protocol === "https:" &&
+			url.hostname === storeDomain.toLowerCase() &&
+			url.port === ""
 		);
 	} catch {
 		return false;
