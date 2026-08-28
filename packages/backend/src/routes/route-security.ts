@@ -7,6 +7,8 @@ export const ROUTE_AUTHENTICATION_CLASSES = [
 	"customer-auth-start",
 	"customer-oauth-callback",
 	"customer",
+	"shopify-webhook",
+	"private-service",
 ] as const;
 
 export type RouteAuthenticationClass =
@@ -65,6 +67,21 @@ export const CURRENT_ROUTE_SECURITY = [
 		method: "POST",
 		path: "/api/organizations/:slug/customer/checkout",
 		authenticationClass: "customer",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/customer/membership-status",
+		authenticationClass: "customer",
+	},
+	{
+		method: "POST",
+		path: "/api/shopify/webhooks/orders-paid",
+		authenticationClass: "shopify-webhook",
+	},
+	{
+		method: "POST",
+		path: "/api/internal/reconcile/shopify-orders",
+		authenticationClass: "private-service",
 	},
 	{
 		method: "GET",

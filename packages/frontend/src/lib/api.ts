@@ -250,6 +250,15 @@ export function getMembershipProducts(slug: string) {
 	);
 }
 
+export function getPublicDivisions(slug: string) {
+	return requestJson<OrganizationDivisionListResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/divisions`,
+		undefined,
+		undefined,
+		"",
+	);
+}
+
 export function resumeCustomerMembershipPurchase(
 	slug: string,
 	offeringId: string,
@@ -266,6 +275,8 @@ export function startCustomerCheckout(
 	slug: string,
 	csrfToken: string,
 	offeringId: string,
+	divisionId: string,
+	staffAccessConsent: boolean,
 	idempotencyKey: string,
 ) {
 	return requestJson<{ checkoutUrl: string }>(
@@ -276,7 +287,11 @@ export function startCustomerCheckout(
 				"X-CSRF-Token": csrfToken,
 				"Idempotency-Key": idempotencyKey,
 			},
-			body: JSON.stringify({ offeringId }),
+			body: JSON.stringify({
+				offeringId,
+				divisionId,
+				staffAccessConsent,
+			}),
 		},
 		undefined,
 		"",

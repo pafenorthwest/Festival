@@ -449,6 +449,225 @@ describe("ShopifyAdminApiClient", () => {
 		).toThrow("not granted");
 	});
 
+	it("reads a bounded, tenant-bound paid-order projection without customer PII", async () => {
+		let graphqlBody: {
+			query: string;
+			variables: Record<string, string>;
+		} | null = null;
+		const client = new ShopifyAdminApiClient({
+			fetch: async (input, init) => {
+				if (input.toString().endsWith("/admin/oauth/access_token")) {
+					return Response.json({
+						access_token: "read-orders-token",
+						expires_in: 3600,
+						scope: "read_orders",
+					});
+				}
+				expect(input.toString()).toContain("/admin/api/2026-07/graphql.json");
+				graphqlBody = JSON.parse(String(init?.body)) as {
+					query: string;
+					variables: Record<string, string>;
+				};
+				return Response.json(
+					{
+						data: {
+							order: {
+								id: "gid://shopify/Order/1",
+								fullyPaid: true,
+								currencyCode: "USD",
+								customer: { id: "gid://shopify/Customer/1" },
+								customAttributes: [
+									{
+										key: "festival_checkout_intent_id",
+										value: "correlation-1",
+									},
+								],
+								lineItems: {
+									nodes: [
+										{
+											id: "gid://shopify/LineItem/1",
+											product: { id: "gid://shopify/Product/1" },
+											variant: { id: "gid://shopify/ProductVariant/1" },
+											quantity: 1,
+											discountedTotalSet: {
+												presentmentMoney: {
+													amount: "125.00",
+													currencyCode: "USD",
+												},
+											},
+										},
+									],
+									pageInfo: { hasNextPage: false },
+								},
+								transactions: [
+									{
+										kind: "SALE",
+										status: "SUCCESS",
+										processedAt: "2026-08-28T18:00:00.000Z",
+									},
+									{
+										kind: "CAPTURE",
+										status: "SUCCESS",
+										processedAt: "2026-08-28T18:01:00.000Z",
+									},
+								],
+							},
+						},
+					},
+					{ headers: { "x-request-id": "read-order-request" } },
+				);
+			},
+		});
+
+		await expect(
+			client.readPaidOrderByGid(
+				{ ...operationContext, capability: "read_orders" },
+				"gid://shopify/Order/1",
+			),
+		).resolves.toEqual({
+			value: {
+				id: "gid://shopify/Order/1",
+				customerGid: "gid://shopify/Customer/1",
+				fullyPaid: true,
+				fullyPaidAtIso: "2026-08-28T18:01:00.000Z",
+				currencyCode: "USD",
+				customAttributes: [
+					{
+						key: "festival_checkout_intent_id",
+						value: "correlation-1",
+					},
+				],
+				lineItems: [
+					{
+						id: "gid://shopify/LineItem/1",
+						productGid: "gid://shopify/Product/1",
+						variantGid: "gid://shopify/ProductVariant/1",
+						quantity: 1,
+						paidAmount: "125.00",
+						paidCurrencyCode: "USD",
+					},
+				],
+			},
+			requestId: "read-order-request",
+		});
+		expect(graphqlBody?.variables).toEqual({
+			orderId: "gid://shopify/Order/1",
+		});
+		expect(graphqlBody?.query).toContain("fullyPaid");
+		expect(graphqlBody?.query).toContain("discountedTotalSet");
+		expect(graphqlBody?.query).toContain("transactions(first: 250)");
+		expect(graphqlBody?.query).not.toContain("email");
+		expect(graphqlBody?.query).not.toContain("phone");
+		expect(graphqlBody?.query).not.toContain("shippingAddress");
+	});
+
+	it("fails closed before transport for an unauthorized or malformed order read", async () => {
+		let fetchCalls = 0;
+		const client = new ShopifyAdminApiClient({
+			fetch: async () => {
+				fetchCalls += 1;
+				return Response.json({});
+			},
+		});
+
+		await expect(
+			client.readPaidOrderByGid(
+				{ ...operationContext, capability: "read_products" },
+				"gid://shopify/Order/1",
+			),
+		).rejects.toThrow("not authorized");
+		await expect(
+			client.readPaidOrderByGid(
+				{ ...operationContext, capability: "read_orders" },
+				"not-a-shopify-order-id",
+			),
+		).rejects.toThrow("order ID is invalid");
+		expect(fetchCalls).toBe(0);
+	});
+
+	it("does not invent a paid timestamp and rejects incomplete paid-order projections", async () => {
+		let call = 0;
+		const client = new ShopifyAdminApiClient({
+			fetch: async () => {
+				call += 1;
+				if (call === 1) {
+					return Response.json({
+						access_token: "read-orders-token",
+						expires_in: 3600,
+						scope: "read_orders",
+					});
+				}
+				return Response.json({
+					data: {
+						order: {
+							id: "gid://shopify/Order/1",
+							fullyPaid: true,
+							currencyCode: "USD",
+							customer: { id: "gid://shopify/Customer/1" },
+							customAttributes: [],
+							lineItems: { nodes: [], pageInfo: { hasNextPage: false } },
+							transactions: [
+								{ kind: "SALE", status: "PENDING", processedAt: null },
+							],
+						},
+					},
+				});
+			},
+		});
+
+		await expect(
+			client.readPaidOrderByGid(
+				{ ...operationContext, capability: "read_orders" },
+				"gid://shopify/Order/1",
+			),
+		).rejects.toThrow("successful payment timestamp");
+	});
+
+	it("returns an unpaid order without a fabricated fully-paid timestamp", async () => {
+		let call = 0;
+		const client = new ShopifyAdminApiClient({
+			fetch: async () => {
+				call += 1;
+				if (call === 1) {
+					return Response.json({
+						access_token: "read-orders-token",
+						expires_in: 3600,
+						scope: "read_orders",
+					});
+				}
+				return Response.json({
+					data: {
+						order: {
+							id: "gid://shopify/Order/1",
+							fullyPaid: false,
+							currencyCode: "USD",
+							customer: { id: "gid://shopify/Customer/1" },
+							customAttributes: [],
+							lineItems: { nodes: [], pageInfo: { hasNextPage: false } },
+							transactions: [],
+						},
+					},
+				});
+			},
+		});
+
+		await expect(
+			client.readPaidOrderByGid(
+				{ ...operationContext, capability: "read_orders" },
+				"gid://shopify/Order/1",
+			),
+		).resolves.toEqual({
+			value: {
+				id: "gid://shopify/Order/1",
+				customerGid: "gid://shopify/Customer/1",
+				fullyPaid: false,
+				currencyCode: "USD",
+				customAttributes: [],
+				lineItems: [],
+			},
+		});
+	});
+
 	it("captures bounded request IDs without exposing raw upstream bodies", async () => {
 		let call = 0;
 		const client = new ShopifyAdminApiClient({

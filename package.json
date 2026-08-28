@@ -29,8 +29,9 @@
     "test": "bun run build:common && bun run test:common && bun run test:backend && bun run test:frontend",
     "test:common": "bun run --cwd packages/common test",
     "test:backend": "bun run --cwd packages/backend test",
-    "test:frontend": "bun run --cwd packages/frontend test"
-		,"benchmark:customer-account-cache": "bun packages/backend/scripts/benchmark-customer-account-cache.ts"
+    "test:frontend": "bun run --cwd packages/frontend test",
+		"benchmark:customer-account-cache": "bun packages/backend/scripts/benchmark-customer-account-cache.ts",
+		"reconcile:shopify-orders": "bun packages/backend/scripts/reconcile-shopify-orders.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.9",

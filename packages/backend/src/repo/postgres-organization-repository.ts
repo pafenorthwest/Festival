@@ -76,6 +76,14 @@ interface FestivalRow {
 	created_at: string;
 }
 
+interface OrganizationRow {
+	id: string;
+	name: string;
+	slug: string;
+	timezone: string;
+	created_at: string;
+}
+
 interface DivisionRow {
 	id: string;
 	organization_id: string;
@@ -1436,6 +1444,20 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		)) as ShopifyIntegrationRow[];
 
 		return rows[0] ? mapShopifyIntegration(rows[0]) : null;
+	}
+
+	async findOrganizationByShopDomain(shopDomain: string) {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT o.id, o.name, o.slug, o.timezone, o.created_at
+			 FROM ${this.schema}.organizations o
+			 JOIN ${this.schema}.shopify_integrations i ON i.organization_id = o.id
+			 WHERE i.verification_status = 'ok'
+			   AND (i.store_domain = $1 OR i.verified_shop_domain = $1)
+			 LIMIT 1`,
+			[shopDomain.toLowerCase()],
+		)) as OrganizationRow[];
+		return rows[0] ? mapOrganization(rows[0]) : null;
 	}
 
 	async getPublicShopifyCatalogDomain(

@@ -1,4 +1,7 @@
-import type { ShopifyAdminCapability } from "@festival/common";
+import type {
+	CustomerMailingAddress,
+	ShopifyAdminCapability,
+} from "@festival/common";
 
 export interface ShopifyCredentials {
 	organizationId: string;
@@ -88,6 +91,58 @@ export interface ShopifyMembershipProductClient {
 		context: ShopifyAdminOperationContext,
 		productGid: string,
 	): Promise<ShopifyAdminResult<void>>;
+}
+
+/**
+ * Server-only Shopify order facts used to validate a correlated membership
+ * purchase. Do not expose this shape through customer or operator DTOs.
+ */
+export interface ShopifyOrderCustomAttribute {
+	readonly key: string;
+	readonly value: string;
+}
+
+export interface ShopifyPaidOrderLine {
+	readonly id: string;
+	readonly productGid: string;
+	readonly variantGid: string;
+	readonly quantity: number;
+	readonly paidAmount: string;
+	readonly paidCurrencyCode: string;
+}
+
+export interface ShopifyPaidOrder {
+	readonly id: string;
+	readonly customerGid: string;
+	readonly fullyPaid: boolean;
+	readonly fullyPaidAtIso?: string;
+	readonly currencyCode: string;
+	readonly customAttributes: ShopifyOrderCustomAttribute[];
+	readonly lineItems: ShopifyPaidOrderLine[];
+}
+
+/** Consent-gated contact facts. This is server-only and never a webhook DTO. */
+export interface ShopifyOrderCustomerProfile {
+	readonly name?: string;
+	readonly email?: string;
+	readonly phone?: string;
+	readonly mailingAddress?: CustomerMailingAddress;
+}
+
+export interface ShopifyPaidOrderReader {
+	readPaidOrderByGid(
+		context: ShopifyAdminOperationContext,
+		orderGid: string,
+	): Promise<ShopifyAdminResult<ShopifyPaidOrder | null>>;
+	readOrderCustomerProfileByGid?(
+		context: ShopifyAdminOperationContext,
+		orderGid: string,
+	): Promise<ShopifyAdminResult<ShopifyOrderCustomerProfile | null>>;
+	listPaidOrdersSince(
+		context: ShopifyAdminOperationContext,
+		sinceIso: string,
+		first?: number,
+	): Promise<ShopifyAdminResult<ShopifyPaidOrder[]>>;
 }
 
 export function assertShopifyOrderReadWindow(

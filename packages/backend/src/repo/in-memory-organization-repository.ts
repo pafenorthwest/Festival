@@ -570,6 +570,19 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		return this.shopifyIntegrations.get(organizationId) ?? null;
 	}
 
+	async findOrganizationByShopDomain(shopDomain: string) {
+		const normalized = shopDomain.toLowerCase();
+		const integration = [...this.shopifyIntegrations.values()].find(
+			(value) =>
+				value.verificationStatus === "ok" &&
+				(value.storeDomain === normalized ||
+					value.verifiedShopDomain === normalized),
+		);
+		return integration
+			? (this.organizations.get(integration.organizationId) ?? null)
+			: null;
+	}
+
 	async getPublicShopifyCatalogDomain(
 		organizationId: string,
 	): Promise<string | null> {

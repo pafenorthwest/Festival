@@ -906,6 +906,31 @@ export class CustomerAccountService {
 			shopifyCustomerAccessToken: bundle.accessToken,
 		};
 	}
+	/** Trusted server-side continuation after checkoutAccess has verified the session and CSRF token. */
+	async recordCheckoutStaffAccessConsent(
+		organizationId: string,
+		customerId: string,
+	) {
+		return this.repository.recordStaffAccessConsent({
+			customerId,
+			organizationId,
+			privacyNoticeVersion: CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION,
+			consentedAtIso: this.now().toISOString(),
+		});
+	}
+
+	/** Internal ownership boundary for customer-owned read DTOs. */
+	async customerReadAccess(slug: string, sessionId: string | undefined) {
+		const org = await this.organizations.findOrganizationBySlug(slug);
+		if (!org || !sessionId)
+			throw new AppError("Customer session is invalid.", 401);
+		const valid = await this.validSession(sessionId, org.id);
+		const touched = await this.repository.touchSession(
+			this.sessionTouch(valid.session, this.now()),
+		);
+		if (!touched) throw new AppError("Customer session is invalid.", 401);
+		return { organizationId: org.id, customerId: valid.customer.id };
+	}
 	async customerProfile(
 		slug: string,
 		sessionId: string | undefined,

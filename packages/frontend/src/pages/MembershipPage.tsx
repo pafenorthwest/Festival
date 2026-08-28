@@ -6,6 +6,7 @@ import {
 	customerMembershipPurchaseSignInPath,
 	getCustomerSession,
 	getMembershipProducts,
+	getPublicDivisions,
 	resumeCustomerMembershipPurchase,
 	startCustomerCheckout,
 } from "../lib/api.js";
@@ -46,6 +47,15 @@ export function MembershipPage(props: MembershipPageProps) {
 	const [pendingOfferingId, setPendingOfferingId] = createSignal<string | null>(
 		null,
 	);
+	const [selectedOfferingId, setSelectedOfferingId] = createSignal<
+		string | null
+	>(null);
+	const [checkoutCsrfToken, setCheckoutCsrfToken] = createSignal<string | null>(
+		null,
+	);
+	const [selectedDivisionId, setSelectedDivisionId] = createSignal("");
+	const [staffAccessConsent, setStaffAccessConsent] = createSignal(false);
+	const [checkoutSubmitting, setCheckoutSubmitting] = createSignal(false);
 	const [response] = createResource(
 		() => {
 			const route = props.app.route();
@@ -59,8 +69,18 @@ export function MembershipPage(props: MembershipPageProps) {
 			return getMembershipProducts(slug);
 		},
 	);
+	const [divisions] = createResource(
+		() => {
+			const route = props.app.route();
+			return route.kind === "org-membership" ? route.slug : null;
+		},
+		async (slug) => {
+			if (!slug) throw new Error("Organization slug is required.");
+			return getPublicDivisions(slug);
+		},
+	);
 
-	async function continuePurchase(
+	async function preparePurchase(
 		slug: string,
 		offeringId: string,
 		csrfToken?: string,
@@ -79,19 +99,37 @@ export function MembershipPage(props: MembershipPageProps) {
 		);
 		if (!csrfToken) {
 			setPurchaseStatus(
-				"Your Teacher Membership selection is authenticated and ready to continue.",
+				"Your Teacher Membership selection is authenticated. Select your division before continuing.",
 			);
 			return;
 		}
-		const storageKey = `festival-checkout:${slug}:${offeringId}`;
-		const idempotencyKey =
-			sessionStorage.getItem(storageKey) ?? crypto.randomUUID();
-		sessionStorage.setItem(storageKey, idempotencyKey);
+		setSelectedOfferingId(offeringId);
+		setCheckoutCsrfToken(csrfToken);
+		setSelectedDivisionId("");
+		setStaffAccessConsent(false);
+		setPurchaseStatus(
+			"Select your division and optional staff-access consent before continuing to Shopify.",
+		);
+	}
+
+	async function startCheckout(slug: string) {
+		const offeringId = selectedOfferingId();
+		const csrfToken = checkoutCsrfToken();
+		const divisionId = selectedDivisionId();
+		if (!offeringId || !csrfToken || !divisionId) return;
+		const storageKey = `festival-checkout:${slug}:${offeringId}:${divisionId}`;
+		setCheckoutSubmitting(true);
+		setPurchaseError("");
 		try {
+			const idempotencyKey =
+				sessionStorage.getItem(storageKey) ?? crypto.randomUUID();
+			sessionStorage.setItem(storageKey, idempotencyKey);
 			const checkout = await startCustomerCheckout(
 				slug,
 				csrfToken,
 				offeringId,
+				divisionId,
+				staffAccessConsent(),
 				idempotencyKey,
 			);
 			sessionStorage.removeItem(storageKey);
@@ -100,10 +138,13 @@ export function MembershipPage(props: MembershipPageProps) {
 			if (
 				error instanceof ApiError &&
 				(error.code === "checkout_expired" ||
-					error.code === "checkout_terminal_failure")
+					error.code === "checkout_terminal_failure" ||
+					error.code === "membership_active")
 			)
 				sessionStorage.removeItem(storageKey);
-			throw error;
+			setPurchaseError(purchaseErrorMessage(error));
+		} finally {
+			setCheckoutSubmitting(false);
 		}
 	}
 
@@ -124,7 +165,7 @@ export function MembershipPage(props: MembershipPageProps) {
 				);
 				return;
 			}
-			await continuePurchase(
+			await preparePurchase(
 				route.slug,
 				membershipProduct.id,
 				customer.session.csrfToken,
@@ -152,7 +193,7 @@ export function MembershipPage(props: MembershipPageProps) {
 			.then((customer) => {
 				if (!customer.session.authenticated)
 					throw new Error("Customer session is invalid.");
-				return continuePurchase(
+				return preparePurchase(
 					route.slug,
 					offeringId,
 					customer.session.csrfToken,
@@ -193,6 +234,68 @@ export function MembershipPage(props: MembershipPageProps) {
 				<div class="membership-purchase-status" role="status">
 					{purchaseStatus()}
 				</div>
+			</Show>
+			<Show when={selectedOfferingId()}>
+				<section
+					class="membership-checkout-details"
+					aria-label="Membership checkout details"
+				>
+					<h2>Membership details</h2>
+					<p class="muted">
+						Choose the Festival division this Teacher Membership supports.
+					</p>
+					<label>
+						Division
+						<select
+							value={selectedDivisionId()}
+							onInput={(event) =>
+								setSelectedDivisionId(event.currentTarget.value)
+							}
+						>
+							<option value="">Select a division</option>
+							<For each={divisions()?.divisions ?? []}>
+								{(division) => (
+									<option value={division.id}>{division.displayName}</option>
+								)}
+							</For>
+						</select>
+					</label>
+					<Show when={divisions.loading}>
+						<p class="muted">Loading available divisions.</p>
+					</Show>
+					<Show when={divisions.error}>
+						<p class="membership-unavailable" role="alert">
+							Available divisions could not be loaded. Please try again.
+						</p>
+					</Show>
+					<label class="membership-consent">
+						<input
+							type="checkbox"
+							checked={staffAccessConsent()}
+							onInput={(event) =>
+								setStaffAccessConsent(event.currentTarget.checked)
+							}
+						/>
+						<span>
+							I consent to Festival staff accessing Shopify-provided contact
+							details when needed to support my membership.
+						</span>
+					</label>
+					<button
+						type="button"
+						disabled={
+							!selectedDivisionId() || divisions.loading || checkoutSubmitting()
+						}
+						onClick={() => {
+							const route = props.app.route();
+							if (route.kind === "org-membership") {
+								void startCheckout(route.slug);
+							}
+						}}
+					>
+						{checkoutSubmitting() ? "Opening Shopify…" : "Continue to Shopify"}
+					</button>
+				</section>
 			</Show>
 
 			<Show

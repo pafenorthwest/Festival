@@ -1,3 +1,5 @@
+import { calendarDateInTimezone } from "@festival/common";
+import type { MembershipCommerceRepository } from "../commerce/membership-commerce-repository.js";
 import { AppError } from "../errors/app-error.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
 import type { PublicMembershipProductService } from "../shopify/public-membership-product-service.js";
@@ -25,6 +27,7 @@ export class MembershipCheckoutService {
 		private readonly listings: PublicMembershipProductService,
 		private readonly checkout: CheckoutRepository,
 		private readonly storefront: MembershipCheckoutStorefront,
+		private readonly commerce?: MembershipCommerceRepository,
 		private readonly now = () => new Date(),
 	) {}
 	async start(input: {
@@ -36,8 +39,9 @@ export class MembershipCheckoutService {
 		buyerAccessToken: string;
 		idempotencyKey: string;
 		offeringId: string;
+		divisionId: string;
+		staffAccessConsent: boolean;
 	}) {
-		// TODO(#78): reject active or processing Teacher Membership purchases.
 		const existing = await this.checkout.getOutcome({
 			organizationId: input.organizationId,
 			customerId: input.customerId,
@@ -45,6 +49,47 @@ export class MembershipCheckoutService {
 			idempotencyKey: input.idempotencyKey,
 		});
 		if (existing) return this.resume(existing, input);
+		if (!input.divisionId || typeof input.staffAccessConsent !== "boolean") {
+			throw new AppError("Checkout request is invalid.", 400);
+		}
+		const division = (
+			await this.organizations.listDivisions(input.organizationId, true)
+		).find((value) => value.id === input.divisionId);
+		if (!division) {
+			throw new AppError("Membership division is unavailable.", 409);
+		}
+		if (this.commerce) {
+			const timezone = await this.organizations.getOrganizationTimezone(
+				input.organizationId,
+			);
+			const today = calendarDateInTimezone(this.now().toISOString(), timezone);
+			if (
+				await this.commerce.hasActiveGrant(
+					input.organizationId,
+					input.customerId,
+					today,
+				)
+			) {
+				throw new AppError(
+					"An active Teacher Membership already exists.",
+					409,
+					"membership_active",
+				);
+			}
+		}
+		if (
+			await this.checkout.hasProcessingIntent(
+				input.organizationId,
+				input.customerId,
+				this.now().toISOString(),
+			)
+		) {
+			throw new AppError(
+				"Checkout is already in progress.",
+				409,
+				"checkout_in_progress",
+			);
+		}
 		const listing = await this.listings.list(input.organizationSlug);
 		const displayed = listing.membershipProducts.find(
 			(value) => value.id === input.offeringId,
@@ -72,6 +117,9 @@ export class MembershipCheckoutService {
 			shopifyProductGid: offering.shopifyProductGid,
 			shopifyVariantGid: offering.shopifyVariantGid,
 			policyVersion: "v1",
+			divisionId: division.id,
+			divisionNameSnapshot: division.displayName,
+			staffAccessConsent: input.staffAccessConsent,
 			amount: displayed.price.amount,
 			currencyCode: displayed.price.currencyCode,
 			expiresAtIso,
@@ -81,6 +129,12 @@ export class MembershipCheckoutService {
 				"Checkout is already in progress.",
 				409,
 				"checkout_in_progress",
+			);
+		if (outcome.kind === "active")
+			throw new AppError(
+				"An active Teacher Membership already exists.",
+				409,
+				"membership_active",
 			);
 		if (outcome.kind === "expired")
 			throw new AppError("Checkout has expired.", 409, "checkout_expired");
@@ -129,6 +183,12 @@ export class MembershipCheckoutService {
 				"Checkout is already in progress.",
 				409,
 				"checkout_in_progress",
+			);
+		if (outcome.kind === "active")
+			throw new AppError(
+				"An active Teacher Membership already exists.",
+				409,
+				"membership_active",
 			);
 		if (outcome.kind === "expired")
 			throw new AppError("Checkout has expired.", 409, "checkout_expired");

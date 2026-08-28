@@ -140,8 +140,46 @@ their source and update time so a later Shopify projection can fill blank or
 Shopify-sourced fields without overwriting Festival-edited fields. Organization
 Admin profile search and detail APIs return only customers who consented to the
 current privacy-notice version and write PII-free access audit records. The
-checkout flow that captures that consent is owned by issue #77; no staff search
-UI is included here.
+Teacher Membership checkout records that explicit consent decision in #78; no
+staff search UI is included here.
+
+### Shopify paid-order webhook and reconciliation
+
+For each verified tenant that sells a Teacher Membership, register exactly one
+Shopify `orders/paid` webhook at API version `2026-07` to:
+
+```text
+https://<festival-public-origin>/api/shopify/webhooks/orders-paid
+```
+
+The endpoint accepts only `POST`, validates the raw-body HMAC with that tenant's
+encrypted Shopify app client secret, and accepts neither browser credentials nor
+CORS preflight. It persists only a payload hash and safe delivery/order metadata,
+then re-reads paid facts through tenant-bound Admin `read_orders`; the webhook
+payload never grants a membership. Do not configure a broader webhook path or
+point the subscription at nginx's private backend port.
+
+Set a distinct scheduler token and a private backend origin (not the public
+nginx origin):
+
+```dotenv
+FESTIVAL_RECONCILIATION_TOKEN=<at-least-32-random-characters>
+FESTIVAL_RECONCILIATION_ORIGIN=http://127.0.0.1:3000
+```
+
+Run the tenant-scoped command at least daily for every enabled Organization. It
+reclaims failed/pending deliveries and uses a bounded 48-hour paid-order overlap
+to find missed webhook evidence. A non-zero exit means the scheduler must alert
+and retry.
+
+```bash
+bun run reconcile:shopify-orders -- --organization <organization-id>
+```
+
+For example, an operator-owned cron entry may invoke that command daily from a
+deployment directory with its production environment loaded. The command targets
+the service-token-protected `/api/internal/reconcile/shopify-orders` backend path;
+nginx intentionally default-denies that path, so do not expose it publicly.
 
 Production order access requires Shopify protected-customer-data configuration
 or approval in addition to the Headless permission. Festival fails closed when

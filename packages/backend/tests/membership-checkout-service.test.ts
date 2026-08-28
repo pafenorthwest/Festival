@@ -12,6 +12,11 @@ describe("membership checkout service", () => {
 			name: "Festival",
 			slug: "festival",
 		});
+		const division = await organizations.createDivision({
+			organizationId: organization.id,
+			displayName: "Piano",
+			normalizedName: "piano",
+		});
 		await organizations.upsertShopifyIntegration({
 			organizationId: organization.id,
 			storeDomain: "festival.myshopify.com",
@@ -91,6 +96,8 @@ describe("membership checkout service", () => {
 			buyerAccessToken: "server-only",
 			idempotencyKey: "00000000-0000-4000-8000-000000000001",
 			offeringId: offering.id,
+			divisionId: division.id,
+			staffAccessConsent: false,
 		};
 		await expect(service.start(input)).resolves.toEqual({
 			checkoutUrl: "https://festival.myshopify.com/checkouts/fresh",
@@ -104,7 +111,7 @@ describe("membership checkout service", () => {
 				...input,
 				idempotencyKey: "00000000-0000-4000-8000-000000000003",
 			}),
-		).rejects.toMatchObject({ code: "checkout_retryable_upstream" });
+		).rejects.toMatchObject({ code: "checkout_in_progress" });
 	});
 
 	it("records a terminal failure and never redirects when cart persistence fails", async () => {
@@ -112,6 +119,11 @@ describe("membership checkout service", () => {
 		const organization = await organizations.createOrganization({
 			name: "Festival",
 			slug: "festival",
+		});
+		const division = await organizations.createDivision({
+			organizationId: organization.id,
+			displayName: "Piano",
+			normalizedName: "piano",
 		});
 		await organizations.upsertShopifyIntegration({
 			organizationId: organization.id,
@@ -188,6 +200,8 @@ describe("membership checkout service", () => {
 			buyerAccessToken: "server-only",
 			idempotencyKey: "00000000-0000-4000-8000-000000000002",
 			offeringId: offering.id,
+			divisionId: division.id,
+			staffAccessConsent: false,
 		};
 		await expect(service.start(input)).rejects.toMatchObject({
 			code: "checkout_retryable_upstream",

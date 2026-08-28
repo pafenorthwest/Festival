@@ -20,6 +20,7 @@ export interface AppEnv {
 	customerJwksCacheTtlSeconds?: number;
 	customerCacheMaxEntryBytes?: number;
 	customerCacheMaxTotalBytes?: number;
+	reconciliationToken?: string;
 }
 
 const LOCAL_API_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
@@ -159,5 +160,6 @@ export function loadEnv(options?: {
 			"CUSTOMER_CACHE_MAX_TOTAL_BYTES",
 			16 * 1_024 * 1_024,
 		),
+		reconciliationToken: process.env.FESTIVAL_RECONCILIATION_TOKEN?.trim(),
 	};
 }

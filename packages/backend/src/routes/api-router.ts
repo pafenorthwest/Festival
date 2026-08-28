@@ -19,6 +19,7 @@ import {
 } from "../auth/tenant-context.js";
 import type { AuthVerifier } from "../auth/types.js";
 import type { MembershipCheckoutService } from "../checkout/membership-checkout-service.js";
+import type { MembershipStatusService } from "../commerce/membership-status-service.js";
 import {
 	CUSTOMER_SESSION_COOKIE,
 	type CustomerAccountService,
@@ -139,6 +140,7 @@ export function buildApiRouter(
 	publicMembershipProductService?: PublicMembershipProductService,
 	shopifyIntegrationDiagnosticService?: ShopifyIntegrationDiagnosticService,
 	membershipCheckoutService?: MembershipCheckoutService,
+	membershipStatusService?: MembershipStatusService,
 ): Hono<{ Variables: Partial<ApiVariables> }> {
 	const router = new Hono<{ Variables: Partial<ApiVariables> }>();
 	const repository = organizationService.repository;
@@ -770,12 +772,19 @@ export function buildApiRouter(
 			)
 				throw new AppError("Checkout request is invalid.", 400);
 			const payload = await c.req.json();
-			assertAllowedFields(payload, ["offeringId"], "Checkout request");
+			assertAllowedFields(
+				payload,
+				["offeringId", "divisionId", "staffAccessConsent"],
+				"Checkout request",
+			);
 			if (
 				!payload ||
 				typeof payload !== "object" ||
 				Array.isArray(payload) ||
-				typeof (payload as { offeringId?: unknown }).offeringId !== "string"
+				typeof (payload as { offeringId?: unknown }).offeringId !== "string" ||
+				typeof (payload as { divisionId?: unknown }).divisionId !== "string" ||
+				typeof (payload as { staffAccessConsent?: unknown })
+					.staffAccessConsent !== "boolean"
 			)
 				throw new AppError("Checkout request is invalid.", 400);
 			const referer = c.req.header("Referer");
@@ -793,6 +802,12 @@ export function buildApiRouter(
 				c.req.header("X-CSRF-Token"),
 				requestOrigin,
 			);
+			if ((payload as { staffAccessConsent: boolean }).staffAccessConsent) {
+				await customerAccountService.recordCheckoutStaffAccessConsent(
+					access.organizationId,
+					access.customerId,
+				);
+			}
 			c.header("Cache-Control", "no-store");
 			return c.json(
 				await membershipCheckoutService.start({
@@ -800,7 +815,32 @@ export function buildApiRouter(
 					buyerAccessToken: access.shopifyCustomerAccessToken,
 					idempotencyKey,
 					offeringId: (payload as { offeringId: string }).offeringId,
+					divisionId: (payload as { divisionId: string }).divisionId,
+					staffAccessConsent: (payload as { staffAccessConsent: boolean })
+						.staffAccessConsent,
 				}),
+			);
+		} catch (error) {
+			return toJsonError(c, error);
+		}
+	});
+
+	router.get("/organizations/:slug/customer/membership-status", async (c) => {
+		try {
+			assertNoBearerPrincipal(c.req.header("Authorization"));
+			if (!customerAccountService || !membershipStatusService) {
+				throw new AppError("Membership status is unavailable.", 503);
+			}
+			const access = await customerAccountService.customerReadAccess(
+				c.req.param("slug"),
+				getCookie(c, CUSTOMER_SESSION_COOKIE),
+			);
+			c.header("Cache-Control", "no-store");
+			return c.json(
+				await membershipStatusService.listForCustomer(
+					access.organizationId,
+					access.customerId,
+				),
 			);
 		} catch (error) {
 			return toJsonError(c, error);

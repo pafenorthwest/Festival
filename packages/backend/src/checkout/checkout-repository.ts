@@ -11,7 +11,10 @@ export type CheckoutIntentStatus =
 	| "checkout_started"
 	| "failed"
 	| "expired"
-	| "superseded";
+	| "superseded"
+	| "approved"
+	| "rejected"
+	| "needs_review";
 
 /** Server-only records. Their Shopify IDs and access context must never be DTO fields. */
 export interface CheckoutCartRecord {
@@ -39,6 +42,9 @@ export interface CheckoutIntentRecord {
 	shopifyProductGid: string;
 	shopifyVariantGid: string;
 	policyVersion: "v1";
+	divisionId: string | null;
+	divisionNameSnapshot: string | null;
+	staffAccessConsent: boolean;
 	amount: string;
 	currencyCode: string;
 	cartReference: string | null;
@@ -51,6 +57,7 @@ export type CheckoutIntentOutcome =
 	| { kind: "created"; intent: CheckoutIntentRecord }
 	| { kind: "in_progress" }
 	| { kind: "ready"; intent: CheckoutIntentRecord; cart: CheckoutCartRecord }
+	| { kind: "active" }
 	| { kind: "expired" }
 	| { kind: "failed" };
 
@@ -62,10 +69,7 @@ export interface CheckoutRepository {
 		idempotencyKey: string;
 	}): Promise<Exclude<CheckoutIntentOutcome, { kind: "created" }> | null>;
 	createIntent(
-		record: Omit<
-			CheckoutIntentRecord,
-			"id" | "correlationId" | "cartReference" | "createdAtIso" | "status"
-		>,
+		record: CreateCheckoutIntentInput,
 	): Promise<CheckoutIntentOutcome>;
 	attachCart(
 		input: Omit<CheckoutCartRecord, "reference" | "createdAtIso" | "status"> & {
@@ -80,7 +84,36 @@ export interface CheckoutRepository {
 		customerId: string,
 		nowIso: string,
 	): Promise<CheckoutCartRecord | null>;
+	findIntentByCorrelation(
+		organizationId: string,
+		correlationId: string,
+	): Promise<CheckoutIntentRecord | null>;
+	hasProcessingIntent(
+		organizationId: string,
+		customerId: string,
+		nowIso: string,
+	): Promise<boolean>;
+	resolveIntent(
+		intentId: string,
+		resolution: "approved" | "rejected" | "needs_review",
+	): Promise<void>;
 }
+
+export type CreateCheckoutIntentInput = Omit<
+	CheckoutIntentRecord,
+	| "id"
+	| "correlationId"
+	| "cartReference"
+	| "createdAtIso"
+	| "status"
+	| "divisionId"
+	| "divisionNameSnapshot"
+	| "staffAccessConsent"
+> & {
+	divisionId?: string | null;
+	divisionNameSnapshot?: string | null;
+	staffAccessConsent?: boolean;
+};
 
 export class InMemoryCheckoutRepository implements CheckoutRepository {
 	private readonly carts = new Map<string, CheckoutCartRecord>();
@@ -102,12 +135,7 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		return intent ? this.outcomeFor(intent) : null;
 	}
 
-	async createIntent(
-		record: Omit<
-			CheckoutIntentRecord,
-			"id" | "correlationId" | "cartReference" | "createdAtIso" | "status"
-		>,
-	) {
+	async createIntent(record: CreateCheckoutIntentInput) {
 		const existing = [...this.intents.values()].find(
 			(intent) =>
 				intent.organizationId === record.organizationId &&
@@ -120,27 +148,19 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 			if (
 				intent.organizationId === record.organizationId &&
 				intent.customerId === record.customerId &&
-				intent.status === "creating" &&
+				(intent.status === "creating" ||
+					intent.status === "ready" ||
+					intent.status === "checkout_started") &&
 				intent.expiresAtIso > new Date().toISOString()
 			) {
 				return { kind: "in_progress" as const };
 			}
 		}
-		for (const intent of this.intents.values()) {
-			if (
-				intent.organizationId === record.organizationId &&
-				intent.customerId === record.customerId &&
-				intent.status === "ready"
-			) {
-				intent.status = "superseded";
-				if (intent.cartReference) {
-					const cart = this.carts.get(intent.cartReference);
-					if (cart) cart.status = "superseded";
-				}
-			}
-		}
 		const value: CheckoutIntentRecord = {
 			...record,
+			divisionId: record.divisionId ?? null,
+			divisionNameSnapshot: record.divisionNameSnapshot ?? null,
+			staffAccessConsent: record.staffAccessConsent ?? false,
 			id: randomUUID(),
 			correlationId: randomUUID(),
 			cartReference: null,
@@ -212,6 +232,39 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		)
 			return null;
 		return { ...cart };
+	}
+
+	async findIntentByCorrelation(organizationId: string, correlationId: string) {
+		const intent = [...this.intents.values()].find(
+			(value) =>
+				value.organizationId === organizationId &&
+				value.correlationId === correlationId,
+		);
+		return intent ? { ...intent } : null;
+	}
+
+	async hasProcessingIntent(
+		organizationId: string,
+		customerId: string,
+		nowIso: string,
+	) {
+		return [...this.intents.values()].some(
+			(intent) =>
+				intent.organizationId === organizationId &&
+				intent.customerId === customerId &&
+				intent.expiresAtIso > nowIso &&
+				(intent.status === "creating" ||
+					intent.status === "ready" ||
+					intent.status === "checkout_started"),
+		);
+	}
+
+	async resolveIntent(
+		intentId: string,
+		resolution: "approved" | "rejected" | "needs_review",
+	) {
+		const intent = this.intents.get(intentId);
+		if (intent) intent.status = resolution;
 	}
 
 	private outcomeFor(

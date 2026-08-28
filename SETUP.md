@@ -221,6 +221,23 @@ New ciphertext uses the active key. To switch keys, add the new key to `FESTIVAL
 
 Legacy ciphertext is intentionally unsupported for the current localhost-development phase; wipe the development database after replacing the legacy configuration. Never log the keyring configuration, plaintext secrets, or encrypted envelopes.
 
+#### Shopify paid-order reconciliation
+
+Set a separate `FESTIVAL_RECONCILIATION_TOKEN` with at least 32 random characters
+and `FESTIVAL_RECONCILIATION_ORIGIN` to the private backend origin
+(`http://127.0.0.1:3000` for a host scheduler or `http://backend:3000` for an
+internal Docker scheduler). This origin must not be the public nginx origin.
+
+For every enabled Organization, schedule this command at least daily:
+
+```bash
+bun run reconcile:shopify-orders -- --organization <organization-id>
+```
+
+The command exits non-zero on a failed reconciliation. Configure the scheduler to
+alert/retry on that exit status. It calls the token-authenticated private backend
+path, which nginx intentionally denies; never add a public nginx allowlist for it.
+
 #### Shopify Dev Dashboard app
 
 Festival uses Shopify's Dev Dashboard app install plus client credentials grant for backend Admin API access.
