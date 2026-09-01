@@ -416,6 +416,22 @@ export class PostgresMembershipCommerceRepository
 					return { decision: decision(correlatedRows[0]), existing: true };
 				}
 			}
+			let finalDecision = input.decision;
+			let grantInput = input.grant;
+			if (grantInput && finalDecision.customerId) {
+				const activeGrantRows = (await tx.unsafe(
+					`SELECT 1 FROM ${this.schema}.entitlement_grants grants JOIN ${this.schema}.organizations organization ON organization.id = grants.organization_id WHERE grants.organization_id = $1 AND grants.customer_id = $2 AND grants.status = 'active' AND grants.ends_on > (NOW() AT TIME ZONE organization.timezone)::date LIMIT 1`,
+					[finalDecision.organizationId, finalDecision.customerId],
+				)) as Array<Record<string, unknown>>;
+				if (activeGrantRows[0]) {
+					finalDecision = {
+						...finalDecision,
+						status: "rejected",
+						reasonCode: "duplicate_purchase",
+					};
+					grantInput = undefined;
+				}
+			}
 			if (input.projection) {
 				await tx.unsafe(
 					`INSERT INTO ${this.schema}.shopify_order_projections (organization_id, shopify_order_gid, shopify_customer_gid, correlation_id, fully_paid_at, currency_code, created_at, updated_at) VALUES ($1,$2,$3,$4,$5::timestamptz,$6,$7::timestamptz,$7::timestamptz) ON CONFLICT (organization_id, shopify_order_gid) DO UPDATE SET shopify_customer_gid = EXCLUDED.shopify_customer_gid, correlation_id = EXCLUDED.correlation_id, fully_paid_at = EXCLUDED.fully_paid_at, currency_code = EXCLUDED.currency_code, updated_at = EXCLUDED.updated_at`,
@@ -431,43 +447,43 @@ export class PostgresMembershipCommerceRepository
 				);
 			}
 			let createdGrant: EntitlementGrantSnapshot | undefined;
-			if (input.grant) {
+			if (grantInput) {
 				const grantRows = (await tx.unsafe(
 					`INSERT INTO ${this.schema}.entitlement_grants (id, organization_id, customer_id, entitlement_class, offering_id, duration_days, division_id, division_name_snapshot, paid_amount, paid_currency_code, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, starts_on, ends_on, status) SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::date,$15::date,$16 FROM ${this.schema}.products offering JOIN ${this.schema}.organization_divisions division ON division.id = $7 WHERE offering.id = $5 AND offering.organization_id = $2 AND division.organization_id = $2 RETURNING id, organization_id, customer_id, entitlement_class, offering_id, duration_days, division_id, division_name_snapshot, paid_amount, paid_currency_code, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, starts_on::text, ends_on::text, status, created_at::text`,
 					[
 						randomUUID(),
-						input.grant.organizationId,
-						input.grant.customerId,
-						input.grant.entitlementClass,
-						input.grant.offeringId,
-						input.grant.durationDays,
-						input.grant.divisionId,
-						input.grant.divisionNameSnapshot,
-						input.grant.paidAmount,
-						input.grant.paidCurrencyCode,
-						input.grant.checkoutIntentId,
-						input.grant.shopifyOrderGid,
-						input.grant.shopifyOrderLineGid,
-						input.grant.startsOn,
-						input.grant.endsOn,
-						input.grant.status,
+						grantInput.organizationId,
+						grantInput.customerId,
+						grantInput.entitlementClass,
+						grantInput.offeringId,
+						grantInput.durationDays,
+						grantInput.divisionId,
+						grantInput.divisionNameSnapshot,
+						grantInput.paidAmount,
+						grantInput.paidCurrencyCode,
+						grantInput.checkoutIntentId,
+						grantInput.shopifyOrderGid,
+						grantInput.shopifyOrderLineGid,
+						grantInput.startsOn,
+						grantInput.endsOn,
+						grantInput.status,
 					],
 				)) as Array<Record<string, unknown>>;
 				if (!grantRows[0])
 					throw new Error("Entitlement offering or division was not found.");
 				createdGrant = grant(grantRows[0]);
 			}
-			const now = input.decision.updatedAtIso;
+			const now = finalDecision.updatedAtIso;
 			const decisionRows = existingRows[0]
 				? ((await tx.unsafe(
 						`UPDATE ${this.schema}.membership_validation_decisions SET customer_id = $2, checkout_intent_id = $3, shopify_order_line_gid = $4, status = $5, reason_code = $6, updated_at = $7::timestamptz WHERE id = $1 RETURNING id, organization_id, customer_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, status, reason_code, created_at::text, updated_at::text`,
 						[
 							existingRows[0].id,
-							input.decision.customerId ?? null,
-							input.decision.checkoutIntentId ?? null,
-							input.decision.shopifyOrderLineGid ?? null,
-							input.decision.status,
-							input.decision.reasonCode ?? null,
+							finalDecision.customerId ?? null,
+							finalDecision.checkoutIntentId ?? null,
+							finalDecision.shopifyOrderLineGid ?? null,
+							finalDecision.status,
+							finalDecision.reasonCode ?? null,
 							now,
 						],
 					)) as Array<Record<string, unknown>>)
@@ -475,23 +491,23 @@ export class PostgresMembershipCommerceRepository
 						`INSERT INTO ${this.schema}.membership_validation_decisions (id, organization_id, customer_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, status, reason_code, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::timestamptz,$9::timestamptz) RETURNING id, organization_id, customer_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, status, reason_code, created_at::text, updated_at::text`,
 						[
 							randomUUID(),
-							input.decision.organizationId,
-							input.decision.customerId ?? null,
-							input.decision.checkoutIntentId ?? null,
-							input.decision.shopifyOrderGid,
-							input.decision.shopifyOrderLineGid ?? null,
-							input.decision.status,
-							input.decision.reasonCode ?? null,
+							finalDecision.organizationId,
+							finalDecision.customerId ?? null,
+							finalDecision.checkoutIntentId ?? null,
+							finalDecision.shopifyOrderGid,
+							finalDecision.shopifyOrderLineGid ?? null,
+							finalDecision.status,
+							finalDecision.reasonCode ?? null,
 							now,
 						],
 					)) as Array<Record<string, unknown>>);
-			if (input.decision.checkoutIntentId) {
+			if (finalDecision.checkoutIntentId) {
 				const resolved = (await tx.unsafe(
 					`UPDATE ${this.schema}.checkout_intents SET status = $1 WHERE id = $2 AND organization_id = $3 RETURNING id`,
 					[
-						input.decision.status,
-						input.decision.checkoutIntentId,
-						input.decision.organizationId,
+						finalDecision.status,
+						finalDecision.checkoutIntentId,
+						finalDecision.organizationId,
 					],
 				)) as Array<Record<string, unknown>>;
 				if (!resolved[0]) throw new Error("Checkout intent was not found.");
