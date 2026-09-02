@@ -19,3 +19,4 @@ number,taskname,first_create_date,first_create_hhmmss,first_create_git_hash
 18,issue-77-direct-teacher-membership-checkout,2026-08-27,000000,-------
 19,issue-78-shopify-order-projection-entitlement,2026-08-28,000000,338259c
 20,app-owned-shopify-webhooks,2026-09-02,000000,-------
+21,issue-94-customer-membership-status,2026-09-01,000000,f09d0ee
