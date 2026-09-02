@@ -41,6 +41,7 @@ import type { ShopifyIntegrationService } from "./shopify/shopify-integration-se
 import { ShopifyIntegrationService as DefaultShopifyIntegrationService } from "./shopify/shopify-integration-service.js";
 import { ShopifyMembershipProductService } from "./shopify/shopify-membership-product-service.js";
 import { TokenlessShopifyPublicCatalogClient } from "./shopify/shopify-public-catalog-client.js";
+import { ShopifyWebhookSubscriptionService } from "./shopify/shopify-webhook-subscription-service.js";
 
 export interface CreateAppOptions {
 	env?: AppEnv;
@@ -113,6 +114,14 @@ export async function createApp(options: CreateAppOptions = {}) {
 		env.festivalSecretKeysJson,
 		env.festivalActiveSecretKeyId,
 	);
+	const shopifyWebhookSubscriptionService = secretKeyring
+		? new ShopifyWebhookSubscriptionService(
+				repository,
+				secretKeyring,
+				shopifyAdminApiClient,
+				env.publicOrigin,
+			)
+		: undefined;
 	const shopifyIntegrationService =
 		options.shopifyIntegrationService ??
 		(secretKeyring
@@ -120,6 +129,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 					repository,
 					secretKeyring,
 					shopifyAdminApiClient,
+					shopifyWebhookSubscriptionService,
 				)
 			: undefined);
 	const shopifyMembershipProductService =
@@ -146,6 +156,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 			repository,
 			shopifyPublicCatalogClient,
 			secretKeyring ?? undefined,
+			shopifyWebhookSubscriptionService,
 		);
 	const customerAccountRepository =
 		options.customerAccountRepository ??

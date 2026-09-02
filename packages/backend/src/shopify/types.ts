@@ -93,6 +93,13 @@ export interface ShopifyMembershipProductClient {
 	): Promise<ShopifyAdminResult<void>>;
 }
 
+export interface ShopifyWebhookSubscriptionClient {
+	reconcileOrdersPaidWebhook(
+		context: ShopifyAdminOperationContext,
+		callbackUrl: string,
+	): Promise<ShopifyAdminResult<void>>;
+}
+
 /**
  * Server-only Shopify order facts used to validate a correlated membership
  * purchase. Do not expose this shape through customer or operator DTOs.

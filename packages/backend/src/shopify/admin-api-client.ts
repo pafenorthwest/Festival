@@ -19,6 +19,7 @@ import type {
 	ShopifyPaidOrderReader,
 	ShopifyProductDetails,
 	ShopifyVerificationResult,
+	ShopifyWebhookSubscriptionClient,
 } from "./types.js";
 
 const SHOPIFY_ADMIN_API_VERSION = "2026-07";
@@ -430,6 +431,7 @@ export class ShopifyAdminApiClient
 	implements
 		ShopifyConnectivityTester,
 		ShopifyMembershipProductClient,
+		ShopifyWebhookSubscriptionClient,
 		ShopifyPaidOrderReader
 {
 	private readonly accessTokens = new Map<string, CachedAccessToken>();
@@ -496,6 +498,120 @@ export class ShopifyAdminApiClient
 				this.accessTokens.delete(key);
 			}
 		}
+	}
+
+	async reconcileOrdersPaidWebhook(
+		context: ShopifyAdminOperationContext,
+		callbackUrl: string,
+	): Promise<ShopifyAdminResult<void>> {
+		this.assertOperationContext(context, "read_orders");
+		if (
+			!/^https:\/\/[^/?#]+\/api\/shopify\/webhooks\/orders-paid$/.test(
+				callbackUrl,
+			)
+		) {
+			throw new ShopifyCredentialsError(
+				"Shopify webhook callback URL is invalid.",
+			);
+		}
+		const { accessToken } = await this.fetchOperationAccessToken(
+			context,
+			"read_orders",
+		);
+		const subscriptions = await this.graphqlRequest<{
+			webhookSubscriptions?: {
+				nodes?: Array<{
+					id?: string;
+					topic?: string;
+					uri?: string;
+				}>;
+			};
+		}>(
+			context.credentials.storeDomain,
+			accessToken,
+			`query ListOrdersPaidWebhookSubscriptions {
+				webhookSubscriptions(first: 250) {
+					nodes { id topic uri }
+				}
+			}`,
+		);
+		const matching = (
+			subscriptions.value.webhookSubscriptions?.nodes ?? []
+		).filter(
+			(subscription) => subscription.topic === "ORDERS_PAID" && subscription.id,
+		);
+		const exact = matching.filter(
+			(subscription) => subscription.uri === callbackUrl,
+		);
+		let keep = exact.shift();
+		let requestId = subscriptions.requestId;
+		if (!keep) {
+			const created = await this.graphqlRequest<{
+				webhookSubscriptionCreate?: {
+					webhookSubscription?: { id?: string; topic?: string; uri?: string };
+					userErrors?: ShopifyUserErrorPayload[];
+				};
+			}>(
+				context.credentials.storeDomain,
+				accessToken,
+				`mutation CreateOrdersPaidWebhook($uri: URL!) {
+					webhookSubscriptionCreate(topic: ORDERS_PAID, webhookSubscription: { uri: $uri }) {
+						webhookSubscription { id topic uri }
+						userErrors { field message }
+					}
+				}`,
+				{ uri: callbackUrl },
+			);
+			const payload = created.value.webhookSubscriptionCreate;
+			throwIfUserErrors(payload?.userErrors, created.requestId);
+			const createdSubscription = payload?.webhookSubscription;
+			if (
+				!createdSubscription?.id ||
+				createdSubscription.topic !== "ORDERS_PAID" ||
+				createdSubscription.uri !== callbackUrl
+			) {
+				throw new ShopifyAdminApiError(
+					"Shopify webhook creation returned an incomplete subscription.",
+					{ requestId: created.requestId },
+				);
+			}
+			keep = createdSubscription;
+			requestId = created.requestId ?? requestId;
+		}
+		for (const subscription of matching) {
+			if (subscription.id === keep.id) continue;
+			const deleted = await this.graphqlRequest<{
+				webhookSubscriptionDelete?: {
+					deletedWebhookSubscriptionId?: string;
+					userErrors?: ShopifyUserErrorPayload[];
+				};
+			}>(
+				context.credentials.storeDomain,
+				accessToken,
+				`mutation DeleteOrdersPaidWebhook($id: ID!) {
+					webhookSubscriptionDelete(id: $id) {
+						deletedWebhookSubscriptionId
+						userErrors { field message }
+					}
+				}`,
+				{ id: subscription.id },
+			);
+			throwIfUserErrors(
+				deleted.value.webhookSubscriptionDelete?.userErrors,
+				deleted.requestId,
+			);
+			if (
+				deleted.value.webhookSubscriptionDelete
+					?.deletedWebhookSubscriptionId !== subscription.id
+			) {
+				throw new ShopifyAdminApiError(
+					"Shopify webhook deletion was not confirmed.",
+					{ requestId: deleted.requestId },
+				);
+			}
+			requestId = deleted.requestId ?? requestId;
+		}
+		return { value: undefined, requestId };
 	}
 
 	async createProduct(

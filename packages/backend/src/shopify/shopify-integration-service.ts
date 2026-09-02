@@ -23,6 +23,10 @@ import {
 import { ShopifyIntegrationError } from "./errors.js";
 import type { ShopifyConnectivityTester } from "./types.js";
 
+export interface ShopifyWebhookSubscriptionReconciler {
+	reconcileForTenant(tenant: TenantContext): Promise<void>;
+}
+
 function toPublicSettings(
 	record: ShopifyIntegrationRecord,
 ): ShopifyIntegrationSettings {
@@ -63,6 +67,7 @@ export class ShopifyIntegrationService {
 		private readonly repository: OrganizationRepository,
 		private readonly secretKeyring: ShopifySecretKeyring,
 		private readonly connectivityTester: ShopifyConnectivityTester,
+		private readonly webhookSubscriptions?: ShopifyWebhookSubscriptionReconciler,
 	) {}
 
 	async getSettingsForTenant(
@@ -183,6 +188,9 @@ export class ShopifyIntegrationService {
 				grantedScopes: result.grantedScopes,
 				capabilities,
 			});
+			if (this.webhookSubscriptions) {
+				await this.webhookSubscriptions.reconcileForTenant(tenant);
+			}
 
 			return { settings: toPublicSettings(verified) };
 		} catch (error) {

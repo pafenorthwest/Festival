@@ -221,6 +221,44 @@ New ciphertext uses the active key. To switch keys, add the new key to `FESTIVAL
 
 Legacy ciphertext is intentionally unsupported for the current localhost-development phase; wipe the development database after replacing the legacy configuration. Never log the keyring configuration, plaintext secrets, or encrypted envelopes.
 
+#### Shopify paid-order webhook and reconciliation
+
+Festival registers and repairs one app-owned paid-order webhook for each
+verified Organization that sells a Teacher Membership. The webhook's HMAC is
+verified with the Organization's already-saved Shopify Admin app client secret;
+do not create a Shopify Admin UI webhook or copy its store-level signing value.
+
+1. Confirm the Organization's Shopify Admin integration has been saved and
+   verified in Festival, including the `read_orders` capability.
+2. In Shopify Dev Dashboard, set the app webhook API version to `2026-07`.
+   Add `read_orders` to the app version, release it, and update/reinstall the
+   app on every target store. `ORDERS_PAID` does not require a separate
+   `write_webhooks` scope.
+3. Complete Shopify protected-customer-data access required for Festival's
+   server-side order re-read. Festival fails closed if required order facts are
+   unavailable.
+4. Set `FESTIVAL_PUBLIC_ORIGIN` to the externally reachable HTTPS origin:
+
+   ```text
+   https://<festival-public-origin>/api/shopify/webhooks/orders-paid
+   ```
+
+   Use the externally reachable HTTPS origin, not `localhost`, the private
+   backend port, or the reconciliation endpoint.
+5. In Festival, save and verify the Shopify Admin integration. Festival then
+   creates or repairs the app-owned `ORDERS_PAID` subscription. Run **Shopify
+   Integration > Diagnostics** to repair it again later; it also reports the
+   safe registration result. Festival never creates subscriptions at startup or
+   during paid-order reconciliation.
+
+For an end-to-end development test, initiate a Teacher Membership checkout from
+Festival and complete it in Shopify's **Test payment gateway** with card number
+`1`, any future expiration date, and any three-digit security code. A generic
+Shopify test notification does not contain Festival's checkout correlation, so
+it cannot verify entitlement issuance. A valid paid checkout should result in a
+`processed` delivery, an `approved` validation decision, and one active
+`entitlement_grants` row for the customer.
+
 #### Shopify paid-order reconciliation
 
 Set a separate `FESTIVAL_RECONCILIATION_TOKEN` with at least 32 random characters

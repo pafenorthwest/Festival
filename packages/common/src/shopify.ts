@@ -96,6 +96,7 @@ export interface SaveShopifyIntegrationResponse {
 }
 
 export const SHOPIFY_INTEGRATION_DIAGNOSTIC_IDS = [
+	"orders_paid_webhook",
 	"public_storefront_access",
 ] as const;
 

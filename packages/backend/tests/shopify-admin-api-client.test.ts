@@ -107,6 +107,116 @@ describe("ShopifyAdminApiClient", () => {
 		expect(tokenRequests).toBe(2);
 	});
 
+	it("creates and confirms an exact paid-order webhook before removing old subscriptions", async () => {
+		const graphQueries: string[] = [];
+		const client = new ShopifyAdminApiClient({
+			fetch: async (input, init) => {
+				const url = input.toString();
+				if (url.endsWith("/admin/oauth/access_token")) {
+					return Response.json({
+						access_token: "token",
+						expires_in: 3600,
+						scope: "read_orders",
+					});
+				}
+				const body = JSON.parse(String(init?.body)) as {
+					query: string;
+					variables: Record<string, string>;
+				};
+				graphQueries.push(body.query);
+				if (body.query.includes("ListOrdersPaidWebhookSubscriptions")) {
+					return Response.json({
+						data: {
+							webhookSubscriptions: {
+								nodes: [
+									{
+										id: "gid://shopify/WebhookSubscription/obsolete",
+										topic: "ORDERS_PAID",
+										uri: "https://old.example.com/orders-paid",
+									},
+								],
+							},
+						},
+					});
+				}
+				if (body.query.includes("DeleteOrdersPaidWebhook")) {
+					return Response.json({
+						data: {
+							webhookSubscriptionDelete: {
+								deletedWebhookSubscriptionId: body.variables.id,
+								userErrors: [],
+							},
+						},
+					});
+				}
+				return Response.json({
+					data: {
+						webhookSubscriptionCreate: {
+							webhookSubscription: {
+								id: "gid://shopify/WebhookSubscription/1",
+								topic: "ORDERS_PAID",
+								uri: body.variables.uri,
+							},
+							userErrors: [],
+						},
+					},
+				});
+			},
+		});
+
+		await client.reconcileOrdersPaidWebhook(
+			{
+				...operationContext,
+				capability: "read_orders",
+				grantedScopes: ["read_orders"],
+			},
+			"https://festival.example.com/api/shopify/webhooks/orders-paid",
+		);
+
+		expect(graphQueries.some((query) => query.includes("uri: $uri"))).toBe(
+			true,
+		);
+		expect(graphQueries.some((query) => query.includes("callbackUrl"))).toBe(
+			false,
+		);
+		expect(
+			graphQueries.some((query) =>
+				query.includes("deletedWebhookSubscriptionId"),
+			),
+		).toBe(true);
+	});
+
+	it("rejects an unconfirmed paid-order webhook creation", async () => {
+		const client = new ShopifyAdminApiClient({
+			fetch: async (input, init) => {
+				if (input.toString().endsWith("/admin/oauth/access_token")) {
+					return Response.json({
+						access_token: "token",
+						expires_in: 3600,
+						scope: "read_orders",
+					});
+				}
+				const query = JSON.parse(String(init?.body)).query as string;
+				return Response.json({
+					data: query.includes("ListOrdersPaidWebhookSubscriptions")
+						? { webhookSubscriptions: { nodes: [] } }
+						: { webhookSubscriptionCreate: { userErrors: [] } },
+				});
+			},
+		});
+
+		await expect(
+			client.reconcileOrdersPaidWebhook(
+				{
+					...operationContext,
+					capability: "read_orders",
+					grantedScopes: ["read_orders"],
+				},
+				"https://festival.example.com/api/shopify/webhooks/orders-paid",
+			),
+		).rejects.toBeInstanceOf(ShopifyAdminApiError);
+	});
+
 	it("rejects non-canonical Shopify destinations before fetch", async () => {
 		let calls = 0;
 		const client = new ShopifyAdminApiClient({

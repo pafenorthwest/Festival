@@ -6,6 +6,7 @@ import {
 	SHOPIFY_STOREFRONT_PRIVATE_TOKEN_PURPOSE,
 	type ShopifySecretKeyring,
 } from "./encryption.js";
+import type { ShopifyWebhookSubscriptionReconciler } from "./shopify-integration-service.js";
 import type { ShopifyPublicStorefrontDiagnosticClient } from "./shopify-public-catalog-client.js";
 
 const PASSED_MESSAGE = "Public Storefront access is available.";
@@ -17,6 +18,7 @@ export class ShopifyIntegrationDiagnosticService {
 		private readonly repository: OrganizationRepository,
 		private readonly client: ShopifyPublicStorefrontDiagnosticClient,
 		private readonly secretKeyring?: ShopifySecretKeyring,
+		private readonly webhookSubscriptions?: ShopifyWebhookSubscriptionReconciler,
 	) {}
 
 	private async storefrontToken(
@@ -46,12 +48,24 @@ export class ShopifyIntegrationDiagnosticService {
 		}
 
 		try {
+			if (this.webhookSubscriptions) {
+				await this.webhookSubscriptions.reconcileForTenant(tenant);
+			}
 			const result = await this.client.diagnosePublicStorefrontAccess(
 				domain,
 				await this.storefrontToken(tenant.organization.id),
 			);
 			return {
 				checks: [
+					...(this.webhookSubscriptions
+						? [
+								{
+									id: "orders_paid_webhook" as const,
+									status: "passed" as const,
+									message: "Paid-order webhook subscription is registered.",
+								},
+							]
+						: []),
 					{
 						id: "public_storefront_access",
 						status: result === "passed" ? "passed" : "failed",
@@ -59,7 +73,8 @@ export class ShopifyIntegrationDiagnosticService {
 					},
 				],
 			};
-		} catch {
+		} catch (error) {
+			if (error instanceof AppError) throw error;
 			throw new AppError(
 				"Shopify diagnostics are temporarily unavailable.",
 				503,
