@@ -10,6 +10,7 @@ import type {
 	CreateOrganizationInput,
 	CreateOrganizationResponse,
 	CustomerAccountSettingsResponse,
+	CustomerMembershipStatusResponse,
 	CustomerOrdersResponse,
 	CustomerProfileResponse,
 	CustomerSessionResponse,
@@ -124,6 +125,15 @@ export function getCustomerSession(slug: string) {
 export function getCustomerOrders(slug: string, after?: string) {
 	return requestJson<CustomerOrdersResponse>(
 		`/api/organizations/${slug}/customer/orders${after ? `?after=${encodeURIComponent(after)}` : ""}`,
+		undefined,
+		undefined,
+		"",
+	);
+}
+
+export function getCustomerMembershipStatus(slug: string) {
+	return requestJson<CustomerMembershipStatusResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/membership-status`,
 		undefined,
 		undefined,
 		"",

@@ -292,6 +292,115 @@ button.compact-header-button {
 	background: rgba(185, 77, 54, 0.08);
 }
 
+.customer-membership-section,
+.customer-membership-list,
+.customer-membership-card,
+.customer-membership-details {
+	display: grid;
+	gap: 0.85rem;
+}
+
+.customer-membership-section {
+	padding-top: 0.5rem;
+	border-top: 1px solid var(--bullet-panel-border);
+}
+
+.customer-membership-section-header,
+.customer-membership-card > header {
+	display: flex;
+	justify-content: space-between;
+	align-items: start;
+	gap: 1rem;
+}
+
+.customer-membership-section-header h2,
+.customer-membership-section-header p,
+.customer-membership-card h3,
+.customer-membership-card p,
+.customer-membership-details {
+	margin: 0;
+}
+
+.customer-membership-section-header .secondary-button {
+	white-space: nowrap;
+}
+
+.customer-membership-card {
+	padding: 1rem;
+	border: 1px solid var(--bullet-panel-border);
+	border-left-width: 5px;
+	border-radius: 12px;
+	background: rgba(255, 255, 255, 0.72);
+}
+
+.customer-membership-badge {
+	padding: 0.3rem 0.65rem;
+	border-radius: 999px;
+	color: white;
+	font-size: 0.82rem;
+	font-weight: 700;
+	white-space: nowrap;
+}
+
+.customer-membership-processing {
+	border-left-color: var(--bullet-accent);
+}
+
+.customer-membership-processing .customer-membership-badge {
+	background: var(--bullet-accent);
+}
+
+.customer-membership-rejected {
+	border-left-color: var(--bullet-error);
+}
+
+.customer-membership-rejected .customer-membership-badge {
+	background: var(--bullet-error);
+}
+
+.customer-membership-review {
+	border-left-color: var(--bullet-gold);
+}
+
+.customer-membership-review .customer-membership-badge {
+	background: #735710;
+}
+
+.customer-membership-active {
+	border-left-color: var(--bullet-success);
+}
+
+.customer-membership-active .customer-membership-badge {
+	background: var(--bullet-success);
+}
+
+.customer-membership-expired {
+	border-left-color: #6b7280;
+}
+
+.customer-membership-expired .customer-membership-badge {
+	background: #6b7280;
+}
+
+.customer-membership-details {
+	grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.customer-membership-details div {
+	display: grid;
+	gap: 0.2rem;
+}
+
+.customer-membership-details dt {
+	color: var(--bullet-soft-ink);
+	font-size: 0.82rem;
+	font-weight: 700;
+}
+
+.customer-membership-details dd {
+	margin: 0;
+}
+
 .hero-panel {
 	display: grid;
 	gap: 1rem;
@@ -979,6 +1088,15 @@ form.shopify-integration-card {
 
 	.admin-page-header {
 		flex-direction: column;
+	}
+
+	.customer-membership-section-header,
+	.customer-membership-card > header {
+		flex-direction: column;
+	}
+
+	.customer-membership-section-header .secondary-button {
+		width: 100%;
 	}
 
 	.shopify-setup-values div {
