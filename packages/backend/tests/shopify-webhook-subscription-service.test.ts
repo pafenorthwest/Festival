@@ -6,6 +6,7 @@ import {
 	SHOPIFY_CLIENT_SECRET_PURPOSE,
 	ShopifySecretKeyring,
 } from "../src/shopify/encryption.js";
+import { ShopifyWebhookOperationError } from "../src/shopify/errors.js";
 import { ShopifyWebhookSubscriptionService } from "../src/shopify/shopify-webhook-subscription-service.js";
 import type {
 	ShopifyAdminOperationContext,
@@ -58,6 +59,7 @@ class FakeWebhookClient implements ShopifyWebhookSubscriptionClient {
 	delay: Promise<void> | undefined;
 	activeCalls = 0;
 	maxActiveCalls = 0;
+	error: Error | undefined;
 	async reconcileOrdersPaidWebhook(
 		context: ShopifyAdminOperationContext,
 		callbackUrl: string,
@@ -67,6 +69,7 @@ class FakeWebhookClient implements ShopifyWebhookSubscriptionClient {
 		this.maxActiveCalls = Math.max(this.maxActiveCalls, this.activeCalls);
 		await this.delay;
 		this.activeCalls -= 1;
+		if (this.error) throw this.error;
 		return { value: undefined };
 	}
 }
@@ -104,7 +107,7 @@ describe("ShopifyWebhookSubscriptionService", () => {
 			},
 		});
 		const client = new FakeWebhookClient();
-		await new ShopifyWebhookSubscriptionService(
+		const result = await new ShopifyWebhookSubscriptionService(
 			repository,
 			secrets,
 			client,
@@ -117,6 +120,11 @@ describe("ShopifyWebhookSubscriptionService", () => {
 		);
 		expect(client.calls[0]?.context.organizationId).toBe(organization.id);
 		expect(client.calls[0]?.context.capability).toBe("read_orders");
+		expect(result.status).toBe("ready");
+		expect(
+			(await repository.getShopifyIntegration(organization.id))
+				?.webhookReadinessStatus,
+		).toBe("ready");
 	});
 
 	it("serializes concurrent reconciliation for one organization", async () => {
@@ -163,12 +171,132 @@ describe("ShopifyWebhookSubscriptionService", () => {
 		);
 
 		const first = service.reconcileForTenant(tenant(organization));
-		await Promise.resolve();
 		const second = service.reconcileForTenant(tenant(organization));
-		await Promise.resolve();
+		for (
+			let attempt = 0;
+			attempt < 10 && client.calls.length === 0;
+			attempt += 1
+		) {
+			await Bun.sleep(0);
+		}
 		expect(client.calls).toHaveLength(1);
 		release();
 		await Promise.all([first, second]);
 		expect(client.maxActiveCalls).toBe(1);
+	});
+
+	it("persists a typed failure without exposing an unsafe request ID", async () => {
+		const repository = new InMemoryOrganizationRepository();
+		const organization = await repository.createOrganization({
+			name: "PAFE",
+			slug: "pafe",
+		});
+		const secrets = keyring();
+		await repository.upsertShopifyIntegration({
+			organizationId: organization.id,
+			storeDomain: "pafe.myshopify.com",
+			clientId: "client-id",
+			encryptedClientSecret: secrets.encrypt("client-secret", {
+				organizationId: organization.id,
+				purpose: SHOPIFY_CLIENT_SECRET_PURPOSE,
+			}),
+		});
+		await repository.updateShopifyVerification({
+			organizationId: organization.id,
+			verificationStatus: "ok",
+			verifiedAtIso: new Date().toISOString(),
+			lastTestedAtIso: new Date().toISOString(),
+			verifiedShopGid: "gid://shopify/Shop/1",
+			verifiedShopDomain: "pafe.myshopify.com",
+			grantedScopes: ["read_orders"],
+			capabilities: {
+				read_products: "missing",
+				write_products: "missing",
+				read_orders: "granted",
+				write_orders: "disabled",
+			},
+		});
+		const client = new FakeWebhookClient();
+		client.error = new ShopifyWebhookOperationError(
+			"subscription_create",
+			"protected_data",
+			"unsafe request id with spaces",
+		);
+		const result = await new ShopifyWebhookSubscriptionService(
+			repository,
+			secrets,
+			client,
+			"https://festival.example.com",
+		).reconcileForTenant(tenant(organization));
+
+		expect(result).toMatchObject({
+			status: "failed",
+			failureCategory: "protected_data",
+		});
+		expect(result.requestId).toBeUndefined();
+		const stored = await repository.getShopifyIntegration(organization.id);
+		expect(stored?.verificationStatus).toBe("ok");
+		expect(stored?.webhookReadinessStatus).toBe("failed");
+		expect(stored?.webhookFailureCategory).toBe("protected_data");
+		expect(stored?.webhookRequestId).toBeUndefined();
+	});
+
+	it("reports configuration and missing-scope readiness without calling Shopify", async () => {
+		const repository = new InMemoryOrganizationRepository();
+		const organization = await repository.createOrganization({
+			name: "PAFE",
+			slug: "pafe",
+		});
+		const secrets = keyring();
+		const client = new FakeWebhookClient();
+		await repository.upsertShopifyIntegration({
+			organizationId: organization.id,
+			storeDomain: "pafe.myshopify.com",
+			clientId: "client-id",
+			encryptedClientSecret: secrets.encrypt("client-secret", {
+				organizationId: organization.id,
+				purpose: SHOPIFY_CLIENT_SECRET_PURPOSE,
+			}),
+		});
+		const missingOrigin = await new ShopifyWebhookSubscriptionService(
+			repository,
+			secrets,
+			client,
+			undefined,
+		).reconcileForTenant(tenant(organization));
+		expect(missingOrigin).toMatchObject({
+			status: "failed",
+			failureCategory: "configuration",
+		});
+		await repository.updateShopifyVerification({
+			organizationId: organization.id,
+			verificationStatus: "ok",
+			verifiedAtIso: new Date().toISOString(),
+			lastTestedAtIso: new Date().toISOString(),
+			verifiedShopGid: "gid://shopify/Shop/1",
+			verifiedShopDomain: "pafe.myshopify.com",
+			grantedScopes: ["read_products"],
+			capabilities: {
+				read_products: "granted",
+				write_products: "missing",
+				read_orders: "missing",
+				write_orders: "disabled",
+			},
+		});
+		const missingScope = await new ShopifyWebhookSubscriptionService(
+			repository,
+			secrets,
+			client,
+			"https://festival.example.com",
+		).reconcileForTenant(tenant(organization));
+		expect(missingScope).toMatchObject({
+			status: "failed",
+			failureCategory: "missing_scope",
+		});
+		expect(client.calls).toHaveLength(0);
+		expect(
+			(await repository.getShopifyIntegration(organization.id))
+				?.verificationStatus,
+		).toBe("ok");
 	});
 });

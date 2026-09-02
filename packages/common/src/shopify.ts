@@ -63,6 +63,37 @@ export const SHOPIFY_FAILURE_CATEGORIES = [
 export type ShopifyFailureCategory =
 	(typeof SHOPIFY_FAILURE_CATEGORIES)[number];
 
+export const SHOPIFY_WEBHOOK_READINESS_STATUSES = [
+	"unknown",
+	"checking",
+	"ready",
+	"failed",
+] as const;
+
+export type ShopifyWebhookReadinessStatus =
+	(typeof SHOPIFY_WEBHOOK_READINESS_STATUSES)[number];
+
+export const SHOPIFY_WEBHOOK_FAILURE_CATEGORIES = [
+	"configuration",
+	"missing_scope",
+	"permission",
+	"protected_data",
+	"callback",
+	"transport",
+	"upstream",
+] as const;
+
+export type ShopifyWebhookFailureCategory =
+	(typeof SHOPIFY_WEBHOOK_FAILURE_CATEGORIES)[number];
+
+export interface ShopifyWebhookReadiness {
+	status: ShopifyWebhookReadinessStatus;
+	message: string;
+	checkedAtIso?: string;
+	failureCategory?: ShopifyWebhookFailureCategory;
+	requestId?: string;
+}
+
 export interface ShopifyIntegrationSettings {
 	storeDomain: string;
 	clientId: string;
@@ -77,6 +108,7 @@ export interface ShopifyIntegrationSettings {
 	lastTestedAtIso?: string;
 	lastError?: string;
 	lastFailureCategory?: ShopifyFailureCategory;
+	ordersPaidWebhook: ShopifyWebhookReadiness;
 	updatedAtIso: string;
 }
 
@@ -93,6 +125,7 @@ export interface SaveShopifyIntegrationInput {
 
 export interface SaveShopifyIntegrationResponse {
 	settings: ShopifyIntegrationSettings;
+	ordersPaidWebhook: ShopifyWebhookReadiness;
 }
 
 export const SHOPIFY_INTEGRATION_DIAGNOSTIC_IDS = [
@@ -107,6 +140,8 @@ export interface ShopifyIntegrationDiagnosticCheck {
 	id: ShopifyIntegrationDiagnosticId;
 	status: "passed" | "failed";
 	message: string;
+	failureCategory?: ShopifyWebhookFailureCategory;
+	requestId?: string;
 }
 
 export interface ShopifyIntegrationDiagnosticsResponse {

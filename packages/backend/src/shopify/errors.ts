@@ -1,4 +1,7 @@
-import type { ShopifyFailureCategory } from "@festival/common";
+import type {
+	ShopifyFailureCategory,
+	ShopifyWebhookFailureCategory,
+} from "@festival/common";
 
 export class ShopifyIntegrationError extends Error {
 	readonly failureCategory: ShopifyFailureCategory;
@@ -73,5 +76,22 @@ export class ShopifyTransportError extends ShopifyIntegrationError {
 	constructor(message = "Shopify transport request failed.") {
 		super(message, "transport");
 		this.name = "ShopifyTransportError";
+	}
+}
+
+export type ShopifyWebhookFailureStage =
+	| "access_token"
+	| "subscription_list"
+	| "subscription_create"
+	| "subscription_delete";
+
+export class ShopifyWebhookOperationError extends Error {
+	constructor(
+		readonly stage: ShopifyWebhookFailureStage,
+		readonly failureCategory: ShopifyWebhookFailureCategory,
+		readonly requestId?: string,
+	) {
+		super("Shopify paid-order webhook reconciliation failed.");
+		this.name = "ShopifyWebhookOperationError";
 	}
 }

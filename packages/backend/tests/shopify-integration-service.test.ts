@@ -386,6 +386,10 @@ describe("ShopifyIntegrationService", () => {
 			{
 				async reconcileForTenant(tenant) {
 					reconciledOrganizations.push(tenant.organization.id);
+					return {
+						status: "ready" as const,
+						message: "Paid-order webhook subscription is registered.",
+					};
 				},
 			},
 		);
@@ -398,6 +402,41 @@ describe("ShopifyIntegrationService", () => {
 		});
 
 		expect(response.settings.verificationStatus).toBe("ok");
+		expect(response.ordersPaidWebhook.status).toBe("ready");
 		expect(reconciledOrganizations).toEqual([tenant.organization.id]);
+	});
+
+	it("keeps verified store capabilities when webhook readiness fails", async () => {
+		const repository = new InMemoryOrganizationRepository();
+		const service = new ShopifyIntegrationService(
+			repository,
+			createKeyring(),
+			new FakeShopifyTester(),
+			{
+				async reconcileForTenant() {
+					return {
+						status: "failed" as const,
+						message: "Shopify denied webhook access.",
+						failureCategory: "permission" as const,
+						requestId: "shopify-request-1",
+					};
+				},
+			},
+		);
+		const tenant = await createTenant(repository);
+		const response = await service.saveAndTestForTenant(tenant, {
+			storeUrl: "example.myshopify.com",
+			clientId: "client-id",
+			clientSecret: "client-secret",
+		});
+
+		expect(response.settings.verificationStatus).toBe("ok");
+		expect(response.settings.verifiedShopDomain).toBe("example.myshopify.com");
+		expect(response.settings.capabilities.read_orders).toBe("granted");
+		expect(response.ordersPaidWebhook).toMatchObject({
+			status: "failed",
+			failureCategory: "permission",
+			requestId: "shopify-request-1",
+		});
 	});
 });

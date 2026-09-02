@@ -13,6 +13,8 @@ import type {
 	ShopifyCapabilityDiagnostics,
 	ShopifyFailureCategory,
 	ShopifyVerificationStatus,
+	ShopifyWebhookFailureCategory,
+	ShopifyWebhookReadinessStatus,
 } from "@festival/common";
 
 export interface MembershipWithOrganization {
@@ -64,6 +66,11 @@ export interface ShopifyIntegrationRecord {
 	lastTestedAtIso?: string;
 	lastError?: string;
 	lastFailureCategory?: ShopifyFailureCategory;
+	webhookReadinessStatus: ShopifyWebhookReadinessStatus;
+	webhookCheckedAtIso?: string;
+	webhookError?: string;
+	webhookFailureCategory?: ShopifyWebhookFailureCategory;
+	webhookRequestId?: string;
 	createdAtIso: string;
 	updatedAtIso: string;
 }
@@ -100,6 +107,24 @@ export type UpdateShopifyVerificationInput =
 			grantedScopes?: undefined;
 			capabilities?: undefined;
 	  });
+
+export type UpdateShopifyWebhookReadinessInput =
+	| {
+			organizationId: string;
+			status: "checking" | "ready";
+			checkedAtIso: string;
+			message?: undefined;
+			failureCategory?: undefined;
+			requestId?: undefined;
+	  }
+	| {
+			organizationId: string;
+			status: "failed";
+			checkedAtIso: string;
+			message: string;
+			failureCategory: ShopifyWebhookFailureCategory;
+			requestId?: string;
+	  };
 
 export class ShopifyShopOwnershipError extends Error {
 	constructor() {
@@ -219,6 +244,9 @@ export interface OrganizationRepository {
 	): Promise<ShopifyIntegrationRecord>;
 	updateShopifyVerification(
 		input: UpdateShopifyVerificationInput,
+	): Promise<ShopifyIntegrationRecord>;
+	updateShopifyWebhookReadiness(
+		input: UpdateShopifyWebhookReadinessInput,
 	): Promise<ShopifyIntegrationRecord>;
 	createMembershipProductRecord(
 		input: CreateMembershipProductRecordInput,

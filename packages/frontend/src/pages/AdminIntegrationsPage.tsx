@@ -2,7 +2,7 @@ import type {
 	ShopifyCapabilityDiagnostics,
 	ShopifyIntegrationDiagnosticCheck,
 } from "@festival/common";
-import { createSignal, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { AccessDeniedPanel } from "../components/AccessDeniedPanel.js";
 import { CustomerAccountAdminCard } from "../components/CustomerAccountAdminCard.js";
@@ -29,6 +29,25 @@ function capabilityLabel(status: string): string {
 		: status === "disabled"
 			? "Disabled"
 			: "Missing";
+}
+
+function webhookStatusLabel(status: string): string {
+	switch (status) {
+		case "ready":
+			return "Ready";
+		case "failed":
+			return "Action required";
+		case "checking":
+			return "Checking";
+		default:
+			return "Not checked";
+	}
+}
+
+function diagnosticLabel(id: ShopifyIntegrationDiagnosticCheck["id"]): string {
+	return id === "orders_paid_webhook"
+		? "Paid-order webhook"
+		: "Public Storefront access";
 }
 
 export function missingRequiredShopifyScopes(
@@ -59,8 +78,9 @@ function currentShopifyAppUrl(app: FestivalAppController): string {
 
 export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 	const [isRunningDiagnostics, setIsRunningDiagnostics] = createSignal(false);
-	const [diagnosticResult, setDiagnosticResult] =
-		createSignal<ShopifyIntegrationDiagnosticCheck | null>(null);
+	const [diagnosticResults, setDiagnosticResults] = createSignal<
+		ShopifyIntegrationDiagnosticCheck[]
+	>([]);
 	const [diagnosticError, setDiagnosticError] = createSignal("");
 	const diagnosticsAvailable = () => {
 		const settings = props.app.shopifySettings();
@@ -83,18 +103,17 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 		}
 
 		setIsRunningDiagnostics(true);
-		setDiagnosticResult(null);
+		setDiagnosticResults([]);
 		setDiagnosticError("");
 		try {
 			const response = await runShopifyDiagnostics(
 				await user.getIdToken(),
 				route.slug,
 			);
-			const check = response.checks.find(
-				(candidate) => candidate.id === "public_storefront_access",
-			);
-			if (!check) throw new Error("Shopify diagnostics returned no result.");
-			setDiagnosticResult(check);
+			if (response.checks.length === 0) {
+				throw new Error("Shopify diagnostics returned no results.");
+			}
+			setDiagnosticResults(response.checks);
 		} catch (error) {
 			setDiagnosticError((error as Error).message);
 		} finally {
@@ -152,7 +171,7 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 					class="shopify-integration-card"
 					onSubmit={(event) => {
 						event.preventDefault();
-						setDiagnosticResult(null);
+						setDiagnosticResults([]);
 						setDiagnosticError("");
 						void props.app.handleSaveShopifySettings();
 					}}
@@ -173,10 +192,14 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 					<Show when={props.app.shopifySettings()} keyed>
 						{(settings) => (
 							<>
-								<section aria-label="Shopify verification details">
+								<section aria-label="Store and credential verification">
+									<h3>Store and credentials</h3>
 									<Show when={settings.verifiedShopDomain} keyed>
 										{(domain) => <p>Verified shop: {domain}</p>}
 									</Show>
+								</section>
+								<section aria-label="Granted Shopify capabilities">
+									<h3>Granted capabilities</h3>
 									<ul>
 										<li>
 											Product reads:{" "}
@@ -191,6 +214,17 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 											{capabilityLabel(settings.capabilities.read_orders)}
 										</li>
 									</ul>
+								</section>
+								<section aria-label="Paid-order webhook readiness">
+									<h3>Paid-order webhook</h3>
+									<p>
+										<strong>Status:</strong>{" "}
+										{webhookStatusLabel(settings.ordersPaidWebhook.status)}
+									</p>
+									<p>{settings.ordersPaidWebhook.message}</p>
+									<Show when={settings.ordersPaidWebhook.requestId} keyed>
+										{(requestId) => <p>Shopify request ID: {requestId}</p>}
+									</Show>
 								</section>
 								<Show
 									when={
@@ -330,28 +364,34 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 							when={
 								diagnosticsAvailable() &&
 								!isRunningDiagnostics() &&
-								!diagnosticResult() &&
+								diagnosticResults().length === 0 &&
 								!diagnosticError()
 							}
 						>
 							<p class="muted">No diagnostics run yet.</p>
 						</Show>
 						<Show when={isRunningDiagnostics()}>
-							<p role="status">Checking public Storefront access…</p>
+							<p role="status">
+								Checking paid-order webhook and public Storefront access…
+							</p>
 						</Show>
-						<Show when={diagnosticResult()} keyed>
+						<For each={diagnosticResults()}>
 							{(result) => (
 								<div
 									class={`shopify-diagnostic-result shopify-diagnostic-${result.status}`}
 									role={result.status === "passed" ? "status" : "alert"}
 								>
 									<strong>
+										{diagnosticLabel(result.id)}:{" "}
 										{result.status === "passed" ? "Passed" : "Action required"}
 									</strong>
 									<p>{result.message}</p>
+									<Show when={result.requestId} keyed>
+										{(requestId) => <p>Shopify request ID: {requestId}</p>}
+									</Show>
 								</div>
 							)}
-						</Show>
+						</For>
 						<Show when={diagnosticError()} keyed>
 							{(message) => (
 								<div

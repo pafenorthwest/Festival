@@ -1159,7 +1159,9 @@ describe("organization routes", () => {
 				clientId: string;
 				hasClientSecret: boolean;
 				verificationStatus: string;
+				ordersPaidWebhook: { status: string };
 			};
+			ordersPaidWebhook: { status: string };
 		};
 		expect(saveData.settings).toMatchObject({
 			storeDomain: "example.myshopify.com",
@@ -1175,6 +1177,8 @@ describe("organization routes", () => {
 			integrationVersion: 1,
 		});
 		expect(shopifyTester.calls[0]?.organizationId).toBeTruthy();
+		expect(saveData.settings.ordersPaidWebhook.status).toBe("unknown");
+		expect(saveData.ordersPaidWebhook.status).toBe("unknown");
 
 		const getResponse = await app.fetch(
 			new Request(

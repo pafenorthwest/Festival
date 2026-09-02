@@ -3,6 +3,7 @@ import type {
 	ShopifyFailureCategory,
 	ShopifyIntegrationSettings,
 	ShopifyIntegrationSettingsResponse,
+	ShopifyWebhookReadiness,
 } from "@festival/common";
 import {
 	deriveShopifyCapabilities,
@@ -24,7 +25,44 @@ import { ShopifyIntegrationError } from "./errors.js";
 import type { ShopifyConnectivityTester } from "./types.js";
 
 export interface ShopifyWebhookSubscriptionReconciler {
-	reconcileForTenant(tenant: TenantContext): Promise<void>;
+	reconcileForTenant(tenant: TenantContext): Promise<ShopifyWebhookReadiness>;
+}
+
+function toPublicWebhookReadiness(
+	record: ShopifyIntegrationRecord,
+): ShopifyWebhookReadiness {
+	switch (record.webhookReadinessStatus) {
+		case "checking":
+			return {
+				status: "checking",
+				message: "Paid-order webhook readiness is being checked.",
+				checkedAtIso: record.webhookCheckedAtIso,
+			};
+		case "ready":
+			return {
+				status: "ready",
+				message: "Paid-order webhook subscription is registered.",
+				checkedAtIso: record.webhookCheckedAtIso,
+			};
+		case "failed":
+			return {
+				status: "failed",
+				message:
+					record.webhookError ??
+					"Paid-order webhook readiness could not be confirmed.",
+				checkedAtIso: record.webhookCheckedAtIso,
+				failureCategory: record.webhookFailureCategory ?? "upstream",
+				...(record.webhookRequestId
+					? { requestId: record.webhookRequestId }
+					: {}),
+			};
+		default:
+			return {
+				status: "unknown",
+				message:
+					"Paid-order webhook readiness has not been checked for these settings.",
+			};
+	}
 }
 
 function toPublicSettings(
@@ -44,6 +82,7 @@ function toPublicSettings(
 		lastTestedAtIso: record.lastTestedAtIso,
 		lastError: record.lastError,
 		lastFailureCategory: record.lastFailureCategory,
+		ordersPaidWebhook: toPublicWebhookReadiness(record),
 		updatedAtIso: record.updatedAtIso,
 	};
 }
@@ -168,6 +207,7 @@ export class ShopifyIntegrationService {
 		}
 
 		const lastTestedAtIso = new Date().toISOString();
+		let verified: ShopifyIntegrationRecord;
 		try {
 			const result = await this.connectivityTester.testCredentials({
 				organizationId: tenant.organization.id,
@@ -178,7 +218,7 @@ export class ShopifyIntegrationService {
 			});
 			const capabilities = deriveShopifyCapabilities(result.grantedScopes);
 
-			const verified = await this.repository.updateShopifyVerification({
+			verified = await this.repository.updateShopifyVerification({
 				organizationId: tenant.organization.id,
 				verificationStatus: "ok",
 				verifiedAtIso: lastTestedAtIso,
@@ -188,11 +228,6 @@ export class ShopifyIntegrationService {
 				grantedScopes: result.grantedScopes,
 				capabilities,
 			});
-			if (this.webhookSubscriptions) {
-				await this.webhookSubscriptions.reconcileForTenant(tenant);
-			}
-
-			return { settings: toPublicSettings(verified) };
 		} catch (error) {
 			const failed = await this.repository.updateShopifyVerification({
 				organizationId: tenant.organization.id,
@@ -202,7 +237,21 @@ export class ShopifyIntegrationService {
 				lastFailureCategory: failureCategory(error),
 			});
 
-			return { settings: toPublicSettings(failed) };
+			return {
+				settings: toPublicSettings(failed),
+				ordersPaidWebhook: toPublicWebhookReadiness(failed),
+			};
 		}
+
+		const ordersPaidWebhook = this.webhookSubscriptions
+			? await this.webhookSubscriptions.reconcileForTenant(tenant)
+			: toPublicWebhookReadiness(verified);
+		const current =
+			(await this.repository.getShopifyIntegration(tenant.organization.id)) ??
+			verified;
+		return {
+			settings: toPublicSettings(current),
+			ordersPaidWebhook,
+		};
 	}
 }

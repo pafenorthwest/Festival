@@ -4,6 +4,7 @@ import {
 	ShopifyAdminApiError,
 	ShopifyCredentialsError,
 	ShopifyUserError,
+	type ShopifyWebhookOperationError,
 } from "../src/shopify/errors.js";
 import { assertShopifyOrderReadAllowed } from "../src/shopify/types.js";
 
@@ -214,7 +215,171 @@ describe("ShopifyAdminApiClient", () => {
 				},
 				"https://festival.example.com/api/shopify/webhooks/orders-paid",
 			),
-		).rejects.toBeInstanceOf(ShopifyAdminApiError);
+		).rejects.toMatchObject({
+			name: "ShopifyWebhookOperationError",
+			stage: "subscription_create",
+			failureCategory: "upstream",
+		});
+	});
+
+	it("accepts an existing exact paid-order webhook without mutating subscriptions", async () => {
+		const graphQueries: string[] = [];
+		const client = new ShopifyAdminApiClient({
+			fetch: async (input, init) => {
+				if (input.toString().endsWith("/admin/oauth/access_token")) {
+					return Response.json({
+						access_token: "token",
+						expires_in: 3600,
+						scope: "read_orders",
+					});
+				}
+				const query = JSON.parse(String(init?.body)).query as string;
+				graphQueries.push(query);
+				return Response.json({
+					data: {
+						webhookSubscriptions: {
+							nodes: [
+								{
+									id: "gid://shopify/WebhookSubscription/1",
+									topic: "ORDERS_PAID",
+									uri: "https://festival.example.com/api/shopify/webhooks/orders-paid",
+								},
+							],
+						},
+					},
+				});
+			},
+		});
+
+		await expect(
+			client.reconcileOrdersPaidWebhook(
+				{
+					...operationContext,
+					capability: "read_orders",
+					grantedScopes: ["read_orders"],
+				},
+				"https://festival.example.com/api/shopify/webhooks/orders-paid",
+			),
+		).resolves.toMatchObject({ value: undefined });
+		expect(graphQueries).toHaveLength(1);
+	});
+
+	it("classifies webhook scope, protected-data, callback, upstream, and timeout failures", async () => {
+		const webhookContext = {
+			...operationContext,
+			capability: "read_orders" as const,
+			grantedScopes: ["read_orders"],
+		};
+		const callback =
+			"https://festival.example.com/api/shopify/webhooks/orders-paid";
+		const cases: Array<{
+			response: () => Response | Promise<Response>;
+			expected: Partial<ShopifyWebhookOperationError>;
+		}> = [
+			{
+				response: () =>
+					Response.json(
+						{
+							errors: [
+								{ message: "Protected customer data access is not approved." },
+							],
+						},
+						{ headers: { "x-request-id": "protected-request" } },
+					),
+				expected: {
+					stage: "subscription_list",
+					failureCategory: "protected_data",
+					requestId: "protected-request",
+				},
+			},
+			{
+				response: () =>
+					Response.json({ data: { webhookSubscriptions: { nodes: [] } } }),
+				expected: { stage: "subscription_create", failureCategory: "callback" },
+			},
+			{
+				response: () =>
+					new Response("failure", {
+						status: 503,
+						headers: { "x-request-id": "upstream-request" },
+					}),
+				expected: {
+					stage: "subscription_list",
+					failureCategory: "upstream",
+					requestId: "upstream-request",
+				},
+			},
+		];
+
+		for (const testCase of cases) {
+			let graphCall = 0;
+			const client = new ShopifyAdminApiClient({
+				fetch: async (input) => {
+					if (input.toString().endsWith("/admin/oauth/access_token"))
+						return Response.json({
+							access_token: "token",
+							expires_in: 3600,
+							scope: "read_orders",
+						});
+					graphCall += 1;
+					if (
+						testCase.expected.failureCategory === "callback" &&
+						graphCall === 2
+					) {
+						return Response.json({
+							data: {
+								webhookSubscriptionCreate: {
+									webhookSubscription: null,
+									userErrors: [{ message: "Callback URL is invalid." }],
+								},
+							},
+						});
+					}
+					return await testCase.response();
+				},
+			});
+			await expect(
+				client.reconcileOrdersPaidWebhook(webhookContext, callback),
+			).rejects.toMatchObject(testCase.expected);
+		}
+
+		const missingScopeClient = new ShopifyAdminApiClient({
+			fetch: async () =>
+				Response.json({
+					access_token: "token",
+					expires_in: 3600,
+					scope: "read_products",
+				}),
+		});
+		await expect(
+			missingScopeClient.reconcileOrdersPaidWebhook(webhookContext, callback),
+		).rejects.toMatchObject({
+			stage: "access_token",
+			failureCategory: "missing_scope",
+		});
+
+		const timeoutClient = new ShopifyAdminApiClient({
+			requestTimeoutMs: 5,
+			fetch: async (input, init) => {
+				if (input.toString().endsWith("/admin/oauth/access_token"))
+					return Response.json({
+						access_token: "token",
+						expires_in: 3600,
+						scope: "read_orders",
+					});
+				return await new Promise<Response>((_resolve, reject) =>
+					init?.signal?.addEventListener("abort", () =>
+						reject(new DOMException("canary secret", "AbortError")),
+					),
+				);
+			},
+		});
+		await expect(
+			timeoutClient.reconcileOrdersPaidWebhook(webhookContext, callback),
+		).rejects.toMatchObject({
+			stage: "subscription_list",
+			failureCategory: "transport",
+		});
 	});
 
 	it("rejects non-canonical Shopify destinations before fetch", async () => {
