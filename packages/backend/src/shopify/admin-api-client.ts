@@ -14,13 +14,19 @@ import type {
 	ShopifyConnectivityTester,
 	ShopifyCredentials,
 	ShopifyMembershipProductClient,
+	ShopifyOrderCustomerProfile,
+	ShopifyPaidOrder,
+	ShopifyPaidOrderReader,
 	ShopifyProductDetails,
 	ShopifyVerificationResult,
+	ShopifyWebhookSubscriptionClient,
 } from "./types.js";
 
 const SHOPIFY_ADMIN_API_VERSION = "2026-07";
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024;
+const DEFAULT_PAID_ORDER_LIST_LIMIT = 50;
+const MAX_PAID_ORDER_LIST_LIMIT = 100;
 
 type ShopifyFetch = (
 	input: RequestInfo | URL,
@@ -75,6 +81,60 @@ interface ShopifyVariantNode {
 	price?: string | { amount?: string; currencyCode?: string };
 	product?: { id?: string };
 	selectedOptions?: Array<{ name?: string; value?: string }>;
+}
+
+interface ShopifyOrderAttributeNode {
+	key?: string;
+	value?: string;
+}
+
+interface ShopifyOrderMoneyNode {
+	presentmentMoney?: {
+		amount?: string;
+		currencyCode?: string;
+	};
+}
+
+interface ShopifyOrderLineNode {
+	id?: string;
+	product?: { id?: string } | null;
+	variant?: { id?: string } | null;
+	quantity?: number;
+	discountedTotalSet?: ShopifyOrderMoneyNode;
+}
+
+interface ShopifyOrderTransactionNode {
+	kind?: string;
+	status?: string;
+	processedAt?: string | null;
+}
+
+interface ShopifyOrderNode {
+	id?: string;
+	fullyPaid?: boolean;
+	currencyCode?: string;
+	customer?: { id?: string } | null;
+	customAttributes?: ShopifyOrderAttributeNode[];
+	lineItems?: {
+		nodes?: ShopifyOrderLineNode[];
+		pageInfo?: { hasNextPage?: boolean };
+	};
+	transactions?: ShopifyOrderTransactionNode[];
+}
+
+interface ShopifyOrderCustomerContactNode {
+	firstName?: string | null;
+	lastName?: string | null;
+	email?: string | null;
+	phone?: string | null;
+	defaultAddress?: {
+		address1?: string | null;
+		address2?: string | null;
+		city?: string | null;
+		province?: string | null;
+		zip?: string | null;
+		countryCodeV2?: string | null;
+	} | null;
 }
 
 interface ShopifyUserErrorPayload {
@@ -137,6 +197,222 @@ function mapProductNode(
 	};
 }
 
+function requiredOrderString(value: unknown, message: string): string {
+	if (typeof value !== "string" || !value.trim()) {
+		throw new ShopifyAdminApiError(message);
+	}
+	return value;
+}
+
+function requiredOrderCurrencyCode(value: unknown, message: string): string {
+	const currencyCode = requiredOrderString(value, message);
+	if (!/^[A-Z]{3}$/.test(currencyCode)) {
+		throw new ShopifyAdminApiError(message);
+	}
+	return currencyCode;
+}
+
+function requiredOrderAmount(value: unknown): string {
+	const amount = requiredOrderString(
+		value,
+		"Shopify order line response did not include a valid paid amount.",
+	);
+	if (!/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(amount)) {
+		throw new ShopifyAdminApiError(
+			"Shopify order line response did not include a valid paid amount.",
+		);
+	}
+	return amount;
+}
+
+function optionalCustomerText(value: unknown, limit = 255): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const normalized = value.trim();
+	return normalized && normalized.length <= limit ? normalized : undefined;
+}
+
+function mapOrderCustomerProfile(
+	customer: ShopifyOrderCustomerContactNode | null | undefined,
+): ShopifyOrderCustomerProfile | null {
+	if (!customer) return null;
+	const firstName = optionalCustomerText(customer.firstName);
+	const lastName = optionalCustomerText(customer.lastName);
+	const name = [firstName, lastName].filter(Boolean).join(" ") || undefined;
+	const emailCandidate = optionalCustomerText(customer.email)?.toLowerCase();
+	const email =
+		emailCandidate && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailCandidate)
+			? emailCandidate
+			: undefined;
+	const phoneCandidate = optionalCustomerText(customer.phone, 31);
+	const phone =
+		phoneCandidate && /^\+?[0-9][0-9 ().-]{5,30}$/.test(phoneCandidate)
+			? phoneCandidate
+			: undefined;
+	const address = customer.defaultAddress;
+	const line1 = optionalCustomerText(address?.address1, 512);
+	const city = optionalCustomerText(address?.city);
+	const region = optionalCustomerText(address?.province);
+	const postalCode = optionalCustomerText(address?.zip);
+	const countryCode = optionalCustomerText(
+		address?.countryCodeV2,
+	)?.toUpperCase();
+	const line2 = optionalCustomerText(address?.address2, 512);
+	const mailingAddress =
+		line1 &&
+		city &&
+		region &&
+		postalCode &&
+		countryCode &&
+		/^[A-Z]{2}$/.test(countryCode)
+			? {
+					line1,
+					...(line2 ? { line2 } : {}),
+					city,
+					region,
+					postalCode,
+					countryCode,
+				}
+			: undefined;
+	if (!name && !email && !phone && !mailingAddress) return null;
+	return {
+		...(name ? { name } : {}),
+		...(email ? { email } : {}),
+		...(phone ? { phone } : {}),
+		...(mailingAddress ? { mailingAddress } : {}),
+	};
+}
+
+function latestSuccessfulPaymentTimestamp(
+	transactions: ShopifyOrderTransactionNode[] | undefined,
+): string {
+	if (!transactions) {
+		throw new ShopifyAdminApiError(
+			"Shopify fully paid order response did not include payment transactions.",
+		);
+	}
+
+	let latest: { value: string; time: number } | undefined;
+	for (const transaction of transactions) {
+		if (
+			transaction.status !== "SUCCESS" ||
+			(transaction.kind !== "SALE" && transaction.kind !== "CAPTURE")
+		) {
+			continue;
+		}
+		const value = transaction.processedAt;
+		if (typeof value !== "string" || !/(?:Z|[+-]\d{2}:\d{2})$/.test(value)) {
+			throw new ShopifyAdminApiError(
+				"Shopify fully paid order response did not include a valid payment timestamp.",
+			);
+		}
+		const time = Date.parse(value);
+		if (!Number.isFinite(time)) {
+			throw new ShopifyAdminApiError(
+				"Shopify fully paid order response did not include a valid payment timestamp.",
+			);
+		}
+		if (!latest || time > latest.time) {
+			latest = { value, time };
+		}
+	}
+
+	if (!latest) {
+		throw new ShopifyAdminApiError(
+			"Shopify fully paid order response did not include a successful payment timestamp.",
+		);
+	}
+	return latest.value;
+}
+
+function mapPaidOrderNode(node: ShopifyOrderNode): ShopifyPaidOrder {
+	const id = requiredOrderString(
+		node.id,
+		"Shopify order response was incomplete.",
+	);
+	const customerGid = requiredOrderString(
+		node.customer?.id,
+		"Shopify order response did not include a customer.",
+	);
+	if (typeof node.fullyPaid !== "boolean") {
+		throw new ShopifyAdminApiError(
+			"Shopify order response did not include a paid status.",
+		);
+	}
+	const currencyCode = requiredOrderCurrencyCode(
+		node.currencyCode,
+		"Shopify order response did not include a valid currency code.",
+	);
+	if (
+		!node.customAttributes ||
+		!node.lineItems?.nodes ||
+		typeof node.lineItems.pageInfo?.hasNextPage !== "boolean"
+	) {
+		throw new ShopifyAdminApiError("Shopify order response was incomplete.");
+	}
+	if (node.lineItems.pageInfo?.hasNextPage) {
+		throw new ShopifyAdminApiError(
+			"Shopify order response exceeded the supported line-item limit.",
+		);
+	}
+
+	const customAttributes = node.customAttributes.map((attribute) => ({
+		key: requiredOrderString(
+			attribute.key,
+			"Shopify order response included an invalid custom attribute.",
+		),
+		value: requiredOrderString(
+			attribute.value,
+			"Shopify order response included an invalid custom attribute.",
+		),
+	}));
+	const lineItems = node.lineItems.nodes.map((lineItem) => {
+		if (
+			typeof lineItem.quantity !== "number" ||
+			!Number.isSafeInteger(lineItem.quantity) ||
+			lineItem.quantity <= 0
+		) {
+			throw new ShopifyAdminApiError(
+				"Shopify order line response did not include a valid quantity.",
+			);
+		}
+		return {
+			id: requiredOrderString(
+				lineItem.id,
+				"Shopify order line response was incomplete.",
+			),
+			productGid: requiredOrderString(
+				lineItem.product?.id,
+				"Shopify order line response did not include a product.",
+			),
+			variantGid: requiredOrderString(
+				lineItem.variant?.id,
+				"Shopify order line response did not include a variant.",
+			),
+			quantity: lineItem.quantity,
+			paidAmount: requiredOrderAmount(
+				lineItem.discountedTotalSet?.presentmentMoney?.amount,
+			),
+			paidCurrencyCode: requiredOrderCurrencyCode(
+				lineItem.discountedTotalSet?.presentmentMoney?.currencyCode,
+				"Shopify order line response did not include a valid paid currency.",
+			),
+		};
+	});
+	const fullyPaidAtIso = node.fullyPaid
+		? latestSuccessfulPaymentTimestamp(node.transactions)
+		: undefined;
+
+	return {
+		id,
+		customerGid,
+		fullyPaid: node.fullyPaid,
+		...(fullyPaidAtIso ? { fullyPaidAtIso } : {}),
+		currencyCode,
+		customAttributes,
+		lineItems,
+	};
+}
+
 function throwIfUserErrors(
 	userErrors: ShopifyUserErrorPayload[] = [],
 	requestId?: string,
@@ -152,7 +428,11 @@ function throwIfUserErrors(
 }
 
 export class ShopifyAdminApiClient
-	implements ShopifyConnectivityTester, ShopifyMembershipProductClient
+	implements
+		ShopifyConnectivityTester,
+		ShopifyMembershipProductClient,
+		ShopifyWebhookSubscriptionClient,
+		ShopifyPaidOrderReader
 {
 	private readonly accessTokens = new Map<string, CachedAccessToken>();
 	private readonly fetchImpl: ShopifyFetch;
@@ -218,6 +498,120 @@ export class ShopifyAdminApiClient
 				this.accessTokens.delete(key);
 			}
 		}
+	}
+
+	async reconcileOrdersPaidWebhook(
+		context: ShopifyAdminOperationContext,
+		callbackUrl: string,
+	): Promise<ShopifyAdminResult<void>> {
+		this.assertOperationContext(context, "read_orders");
+		if (
+			!/^https:\/\/[^/?#]+\/api\/shopify\/webhooks\/orders-paid$/.test(
+				callbackUrl,
+			)
+		) {
+			throw new ShopifyCredentialsError(
+				"Shopify webhook callback URL is invalid.",
+			);
+		}
+		const { accessToken } = await this.fetchOperationAccessToken(
+			context,
+			"read_orders",
+		);
+		const subscriptions = await this.graphqlRequest<{
+			webhookSubscriptions?: {
+				nodes?: Array<{
+					id?: string;
+					topic?: string;
+					uri?: string;
+				}>;
+			};
+		}>(
+			context.credentials.storeDomain,
+			accessToken,
+			`query ListOrdersPaidWebhookSubscriptions {
+				webhookSubscriptions(first: 250) {
+					nodes { id topic uri }
+				}
+			}`,
+		);
+		const matching = (
+			subscriptions.value.webhookSubscriptions?.nodes ?? []
+		).filter(
+			(subscription) => subscription.topic === "ORDERS_PAID" && subscription.id,
+		);
+		const exact = matching.filter(
+			(subscription) => subscription.uri === callbackUrl,
+		);
+		let keep = exact.shift();
+		let requestId = subscriptions.requestId;
+		if (!keep) {
+			const created = await this.graphqlRequest<{
+				webhookSubscriptionCreate?: {
+					webhookSubscription?: { id?: string; topic?: string; uri?: string };
+					userErrors?: ShopifyUserErrorPayload[];
+				};
+			}>(
+				context.credentials.storeDomain,
+				accessToken,
+				`mutation CreateOrdersPaidWebhook($uri: URL!) {
+					webhookSubscriptionCreate(topic: ORDERS_PAID, webhookSubscription: { uri: $uri }) {
+						webhookSubscription { id topic uri }
+						userErrors { field message }
+					}
+				}`,
+				{ uri: callbackUrl },
+			);
+			const payload = created.value.webhookSubscriptionCreate;
+			throwIfUserErrors(payload?.userErrors, created.requestId);
+			const createdSubscription = payload?.webhookSubscription;
+			if (
+				!createdSubscription?.id ||
+				createdSubscription.topic !== "ORDERS_PAID" ||
+				createdSubscription.uri !== callbackUrl
+			) {
+				throw new ShopifyAdminApiError(
+					"Shopify webhook creation returned an incomplete subscription.",
+					{ requestId: created.requestId },
+				);
+			}
+			keep = createdSubscription;
+			requestId = created.requestId ?? requestId;
+		}
+		for (const subscription of matching) {
+			if (subscription.id === keep.id) continue;
+			const deleted = await this.graphqlRequest<{
+				webhookSubscriptionDelete?: {
+					deletedWebhookSubscriptionId?: string;
+					userErrors?: ShopifyUserErrorPayload[];
+				};
+			}>(
+				context.credentials.storeDomain,
+				accessToken,
+				`mutation DeleteOrdersPaidWebhook($id: ID!) {
+					webhookSubscriptionDelete(id: $id) {
+						deletedWebhookSubscriptionId
+						userErrors { field message }
+					}
+				}`,
+				{ id: subscription.id },
+			);
+			throwIfUserErrors(
+				deleted.value.webhookSubscriptionDelete?.userErrors,
+				deleted.requestId,
+			);
+			if (
+				deleted.value.webhookSubscriptionDelete
+					?.deletedWebhookSubscriptionId !== subscription.id
+			) {
+				throw new ShopifyAdminApiError(
+					"Shopify webhook deletion was not confirmed.",
+					{ requestId: deleted.requestId },
+				);
+			}
+			requestId = deleted.requestId ?? requestId;
+		}
+		return { value: undefined, requestId };
 	}
 
 	async createProduct(
@@ -453,6 +847,247 @@ export class ShopifyAdminApiClient
 		};
 	}
 
+	async readPaidOrderByGid(
+		context: ShopifyAdminOperationContext,
+		orderGid: string,
+	): Promise<ShopifyAdminResult<ShopifyPaidOrder | null>> {
+		this.assertOperationContext(context, "read_orders");
+		if (!/^gid:\/\/shopify\/Order\/[^/?#\s]+$/.test(orderGid)) {
+			throw new ShopifyCredentialsError("Shopify order ID is invalid.");
+		}
+
+		const { credentials } = context;
+		const { accessToken } = await this.fetchOperationAccessToken(
+			context,
+			"read_orders",
+		);
+		const response = await this.graphqlRequest<{
+			order?: ShopifyOrderNode | null;
+		}>(
+			credentials.storeDomain,
+			accessToken,
+			`
+			query ReadPaidOrder($orderId: ID!) {
+				order(id: $orderId) {
+					id
+					fullyPaid
+					currencyCode
+					customer {
+						id
+					}
+					customAttributes {
+						key
+						value
+					}
+					lineItems(first: 250) {
+						nodes {
+							id
+							product {
+								id
+							}
+							variant {
+								id
+							}
+							quantity
+							discountedTotalSet {
+								presentmentMoney {
+									amount
+									currencyCode
+								}
+							}
+						}
+						pageInfo {
+							hasNextPage
+						}
+					}
+					transactions(first: 250) {
+						kind
+						status
+						processedAt
+					}
+				}
+			}
+		`,
+			{ orderId: orderGid },
+		);
+
+		return {
+			value: response.value.order
+				? mapPaidOrderNode(response.value.order)
+				: null,
+			requestId: response.requestId,
+		};
+	}
+
+	async readOrderCustomerProfileByGid(
+		context: ShopifyAdminOperationContext,
+		orderGid: string,
+	): Promise<ShopifyAdminResult<ShopifyOrderCustomerProfile | null>> {
+		this.assertOperationContext(context, "read_orders");
+		if (!/^gid:\/\/shopify\/Order\/[^/?#\s]+$/.test(orderGid)) {
+			throw new ShopifyCredentialsError("Shopify order ID is invalid.");
+		}
+		const { credentials } = context;
+		const { accessToken } = await this.fetchOperationAccessToken(
+			context,
+			"read_orders",
+		);
+		const response = await this.graphqlRequest<{
+			order?: { customer?: ShopifyOrderCustomerContactNode | null } | null;
+		}>(
+			credentials.storeDomain,
+			accessToken,
+			`
+			query ReadPaidOrderCustomerProfile($orderId: ID!) {
+				order(id: $orderId) {
+					customer {
+						firstName
+						lastName
+						email
+						phone
+						defaultAddress {
+							address1
+							address2
+							city
+							province
+							zip
+							countryCodeV2
+						}
+					}
+				}
+			}
+		`,
+			{ orderId: orderGid },
+		);
+		return {
+			value: mapOrderCustomerProfile(response.value.order?.customer),
+			requestId: response.requestId,
+		};
+	}
+
+	async listPaidOrdersSince(
+		context: ShopifyAdminOperationContext,
+		sinceIso: string,
+		first = DEFAULT_PAID_ORDER_LIST_LIMIT,
+	): Promise<ShopifyAdminResult<ShopifyPaidOrder[]>> {
+		this.assertOperationContext(context, "read_orders");
+		const normalizedSinceIso = this.normalizePaidOrderReadSince(sinceIso);
+		if (
+			!Number.isSafeInteger(first) ||
+			first <= 0 ||
+			first > MAX_PAID_ORDER_LIST_LIMIT
+		) {
+			throw new Error("Shopify paid order read limit is invalid.");
+		}
+
+		const { credentials } = context;
+		const { accessToken } = await this.fetchOperationAccessToken(
+			context,
+			"read_orders",
+		);
+		const response = await this.graphqlRequest<{
+			orders?: {
+				nodes?: Array<ShopifyOrderNode | null>;
+				pageInfo?: { hasNextPage?: boolean };
+			};
+		}>(
+			credentials.storeDomain,
+			accessToken,
+			`
+			query ListPaidOrdersSince($first: Int!, $query: String!) {
+				orders(
+					first: $first
+					query: $query
+					sortKey: PROCESSED_AT
+					reverse: true
+				) {
+					nodes {
+						id
+						fullyPaid
+						currencyCode
+						customer {
+							id
+						}
+						customAttributes {
+							key
+							value
+						}
+						lineItems(first: 250) {
+							nodes {
+								id
+								product {
+									id
+								}
+								variant {
+									id
+								}
+								quantity
+								discountedTotalSet {
+									presentmentMoney {
+										amount
+										currencyCode
+									}
+								}
+							}
+							pageInfo {
+								hasNextPage
+							}
+						}
+						transactions(first: 250) {
+							kind
+							status
+							processedAt
+						}
+					}
+					pageInfo {
+						hasNextPage
+					}
+				}
+			}
+		`,
+			{
+				first,
+				query: `financial_status:paid processed_at:>='${normalizedSinceIso}'`,
+			},
+		);
+
+		const orders = response.value.orders;
+		if (!orders?.nodes || typeof orders.pageInfo?.hasNextPage !== "boolean") {
+			throw new ShopifyAdminApiError(
+				"Shopify paid-order list was incomplete.",
+				{
+					requestId: response.requestId,
+				},
+			);
+		}
+		if (orders.pageInfo.hasNextPage) {
+			throw new ShopifyAdminApiError(
+				"Shopify paid-order list exceeded the supported limit.",
+				{ requestId: response.requestId },
+			);
+		}
+
+		return {
+			value: orders.nodes.map((node) => {
+				if (!node) {
+					throw new ShopifyAdminApiError(
+						"Shopify paid-order list was incomplete.",
+						{ requestId: response.requestId },
+					);
+				}
+				const order = mapPaidOrderNode(node);
+				if (!order.fullyPaid) {
+					throw new ShopifyAdminApiError(
+						"Shopify paid-order list included an order that is not fully paid.",
+						{ requestId: response.requestId },
+					);
+				}
+				return order;
+			}),
+			requestId: response.requestId,
+		};
+	}
+
 	async deleteProduct(
 		context: ShopifyAdminOperationContext,
 		productGid: string,
@@ -500,7 +1135,7 @@ export class ShopifyAdminApiClient
 
 	private assertOperationContext(
 		context: ShopifyAdminOperationContext,
-		requiredCapability: "read_products" | "write_products",
+		requiredCapability: "read_products" | "write_products" | "read_orders",
 	): void {
 		if (
 			context.capability !== requiredCapability ||
@@ -515,9 +1150,34 @@ export class ShopifyAdminApiClient
 		}
 	}
 
+	private normalizePaidOrderReadSince(sinceIso: string): string {
+		if (
+			typeof sinceIso !== "string" ||
+			!/(?:Z|[+-]\d{2}:\d{2})$/.test(sinceIso)
+		) {
+			throw new Error("Shopify order read window is invalid.");
+		}
+		const since = new Date(sinceIso);
+		const now = new Date(this.now());
+		if (!Number.isFinite(since.getTime()) || !Number.isFinite(now.getTime())) {
+			throw new Error("Shopify order read window is invalid.");
+		}
+		const oldestAllowed = new Date(now);
+		oldestAllowed.setUTCDate(oldestAllowed.getUTCDate() - 60);
+		if (since < oldestAllowed) {
+			throw new Error(
+				"Shopify order reads are limited to the most recent 60 days.",
+			);
+		}
+		if (since > now) {
+			throw new Error("Shopify order read window is invalid.");
+		}
+		return since.toISOString();
+	}
+
 	private async fetchOperationAccessToken(
 		context: ShopifyAdminOperationContext,
-		requiredCapability: "read_products" | "write_products",
+		requiredCapability: "read_products" | "write_products" | "read_orders",
 	): Promise<AcquiredAccessToken> {
 		const token = await this.fetchAccessToken(context.credentials);
 		if (!token.grantedScopes.includes(requiredCapability)) {

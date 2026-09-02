@@ -32,15 +32,19 @@ describe("PostgresCheckoutRepository", () => {
 		);
 	});
 
-	it("serializes local intent replacement without holding the transaction across Shopify", async () => {
+	it("serializes local processing intent checks without holding the transaction across Shopify", async () => {
 		const value = await source();
 		expect(value).toContain("return sql.begin(async (tx) => {");
 		expect(value).toContain("pg_advisory_xact_lock(hashtextextended($1, 0))");
 		expect(value).toContain(
 			"session_id = $3 AND idempotency_key = $4 FOR UPDATE",
 		);
-		expect(value).toContain("status = 'creating' AND expires_at > NOW()");
-		expect(value).toContain("status = 'ready'");
+		expect(value).toContain(
+			"status IN ('creating', 'ready', 'checkout_started') AND expires_at > NOW()",
+		);
+		expect(value).not.toContain(
+			"SET status = 'superseded' WHERE organization_id = $1 AND customer_id = $2 AND status = 'ready'",
+		);
 		expect(value).not.toContain("createCart(");
 		expect(value).not.toContain("checkoutUrl");
 	});

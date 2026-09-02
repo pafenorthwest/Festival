@@ -17,3 +17,5 @@ number,taskname,first_create_date,first_create_hhmmss,first_create_git_hash
 16,shopify-integration-public-storefront-diagnostic,2026-08-19,000000,-------
 17,shopify-headless-private-token,2026-08-26,000000,-------
 18,issue-77-direct-teacher-membership-checkout,2026-08-27,000000,-------
+19,issue-78-shopify-order-projection-entitlement,2026-08-28,000000,338259c
+20,app-owned-shopify-webhooks,2026-09-02,000000,-------

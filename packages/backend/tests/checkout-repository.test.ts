@@ -171,7 +171,7 @@ describe("checkout repository", () => {
 		expect((await repository.getOutcome(record))?.kind).toBe("failed");
 	});
 
-	it("keeps keys isolated by session and replaces only a ready cart", async () => {
+	it("keeps a ready cart as a processing purchase across customer sessions", async () => {
 		const repository = new InMemoryCheckoutRepository();
 		const base = {
 			organizationId: "org-a",
@@ -206,17 +206,14 @@ describe("checkout repository", () => {
 			sessionId: "session-b",
 			idempotencyKey: "key-a",
 		});
-		expect(replacement.kind).toBe("created");
+		expect(replacement.kind).toBe("in_progress");
 		expect(
-			(
-				await repository.getOutcome({
-					organizationId: "org-a",
-					customerId: "customer-a",
-					sessionId: "session-a",
-					idempotencyKey: "key-a",
-				})
-			)?.kind,
-		).toBe("failed");
+			await repository.hasProcessingIntent(
+				"org-a",
+				"customer-a",
+				"2029-01-01T00:00:00.000Z",
+			),
+		).toBeTrue();
 	});
 
 	it("reports expired and checkout-started outcomes without exposing the cart ID", async () => {

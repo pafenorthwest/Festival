@@ -375,4 +375,29 @@ describe("ShopifyIntegrationService", () => {
 		expect(response.settings.lastFailureCategory).toBe("identity_mismatch");
 		expect(JSON.stringify(response)).not.toContain("different shop identity");
 	});
+
+	it("reconciles the paid-order webhook after Save & Verify", async () => {
+		const repository = new InMemoryOrganizationRepository();
+		const reconciledOrganizations: string[] = [];
+		const service = new ShopifyIntegrationService(
+			repository,
+			createKeyring(),
+			new FakeShopifyTester(),
+			{
+				async reconcileForTenant(tenant) {
+					reconciledOrganizations.push(tenant.organization.id);
+				},
+			},
+		);
+		const tenant = await createTenant(repository);
+
+		const response = await service.saveAndTestForTenant(tenant, {
+			storeUrl: "example.myshopify.com",
+			clientId: "client-id",
+			clientSecret: "client-secret",
+		});
+
+		expect(response.settings.verificationStatus).toBe("ok");
+		expect(reconciledOrganizations).toEqual([tenant.organization.id]);
+	});
 });

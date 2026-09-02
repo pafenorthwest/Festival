@@ -5,6 +5,7 @@ import type {
 	CheckoutIntentOutcome,
 	CheckoutIntentRecord,
 	CheckoutRepository,
+	CreateCheckoutIntentInput,
 } from "./checkout-repository.js";
 
 function schemaName(value: string) {
@@ -32,14 +33,18 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 				customer_id TEXT NOT NULL, session_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, offering_id TEXT NOT NULL REFERENCES ${this.schema}.products (id),
 				entitlement_class TEXT NOT NULL, duration_days INTEGER NOT NULL,
 				shopify_product_gid TEXT NOT NULL, shopify_variant_gid TEXT NOT NULL, policy_version TEXT NOT NULL,
+				division_id TEXT NULL, division_name_snapshot TEXT NULL, staff_access_consent BOOLEAN NOT NULL DEFAULT FALSE,
 				amount TEXT NOT NULL, currency_code TEXT NOT NULL,
 				cart_reference TEXT NULL REFERENCES ${this.schema}.checkout_carts (reference),
-				status TEXT NOT NULL CHECK (status IN ('creating', 'ready', 'checkout_started', 'failed', 'expired', 'superseded')),
+				status TEXT NOT NULL CHECK (status IN ('creating', 'ready', 'checkout_started', 'failed', 'expired', 'superseded', 'approved', 'rejected', 'needs_review')),
 				expires_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
 			ALTER TABLE ${this.schema}.checkout_intents ADD COLUMN IF NOT EXISTS session_id TEXT;
 			ALTER TABLE ${this.schema}.checkout_intents ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+			ALTER TABLE ${this.schema}.checkout_intents ADD COLUMN IF NOT EXISTS division_id TEXT;
+			ALTER TABLE ${this.schema}.checkout_intents ADD COLUMN IF NOT EXISTS division_name_snapshot TEXT;
+			ALTER TABLE ${this.schema}.checkout_intents ADD COLUMN IF NOT EXISTS staff_access_consent BOOLEAN NOT NULL DEFAULT FALSE;
 			ALTER TABLE ${this.schema}.checkout_intents DROP CONSTRAINT IF EXISTS checkout_intents_status_check;
-			ALTER TABLE ${this.schema}.checkout_intents ADD CONSTRAINT checkout_intents_status_check CHECK (status IN ('creating', 'ready', 'checkout_started', 'failed', 'expired', 'superseded'));
+			ALTER TABLE ${this.schema}.checkout_intents ADD CONSTRAINT checkout_intents_status_check CHECK (status IN ('creating', 'ready', 'checkout_started', 'failed', 'expired', 'superseded', 'approved', 'rejected', 'needs_review'));
 			CREATE UNIQUE INDEX IF NOT EXISTS checkout_intents_scope_key ON ${this.schema}.checkout_intents(organization_id, customer_id, session_id, idempotency_key);
 		`);
 	}
@@ -50,7 +55,7 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 		idempotencyKey: string;
 	}) {
 		const rows = (await sql.unsafe(
-			`SELECT id, correlation_id, organization_id, customer_id, session_id, idempotency_key, offering_id, entitlement_class, duration_days, shopify_product_gid, shopify_variant_gid, policy_version, amount, currency_code, cart_reference, status, expires_at::text, created_at::text FROM ${this.schema}.checkout_intents WHERE organization_id = $1 AND customer_id = $2 AND session_id = $3 AND idempotency_key = $4`,
+			`SELECT id, correlation_id, organization_id, customer_id, session_id, idempotency_key, offering_id, entitlement_class, duration_days, shopify_product_gid, shopify_variant_gid, policy_version, division_id, division_name_snapshot, staff_access_consent, amount, currency_code, cart_reference, status, expires_at::text, created_at::text FROM ${this.schema}.checkout_intents WHERE organization_id = $1 AND customer_id = $2 AND session_id = $3 AND idempotency_key = $4`,
 			[
 				input.organizationId,
 				input.customerId,
@@ -61,19 +66,19 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 		if (!rows[0]) return null;
 		return this.outcomeFor(this.intent(rows[0]));
 	}
-	async createIntent(
-		record: Omit<
-			CheckoutIntentRecord,
-			"id" | "correlationId" | "cartReference" | "createdAtIso" | "status"
-		>,
-	) {
+	async createIntent(record: CreateCheckoutIntentInput) {
 		return sql.begin(async (tx) => {
 			// This transaction serializes only local intent state. Shopify calls happen after it commits.
 			await tx.unsafe("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
 				`${record.organizationId}:${record.customerId}`,
 			]);
+			const activeGrant = (await tx.unsafe(
+				`SELECT 1 FROM ${this.schema}.entitlement_grants grants JOIN ${this.schema}.organizations organization ON organization.id = grants.organization_id WHERE grants.organization_id = $1 AND grants.customer_id = $2 AND grants.status = 'active' AND grants.ends_on > (NOW() AT TIME ZONE organization.timezone)::date LIMIT 1`,
+				[record.organizationId, record.customerId],
+			)) as Array<Record<string, unknown>>;
+			if (activeGrant[0]) return { kind: "active" as const };
 			const existingRows = (await tx.unsafe(
-				`SELECT id, correlation_id, organization_id, customer_id, session_id, idempotency_key, offering_id, entitlement_class, duration_days, shopify_product_gid, shopify_variant_gid, policy_version, amount, currency_code, cart_reference, status, expires_at::text, created_at::text FROM ${this.schema}.checkout_intents WHERE organization_id = $1 AND customer_id = $2 AND session_id = $3 AND idempotency_key = $4 FOR UPDATE`,
+				`SELECT id, correlation_id, organization_id, customer_id, session_id, idempotency_key, offering_id, entitlement_class, duration_days, shopify_product_gid, shopify_variant_gid, policy_version, division_id, division_name_snapshot, staff_access_consent, amount, currency_code, cart_reference, status, expires_at::text, created_at::text FROM ${this.schema}.checkout_intents WHERE organization_id = $1 AND customer_id = $2 AND session_id = $3 AND idempotency_key = $4 FOR UPDATE`,
 				[
 					record.organizationId,
 					record.customerId,
@@ -104,22 +109,14 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 				return { kind: "failed" };
 			}
 			const creating = (await tx.unsafe(
-				`SELECT id FROM ${this.schema}.checkout_intents WHERE organization_id = $1 AND customer_id = $2 AND status = 'creating' AND expires_at > NOW() LIMIT 1 FOR UPDATE`,
+				`SELECT id FROM ${this.schema}.checkout_intents WHERE organization_id = $1 AND customer_id = $2 AND status IN ('creating', 'ready', 'checkout_started') AND expires_at > NOW() LIMIT 1 FOR UPDATE`,
 				[record.organizationId, record.customerId],
 			)) as Array<Record<string, unknown>>;
 			if (creating[0]) return { kind: "in_progress" };
-			await tx.unsafe(
-				`UPDATE ${this.schema}.checkout_intents SET status = 'superseded' WHERE organization_id = $1 AND customer_id = $2 AND status = 'ready'`,
-				[record.organizationId, record.customerId],
-			);
-			await tx.unsafe(
-				`UPDATE ${this.schema}.checkout_carts SET status = 'superseded' WHERE organization_id = $1 AND customer_id = $2 AND status = 'ready'`,
-				[record.organizationId, record.customerId],
-			);
 			const id = randomUUID(),
 				correlationId = randomUUID();
 			const rows = (await tx.unsafe(
-				`INSERT INTO ${this.schema}.checkout_intents (id, correlation_id, organization_id, customer_id, session_id, idempotency_key, offering_id, entitlement_class, duration_days, shopify_product_gid, shopify_variant_gid, policy_version, amount, currency_code, status, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'creating',$15) RETURNING id, correlation_id, organization_id, customer_id, session_id, idempotency_key, offering_id, entitlement_class, duration_days, shopify_product_gid, shopify_variant_gid, policy_version, amount, currency_code, cart_reference, status, expires_at::text, created_at::text`,
+				`INSERT INTO ${this.schema}.checkout_intents (id, correlation_id, organization_id, customer_id, session_id, idempotency_key, offering_id, entitlement_class, duration_days, shopify_product_gid, shopify_variant_gid, policy_version, division_id, division_name_snapshot, staff_access_consent, amount, currency_code, status, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'creating',$18) RETURNING id, correlation_id, organization_id, customer_id, session_id, idempotency_key, offering_id, entitlement_class, duration_days, shopify_product_gid, shopify_variant_gid, policy_version, division_id, division_name_snapshot, staff_access_consent, amount, currency_code, cart_reference, status, expires_at::text, created_at::text`,
 				[
 					id,
 					correlationId,
@@ -133,6 +130,9 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 					record.shopifyProductGid,
 					record.shopifyVariantGid,
 					record.policyVersion,
+					record.divisionId ?? null,
+					record.divisionNameSnapshot ?? null,
+					record.staffAccessConsent ?? false,
 					record.amount,
 					record.currencyCode,
 					record.expiresAtIso,
@@ -223,6 +223,33 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 		)) as Array<Record<string, unknown>>;
 		return rows[0] ? this.cart(rows[0]) : null;
 	}
+	async findIntentByCorrelation(organizationId: string, correlationId: string) {
+		const rows = (await sql.unsafe(
+			`SELECT id, correlation_id, organization_id, customer_id, session_id, idempotency_key, offering_id, entitlement_class, duration_days, shopify_product_gid, shopify_variant_gid, policy_version, division_id, division_name_snapshot, staff_access_consent, amount, currency_code, cart_reference, status, expires_at::text, created_at::text FROM ${this.schema}.checkout_intents WHERE organization_id = $1 AND correlation_id = $2`,
+			[organizationId, correlationId],
+		)) as Array<Record<string, unknown>>;
+		return rows[0] ? this.intent(rows[0]) : null;
+	}
+	async hasProcessingIntent(
+		organizationId: string,
+		customerId: string,
+		nowIso: string,
+	) {
+		const rows = (await sql.unsafe(
+			`SELECT id FROM ${this.schema}.checkout_intents WHERE organization_id = $1 AND customer_id = $2 AND expires_at > $3::timestamptz AND status IN ('creating', 'ready', 'checkout_started') LIMIT 1`,
+			[organizationId, customerId, nowIso],
+		)) as Array<Record<string, unknown>>;
+		return Boolean(rows[0]);
+	}
+	async resolveIntent(
+		intentId: string,
+		resolution: "approved" | "rejected" | "needs_review",
+	) {
+		await sql.unsafe(
+			`UPDATE ${this.schema}.checkout_intents SET status = $1 WHERE id = $2`,
+			[resolution, intentId],
+		);
+	}
 	private cart(row: Record<string, unknown>): CheckoutCartRecord {
 		return {
 			reference: String(row.reference),
@@ -250,6 +277,16 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 			shopifyProductGid: String(row.shopify_product_gid),
 			shopifyVariantGid: String(row.shopify_variant_gid),
 			policyVersion: "v1",
+			divisionId:
+				row.division_id === null || row.division_id === undefined
+					? null
+					: String(row.division_id),
+			divisionNameSnapshot:
+				row.division_name_snapshot === null ||
+				row.division_name_snapshot === undefined
+					? null
+					: String(row.division_name_snapshot),
+			staffAccessConsent: row.staff_access_consent === true,
 			amount: String(row.amount),
 			currencyCode: String(row.currency_code),
 			cartReference:

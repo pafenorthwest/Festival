@@ -2,6 +2,8 @@ import { describe, expect, it } from "bun:test";
 import type { AuthenticatedUser } from "@festival/common";
 import { createApp } from "../src/app.js";
 import type { AuthVerifier } from "../src/auth/types.js";
+import type { MembershipCheckoutService } from "../src/checkout/membership-checkout-service.js";
+import type { MembershipStatusService } from "../src/commerce/membership-status-service.js";
 import type { CustomerAccountService } from "../src/customer/customer-account-service.js";
 import { AppError } from "../src/errors/app-error.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
@@ -51,6 +53,19 @@ function service(overrides: Record<string, unknown> = {}) {
 				updatedAtIso: "2026-08-14T00:00:00.000Z",
 			},
 		}),
+		customerReadAccess: async () => ({
+			organizationId: "customer-owned-organization",
+			customerId: "customer-owned-customer",
+		}),
+		recordCheckoutStaffAccessConsent: async () => ({}),
+		checkoutAccess: async () => ({
+			organizationId: "customer-owned-organization",
+			organizationSlug: "festival",
+			customerId: "customer-owned-customer",
+			sessionId: "opaque-session",
+			integrationVersion: 1,
+			shopifyCustomerAccessToken: "server-only",
+		}),
 		updateCustomerProfile: async () => ({
 			profile: {
 				name: "Updated",
@@ -77,6 +92,8 @@ function service(overrides: Record<string, unknown> = {}) {
 async function app(
 	customerAccountService = service(),
 	publicMembershipProductService?: PublicMembershipProductService,
+	membershipStatusService?: MembershipStatusService,
+	membershipCheckoutService?: MembershipCheckoutService,
 ) {
 	const repository = new InMemoryOrganizationRepository();
 	const organization = await repository.createOrganization({
@@ -111,6 +128,8 @@ async function app(
 		authVerifier: new Auth(),
 		customerAccountService,
 		publicMembershipProductService,
+		membershipStatusService,
+		membershipCheckoutService,
 	});
 	return created.app;
 }
@@ -136,6 +155,121 @@ describe("customer account routes", () => {
 			{ headers: { Authorization: "Bearer admin" } },
 		);
 		expect(response.status).toBe(400);
+	});
+	it("returns only an ownership-scoped membership status handoff", async () => {
+		let accessArgs: unknown[] = [];
+		let statusArgs: unknown[] = [];
+		const a = await app(
+			service({
+				customerReadAccess: async (...args: unknown[]) => {
+					accessArgs = args;
+					return {
+						organizationId: "organization-owned",
+						customerId: "customer-owned",
+					};
+				},
+			}),
+			undefined,
+			{
+				listForCustomer: async (...args: unknown[]) => {
+					statusArgs = args;
+					return {
+						memberships: [
+							{
+								status: "processing",
+								entitlementClass: "teacher_membership",
+								displayName: "Teacher Membership",
+							},
+						],
+					};
+				},
+			} as unknown as MembershipStatusService,
+		);
+		const response = await a.request(
+			"/api/organizations/festival/customer/membership-status",
+			{ headers: { Cookie: "festival_customer_session=opaque-session" } },
+		);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({
+			memberships: [
+				{
+					status: "processing",
+					entitlementClass: "teacher_membership",
+					displayName: "Teacher Membership",
+				},
+			],
+		});
+		expect(accessArgs).toEqual(["festival", "opaque-session"]);
+		expect(statusArgs).toEqual(["organization-owned", "customer-owned"]);
+		const bearer = await a.request(
+			"/api/organizations/festival/customer/membership-status",
+			{ headers: { Authorization: "Bearer admin" } },
+		);
+		expect(bearer.status).toBe(400);
+	});
+	it("requires trusted division and explicit consent fields before checkout", async () => {
+		let checkoutArgs: unknown[] = [];
+		let consentArgs: unknown[] = [];
+		const a = await app(
+			service({
+				recordCheckoutStaffAccessConsent: async (...args: unknown[]) => {
+					consentArgs = args;
+					return {};
+				},
+			}),
+			undefined,
+			undefined,
+			{
+				start: async (...args: unknown[]) => {
+					checkoutArgs = args;
+					return { checkoutUrl: "https://festival.myshopify.com/checkouts/1" };
+				},
+			} as unknown as MembershipCheckoutService,
+		);
+		const headers = {
+			"Content-Type": "application/json",
+			Cookie: "festival_customer_session=opaque-session",
+			Origin: "https://festival.example.com",
+			"X-CSRF-Token": "csrf",
+			"Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+		};
+		const accepted = await a.request(
+			"/api/organizations/festival/customer/checkout",
+			{
+				method: "POST",
+				headers,
+				body: JSON.stringify({
+					offeringId: "offering",
+					divisionId: "division",
+					staffAccessConsent: true,
+				}),
+			},
+		);
+		expect(accepted.status).toBe(200);
+		expect(consentArgs).toEqual([
+			"customer-owned-organization",
+			"customer-owned-customer",
+		]);
+		expect(checkoutArgs).toMatchObject([
+			{
+				offeringId: "offering",
+				divisionId: "division",
+				staffAccessConsent: true,
+				buyerAccessToken: "server-only",
+			},
+		]);
+		const rejected = await a.request(
+			"/api/organizations/festival/customer/checkout",
+			{
+				method: "POST",
+				headers,
+				body: JSON.stringify({
+					offeringId: "offering",
+					staffAccessConsent: false,
+				}),
+			},
+		);
+		expect(rejected.status).toBe(400);
 	});
 	it("reads and updates only the cookie-authenticated customer profile", async () => {
 		let updateArguments: unknown[] = [];

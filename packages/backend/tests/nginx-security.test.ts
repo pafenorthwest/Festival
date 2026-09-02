@@ -27,10 +27,12 @@ describe("repository nginx security policy", () => {
 				"admin/membership-products",
 				"admin/customers",
 				"customer-auth/callback",
-				"customer-auth/start|customer/session|customer/orders",
+				"customer-auth/start|customer/session|customer/orders|customer/membership-status",
 				"customer/membership-purchase/[^/]+",
+				"customer/checkout",
 				"customer/logout",
 				"customer/profile",
+				"shopify/webhooks/orders-paid",
 				"v1/auth/sync",
 				"v1/auth/login-event",
 				"v1/auth/me",
@@ -60,6 +62,13 @@ describe("repository nginx security policy", () => {
 			expect(config).toContain(
 				'add_header X-Content-Type-Options "nosniff" always',
 			);
+			expect(config).toMatch(
+				/location ~ \^\/api\/organizations\/\[\^\/\]\+\/customer\/checkout\$ \{\s+limit_except POST OPTIONS \{ deny all; \}/,
+			);
+			expect(config).toMatch(
+				/location = \/api\/shopify\/webhooks\/orders-paid \{\s+limit_except POST \{ deny all; \}/,
+			);
+			expect(config).not.toContain("location ~ ^/api/shopify/webhooks");
 		});
 	}
 

@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { createFirebaseAuthVerifier } from "./auth/firebase-auth-verifier.js";
@@ -9,6 +10,14 @@ import {
 import { MembershipCheckoutService } from "./checkout/membership-checkout-service.js";
 import { PostgresCheckoutRepository } from "./checkout/postgres-checkout-repository.js";
 import { ShopifyMembershipCheckoutClient } from "./checkout/shopify-membership-checkout-client.js";
+import {
+	InMemoryMembershipCommerceRepository,
+	type MembershipCommerceRepository,
+} from "./commerce/membership-commerce-repository.js";
+import { MembershipStatusService } from "./commerce/membership-status-service.js";
+import { PostgresMembershipCommerceRepository } from "./commerce/postgres-membership-commerce-repository.js";
+import { ShopifyOrderProjectionService } from "./commerce/shopify-order-projection-service.js";
+import { ShopifyWebhookService } from "./commerce/shopify-webhook-service.js";
 import { type AppEnv, LOCAL_API_ORIGINS, loadEnv } from "./config/env.js";
 import type { CustomerAccountRepository } from "./customer/customer-account-repository.js";
 import { CustomerAccountService } from "./customer/customer-account-service.js";
@@ -32,6 +41,7 @@ import type { ShopifyIntegrationService } from "./shopify/shopify-integration-se
 import { ShopifyIntegrationService as DefaultShopifyIntegrationService } from "./shopify/shopify-integration-service.js";
 import { ShopifyMembershipProductService } from "./shopify/shopify-membership-product-service.js";
 import { TokenlessShopifyPublicCatalogClient } from "./shopify/shopify-public-catalog-client.js";
+import { ShopifyWebhookSubscriptionService } from "./shopify/shopify-webhook-subscription-service.js";
 
 export interface CreateAppOptions {
 	env?: AppEnv;
@@ -46,6 +56,23 @@ export interface CreateAppOptions {
 	customerAccountService?: CustomerAccountService;
 	checkoutRepository?: CheckoutRepository;
 	membershipCheckoutService?: MembershipCheckoutService;
+	commerceRepository?: MembershipCommerceRepository;
+	shopifyOrderProjectionService?: ShopifyOrderProjectionService;
+	shopifyWebhookService?: ShopifyWebhookService;
+	membershipStatusService?: MembershipStatusService;
+}
+
+function privateTokenMatches(
+	provided: string | undefined,
+	expected: string | undefined,
+): boolean {
+	if (!provided || !expected) return false;
+	const actualBytes = Buffer.from(provided, "utf8");
+	const expectedBytes = Buffer.from(expected, "utf8");
+	return (
+		actualBytes.length === expectedBytes.length &&
+		timingSafeEqual(actualBytes, expectedBytes)
+	);
 }
 
 export async function createApp(options: CreateAppOptions = {}) {
@@ -87,6 +114,14 @@ export async function createApp(options: CreateAppOptions = {}) {
 		env.festivalSecretKeysJson,
 		env.festivalActiveSecretKeyId,
 	);
+	const shopifyWebhookSubscriptionService = secretKeyring
+		? new ShopifyWebhookSubscriptionService(
+				repository,
+				secretKeyring,
+				shopifyAdminApiClient,
+				env.publicOrigin,
+			)
+		: undefined;
 	const shopifyIntegrationService =
 		options.shopifyIntegrationService ??
 		(secretKeyring
@@ -94,6 +129,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 					repository,
 					secretKeyring,
 					shopifyAdminApiClient,
+					shopifyWebhookSubscriptionService,
 				)
 			: undefined);
 	const shopifyMembershipProductService =
@@ -120,6 +156,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 			repository,
 			shopifyPublicCatalogClient,
 			secretKeyring ?? undefined,
+			shopifyWebhookSubscriptionService,
 		);
 	const customerAccountRepository =
 		options.customerAccountRepository ??
@@ -168,6 +205,15 @@ export async function createApp(options: CreateAppOptions = {}) {
 			: new InMemoryCheckoutRepository());
 	if (checkoutRepository instanceof PostgresCheckoutRepository)
 		await checkoutRepository.ensureReady();
+	const commerceRepository =
+		options.commerceRepository ??
+		(env.databaseSchema
+			? new PostgresMembershipCommerceRepository(env.databaseSchema)
+			: new InMemoryMembershipCommerceRepository(
+					repository,
+					checkoutRepository,
+				));
+	await commerceRepository.ensureReady();
 	const membershipCheckoutService =
 		options.membershipCheckoutService ??
 		(secretKeyring
@@ -176,11 +222,72 @@ export async function createApp(options: CreateAppOptions = {}) {
 					publicMembershipProductService,
 					checkoutRepository,
 					new ShopifyMembershipCheckoutClient(repository, secretKeyring),
+					commerceRepository,
 				)
 			: undefined);
+	const shopifyOrderProjectionService =
+		options.shopifyOrderProjectionService ??
+		new ShopifyOrderProjectionService(
+			repository,
+			checkoutRepository,
+			commerceRepository,
+			shopifyAdminApiClient,
+			secretKeyring,
+			customerAccountRepository,
+		);
+	const shopifyWebhookService =
+		options.shopifyWebhookService ??
+		new ShopifyWebhookService(
+			repository,
+			commerceRepository,
+			secretKeyring,
+			shopifyOrderProjectionService,
+		);
+	const membershipStatusService =
+		options.membershipStatusService ??
+		new MembershipStatusService(repository, commerceRepository);
 
 	const app = new Hono();
 	const allowedApiOrigins = new Set(env.allowedApiOrigins ?? LOCAL_API_ORIGINS);
+	app.post("/api/shopify/webhooks/orders-paid", (c) =>
+		shopifyWebhookService.handle(c),
+	);
+	app.post("/api/internal/reconcile/shopify-orders", async (c) => {
+		const expectedToken = env.reconciliationToken;
+		if (
+			!privateTokenMatches(
+				c.req.header("X-Festival-Reconciliation-Token"),
+				expectedToken,
+			) ||
+			c.req.header("Cookie") !== undefined ||
+			c.req.header("Authorization") !== undefined ||
+			c.req.header("Origin") !== undefined
+		) {
+			return c.json({ error: "Not found." }, 404);
+		}
+		try {
+			const body = await c.req.json();
+			if (
+				!body ||
+				typeof body !== "object" ||
+				Array.isArray(body) ||
+				Object.keys(body).length !== 1 ||
+				typeof (body as { organizationId?: unknown }).organizationId !==
+					"string" ||
+				!(body as { organizationId: string }).organizationId.trim() ||
+				(body as { organizationId: string }).organizationId.length > 256
+			) {
+				return c.json({ error: "Reconciliation request is invalid." }, 400);
+			}
+			return c.json(
+				await shopifyOrderProjectionService.reconcile(
+					(body as { organizationId: string }).organizationId,
+				),
+			);
+		} catch {
+			return c.json({ error: "Shopify order reconciliation failed." }, 503);
+		}
+	});
 
 	app.use(
 		"/api/*",
@@ -208,6 +315,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 			publicMembershipProductService,
 			shopifyIntegrationDiagnosticService,
 			membershipCheckoutService,
+			membershipStatusService,
 		),
 	);
 	app.route(

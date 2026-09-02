@@ -152,4 +152,27 @@ describe("ShopifyIntegrationDiagnosticService", () => {
 			);
 		}
 	});
+
+	it("repairs the paid-order webhook when diagnostics run", async () => {
+		const { repository, organization } = await verifiedRepository();
+		const calls: string[] = [];
+		const service = new ShopifyIntegrationDiagnosticService(
+			repository,
+			new DiagnosticClient(),
+			undefined,
+			{
+				async reconcileForTenant(tenant) {
+					calls.push(tenant.organization.id);
+				},
+			},
+		);
+
+		const result = await service.runForTenant(tenantFor(organization));
+		expect(calls).toEqual([organization.id]);
+		expect(result.checks[0]).toEqual({
+			id: "orders_paid_webhook",
+			status: "passed",
+			message: "Paid-order webhook subscription is registered.",
+		});
+	});
 });
