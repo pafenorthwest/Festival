@@ -72,6 +72,22 @@ class FakeWebhookClient implements ShopifyWebhookSubscriptionClient {
 }
 
 describe("ShopifyWebhookSubscriptionService", () => {
+	it("rejects a missing public callback origin before Shopify access", () => {
+		const client = new FakeWebhookClient();
+		expect(
+			() =>
+				new ShopifyWebhookSubscriptionService(
+					new InMemoryOrganizationRepository(),
+					keyring(),
+					client,
+					undefined,
+				),
+		).toThrow(
+			"FESTIVAL_PUBLIC_ORIGIN is required when Shopify services are enabled.",
+		);
+		expect(client.calls).toHaveLength(0);
+	});
+
 	it("uses the verified tenant and exact paid-order endpoint", async () => {
 		const repository = new InMemoryOrganizationRepository();
 		const organization = await repository.createOrganization({

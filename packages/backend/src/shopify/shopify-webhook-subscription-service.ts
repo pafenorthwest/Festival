@@ -17,12 +17,17 @@ import type {
 export const SHOPIFY_ORDERS_PAID_WEBHOOK_PATH =
 	"/api/shopify/webhooks/orders-paid";
 
-function callbackUrl(publicOrigin: string): string {
+function callbackUrl(publicOrigin: string | undefined): string {
+	if (!publicOrigin) {
+		throw new Error(
+			"FESTIVAL_PUBLIC_ORIGIN is required when Shopify services are enabled.",
+		);
+	}
 	let origin: URL;
 	try {
 		origin = new URL(publicOrigin);
 	} catch {
-		throw new AppError("Festival public origin is invalid.", 503);
+		throw new Error("FESTIVAL_PUBLIC_ORIGIN is invalid.");
 	}
 	if (
 		origin.protocol !== "https:" ||
@@ -30,9 +35,8 @@ function callbackUrl(publicOrigin: string): string {
 		origin.password ||
 		origin.port
 	) {
-		throw new AppError(
-			"Festival public origin must be an external HTTPS origin.",
-			503,
+		throw new Error(
+			"FESTIVAL_PUBLIC_ORIGIN must be an external HTTPS origin without credentials or a port.",
 		);
 	}
 	return new URL(SHOPIFY_ORDERS_PAID_WEBHOOK_PATH, origin).toString();
@@ -40,13 +44,16 @@ function callbackUrl(publicOrigin: string): string {
 
 export class ShopifyWebhookSubscriptionService {
 	private readonly reconciliationLocks = new Map<string, Promise<void>>();
+	private readonly ordersPaidCallbackUrl: string;
 
 	constructor(
 		private readonly repository: OrganizationRepository,
 		private readonly secretKeyring: ShopifySecretKeyring,
 		private readonly client: ShopifyWebhookSubscriptionClient,
-		private readonly publicOrigin: string | undefined,
-	) {}
+		publicOrigin: string | undefined,
+	) {
+		this.ordersPaidCallbackUrl = callbackUrl(publicOrigin);
+	}
 
 	async reconcileForTenant(tenant: TenantContext): Promise<void> {
 		return this.withOrganizationLock(tenant.organization.id, async () =>
@@ -57,9 +64,6 @@ export class ShopifyWebhookSubscriptionService {
 	private async reconcileUnlockedForTenant(
 		tenant: TenantContext,
 	): Promise<void> {
-		if (!this.publicOrigin) {
-			throw new AppError("Festival public origin is not configured.", 503);
-		}
 		const integration = await this.repository.getShopifyIntegration(
 			tenant.organization.id,
 		);
@@ -90,7 +94,7 @@ export class ShopifyWebhookSubscriptionService {
 		try {
 			await this.client.reconcileOrdersPaidWebhook(
 				context,
-				callbackUrl(this.publicOrigin),
+				this.ordersPaidCallbackUrl,
 			);
 		} catch (error) {
 			if (error instanceof AppError) throw error;
