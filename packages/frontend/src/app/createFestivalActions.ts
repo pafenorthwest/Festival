@@ -410,7 +410,9 @@ export function createFestivalActions(
 			});
 			state.setStatusMessage(
 				response.settings.verificationStatus === "ok"
-					? "Shopify credentials saved and verified."
+					? response.ordersPaidWebhook.status === "ready"
+						? "Shopify credentials and paid-order webhook are ready."
+						: "Shopify credentials are verified; the paid-order webhook needs attention."
 					: "Shopify credentials saved, but verification failed.",
 			);
 		} catch (error) {

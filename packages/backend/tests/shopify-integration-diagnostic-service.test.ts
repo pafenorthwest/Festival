@@ -1,7 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { OrganizationRecord } from "@festival/common";
 import type { TenantContext } from "../src/auth/tenant-context.js";
-import { AppError } from "../src/errors/app-error.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
 import { ShopifyIntegrationDiagnosticService } from "../src/shopify/shopify-integration-diagnostic-service.js";
 import type {
@@ -135,22 +134,18 @@ describe("ShopifyIntegrationDiagnosticService", () => {
 
 		const verified = await verifiedRepository();
 		client.error = new Error("sensitive-upstream-canary");
-		try {
-			await new ShopifyIntegrationDiagnosticService(
-				verified.repository,
-				client,
-			).runForTenant(tenantFor(verified.organization));
-			throw new Error("Expected diagnostic to reject.");
-		} catch (error) {
-			expect(error).toBeInstanceOf(AppError);
-			expect((error as AppError).status).toBe(503);
-			expect((error as Error).message).toBe(
-				"Shopify diagnostics are temporarily unavailable.",
-			);
-			expect((error as Error).message).not.toContain(
-				"sensitive-upstream-canary",
-			);
-		}
+		const failed = await new ShopifyIntegrationDiagnosticService(
+			verified.repository,
+			client,
+		).runForTenant(tenantFor(verified.organization));
+		expect(failed.checks).toEqual([
+			{
+				id: "public_storefront_access",
+				status: "failed",
+				message: "Public Storefront diagnostics are temporarily unavailable.",
+			},
+		]);
+		expect(JSON.stringify(failed)).not.toContain("sensitive-upstream-canary");
 	});
 
 	it("repairs the paid-order webhook when diagnostics run", async () => {
@@ -163,6 +158,10 @@ describe("ShopifyIntegrationDiagnosticService", () => {
 			{
 				async reconcileForTenant(tenant) {
 					calls.push(tenant.organization.id);
+					return {
+						status: "ready" as const,
+						message: "Paid-order webhook subscription is registered.",
+					};
 				},
 			},
 		);
@@ -174,5 +173,41 @@ describe("ShopifyIntegrationDiagnosticService", () => {
 			status: "passed",
 			message: "Paid-order webhook subscription is registered.",
 		});
+	});
+
+	it("returns webhook and Storefront results independently when both fail", async () => {
+		const { repository, organization } = await verifiedRepository();
+		const client = new DiagnosticClient();
+		client.error = new Error("storefront-secret-canary");
+		const result = await new ShopifyIntegrationDiagnosticService(
+			repository,
+			client,
+			undefined,
+			{
+				async reconcileForTenant() {
+					return {
+						status: "failed" as const,
+						message: "Shopify protected customer data access is required.",
+						failureCategory: "protected_data" as const,
+						requestId: "request-123",
+					};
+				},
+			},
+		).runForTenant(tenantFor(organization));
+		expect(result.checks).toEqual([
+			{
+				id: "orders_paid_webhook",
+				status: "failed",
+				message: "Shopify protected customer data access is required.",
+				failureCategory: "protected_data",
+				requestId: "request-123",
+			},
+			{
+				id: "public_storefront_access",
+				status: "failed",
+				message: "Public Storefront diagnostics are temporarily unavailable.",
+			},
+		]);
+		expect(JSON.stringify(result)).not.toContain("storefront-secret-canary");
 	});
 });

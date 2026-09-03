@@ -35,6 +35,14 @@ describe("Shopify integration repository", () => {
 				write_orders: "disabled",
 			},
 		});
+		await repository.updateShopifyWebhookReadiness({
+			organizationId: org.id,
+			status: "failed",
+			checkedAtIso: "2026-08-12T12:01:00.000Z",
+			message: "Safe webhook failure.",
+			failureCategory: "permission",
+			requestId: "shopify-request-1",
+		});
 
 		const rotated = await repository.upsertShopifyIntegration({
 			organizationId: org.id,
@@ -49,6 +57,49 @@ describe("Shopify integration repository", () => {
 		expect(rotated.verifiedShopGid).toBeUndefined();
 		expect(rotated.grantedScopes).toEqual([]);
 		expect(rotated.capabilities.write_products).toBe("missing");
+		expect(rotated.webhookReadinessStatus).toBe("unknown");
+		expect(rotated.webhookCheckedAtIso).toBeUndefined();
+		expect(rotated.webhookError).toBeUndefined();
+	});
+
+	it("persists current webhook readiness independently of store verification", async () => {
+		const repository = new InMemoryOrganizationRepository();
+		const org = await organization(repository, "Festival One", "one");
+		await repository.upsertShopifyIntegration({
+			organizationId: org.id,
+			storeDomain: "one.myshopify.com",
+			clientId: "client-1",
+			encryptedClientSecret: "opaque-envelope",
+		});
+		await repository.updateShopifyWebhookReadiness({
+			organizationId: org.id,
+			status: "checking",
+			checkedAtIso: "2026-08-12T12:00:00.000Z",
+		});
+		await repository.updateShopifyWebhookReadiness({
+			organizationId: org.id,
+			status: "ready",
+			checkedAtIso: "2026-08-12T12:01:00.000Z",
+		});
+		const ready = await repository.getShopifyIntegration(org.id);
+		expect(ready?.webhookReadinessStatus).toBe("ready");
+		expect(ready?.verificationStatus).toBe("unknown");
+		await repository.updateShopifyWebhookReadiness({
+			organizationId: org.id,
+			status: "failed",
+			checkedAtIso: "2026-08-12T12:02:00.000Z",
+			message: "Safe failure.",
+			failureCategory: "protected_data",
+			requestId: "request-2",
+		});
+		const failed = await repository.getShopifyIntegration(org.id);
+		expect(failed).toMatchObject({
+			webhookReadinessStatus: "failed",
+			webhookError: "Safe failure.",
+			webhookFailureCategory: "protected_data",
+			webhookRequestId: "request-2",
+			verificationStatus: "unknown",
+		});
 	});
 
 	it("rejects configured and verified shop ownership conflicts", async () => {

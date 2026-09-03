@@ -7,6 +7,8 @@ import {
 	ShopifyScopeError,
 	ShopifyTransportError,
 	ShopifyUserError,
+	type ShopifyWebhookFailureStage,
+	ShopifyWebhookOperationError,
 } from "./errors.js";
 import type {
 	ShopifyAdminOperationContext,
@@ -427,6 +429,67 @@ function throwIfUserErrors(
 	);
 }
 
+function webhookFailureCategory(messages: readonly string[]) {
+	const normalized = messages.join(" ").toLowerCase();
+	if (
+		normalized.includes("protected customer") ||
+		normalized.includes("not approved")
+	) {
+		return "protected_data" as const;
+	}
+	if (
+		normalized.includes("callback") ||
+		normalized.includes("uri") ||
+		normalized.includes("url") ||
+		normalized.includes("https")
+	) {
+		return "callback" as const;
+	}
+	if (
+		normalized.includes("permission") ||
+		normalized.includes("access") ||
+		normalized.includes("scope") ||
+		normalized.includes("authorized")
+	) {
+		return "permission" as const;
+	}
+	return "upstream" as const;
+}
+
+function webhookOperationError(
+	error: unknown,
+	stage: ShopifyWebhookFailureStage,
+): ShopifyWebhookOperationError {
+	if (error instanceof ShopifyWebhookOperationError) return error;
+	if (error instanceof ShopifyScopeError) {
+		return new ShopifyWebhookOperationError(stage, "missing_scope");
+	}
+	if (error instanceof ShopifyTransportError) {
+		return new ShopifyWebhookOperationError(stage, "transport");
+	}
+	if (error instanceof ShopifyIntegrationError) {
+		return new ShopifyWebhookOperationError(
+			stage,
+			error.failureCategory === "credentials" ? "permission" : "upstream",
+			error.requestId,
+		);
+	}
+	return new ShopifyWebhookOperationError(stage, "upstream");
+}
+
+function throwIfWebhookUserErrors(
+	userErrors: ShopifyUserErrorPayload[] = [],
+	stage: ShopifyWebhookFailureStage,
+	requestId?: string,
+): void {
+	if (userErrors.length === 0) return;
+	throw new ShopifyWebhookOperationError(
+		stage,
+		webhookFailureCategory(userErrors.map((error) => error.message)),
+		requestId,
+	);
+}
+
 export class ShopifyAdminApiClient
 	implements
 		ShopifyConnectivityTester,
@@ -504,21 +567,28 @@ export class ShopifyAdminApiClient
 		context: ShopifyAdminOperationContext,
 		callbackUrl: string,
 	): Promise<ShopifyAdminResult<void>> {
-		this.assertOperationContext(context, "read_orders");
+		try {
+			this.assertOperationContext(context, "read_orders");
+		} catch (error) {
+			throw webhookOperationError(error, "access_token");
+		}
 		if (
 			!/^https:\/\/[^/?#]+\/api\/shopify\/webhooks\/orders-paid$/.test(
 				callbackUrl,
 			)
 		) {
-			throw new ShopifyCredentialsError(
-				"Shopify webhook callback URL is invalid.",
-			);
+			throw new ShopifyWebhookOperationError("subscription_create", "callback");
 		}
-		const { accessToken } = await this.fetchOperationAccessToken(
-			context,
-			"read_orders",
-		);
-		const subscriptions = await this.graphqlRequest<{
+		let accessToken: string;
+		try {
+			({ accessToken } = await this.fetchOperationAccessToken(
+				context,
+				"read_orders",
+			));
+		} catch (error) {
+			throw webhookOperationError(error, "access_token");
+		}
+		const subscriptions = await this.webhookGraphqlRequest<{
 			webhookSubscriptions?: {
 				nodes?: Array<{
 					id?: string;
@@ -534,6 +604,8 @@ export class ShopifyAdminApiClient
 					nodes { id topic uri }
 				}
 			}`,
+			{},
+			"subscription_list",
 		);
 		const matching = (
 			subscriptions.value.webhookSubscriptions?.nodes ?? []
@@ -546,7 +618,7 @@ export class ShopifyAdminApiClient
 		let keep = exact.shift();
 		let requestId = subscriptions.requestId;
 		if (!keep) {
-			const created = await this.graphqlRequest<{
+			const created = await this.webhookGraphqlRequest<{
 				webhookSubscriptionCreate?: {
 					webhookSubscription?: { id?: string; topic?: string; uri?: string };
 					userErrors?: ShopifyUserErrorPayload[];
@@ -561,18 +633,24 @@ export class ShopifyAdminApiClient
 					}
 				}`,
 				{ uri: callbackUrl },
+				"subscription_create",
 			);
 			const payload = created.value.webhookSubscriptionCreate;
-			throwIfUserErrors(payload?.userErrors, created.requestId);
+			throwIfWebhookUserErrors(
+				payload?.userErrors,
+				"subscription_create",
+				created.requestId,
+			);
 			const createdSubscription = payload?.webhookSubscription;
 			if (
 				!createdSubscription?.id ||
 				createdSubscription.topic !== "ORDERS_PAID" ||
 				createdSubscription.uri !== callbackUrl
 			) {
-				throw new ShopifyAdminApiError(
-					"Shopify webhook creation returned an incomplete subscription.",
-					{ requestId: created.requestId },
+				throw new ShopifyWebhookOperationError(
+					"subscription_create",
+					"upstream",
+					created.requestId,
 				);
 			}
 			keep = createdSubscription;
@@ -580,7 +658,7 @@ export class ShopifyAdminApiClient
 		}
 		for (const subscription of matching) {
 			if (subscription.id === keep.id) continue;
-			const deleted = await this.graphqlRequest<{
+			const deleted = await this.webhookGraphqlRequest<{
 				webhookSubscriptionDelete?: {
 					deletedWebhookSubscriptionId?: string;
 					userErrors?: ShopifyUserErrorPayload[];
@@ -595,18 +673,21 @@ export class ShopifyAdminApiClient
 					}
 				}`,
 				{ id: subscription.id },
+				"subscription_delete",
 			);
-			throwIfUserErrors(
+			throwIfWebhookUserErrors(
 				deleted.value.webhookSubscriptionDelete?.userErrors,
+				"subscription_delete",
 				deleted.requestId,
 			);
 			if (
 				deleted.value.webhookSubscriptionDelete
 					?.deletedWebhookSubscriptionId !== subscription.id
 			) {
-				throw new ShopifyAdminApiError(
-					"Shopify webhook deletion was not confirmed.",
-					{ requestId: deleted.requestId },
+				throw new ShopifyWebhookOperationError(
+					"subscription_delete",
+					"upstream",
+					deleted.requestId,
 				);
 			}
 			requestId = deleted.requestId ?? requestId;
@@ -1342,6 +1423,49 @@ export class ShopifyAdminApiClient
 		}
 
 		return { value: payload.data, requestId: response.requestId };
+	}
+
+	private async webhookGraphqlRequest<TData>(
+		storeDomain: string,
+		accessToken: string,
+		query: string,
+		variables: Record<string, unknown>,
+		stage: ShopifyWebhookFailureStage,
+	): Promise<ShopifyAdminResult<TData>> {
+		try {
+			const response = await this.postJson<GraphqlResponse<TData>>(
+				this.shopifyUrl(
+					storeDomain,
+					`/admin/api/${SHOPIFY_ADMIN_API_VERSION}/graphql.json`,
+				),
+				{
+					headers: {
+						"Content-Type": "application/json",
+						"X-Shopify-Access-Token": accessToken,
+					},
+					body: JSON.stringify({ query, variables }),
+				},
+				"admin",
+			);
+			const payload = response.value;
+			if (payload.errors && payload.errors.length > 0) {
+				throw new ShopifyWebhookOperationError(
+					stage,
+					webhookFailureCategory(payload.errors.map((error) => error.message)),
+					response.requestId,
+				);
+			}
+			if (!payload.data) {
+				throw new ShopifyWebhookOperationError(
+					stage,
+					"upstream",
+					response.requestId,
+				);
+			}
+			return { value: payload.data, requestId: response.requestId };
+		} catch (error) {
+			throw webhookOperationError(error, stage);
+		}
 	}
 
 	private shopifyUrl(storeDomain: string, path: string): URL {

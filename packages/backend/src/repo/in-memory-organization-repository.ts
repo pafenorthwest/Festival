@@ -29,6 +29,7 @@ import type {
 	ProductRecord,
 	ShopifyIntegrationRecord,
 	UpdateShopifyVerificationInput,
+	UpdateShopifyWebhookReadinessInput,
 	UpsertShopifyIntegrationInput,
 } from "./organization-repository.js";
 import { ShopifyShopOwnershipError } from "./organization-repository.js";
@@ -617,10 +618,32 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			grantedScopes: [],
 			capabilities: { ...EMPTY_SHOPIFY_CAPABILITIES },
 			integrationVersion: (existing?.integrationVersion ?? 0) + 1,
+			webhookReadinessStatus: "unknown",
 			createdAtIso: existing?.createdAtIso ?? now,
 			updatedAtIso: now,
 		};
 
+		this.shopifyIntegrations.set(input.organizationId, record);
+		return record;
+	}
+
+	async updateShopifyWebhookReadiness(
+		input: UpdateShopifyWebhookReadinessInput,
+	): Promise<ShopifyIntegrationRecord> {
+		const existing = this.shopifyIntegrations.get(input.organizationId);
+		if (!existing) {
+			throw new Error("Shopify integration not found.");
+		}
+		const record: ShopifyIntegrationRecord = {
+			...existing,
+			webhookReadinessStatus: input.status,
+			webhookCheckedAtIso: input.checkedAtIso,
+			webhookError: input.status === "failed" ? input.message : undefined,
+			webhookFailureCategory:
+				input.status === "failed" ? input.failureCategory : undefined,
+			webhookRequestId: input.status === "failed" ? input.requestId : undefined,
+			updatedAtIso: new Date().toISOString(),
+		};
 		this.shopifyIntegrations.set(input.organizationId, record);
 		return record;
 	}

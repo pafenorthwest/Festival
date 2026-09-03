@@ -16,6 +16,8 @@ import type {
 	ShopifyCapabilityDiagnostics,
 	ShopifyFailureCategory,
 	ShopifyVerificationStatus,
+	ShopifyWebhookFailureCategory,
+	ShopifyWebhookReadinessStatus,
 } from "@festival/common";
 import {
 	assertValidEntitlementDurationDays,
@@ -33,6 +35,7 @@ import type {
 	ProductRecord,
 	ShopifyIntegrationRecord,
 	UpdateShopifyVerificationInput,
+	UpdateShopifyWebhookReadinessInput,
 	UpsertShopifyIntegrationInput,
 } from "./organization-repository.js";
 import { ShopifyShopOwnershipError } from "./organization-repository.js";
@@ -112,6 +115,11 @@ interface ShopifyIntegrationRow {
 	last_tested_at: string | null;
 	last_error: string | null;
 	last_failure_category: ShopifyFailureCategory | null;
+	webhook_readiness_status: ShopifyWebhookReadinessStatus;
+	webhook_checked_at: string | null;
+	webhook_error: string | null;
+	webhook_failure_category: ShopifyWebhookFailureCategory | null;
+	webhook_request_id: string | null;
 	created_at: string;
 	updated_at: string;
 }
@@ -298,6 +306,11 @@ function mapShopifyIntegration(
 		lastTestedAtIso: row.last_tested_at ?? undefined,
 		lastError: row.last_error ?? undefined,
 		lastFailureCategory: row.last_failure_category ?? undefined,
+		webhookReadinessStatus: row.webhook_readiness_status,
+		webhookCheckedAtIso: row.webhook_checked_at ?? undefined,
+		webhookError: row.webhook_error ?? undefined,
+		webhookFailureCategory: row.webhook_failure_category ?? undefined,
+		webhookRequestId: row.webhook_request_id ?? undefined,
 		createdAtIso: row.created_at,
 		updatedAtIso: row.updated_at,
 	};
@@ -458,6 +471,11 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				last_tested_at TIMESTAMPTZ NULL,
 				last_error TEXT NULL,
 				last_failure_category TEXT NULL,
+				webhook_readiness_status TEXT NOT NULL DEFAULT 'unknown',
+				webhook_checked_at TIMESTAMPTZ NULL,
+				webhook_error TEXT NULL,
+				webhook_failure_category TEXT NULL,
+				webhook_request_id TEXT NULL,
 				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 			);
@@ -577,6 +595,11 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				ADD COLUMN IF NOT EXISTS can_read_orders BOOLEAN NOT NULL DEFAULT FALSE,
 				ADD COLUMN IF NOT EXISTS integration_version BIGINT NOT NULL DEFAULT 1,
 				ADD COLUMN IF NOT EXISTS last_failure_category TEXT NULL,
+				ADD COLUMN IF NOT EXISTS webhook_readiness_status TEXT NOT NULL DEFAULT 'unknown',
+				ADD COLUMN IF NOT EXISTS webhook_checked_at TIMESTAMPTZ NULL,
+				ADD COLUMN IF NOT EXISTS webhook_error TEXT NULL,
+				ADD COLUMN IF NOT EXISTS webhook_failure_category TEXT NULL,
+				ADD COLUMN IF NOT EXISTS webhook_request_id TEXT NULL,
 				DROP COLUMN IF EXISTS encrypted_offline_access_token,
 				DROP COLUMN IF EXISTS installed_at,
 				DROP COLUMN IF EXISTS oauth_state,
@@ -585,6 +608,10 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			ALTER TABLE ${schema}.shopify_integrations
 				DROP CONSTRAINT IF EXISTS shopify_integrations_verification_status_check,
 				DROP CONSTRAINT IF EXISTS shopify_integrations_failure_category_check,
+				DROP CONSTRAINT IF EXISTS shopify_integrations_webhook_status_check,
+				DROP CONSTRAINT IF EXISTS shopify_integrations_webhook_failure_category_check,
+				DROP CONSTRAINT IF EXISTS shopify_integrations_webhook_result_check,
+				DROP CONSTRAINT IF EXISTS shopify_integrations_webhook_request_id_check,
 				DROP CONSTRAINT IF EXISTS shopify_integrations_version_check;
 
 			ALTER TABLE ${schema}.shopify_integrations
@@ -600,6 +627,41 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 							'transport',
 							'upstream'
 						)
+					),
+				ADD CONSTRAINT shopify_integrations_webhook_status_check
+					CHECK (webhook_readiness_status IN ('unknown', 'checking', 'ready', 'failed')),
+				ADD CONSTRAINT shopify_integrations_webhook_failure_category_check
+					CHECK (
+						webhook_failure_category IS NULL OR webhook_failure_category IN (
+							'configuration',
+							'missing_scope',
+							'permission',
+							'protected_data',
+							'callback',
+							'transport',
+							'upstream'
+						)
+					),
+				ADD CONSTRAINT shopify_integrations_webhook_result_check
+					CHECK (
+						(webhook_readiness_status = 'unknown'
+							AND webhook_checked_at IS NULL
+							AND webhook_error IS NULL
+							AND webhook_failure_category IS NULL
+							AND webhook_request_id IS NULL)
+						OR (webhook_readiness_status IN ('checking', 'ready')
+							AND webhook_checked_at IS NOT NULL
+							AND webhook_error IS NULL
+							AND webhook_failure_category IS NULL
+							AND webhook_request_id IS NULL)
+						OR (webhook_readiness_status = 'failed'
+							AND webhook_checked_at IS NOT NULL
+							AND webhook_error IS NOT NULL
+							AND webhook_failure_category IS NOT NULL)
+					),
+				ADD CONSTRAINT shopify_integrations_webhook_request_id_check
+					CHECK (
+						webhook_request_id IS NULL OR webhook_request_id ~ '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'
 					),
 				ADD CONSTRAINT shopify_integrations_version_check
 					CHECK (integration_version > 0);
@@ -1435,6 +1497,11 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				last_tested_at,
 				last_error,
 				last_failure_category,
+				webhook_readiness_status,
+				webhook_checked_at,
+				webhook_error,
+				webhook_failure_category,
+				webhook_request_id,
 				created_at,
 				updated_at
 			 FROM ${this.schema}.shopify_integrations
@@ -1513,6 +1580,11 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				last_tested_at = NULL,
 				last_error = NULL,
 				last_failure_category = NULL,
+				webhook_readiness_status = 'unknown',
+				webhook_checked_at = NULL,
+				webhook_error = NULL,
+				webhook_failure_category = NULL,
+				webhook_request_id = NULL,
 				updated_at = NOW()
 			RETURNING
 				organization_id,
@@ -1532,6 +1604,11 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				last_tested_at,
 				last_error,
 				last_failure_category,
+				webhook_readiness_status,
+				webhook_checked_at,
+				webhook_error,
+				webhook_failure_category,
+				webhook_request_id,
 				created_at,
 				updated_at`,
 				[
@@ -1582,11 +1659,12 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				last_failure_category = $12,
 				updated_at = NOW()
 			 WHERE organization_id = $1
-			 RETURNING
+			RETURNING
 				organization_id,
 				store_domain,
 				client_id,
 				encrypted_client_secret,
+				encrypted_storefront_private_token,
 				verification_status,
 				verified_shop_gid,
 				verified_shop_domain,
@@ -1599,6 +1677,11 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				last_tested_at,
 				last_error,
 				last_failure_category,
+				webhook_readiness_status,
+				webhook_checked_at,
+				webhook_error,
+				webhook_failure_category,
+				webhook_request_id,
 				created_at,
 				updated_at`,
 				[
@@ -1624,6 +1707,67 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			throw new Error("Shopify integration not found.");
 		}
 
+		return mapShopifyIntegration(row);
+	}
+
+	async updateShopifyWebhookReadiness(
+		input: UpdateShopifyWebhookReadinessInput,
+	): Promise<ShopifyIntegrationRecord> {
+		await this.ensureReady();
+		if (
+			input.requestId !== undefined &&
+			!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(input.requestId)
+		) {
+			throw new Error("Shopify webhook request ID is invalid.");
+		}
+
+		const [row] = (await sql.unsafe(
+			`UPDATE ${this.schema}.shopify_integrations
+			 SET
+				webhook_readiness_status = $2,
+				webhook_checked_at = $3,
+				webhook_error = $4,
+				webhook_failure_category = $5,
+				webhook_request_id = $6,
+				updated_at = NOW()
+			 WHERE organization_id = $1
+			 RETURNING
+				organization_id,
+				store_domain,
+				client_id,
+				encrypted_client_secret,
+				encrypted_storefront_private_token,
+				verification_status,
+				verified_shop_gid,
+				verified_shop_domain,
+				granted_scopes,
+				can_read_products,
+				can_write_products,
+				can_read_orders,
+				integration_version,
+				verified_at,
+				last_tested_at,
+				last_error,
+				last_failure_category,
+				webhook_readiness_status,
+				webhook_checked_at,
+				webhook_error,
+				webhook_failure_category,
+				webhook_request_id,
+				created_at,
+				updated_at`,
+			[
+				input.organizationId,
+				input.status,
+				input.checkedAtIso,
+				input.status === "failed" ? input.message : null,
+				input.status === "failed" ? input.failureCategory : null,
+				input.status === "failed" ? (input.requestId ?? null) : null,
+			],
+		)) as ShopifyIntegrationRow[];
+		if (!row) {
+			throw new Error("Shopify integration not found.");
+		}
 		return mapShopifyIntegration(row);
 	}
 
