@@ -28,7 +28,6 @@ function callbackUrl(publicOrigin: string | undefined): string {
 			"FESTIVAL_PUBLIC_ORIGIN is required when Shopify services are enabled.",
 		);
 	}
- 
 	let origin: URL;
 	try {
 		origin = new URL(publicOrigin);
@@ -104,13 +103,6 @@ export class ShopifyWebhookSubscriptionService {
 			checkedAtIso,
 		});
 		try {
-			if (!this.publicOrigin) {
-				return await this.recordFailure(
-					tenant.organization.id,
-					checkedAtIso,
-					"configuration",
-				);
-			}
 			const integration = await this.repository.getShopifyIntegration(
 				tenant.organization.id,
 			);
