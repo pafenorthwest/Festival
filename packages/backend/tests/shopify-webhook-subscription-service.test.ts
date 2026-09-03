@@ -75,6 +75,22 @@ class FakeWebhookClient implements ShopifyWebhookSubscriptionClient {
 }
 
 describe("ShopifyWebhookSubscriptionService", () => {
+	it("rejects a missing public callback origin before Shopify access", () => {
+		const client = new FakeWebhookClient();
+		expect(
+			() =>
+				new ShopifyWebhookSubscriptionService(
+					new InMemoryOrganizationRepository(),
+					keyring(),
+					client,
+					undefined,
+				),
+		).toThrow(
+			"FESTIVAL_PUBLIC_ORIGIN is required when Shopify services are enabled.",
+		);
+		expect(client.calls).toHaveLength(0);
+	});
+
 	it("uses the verified tenant and exact paid-order endpoint", async () => {
 		const repository = new InMemoryOrganizationRepository();
 		const organization = await repository.createOrganization({
@@ -241,7 +257,7 @@ describe("ShopifyWebhookSubscriptionService", () => {
 		expect(stored?.webhookRequestId).toBeUndefined();
 	});
 
-	it("reports configuration and missing-scope readiness without calling Shopify", async () => {
+	it("reports missing-scope readiness without calling Shopify", async () => {
 		const repository = new InMemoryOrganizationRepository();
 		const organization = await repository.createOrganization({
 			name: "PAFE",
@@ -257,16 +273,6 @@ describe("ShopifyWebhookSubscriptionService", () => {
 				organizationId: organization.id,
 				purpose: SHOPIFY_CLIENT_SECRET_PURPOSE,
 			}),
-		});
-		const missingOrigin = await new ShopifyWebhookSubscriptionService(
-			repository,
-			secrets,
-			client,
-			undefined,
-		).reconcileForTenant(tenant(organization));
-		expect(missingOrigin).toMatchObject({
-			status: "failed",
-			failureCategory: "configuration",
 		});
 		await repository.updateShopifyVerification({
 			organizationId: organization.id,

@@ -440,12 +440,29 @@ describe("organization routes", () => {
 		).rejects.toThrow("Shopify secret keyring configuration is invalid.");
 	});
 
-	it("constructs Shopify services from a valid keyring configuration", async () => {
+	it("requires a public callback origin with a valid keyring", async () => {
+		await expect(
+			createApp({
+				env: {
+					port: 3000,
+					festivalSecretKeysJson: JSON.stringify({ test: TEST_AES_KEY }),
+					festivalActiveSecretKeyId: "test",
+				},
+				repository: new InMemoryOrganizationRepository(),
+				authVerifier: new FakeAuthVerifier({}),
+			}),
+		).rejects.toThrow(
+			"FESTIVAL_PUBLIC_ORIGIN is required when Shopify services are enabled.",
+		);
+	});
+
+	it("constructs Shopify services from a valid keyring and public origin", async () => {
 		const { app } = await createApp({
 			env: {
 				port: 3000,
 				festivalSecretKeysJson: JSON.stringify({ test: TEST_AES_KEY }),
 				festivalActiveSecretKeyId: "test",
+				publicOrigin: "https://festival.example.com",
 			},
 			repository: new InMemoryOrganizationRepository(),
 			authVerifier: new FakeAuthVerifier({

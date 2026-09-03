@@ -21,3 +21,4 @@ number,taskname,first_create_date,first_create_hhmmss,first_create_git_hash
 20,app-owned-shopify-webhooks,2026-09-02,000000,-------
 21,issue-94-customer-membership-status,2026-09-01,000000,f09d0ee
 22,issue-113-webhook-readiness-results,2026-09-02,210436,9a2752f
+23,issue-112-webhook-registration-diagnosis,2026-09-02,205123,9a2752f
