@@ -345,13 +345,18 @@ describe("organization onboarding integration", () => {
 		expect(pageSource).toContain("Run diagnostics");
 		expect(pageSource).toContain("Running diagnostics…");
 		expect(pageSource).toContain("No diagnostics run yet.");
-		expect(pageSource).toContain("Checking public Storefront access…");
+		expect(pageSource).toContain(
+			"Checking paid-order webhook and public Storefront access…",
+		);
 		expect(pageSource).toContain('result.status === "passed"');
 		expect(pageSource).toContain("Action required");
 		expect(pageSource).toContain("Diagnostics unavailable");
 		expect(pageSource).toContain('settings?.verificationStatus === "ok"');
 		expect(pageSource).toContain("Boolean(settings.verifiedShopDomain)");
-		expect(pageSource).toContain("setDiagnosticResult(null)");
+		expect(pageSource).toContain("setDiagnosticResults([])");
+		expect(pageSource).toContain("Paid-order webhook");
+		expect(pageSource).toContain("Store and credentials");
+		expect(pageSource).toContain("Granted capabilities");
 		expect(pageSource).toContain('setDiagnosticError("")');
 		expect(styles).toContain(".shopify-diagnostics");
 		expect(styles).toContain(".shopify-diagnostic-passed");

@@ -47,38 +47,59 @@ export class ShopifyIntegrationDiagnosticService {
 			throw new AppError("Shopify integration has not been verified.", 409);
 		}
 
-		try {
-			if (this.webhookSubscriptions) {
-				await this.webhookSubscriptions.reconcileForTenant(tenant);
+		const webhookCheck = this.webhookSubscriptions
+			? (async () => {
+					try {
+						const result =
+							await this.webhookSubscriptions?.reconcileForTenant(tenant);
+						if (!result) throw new Error("Webhook diagnostic is unavailable.");
+						return {
+							id: "orders_paid_webhook" as const,
+							status:
+								result.status === "ready"
+									? ("passed" as const)
+									: ("failed" as const),
+							message: result.message,
+							...(result.failureCategory
+								? { failureCategory: result.failureCategory }
+								: {}),
+							...(result.requestId ? { requestId: result.requestId } : {}),
+						};
+					} catch {
+						return {
+							id: "orders_paid_webhook" as const,
+							status: "failed" as const,
+							message:
+								"Paid-order webhook diagnostics are temporarily unavailable.",
+							failureCategory: "upstream" as const,
+						};
+					}
+				})()
+			: undefined;
+		const storefrontCheck = (async () => {
+			try {
+				const result = await this.client.diagnosePublicStorefrontAccess(
+					domain,
+					await this.storefrontToken(tenant.organization.id),
+				);
+				return {
+					id: "public_storefront_access" as const,
+					status:
+						result === "passed" ? ("passed" as const) : ("failed" as const),
+					message: result === "passed" ? PASSED_MESSAGE : LOCKED_MESSAGE,
+				};
+			} catch {
+				return {
+					id: "public_storefront_access" as const,
+					status: "failed" as const,
+					message: "Public Storefront diagnostics are temporarily unavailable.",
+				};
 			}
-			const result = await this.client.diagnosePublicStorefrontAccess(
-				domain,
-				await this.storefrontToken(tenant.organization.id),
-			);
-			return {
-				checks: [
-					...(this.webhookSubscriptions
-						? [
-								{
-									id: "orders_paid_webhook" as const,
-									status: "passed" as const,
-									message: "Paid-order webhook subscription is registered.",
-								},
-							]
-						: []),
-					{
-						id: "public_storefront_access",
-						status: result === "passed" ? "passed" : "failed",
-						message: result === "passed" ? PASSED_MESSAGE : LOCKED_MESSAGE,
-					},
-				],
-			};
-		} catch (error) {
-			if (error instanceof AppError) throw error;
-			throw new AppError(
-				"Shopify diagnostics are temporarily unavailable.",
-				503,
-			);
-		}
+		})();
+		const [webhook, storefront] = await Promise.all([
+			webhookCheck,
+			storefrontCheck,
+		]);
+		return { checks: [...(webhook ? [webhook] : []), storefront] };
 	}
 }

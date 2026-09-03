@@ -4,11 +4,30 @@ import {
 	isMembershipProductPurchasable,
 	normalizeEffectiveShopifyScopes,
 	normalizeShopifyStoreDomain,
+	SHOPIFY_WEBHOOK_FAILURE_CATEGORIES,
+	SHOPIFY_WEBHOOK_READINESS_STATUSES,
 	validateMembershipProductInput,
 	validateShopifySettingsInput,
 } from "../src/shopify.js";
 
 describe("Shopify settings contract", () => {
+	it("keeps webhook readiness and failure values closed and allowlisted", () => {
+		expect(SHOPIFY_WEBHOOK_READINESS_STATUSES).toEqual([
+			"unknown",
+			"checking",
+			"ready",
+			"failed",
+		]);
+		expect(SHOPIFY_WEBHOOK_FAILURE_CATEGORIES).toEqual([
+			"configuration",
+			"missing_scope",
+			"permission",
+			"protected_data",
+			"callback",
+			"transport",
+			"upstream",
+		]);
+	});
 	it("normalizes Shopify write access to include its implied read access", () => {
 		expect(
 			normalizeEffectiveShopifyScopes([

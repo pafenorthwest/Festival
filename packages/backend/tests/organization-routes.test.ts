@@ -21,7 +21,10 @@ import {
 } from "../src/shopify/encryption.js";
 import { PublicMembershipProductService } from "../src/shopify/public-membership-product-service.js";
 import { ShopifyIntegrationDiagnosticService } from "../src/shopify/shopify-integration-diagnostic-service.js";
-import { ShopifyIntegrationService } from "../src/shopify/shopify-integration-service.js";
+import {
+	ShopifyIntegrationService,
+	type ShopifyWebhookSubscriptionReconciler,
+} from "../src/shopify/shopify-integration-service.js";
 import { ShopifyMembershipProductService } from "../src/shopify/shopify-membership-product-service.js";
 import type {
 	PublicShopifyCatalogProduct,
@@ -90,6 +93,28 @@ class FakePublicStorefrontDiagnosticClient
 	): Promise<ShopifyPublicStorefrontAccessResult> {
 		this.domains.push(domain);
 		return this.result;
+	}
+}
+
+class FakeWebhookReconciler implements ShopifyWebhookSubscriptionReconciler {
+	constructor(private readonly repository: InMemoryOrganizationRepository) {}
+
+	async reconcileForTenant(
+		tenant: Parameters<
+			ShopifyWebhookSubscriptionReconciler["reconcileForTenant"]
+		>[0],
+	) {
+		const checkedAtIso = new Date().toISOString();
+		await this.repository.updateShopifyWebhookReadiness({
+			organizationId: tenant.organization.id,
+			status: "ready",
+			checkedAtIso,
+		});
+		return {
+			status: "ready" as const,
+			message: "Paid-order webhook subscription is registered.",
+			checkedAtIso,
+		};
 	}
 }
 
@@ -220,6 +245,7 @@ async function createTestAppWithShopify() {
 	const repository = new InMemoryOrganizationRepository();
 	const shopifyTester = new FakeShopifyTester();
 	const diagnosticClient = new FakePublicStorefrontDiagnosticClient();
+	const webhookReconciler = new FakeWebhookReconciler(repository);
 	const app = await createApp({
 		env: { port: 3000 },
 		repository,
@@ -239,9 +265,15 @@ async function createTestAppWithShopify() {
 			repository,
 			createKeyring(),
 			shopifyTester,
+			webhookReconciler,
 		),
 		shopifyIntegrationDiagnosticService:
-			new ShopifyIntegrationDiagnosticService(repository, diagnosticClient),
+			new ShopifyIntegrationDiagnosticService(
+				repository,
+				diagnosticClient,
+				undefined,
+				webhookReconciler,
+			),
 	});
 
 	return { ...app, shopifyTester, diagnosticClient };
@@ -1159,7 +1191,9 @@ describe("organization routes", () => {
 				clientId: string;
 				hasClientSecret: boolean;
 				verificationStatus: string;
+				ordersPaidWebhook: { status: string };
 			};
+			ordersPaidWebhook: { status: string };
 		};
 		expect(saveData.settings).toMatchObject({
 			storeDomain: "example.myshopify.com",
@@ -1175,6 +1209,8 @@ describe("organization routes", () => {
 			integrationVersion: 1,
 		});
 		expect(shopifyTester.calls[0]?.organizationId).toBeTruthy();
+		expect(saveData.settings.ordersPaidWebhook.status).toBe("ready");
+		expect(saveData.ordersPaidWebhook.status).toBe("ready");
 
 		const getResponse = await app.fetch(
 			new Request(
@@ -1235,6 +1271,11 @@ describe("organization routes", () => {
 		await expect(passed.json()).resolves.toEqual({
 			checks: [
 				{
+					id: "orders_paid_webhook",
+					status: "passed",
+					message: "Paid-order webhook subscription is registered.",
+				},
+				{
 					id: "public_storefront_access",
 					status: "passed",
 					message: "Public Storefront access is available.",
@@ -1250,6 +1291,11 @@ describe("organization routes", () => {
 		expect(locked.status).toBe(200);
 		await expect(locked.json()).resolves.toEqual({
 			checks: [
+				{
+					id: "orders_paid_webhook",
+					status: "passed",
+					message: "Paid-order webhook subscription is registered.",
+				},
 				{
 					id: "public_storefront_access",
 					status: "failed",
