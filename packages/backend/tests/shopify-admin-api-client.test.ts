@@ -177,6 +177,11 @@ describe("ShopifyAdminApiClient", () => {
 		expect(graphQueries.some((query) => query.includes("uri: $uri"))).toBe(
 			true,
 		);
+		expect(
+			graphQueries.some((query) =>
+				query.includes("CreateOrdersPaidWebhook($uri: String!)"),
+			),
+		).toBe(true);
 		expect(graphQueries.some((query) => query.includes("callbackUrl"))).toBe(
 			false,
 		);
@@ -281,6 +286,25 @@ describe("ShopifyAdminApiClient", () => {
 					Response.json(
 						{
 							errors: [
+								{
+									message:
+										"Type mismatch on variable $uri and argument uri (URL! / String)",
+								},
+							],
+						},
+						{ headers: { "x-request-id": "schema-request" } },
+					),
+				expected: {
+					stage: "subscription_create",
+					failureCategory: "upstream",
+					requestId: "schema-request",
+				},
+			},
+			{
+				response: () =>
+					Response.json(
+						{
+							errors: [
 								{ message: "Protected customer data access is not approved." },
 							],
 						},
@@ -322,6 +346,14 @@ describe("ShopifyAdminApiClient", () => {
 							scope: "read_orders",
 						});
 					graphCall += 1;
+					if (
+						testCase.expected.stage === "subscription_create" &&
+						graphCall === 1
+					) {
+						return Response.json({
+							data: { webhookSubscriptions: { nodes: [] } },
+						});
+					}
 					if (
 						testCase.expected.failureCategory === "callback" &&
 						graphCall === 2
