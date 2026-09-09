@@ -429,7 +429,10 @@ function throwIfUserErrors(
 	);
 }
 
-function webhookFailureCategory(messages: readonly string[]) {
+function webhookFailureCategory(
+	messages: readonly string[],
+	allowCallbackFailure = true,
+) {
 	const normalized = messages.join(" ").toLowerCase();
 	if (
 		normalized.includes("protected customer") ||
@@ -438,10 +441,11 @@ function webhookFailureCategory(messages: readonly string[]) {
 		return "protected_data" as const;
 	}
 	if (
-		normalized.includes("callback") ||
-		normalized.includes("uri") ||
-		normalized.includes("url") ||
-		normalized.includes("https")
+		allowCallbackFailure &&
+		(normalized.includes("callback") ||
+			normalized.includes("uri") ||
+			normalized.includes("url") ||
+			normalized.includes("https"))
 	) {
 		return "callback" as const;
 	}
@@ -626,7 +630,7 @@ export class ShopifyAdminApiClient
 			}>(
 				context.credentials.storeDomain,
 				accessToken,
-				`mutation CreateOrdersPaidWebhook($uri: URL!) {
+				`mutation CreateOrdersPaidWebhook($uri: String!) {
 					webhookSubscriptionCreate(topic: ORDERS_PAID, webhookSubscription: { uri: $uri }) {
 						webhookSubscription { id topic uri }
 						userErrors { field message }
@@ -1451,7 +1455,12 @@ export class ShopifyAdminApiClient
 			if (payload.errors && payload.errors.length > 0) {
 				throw new ShopifyWebhookOperationError(
 					stage,
-					webhookFailureCategory(payload.errors.map((error) => error.message)),
+					// Top-level GraphQL errors can mention uri in schema/type failures.
+					// Callback validation is reported through mutation userErrors.
+					webhookFailureCategory(
+						payload.errors.map((error) => error.message),
+						false,
+					),
 					response.requestId,
 				);
 			}
