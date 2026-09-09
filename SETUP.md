@@ -233,11 +233,13 @@ Use this ordered checklist when setting up or diagnosing a store:
 1. In Shopify Dev Dashboard, confirm the app and development store appear under
    the same Shopify organization. Installing an app on a store does not by
    itself satisfy the client-credentials ownership requirement.
-2. Select an app distribution method before configuring protected customer
-   data. In the app's API access configuration, select the minimum required
-   order/customer data and fields. Development-store access does not require
-   submitting a public-app review, but the data and fields must still be
-   selected.
+2. Select an app distribution method, then open **Partner Dashboard → Apps →
+   your app → API access requests → Protected customer data access**. Select
+   **Protected customer data**, explain its use for paid-order membership
+   verification, select only required fields, and **Save**. For development-only
+   or custom-distributed apps, the 16-question Partner review questionnaire and
+   public-app review submission are not required. See Shopify's
+   [request-access instructions](https://shopify.dev/docs/apps/launch/protected-customer-data#request-access-to-protected-customer-data).
 3. Set the app webhook API version to `2026-07`. Add `read_orders` to the app
    version, release it, and update or reinstall the released version on the
    target store. Approve the changed access on the store. Festival reads the
