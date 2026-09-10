@@ -263,6 +263,11 @@ export interface OrganizationFestivalListResponse {
 	festivals: FestivalSummary[];
 }
 
+export interface PublicOrganizationLandingResponse {
+	organization: Pick<OrganizationRecord, "name" | "slug">;
+	festivals: FestivalSummary[];
+}
+
 export interface AcceptInviteInput {
 	name: string;
 }

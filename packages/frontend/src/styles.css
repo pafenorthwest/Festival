@@ -128,6 +128,77 @@ a {
 	padding: 2.5rem 1.25rem 4rem;
 }
 
+.org-landing {
+	display: grid;
+	gap: 1.5rem;
+}
+.org-landing-header {
+	display: flex;
+	justify-content: space-between;
+	gap: 1rem;
+	align-items: start;
+}
+.org-landing-header h1 {
+	margin: 0;
+	font-size: clamp(2.4rem, 5vw, 4.5rem);
+}
+.customer-auth-button,
+.all-memberships-link {
+	display: inline-block;
+	padding: 0.7rem 1rem;
+	border-radius: 999px;
+	background: var(--bullet-ink);
+	color: white;
+	text-decoration: none;
+}
+.upcoming-festivals,
+.role-banners {
+	display: grid;
+	gap: 0.75rem;
+}
+.upcoming-festivals ul {
+	list-style: none;
+	padding: 0;
+	margin: 0;
+	display: grid;
+	gap: 0.5rem;
+}
+.upcoming-festivals li {
+	display: flex;
+	justify-content: space-between;
+	gap: 1rem;
+	padding: 0.9rem 1rem;
+	background: var(--bullet-panel);
+	border-radius: 12px;
+}
+.role-banner {
+	display: grid;
+	min-height: 8rem;
+	place-items: center;
+	border-radius: var(--bullet-radius);
+	color: white;
+	text-decoration: none;
+	font-size: clamp(2.5rem, 6vw, 4rem);
+	font-weight: 700;
+	box-shadow: var(--bullet-shadow);
+}
+.role-banner.teachers {
+	background: #4459d6;
+}
+.role-banner.parents {
+	background: #b94d36;
+}
+.role-banner.volunteers {
+	background: #1f7a57;
+}
+.role-banner.accompanists {
+	background: #b6872c;
+}
+.all-memberships-link {
+	justify-self: start;
+	font-size: 0.9rem;
+}
+
 .masthead {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) auto;

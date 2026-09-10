@@ -75,7 +75,7 @@ export function parseRoute(pathname: string): AppRoute {
 		return { kind: "invite", token: inviteMatch[1] ?? "" };
 	}
 
-	const orgRootMatch = pathname.match(/^\/org\/([^/]+)$/);
+	const orgRootMatch = pathname.match(/^\/org\/([^/]+)\/?$/);
 	if (orgRootMatch) {
 		return { kind: "org-root", slug: orgRootMatch[1] ?? "" };
 	}

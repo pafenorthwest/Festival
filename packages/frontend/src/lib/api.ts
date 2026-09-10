@@ -26,6 +26,7 @@ import type {
 	OrganizationMembershipListResponse,
 	OrganizationTimezoneResponse,
 	PublicMembershipProductsListResponse,
+	PublicOrganizationLandingResponse,
 	ReorderOrganizationDivisionsInput,
 	SaveCustomerAccountSettingsInput,
 	SaveCustomerAccountSettingsResponse,
@@ -252,6 +253,17 @@ export function getOrganization(idToken: string, slug: string) {
 		undefined,
 		idToken,
 	);
+}
+
+export function getPublicOrganizationLanding(slug: string) {
+	return requestJson<PublicOrganizationLandingResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/landing`,
+	);
+}
+
+export function customerLandingSignInPath(slug: string) {
+	const returnTo = `/org/${encodeURIComponent(slug)}`;
+	return `/api/organizations/${encodeURIComponent(slug)}/customer-auth/start?returnTo=${encodeURIComponent(returnTo)}`;
 }
 
 export function getMembershipProducts(slug: string) {

@@ -34,6 +34,10 @@ describe("route helpers", () => {
 	});
 
 	it("parses organization routes", () => {
+		expect(parseRoute("/org/festival-admins/")).toEqual({
+			kind: "org-root",
+			slug: "festival-admins",
+		});
 		expect(parseRoute("/org/festival-admins")).toEqual({
 			kind: "org-root",
 			slug: "festival-admins",

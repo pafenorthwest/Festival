@@ -25,3 +25,4 @@ number,taskname,first_create_date,first_create_hhmmss,first_create_git_hash
 24,shopify-paid-order-callback-error,2026-09-09,000000,-------
 25,issue-120-customer-profile-shopify-prefill,2026-09-10,000000,-------
 26,membership-checkout-503,2026-09-10,000000,-------
+27,public-organization-landing-page,2026-09-10,000000,-------

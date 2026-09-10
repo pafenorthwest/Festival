@@ -163,6 +163,11 @@ export const CURRENT_ROUTE_SECURITY = [
 	},
 	{
 		method: "GET",
+		path: "/api/organizations/:slug/landing",
+		authenticationClass: "public",
+	},
+	{
+		method: "GET",
 		path: "/api/organizations/:slug/admin/divisions",
 		authenticationClass: "admin",
 	},

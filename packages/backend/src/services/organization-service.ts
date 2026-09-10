@@ -26,6 +26,7 @@ import {
 	type OrganizationMembershipRecord,
 	type OrganizationRecord,
 	type OrganizationSession,
+	type PublicOrganizationLandingResponse,
 	type ReorderOrganizationDivisionsInput,
 	type SessionMembership,
 	type SessionResponse,
@@ -530,6 +531,25 @@ export class OrganizationService {
 			festivals: (
 				await this.repository.listFestivals(tenant.organization.id)
 			).map(toFestivalSummary),
+		};
+	}
+
+	async getPublicLanding(
+		organizationSlug: string,
+	): Promise<PublicOrganizationLandingResponse> {
+		const organization =
+			await this.repository.findOrganizationBySlug(organizationSlug);
+		if (!organization) throw new AppError("Organization not found.", 404);
+
+		const today = new Date().toISOString().slice(0, 10);
+		const festivals = (await this.repository.listFestivals(organization.id))
+			.filter((festival) => festival.endDate >= today)
+			.sort((left, right) => left.startDate.localeCompare(right.startDate))
+			.map(toFestivalSummary);
+
+		return {
+			organization: { name: organization.name, slug: organization.slug },
+			festivals,
 		};
 	}
 
