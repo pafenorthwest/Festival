@@ -11,6 +11,7 @@ import {
 	buildOrgPath,
 	buildOrgRootPath,
 	buildPrivacyPolicyPath,
+	isOrganizationPageRoute,
 	parseRoute,
 } from "../src/lib/routes.js";
 
@@ -74,6 +75,22 @@ describe("route helpers", () => {
 			kind: "org-admin-divisions",
 			slug: "festival-admins",
 		});
+	});
+
+	it("identifies public organization pages", () => {
+		expect(isOrganizationPageRoute(parseRoute("/org/festival-admins"))).toBe(
+			true,
+		);
+		expect(
+			isOrganizationPageRoute(parseRoute("/org/festival-admins/membership")),
+		).toBe(true);
+		expect(
+			isOrganizationPageRoute(parseRoute("/org/festival-admins/account")),
+		).toBe(true);
+		expect(
+			isOrganizationPageRoute(parseRoute("/org/festival-admins/admin")),
+		).toBe(false);
+		expect(isOrganizationPageRoute(parseRoute("/"))).toBe(false);
 	});
 
 	it("parses invite routes", () => {

@@ -57,6 +57,14 @@ export function buildPrivacyPolicyPath(): string {
 	return "/privacy-policy";
 }
 
+export function isOrganizationPageRoute(route: AppRoute): boolean {
+	return (
+		route.kind === "org-root" ||
+		route.kind === "org-membership" ||
+		route.kind === "org-customer-account"
+	);
+}
+
 export function parseRoute(pathname: string): AppRoute {
 	if (pathname === "/") {
 		return { kind: "home" };

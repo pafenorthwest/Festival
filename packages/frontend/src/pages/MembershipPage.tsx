@@ -229,13 +229,6 @@ export function MembershipPage(props: MembershipPageProps) {
 
 	return (
 		<section class="panel membership-page">
-			<header class="membership-header">
-				<div>
-					<p class="eyebrow">Memberships</p>
-					<h1>{response()?.organization.name ?? "Organization Memberships"}</h1>
-				</div>
-			</header>
-
 			<Show when={response.loading}>
 				<p class="muted">Loading membership information.</p>
 			</Show>

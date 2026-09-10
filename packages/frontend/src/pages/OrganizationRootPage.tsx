@@ -1,11 +1,7 @@
-import { createResource, createSignal, For, onMount, Show } from "solid-js";
+import { createResource, For, Show } from "solid-js";
 import {
-	customerLandingSignInPath,
-	getCustomerSession,
 	getPublicOrganizationLanding,
-	logoutCustomer,
 } from "../lib/api.js";
-import { Button } from "../components/Button.js";
 
 interface OrganizationRootPageProps {
 	app: { route: () => { kind: string; slug?: string } };
@@ -13,50 +9,10 @@ interface OrganizationRootPageProps {
 
 export function OrganizationRootPage(props: OrganizationRootPageProps) {
 	const slug = () => props.app.route().slug ?? "";
-	const [customerSession, setCustomerSession] = createSignal<{
-		authenticated: boolean;
-		csrfToken?: string;
-	}>({ authenticated: false });
-	const [sessionLoading, setSessionLoading] = createSignal(true);
 	const [landing] = createResource(slug, getPublicOrganizationLanding);
-
-	onMount(() => {
-		void getCustomerSession(slug())
-			.then((response) => setCustomerSession(response.session))
-			.finally(() => setSessionLoading(false));
-	});
-
-	function logout() {
-		const session = customerSession();
-		if (session.authenticated && session.csrfToken)
-			logoutCustomer(slug(), session.csrfToken);
-	}
 
 	return (
 		<section class="org-landing">
-			<header class="org-landing-header">
-				<div>
-					<p class="eyebrow">Music festival</p>
-					<h1>{landing()?.organization.name ?? "Organization"}</h1>
-				</div>
-				<Show when={!sessionLoading()}>
-					<Show
-						when={customerSession().authenticated}
-						fallback={
-							<a
-								class="customer-auth-button"
-								href={customerLandingSignInPath(slug())}
-							>
-								Login
-							</a>
-						}
-					>
-						<Button type="button" variant="secondary" onClick={logout}>
-							Logout
-						</Button>
-					</Show>
-				</Show>
-			</header>
 			<Show when={landing.loading}>
 				<p class="muted">Loading upcoming festivals.</p>
 			</Show>

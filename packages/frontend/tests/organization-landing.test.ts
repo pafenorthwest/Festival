@@ -4,14 +4,20 @@ import { customerLandingSignInPath } from "../src/lib/api.js";
 const page = await Bun.file(
 	new URL("../src/pages/OrganizationRootPage.tsx", import.meta.url),
 ).text();
+const appHeader = await Bun.file(
+	new URL("../src/components/AppHeader.tsx", import.meta.url),
+).text();
 
 describe("public organization landing page", () => {
-	it("uses only Shopify Customer Account authentication", () => {
+	it("uses the shared Organization Page header for customer authentication", () => {
 		expect(customerLandingSignInPath("pafe")).toBe(
 			"/api/organizations/pafe/customer-auth/start?returnTo=%2Forg%2Fpafe",
 		);
-		expect(page).toContain("getCustomerSession");
-		expect(page).toContain("logoutCustomer");
+		expect(appHeader).toContain("isOrganizationPageRoute");
+		expect(appHeader).toContain("getCustomerSession");
+		expect(appHeader).toContain("logoutCustomer");
+		expect(appHeader).toContain('class="org-landing-header"');
+		expect(page).not.toContain('class="org-landing-header"');
 		expect(page).not.toContain("handleLogout");
 	});
 

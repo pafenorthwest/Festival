@@ -241,7 +241,7 @@ button.compact-header-button {
 	margin: 0;
 	font-size: clamp(2.4rem, 4vw, 4.5rem);
 	line-height: 0.96;
-	max-width: 11ch;
+	max-width: 20ch;
 }
 
 .lede {
