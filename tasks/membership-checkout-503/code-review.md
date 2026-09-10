@@ -1,0 +1,126 @@
+# Code Review
+- Task name: membership-checkout-503
+- Findings status: none
+
+## Context
+- Base branch: main
+- Diff command: `git diff --cached; git diff; inspect listed untracked files`
+- Changed files:
+  - `README.md`
+  - `bun.lock`
+  - `docker/backend.Dockerfile`
+  - `docker/frontend.Dockerfile`
+  - `goals/membership-checkout-503/establish-goals.v0.md`
+  - `goals/membership-checkout-503/establish-goals.v1.md`
+  - `goals/membership-checkout-503/establish-goals.v2.md`
+  - `goals/membership-checkout-503/establish-goals.v3.md`
+  - `goals/membership-checkout-503/establish-goals.v4.md`
+  - `goals/membership-checkout-503/goals.v0.md`
+  - `goals/membership-checkout-503/goals.v1.md`
+  - `goals/membership-checkout-503/goals.v2.md`
+  - `goals/membership-checkout-503/goals.v3.md`
+  - `goals/membership-checkout-503/goals.v4.md`
+  - `goals/task-manifest.csv`
+  - `package.json`
+  - `packages/backend/src/checkout/membership-checkout-service.ts`
+  - `packages/backend/src/customer/customer-account-service.ts`
+  - `packages/backend/src/routes/api-router.ts`
+  - `packages/backend/tests/customer-account-routes.test.ts`
+  - `packages/backend/tests/customer-account-service.test.ts`
+  - `packages/backend/tests/membership-checkout-service.test.ts`
+  - `packages/frontend/src/lib/api.ts`
+  - `packages/frontend/src/pages/CustomerAccountPage.tsx`
+  - `packages/frontend/src/pages/MembershipPage.tsx`
+  - `packages/frontend/src/styles.css`
+  - `packages/frontend/tests/browser/account-return.html`
+  - `packages/frontend/tests/browser/account-return.tsx`
+  - `packages/frontend/tests/browser/membership-purchase.html`
+  - `packages/frontend/tests/browser/membership-purchase.tsx`
+  - `packages/frontend/tests/customer-account.test.ts`
+  - `packages/shopify-confirmation/README.md`
+  - `packages/shopify-confirmation/extensions/festival-account-return/shopify.extension.toml`
+  - `packages/shopify-confirmation/extensions/festival-account-return/src/order-status.ts`
+  - `packages/shopify-confirmation/extensions/festival-account-return/src/return-button.ts`
+  - `packages/shopify-confirmation/extensions/festival-account-return/src/thank-you.ts`
+  - `packages/shopify-confirmation/package.json`
+  - `packages/shopify-confirmation/tests/return-button.test.ts`
+  - `packages/shopify-confirmation/tsconfig.json`
+  - `tasks/membership-checkout-503/code-review.md`
+  - `tasks/membership-checkout-503/diagnosis.md`
+  - `tasks/membership-checkout-503/spec.md`
+  - `tasks/membership-checkout-503/verify-browser.cjs`
+  - `token`
+- Citation candidates (verify before use):
+  - `README.md:146-149`
+  - `bun.lock:172-173`
+  - `bun.lock:288-293`
+  - `bun.lock:366-367`
+  - `bun.lock:372-373`
+  - `bun.lock:420-421`
+  - `bun.lock:428-431`
+  - `bun.lock:44-50`
+  - `bun.lock:444-445`
+  - `bun.lock:498-499`
+  - `bun.lock:504-505`
+  - `bun.lock:512-513`
+  - `bun.lock:540-541`
+  - `bun.lock:572-573`
+  - `bun.lock:576-579`
+  - `bun.lock:632-635`
+  - `bun.lock:642-643`
+  - `bun.lock:664-665`
+  - `bun.lock:678-679`
+  - `bun.lock:688-689`
+  - `bun.lock:692-693`
+  - `bun.lock:726-727`
+  - `bun.lock:730-731`
+  - `bun.lock:804-805`
+  - `docker/backend.Dockerfile:29-29`
+  - `docker/backend.Dockerfile:8-8`
+  - `docker/frontend.Dockerfile:8-8`
+  - `goals/task-manifest.csv:26-26`
+  - `package.json:25-26`
+  - `package.json:30-31`
+  - `packages/backend/src/checkout/membership-checkout-service.ts:152-157`
+  - `packages/backend/src/checkout/membership-checkout-service.ts:162-163`
+  - `packages/backend/src/checkout/membership-checkout-service.ts:174-175`
+  - `packages/backend/src/checkout/membership-checkout-service.ts:214-220`
+  - `packages/backend/src/checkout/membership-checkout-service.ts:231-232`
+  - `packages/backend/src/checkout/membership-checkout-service.ts:45-50`
+  - `packages/backend/src/checkout/membership-checkout-service.ts:57-57`
+  - `packages/backend/src/customer/customer-account-service.ts:402-402`
+  - `packages/backend/src/customer/customer-account-service.ts:405-408`
+  - `packages/backend/src/routes/api-router.ts:786-788`
+  - `packages/backend/tests/customer-account-routes.test.ts:273-291`
+  - `packages/backend/tests/customer-account-service.test.ts:477-497`
+  - `packages/backend/tests/membership-checkout-service.test.ts:100-100`
+  - `packages/backend/tests/membership-checkout-service.test.ts:199-199`
+  - `packages/backend/tests/membership-checkout-service.test.ts:204-204`
+  - `packages/backend/tests/membership-checkout-service.test.ts:214-286`
+  - `packages/backend/tests/membership-checkout-service.test.ts:9-9`
+  - `packages/backend/tests/membership-checkout-service.test.ts:95-95`
+  - `packages/frontend/src/lib/api.ts:104-105`
+  - `packages/frontend/src/pages/CustomerAccountPage.tsx:287-290`
+  - `packages/frontend/src/pages/MembershipPage.tsx:110-110`
+  - `packages/frontend/src/pages/MembershipPage.tsx:117-126`
+  - `packages/frontend/src/pages/MembershipPage.tsx:147-148`
+  - `packages/frontend/src/pages/MembershipPage.tsx:159-171`
+  - `packages/frontend/src/pages/MembershipPage.tsx:264-284`
+  - `packages/frontend/src/pages/MembershipPage.tsx:286-286`
+  - `packages/frontend/src/pages/MembershipPage.tsx:288-288`
+  - `packages/frontend/src/pages/MembershipPage.tsx:300-327`
+  - `packages/frontend/src/pages/MembershipPage.tsx:329-369`
+  - `packages/frontend/src/pages/MembershipPage.tsx:383-426`
+  - `packages/frontend/src/styles.css:226-274`
+  - `packages/frontend/tests/customer-account.test.ts:18-32`
+  - `packages/frontend/tests/customer-account.test.ts:2-5`
+
+## Findings JSON
+```json
+[]
+```
+
+## Verdict
+- Verdict: patch is correct
+- Confidence: 0.9
+- Justification: Reviewed the checkout fix, consent UI/API, two-target Shopify native button renderer, settings URL validation, restricted OAuth handoff, and workspace packaging. The approved behavior is implemented locally with passing SDK build, 352 tests, and desktop/mobile browser checks. No introduced regression found. Live Shopify host preview/release/editor placement remains an explicitly documented external verification requirement. The pre-existing token file was excluded and not read.

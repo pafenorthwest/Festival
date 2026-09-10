@@ -106,6 +106,10 @@ code {
 	border-radius: 6px;
 }
 
+a {
+	color: var(--bullet-accent-strong);
+}
+
 .sr-only {
 	position: absolute;
 	width: 1px;
@@ -205,6 +209,48 @@ button.compact-header-button {
 	margin-bottom: 1.25rem;
 }
 
+.site-footer {
+	margin-top: 2rem;
+	text-align: center;
+	font-size: 0.95rem;
+}
+
+.invite-list {
+	list-style: none;
+	padding: 0;
+	margin: 0;
+}
+
+.invite-list li {
+	display: grid;
+	gap: 0.2rem;
+	padding: 0.8rem 0.9rem;
+	border-radius: 14px;
+	background: rgba(255, 255, 255, 0.7);
+	border: 1px solid rgba(31, 36, 49, 0.08);
+}
+
+.privacy-policy {
+	max-width: 760px;
+}
+
+.privacy-policy h2 {
+	margin-top: 2rem;
+	font-size: 1.35rem;
+}
+
+.privacy-policy h2:first-of-type {
+	margin-top: 0;
+}
+
+.privacy-policy ul {
+	padding-left: 1.3rem;
+}
+
+.privacy-policy li + li {
+	margin-top: 0.45rem;
+}
+
 .membership-page {
 	display: grid;
 	gap: 1.25rem;
@@ -221,6 +267,55 @@ button.compact-header-button {
 	margin: 0;
 	font-size: 2rem;
 	line-height: 1.05;
+}
+
+.membership-checkout-details {
+	display: grid;
+	gap: 1.75rem;
+	width: 100%;
+	max-width: 640px;
+	margin-inline: auto;
+}
+
+.membership-checkout-summary {
+	border-bottom: 1px solid var(--bullet-panel-border);
+	padding-bottom: 1rem;
+}
+
+.membership-checkout-summary h2,
+.membership-checkout-step h3 {
+	margin: 0 0 1rem;
+}
+
+.membership-checkout-summary p {
+	margin-bottom: 0;
+}
+
+.membership-checkout-step select {
+	width: 100%;
+}
+
+.membership-consent {
+	display: flex;
+	align-items: flex-start;
+	gap: 0.65rem;
+	line-height: 1.5;
+}
+
+.membership-consent input {
+	flex: 0 0 auto;
+	width: 1.2rem;
+	height: 1.2rem;
+	margin-top: 0.2rem;
+}
+
+.membership-checkout-actions {
+	display: flex;
+	justify-content: space-between;
+	gap: 1rem;
+	border-top: 1px solid var(--bullet-panel-border);
+	padding-top: 1.25rem;
+	margin-top: 1.25rem;
 }
 
 .membership-product-grid {
@@ -486,21 +581,6 @@ button.compact-header-button {
 
 .invite-feedback span:last-child {
 	color: var(--bullet-soft-ink);
-}
-
-.invite-list {
-	list-style: none;
-	padding: 0;
-	margin: 0;
-}
-
-.invite-list li {
-	display: grid;
-	gap: 0.2rem;
-	padding: 0.8rem 0.9rem;
-	border-radius: 14px;
-	background: rgba(255, 255, 255, 0.7);
-	border: 1px solid rgba(31, 36, 49, 0.08);
 }
 
 @keyframes invite-feedback-fade {

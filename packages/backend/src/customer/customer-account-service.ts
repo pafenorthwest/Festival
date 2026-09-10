@@ -399,9 +399,13 @@ export class CustomerAccountService {
 		if (offeringId && !/^[A-Za-z0-9_-]{1,128}$/.test(offeringId)) {
 			throw new AppError("Membership selection is invalid.", 400);
 		}
-		const expected = offeringId
+		let expected = offeringId
 			? `/org/${slug}/membership?purchase=${encodeURIComponent(offeringId)}`
 			: `/org/${slug}/account`;
+		// Preserve only the known checkout handoff; arbitrary return URLs remain forbidden.
+		if (!offeringId && returnTo === `${expected}?checkout=processing`) {
+			expected = returnTo;
+		}
 		if (returnTo && returnTo !== expected)
 			throw new AppError("Return target is invalid.", 400);
 		const state = randomOpaque(),

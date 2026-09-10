@@ -5,6 +5,7 @@ COPY package.json bun.lock tsconfig.json tsconfig.base.json ./
 COPY packages/common/package.json packages/common/package.json
 COPY packages/backend/package.json packages/backend/package.json
 COPY packages/frontend/package.json packages/frontend/package.json
+COPY packages/shopify-confirmation/package.json packages/shopify-confirmation/package.json
 RUN bun install --frozen-lockfile
 
 FROM deps AS build
@@ -25,6 +26,7 @@ COPY package.json bun.lock ./
 COPY packages/common/package.json packages/common/package.json
 COPY packages/backend/package.json packages/backend/package.json
 COPY packages/frontend/package.json packages/frontend/package.json
+COPY packages/shopify-confirmation/package.json packages/shopify-confirmation/package.json
 RUN bun install --frozen-lockfile --production
 
 EXPOSE 3000

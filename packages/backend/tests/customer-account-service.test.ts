@@ -474,6 +474,27 @@ describe("CustomerAccountService", () => {
 			target.service.start("festival", "https://evil.example/callback"),
 		).rejects.toThrow("Return target");
 	});
+	it("preserves the exact account processing return through OAuth and rejects variations", async () => {
+		const f = await fixture();
+		const authorization = await f.begin(
+			"/org/festival/account?checkout=processing",
+		);
+		const result = await f.service.callback(
+			authorization.searchParams.get("state") ?? "",
+			"code",
+		);
+		expect(result.returnTo).toBe("/org/festival/account?checkout=processing");
+		for (const target of [
+			"/org/other/account?checkout=processing",
+			"/org/festival/account?checkout=approved",
+			"/org/festival/account?checkout=processing&returnTo=https://evil.example",
+			"https://festival.example.com/org/festival/account?checkout=processing",
+		])
+			await expect(f.service.start("festival", target)).rejects.toThrow(
+				"Return target",
+			);
+	});
+
 	it("preserves one bounded local offering in one-time tenant OAuth state", async () => {
 		const f = await fixture();
 		const authUrl = await f.begin(undefined, "offering_123");

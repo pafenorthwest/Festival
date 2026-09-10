@@ -1,5 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { getCustomerMembershipStatus } from "../src/lib/api.js";
+import {
+	customerSignInPath,
+	getCustomerMembershipStatus,
+} from "../src/lib/api.js";
 
 const page = await Bun.file(
 	new URL("../src/pages/CustomerAccountPage.tsx", import.meta.url),
@@ -12,6 +15,21 @@ const api = await Bun.file(
 ).text();
 
 describe("customer account frontend boundary", () => {
+	it("retains checkout processing on sign-in only for an explicit checkout return", () => {
+		const returned = new URL(
+			customerSignInPath("pafe", true),
+			"https://festival.example.com",
+		);
+		expect(returned.searchParams.get("returnTo")).toBe(
+			"/org/pafe/account?checkout=processing",
+		);
+		const ordinary = new URL(
+			customerSignInPath("pafe"),
+			"https://festival.example.com",
+		);
+		expect(ordinary.searchParams.get("returnTo")).toBe("/org/pafe/account");
+	});
+
 	it("loads the tenant-scoped customer membership status with cookie credentials", async () => {
 		const originalFetch = globalThis.fetch;
 		let request: { url: string; init?: RequestInit } | undefined;

@@ -1,0 +1,13 @@
+{
+	"name": "@festival/shopify-confirmation",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"build": "tsc --noEmit && bun build ./extensions/festival-account-return/src/thank-you.ts ./extensions/festival-account-return/src/order-status.ts --target browser --outdir dist",
+		"test": "bun test"
+	},
+	"devDependencies": {
+		"@shopify/ui-extensions": "2026.7.0"
+	}
+}

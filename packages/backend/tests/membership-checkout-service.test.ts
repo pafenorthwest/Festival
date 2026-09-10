@@ -6,7 +6,7 @@ import { PublicMembershipProductService } from "../src/shopify/public-membership
 import type { ShopifyPublicCatalogClient } from "../src/shopify/shopify-public-catalog-client.js";
 
 describe("membership checkout service", () => {
-	it("revalidates one local offering and records its intent before requesting checkout", async () => {
+	it("allows independent Customer Account and Shopify versions and reuses the cart", async () => {
 		const organizations = new InMemoryOrganizationRepository();
 		const organization = await organizations.createOrganization({
 			name: "Festival",
@@ -92,12 +92,12 @@ describe("membership checkout service", () => {
 			organizationSlug: organization.slug,
 			customerId: "customer",
 			sessionId: "session",
-			integrationVersion: 1,
+			integrationVersion: 14,
 			buyerAccessToken: "server-only",
 			idempotencyKey: "00000000-0000-4000-8000-000000000001",
 			offeringId: offering.id,
 			divisionId: division.id,
-			staffAccessConsent: false,
+			staffAccessConsent: true,
 		};
 		await expect(service.start(input)).resolves.toEqual({
 			checkoutUrl: "https://festival.myshopify.com/checkouts/fresh",
@@ -196,12 +196,12 @@ describe("membership checkout service", () => {
 			organizationSlug: organization.slug,
 			customerId: "customer",
 			sessionId: "session",
-			integrationVersion: 1,
+			integrationVersion: 14,
 			buyerAccessToken: "server-only",
 			idempotencyKey: "00000000-0000-4000-8000-000000000002",
 			offeringId: offering.id,
 			divisionId: division.id,
-			staffAccessConsent: false,
+			staffAccessConsent: true,
 		};
 		await expect(service.start(input)).rejects.toMatchObject({
 			code: "checkout_retryable_upstream",
@@ -210,5 +210,78 @@ describe("membership checkout service", () => {
 		await expect(service.start(input)).rejects.toMatchObject({
 			code: "checkout_terminal_failure",
 		});
+	});
+	it("rejects missing consent or division even when an idempotent outcome exists", async () => {
+		let reads = 0;
+		const service = new MembershipCheckoutService(
+			{} as never,
+			{} as never,
+			{
+				getOutcome: async () => {
+					reads++;
+					return { kind: "ready" };
+				},
+			} as never,
+			{} as never,
+		);
+		for (const prerequisites of [
+			{ divisionId: "division", staffAccessConsent: false },
+			{ divisionId: "", staffAccessConsent: true },
+		]) {
+			await expect(service.start(prerequisites as never)).rejects.toMatchObject(
+				{ status: 400 },
+			);
+		}
+		expect(reads).toBe(0);
+	});
+
+	it.each([
+		"version",
+		"domain",
+		"customer-version",
+		"unsafe-url",
+	])("rejects resumed checkout when %s changes", async (change) => {
+		let reads = 0;
+		let failures = 0;
+		const service = new MembershipCheckoutService(
+			{
+				getShopifyIntegration: async () => ({
+					integrationVersion: ++reads > 1 && change === "version" ? 22 : 21,
+					storeDomain:
+						reads > 1 && change === "domain"
+							? "other.myshopify.com"
+							: "festival.myshopify.com",
+				}),
+			} as never,
+			{} as never,
+			{
+				getOutcome: async () => ({
+					kind: "ready",
+					intent: { id: "intent" },
+					cart: { integrationVersion: 14, shopifyCartId: "cart" },
+				}),
+				markCheckoutStarted: async () => {},
+				markFailed: async () => {
+					failures++;
+				},
+			} as never,
+			{
+				checkout: async () => ({
+					checkoutUrl:
+						change === "unsafe-url"
+							? "https://festival.myshopify.com:444/checkout"
+							: "https://festival.myshopify.com/checkout",
+				}),
+			} as never,
+		);
+		await expect(
+			service.start({
+				organizationId: "org",
+				integrationVersion: change === "customer-version" ? 15 : 14,
+				divisionId: "division",
+				staffAccessConsent: true,
+			} as never),
+		).rejects.toMatchObject({ code: "checkout_retryable_upstream" });
+		expect(failures).toBe(1);
 	});
 });

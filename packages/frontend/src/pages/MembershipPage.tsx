@@ -107,16 +107,23 @@ export function MembershipPage(props: MembershipPageProps) {
 		setCheckoutCsrfToken(csrfToken);
 		setSelectedDivisionId("");
 		setStaffAccessConsent(false);
-		setPurchaseStatus(
-			"Select your division and optional staff-access consent before continuing to Shopify.",
-		);
+		setPurchaseStatus("");
 	}
 
 	async function startCheckout(slug: string) {
 		const offeringId = selectedOfferingId();
 		const csrfToken = checkoutCsrfToken();
 		const divisionId = selectedDivisionId();
-		if (!offeringId || !csrfToken || !divisionId) return;
+		if (
+			!offeringId ||
+			!csrfToken ||
+			!divisionId ||
+			!staffAccessConsent() ||
+			checkoutSubmitting() ||
+			divisions.loading ||
+			divisions.error
+		)
+			return;
 		const storageKey = `festival-checkout:${slug}:${offeringId}:${divisionId}`;
 		setCheckoutSubmitting(true);
 		setPurchaseError("");
@@ -137,7 +144,8 @@ export function MembershipPage(props: MembershipPageProps) {
 		} catch (error) {
 			if (
 				error instanceof ApiError &&
-				(error.code === "checkout_expired" ||
+				(error.code === "checkout_retryable_upstream" ||
+					error.code === "checkout_expired" ||
 					error.code === "checkout_terminal_failure" ||
 					error.code === "membership_active")
 			)
@@ -146,6 +154,19 @@ export function MembershipPage(props: MembershipPageProps) {
 		} finally {
 			setCheckoutSubmitting(false);
 		}
+	}
+
+	function cancelPurchase() {
+		if (checkoutSubmitting()) return;
+		const route = props.app.route();
+		if (route.kind !== "org-membership") return;
+		setSelectedOfferingId(null);
+		setCheckoutCsrfToken(null);
+		setSelectedDivisionId("");
+		setStaffAccessConsent(false);
+		setPurchaseError("");
+		setPurchaseStatus("");
+		window.history.replaceState(null, "", buildOrgMembershipPath(route.slug));
 	}
 
 	async function purchase(membershipProduct: PublicMembershipProductSummary) {
@@ -240,14 +261,31 @@ export function MembershipPage(props: MembershipPageProps) {
 					class="membership-checkout-details"
 					aria-label="Membership checkout details"
 				>
-					<h2>Membership details</h2>
-					<p class="muted">
-						Choose the Festival division this Teacher Membership supports.
-					</p>
-					<label>
-						Division
+					<header class="membership-checkout-summary">
+						<h2>Purchase membership</h2>
+						<Show
+							when={response()?.membershipProducts.find(
+								(product) => product.id === selectedOfferingId(),
+							)}
+						>
+							{(product) => (
+								<>
+									<strong>{product().name}</strong>
+									<p>
+										{product().price.amount} {product().price.currencyCode}
+									</p>
+								</>
+							)}
+						</Show>
+					</header>
+					<section class="membership-checkout-step">
+						<h3>
+							<label for="membership-division">1. Select Division</label>
+						</h3>
 						<select
+							id="membership-division"
 							value={selectedDivisionId()}
+							disabled={checkoutSubmitting() || divisions.loading}
 							onInput={(event) =>
 								setSelectedDivisionId(event.currentTarget.value)
 							}
@@ -259,42 +297,77 @@ export function MembershipPage(props: MembershipPageProps) {
 								)}
 							</For>
 						</select>
-					</label>
-					<Show when={divisions.loading}>
-						<p class="muted">Loading available divisions.</p>
-					</Show>
-					<Show when={divisions.error}>
-						<p class="membership-unavailable" role="alert">
-							Available divisions could not be loaded. Please try again.
+						<Show when={divisions.loading}>
+							<p class="muted">Loading available divisions.</p>
+						</Show>
+						<Show when={divisions.error}>
+							<p class="membership-unavailable" role="alert">
+								Available divisions could not be loaded. Please try again.
+							</p>
+						</Show>
+					</section>
+					<section class="membership-checkout-step">
+						<h3>2. Agree to sharing data</h3>
+						<label class="membership-consent">
+							<input
+								type="checkbox"
+								checked={staffAccessConsent()}
+								disabled={checkoutSubmitting()}
+								aria-describedby="membership-consent-required"
+								onInput={(event) =>
+									setStaffAccessConsent(event.currentTarget.checked)
+								}
+							/>
+							<span>
+								Agree to sharing Shopify-provided contact details to support my
+								membership
+							</span>
+						</label>
+						<p class="muted" id="membership-consent-required">
+							Required to purchase this membership. See our{" "}
+							<a href="/privacy-policy">Privacy Policy</a> for details.
 						</p>
-					</Show>
-					<label class="membership-consent">
-						<input
-							type="checkbox"
-							checked={staffAccessConsent()}
-							onInput={(event) =>
-								setStaffAccessConsent(event.currentTarget.checked)
-							}
-						/>
-						<span>
-							I consent to Festival staff accessing Shopify-provided contact
-							details when needed to support my membership.
-						</span>
-					</label>
-					<button
-						type="button"
-						disabled={
-							!selectedDivisionId() || divisions.loading || checkoutSubmitting()
-						}
-						onClick={() => {
-							const route = props.app.route();
-							if (route.kind === "org-membership") {
-								void startCheckout(route.slug);
-							}
-						}}
-					>
-						{checkoutSubmitting() ? "Opening Shopify…" : "Continue to Shopify"}
-					</button>
+					</section>
+					<section class="membership-checkout-step">
+						<h3>3. Purchase or Cancel</h3>
+						<p>
+							You’ll complete payment securely on Shopify. After payment, choose
+							“Return to Festival account” on the confirmation page to view your
+							membership status.
+						</p>
+						<Show when={!selectedDivisionId() || !staffAccessConsent()}>
+							<p class="muted">
+								Select a division and agree to sharing data to enable Purchase.
+							</p>
+						</Show>
+						<div class="membership-checkout-actions">
+							<button
+								type="button"
+								class="secondary-button"
+								disabled={checkoutSubmitting()}
+								onClick={cancelPurchase}
+							>
+								Cancel
+							</button>
+							<button
+								type="button"
+								disabled={
+									!selectedDivisionId() ||
+									!staffAccessConsent() ||
+									divisions.loading ||
+									Boolean(divisions.error) ||
+									checkoutSubmitting()
+								}
+								onClick={() => {
+									const route = props.app.route();
+									if (route.kind === "org-membership")
+										void startCheckout(route.slug);
+								}}
+							>
+								{checkoutSubmitting() ? "Opening Shopify…" : "Purchase"}
+							</button>
+						</div>
+					</section>
 				</section>
 			</Show>
 
@@ -308,48 +381,50 @@ export function MembershipPage(props: MembershipPageProps) {
 				<p class="muted">No memberships are available right now.</p>
 			</Show>
 
-			<div class="membership-product-grid">
-				<For each={response()?.membershipProducts ?? []}>
-					{(membershipProduct) => (
-						<article class="membership-product-card">
-							<div>
-								<p class="membership-product-type">
-									{formatEntitlementClass(membershipProduct.entitlementClass)}
-								</p>
-								<h2>{membershipProduct.name}</h2>
-							</div>
-							<Show when={membershipProduct.description}>
-								<div
-									class="membership-description"
-									innerHTML={sanitizeShopifyDescriptionHtml(
-										membershipProduct.description ?? "",
-									)}
-								/>
-							</Show>
-							<div class="membership-product-footer">
-								<strong>
-									{membershipProduct.price.amount}{" "}
-									{membershipProduct.price.currencyCode}
-								</strong>
-								<button
-									type="button"
-									disabled={
-										!membershipProduct.available ||
-										pendingOfferingId() === membershipProduct.id
-									}
-									onClick={() => void purchase(membershipProduct)}
-								>
-									{membershipProduct.available
-										? pendingOfferingId() === membershipProduct.id
-											? "Continuing…"
-											: "Purchase"
-										: "Unavailable"}
-								</button>
-							</div>
-						</article>
-					)}
-				</For>
-			</div>
+			<Show when={!selectedOfferingId() && !pendingOfferingId()}>
+				<div class="membership-product-grid">
+					<For each={response()?.membershipProducts ?? []}>
+						{(membershipProduct) => (
+							<article class="membership-product-card">
+								<div>
+									<p class="membership-product-type">
+										{formatEntitlementClass(membershipProduct.entitlementClass)}
+									</p>
+									<h2>{membershipProduct.name}</h2>
+								</div>
+								<Show when={membershipProduct.description}>
+									<div
+										class="membership-description"
+										innerHTML={sanitizeShopifyDescriptionHtml(
+											membershipProduct.description ?? "",
+										)}
+									/>
+								</Show>
+								<div class="membership-product-footer">
+									<strong>
+										{membershipProduct.price.amount}{" "}
+										{membershipProduct.price.currencyCode}
+									</strong>
+									<button
+										type="button"
+										disabled={
+											!membershipProduct.available ||
+											pendingOfferingId() === membershipProduct.id
+										}
+										onClick={() => void purchase(membershipProduct)}
+									>
+										{membershipProduct.available
+											? pendingOfferingId() === membershipProduct.id
+												? "Continuing…"
+												: "Purchase"
+											: "Unavailable"}
+									</button>
+								</div>
+							</article>
+						)}
+					</For>
+				</div>
+			</Show>
 		</section>
 	);
 }

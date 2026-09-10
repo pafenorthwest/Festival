@@ -270,6 +270,25 @@ describe("customer account routes", () => {
 			},
 		);
 		expect(rejected.status).toBe(400);
+		for (const prerequisites of [
+			{ divisionId: "division", staffAccessConsent: false },
+			{ divisionId: "", staffAccessConsent: true },
+			{ divisionId: "   ", staffAccessConsent: true },
+		]) {
+			checkoutArgs = [];
+			consentArgs = [];
+			const response = await a.request(
+				"/api/organizations/festival/customer/checkout",
+				{
+					method: "POST",
+					headers,
+					body: JSON.stringify({ offeringId: "offering", ...prerequisites }),
+				},
+			);
+			expect(response.status).toBe(400);
+			expect(checkoutArgs).toEqual([]);
+			expect(consentArgs).toEqual([]);
+		}
 	});
 	it("reads and updates only the cookie-authenticated customer profile", async () => {
 		let updateArguments: unknown[] = [];

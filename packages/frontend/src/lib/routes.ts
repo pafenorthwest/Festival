@@ -1,5 +1,6 @@
 export type AppRoute =
 	| { kind: "home" }
+	| { kind: "privacy-policy" }
 	| { kind: "create-org" }
 	| { kind: "invite"; token: string }
 	| { kind: "org-root"; slug: string }
@@ -52,9 +53,17 @@ export function buildInvitePath(token: string): string {
 	return `/invite/${token}`;
 }
 
+export function buildPrivacyPolicyPath(): string {
+	return "/privacy-policy";
+}
+
 export function parseRoute(pathname: string): AppRoute {
 	if (pathname === "/") {
 		return { kind: "home" };
+	}
+
+	if (pathname === "/privacy-policy") {
+		return { kind: "privacy-policy" };
 	}
 
 	if (pathname === "/create-organization") {
