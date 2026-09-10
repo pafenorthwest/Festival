@@ -48,4 +48,4 @@
 - Build: passed (`bun run build`)
 - Tests: passed (`bun run test`; 353 tests across all workspaces)
 - Code review: passed (no actionable findings after the P1 fix)
-- Clean merge: pending
+- Clean merge: passed (fast-forward with `main`)
