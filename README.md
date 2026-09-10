@@ -143,6 +143,10 @@ current privacy-notice version and write PII-free access audit records. The
 Teacher Membership checkout records that explicit consent decision in #78; no
 staff search UI is included here.
 
+### Shopify confirmation-page return
+
+The confirmation extension adds **Return to Festival account** on Shopify's Thank you and Order status pages. It sends customers to the configured Festival organization's account with `checkout=processing`, preserving that return if Festival sign-in is required. The account reads server-confirmed membership status; the link itself grants no membership. See [extension setup and activation](packages/shopify-confirmation/README.md). Shopify app deployment and editor placement are required in addition to deploying Festival.
+
 ### Shopify paid-order webhook and reconciliation
 
 For each verified tenant that sells a Teacher Membership, register exactly one

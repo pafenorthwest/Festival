@@ -284,7 +284,10 @@ export function CustomerAccountPage(props: { slug: string }) {
 					fallback={
 						<>
 							<p>Sign in with Shopify to view your order history and status.</p>
-							<a class="primary-button" href={customerSignInPath(props.slug)}>
+							<a
+								class="primary-button"
+								href={customerSignInPath(props.slug, checkoutProcessing())}
+							>
 								Sign in with Shopify
 							</a>
 						</>

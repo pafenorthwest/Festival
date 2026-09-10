@@ -783,8 +783,9 @@ export function buildApiRouter(
 				Array.isArray(payload) ||
 				typeof (payload as { offeringId?: unknown }).offeringId !== "string" ||
 				typeof (payload as { divisionId?: unknown }).divisionId !== "string" ||
-				typeof (payload as { staffAccessConsent?: unknown })
-					.staffAccessConsent !== "boolean"
+				!(payload as { divisionId: string }).divisionId.trim() ||
+				(payload as { staffAccessConsent?: unknown }).staffAccessConsent !==
+					true
 			)
 				throw new AppError("Checkout request is invalid.", 400);
 			const referer = c.req.header("Referer");

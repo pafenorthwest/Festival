@@ -1,0 +1,31 @@
+api_version = "2026-07"
+
+[[extensions]]
+name = "Return to Festival account"
+handle = "festival-account-return"
+type = "ui_extension"
+
+[[extensions.targeting]]
+module = "./src/thank-you.ts"
+target = "purchase.thank-you.block.render"
+
+[[extensions.targeting]]
+module = "./src/order-status.ts"
+target = "customer-account.order-status.block.render"
+
+[extensions.capabilities]
+api_access = false
+network_access = false
+
+[extensions.settings]
+[[extensions.settings.fields]]
+key = "festival_origin"
+type = "single_line_text_field"
+name = "Festival application origin"
+description = "HTTPS origin only, for example https://festival.passmore.xyz. Defaults to that origin."
+
+[[extensions.settings.fields]]
+key = "organization_slug"
+type = "single_line_text_field"
+name = "Festival organization slug"
+description = "Required. Enter the Festival organization connected to this Shopify store, for example pafe."

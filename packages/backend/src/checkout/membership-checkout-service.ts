@@ -42,6 +42,12 @@ export class MembershipCheckoutService {
 		divisionId: string;
 		staffAccessConsent: boolean;
 	}) {
+		if (!input.divisionId.trim() || input.staffAccessConsent !== true) {
+			throw new AppError(
+				"Select a division and agree to sharing data before purchasing.",
+				400,
+			);
+		}
 		const existing = await this.checkout.getOutcome({
 			organizationId: input.organizationId,
 			customerId: input.customerId,
@@ -49,9 +55,6 @@ export class MembershipCheckoutService {
 			idempotencyKey: input.idempotencyKey,
 		});
 		if (existing) return this.resume(existing, input);
-		if (!input.divisionId || typeof input.staffAccessConsent !== "boolean") {
-			throw new AppError("Checkout request is invalid.", 400);
-		}
 		const division = (
 			await this.organizations.listDivisions(input.organizationId, true)
 		).find((value) => value.id === input.divisionId);
@@ -146,10 +149,18 @@ export class MembershipCheckoutService {
 			);
 		const intent = outcome.intent;
 		try {
+			// This is the Storefront configuration version. input.integrationVersion
+			// belongs to Customer Accounts and has an independent counter.
+			const storefrontIntegration =
+				await this.organizations.getShopifyIntegration(input.organizationId);
+			if (!storefrontIntegration)
+				throw new AppError("Shopify checkout is unavailable.", 503);
 			const cart =
 				outcome.kind === "ready"
 					? outcome.cart
 					: await this.createCart(intent, input, expiresAtIso);
+			if (cart.integrationVersion !== input.integrationVersion)
+				throw new AppError("Customer checkout context has changed.", 503);
 			await this.checkout.markCheckoutStarted(intent.id);
 			const checkout = await this.storefront.checkout({
 				organizationId: input.organizationId,
@@ -160,7 +171,8 @@ export class MembershipCheckoutService {
 			);
 			if (
 				!integration ||
-				integration.integrationVersion !== input.integrationVersion ||
+				integration.integrationVersion !==
+					storefrontIntegration.integrationVersion ||
 				!isAllowedCheckoutUrl(checkout.checkoutUrl, integration.storeDomain)
 			)
 				throw new AppError("Shopify checkout is unavailable.", 503);
@@ -199,6 +211,13 @@ export class MembershipCheckoutService {
 				"checkout_terminal_failure",
 			);
 		try {
+			const storefrontIntegration =
+				await this.organizations.getShopifyIntegration(input.organizationId);
+			if (
+				!storefrontIntegration ||
+				outcome.cart.integrationVersion !== input.integrationVersion
+			)
+				throw new AppError("Customer checkout context has changed.", 503);
 			await this.checkout.markCheckoutStarted(outcome.intent.id);
 			const checkout = await this.storefront.checkout({
 				organizationId: input.organizationId,
@@ -209,7 +228,8 @@ export class MembershipCheckoutService {
 			);
 			if (
 				!integration ||
-				integration.integrationVersion !== input.integrationVersion ||
+				integration.integrationVersion !==
+					storefrontIntegration.integrationVersion ||
 				!isAllowedCheckoutUrl(checkout.checkoutUrl, integration.storeDomain)
 			)
 				throw new AppError("Shopify checkout is unavailable.", 503);

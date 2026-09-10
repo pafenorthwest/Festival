@@ -16,6 +16,7 @@ import { InviteLandingPage } from "./pages/InviteLandingPage.js";
 import { MembershipPage } from "./pages/MembershipPage.js";
 import { OrganizationChooser } from "./pages/OrganizationChooser.js";
 import { OrganizationRootPage } from "./pages/OrganizationRootPage.js";
+import { PrivacyPolicyPage } from "./pages/PrivacyPolicyPage.js";
 
 export default function App() {
 	const app = useFestivalAppController();
@@ -31,6 +32,9 @@ export default function App() {
 					when={app.route().kind === "home" && !app.shouldShowOrgChooser()}
 				>
 					<HomePage app={app} />
+				</Match>
+				<Match when={app.route().kind === "privacy-policy"}>
+					<PrivacyPolicyPage />
 				</Match>
 				<Match when={app.route().kind === "create-org"}>
 					<CreateOrganizationPage app={app} />
@@ -66,6 +70,9 @@ export default function App() {
 					<AdminDivisionsPage app={app} />
 				</Match>
 			</Switch>
+			<footer class="site-footer">
+				<a href="/privacy-policy">Privacy Policy</a>
+			</footer>
 
 			<SignInModal app={app} />
 		</main>

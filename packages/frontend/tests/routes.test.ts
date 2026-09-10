@@ -10,12 +10,16 @@ import {
 	buildOrgMembershipPath,
 	buildOrgPath,
 	buildOrgRootPath,
+	buildPrivacyPolicyPath,
 	parseRoute,
 } from "../src/lib/routes.js";
 
 describe("route helpers", () => {
 	it("parses onboarding routes", () => {
 		expect(parseRoute("/")).toEqual({ kind: "home" });
+		expect(parseRoute("/privacy-policy")).toEqual({
+			kind: "privacy-policy",
+		});
 		expect(parseRoute("/create-organization")).toEqual({
 			kind: "create-org",
 		});
@@ -105,5 +109,6 @@ describe("route helpers", () => {
 		);
 		expect(buildOrgPath("second-festival")).toBe("/org/second-festival/admin");
 		expect(buildInvitePath("abc123")).toBe("/invite/abc123");
+		expect(buildPrivacyPolicyPath()).toBe("/privacy-policy");
 	});
 });
