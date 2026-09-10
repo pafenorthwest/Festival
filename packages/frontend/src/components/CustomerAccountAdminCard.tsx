@@ -1,6 +1,7 @@
 import type { CustomerAccountSettings } from "@festival/common";
 import { createSignal, onMount, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
+import { Button } from "./Button.js";
 import {
 	getCustomerAccountSettings,
 	saveCustomerAccountSettings,
@@ -149,9 +150,9 @@ export function CustomerAccountAdminCard(props: {
 						</p>
 					)}
 				</Show>
-				<button type="submit" class="shopify-submit-button" disabled={busy()}>
+				<Button type="submit" disabled={busy()}>
 					{busy() ? "Verifying…" : "Save & Verify"}
-				</button>
+				</Button>
 			</form>
 		</section>
 	);

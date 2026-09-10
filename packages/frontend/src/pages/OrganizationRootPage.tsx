@@ -5,6 +5,7 @@ import {
 	getPublicOrganizationLanding,
 	logoutCustomer,
 } from "../lib/api.js";
+import { Button } from "../components/Button.js";
 
 interface OrganizationRootPageProps {
 	app: { route: () => { kind: string; slug?: string } };
@@ -50,9 +51,9 @@ export function OrganizationRootPage(props: OrganizationRootPageProps) {
 							</a>
 						}
 					>
-						<button type="button" class="secondary-button" onClick={logout}>
+						<Button type="button" variant="secondary" onClick={logout}>
 							Logout
-						</button>
+						</Button>
 					</Show>
 				</Show>
 			</header>

@@ -4,8 +4,8 @@
 	--bullet-paper: #f7f4ee;
 	--bullet-panel: rgba(255, 255, 255, 0.82);
 	--bullet-panel-border: rgba(31, 36, 49, 0.12);
-	--bullet-accent: #4459d6;
-	--bullet-accent-strong: #2338b0;
+	--bullet-accent: #303240;
+	--bullet-accent-strong: #2a2c40;
 	--bullet-gold: #b6872c;
 	--bullet-error: #b94d36;
 	--bullet-success: #1f7a57;
@@ -57,6 +57,10 @@ button {
 	);
 	color: white;
 	box-shadow: 0 10px 24px rgba(68, 89, 214, 0.18);
+}
+
+button.button {
+	border-radius: 4px;
 }
 
 button:disabled {
@@ -854,17 +858,6 @@ form.shopify-integration-card {
 	margin: 0;
 	color: var(--bullet-error);
 	font-size: 0.95rem;
-}
-
-.shopify-submit-button {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	gap: 0.55rem;
-	width: fit-content;
-	min-width: 8.5rem;
-	min-height: 2.9rem;
-	margin-top: 0.2rem;
 }
 
 .membership-admin-layout {

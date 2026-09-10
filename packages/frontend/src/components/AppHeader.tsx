@@ -1,5 +1,6 @@
 import { Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
+import { Button } from "./Button.js";
 
 interface AppHeaderProps {
 	app: FestivalAppController;
@@ -32,22 +33,22 @@ export function AppHeader(props: AppHeaderProps) {
 			<Show when={props.app.sessionMembership() && props.app.isAdminRoute()}>
 				<div class="masthead-actions">
 					<Show when={props.app.isAdminSubRoute()}>
-						<button
+						<Button
 							type="button"
-							class="secondary-button compact-header-button"
+							variant="compact-header"
 							onClick={props.app.backToAdmin}
 						>
 							Back to Admin
-						</button>
+						</Button>
 					</Show>
-					<button
+					<Button
 						type="button"
-						class="secondary-button compact-header-button"
+						variant="compact-header"
 						onClick={props.app.handleLogout}
 						disabled={props.app.isBusy()}
 					>
 						Log out {props.app.adminUserLabel()}
-					</button>
+					</Button>
 				</div>
 			</Show>
 		</header>

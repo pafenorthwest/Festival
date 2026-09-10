@@ -1,6 +1,7 @@
 import { For, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { AccessDeniedPanel } from "../components/AccessDeniedPanel.js";
+import { Button } from "../components/Button.js";
 import { buildOrgAdminIntegrationsPath } from "../lib/routes.js";
 
 interface AdminMembershipProductsPageProps {
@@ -120,9 +121,9 @@ export function AdminMembershipProductsPage(
 									Verified Shopify integration is required before creating
 									memberships.
 								</p>
-								<button
+								<Button
 									type="button"
-									class="secondary-button"
+									variant="secondary"
 									onClick={() => {
 										const route = props.app.route();
 										if (route.kind !== "org-admin-memberships") {
@@ -135,7 +136,7 @@ export function AdminMembershipProductsPage(
 									}}
 								>
 									Open Shopify Integration
-								</button>
+								</Button>
 							</div>
 						</Show>
 
@@ -194,9 +195,8 @@ export function AdminMembershipProductsPage(
 								{props.app.membershipProductValidationMessage()}
 							</p>
 						</Show>
-						<button
+						<Button
 							type="submit"
-							class="shopify-submit-button"
 							disabled={
 								!props.app.shopifyPrerequisiteMet() ||
 								props.app.isCreatingMembershipProduct()
@@ -209,7 +209,7 @@ export function AdminMembershipProductsPage(
 								<span class="button-spinner" aria-hidden="true" />
 								<span>Creating</span>
 							</Show>
-						</button>
+						</Button>
 					</form>
 				</div>
 			</section>

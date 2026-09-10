@@ -14,6 +14,7 @@ import {
 	logoutCustomer,
 	updateCustomerProfile,
 } from "../lib/api.js";
+import { Button } from "../components/Button.js";
 import {
 	customerMembershipViewModel,
 	decideMembershipPolling,
@@ -394,13 +395,13 @@ export function CustomerAccountPage(props: { slug: string }) {
 					<Show when={status()}>
 						{(message) => <p role="status">{message()}</p>}
 					</Show>
-					<button
+					<Button
 						type="button"
-						class="secondary-button"
+						variant="secondary"
 						onClick={() => void logout()}
 					>
 						Log out
-					</button>
+					</Button>
 					<section
 						class="customer-membership-section"
 						aria-labelledby="festival-memberships-heading"
@@ -413,16 +414,16 @@ export function CustomerAccountPage(props: { slug: string }) {
 									rights.
 								</p>
 							</div>
-							<button
+							<Button
 								type="button"
-								class="secondary-button"
+								variant="secondary"
 								disabled={membershipLoading() || membershipRefreshing()}
 								onClick={() => void refreshMembershipStatus()}
 							>
 								{membershipRefreshing()
 									? "Refreshing…"
 									: "Refresh membership status"}
-							</button>
+							</Button>
 						</header>
 						<Show when={membershipLoading()}>
 							<p role="status">Loading Festival membership status…</p>
@@ -555,13 +556,13 @@ export function CustomerAccountPage(props: { slug: string }) {
 						</Show>
 						<Show when={next()} keyed>
 							{(cursor) => (
-								<button
+								<Button
 									type="button"
-									class="secondary-button"
+									variant="secondary"
 									onClick={() => void loadOrders(cursor)}
 								>
 									Load more
-								</button>
+								</Button>
 							)}
 						</Show>
 					</section>

@@ -66,6 +66,8 @@ async function readFrontendSource(): Promise<string> {
 		"src/app/useFestivalLifecycle.ts",
 		"src/components/AccessDeniedPanel.tsx",
 		"src/components/AppBanners.tsx",
+		"src/components/Button.tsx",
+		"src/components/CustomerAccountAdminCard.tsx",
 		"src/components/AppHeader.tsx",
 		"src/components/SignInModal.tsx",
 		"src/lib/api.ts",
@@ -504,9 +506,24 @@ describe("organization onboarding integration", () => {
 		expect(source).toContain("clearMessages()");
 		expect(source).toContain("validateFestivalDates(draft)");
 		expect(source).toContain('class="masthead-actions"');
-		expect(source).toContain('class="secondary-button compact-header-button"');
+		expect(source).toContain('variant="compact-header"');
 		expect(styles).toContain(".compact-header-button");
 		expect(styles).toContain("background: rgba(31, 122, 87, 0.08);");
+	});
+
+	it("uses the shared button component with the requested visual tokens", async () => {
+		const source = await readFrontendSource();
+		const styles = await Bun.file("src/styles.css").text();
+
+		expect(source).toContain('export type ButtonVariant = "primary" | "secondary" | "compact-header"');
+		expect(source).toContain('"secondary-button compact-header-button"');
+		expect(source).toContain('variant="secondary"');
+		expect(styles).toContain("--bullet-accent: #303240;");
+		expect(styles).toContain("--bullet-accent-strong: #2a2c40;");
+		expect(styles).toContain("button.button {");
+		expect(styles).toContain("border-radius: 4px;");
+		expect(source).not.toContain("shopify-submit-button");
+		expect(styles).not.toContain(".shopify-submit-button");
 	});
 
 	it("wires issue 70 admin membership UI through existing admin access control", async () => {

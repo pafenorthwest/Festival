@@ -2,6 +2,7 @@ import { For, Show } from "solid-js";
 import { formatDateOnly } from "../app/appFormatting.js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { AccessDeniedPanel } from "../components/AccessDeniedPanel.js";
+import { Button } from "../components/Button.js";
 
 interface AdminFestivalsPageProps {
 	app: FestivalAppController;
@@ -85,13 +86,13 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 						}
 					/>
 				</label>
-				<button
+				<Button
 					type="button"
 					onClick={props.app.handleCreateFestival}
 					disabled={props.app.isBusy()}
 				>
 					Create festival
-				</button>
+				</Button>
 			</section>
 		</Show>
 	);

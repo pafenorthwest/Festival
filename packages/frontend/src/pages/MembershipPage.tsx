@@ -12,6 +12,7 @@ import {
 } from "../lib/api.js";
 import { buildOrgMembershipPath } from "../lib/routes.js";
 import { sanitizeShopifyDescriptionHtml } from "../lib/sanitize-html.js";
+import { Button } from "../components/Button.js";
 
 interface MembershipPageProps {
 	app: FestivalAppController;
@@ -341,15 +342,15 @@ export function MembershipPage(props: MembershipPageProps) {
 							</p>
 						</Show>
 						<div class="membership-checkout-actions">
-							<button
+							<Button
 								type="button"
-								class="secondary-button"
+								variant="secondary"
 								disabled={checkoutSubmitting()}
 								onClick={cancelPurchase}
 							>
 								Cancel
-							</button>
-							<button
+							</Button>
+							<Button
 								type="button"
 								disabled={
 									!selectedDivisionId() ||
@@ -365,7 +366,7 @@ export function MembershipPage(props: MembershipPageProps) {
 								}}
 							>
 								{checkoutSubmitting() ? "Opening Shopify…" : "Purchase"}
-							</button>
+							</Button>
 						</div>
 					</section>
 				</section>
@@ -405,7 +406,7 @@ export function MembershipPage(props: MembershipPageProps) {
 										{membershipProduct.price.amount}{" "}
 										{membershipProduct.price.currencyCode}
 									</strong>
-									<button
+									<Button
 										type="button"
 										disabled={
 											!membershipProduct.available ||
@@ -418,7 +419,7 @@ export function MembershipPage(props: MembershipPageProps) {
 												? "Continuing…"
 												: "Purchase"
 											: "Unavailable"}
-									</button>
+									</Button>
 								</div>
 							</article>
 						)}

@@ -6,6 +6,7 @@ import { createSignal, For, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { AccessDeniedPanel } from "../components/AccessDeniedPanel.js";
 import { CustomerAccountAdminCard } from "../components/CustomerAccountAdminCard.js";
+import { Button } from "../components/Button.js";
 import { runShopifyDiagnostics } from "../lib/api.js";
 
 interface AdminIntegrationsPageProps {
@@ -324,9 +325,8 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 					<Show when={props.app.shopifySettings()?.lastError} keyed>
 						{(lastError) => <p class="shopify-error-text">{lastError}</p>}
 					</Show>
-					<button
+					<Button
 						type="submit"
-						class="shopify-submit-button"
 						disabled={
 							!props.app.isAdminMember() || props.app.isShopifyTesting()
 						}
@@ -335,7 +335,7 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 							<span class="button-spinner" aria-hidden="true" />
 							<span>Testing</span>
 						</Show>
-					</button>
+					</Button>
 					<section
 						class="shopify-diagnostics"
 						aria-labelledby="shopify-diagnostics-title"
@@ -344,16 +344,16 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 							<h3 id="shopify-diagnostics-title">Diagnostics</h3>
 							<p>Check conditions required outside Shopify Admin API setup.</p>
 						</div>
-						<button
+						<Button
 							type="button"
-							class="secondary-button"
+							variant="secondary"
 							disabled={!diagnosticsAvailable() || isRunningDiagnostics()}
 							onClick={() => void handleRunDiagnostics()}
 						>
 							{isRunningDiagnostics()
 								? "Running diagnostics…"
 								: "Run diagnostics"}
-						</button>
+						</Button>
 						<Show when={!diagnosticsAvailable()}>
 							<p class="muted">
 								Save and verify the Shopify integration before running

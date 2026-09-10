@@ -21,10 +21,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/resolve-codex-root.sh"
 
-# Keep bootstrap codex paths aligned with the current worktree when Stage 1
-# starts in detached HEAD mode.
-"${SCRIPT_DIR}/codex-config-bootstrap-sync.sh" apply
-
 if ! CODEX_ROOT_RESOLVED="$(resolve_codex_root goals/establish-goals.template.md)"; then
   echo "ERROR: Unable to resolve codex root (checked ./.codex, ./codex, \$HOME/.codex)"
   exit 1
