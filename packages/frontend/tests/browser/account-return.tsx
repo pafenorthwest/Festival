@@ -9,6 +9,8 @@ const checks: string[] = [];
 let authenticated = false;
 let memberships: Record<string, unknown>[] = [];
 let requestedMemberships = 0;
+let profile = {};
+let requestedProfiles = 0;
 window.fetch = async (input) => {
 	const url = String(input);
 	let body: unknown;
@@ -18,8 +20,10 @@ window.fetch = async (input) => {
 				? { authenticated: true, csrfToken: "fixture" }
 				: { authenticated: false },
 		};
-	else if (url.endsWith("/customer/profile")) body = { profile: {} };
-	else if (url.endsWith("/customer/orders"))
+	else if (url.endsWith("/customer/profile")) {
+		requestedProfiles++;
+		body = { profile };
+	} else if (url.endsWith("/customer/orders"))
 		body = { orders: [], pageInfo: { hasNextPage: false, endCursor: null } };
 	else if (url.endsWith("/customer/membership-status")) {
 		requestedMemberships++;
@@ -79,6 +83,22 @@ async function verify() {
 		root?.textContent?.includes("Processing"),
 		"Unconfirmed payment displays Processing",
 	);
+	assert(
+		root?.textContent?.includes("We’re importing your purchase details"),
+		"Pending return explains that profile import is in progress",
+	);
+	profile = {
+		name: "Shopify Customer",
+		email: "customer@example.com",
+		phone: "+1 555 555 0100",
+		mailingAddress: {
+			line1: "123 Purchase Street",
+			city: "Portland",
+			region: "OR",
+			postalCode: "97201",
+			countryCode: "US",
+		},
+	};
 	memberships = [
 		{
 			status: "active",
@@ -99,6 +119,11 @@ async function verify() {
 	assert(
 		!window.location.search,
 		"Confirmed membership clears the processing handoff",
+	);
+	assert(requestedProfiles >= 2, "Confirmed return refreshes the profile");
+	assert(
+		root?.textContent?.includes("Shopify Customer"),
+		"Refreshed profile displays imported Shopify contact data",
 	);
 	if (results)
 		results.textContent = `PASS: ${checks.length} account return checks\n${checks.join("\n")}`;

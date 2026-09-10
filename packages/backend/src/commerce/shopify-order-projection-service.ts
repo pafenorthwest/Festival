@@ -122,7 +122,10 @@ export class ShopifyOrderProjectionService {
 				shopifyOrderGid: delivery.shopifyOrderGid,
 				updatedAtIso: nowIso(this.now),
 			});
-			if (pending.status !== "pending_validation") {
+			if (
+				pending.status !== "pending_validation" &&
+				pending.status !== "approved"
+			) {
 				await this.commerce.markDeliveryProcessed(delivery.id);
 				return "skipped";
 			}
@@ -183,6 +186,17 @@ export class ShopifyOrderProjectionService {
 				);
 				return "processed";
 			}
+			if (pending.status === "approved") {
+				if (delivery.attemptCount > 1) {
+					await this.projectConsentedCustomerProfile(
+						delivery.organizationId,
+						intent,
+						order,
+					);
+				}
+				await this.commerce.markDeliveryProcessed(delivery.id);
+				return delivery.attemptCount > 1 ? "processed" : "skipped";
+			}
 
 			const reason = await this.validate(
 				delivery.organizationId,
@@ -208,12 +222,6 @@ export class ShopifyOrderProjectionService {
 				);
 				return "processed";
 			}
-			await this.projectConsentedCustomerProfile(
-				delivery.organizationId,
-				intent,
-				order,
-			).catch(() => undefined);
-
 			const line = order.lineItems[0];
 			if (
 				!line ||
@@ -257,6 +265,11 @@ export class ShopifyOrderProjectionService {
 					},
 				},
 				projection,
+			);
+			await this.projectConsentedCustomerProfile(
+				delivery.organizationId,
+				intent,
+				order,
 			);
 			return "processed";
 		} catch (error) {

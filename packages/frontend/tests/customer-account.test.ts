@@ -77,6 +77,9 @@ describe("customer account frontend boundary", () => {
 		expect(page).toContain("getCustomerMembershipStatus");
 		expect(page).toContain("getCustomerOrders");
 		expect(page).toContain("getCustomerProfile");
+		expect(page).toContain("async function loadProfile()");
+		expect(page).toContain("void loadProfile().catch");
+		expect(page).toContain("We’re importing your purchase details");
 		expect(page).toContain("updateCustomerProfile");
 		expect(page).toContain("void loadOrders().catch");
 		expect(page).not.toContain("const [, profileResponse] = await Promise.all");
