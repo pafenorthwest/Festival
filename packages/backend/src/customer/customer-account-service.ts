@@ -402,6 +402,10 @@ export class CustomerAccountService {
 		let expected = offeringId
 			? `/org/${slug}/membership?purchase=${encodeURIComponent(offeringId)}`
 			: `/org/${slug}/account`;
+		const landingPath = `/org/${slug}`;
+		if (!offeringId && returnTo === landingPath) {
+			expected = landingPath;
+		}
 		// Preserve only the known checkout handoff; arbitrary return URLs remain forbidden.
 		if (!offeringId && returnTo === `${expected}?checkout=processing`) {
 			expected = returnTo;

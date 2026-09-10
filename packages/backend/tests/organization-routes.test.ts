@@ -1168,6 +1168,41 @@ describe("organization routes", () => {
 		});
 	});
 
+	it("serves a public organization landing with upcoming festivals", async () => {
+		const { app } = await createTestApp();
+		await app.fetch(
+			new Request(
+				"http://test/api/organizations",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({ name: "Festival Admins", shortName: "pafe" }),
+				}),
+			),
+		);
+		await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/festivals",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						name: "Spring Festival",
+						startDate: "2027-06-10",
+						endDate: "2027-06-12",
+					}),
+				}),
+			),
+		);
+
+		const response = await app.fetch(
+			new Request("http://test/api/organizations/pafe/landing"),
+		);
+		expect(response.status).toBe(200);
+		await expect(response.json()).resolves.toMatchObject({
+			organization: { name: "Festival Admins", slug: "pafe" },
+			festivals: [{ name: "Spring Festival", startDate: "2027-06-10" }],
+		});
+	});
+
 	it("saves and verifies Shopify settings without returning the secret", async () => {
 		const { app, shopifyTester } = await createTestAppWithShopify();
 

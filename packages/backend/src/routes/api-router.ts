@@ -387,6 +387,16 @@ export function buildApiRouter(
 		}
 	});
 
+	router.get("/organizations/:slug/landing", async (c) => {
+		try {
+			return c.json(
+				await organizationService.getPublicLanding(c.req.param("slug")),
+			);
+		} catch (error) {
+			return toJsonError(c, error);
+		}
+	});
+
 	router.get(
 		"/organizations/:slug/admin/divisions",
 		requireAuth(authVerifier),
