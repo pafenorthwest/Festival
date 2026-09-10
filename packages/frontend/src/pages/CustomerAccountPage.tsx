@@ -84,6 +84,7 @@ export function CustomerAccountPage(props: { slug: string }) {
 		stopMembershipPolling();
 		setMembershipPollTimedOut(false);
 		if (checkoutReturn) {
+			void loadProfile().catch((error) => setError((error as Error).message));
 			checkoutReturn = false;
 			setCheckoutProcessing(false);
 			removeCheckoutProcessingQuery();
@@ -195,6 +196,25 @@ export function CustomerAccountPage(props: { slug: string }) {
 		);
 		setNext(response.pageInfo.hasNextPage ? response.pageInfo.endCursor : null);
 	}
+
+	async function loadProfile() {
+		const profileResponse = await getCustomerProfile(props.slug);
+		const current = profileResponse.profile;
+		setProfile({
+			name: current.name ?? "",
+			email: current.email ?? "",
+			mailingAddress: {
+				line1: current.mailingAddress?.line1 ?? "",
+				line2: current.mailingAddress?.line2 ?? "",
+				city: current.mailingAddress?.city ?? "",
+				region: current.mailingAddress?.region ?? "",
+				postalCode: current.mailingAddress?.postalCode ?? "",
+				countryCode: current.mailingAddress?.countryCode ?? "",
+			},
+			phone: current.phone ?? "",
+		});
+	}
+
 	onMount(
 		() =>
 			void (async () => {
@@ -210,21 +230,7 @@ export function CustomerAccountPage(props: { slug: string }) {
 							setError((error as Error).message),
 						);
 						void initializeMembershipStatus();
-						const profileResponse = await getCustomerProfile(props.slug);
-						const current = profileResponse.profile;
-						setProfile({
-							name: current.name ?? "",
-							email: current.email ?? "",
-							mailingAddress: {
-								line1: current.mailingAddress?.line1 ?? "",
-								line2: current.mailingAddress?.line2 ?? "",
-								city: current.mailingAddress?.city ?? "",
-								region: current.mailingAddress?.region ?? "",
-								postalCode: current.mailingAddress?.postalCode ?? "",
-								countryCode: current.mailingAddress?.countryCode ?? "",
-							},
-							phone: current.phone ?? "",
-						});
+						await loadProfile();
 					}
 				} catch (error) {
 					setError((error as Error).message);
@@ -299,6 +305,12 @@ export function CustomerAccountPage(props: { slug: string }) {
 						onSubmit={(event) => void saveProfile(event)}
 					>
 						<h2>Festival profile</h2>
+						<Show when={checkoutProcessing()}>
+							<p role="status">
+								We’re importing your purchase details. Your profile will refresh
+								when payment confirmation finishes.
+							</p>
+						</Show>
 						<p class="muted">
 							These details are stored in Festival. Changes here do not update
 							Shopify.

@@ -868,6 +868,67 @@ describe("ShopifyAdminApiClient", () => {
 		expect(graphqlBody?.query).not.toContain("shippingAddress");
 	});
 
+	it("prefers the paid order shipping address for contact projection", async () => {
+		let profileQuery = "";
+		const client = new ShopifyAdminApiClient({
+			fetch: async (input, init) => {
+				if (input.toString().endsWith("/admin/oauth/access_token")) {
+					return Response.json({
+						access_token: "read-orders-token",
+						expires_in: 3600,
+						scope: "read_orders",
+					});
+				}
+				profileQuery = JSON.parse(String(init?.body)).query;
+				return Response.json({
+					data: {
+						order: {
+							shippingAddress: {
+								address1: "123 Purchase Street",
+								city: "Portland",
+								province: "OR",
+								zip: "97201",
+								countryCodeV2: "US",
+							},
+							customer: {
+								firstName: "Shopify",
+								lastName: "Customer",
+								email: "customer@example.com",
+								defaultAddress: {
+									address1: "1 Old Address",
+									city: "Seattle",
+									province: "WA",
+									zip: "98101",
+									countryCodeV2: "US",
+								},
+							},
+						},
+					},
+				});
+			},
+		});
+
+		await expect(
+			client.readOrderCustomerProfileByGid(
+				{ ...operationContext, capability: "read_orders" },
+				"gid://shopify/Order/1",
+			),
+		).resolves.toMatchObject({
+			value: {
+				name: "Shopify Customer",
+				email: "customer@example.com",
+				mailingAddress: {
+					line1: "123 Purchase Street",
+					city: "Portland",
+					region: "OR",
+					postalCode: "97201",
+					countryCode: "US",
+				},
+			},
+		});
+		expect(profileQuery).toContain("shippingAddress");
+	});
+
 	it("fails closed before transport for an unauthorized or malformed order read", async () => {
 		let fetchCalls = 0;
 		const client = new ShopifyAdminApiClient({

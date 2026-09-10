@@ -139,6 +139,15 @@ interface ShopifyOrderCustomerContactNode {
 	} | null;
 }
 
+interface ShopifyOrderAddressNode {
+	address1?: string | null;
+	address2?: string | null;
+	city?: string | null;
+	province?: string | null;
+	zip?: string | null;
+	countryCodeV2?: string | null;
+}
+
 interface ShopifyUserErrorPayload {
 	field?: string[];
 	message: string;
@@ -233,8 +242,39 @@ function optionalCustomerText(value: unknown, limit = 255): string | undefined {
 	return normalized && normalized.length <= limit ? normalized : undefined;
 }
 
+function mapMailingAddress(
+	address: ShopifyOrderAddressNode | null | undefined,
+) {
+	const line1 = optionalCustomerText(address?.address1, 512);
+	const city = optionalCustomerText(address?.city);
+	const region = optionalCustomerText(address?.province);
+	const postalCode = optionalCustomerText(address?.zip);
+	const countryCode = optionalCustomerText(
+		address?.countryCodeV2,
+	)?.toUpperCase();
+	const line2 = optionalCustomerText(address?.address2, 512);
+	if (
+		!line1 ||
+		!city ||
+		!region ||
+		!postalCode ||
+		!countryCode ||
+		!/^[A-Z]{2}$/.test(countryCode)
+	)
+		return undefined;
+	return {
+		line1,
+		...(line2 ? { line2 } : {}),
+		city,
+		region,
+		postalCode,
+		countryCode,
+	};
+}
+
 function mapOrderCustomerProfile(
 	customer: ShopifyOrderCustomerContactNode | null | undefined,
+	shippingAddress: ShopifyOrderAddressNode | null | undefined,
 ): ShopifyOrderCustomerProfile | null {
 	if (!customer) return null;
 	const firstName = optionalCustomerText(customer.firstName);
@@ -250,31 +290,9 @@ function mapOrderCustomerProfile(
 		phoneCandidate && /^\+?[0-9][0-9 ().-]{5,30}$/.test(phoneCandidate)
 			? phoneCandidate
 			: undefined;
-	const address = customer.defaultAddress;
-	const line1 = optionalCustomerText(address?.address1, 512);
-	const city = optionalCustomerText(address?.city);
-	const region = optionalCustomerText(address?.province);
-	const postalCode = optionalCustomerText(address?.zip);
-	const countryCode = optionalCustomerText(
-		address?.countryCodeV2,
-	)?.toUpperCase();
-	const line2 = optionalCustomerText(address?.address2, 512);
 	const mailingAddress =
-		line1 &&
-		city &&
-		region &&
-		postalCode &&
-		countryCode &&
-		/^[A-Z]{2}$/.test(countryCode)
-			? {
-					line1,
-					...(line2 ? { line2 } : {}),
-					city,
-					region,
-					postalCode,
-					countryCode,
-				}
-			: undefined;
+		mapMailingAddress(shippingAddress) ??
+		mapMailingAddress(customer.defaultAddress);
 	if (!name && !email && !phone && !mailingAddress) return null;
 	return {
 		...(name ? { name } : {}),
@@ -1018,14 +1036,25 @@ export class ShopifyAdminApiClient
 			"read_orders",
 		);
 		const response = await this.graphqlRequest<{
-			order?: { customer?: ShopifyOrderCustomerContactNode | null } | null;
+			order?: {
+				customer?: ShopifyOrderCustomerContactNode | null;
+				shippingAddress?: ShopifyOrderAddressNode | null;
+			} | null;
 		}>(
 			credentials.storeDomain,
 			accessToken,
 			`
 			query ReadPaidOrderCustomerProfile($orderId: ID!) {
-				order(id: $orderId) {
-					customer {
+			order(id: $orderId) {
+				shippingAddress {
+					address1
+					address2
+					city
+					province
+					zip
+					countryCodeV2
+				}
+				customer {
 						firstName
 						lastName
 						email
@@ -1045,7 +1074,10 @@ export class ShopifyAdminApiClient
 			{ orderId: orderGid },
 		);
 		return {
-			value: mapOrderCustomerProfile(response.value.order?.customer),
+			value: mapOrderCustomerProfile(
+				response.value.order?.customer,
+				response.value.order?.shippingAddress,
+			),
 			requestId: response.requestId,
 		};
 	}
