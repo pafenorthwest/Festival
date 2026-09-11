@@ -186,9 +186,12 @@ the service-token-protected `/api/internal/reconcile/shopify-orders` backend pat
 nginx intentionally default-denies that path, so do not expose it publicly.
 
 Production order access requires Shopify protected-customer-data configuration
-or approval in addition to the Headless permission. Festival fails closed when
-Shopify denies or redacts protected order data. Auth start/callback rate limiting
-is intentionally deferred until benchmarking and load testing establish an
+or approval in addition to the Headless permission. For Custom distribution,
+generate the target-store install link in Partner Dashboard and open it while
+signed into the target store to approve installation and released scope changes;
+the link is not a Festival credential. Festival fails closed when Shopify denies
+or redacts protected order data. Auth start/callback rate limiting is
+intentionally deferred until benchmarking and load testing establish an
 evidence-based policy; do not interpret the platform's 500 requests/second
 performance target as an authentication throttle.
 

@@ -196,11 +196,9 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 											{(scope) => (
 												<li>
 													{scope}:{" "}
-													{scope === "read_customers"
-														? "Manual verification required"
-														: settings.verifiedScopes.includes(scope)
-															? "Granted"
-															: "Missing"}
+													{settings.verifiedScopes.includes(scope)
+														? "Granted"
+														: "Missing"}
 												</li>
 											)}
 										</For>
