@@ -108,8 +108,7 @@ async function fixture(
 		shopifyProductGid:
 			productionSnapshot.shopifyProductGid ?? "gid://shopify/Product/1",
 		shopifyVariantGid:
-			productionSnapshot.shopifyVariantGid ??
-			"gid://shopify/ProductVariant/1",
+			productionSnapshot.shopifyVariantGid ?? "gid://shopify/ProductVariant/1",
 		productNameSnapshot: "Teacher Membership",
 	});
 	const customers = new InMemoryCustomerAccountRepository();

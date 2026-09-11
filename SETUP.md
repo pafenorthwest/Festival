@@ -233,20 +233,28 @@ Use this ordered checklist when setting up or diagnosing a store:
 1. In Shopify Dev Dashboard, confirm the app and development store appear under
    the same Shopify organization. Installing an app on a store does not by
    itself satisfy the client-credentials ownership requirement.
-2. Select an app distribution method, then open **Partner Dashboard → Apps →
-   your app → API access requests → Protected customer data access**. Select
-   **Protected customer data**, explain its use for paid-order membership
-   verification, select only required fields, and **Save**. For development-only
-   or custom-distributed apps, the 16-question Partner review questionnaire and
-   public-app review submission are not required. See Shopify's
-   [request-access instructions](https://shopify.dev/docs/apps/launch/protected-customer-data#request-access-to-protected-customer-data).
-3. Set the app webhook API version to `2026-07`. Add `read_orders` to the app
-   version, release it, and update or reinstall the released version on the
-   target store. Approve the changed access on the store. Festival reads the
-   effective scopes returned by that store's access token; the Dev Dashboard
-   selection alone is not proof that `read_orders` was granted.
+2. Open **Partner Dashboard → Apps → your app → API access requests** and
+   request **Protected customer data** for paid-order membership verification.
+   Select only the fields required by Festival and save the request. For
+   development-only or custom-distributed apps, the 16-question Partner review
+   questionnaire and public-app review submission are not required. See
+   Shopify's [request-access instructions](https://shopify.dev/docs/apps/launch/protected-customer-data#request-access-to-protected-customer-data).
+3. Open **Partner Dashboard → Apps → your app → Distribution**, select
+   **Custom distribution**, enter the target store's `*.myshopify.com` domain,
+   and generate the install link. Copy the generated link and open it in a
+   browser while signed in as an administrator of that target store; complete
+   the install or scope-update approval. The link is an installation and
+   permission-approval step, not a Festival credential: do not paste it into
+   Festival's Client ID, Client secret, or Store URL fields.
+4. In Shopify Dev Dashboard, set the app webhook API version to `2026-07` and
+   add all Festival-required Admin and Customer Account scopes, including
+   `read_customers` and `read_orders`. Release the version, then repeat the
+   generated Custom-distribution install-link approval on the target store when
+   Shopify requires consent for the changed scopes. Festival reads the effective
+   scopes returned by that store's access token; a checked Dev Dashboard scope
+   alone is not proof that access was granted.
    `ORDERS_PAID` does not require a separate `write_webhooks` scope.
-4. Set `FESTIVAL_PUBLIC_ORIGIN` before starting a keyring-enabled Festival
+5. Set `FESTIVAL_PUBLIC_ORIGIN` before starting a keyring-enabled Festival
    backend. It must be the externally reachable HTTPS origin without a path,
    credentials, or explicit port:
 
@@ -260,7 +268,7 @@ Use this ordered checklist when setting up or diagnosing a store:
    work from outside the private network. An unsigned probe must be rejected by
    Festival's HMAC check; do not weaken that check to make a probe pass. Do not
    use `localhost`, the private backend port, or the reconciliation endpoint.
-5. Start Festival, save and verify the Organization's Shopify Admin integration,
+6. Start Festival, save and verify the Organization's Shopify Admin integration,
    and confirm the returned effective capability includes `read_orders`.
    Festival then lists and creates or repairs the app-owned `ORDERS_PAID`
    subscription. Run **Shopify Integration > Diagnostics** to repair it again
@@ -299,7 +307,10 @@ Festival uses Shopify's Dev Dashboard app install plus client credentials grant 
 In the Shopify Dev Dashboard:
 - Configure scopes in the app version: `read_customers,read_orders,read_products,write_products,customer_read_customers,customer_read_draft_orders,customer_read_metaobjects,customer_read_orders`.
 - Release the version.
-- Install the app on the target store from the app Home tab.
+- In Partner Dashboard, request Protected customer data and configure Custom
+  distribution for the target store. Generate the install link, then open it
+  while signed into that store to complete installation or approve the released
+  scope update.
 
 In Festival's organization admin page, enter the store's `*.myshopify.com` domain plus the app Client ID and Client secret. The backend uses Admin GraphQL `2026-07`, verifies the returned canonical shop and already-granted scopes, and does not request scopes during token exchange. Short-lived access tokens remain only in an early-expiry process-local cache and are never persisted.
 

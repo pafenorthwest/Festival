@@ -147,6 +147,7 @@ describe("organization onboarding integration", () => {
 				"write_products",
 			]),
 		).toEqual([
+			"read_customers",
 			"customer_read_customers",
 			"customer_read_draft_orders",
 			"customer_read_metaobjects",
@@ -167,7 +168,7 @@ describe("organization onboarding integration", () => {
 		expect(source).toContain(
 			"Shopify is verified, but required scopes are missing.",
 		);
-		expect(source).toContain("Manual verification required");
+		expect(source).not.toContain("Manual verification required");
 		expect(source).toContain('settings.verificationStatus === "ok"');
 		expect(source).toContain("Missing scopes:");
 		expect(source).toContain("then run Save &amp; Test again");
