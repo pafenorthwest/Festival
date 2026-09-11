@@ -199,7 +199,9 @@ a {
 	width: 4.25rem;
 }
 
-.organization-side-navigation.is-collapsed .organization-side-navigation-section h2,
+.organization-side-navigation.is-collapsed
+	.organization-side-navigation-section
+	h2,
 .organization-side-navigation.is-collapsed .organization-side-navigation-label {
 	display: none;
 }

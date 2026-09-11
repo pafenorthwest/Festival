@@ -2,8 +2,9 @@ import { Match, Switch } from "solid-js";
 import { useFestivalAppController } from "./app/useFestivalAppController.js";
 import { AppBanners } from "./components/AppBanners.js";
 import { AppHeader } from "./components/AppHeader.js";
-import { SignInModal } from "./components/SignInModal.js";
 import { OrganizationSideNavigation } from "./components/OrganizationSideNavigation.js";
+import { SignInModal } from "./components/SignInModal.js";
+import { isOrganizationPageRoute } from "./lib/routes.js";
 import { AdminDivisionsPage } from "./pages/AdminDivisionsPage.js";
 import { AdminFestivalsPage } from "./pages/AdminFestivalsPage.js";
 import { AdminHomePage } from "./pages/AdminHomePage.js";
@@ -21,7 +22,6 @@ import { MembershipPage } from "./pages/MembershipPage.js";
 import { OrganizationChooser } from "./pages/OrganizationChooser.js";
 import { OrganizationRootPage } from "./pages/OrganizationRootPage.js";
 import { PrivacyPolicyPage } from "./pages/PrivacyPolicyPage.js";
-import { isOrganizationPageRoute } from "./lib/routes.js";
 
 export default function App() {
 	const app = useFestivalAppController();
@@ -72,7 +72,9 @@ export default function App() {
 								slug={(app.route() as { slug: string }).slug}
 							/>
 						</Match>
-						<Match when={app.route().kind === "org-customer-account-memberships"}>
+						<Match
+							when={app.route().kind === "org-customer-account-memberships"}
+						>
 							<CustomerAccountMembershipsPage
 								slug={(app.route() as { slug: string }).slug}
 							/>

@@ -7,8 +7,10 @@ import {
 } from "../lib/routes.js";
 
 function startsCollapsed() {
-	return typeof window !== "undefined" &&
-		window.matchMedia("(max-width: 720px)").matches;
+	return (
+		typeof window !== "undefined" &&
+		window.matchMedia("(max-width: 720px)").matches
+	);
 }
 
 export function OrganizationSideNavigation(props: { slug: string }) {
