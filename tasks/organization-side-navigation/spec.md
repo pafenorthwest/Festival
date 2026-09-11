@@ -38,5 +38,5 @@
 - Lint: passed (`bun run lint`, from `packages/frontend`)
 - Build: passed (`bun run build`, from `packages/frontend`)
 - Tests: passed (`bun test`, from `packages/frontend`)
-- Code review: pending
+- Code review: passed (no actionable findings; confidence 0.92)
 - Clean merge: pending
