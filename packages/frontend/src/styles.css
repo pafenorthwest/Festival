@@ -132,6 +132,82 @@ a {
 	padding: 2.5rem 1.25rem 4rem;
 }
 
+.organization-page-layout {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr);
+	gap: 1.5rem;
+	align-items: start;
+}
+
+.application-page-content {
+	min-width: 0;
+}
+
+.organization-side-navigation {
+	position: sticky;
+	top: 1rem;
+	width: 13.5rem;
+	display: grid;
+	gap: 1.25rem;
+	padding: 1rem;
+	border: 1px solid var(--bullet-panel-border);
+	border-radius: 12px;
+	background: var(--bullet-panel);
+	transition: width 160ms ease;
+}
+
+.organization-side-navigation-toggle {
+	justify-self: end;
+	display: grid;
+	place-items: center;
+	width: 2.25rem;
+	height: 2.25rem;
+	padding: 0;
+	border-radius: 6px;
+}
+
+.organization-side-navigation-section {
+	display: grid;
+	gap: 0.35rem;
+}
+
+.organization-side-navigation-section h2 {
+	margin: 0 0 0.25rem;
+	font-size: 0.78rem;
+	text-transform: uppercase;
+	letter-spacing: 0.12em;
+	color: var(--bullet-soft-ink);
+}
+
+.organization-side-navigation a {
+	display: flex;
+	align-items: center;
+	gap: 0.65rem;
+	min-height: 2.5rem;
+	padding: 0.45rem;
+	border-radius: 6px;
+	color: var(--bullet-ink);
+	text-decoration: none;
+}
+
+.organization-side-navigation a:hover,
+.organization-side-navigation a:focus-visible {
+	background: rgba(31, 36, 49, 0.08);
+}
+
+.organization-side-navigation.is-collapsed {
+	width: 4.25rem;
+}
+
+.organization-side-navigation.is-collapsed .organization-side-navigation-section h2,
+.organization-side-navigation.is-collapsed .organization-side-navigation-label {
+	display: none;
+}
+
+.organization-side-navigation.is-collapsed a {
+	justify-content: center;
+}
+
 .org-landing {
 	display: grid;
 	gap: 1.5rem;
@@ -1307,6 +1383,10 @@ form.shopify-integration-card {
 }
 
 @media (max-width: 720px) {
+	.organization-page-layout {
+		gap: 0.75rem;
+	}
+
 	.masthead {
 		grid-template-columns: 1fr;
 	}

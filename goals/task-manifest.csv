@@ -30,4 +30,5 @@ number,taskname,first_create_date,first_create_hhmmss,first_create_git_hash
 29,public-organization-landing-page,2026-09-10,000000,-------
 30,account-page-split,2026-09-11,000000,-------
 31,org-landing-header-auth-links,2026-09-11,000000,-------
-32,shopify-integration-scopes-layout,2026-09-11,000000,-------
+32,organization-side-navigation,2026-09-11,000000,-------
+33,shopify-integration-scopes-layout,2026-09-11,000000,-------

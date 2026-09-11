@@ -7,11 +7,43 @@ const page = await Bun.file(
 const appHeader = await Bun.file(
 	new URL("../src/components/AppHeader.tsx", import.meta.url),
 ).text();
+const app = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
+const sideNavigation = await Bun.file(
+	new URL("../src/components/OrganizationSideNavigation.tsx", import.meta.url),
+).text();
 const styles = await Bun.file(
 	new URL("../src/styles.css", import.meta.url),
 ).text();
 
 describe("public organization landing page", () => {
+	it("uses the shared sidebar only for the approved organization routes", () => {
+		expect(app).toContain("isOrganizationPageRoute(route)");
+		expect(app).toContain("OrganizationSideNavigation");
+		expect(sideNavigation).toContain('aria-label="Organization navigation"');
+		expect(sideNavigation).toContain("buildOrgCustomerAccountMembershipsPath");
+		expect(sideNavigation).toContain("buildOrgCustomerAccountContactPath");
+		expect(sideNavigation).toContain("buildOrgCustomerAccountOrdersPath");
+		expect(sideNavigation).toContain("buildOrgRootPath");
+		expect(sideNavigation).toContain("Accounts");
+		expect(sideNavigation).toContain("Festival");
+	});
+
+	it("provides a non-persistent responsive icon-only sidebar toggle", () => {
+		expect(sideNavigation).toContain("window.matchMedia");
+		expect(sideNavigation).toContain("(max-width: 720px)");
+		expect(sideNavigation).toContain("Expand navigation");
+		expect(sideNavigation).toContain("Collapse navigation");
+		expect(sideNavigation).toContain("card_membership");
+		expect(sideNavigation).toContain("contact_page");
+		expect(sideNavigation).toContain("receipt_long");
+		expect(sideNavigation).toContain("home");
+		expect(sideNavigation).toContain('aria-label="Memberships"');
+		expect(sideNavigation).toContain('aria-label="Contact Information"');
+		expect(sideNavigation).toContain('aria-label="Order History"');
+		expect(sideNavigation).toContain('aria-label="Home"');
+		expect(styles).toContain(".organization-side-navigation.is-collapsed");
+	});
+
 	it("uses the shared Organization Page header for customer authentication", () => {
 		expect(customerLandingSignInPath("pafe")).toBe(
 			"/api/organizations/pafe/customer-auth/start?returnTo=%2Forg%2Fpafe",
