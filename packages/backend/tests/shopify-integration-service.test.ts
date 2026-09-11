@@ -307,6 +307,7 @@ describe("ShopifyIntegrationService", () => {
 			verificationStatus: "ok",
 			verifiedShopGid: "gid://shopify/Shop/1",
 			verifiedShopDomain: "example.myshopify.com",
+			verifiedScopes: ["read_orders", "read_products"],
 			capabilities: {
 				read_products: "granted",
 				write_products: "missing",

@@ -744,6 +744,33 @@ form.shopify-integration-card {
 	gap: 0.8rem;
 }
 
+.shopify-verified-settings {
+	display: grid;
+	gap: 0.4rem;
+	margin-bottom: 1rem;
+	padding: 0.7rem 0.85rem;
+	border: 1px solid rgba(31, 36, 49, 0.16);
+	border-radius: 12px;
+	background: rgba(231, 235, 240, 0.62);
+	font-size: 0.88rem;
+}
+
+.shopify-verified-settings section {
+	display: grid;
+	gap: 0.2rem;
+}
+
+.shopify-verified-settings h3,
+.shopify-verified-settings p,
+.shopify-verified-settings ul {
+	margin: 0;
+}
+
+.shopify-verified-settings ul {
+	padding-left: 1.15rem;
+	list-style: none;
+}
+
 .shopify-setup-card {
 	padding: 0;
 }

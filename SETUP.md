@@ -297,7 +297,7 @@ path, which nginx intentionally denies; never add a public nginx allowlist for i
 Festival uses Shopify's Dev Dashboard app install plus client credentials grant for backend Admin API access.
 
 In the Shopify Dev Dashboard:
-- Configure scopes in the app version, for example `read_orders,read_products,write_products`.
+- Configure scopes in the app version: `read_customers,read_orders,read_products,write_products,customer_read_customers,customer_read_draft_orders,customer_read_metaobjects,customer_read_orders`.
 - Release the version.
 - Install the app on the target store from the app Home tab.
 
