@@ -48,7 +48,17 @@ function keyring() {
 async function fixture(
 	expiresAtIso = "2030-01-01T00:00:00.000Z",
 	staffAccessConsent = false,
+	productionSnapshot: {
+		now?: Date;
+		shopifyCustomerGid?: string;
+		shopifyProductGid?: string;
+		shopifyVariantGid?: string;
+		amount?: string;
+		currencyCode?: string;
+		divisionName?: string;
+	} = {},
 ) {
+	const now = productionSnapshot.now ?? NOW;
 	const organizations = new InMemoryOrganizationRepository();
 	const organization = await organizations.createOrganization({
 		name: "Festival",
@@ -71,8 +81,8 @@ async function fixture(
 	await organizations.updateShopifyVerification({
 		organizationId: organization.id,
 		verificationStatus: "ok",
-		verifiedAtIso: NOW.toISOString(),
-		lastTestedAtIso: NOW.toISOString(),
+		verifiedAtIso: now.toISOString(),
+		lastTestedAtIso: now.toISOString(),
 		verifiedShopGid: "gid://shopify/Shop/1",
 		verifiedShopDomain: "festival.myshopify.com",
 		grantedScopes: ["read_orders"],
@@ -85,28 +95,34 @@ async function fixture(
 	});
 	const division = await organizations.createDivision({
 		organizationId: organization.id,
-		displayName: "Piano",
-		normalizedName: "piano",
+		displayName: productionSnapshot.divisionName ?? "Piano",
+		normalizedName: (productionSnapshot.divisionName ?? "Piano")
+			.toLowerCase()
+			.replace(/[^a-z0-9]+/g, "-"),
 	});
 	const offering = await organizations.createMembershipProductRecord({
 		organizationId: organization.id,
 		entitlementClass: "teacher_membership",
 		durationDays: 365,
 		isActive: true,
-		shopifyProductGid: "gid://shopify/Product/1",
-		shopifyVariantGid: "gid://shopify/ProductVariant/1",
+		shopifyProductGid:
+			productionSnapshot.shopifyProductGid ?? "gid://shopify/Product/1",
+		shopifyVariantGid:
+			productionSnapshot.shopifyVariantGid ??
+			"gid://shopify/ProductVariant/1",
 		productNameSnapshot: "Teacher Membership",
 	});
 	const customers = new InMemoryCustomerAccountRepository();
 	const { customer } = await customers.createCustomerSession({
 		sessionId: "session",
 		organizationId: organization.id,
-		shopifyCustomerGid: "gid://shopify/Customer/1",
+		shopifyCustomerGid:
+			productionSnapshot.shopifyCustomerGid ?? "gid://shopify/Customer/1",
 		encryptedTokens: "opaque",
 		csrfToken: "csrf",
 		integrationVersion: 1,
-		createdAtIso: NOW.toISOString(),
-		lastSeenAtIso: NOW.toISOString(),
+		createdAtIso: now.toISOString(),
+		lastSeenAtIso: now.toISOString(),
 		expiresAtIso: "2030-01-01T00:00:00.000Z",
 	});
 	const checkout = new InMemoryCheckoutRepository();
@@ -124,15 +140,15 @@ async function fixture(
 		divisionId: division.id,
 		divisionNameSnapshot: division.displayName,
 		staffAccessConsent,
-		amount: "75.00",
-		currencyCode: "USD",
+		amount: productionSnapshot.amount ?? "75.00",
+		currencyCode: productionSnapshot.currencyCode ?? "USD",
 		expiresAtIso,
 	});
 	if (created.kind !== "created") throw new Error("Expected checkout intent.");
 	const commerce = new InMemoryMembershipCommerceRepository(
 		organizations,
 		checkout,
-		() => NOW,
+		() => now,
 	);
 	const orders = new Orders();
 	const service = new ShopifyOrderProjectionService(
@@ -142,7 +158,7 @@ async function fixture(
 		orders,
 		secrets,
 		customers,
-		() => NOW,
+		() => now,
 	);
 	return {
 		organizations,
@@ -187,6 +203,7 @@ async function delivery(
 	organizationId: string,
 	webhookId: string,
 	orderGid = "gid://shopify/Order/1",
+	receivedAtIso = NOW.toISOString(),
 ) {
 	const recorded = await commerce.recordDelivery({
 		organizationId,
@@ -196,7 +213,7 @@ async function delivery(
 		apiVersion: "2026-07",
 		shopifyOrderGid: orderGid,
 		payloadSha256: "a".repeat(64),
-		receivedAtIso: NOW.toISOString(),
+		receivedAtIso,
 	});
 	if (recorded.kind !== "accepted")
 		throw new Error("Expected delivery evidence.");
@@ -437,6 +454,65 @@ describe("Shopify order projection", () => {
 				NOW.toISOString(),
 			),
 		).toBeFalse();
+	});
+
+	// Regression harness for https://github.com/pafenorthwest/Festival/issues/126.
+	// Snapshot source: the 2026-09-10 production delivery that was accepted, then
+	// failed because Shopify denied the Admin GraphQL ReadPaidOrder operation.
+	// Remove .skip only with the expiry-vs-paid-time implementation from #126.
+	it.skip("approves the captured paid-before-expiry order when reconciliation runs after intent expiry", async () => {
+		const paidAtIso = "2026-09-11T06:04:01.203Z";
+		const expiresAtIso = "2026-09-11T06:33:32.656Z";
+		const reconciledAt = new Date("2026-09-11T07:00:00.000Z");
+		const orderGid = "gid://shopify/Order/6795053859005";
+		const f = await fixture(expiresAtIso, true, {
+			now: reconciledAt,
+			shopifyCustomerGid: "gid://shopify/Customer/9381966446781",
+			shopifyProductGid: "gid://shopify/Product/8448886866109",
+			shopifyVariantGid: "gid://shopify/ProductVariant/47990099968189",
+			amount: "25.0",
+			currencyCode: "USD",
+			divisionName: "Cello/Bass",
+		});
+		const correlationId = "619b61e4-6cf7-4333-a37e-f61fe9b82543";
+		f.orders.values.set(orderGid, {
+			id: orderGid,
+			customerGid: "gid://shopify/Customer/9381966446781",
+			fullyPaid: true,
+			fullyPaidAtIso: paidAtIso,
+			currencyCode: "USD",
+			customAttributes: [
+				{ key: "festival_checkout_intent_id", value: correlationId },
+			],
+			lineItems: [
+				{
+					id: "gid://shopify/LineItem/1",
+					productGid: "gid://shopify/Product/8448886866109",
+					variantGid: "gid://shopify/ProductVariant/47990099968189",
+					quantity: 1,
+					paidAmount: "25.00",
+					paidCurrencyCode: "USD",
+				},
+			],
+		});
+		const received = await delivery(
+			f.commerce,
+			f.organization.id,
+			"b39456f0-8484-5fd7-9701-4b58c31c91ba",
+			orderGid,
+			paidAtIso,
+		);
+
+		expect(await f.service.processDelivery(received.id)).toBe("processed");
+		expect(
+			await f.organizations.listEntitlementGrantSnapshots(
+				f.organization.id,
+				f.customer.id,
+			),
+		).toHaveLength(1);
+		expect(
+			await f.commerce.listCustomerDecisions(f.organization.id, f.customer.id),
+		).toMatchObject([{ status: "approved" }]);
 	});
 
 	it("rejects a cart-manipulated order line and reconciles missed paid orders", async () => {
