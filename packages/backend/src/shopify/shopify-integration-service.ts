@@ -7,6 +7,7 @@ import type {
 } from "@festival/common";
 import {
 	deriveShopifyCapabilities,
+	SHOPIFY_REQUIRED_SCOPES,
 	validateShopifySettingsInput,
 } from "@festival/common";
 import type { TenantContext } from "../auth/tenant-context.js";
@@ -76,6 +77,9 @@ function toPublicSettings(
 		verificationStatus: record.verificationStatus,
 		verifiedShopGid: record.verifiedShopGid,
 		verifiedShopDomain: record.verifiedShopDomain,
+		verifiedScopes: SHOPIFY_REQUIRED_SCOPES.filter((scope) =>
+			record.grantedScopes.includes(scope),
+		),
 		capabilities: { ...record.capabilities },
 		integrationVersion: record.integrationVersion,
 		verifiedAtIso: record.verifiedAtIso,

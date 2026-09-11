@@ -66,6 +66,8 @@ async function readFrontendSource(): Promise<string> {
 		"src/app/useFestivalLifecycle.ts",
 		"src/components/AccessDeniedPanel.tsx",
 		"src/components/AppBanners.tsx",
+		"src/components/Button.tsx",
+		"src/components/CustomerAccountAdminCard.tsx",
 		"src/components/AppHeader.tsx",
 		"src/components/SignInModal.tsx",
 		"src/lib/api.ts",
@@ -103,7 +105,7 @@ describe("organization onboarding integration", () => {
 			"<summary>Shopify app setup instructions</summary>",
 		);
 		expect(pageSource).toContain("PAFE Test 2026-08");
-		expect(pageSource).toContain("read_orders,read_products,write_products");
+		expect(pageSource).toContain("SHOPIFY_REQUIRED_SCOPES.join");
 		expect(pageSource).toContain("Use legacy install flow");
 		expect(pageSource).toContain("Embedded");
 		expect(pageSource).toContain("Webhooks API version");
@@ -121,11 +123,8 @@ describe("organization onboarding integration", () => {
 	it("shows only safe Shopify identity and capability diagnostics", async () => {
 		const source = await readFrontendSource();
 		expect(source).toContain("Verified shop:");
-		expect(source).toContain("Product reads:");
-		expect(source).toContain("Product writes:");
-		expect(source).toContain("Order reads:");
-		expect(source).toContain("settings.capabilities.read_products");
-		expect(source).toContain("settings.capabilities.write_products");
+		expect(source).toContain("Verified required scopes");
+		expect(source).toContain("settings.verifiedScopes.includes(scope)");
 		expect(source).not.toContain("settings.grantedScopes");
 		expect(source).not.toContain("accessToken");
 	});
@@ -142,29 +141,44 @@ describe("organization onboarding integration", () => {
 		const styles = await Bun.file("src/styles.css").text();
 
 		expect(
-			missingRequiredShopifyScopes({
-				read_products: "granted",
-				write_products: "missing",
-				read_orders: "missing",
-				write_orders: "disabled",
-			}),
-		).toEqual(["write_products", "read_orders"]);
+			missingRequiredShopifyScopes([
+				"read_orders",
+				"read_products",
+				"write_products",
+			]),
+		).toEqual([
+			"customer_read_customers",
+			"customer_read_draft_orders",
+			"customer_read_metaobjects",
+			"customer_read_orders",
+		]);
 		expect(
-			missingRequiredShopifyScopes({
-				read_products: "granted",
-				write_products: "granted",
-				read_orders: "granted",
-				write_orders: "disabled",
-			}),
+			missingRequiredShopifyScopes([
+				"read_customers",
+				"read_orders",
+				"read_products",
+				"write_products",
+				"customer_read_customers",
+				"customer_read_draft_orders",
+				"customer_read_metaobjects",
+				"customer_read_orders",
+			]),
 		).toEqual([]);
 		expect(source).toContain(
 			"Shopify is verified, but required scopes are missing.",
 		);
+		expect(source).toContain("Manual verification required");
 		expect(source).toContain('settings.verificationStatus === "ok"');
 		expect(source).toContain("Missing scopes:");
 		expect(source).toContain("then run Save &amp; Test again");
 		expect(source).toContain('class="shopify-warning-banner" role="alert"');
 		expect(styles).toContain(".shopify-warning-banner");
+		expect(styles).toContain(".shopify-verified-settings");
+		expect(styles).toContain("gap: 0.4rem;");
+		expect(styles).toContain("margin-bottom: 1rem;");
+		expect(styles).toContain("font-size: 0.88rem;");
+		expect(styles).toContain("background: rgba(231, 235, 240, 0.62);");
+		expect(styles).toContain("list-style: none;");
 	});
 	it("keeps issue 22 wired to router, Firebase auth helpers, and API helpers", async () => {
 		const source = await readFrontendSource();
@@ -356,7 +370,7 @@ describe("organization onboarding integration", () => {
 		expect(pageSource).toContain("setDiagnosticResults([])");
 		expect(pageSource).toContain("Paid-order webhook");
 		expect(pageSource).toContain("Store and credentials");
-		expect(pageSource).toContain("Granted capabilities");
+		expect(pageSource).toContain("Verified required scopes");
 		expect(pageSource).toContain('setDiagnosticError("")');
 		expect(styles).toContain(".shopify-diagnostics");
 		expect(styles).toContain(".shopify-diagnostic-passed");
@@ -504,9 +518,26 @@ describe("organization onboarding integration", () => {
 		expect(source).toContain("clearMessages()");
 		expect(source).toContain("validateFestivalDates(draft)");
 		expect(source).toContain('class="masthead-actions"');
-		expect(source).toContain('class="secondary-button compact-header-button"');
+		expect(source).toContain('variant="compact-header"');
 		expect(styles).toContain(".compact-header-button");
 		expect(styles).toContain("background: rgba(31, 122, 87, 0.08);");
+	});
+
+	it("uses the shared button component with the requested visual tokens", async () => {
+		const source = await readFrontendSource();
+		const styles = await Bun.file("src/styles.css").text();
+
+		expect(source).toContain(
+			'export type ButtonVariant = "primary" | "secondary" | "compact-header"',
+		);
+		expect(source).toContain('"secondary-button compact-header-button"');
+		expect(source).toContain('variant="secondary"');
+		expect(styles).toContain("--bullet-accent: #303240;");
+		expect(styles).toContain("--bullet-accent-strong: #2a2c40;");
+		expect(styles).toContain("button.button {");
+		expect(styles).toContain("border-radius: 4px;");
+		expect(source).not.toContain("shopify-submit-button");
+		expect(styles).not.toContain(".shopify-submit-button");
 	});
 
 	it("wires issue 70 admin membership UI through existing admin access control", async () => {

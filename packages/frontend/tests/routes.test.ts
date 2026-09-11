@@ -6,11 +6,15 @@ import {
 	buildOrgAdminIntegrationsPath,
 	buildOrgAdminMembershipsPath,
 	buildOrgAdminUsersPath,
+	buildOrgCustomerAccountContactPath,
+	buildOrgCustomerAccountMembershipsPath,
+	buildOrgCustomerAccountOrdersPath,
 	buildOrgCustomerAccountPath,
 	buildOrgMembershipPath,
 	buildOrgPath,
 	buildOrgRootPath,
 	buildPrivacyPolicyPath,
+	isOrganizationPageRoute,
 	parseRoute,
 } from "../src/lib/routes.js";
 
@@ -47,7 +51,23 @@ describe("route helpers", () => {
 			slug: "festival-admins",
 		});
 		expect(parseRoute("/org/festival-admins/account")).toEqual({
-			kind: "org-customer-account",
+			kind: "org-customer-account-legacy",
+			slug: "festival-admins",
+		});
+		expect(parseRoute("/org/festival-admins/account/")).toEqual({
+			kind: "org-customer-account-legacy",
+			slug: "festival-admins",
+		});
+		expect(parseRoute("/org/festival-admins/account/memberships")).toEqual({
+			kind: "org-customer-account-memberships",
+			slug: "festival-admins",
+		});
+		expect(parseRoute("/org/festival-admins/account/contact")).toEqual({
+			kind: "org-customer-account-contact",
+			slug: "festival-admins",
+		});
+		expect(parseRoute("/org/festival-admins/account/orders")).toEqual({
+			kind: "org-customer-account-orders",
 			slug: "festival-admins",
 		});
 		expect(parseRoute("/org/festival-admins/admin")).toEqual({
@@ -76,6 +96,22 @@ describe("route helpers", () => {
 		});
 	});
 
+	it("identifies public organization pages", () => {
+		expect(isOrganizationPageRoute(parseRoute("/org/festival-admins"))).toBe(
+			true,
+		);
+		expect(
+			isOrganizationPageRoute(parseRoute("/org/festival-admins/membership")),
+		).toBe(true);
+		expect(
+			isOrganizationPageRoute(parseRoute("/org/festival-admins/account")),
+		).toBe(true);
+		expect(
+			isOrganizationPageRoute(parseRoute("/org/festival-admins/admin")),
+		).toBe(false);
+		expect(isOrganizationPageRoute(parseRoute("/"))).toBe(false);
+	});
+
 	it("parses invite routes", () => {
 		expect(parseRoute("/invite/token-123")).toEqual({
 			kind: "invite",
@@ -94,7 +130,16 @@ describe("route helpers", () => {
 			"/org/festival-admins/membership",
 		);
 		expect(buildOrgCustomerAccountPath("festival-admins")).toBe(
-			"/org/festival-admins/account",
+			"/org/festival-admins/account/memberships",
+		);
+		expect(buildOrgCustomerAccountMembershipsPath("festival-admins")).toBe(
+			"/org/festival-admins/account/memberships",
+		);
+		expect(buildOrgCustomerAccountContactPath("festival-admins")).toBe(
+			"/org/festival-admins/account/contact",
+		);
+		expect(buildOrgCustomerAccountOrdersPath("festival-admins")).toBe(
+			"/org/festival-admins/account/orders",
 		);
 		expect(buildOrgAdminUsersPath("festival-admins")).toBe(
 			"/org/festival-admins/admin/users",

@@ -4,8 +4,8 @@
 	--bullet-paper: #f7f4ee;
 	--bullet-panel: rgba(255, 255, 255, 0.82);
 	--bullet-panel-border: rgba(31, 36, 49, 0.12);
-	--bullet-accent: #4459d6;
-	--bullet-accent-strong: #2338b0;
+	--bullet-accent: #303240;
+	--bullet-accent-strong: #2a2c40;
 	--bullet-gold: #b6872c;
 	--bullet-error: #b94d36;
 	--bullet-success: #1f7a57;
@@ -57,6 +57,10 @@ button {
 	);
 	color: white;
 	box-shadow: 0 10px 24px rgba(68, 89, 214, 0.18);
+}
+
+button.button {
+	border-radius: 4px;
 }
 
 button:disabled {
@@ -128,6 +132,84 @@ a {
 	padding: 2.5rem 1.25rem 4rem;
 }
 
+.organization-page-layout {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr);
+	gap: 1.5rem;
+	align-items: start;
+}
+
+.application-page-content {
+	min-width: 0;
+}
+
+.organization-side-navigation {
+	position: sticky;
+	top: 1rem;
+	width: 13.5rem;
+	display: grid;
+	gap: 1.25rem;
+	padding: 1rem;
+	border: 1px solid var(--bullet-panel-border);
+	border-radius: 12px;
+	background: var(--bullet-panel);
+	transition: width 160ms ease;
+}
+
+.organization-side-navigation-toggle {
+	justify-self: end;
+	display: grid;
+	place-items: center;
+	width: 2.25rem;
+	height: 2.25rem;
+	padding: 0;
+	border-radius: 6px;
+}
+
+.organization-side-navigation-section {
+	display: grid;
+	gap: 0.35rem;
+}
+
+.organization-side-navigation-section h2 {
+	margin: 0 0 0.25rem;
+	font-size: 0.78rem;
+	text-transform: uppercase;
+	letter-spacing: 0.12em;
+	color: var(--bullet-soft-ink);
+}
+
+.organization-side-navigation a {
+	display: flex;
+	align-items: center;
+	gap: 0.65rem;
+	min-height: 2.5rem;
+	padding: 0.45rem;
+	border-radius: 6px;
+	color: var(--bullet-ink);
+	text-decoration: none;
+}
+
+.organization-side-navigation a:hover,
+.organization-side-navigation a:focus-visible {
+	background: rgba(31, 36, 49, 0.08);
+}
+
+.organization-side-navigation.is-collapsed {
+	width: 4.25rem;
+}
+
+.organization-side-navigation.is-collapsed
+	.organization-side-navigation-section
+	h2,
+.organization-side-navigation.is-collapsed .organization-side-navigation-label {
+	display: none;
+}
+
+.organization-side-navigation.is-collapsed a {
+	justify-content: center;
+}
+
 .org-landing {
 	display: grid;
 	gap: 1.5rem;
@@ -142,14 +224,70 @@ a {
 	margin: 0;
 	font-size: clamp(2.4rem, 5vw, 4.5rem);
 }
-.customer-auth-button,
-.all-memberships-link {
+a.button {
 	display: inline-block;
-	padding: 0.7rem 1rem;
-	border-radius: 999px;
+	border-radius: 4px;
+	text-decoration: none;
+}
+
+a.secondary-button {
+	background: transparent;
+	color: var(--bullet-ink);
+	border: 1px solid var(--bullet-panel-border);
+	box-shadow: none;
+}
+
+a.compact-header-button {
+	padding: 0.65rem 0.85rem;
+	line-height: 1.1;
+	max-width: 9.5rem;
+	white-space: normal;
 	background: var(--bullet-ink);
 	color: white;
+	border-color: var(--bullet-ink);
+	box-shadow: 0 10px 22px rgba(31, 36, 49, 0.16);
+}
+
+.org-landing-actions {
+	display: flex;
+	align-items: center;
+	gap: 0.65rem;
+}
+
+.customer-account-link {
+	display: inline-grid;
+	place-items: center;
+	padding-inline: 1rem;
+	color: transparent;
+	opacity: 0;
 	text-decoration: none;
+}
+
+.customer-account-navigation {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: start;
+	gap: 0.5rem;
+}
+
+.customer-account-link.is-authenticated {
+	color: var(--bullet-ink);
+	opacity: 1;
+}
+
+.material-symbols-outlined {
+	font-family: "Material Symbols Outlined", sans-serif;
+	font-weight: normal;
+	font-style: normal;
+	font-size: 1.5rem;
+	line-height: 1;
+	letter-spacing: normal;
+	text-transform: none;
+	display: inline-block;
+	white-space: nowrap;
+	word-wrap: normal;
+	direction: ltr;
+	-webkit-font-smoothing: antialiased;
 }
 .upcoming-festivals,
 .role-banners {
@@ -225,6 +363,16 @@ button.compact-header-button {
 	box-shadow: 0 10px 22px rgba(31, 36, 49, 0.16);
 }
 
+.customer-account-navigation button.compact-header-button {
+	padding: 0.52rem 0.68rem;
+	font-size: 80%;
+	background: linear-gradient(
+		135deg,
+		var(--bullet-accent),
+		var(--bullet-accent-strong)
+	);
+}
+
 .eyebrow {
 	text-transform: uppercase;
 	letter-spacing: 0.18em;
@@ -237,7 +385,7 @@ button.compact-header-button {
 	margin: 0;
 	font-size: clamp(2.4rem, 4vw, 4.5rem);
 	line-height: 0.96;
-	max-width: 11ch;
+	max-width: 20ch;
 }
 
 .lede {
@@ -740,6 +888,33 @@ form.shopify-integration-card {
 	gap: 0.8rem;
 }
 
+.shopify-verified-settings {
+	display: grid;
+	gap: 0.4rem;
+	margin-bottom: 1rem;
+	padding: 0.7rem 0.85rem;
+	border: 1px solid rgba(31, 36, 49, 0.16);
+	border-radius: 12px;
+	background: rgba(231, 235, 240, 0.62);
+	font-size: 0.88rem;
+}
+
+.shopify-verified-settings section {
+	display: grid;
+	gap: 0.2rem;
+}
+
+.shopify-verified-settings h3,
+.shopify-verified-settings p,
+.shopify-verified-settings ul {
+	margin: 0;
+}
+
+.shopify-verified-settings ul {
+	padding-left: 1.15rem;
+	list-style: none;
+}
+
 .shopify-setup-card {
 	padding: 0;
 }
@@ -854,17 +1029,6 @@ form.shopify-integration-card {
 	margin: 0;
 	color: var(--bullet-error);
 	font-size: 0.95rem;
-}
-
-.shopify-submit-button {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	gap: 0.55rem;
-	width: fit-content;
-	min-width: 8.5rem;
-	min-height: 2.9rem;
-	margin-top: 0.2rem;
 }
 
 .membership-admin-layout {
@@ -1221,6 +1385,10 @@ form.shopify-integration-card {
 }
 
 @media (max-width: 720px) {
+	.organization-page-layout {
+		gap: 0.75rem;
+	}
+
 	.masthead {
 		grid-template-columns: 1fr;
 	}

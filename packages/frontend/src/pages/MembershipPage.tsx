@@ -1,6 +1,7 @@
 import type { PublicMembershipProductSummary } from "@festival/common";
 import { createResource, createSignal, For, onMount, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
+import { Button } from "../components/Button.js";
 import {
 	ApiError,
 	customerMembershipPurchaseSignInPath,
@@ -228,13 +229,6 @@ export function MembershipPage(props: MembershipPageProps) {
 
 	return (
 		<section class="panel membership-page">
-			<header class="membership-header">
-				<div>
-					<p class="eyebrow">Memberships</p>
-					<h1>{response()?.organization.name ?? "Organization Memberships"}</h1>
-				</div>
-			</header>
-
 			<Show when={response.loading}>
 				<p class="muted">Loading membership information.</p>
 			</Show>
@@ -341,15 +335,15 @@ export function MembershipPage(props: MembershipPageProps) {
 							</p>
 						</Show>
 						<div class="membership-checkout-actions">
-							<button
+							<Button
 								type="button"
-								class="secondary-button"
+								variant="secondary"
 								disabled={checkoutSubmitting()}
 								onClick={cancelPurchase}
 							>
 								Cancel
-							</button>
-							<button
+							</Button>
+							<Button
 								type="button"
 								disabled={
 									!selectedDivisionId() ||
@@ -365,7 +359,7 @@ export function MembershipPage(props: MembershipPageProps) {
 								}}
 							>
 								{checkoutSubmitting() ? "Opening Shopify…" : "Purchase"}
-							</button>
+							</Button>
 						</div>
 					</section>
 				</section>
@@ -405,7 +399,7 @@ export function MembershipPage(props: MembershipPageProps) {
 										{membershipProduct.price.amount}{" "}
 										{membershipProduct.price.currencyCode}
 									</strong>
-									<button
+									<Button
 										type="button"
 										disabled={
 											!membershipProduct.available ||
@@ -418,7 +412,7 @@ export function MembershipPage(props: MembershipPageProps) {
 												? "Continuing…"
 												: "Purchase"
 											: "Unavailable"}
-									</button>
+									</Button>
 								</div>
 							</article>
 						)}

@@ -5,6 +5,7 @@ import {
 	getCustomerAccountSettings,
 	saveCustomerAccountSettings,
 } from "../lib/api.js";
+import { Button } from "./Button.js";
 
 export function CustomerAccountAdminCard(props: {
 	app: FestivalAppController;
@@ -149,9 +150,9 @@ export function CustomerAccountAdminCard(props: {
 						</p>
 					)}
 				</Show>
-				<button type="submit" class="shopify-submit-button" disabled={busy()}>
+				<Button type="submit" disabled={busy()}>
 					{busy() ? "Verifying…" : "Save & Verify"}
-				</button>
+				</Button>
 			</form>
 		</section>
 	);

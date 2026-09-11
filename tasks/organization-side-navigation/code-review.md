@@ -1,0 +1,109 @@
+# Code Review
+- Task name: organization-side-navigation
+- Findings status: none
+
+## Context
+- Base branch: main
+- Diff command: `git diff main...HEAD`
+- Changed files:
+  - `.codex/scripts/goals-scaffold.sh`
+  - `SETUP.md`
+  - `goals/account-page-split/establish-goals.v0.md`
+  - `goals/account-page-split/establish-goals.v1.md`
+  - `goals/account-page-split/establish-goals.v2.md`
+  - `goals/account-page-split/establish-goals.v3.md`
+  - `goals/account-page-split/establish-goals.v4.md`
+  - `goals/account-page-split/goals.v0.md`
+  - `goals/account-page-split/goals.v1.md`
+  - `goals/account-page-split/goals.v2.md`
+  - `goals/account-page-split/goals.v3.md`
+  - `goals/account-page-split/goals.v4.md`
+  - `goals/button-component/establish-goals.v0.md`
+  - `goals/button-component/establish-goals.v1.md`
+  - `goals/button-component/goals.v0.md`
+  - `goals/button-component/goals.v1.md`
+  - `goals/org-landing-header-auth-links/establish-goals.v0.md`
+  - `goals/org-landing-header-auth-links/establish-goals.v1.md`
+  - `goals/org-landing-header-auth-links/establish-goals.v2.md`
+  - `goals/org-landing-header-auth-links/establish-goals.v3.md`
+  - `goals/org-landing-header-auth-links/establish-goals.v4.md`
+  - `goals/org-landing-header-auth-links/establish-goals.v5.md`
+  - `goals/org-landing-header-auth-links/goals.v0.md`
+  - `goals/org-landing-header-auth-links/goals.v1.md`
+  - `goals/org-landing-header-auth-links/goals.v2.md`
+  - `goals/org-landing-header-auth-links/goals.v3.md`
+  - `goals/org-landing-header-auth-links/goals.v4.md`
+  - `goals/org-landing-header-auth-links/goals.v5.md`
+  - `goals/organization-page-app-header/establish-goals.v0.md`
+  - `goals/organization-page-app-header/establish-goals.v1.md`
+  - `goals/organization-page-app-header/goals.v0.md`
+  - `goals/organization-page-app-header/goals.v1.md`
+  - `goals/organization-side-navigation/establish-goals.v0.md`
+  - `goals/organization-side-navigation/establish-goals.v1.md`
+  - `goals/organization-side-navigation/establish-goals.v2.md`
+  - `goals/organization-side-navigation/goals.v0.md`
+  - `goals/organization-side-navigation/goals.v1.md`
+  - `goals/organization-side-navigation/goals.v2.md`
+  - `goals/shopify-integration-scopes-layout/establish-goals.v0.md`
+  - `goals/shopify-integration-scopes-layout/establish-goals.v1.md`
+  - `goals/shopify-integration-scopes-layout/establish-goals.v2.md`
+  - `goals/shopify-integration-scopes-layout/establish-goals.v3.md`
+  - `goals/shopify-integration-scopes-layout/goals.v0.md`
+  - `goals/shopify-integration-scopes-layout/goals.v1.md`
+  - `goals/shopify-integration-scopes-layout/goals.v2.md`
+  - `goals/shopify-integration-scopes-layout/goals.v3.md`
+  - `goals/task-manifest.csv`
+  - `packages/backend/src/shopify/shopify-integration-service.ts`
+  - `packages/backend/tests/shopify-integration-service.test.ts`
+  - `packages/common/src/shopify.ts`
+  - `packages/frontend/index.html`
+  - `packages/frontend/src/App.tsx`
+  - `packages/frontend/src/components/AppHeader.tsx`
+  - `packages/frontend/src/components/Button.tsx`
+  - `packages/frontend/src/components/CustomerAccountAdminCard.tsx`
+  - `packages/frontend/src/components/OrganizationSideNavigation.tsx`
+  - `packages/frontend/src/components/SignInModal.tsx`
+  - `packages/frontend/src/lib/api.ts`
+  - `packages/frontend/src/lib/routes.ts`
+  - `packages/frontend/src/pages/AdminDivisionsPage.tsx`
+  - `packages/frontend/src/pages/AdminFestivalsPage.tsx`
+  - `packages/frontend/src/pages/AdminHomePage.tsx`
+  - `packages/frontend/src/pages/AdminIntegrationsPage.tsx`
+  - `packages/frontend/src/pages/AdminMembershipProductsPage.tsx`
+  - `packages/frontend/src/pages/AdminUsersPage.tsx`
+  - `packages/frontend/src/pages/CreateOrganizationPage.tsx`
+  - `packages/frontend/src/pages/CustomerAccountContactPage.tsx`
+  - `packages/frontend/src/pages/CustomerAccountMembershipsPage.tsx`
+  - `packages/frontend/src/pages/CustomerAccountNavigation.tsx`
+  - `packages/frontend/src/pages/CustomerAccountOrdersPage.tsx`
+  - `packages/frontend/src/pages/CustomerAccountPage.tsx`
+  - `packages/frontend/src/pages/CustomerAccountPageLayout.tsx`
+  - `packages/frontend/src/pages/HomePage.tsx`
+  - `packages/frontend/src/pages/InviteLandingPage.tsx`
+  - `packages/frontend/src/pages/LegacyCustomerAccountRedirect.tsx`
+  - `packages/frontend/src/pages/MembershipPage.tsx`
+  - `packages/frontend/src/pages/OrganizationRootPage.tsx`
+  - `packages/frontend/src/styles.css`
+  - `packages/frontend/tests/browser/account-return.tsx`
+  - `packages/frontend/tests/customer-account.test.ts`
+  - `packages/frontend/tests/onboarding-integration.test.ts`
+  - `packages/frontend/tests/organization-landing.test.ts`
+  - `packages/frontend/tests/routes.test.ts`
+  - `tasks/account-page-split/spec.md`
+  - `tasks/button-component/spec.md`
+  - `tasks/org-landing-header-auth-links/spec.md`
+  - `tasks/organization-page-app-header/spec.md`
+  - `tasks/organization-side-navigation/spec.md`
+  - `tasks/shopify-integration-scopes-layout/spec.md`
+- Citation candidates (verify before use):
+  - _none_
+
+## Findings JSON
+```json
+[]
+```
+
+## Verdict
+- Verdict: patch is correct
+- Confidence: 0.92
+- Justification: The shared route guard limits the new sidebar to the approved organization page families. The navigation uses existing route builders, keeps account navigation additive, provides accessible icon-only labels, and has focused coverage for the responsive toggle and destinations.

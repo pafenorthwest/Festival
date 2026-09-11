@@ -5,6 +5,7 @@ import {
 } from "../app/adminDivisions.js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { AccessDeniedPanel } from "../components/AccessDeniedPanel.js";
+import { Button } from "../components/Button.js";
 
 interface AdminDivisionsPageProps {
 	app: FestivalAppController;
@@ -35,12 +36,12 @@ export function AdminDivisionsPage(props: AdminDivisionsPageProps) {
 				<Show when={props.app.divisionConfigurationLoadError()}>
 					<section class="panel division-load-error" role="alert">
 						<p>{props.app.divisionConfigurationLoadError()}</p>
-						<button
+						<Button
 							type="button"
 							onClick={props.app.handleReloadDivisionConfiguration}
 						>
 							Try again
-						</button>
+						</Button>
 					</section>
 				</Show>
 
@@ -91,13 +92,13 @@ export function AdminDivisionsPage(props: AdminDivisionsPageProps) {
 								{divisionNameValidationError(props.app.divisionNameDraft())}
 							</p>
 						</Show>
-						<button
+						<Button
 							type="button"
 							disabled={props.app.isDivisionMutationPending()}
 							onClick={props.app.handleCreateDivision}
 						>
 							Create division
-						</button>
+						</Button>
 					</section>
 
 					<section class="panel division-list-panel">
@@ -134,7 +135,7 @@ export function AdminDivisionsPage(props: AdminDivisionsPageProps) {
 											/>
 										</label>
 										<div class="division-actions">
-											<button
+											<Button
 												type="button"
 												disabled={props.app.isDivisionMutationPending()}
 												onClick={() =>
@@ -142,10 +143,10 @@ export function AdminDivisionsPage(props: AdminDivisionsPageProps) {
 												}
 											>
 												Save name
-											</button>
-											<button
+											</Button>
+											<Button
 												type="button"
-												class="secondary-button"
+												variant="secondary"
 												disabled={
 													props.app.isDivisionMutationPending() || index() === 0
 												}
@@ -155,10 +156,10 @@ export function AdminDivisionsPage(props: AdminDivisionsPageProps) {
 												aria-label={`Move ${division.displayName} up`}
 											>
 												Move up
-											</button>
-											<button
+											</Button>
+											<Button
 												type="button"
-												class="secondary-button"
+												variant="secondary"
 												disabled={
 													props.app.isDivisionMutationPending() ||
 													index() === props.app.divisions().length - 1
@@ -169,10 +170,10 @@ export function AdminDivisionsPage(props: AdminDivisionsPageProps) {
 												aria-label={`Move ${division.displayName} down`}
 											>
 												Move down
-											</button>
-											<button
+											</Button>
+											<Button
 												type="button"
-												class="secondary-button"
+												variant="secondary"
 												disabled={props.app.isDivisionMutationPending()}
 												onClick={() =>
 													props.app.handleSetDivisionActive(
@@ -182,7 +183,7 @@ export function AdminDivisionsPage(props: AdminDivisionsPageProps) {
 												}
 											>
 												{division.isActive ? "Deactivate" : "Activate"}
-											</button>
+											</Button>
 										</div>
 									</li>
 								)}
@@ -208,7 +209,7 @@ export function AdminDivisionsPage(props: AdminDivisionsPageProps) {
 								</For>
 							</select>
 						</label>
-						<button
+						<Button
 							type="button"
 							disabled={
 								props.app.isDivisionMutationPending() ||
@@ -217,7 +218,7 @@ export function AdminDivisionsPage(props: AdminDivisionsPageProps) {
 							onClick={props.app.handleSaveOrganizationTimezone}
 						>
 							Save timezone
-						</button>
+						</Button>
 					</section>
 				</Show>
 			</section>

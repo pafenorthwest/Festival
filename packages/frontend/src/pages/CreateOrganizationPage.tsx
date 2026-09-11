@@ -2,6 +2,7 @@ import type { OrganizationRole } from "@festival/common";
 import { ORGANIZATION_ROLES } from "@festival/common";
 import { For, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
+import { Button } from "../components/Button.js";
 import { buildOrgPath } from "../lib/routes.js";
 
 interface CreateOrganizationPageProps {
@@ -18,12 +19,12 @@ export function CreateOrganizationPage(props: CreateOrganizationPageProps) {
 					<p class="muted">
 						Sign in first to continue to organization creation.
 					</p>
-					<button
+					<Button
 						type="button"
 						onClick={() => props.app.openSignInModal("create-org")}
 					>
 						Choose sign-in method
-					</button>
+					</Button>
 				</Show>
 				<Show when={props.app.session().authenticated}>
 					<label class="field">
@@ -67,13 +68,13 @@ export function CreateOrganizationPage(props: CreateOrganizationPageProps) {
 							{props.app.organizationValidationMessage()}
 						</section>
 					</Show>
-					<button
+					<Button
 						type="button"
 						onClick={props.app.handleCreateOrganization}
 						disabled={props.app.isBusy() || props.app.organizationCreated()}
 					>
 						Create organization
-					</button>
+					</Button>
 				</Show>
 			</section>
 
@@ -116,7 +117,7 @@ export function CreateOrganizationPage(props: CreateOrganizationPageProps) {
 								</select>
 							</label>
 							<div class="stack-actions">
-								<button
+								<Button
 									type="button"
 									onClick={props.app.handleCreateInvite}
 									disabled={props.app.isBusy()}
@@ -124,10 +125,10 @@ export function CreateOrganizationPage(props: CreateOrganizationPageProps) {
 									{props.app.createdInvites().length > 0
 										? "Send another invite"
 										: "Send invite"}
-								</button>
-								<button
+								</Button>
+								<Button
 									type="button"
-									class="secondary-button"
+									variant="secondary"
 									onClick={() =>
 										props.app.navigate(
 											buildOrgPath(membership.organizationSlug),
@@ -135,7 +136,7 @@ export function CreateOrganizationPage(props: CreateOrganizationPageProps) {
 									}
 								>
 									Continue to organization
-								</button>
+								</Button>
 							</div>
 							<Show when={props.app.inviteFeedback()} keyed>
 								{(feedback) => (

@@ -1,4 +1,5 @@
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
+import { Button } from "../components/Button.js";
 
 interface HomePageProps {
 	app: FestivalAppController;
@@ -10,12 +11,12 @@ export function HomePage(props: HomePageProps) {
 			<h2>Start a new organization</h2>
 			<p>Sign-up. Create a Organization. Create a Festival. Invite Users.</p>
 			<div class="hero-actions">
-				<button
+				<Button
 					type="button"
 					onClick={() => props.app.openSignInModal("create-org")}
 				>
 					Sign up or Sign In
-				</button>
+				</Button>
 			</div>
 		</section>
 	);

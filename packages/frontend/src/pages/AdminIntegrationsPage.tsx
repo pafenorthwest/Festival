@@ -1,10 +1,12 @@
-import type {
-	ShopifyCapabilityDiagnostics,
-	ShopifyIntegrationDiagnosticCheck,
+import {
+	SHOPIFY_AUTOMATICALLY_VERIFIED_SCOPES,
+	SHOPIFY_REQUIRED_SCOPES,
+	type ShopifyIntegrationDiagnosticCheck,
 } from "@festival/common";
 import { createSignal, For, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { AccessDeniedPanel } from "../components/AccessDeniedPanel.js";
+import { Button } from "../components/Button.js";
 import { CustomerAccountAdminCard } from "../components/CustomerAccountAdminCard.js";
 import { runShopifyDiagnostics } from "../lib/api.js";
 
@@ -21,14 +23,6 @@ function shopifyStatusLabel(status: string | undefined): string {
 		default:
 			return "Unknown";
 	}
-}
-
-function capabilityLabel(status: string): string {
-	return status === "granted"
-		? "Granted"
-		: status === "disabled"
-			? "Disabled"
-			: "Missing";
 }
 
 function webhookStatusLabel(status: string): string {
@@ -51,15 +45,12 @@ function diagnosticLabel(id: ShopifyIntegrationDiagnosticCheck["id"]): string {
 }
 
 export function missingRequiredShopifyScopes(
-	capabilities: ShopifyCapabilityDiagnostics,
+	verifiedScopes: readonly string[],
 ): string[] {
-	return [
-		["read_products", capabilities.read_products],
-		["write_products", capabilities.write_products],
-		["read_orders", capabilities.read_orders],
-	]
-		.filter(([, status]) => status !== "granted")
-		.map(([scope]) => scope);
+	const grantedScopes = new Set(verifiedScopes);
+	return SHOPIFY_AUTOMATICALLY_VERIFIED_SCOPES.filter(
+		(scope) => !grantedScopes.has(scope),
+	);
 }
 
 export function buildShopifyAppUrl(origin: string, shortName: string): string {
@@ -142,7 +133,7 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 						</div>
 						<div>
 							<dt>Access scopes</dt>
-							<dd>read_orders,read_products,write_products</dd>
+							<dd>{SHOPIFY_REQUIRED_SCOPES.join(",")}</dd>
 						</div>
 						<div>
 							<dt>Use legacy install flow</dt>
@@ -191,28 +182,28 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 					</div>
 					<Show when={props.app.shopifySettings()} keyed>
 						{(settings) => (
-							<>
+							<div class="shopify-verified-settings">
 								<section aria-label="Store and credential verification">
 									<h3>Store and credentials</h3>
 									<Show when={settings.verifiedShopDomain} keyed>
 										{(domain) => <p>Verified shop: {domain}</p>}
 									</Show>
 								</section>
-								<section aria-label="Granted Shopify capabilities">
-									<h3>Granted capabilities</h3>
+								<section aria-label="Verified Shopify scopes">
+									<h3>Verified required scopes</h3>
 									<ul>
-										<li>
-											Product reads:{" "}
-											{capabilityLabel(settings.capabilities.read_products)}
-										</li>
-										<li>
-											Product writes:{" "}
-											{capabilityLabel(settings.capabilities.write_products)}
-										</li>
-										<li>
-											Order reads:{" "}
-											{capabilityLabel(settings.capabilities.read_orders)}
-										</li>
+										<For each={SHOPIFY_REQUIRED_SCOPES}>
+											{(scope) => (
+												<li>
+													{scope}:{" "}
+													{scope === "read_customers"
+														? "Manual verification required"
+														: settings.verifiedScopes.includes(scope)
+															? "Granted"
+															: "Missing"}
+												</li>
+											)}
+										</For>
 									</ul>
 								</section>
 								<section aria-label="Paid-order webhook readiness">
@@ -229,8 +220,8 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 								<Show
 									when={
 										settings.verificationStatus === "ok" &&
-										missingRequiredShopifyScopes(settings.capabilities).length >
-											0
+										missingRequiredShopifyScopes(settings.verifiedScopes)
+											.length > 0
 									}
 								>
 									<div class="shopify-warning-banner" role="alert">
@@ -239,9 +230,9 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 										</strong>
 										<p>
 											Missing scopes:{" "}
-											{missingRequiredShopifyScopes(settings.capabilities).join(
-												", ",
-											)}
+											{missingRequiredShopifyScopes(
+												settings.verifiedScopes,
+											).join(", ")}
 											.
 										</p>
 										<p>
@@ -250,7 +241,7 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 										</p>
 									</div>
 								</Show>
-							</>
+							</div>
 						)}
 					</Show>
 					<label class="field">
@@ -324,9 +315,8 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 					<Show when={props.app.shopifySettings()?.lastError} keyed>
 						{(lastError) => <p class="shopify-error-text">{lastError}</p>}
 					</Show>
-					<button
+					<Button
 						type="submit"
-						class="shopify-submit-button"
 						disabled={
 							!props.app.isAdminMember() || props.app.isShopifyTesting()
 						}
@@ -335,7 +325,7 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 							<span class="button-spinner" aria-hidden="true" />
 							<span>Testing</span>
 						</Show>
-					</button>
+					</Button>
 					<section
 						class="shopify-diagnostics"
 						aria-labelledby="shopify-diagnostics-title"
@@ -344,16 +334,16 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 							<h3 id="shopify-diagnostics-title">Diagnostics</h3>
 							<p>Check conditions required outside Shopify Admin API setup.</p>
 						</div>
-						<button
+						<Button
 							type="button"
-							class="secondary-button"
+							variant="secondary"
 							disabled={!diagnosticsAvailable() || isRunningDiagnostics()}
 							onClick={() => void handleRunDiagnostics()}
 						>
 							{isRunningDiagnostics()
 								? "Running diagnostics…"
 								: "Run diagnostics"}
-						</button>
+						</Button>
 						<Show when={!diagnosticsAvailable()}>
 							<p class="muted">
 								Save and verify the Shopify integration before running

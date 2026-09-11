@@ -1,5 +1,6 @@
 import { Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
+import { Button } from "../components/Button.js";
 import {
 	buildOrgAdminDivisionsPath,
 	buildOrgAdminFestivalsPath,
@@ -32,9 +33,9 @@ export function AdminHomePage(props: AdminHomePageProps) {
 							getting-started instructions can live here.
 						</p>
 					</div>
-					<button type="button" onClick={props.app.handleDismissWelcome}>
+					<Button type="button" onClick={props.app.handleDismissWelcome}>
 						Dismiss
-					</button>
+					</Button>
 				</div>
 			</Show>
 

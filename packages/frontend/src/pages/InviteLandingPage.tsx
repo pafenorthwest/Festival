@@ -1,5 +1,6 @@
 import { Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
+import { Button } from "../components/Button.js";
 
 interface InviteLandingPageProps {
 	app: FestivalAppController;
@@ -39,25 +40,25 @@ export function InviteLandingPage(props: InviteLandingPageProps) {
 				/>
 			</label>
 			<Show when={!props.app.session().authenticated}>
-				<button
+				<Button
 					type="button"
 					onClick={() => props.app.openSignInModal("invite")}
 				>
 					Sign up to accept invite
-				</button>
+				</Button>
 			</Show>
 			<Show
 				when={
 					props.app.session().authenticated && !props.app.sessionMembership()
 				}
 			>
-				<button
+				<Button
 					type="button"
 					onClick={props.app.handleAcceptInvite}
 					disabled={props.app.isBusy()}
 				>
 					Accept invite
-				</button>
+				</Button>
 			</Show>
 		</section>
 	);

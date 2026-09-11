@@ -3,6 +3,7 @@ import { ORGANIZATION_ROLES } from "@festival/common";
 import { For, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { AccessDeniedPanel } from "../components/AccessDeniedPanel.js";
+import { Button } from "../components/Button.js";
 
 interface AdminUsersPageProps {
 	app: FestivalAppController;
@@ -70,13 +71,13 @@ export function AdminUsersPage(props: AdminUsersPageProps) {
 						</For>
 					</select>
 				</label>
-				<button
+				<Button
 					type="button"
 					onClick={props.app.handleCreateAdminInvite}
 					disabled={props.app.isBusy()}
 				>
 					Send invite
-				</button>
+				</Button>
 			</section>
 		</Show>
 	);

@@ -14,6 +14,20 @@ export const SHOPIFY_ADMIN_CAPABILITIES = [
 	"write_orders",
 ] as const;
 
+export const SHOPIFY_REQUIRED_SCOPES = [
+	"read_customers",
+	"read_orders",
+	"read_products",
+	"write_products",
+	"customer_read_customers",
+	"customer_read_draft_orders",
+	"customer_read_metaobjects",
+	"customer_read_orders",
+] as const;
+
+export const SHOPIFY_AUTOMATICALLY_VERIFIED_SCOPES =
+	SHOPIFY_REQUIRED_SCOPES.filter((scope) => scope !== "read_customers");
+
 export type ShopifyAdminCapability =
 	(typeof SHOPIFY_ADMIN_CAPABILITIES)[number];
 export type ShopifyCapabilityStatus = "granted" | "missing" | "disabled";
@@ -102,6 +116,7 @@ export interface ShopifyIntegrationSettings {
 	verificationStatus: ShopifyVerificationStatus;
 	verifiedShopGid?: string;
 	verifiedShopDomain?: string;
+	verifiedScopes: string[];
 	capabilities: ShopifyCapabilityDiagnostics;
 	integrationVersion: number;
 	verifiedAtIso?: string;

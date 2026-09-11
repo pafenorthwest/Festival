@@ -1,5 +1,6 @@
 import { Match, Show, Switch } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
+import { Button } from "./Button.js";
 
 interface SignInModalProps {
 	app: FestivalAppController;
@@ -36,21 +37,21 @@ export function SignInModal(props: SignInModalProps) {
 						<Switch>
 							<Match when={props.app.signInStep() === "method"}>
 								<div class="auth-method-stack">
-									<button
+									<Button
 										type="button"
 										onClick={() => void props.app.handleGoogleSignIn(modalKind)}
 										disabled={props.app.isBusy()}
 									>
 										Google Auth
-									</button>
-									<button
+									</Button>
+									<Button
 										type="button"
-										class="secondary-button"
+										variant="secondary"
 										onClick={() => props.app.setSignInStep("email")}
 										disabled={props.app.isBusy()}
 									>
 										Email Link Auth
-									</button>
+									</Button>
 								</div>
 							</Match>
 							<Match when={props.app.signInStep() === "email"}>
@@ -67,7 +68,7 @@ export function SignInModal(props: SignInModalProps) {
 										/>
 									</label>
 									<div class="modal-actions">
-										<button
+										<Button
 											type="button"
 											onClick={() =>
 												void props.app.handlePasswordlessSignIn(modalKind)
@@ -75,15 +76,15 @@ export function SignInModal(props: SignInModalProps) {
 											disabled={props.app.isBusy()}
 										>
 											Send email link
-										</button>
-										<button
+										</Button>
+										<Button
 											type="button"
-											class="secondary-button"
+											variant="secondary"
 											onClick={() => props.app.setSignInStep("method")}
 											disabled={props.app.isBusy()}
 										>
 											Back
-										</button>
+										</Button>
 									</div>
 								</div>
 							</Match>
