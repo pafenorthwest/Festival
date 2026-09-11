@@ -1,6 +1,7 @@
 import type { PublicMembershipProductSummary } from "@festival/common";
 import { createResource, createSignal, For, onMount, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
+import { Button } from "../components/Button.js";
 import {
 	ApiError,
 	customerMembershipPurchaseSignInPath,
@@ -12,7 +13,6 @@ import {
 } from "../lib/api.js";
 import { buildOrgMembershipPath } from "../lib/routes.js";
 import { sanitizeShopifyDescriptionHtml } from "../lib/sanitize-html.js";
-import { Button } from "../components/Button.js";
 
 interface MembershipPageProps {
 	app: FestivalAppController;

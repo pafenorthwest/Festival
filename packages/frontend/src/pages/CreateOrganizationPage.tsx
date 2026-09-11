@@ -2,8 +2,8 @@ import type { OrganizationRole } from "@festival/common";
 import { ORGANIZATION_ROLES } from "@festival/common";
 import { For, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
-import { buildOrgPath } from "../lib/routes.js";
 import { Button } from "../components/Button.js";
+import { buildOrgPath } from "../lib/routes.js";
 
 interface CreateOrganizationPageProps {
 	app: FestivalAppController;

@@ -146,14 +146,63 @@ a {
 	margin: 0;
 	font-size: clamp(2.4rem, 5vw, 4.5rem);
 }
-.customer-auth-button,
-.all-memberships-link {
+a.button {
 	display: inline-block;
-	padding: 0.7rem 1rem;
-	border-radius: 999px;
+	border-radius: 4px;
+	text-decoration: none;
+}
+
+a.secondary-button {
+	background: transparent;
+	color: var(--bullet-ink);
+	border: 1px solid var(--bullet-panel-border);
+	box-shadow: none;
+}
+
+a.compact-header-button {
+	padding: 0.65rem 0.85rem;
+	line-height: 1.1;
+	max-width: 9.5rem;
+	white-space: normal;
 	background: var(--bullet-ink);
 	color: white;
+	border-color: var(--bullet-ink);
+	box-shadow: 0 10px 22px rgba(31, 36, 49, 0.16);
+}
+
+.org-landing-actions {
+	display: flex;
+	align-items: center;
+	gap: 0.65rem;
+}
+
+.customer-account-link {
+	display: inline-grid;
+	place-items: center;
+	padding-inline: 1rem;
+	color: transparent;
+	opacity: 0;
 	text-decoration: none;
+}
+
+.customer-account-link.is-authenticated {
+	color: var(--bullet-ink);
+	opacity: 1;
+}
+
+.material-symbols-outlined {
+	font-family: "Material Symbols Outlined", sans-serif;
+	font-weight: normal;
+	font-style: normal;
+	font-size: 1.5rem;
+	line-height: 1;
+	letter-spacing: normal;
+	text-transform: none;
+	display: inline-block;
+	white-space: nowrap;
+	word-wrap: normal;
+	direction: ltr;
+	-webkit-font-smoothing: antialiased;
 }
 .upcoming-festivals,
 .role-banners {

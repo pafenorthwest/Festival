@@ -527,7 +527,9 @@ describe("organization onboarding integration", () => {
 		const source = await readFrontendSource();
 		const styles = await Bun.file("src/styles.css").text();
 
-		expect(source).toContain('export type ButtonVariant = "primary" | "secondary" | "compact-header"');
+		expect(source).toContain(
+			'export type ButtonVariant = "primary" | "secondary" | "compact-header"',
+		);
 		expect(source).toContain('"secondary-button compact-header-button"');
 		expect(source).toContain('variant="secondary"');
 		expect(styles).toContain("--bullet-accent: #303240;");

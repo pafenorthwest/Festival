@@ -5,6 +5,7 @@ import type {
 	UpdateCustomerProfileInput,
 } from "@festival/common";
 import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { Button } from "../components/Button.js";
 import {
 	customerSignInPath,
 	getCustomerMembershipStatus,
@@ -14,7 +15,6 @@ import {
 	logoutCustomer,
 	updateCustomerProfile,
 } from "../lib/api.js";
-import { Button } from "../components/Button.js";
 import {
 	customerMembershipViewModel,
 	decideMembershipPolling,

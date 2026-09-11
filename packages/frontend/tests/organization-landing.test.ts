@@ -7,6 +7,9 @@ const page = await Bun.file(
 const appHeader = await Bun.file(
 	new URL("../src/components/AppHeader.tsx", import.meta.url),
 ).text();
+const styles = await Bun.file(
+	new URL("../src/styles.css", import.meta.url),
+).text();
 
 describe("public organization landing page", () => {
 	it("uses the shared Organization Page header for customer authentication", () => {
@@ -21,6 +24,26 @@ describe("public organization landing page", () => {
 		expect(page).not.toContain("handleLogout");
 	});
 
+	it("renders Home and the account icon before the customer auth control", () => {
+		const home = appHeader.indexOf('class="org-landing-home-link"');
+		const account = appHeader.indexOf('class="customer-account-link"');
+		const auth = appHeader.indexOf('class="customer-auth-button"');
+
+		expect(home).toBeGreaterThan(-1);
+		expect(home).toBeLessThan(account);
+		expect(account).toBeLessThan(auth);
+		expect(appHeader).toContain("href={`/org/");
+		expect(appHeader).toContain("/account`}");
+		expect(appHeader).toContain('class="material-symbols-outlined"');
+		expect(appHeader).toContain("person");
+		expect(styles).toContain(".customer-account-link.is-authenticated");
+		expect(styles).toContain("padding-inline: 1rem;");
+		expect(styles).toContain("color: transparent;");
+		expect(styles).toContain("color: var(--bullet-ink);");
+		expect(styles).toContain("opacity: 0;");
+		expect(styles).toContain("opacity: 1;");
+	});
+
 	it("renders the approved banner sequence and destinations", () => {
 		const teachers = page.indexOf('class="role-banner teachers"');
 		const parents = page.indexOf('class="role-banner parents"');
@@ -31,5 +54,16 @@ describe("public organization landing page", () => {
 		expect(parents).toBeLessThan(volunteers);
 		expect(volunteers).toBeLessThan(accompanists);
 		expect(page).toContain("All Memberships");
+		expect(page).toContain(
+			'class="button secondary-button compact-header-button all-memberships-link"',
+		);
+		expect(appHeader).toContain('variant="compact-header"');
+		expect(appHeader).toContain("onClick={login}");
+		expect(appHeader).toContain(
+			'window.location.assign(customerLandingSignInPath(slug() ?? ""));',
+		);
+		expect(appHeader).not.toContain(
+			'<a\n\t\t\t\t\t\t\t\t\tclass="button secondary-button compact-header-button customer-auth-button"',
+		);
 	});
 });

@@ -1,11 +1,11 @@
 import type { CustomerAccountSettings } from "@festival/common";
 import { createSignal, onMount, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
-import { Button } from "./Button.js";
 import {
 	getCustomerAccountSettings,
 	saveCustomerAccountSettings,
 } from "../lib/api.js";
+import { Button } from "./Button.js";
 
 export function CustomerAccountAdminCard(props: {
 	app: FestivalAppController;

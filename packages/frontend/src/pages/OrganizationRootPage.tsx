@@ -1,7 +1,5 @@
 import { createResource, For, Show } from "solid-js";
-import {
-	getPublicOrganizationLanding,
-} from "../lib/api.js";
+import { getPublicOrganizationLanding } from "../lib/api.js";
 
 interface OrganizationRootPageProps {
 	app: { route: () => { kind: string; slug?: string } };
@@ -61,7 +59,10 @@ export function OrganizationRootPage(props: OrganizationRootPageProps) {
 						Accompanists
 					</a>
 				</nav>
-				<a class="all-memberships-link" href={`/org/${slug()}/membership`}>
+				<a
+					class="button secondary-button compact-header-button all-memberships-link"
+					href={`/org/${slug()}/membership`}
+				>
 					All Memberships
 				</a>
 			</Show>

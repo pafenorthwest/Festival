@@ -6,8 +6,8 @@ import {
 import { createSignal, For, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { AccessDeniedPanel } from "../components/AccessDeniedPanel.js";
-import { CustomerAccountAdminCard } from "../components/CustomerAccountAdminCard.js";
 import { Button } from "../components/Button.js";
+import { CustomerAccountAdminCard } from "../components/CustomerAccountAdminCard.js";
 import { runShopifyDiagnostics } from "../lib/api.js";
 
 interface AdminIntegrationsPageProps {
@@ -195,12 +195,12 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 										<For each={SHOPIFY_REQUIRED_SCOPES}>
 											{(scope) => (
 												<li>
-													{scope}: {" "}
+													{scope}:{" "}
 													{scope === "read_customers"
 														? "Manual verification required"
 														: settings.verifiedScopes.includes(scope)
-														? "Granted"
-														: "Missing"}
+															? "Granted"
+															: "Missing"}
 												</li>
 											)}
 										</For>
@@ -220,8 +220,8 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 								<Show
 									when={
 										settings.verificationStatus === "ok" &&
-										missingRequiredShopifyScopes(settings.verifiedScopes).length >
-											0
+										missingRequiredShopifyScopes(settings.verifiedScopes)
+											.length > 0
 									}
 								>
 									<div class="shopify-warning-banner" role="alert">
@@ -230,9 +230,9 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 										</strong>
 										<p>
 											Missing scopes:{" "}
-											{missingRequiredShopifyScopes(settings.verifiedScopes).join(
-												", ",
-											)}
+											{missingRequiredShopifyScopes(
+												settings.verifiedScopes,
+											).join(", ")}
 											.
 										</p>
 										<p>

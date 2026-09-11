@@ -16,7 +16,11 @@ interface AppHeaderProps {
 export function AppHeader(props: AppHeaderProps) {
 	const slug = () => {
 		const route = props.app.route();
-		return isOrganizationPageRoute(route) ? route.slug : null;
+		return route.kind === "org-root" ||
+			route.kind === "org-membership" ||
+			route.kind === "org-customer-account"
+			? route.slug
+			: null;
 	};
 	const [customerSession, setCustomerSession] = createSignal<{
 		authenticated: boolean;
@@ -42,6 +46,10 @@ export function AppHeader(props: AppHeaderProps) {
 		const session = customerSession();
 		if (organizationSlug && session.authenticated && session.csrfToken)
 			logoutCustomer(organizationSlug, session.csrfToken);
+	}
+
+	function login() {
+		window.location.assign(customerLandingSignInPath(slug() ?? ""));
 	}
 
 	return (
@@ -105,23 +113,46 @@ export function AppHeader(props: AppHeaderProps) {
 					<p class="eyebrow">Music festival</p>
 					<h1>{landing()?.organization.name ?? "Organization"}</h1>
 				</div>
-				<Show when={!sessionLoading()}>
-					<Show
-						when={customerSession().authenticated}
-						fallback={
-							<a
-								class="customer-auth-button"
-								href={customerLandingSignInPath(slug() ?? "")}
-							>
-								Login
-							</a>
-						}
+				<div class="org-landing-actions">
+					<a class="org-landing-home-link" href={`/org/${slug() ?? ""}`}>
+						Home
+					</a>
+					<a
+						class="customer-account-link"
+						classList={{ "is-authenticated": customerSession().authenticated }}
+						href={`/org/${slug() ?? ""}/account`}
+						aria-label="Customer account"
 					>
-						<Button type="button" variant="secondary" onClick={logout}>
-							Logout
-						</Button>
+						<span class="material-symbols-outlined" aria-hidden="true">
+							person
+						</span>
+						<span class="sr-only">Customer account</span>
+					</a>
+					<Show when={!sessionLoading()}>
+						<Show
+							when={customerSession().authenticated}
+							fallback={
+								<Button
+									type="button"
+									variant="compact-header"
+									class="customer-auth-button"
+									onClick={login}
+								>
+									Login
+								</Button>
+							}
+						>
+							<Button
+								type="button"
+								variant="compact-header"
+								class="customer-auth-button"
+								onClick={logout}
+							>
+								Logout
+							</Button>
+						</Show>
 					</Show>
-				</Show>
+				</div>
 			</header>
 		</Show>
 	);
