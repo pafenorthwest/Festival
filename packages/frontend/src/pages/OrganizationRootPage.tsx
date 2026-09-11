@@ -43,6 +43,7 @@ export function OrganizationRootPage(props: OrganizationRootPageProps) {
 						</ul>
 					</Show>
 				</section>
+				<h2>Register</h2>
 				<nav class="role-banners" aria-label="Audience links">
 					<a class="role-banner teachers" href={`/org/${slug()}/membership`}>
 						Teachers
