@@ -25,8 +25,7 @@ export const SHOPIFY_REQUIRED_SCOPES = [
 	"customer_read_orders",
 ] as const;
 
-export const SHOPIFY_AUTOMATICALLY_VERIFIED_SCOPES =
-	SHOPIFY_REQUIRED_SCOPES;
+export const SHOPIFY_AUTOMATICALLY_VERIFIED_SCOPES = SHOPIFY_REQUIRED_SCOPES;
 
 export type ShopifyAdminCapability =
 	(typeof SHOPIFY_ADMIN_CAPABILITIES)[number];
