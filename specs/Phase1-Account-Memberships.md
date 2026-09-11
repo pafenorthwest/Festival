@@ -386,7 +386,11 @@ Minimum likely fields:
 
 * student_id
 * full_name
-* birthdate or age basis
+* parent_or_guardian_id
+* derived whole-year age, calculated from a submitted birth date and the
+  Organization registration-age date
+* age_snapshot_created_at and age_snapshot_valid_until (90 days after creation)
+  — never retain the submitted birth date
 * contact email for parent/guardian or student, depending on policy
 * selected_teacher_profile_id
 * created_at

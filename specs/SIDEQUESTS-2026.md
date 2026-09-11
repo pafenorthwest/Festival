@@ -56,7 +56,6 @@
 * Browse available roles/shifts
 * Sign up / cancel
 * Admin view of coverage gaps
-* Automated reminders
 
 **Deliverables:**
 
@@ -75,7 +74,9 @@
 
 * Volunteers can self-assign to roles
 * Admin can see coverage in real time
-* Reminder notifications sent pre-event
+
+**Deferred:** Reminder notifications, their event contract, delivery provider,
+retry policy, timing, and ownership require separate specification.
 
 **Failure Modes:**
 
@@ -129,13 +130,13 @@
 
 ## 4. Admin Billing Reconciliation (Debit & Credit Repair)
 
-**Goal:** Give administrators precise control to correct payment mismatches between Shopify and actual services rendered.
+**Goal:** Give administrators precise control to reconcile and repair recorded
+payment mismatches after an approved financial decision.
 
 **Scope:**
 
-* Issue refunds (full/partial)
-* Create manual charges/invoices
-* Apply credits to future use
+* Record and reconcile approved refunds, charges/invoices, credits, and write-offs
+* Investigate payment mismatches without creating an independent financial-decision path
 * Reconcile discrepancies:
 
   * paid but not registered
@@ -147,6 +148,8 @@
 
 * Shopify remains the **source of truth for money movement**
 * Local system becomes the **source of truth for intent + reconciliation**
+* Membership cancellation/refund approval and execution remain owned by issue #98;
+  this side quest consumes those approved decisions
 
 ### Deliverables
 
@@ -168,9 +171,9 @@
 
 **Core APIs:**
 
-* issue refund (calls Shopify API)
-* create invoice (manual charge)
-* apply credit to registration
+* record/reconcile an approved refund or financial adjustment
+* record an approved invoice or manual charge
+* apply an approved credit to a registration
 * reconcile payment mismatch
 
 ### UI Capabilities
@@ -187,14 +190,15 @@
   * balance summary
 * Actions:
 
-  * refund (full/partial)
-  * apply credit
-  * generate invoice
+  * inspect approved refunds and adjustments
+  * reconcile approved credits and invoices
   * mark resolved
 
 ### Exit Criteria
 
-* Admin can resolve any payment mismatch without engineering support
+* Admin can resolve recorded payment mismatches without engineering support,
+  without bypassing the approved-decision authority for membership refunds or
+  cancellations
 * Every financial adjustment is:
 
   * logged
@@ -411,4 +415,3 @@
 ### Priority
 
 **High priority** Admin Billing and Reconcilation
-

@@ -122,44 +122,49 @@
 
 ## Phase 3 — Cart Logic + Waitlists (Critical Complexity Phase)
 
-**Goal:** Own **allocation + fairness logic locally**, not in Shopify.
+**Goal:** Own **post-payment allocation + fairness logic locally**, not in Shopify.
 
 **Scope:**
 
-* Pre-checkout validation (soft holds)
-* Class capacity enforcement
-* Waitlist system (ordered, timestamped)
+* Verified-payment allocation using an editable soft-capacity threshold
+* Immutable placed or waitlisted outcomes for each paid registration
+* Auditable waitlist outcomes; automatic promotion is deferred
 * Global constraints (e.g., max entries per user)
 
 **Key Design Shift:**
 
-* Shopify handles payment
-* Local system handles **availability + eligibility**
+* Shopify remains authoritative for payment
+* The local system allocates only after trusted verified-payment projection
+* A capacity change affects later allocations only; it never reclassifies a
+  confirmed placement or waitlist outcome
 
 **Deliverables:**
 
 * Tables:
 
-  * `class_inventory`
-  * `waitlist`
-  * `cart_hold` (TTL-based)
+  * class capacity threshold/configuration
+  * registration allocation outcome and audit history
+  * waitlist outcome records
 * APIs:
 
-  * reserve slot (pre-checkout)
-  * confirm via webhook
-  * release expired holds
+  * record verified-payment allocation
+  * manage class capacity threshold
+  * retrieve allocation/audit status
 
 **Exit Criteria:**
 
-* No overselling under concurrency
-* Deterministic waitlist ordering
-* Holds expire cleanly
+* Each verified payment receives one deterministic, tenant-scoped outcome under
+  concurrency and retries
+* Allocations use the currently effective positive capacity threshold (default
+  100), without displacing earlier outcomes after a capacity change
+* Capacity refresh/reconciliation affects only future allocation decisions
 
 **Failure Modes (serious):**
 
-* Race conditions → oversubscription
-* Shopify checkout succeeds but capacity exceeded locally
-* No reconciliation job
+* Race conditions → duplicate or conflicting allocation outcomes
+* Treating browser return, rather than verified payment, as allocation authority
+* Capacity refresh/reconciliation changing an existing placed or waitlisted
+  outcome
 
 ---
 
@@ -215,7 +220,8 @@
   * rooms
   * time slots
   * adjudicators
-* Assign performers to slots
+* Assign placed performers to slots; waitlisted registrations require a
+  separately approved, audited override
 * Handle constraints:
 
   * instrument
@@ -236,7 +242,7 @@
 * Admin can:
 
   * define rooms + slots
-  * assign performers
+  * assign placed performers
 * Export schedule (PDF/CSV)
 
 **Failure Modes:**
@@ -280,4 +286,3 @@ Everything async:
 
   * Shopify and local DB **will diverge**
 * Build reconciliation jobs early (Phase 2–3)
-
