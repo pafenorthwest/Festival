@@ -185,6 +185,13 @@ a.compact-header-button {
 	text-decoration: none;
 }
 
+.customer-account-navigation {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: start;
+	gap: 0.5rem;
+}
+
 .customer-account-link.is-authenticated {
 	color: var(--bullet-ink);
 	opacity: 1;
@@ -276,6 +283,16 @@ button.compact-header-button {
 	color: white;
 	border-color: var(--bullet-ink);
 	box-shadow: 0 10px 22px rgba(31, 36, 49, 0.16);
+}
+
+.customer-account-navigation button.compact-header-button {
+	padding: 0.52rem 0.68rem;
+	font-size: 80%;
+	background: linear-gradient(
+		135deg,
+		var(--bullet-accent),
+		var(--bullet-accent-strong)
+	);
 }
 
 .eyebrow {

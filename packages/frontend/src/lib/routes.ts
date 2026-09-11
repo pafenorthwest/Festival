@@ -5,7 +5,10 @@ export type AppRoute =
 	| { kind: "invite"; token: string }
 	| { kind: "org-root"; slug: string }
 	| { kind: "org-membership"; slug: string }
-	| { kind: "org-customer-account"; slug: string }
+	| { kind: "org-customer-account-legacy"; slug: string }
+	| { kind: "org-customer-account-memberships"; slug: string }
+	| { kind: "org-customer-account-contact"; slug: string }
+	| { kind: "org-customer-account-orders"; slug: string }
 	| { kind: "org-admin"; slug: string }
 	| { kind: "org-admin-users"; slug: string }
 	| { kind: "org-admin-integrations"; slug: string }
@@ -26,7 +29,19 @@ export function buildOrgMembershipPath(slug: string): string {
 }
 
 export function buildOrgCustomerAccountPath(slug: string): string {
-	return `/org/${slug}/account`;
+	return buildOrgCustomerAccountMembershipsPath(slug);
+}
+
+export function buildOrgCustomerAccountMembershipsPath(slug: string): string {
+	return `/org/${slug}/account/memberships`;
+}
+
+export function buildOrgCustomerAccountContactPath(slug: string): string {
+	return `/org/${slug}/account/contact`;
+}
+
+export function buildOrgCustomerAccountOrdersPath(slug: string): string {
+	return `/org/${slug}/account/orders`;
 }
 
 export function buildOrgAdminUsersPath(slug: string): string {
@@ -61,7 +76,10 @@ export function isOrganizationPageRoute(route: AppRoute): boolean {
 	return (
 		route.kind === "org-root" ||
 		route.kind === "org-membership" ||
-		route.kind === "org-customer-account"
+		route.kind === "org-customer-account-legacy" ||
+		route.kind === "org-customer-account-memberships" ||
+		route.kind === "org-customer-account-contact" ||
+		route.kind === "org-customer-account-orders"
 	);
 }
 
@@ -93,11 +111,38 @@ export function parseRoute(pathname: string): AppRoute {
 		return { kind: "org-membership", slug: orgMembershipMatch[1] ?? "" };
 	}
 
-	const customerAccountMatch = pathname.match(/^\/org\/([^/]+)\/account$/);
+	const customerAccountMatch = pathname.match(/^\/org\/([^/]+)\/account\/?$/);
 	if (customerAccountMatch)
 		return {
-			kind: "org-customer-account",
+			kind: "org-customer-account-legacy",
 			slug: customerAccountMatch[1] ?? "",
+		};
+
+	const customerAccountMembershipsMatch = pathname.match(
+		/^\/org\/([^/]+)\/account\/memberships$/,
+	);
+	if (customerAccountMembershipsMatch)
+		return {
+			kind: "org-customer-account-memberships",
+			slug: customerAccountMembershipsMatch[1] ?? "",
+		};
+
+	const customerAccountContactMatch = pathname.match(
+		/^\/org\/([^/]+)\/account\/contact$/,
+	);
+	if (customerAccountContactMatch)
+		return {
+			kind: "org-customer-account-contact",
+			slug: customerAccountContactMatch[1] ?? "",
+		};
+
+	const customerAccountOrdersMatch = pathname.match(
+		/^\/org\/([^/]+)\/account\/orders$/,
+	);
+	if (customerAccountOrdersMatch)
+		return {
+			kind: "org-customer-account-orders",
+			slug: customerAccountOrdersMatch[1] ?? "",
 		};
 
 	const orgAdminMatch = pathname.match(/^\/org\/([^/]+)\/admin$/);

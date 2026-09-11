@@ -103,7 +103,7 @@ export function saveCustomerAccountSettings(
 }
 
 export function customerSignInPath(slug: string, checkoutReturn = false) {
-	const returnTo = `/org/${slug}/account${checkoutReturn ? "?checkout=processing" : ""}`;
+	const returnTo = `/org/${slug}/account/memberships${checkoutReturn ? "?checkout=processing" : ""}`;
 	return `/api/organizations/${slug}/customer-auth/start?returnTo=${encodeURIComponent(returnTo)}`;
 }
 

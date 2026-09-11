@@ -33,7 +33,7 @@ describe("public organization landing page", () => {
 		expect(home).toBeLessThan(account);
 		expect(account).toBeLessThan(auth);
 		expect(appHeader).toContain("href={`/org/");
-		expect(appHeader).toContain("/account`}");
+		expect(appHeader).toContain("/account/memberships`}");
 		expect(appHeader).toContain('class="material-symbols-outlined"');
 		expect(appHeader).toContain("person");
 		expect(styles).toContain(".customer-account-link.is-authenticated");

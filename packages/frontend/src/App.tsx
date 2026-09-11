@@ -10,9 +10,12 @@ import { AdminIntegrationsPage } from "./pages/AdminIntegrationsPage.js";
 import { AdminMembershipProductsPage } from "./pages/AdminMembershipProductsPage.js";
 import { AdminUsersPage } from "./pages/AdminUsersPage.js";
 import { CreateOrganizationPage } from "./pages/CreateOrganizationPage.js";
-import { CustomerAccountPage } from "./pages/CustomerAccountPage.js";
+import { CustomerAccountContactPage } from "./pages/CustomerAccountContactPage.js";
+import { CustomerAccountMembershipsPage } from "./pages/CustomerAccountMembershipsPage.js";
+import { CustomerAccountOrdersPage } from "./pages/CustomerAccountOrdersPage.js";
 import { HomePage } from "./pages/HomePage.js";
 import { InviteLandingPage } from "./pages/InviteLandingPage.js";
+import { LegacyCustomerAccountRedirect } from "./pages/LegacyCustomerAccountRedirect.js";
 import { MembershipPage } from "./pages/MembershipPage.js";
 import { OrganizationChooser } from "./pages/OrganizationChooser.js";
 import { OrganizationRootPage } from "./pages/OrganizationRootPage.js";
@@ -48,8 +51,25 @@ export default function App() {
 				<Match when={app.route().kind === "org-membership"}>
 					<MembershipPage app={app} />
 				</Match>
-				<Match when={app.route().kind === "org-customer-account"}>
-					<CustomerAccountPage slug={(app.route() as { slug: string }).slug} />
+				<Match when={app.route().kind === "org-customer-account-legacy"}>
+					<LegacyCustomerAccountRedirect
+						slug={(app.route() as { slug: string }).slug}
+					/>
+				</Match>
+				<Match when={app.route().kind === "org-customer-account-memberships"}>
+					<CustomerAccountMembershipsPage
+						slug={(app.route() as { slug: string }).slug}
+					/>
+				</Match>
+				<Match when={app.route().kind === "org-customer-account-contact"}>
+					<CustomerAccountContactPage
+						slug={(app.route() as { slug: string }).slug}
+					/>
+				</Match>
+				<Match when={app.route().kind === "org-customer-account-orders"}>
+					<CustomerAccountOrdersPage
+						slug={(app.route() as { slug: string }).slug}
+					/>
 				</Match>
 				<Match when={app.route().kind === "org-admin"}>
 					<AdminHomePage app={app} />

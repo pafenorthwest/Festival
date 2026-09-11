@@ -18,7 +18,10 @@ export function AppHeader(props: AppHeaderProps) {
 		const route = props.app.route();
 		return route.kind === "org-root" ||
 			route.kind === "org-membership" ||
-			route.kind === "org-customer-account"
+			route.kind === "org-customer-account-legacy" ||
+			route.kind === "org-customer-account-memberships" ||
+			route.kind === "org-customer-account-contact" ||
+			route.kind === "org-customer-account-orders"
 			? route.slug
 			: null;
 	};
@@ -120,7 +123,7 @@ export function AppHeader(props: AppHeaderProps) {
 					<a
 						class="customer-account-link"
 						classList={{ "is-authenticated": customerSession().authenticated }}
-						href={`/org/${slug() ?? ""}/account`}
+						href={`/org/${slug() ?? ""}/account/memberships`}
 						aria-label="Customer account"
 					>
 						<span class="material-symbols-outlined" aria-hidden="true">

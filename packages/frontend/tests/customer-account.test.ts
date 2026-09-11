@@ -4,8 +4,17 @@ import {
 	getCustomerMembershipStatus,
 } from "../src/lib/api.js";
 
-const page = await Bun.file(
-	new URL("../src/pages/CustomerAccountPage.tsx", import.meta.url),
+const membershipsPage = await Bun.file(
+	new URL("../src/pages/CustomerAccountMembershipsPage.tsx", import.meta.url),
+).text();
+const contactPage = await Bun.file(
+	new URL("../src/pages/CustomerAccountContactPage.tsx", import.meta.url),
+).text();
+const ordersPage = await Bun.file(
+	new URL("../src/pages/CustomerAccountOrdersPage.tsx", import.meta.url),
+).text();
+const layout = await Bun.file(
+	new URL("../src/pages/CustomerAccountPageLayout.tsx", import.meta.url),
 ).text();
 const admin = await Bun.file(
 	new URL("../src/components/CustomerAccountAdminCard.tsx", import.meta.url),
@@ -21,13 +30,15 @@ describe("customer account frontend boundary", () => {
 			"https://festival.example.com",
 		);
 		expect(returned.searchParams.get("returnTo")).toBe(
-			"/org/pafe/account?checkout=processing",
+			"/org/pafe/account/memberships?checkout=processing",
 		);
 		const ordinary = new URL(
 			customerSignInPath("pafe"),
 			"https://festival.example.com",
 		);
-		expect(ordinary.searchParams.get("returnTo")).toBe("/org/pafe/account");
+		expect(ordinary.searchParams.get("returnTo")).toBe(
+			"/org/pafe/account/memberships",
+		);
 	});
 
 	it("loads the tenant-scoped customer membership status with cookie credentials", async () => {
@@ -73,22 +84,16 @@ describe("customer account frontend boundary", () => {
 	});
 
 	it("keeps customer calls behind API helpers and renders only the allowlisted order DTO", () => {
-		expect(page).toContain("getCustomerSession");
-		expect(page).toContain("getCustomerMembershipStatus");
-		expect(page).toContain("getCustomerOrders");
-		expect(page).toContain("getCustomerProfile");
-		expect(page).toContain("async function loadProfile()");
-		expect(page).toContain("void loadProfile().catch");
-		expect(page).toContain("We’re importing your purchase details");
-		expect(page).toContain("updateCustomerProfile");
-		expect(page).toContain("void loadOrders().catch");
-		expect(page).not.toContain("const [, profileResponse] = await Promise.all");
-		expect(page).toContain("Mailing address");
-		expect(page).toContain("These details are stored in Festival");
-		expect(page).toContain("Shopify.");
-		expect(page).toContain("order.financialStatus");
-		expect(page).toContain("order.fulfillmentStatus");
-		expect(page).not.toMatch(
+		expect(layout).toContain("getCustomerSession");
+		expect(membershipsPage).toContain("getCustomerMembershipStatus");
+		expect(contactPage).toContain("getCustomerProfile");
+		expect(contactPage).toContain("updateCustomerProfile");
+		expect(contactPage).toContain("Mailing address");
+		expect(contactPage).toContain("These details are stored in Festival");
+		expect(ordersPage).toContain("getCustomerOrders");
+		expect(ordersPage).toContain("order.financialStatus");
+		expect(ordersPage).toContain("order.fulfillmentStatus");
+		expect(ordersPage).not.toMatch(
 			/firstName|lastName|emailAddress|phoneNumber|accessToken|refreshToken|idToken/,
 		);
 		expect(api).toContain('credentials: "include"');
@@ -100,28 +105,35 @@ describe("customer account frontend boundary", () => {
 	});
 
 	it("renders Festival membership states separately and bounds polling", () => {
-		expect(page).toContain("Festival memberships");
-		expect(page).toContain("Shopify orders");
-		expect(page.indexOf("Festival memberships")).toBeLessThan(
-			page.indexOf("Shopify orders"),
+		expect(membershipsPage).toContain("Festival memberships");
+		expect(membershipsPage).toContain("Loading Festival membership status");
+		expect(membershipsPage).toContain("No Festival memberships found.");
+		expect(membershipsPage).toContain("membership status could not be loaded");
+		expect(membershipsPage).toContain(
+			"Membership validation is still processing",
 		);
-		expect(page).toContain("Loading Festival membership status");
-		expect(page).toContain("No Festival memberships found.");
-		expect(page).toContain("membership status could not be loaded");
-		expect(page).toContain("Membership validation is still processing");
-		expect(page).toContain("Refresh membership status");
-		expect(page).toContain('aria-live="polite"');
-		expect(page).toContain("membershipRequestInFlight");
-		expect(page).toContain("MEMBERSHIP_POLL_INTERVAL_MS");
-		expect(page).toContain("setTimeout");
-		expect(page).toContain("clearTimeout");
-		expect(page).toContain("onCleanup");
-		expect(page).toContain("membershipInitialSignature");
-		expect(page).toContain("removeCheckoutProcessingQuery");
-		expect(page).not.toContain("reasonCode");
-		expect(page).not.toMatch(
+		expect(membershipsPage).toContain("Refresh membership status");
+		expect(membershipsPage).toContain('aria-live="polite"');
+		expect(membershipsPage).toContain("membershipRequestInFlight");
+		expect(membershipsPage).toContain("MEMBERSHIP_POLL_INTERVAL_MS");
+		expect(membershipsPage).toContain("setTimeout");
+		expect(membershipsPage).toContain("clearTimeout");
+		expect(membershipsPage).toContain("onCleanup");
+		expect(membershipsPage).toContain("membershipInitialSignature");
+		expect(membershipsPage).toContain("removeCheckoutProcessingQuery");
+		expect(membershipsPage).not.toContain("reasonCode");
+		expect(membershipsPage).not.toMatch(
 			/shopifyOrderGid|shopifyOrderLineGid|checkoutIntentId|accessToken|refreshToken|idToken/,
 		);
+	});
+
+	it("keeps account authentication in the shared header and account controls consistently styled", () => {
+		expect(layout).toContain("Sign in using the header to view your account.");
+		expect(layout).not.toContain("customerSignInPath");
+		expect(contactPage).not.toContain("logoutCustomer");
+		expect(contactPage).toContain('type="button"');
+		expect(ordersPage).toContain('type="button"');
+		expect(membershipsPage).toContain('type="button"');
 	});
 	it("keeps Customer Account Admin credentials separate and replace-only", () => {
 		expect(admin).toContain("Shopify Customer Accounts");
