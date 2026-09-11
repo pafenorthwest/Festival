@@ -39,4 +39,4 @@
 - Build: passed (`bun run build`, from `packages/frontend`)
 - Tests: passed (`bun test`, from `packages/frontend`)
 - Code review: passed (no actionable findings; confidence 0.92)
-- Clean merge: pending
+- Clean merge: passed (`git-clean-merge-check.sh main ericp/style-update-sep-2026`; fast-forward)
