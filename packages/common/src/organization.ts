@@ -86,6 +86,24 @@ export interface FestivalClassConfiguration {
 	updatedAtIso: string;
 }
 
+export interface FestivalChildRecord {
+	id: string;
+	organizationId: string;
+	parentCustomerId: string;
+	displayName: string;
+	createdAtIso: string;
+}
+
+export interface FestivalChildAgeSnapshot {
+	id: string;
+	childId: string;
+	organizationId: string;
+	age: number;
+	createdAtIso: string;
+	validUntilIso: string;
+	supersededAtIso?: string;
+}
+
 export function validateRegistrationAgeDate(value: unknown): string {
 	if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
 		throw new Error("Registration age date must use YYYY-MM-DD.");

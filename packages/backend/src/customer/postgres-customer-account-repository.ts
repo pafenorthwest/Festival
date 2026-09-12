@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import type { CustomerMailingAddress } from "@festival/common";
 import { sql } from "bun";
 import type {
+	FestivalChildAgeSnapshot,
+	FestivalChildRecord,
+} from "@festival/common";
+import type {
 	ApplyCustomerProfileInput,
 	CustomerAccountIntegrationRecord,
 	CustomerAccountRepository,
@@ -528,5 +532,105 @@ export class PostgresCustomerAccountRepository
 			`UPDATE ${this.schema}.shopify_customer_sessions SET revoked_at=$2 WHERE organization_id=$1 AND revoked_at IS NULL`,
 			[org, at],
 		);
+	}
+	async createChild(
+		input: Omit<FestivalChildRecord, "id" | "createdAtIso">,
+	): Promise<FestivalChildRecord> {
+		await this.ensureReady();
+		const id = randomUUID();
+		const createdAtIso = new Date().toISOString();
+		await sql.unsafe(
+			`CREATE TABLE IF NOT EXISTS ${this.schema}.festival_children (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, parent_customer_id TEXT NOT NULL, display_name TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL, UNIQUE(organization_id,parent_customer_id,LOWER(display_name)))`,
+		);
+		await sql.unsafe(
+			`INSERT INTO ${this.schema}.festival_children (id,organization_id,parent_customer_id,display_name,created_at) VALUES ($1,$2,$3,$4,$5)`,
+			[
+				id,
+				input.organizationId,
+				input.parentCustomerId,
+				input.displayName,
+				createdAtIso,
+			],
+		);
+		return { ...input, id, createdAtIso };
+	}
+	async listChildren(
+		organizationId: string,
+		parentCustomerId: string,
+	): Promise<FestivalChildRecord[]> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT id,organization_id,parent_customer_id,display_name,created_at FROM ${this.schema}.festival_children WHERE organization_id=$1 AND parent_customer_id=$2`,
+			[organizationId, parentCustomerId],
+		)) as Array<{
+			id: string;
+			organization_id: string;
+			parent_customer_id: string;
+			display_name: string;
+			created_at: string;
+		}>;
+		return rows.map((row) => ({
+			id: row.id,
+			organizationId: row.organization_id,
+			parentCustomerId: row.parent_customer_id,
+			displayName: row.display_name,
+			createdAtIso: row.created_at,
+		}));
+	}
+	async createChildAgeSnapshot(
+		input: Omit<
+			FestivalChildAgeSnapshot,
+			"id" | "createdAtIso" | "supersededAtIso"
+		>,
+	): Promise<FestivalChildAgeSnapshot> {
+		await this.ensureReady();
+		const id = randomUUID();
+		const createdAtIso = new Date().toISOString();
+		await sql.unsafe(
+			`CREATE TABLE IF NOT EXISTS ${this.schema}.festival_child_age_snapshots (id TEXT PRIMARY KEY, child_id TEXT NOT NULL, organization_id TEXT NOT NULL, age INTEGER NOT NULL, created_at TIMESTAMPTZ NOT NULL, valid_until TIMESTAMPTZ NOT NULL, superseded_at TIMESTAMPTZ NULL)`,
+		);
+		await sql.unsafe(
+			`UPDATE ${this.schema}.festival_child_age_snapshots SET superseded_at=$3 WHERE organization_id=$1 AND child_id=$2 AND superseded_at IS NULL`,
+			[input.organizationId, input.childId, createdAtIso],
+		);
+		await sql.unsafe(
+			`INSERT INTO ${this.schema}.festival_child_age_snapshots (id,child_id,organization_id,age,created_at,valid_until) VALUES ($1,$2,$3,$4,$5,$6)`,
+			[
+				id,
+				input.childId,
+				input.organizationId,
+				input.age,
+				createdAtIso,
+				input.validUntilIso,
+			],
+		);
+		return { ...input, id, createdAtIso };
+	}
+	async listChildAgeSnapshots(
+		organizationId: string,
+		childId: string,
+	): Promise<FestivalChildAgeSnapshot[]> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT id,child_id,organization_id,age,created_at,valid_until,superseded_at FROM ${this.schema}.festival_child_age_snapshots WHERE organization_id=$1 AND child_id=$2`,
+			[organizationId, childId],
+		)) as Array<{
+			id: string;
+			child_id: string;
+			organization_id: string;
+			age: number;
+			created_at: string;
+			valid_until: string;
+			superseded_at: string | null;
+		}>;
+		return rows.map((row) => ({
+			id: row.id,
+			childId: row.child_id,
+			organizationId: row.organization_id,
+			age: row.age,
+			createdAtIso: row.created_at,
+			validUntilIso: row.valid_until,
+			...(row.superseded_at ? { supersededAtIso: row.superseded_at } : {}),
+		}));
 	}
 }

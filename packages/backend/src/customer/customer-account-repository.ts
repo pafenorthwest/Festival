@@ -1,5 +1,7 @@
 import type {
 	CustomerMailingAddress,
+	FestivalChildAgeSnapshot,
+	FestivalChildRecord,
 	UpdateCustomerProfileInput,
 } from "@festival/common";
 
@@ -173,4 +175,21 @@ export interface CustomerAccountRepository {
 		organizationId: string,
 		revokedAtIso: string,
 	): Promise<void>;
+	createChild(
+		input: Omit<FestivalChildRecord, "id" | "createdAtIso">,
+	): Promise<FestivalChildRecord>;
+	listChildren(
+		organizationId: string,
+		parentCustomerId: string,
+	): Promise<FestivalChildRecord[]>;
+	createChildAgeSnapshot(
+		input: Omit<
+			FestivalChildAgeSnapshot,
+			"id" | "createdAtIso" | "supersededAtIso"
+		>,
+	): Promise<FestivalChildAgeSnapshot>;
+	listChildAgeSnapshots(
+		organizationId: string,
+		childId: string,
+	): Promise<FestivalChildAgeSnapshot[]>;
 }
