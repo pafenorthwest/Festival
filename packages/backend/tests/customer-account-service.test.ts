@@ -319,6 +319,32 @@ describe("CustomerAccountService", () => {
 				new Date(created.ageSnapshot.createdAtIso).getTime(),
 		).toBeGreaterThanOrEqual(90 * 24 * 60 * 60 * 1000 - 1);
 	});
+	it("rejects child writes without the customer CSRF boundary", async () => {
+		const f = await fixture();
+		await f.organizations.updateRegistrationAgeConfiguration({
+			organizationId: f.org.id,
+			registrationAgeDate: "2026-06-01",
+		});
+		const auth = await f.authenticate();
+		await expect(
+			f.service.createChild(
+				"festival",
+				auth.sessionId,
+				"wrong",
+				"https://festival.example.com",
+				{ displayName: "Alex", birthday: "2016-06-01" },
+			),
+		).rejects.toMatchObject({ status: 403 });
+		await expect(
+			f.service.createChild(
+				"festival",
+				auth.sessionId,
+				"",
+				"https://festival.example.com",
+				{ displayName: "Alex", birthday: "2016-06-01" },
+			),
+		).rejects.toMatchObject({ status: 403 });
+	});
 	it("keeps configuration separate, validates discovery, and never returns the secret", async () => {
 		const f = await fixture();
 		const stored = await f.repository.getIntegration(f.org.id);
