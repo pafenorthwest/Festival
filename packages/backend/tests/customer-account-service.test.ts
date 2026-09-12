@@ -293,6 +293,32 @@ describe("CustomerAccountService", () => {
 		expect(snapshots).toHaveLength(2);
 		expect(snapshots[0]?.supersededAtIso).toBeDefined();
 	});
+	it("calculates registration ages at before, on, and after birthday boundaries", async () => {
+		const f = await fixture();
+		await f.organizations.updateRegistrationAgeConfiguration({
+			organizationId: f.org.id,
+			registrationAgeDate: "2026-06-01",
+		});
+		const auth = await f.authenticate();
+		const session = await f.repository.getSession(auth.sessionId);
+		if (!session) throw new Error("session");
+		const create = (displayName: string, birthday: string) =>
+			f.service.createChild(
+				"festival",
+				auth.sessionId,
+				session.csrfToken,
+				"https://festival.example.com",
+				{ displayName, birthday },
+			);
+		expect((await create("Before", "2016-05-31")).ageSnapshot.age).toBe(10);
+		expect((await create("On", "2016-06-01")).ageSnapshot.age).toBe(10);
+		expect((await create("After", "2016-06-02")).ageSnapshot.age).toBe(9);
+		const created = await create("Validity", "2016-01-01");
+		expect(
+			new Date(created.ageSnapshot.validUntilIso).getTime() -
+				new Date(created.ageSnapshot.createdAtIso).getTime(),
+		).toBeGreaterThanOrEqual(90 * 24 * 60 * 60 * 1000 - 1);
+	});
 	it("keeps configuration separate, validates discovery, and never returns the secret", async () => {
 		const f = await fixture();
 		const stored = await f.repository.getIntegration(f.org.id);
