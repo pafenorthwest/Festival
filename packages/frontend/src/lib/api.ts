@@ -150,6 +150,36 @@ export function getCustomerProfile(slug: string) {
 	);
 }
 
+export interface CustomerChildDto {
+	id: string;
+	displayName: string;
+	hasCurrentValidAgeSnapshot: boolean;
+}
+export function getCustomerChildren(slug: string) {
+	return requestJson<{ children: CustomerChildDto[] }>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/children`,
+		undefined,
+		undefined,
+		"",
+	);
+}
+export function createCustomerChild(
+	slug: string,
+	csrfToken: string,
+	input: { displayName: string; birthday: string },
+) {
+	return requestJson<{ child: CustomerChildDto }>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/children`,
+		{
+			method: "POST",
+			headers: { "X-CSRF-Token": csrfToken },
+			body: JSON.stringify(input),
+		},
+		undefined,
+		"",
+	);
+}
+
 export function updateCustomerProfile(
 	slug: string,
 	csrfToken: string,
