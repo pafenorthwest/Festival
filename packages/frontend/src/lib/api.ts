@@ -481,6 +481,18 @@ export function createFestival(
 	);
 }
 
+export function setPrimaryFestival(
+	idToken: string,
+	slug: string,
+	festivalShortName: string,
+) {
+	return requestJson<CreateFestivalResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/festivals/${encodeURIComponent(festivalShortName)}/primary`,
+		{ method: "POST" },
+		idToken,
+	);
+}
+
 export function getAdminDivisions(idToken: string, slug: string) {
 	return requestJson<OrganizationDivisionListResponse>(
 		`/api/organizations/${slug}/admin/divisions`,
