@@ -1,208 +1,153 @@
-# Style
-Follow https://www.skeleton.dev/ with the following
+# Festival UI style
 
-[data-theme='Bullet'] {
-	--text-scaling: 1.125;
-	--base-font-color: var(--color-surface-950);
-	--base-font-color-dark: var(--color-surface-50);
-	--base-font-family: 'Iowan Old Style', 'Palatino Linotype', 'URW Palladio L', P052, serif;
-	--base-font-size: inherit;
-	--base-line-height: inherit;
-	--base-font-weight: normal;
-	--base-font-style: normal;
-	--base-letter-spacing: 0em;
-	--heading-font-color: inherit;
-	--heading-font-color-dark: inherit;
-	--heading-font-family: inherit;
-	--heading-font-weight: bold;
-	--heading-font-style: normal;
-	--heading-letter-spacing: inherit;
-	--anchor-font-color: var(--color-primary-500);
-	--anchor-font-color-dark: var(--color-primary-500);
-	--anchor-font-family: inherit;
-	--anchor-font-size: inherit;
-	--anchor-line-height: inherit;
-	--anchor-font-weight: inherit;
-	--anchor-font-style: inherit;
-	--anchor-letter-spacing: inherit;
-	--anchor-text-decoration: none;
-	--anchor-text-decoration-hover: underline;
-	--anchor-text-decoration-active: none;
-	--anchor-text-decoration-focus: none;
-	--spacing: 0.22rem;
-	--radius-base: 0rem;
-	--radius-container: 0.25rem;
-	--default-border-width: 1px;
-	--default-divide-width: 1px;
-	--default-ring-width: 4px;
-	--body-background-color: var(--color-surface-50);
-	--body-background-color-dark: var(--color-surface-950);
-	--color-primary-50: oklch(91.66% 0.04 257.51deg);
-	--color-primary-100: oklch(84.1% 0.08 254.61deg);
-	--color-primary-200: oklch(76.5% 0.11 254.28deg);
-	--color-primary-300: oklch(69.52% 0.15 254.36deg);
-	--color-primary-400: oklch(62.85% 0.19 255.71deg);
-	--color-primary-500: oklch(57.32% 0.21 258.29deg);
-	--color-primary-600: oklch(51.62% 0.19 258.15deg);
-	--color-primary-700: oklch(46.06% 0.17 257.78deg);
-	--color-primary-800: oklch(40.05% 0.14 257.62deg);
-	--color-primary-900: oklch(34.15% 0.11 257.14deg);
-	--color-primary-950: oklch(27.73% 0.08 257.49deg);
-	--color-primary-contrast-dark: var(--color-primary-950);
-	--color-primary-contrast-light: var(--color-primary-50);
-	--color-primary-contrast-50: var(--color-primary-contrast-dark);
-	--color-primary-contrast-100: var(--color-primary-contrast-dark);
-	--color-primary-contrast-200: var(--color-primary-contrast-dark);
-	--color-primary-contrast-300: var(--color-primary-contrast-dark);
-	--color-primary-contrast-400: var(--color-primary-contrast-dark);
-	--color-primary-contrast-500: var(--color-primary-contrast-light);
-	--color-primary-contrast-600: var(--color-primary-contrast-light);
-	--color-primary-contrast-700: var(--color-primary-contrast-light);
-	--color-primary-contrast-800: var(--color-primary-contrast-light);
-	--color-primary-contrast-900: var(--color-primary-contrast-light);
-	--color-primary-contrast-950: var(--color-primary-contrast-light);
-	--color-secondary-50: oklch(86.66% 0.05 300.15deg);
-	--color-secondary-100: oklch(78.51% 0.09 303.57deg);
-	--color-secondary-200: oklch(70.44% 0.13 304.44deg);
-	--color-secondary-300: oklch(62.83% 0.17 303.81deg);
-	--color-secondary-400: oklch(55.48% 0.2 302.75deg);
-	--color-secondary-500: oklch(49.07% 0.23 300.46deg);
-	--color-secondary-600: oklch(45.39% 0.21 299.6deg);
-	--color-secondary-700: oklch(41.75% 0.19 298.26deg);
-	--color-secondary-800: oklch(37.84% 0.17 296.27deg);
-	--color-secondary-900: oklch(34.08% 0.15 293.97deg);
-	--color-secondary-950: oklch(30.18% 0.13 291.16deg);
-	--color-secondary-contrast-dark: var(--color-secondary-950);
-	--color-secondary-contrast-light: var(--color-secondary-50);
-	--color-secondary-contrast-50: var(--color-secondary-contrast-dark);
-	--color-secondary-contrast-100: var(--color-secondary-contrast-dark);
-	--color-secondary-contrast-200: var(--color-secondary-contrast-dark);
-	--color-secondary-contrast-300: var(--color-secondary-contrast-dark);
-	--color-secondary-contrast-400: var(--color-secondary-contrast-light);
-	--color-secondary-contrast-500: var(--color-secondary-contrast-light);
-	--color-secondary-contrast-600: var(--color-secondary-contrast-light);
-	--color-secondary-contrast-700: var(--color-secondary-contrast-light);
-	--color-secondary-contrast-800: var(--color-secondary-contrast-light);
-	--color-secondary-contrast-900: var(--color-secondary-contrast-light);
-	--color-secondary-contrast-950: var(--color-secondary-contrast-light);
-	--color-tertiary-50: oklch(82.72% 0.04 328.71deg);
-	--color-tertiary-100: oklch(79.1% 0.07 339.94deg);
-	--color-tertiary-200: oklch(75.68% 0.1 343.95deg);
-	--color-tertiary-300: oklch(72.82% 0.13 347.8deg);
-	--color-tertiary-400: oklch(70.09% 0.16 349.92deg);
-	--color-tertiary-500: oklch(67.92% 0.19 352.62deg);
-	--color-tertiary-600: oklch(60.3% 0.18 352.58deg);
-	--color-tertiary-700: oklch(52.47% 0.16 352.59deg);
-	--color-tertiary-800: oklch(44.23% 0.15 352.35deg);
-	--color-tertiary-900: oklch(35.9% 0.13 352.66deg);
-	--color-tertiary-950: oklch(27.14% 0.11 353.35deg);
-	--color-tertiary-contrast-dark: var(--color-tertiary-950);
-	--color-tertiary-contrast-light: var(--color-tertiary-50);
-	--color-tertiary-contrast-50: var(--color-tertiary-contrast-dark);
-	--color-tertiary-contrast-100: var(--color-tertiary-contrast-dark);
-	--color-tertiary-contrast-200: var(--color-tertiary-contrast-dark);
-	--color-tertiary-contrast-300: var(--color-tertiary-contrast-dark);
-	--color-tertiary-contrast-400: var(--color-tertiary-contrast-dark);
-	--color-tertiary-contrast-500: var(--color-tertiary-contrast-dark);
-	--color-tertiary-contrast-600: var(--color-tertiary-contrast-dark);
-	--color-tertiary-contrast-700: var(--color-tertiary-contrast-light);
-	--color-tertiary-contrast-800: var(--color-tertiary-contrast-light);
-	--color-tertiary-contrast-900: var(--color-tertiary-contrast-light);
-	--color-tertiary-contrast-950: var(--color-tertiary-contrast-light);
-	--color-success-50: oklch(94.05% 0.09 178.66deg);
-	--color-success-100: oklch(91.62% 0.1 178.6deg);
-	--color-success-200: oklch(89.44% 0.11 177.16deg);
-	--color-success-300: oklch(87.13% 0.12 176.9deg);
-	--color-success-400: oklch(85.09% 0.13 175.45deg);
-	--color-success-500: oklch(82.91% 0.13 174.95deg);
-	--color-success-600: oklch(72.85% 0.12 175.7deg);
-	--color-success-700: oklch(62.4% 0.1 175.99deg);
-	--color-success-800: oklch(51.26% 0.08 178.28deg);
-	--color-success-900: oklch(39.72% 0.06 179.74deg);
-	--color-success-950: oklch(27.27% 0.04 185.29deg);
-	--color-success-contrast-dark: var(--color-success-950);
-	--color-success-contrast-light: var(--color-success-50);
-	--color-success-contrast-50: var(--color-success-contrast-dark);
-	--color-success-contrast-100: var(--color-success-contrast-dark);
-	--color-success-contrast-200: var(--color-success-contrast-dark);
-	--color-success-contrast-300: var(--color-success-contrast-dark);
-	--color-success-contrast-400: var(--color-success-contrast-dark);
-	--color-success-contrast-500: var(--color-success-contrast-dark);
-	--color-success-contrast-600: var(--color-success-contrast-light);
-	--color-success-contrast-700: var(--color-success-contrast-light);
-	--color-success-contrast-800: var(--color-success-contrast-light);
-	--color-success-contrast-900: var(--color-success-contrast-light);
-	--color-success-contrast-950: var(--color-success-contrast-light);
-	--color-warning-50: oklch(95.67% 0.05 84.56deg);
-	--color-warning-100: oklch(92.83% 0.06 82.16deg);
-	--color-warning-200: oklch(90.12% 0.08 80.33deg);
-	--color-warning-300: oklch(87.59% 0.1 80.01deg);
-	--color-warning-400: oklch(85.03% 0.12 78.35deg);
-	--color-warning-500: oklch(82.46% 0.14 76.71deg);
-	--color-warning-600: oklch(76.34% 0.13 72.25deg);
-	--color-warning-700: oklch(70.34% 0.13 68.09deg);
-	--color-warning-800: oklch(63.99% 0.13 63.18deg);
-	--color-warning-900: oklch(57.91% 0.13 57.97deg);
-	--color-warning-950: oklch(51.69% 0.13 51.44deg);
-	--color-warning-contrast-dark: var(--color-warning-950);
-	--color-warning-contrast-light: var(--color-warning-50);
-	--color-warning-contrast-50: var(--color-warning-contrast-dark);
-	--color-warning-contrast-100: var(--color-warning-contrast-dark);
-	--color-warning-contrast-200: var(--color-warning-contrast-dark);
-	--color-warning-contrast-300: var(--color-warning-contrast-dark);
-	--color-warning-contrast-400: var(--color-warning-contrast-dark);
-	--color-warning-contrast-500: var(--color-warning-contrast-dark);
-	--color-warning-contrast-600: var(--color-warning-contrast-light);
-	--color-warning-contrast-700: var(--color-warning-contrast-light);
-	--color-warning-contrast-800: var(--color-warning-contrast-light);
-	--color-warning-contrast-900: var(--color-warning-contrast-light);
-	--color-warning-contrast-950: var(--color-warning-contrast-light);
-	--color-error-50: oklch(89.99% 0.04 14.04deg);
-	--color-error-100: oklch(83.49% 0.07 19.81deg);
-	--color-error-200: oklch(77.4% 0.11 21.98deg);
-	--color-error-300: oklch(72.13% 0.15 24.9deg);
-	--color-error-400: oklch(67.39% 0.19 26.71deg);
-	--color-error-500: oklch(63.72% 0.22 28.71deg);
-	--color-error-600: oklch(59.28% 0.21 28.53deg);
-	--color-error-700: oklch(54.92% 0.2 28.58deg);
-	--color-error-800: oklch(50.51% 0.19 28.72deg);
-	--color-error-900: oklch(46.22% 0.18 28.88deg);
-	--color-error-950: oklch(41.86% 0.17 29.23deg);
-	--color-error-contrast-dark: var(--color-error-950);
-	--color-error-contrast-light: var(--color-error-50);
-	--color-error-contrast-50: var(--color-error-contrast-dark);
-	--color-error-contrast-100: var(--color-error-contrast-dark);
-	--color-error-contrast-200: var(--color-error-contrast-dark);
-	--color-error-contrast-300: var(--color-error-contrast-dark);
-	--color-error-contrast-400: var(--color-error-contrast-dark);
-	--color-error-contrast-500: var(--color-error-contrast-light);
-	--color-error-contrast-600: var(--color-error-contrast-light);
-	--color-error-contrast-700: var(--color-error-contrast-light);
-	--color-error-contrast-800: var(--color-error-contrast-light);
-	--color-error-contrast-900: var(--color-error-contrast-light);
-	--color-error-contrast-950: var(--color-error-contrast-light);
-	--color-surface-50: oklch(100% 0 none);
-	--color-surface-100: oklch(90.67% 0 none);
-	--color-surface-200: oklch(81.41% 0 none);
-	--color-surface-300: oklch(71.55% 0 none);
-	--color-surface-400: oklch(61.67% 0 none);
-	--color-surface-500: oklch(51.03% 0 none);
-	--color-surface-600: oklch(44.95% 0 none);
-	--color-surface-700: oklch(38.67% 0 none);
-	--color-surface-800: oklch(32.11% 0 none);
-	--color-surface-900: oklch(25.2% 0 none);
-	--color-surface-950: oklch(17.76% 0 none);
-	--color-surface-contrast-dark: var(--color-surface-950);
-	--color-surface-contrast-light: var(--color-surface-50);
-	--color-surface-contrast-50: var(--color-surface-contrast-dark);
-	--color-surface-contrast-100: var(--color-surface-contrast-dark);
-	--color-surface-contrast-200: var(--color-surface-contrast-dark);
-	--color-surface-contrast-300: var(--color-surface-contrast-dark);
-	--color-surface-contrast-400: var(--color-surface-contrast-light);
-	--color-surface-contrast-500: var(--color-surface-contrast-light);
-	--color-surface-contrast-600: var(--color-surface-contrast-light);
-	--color-surface-contrast-700: var(--color-surface-contrast-light);
-	--color-surface-contrast-800: var(--color-surface-contrast-light);
-	--color-surface-contrast-900: var(--color-surface-contrast-light);
-	--color-surface-contrast-950: var(--color-surface-contrast-light);
+`packages/frontend/src/styles.css` is the implementation and source of truth for this visual system. This document records that system for use when adding or revising UI. It does not use Skeleton, and no `data-theme` attribute is required.
+
+## Foundation
+
+The interface is editorial and warm: a serif typeface, dark blue-black ink, a cream-paper background, softly translucent white panels, restrained shadows, and muted gold, green, and terracotta status colors. Prefer the existing `--bullet-*` tokens to new raw colors.
+
+```css
+:root {
+	--bullet-ink: #1f2431;
+	--bullet-soft-ink: rgba(31, 36, 49, 0.7);
+	--bullet-paper: #f7f4ee;
+	--bullet-panel: rgba(255, 255, 255, 0.82);
+	--bullet-panel-border: rgba(31, 36, 49, 0.12);
+	--bullet-accent: #303240;
+	--bullet-accent-strong: #2a2c40;
+	--bullet-gold: #b6872c;
+	--bullet-error: #b94d36;
+	--bullet-success: #1f7a57;
+	--bullet-shadow: 0 24px 60px rgba(31, 36, 49, 0.12);
+	--bullet-radius: 18px;
+	--bullet-serif: "Iowan Old Style", "Palatino Linotype", "URW Palladio L", P052, serif;
 }
+```
+
+- Use `--bullet-ink` for primary text and `--bullet-soft-ink` for supporting text.
+- The page background is a cream vertical gradient (`#fdfaf3` to `#efe8da`) with subtle blue and gold radial highlights; do not replace it with a flat white or dark surface.
+- Use the serif stack for all interface text. Use UI monospace only for technical values such as Shopify identifiers.
+- All elements use `box-sizing: border-box`.
+- Links are `--bullet-accent-strong`; preserve the browser-default underline unless a component explicitly removes it.
+- Inline `code` is slightly smaller, with a pale blue background and a 6px radius.
+
+## Layout and type
+
+- The main `.shell` is centered, `1100px` wide at most, and has `2.5rem 1.25rem 4rem` padding.
+- Primary layouts use CSS grid with `1rem`–`1.5rem` gaps. Use flex only for inline control groups and headers.
+- The masthead and organization heading use large serif headlines (`clamp(2.4rem, 4–5vw, 4.5rem)`) with tight leading. The membership heading is `2rem`; smaller section headings generally retain their browser/default scale unless a component rule specifies otherwise.
+- Use `.eyebrow` for metadata above a title: uppercase, `0.76rem`, `0.18em` tracking, and `--bullet-accent-strong`.
+- Use `.lede`, `.muted`, `.identity-email`, and other secondary copy in `--bullet-soft-ink`.
+
+## Surfaces and corners
+
+The UI deliberately mixes compact utility corners with softer prominent surfaces; do not normalize every element to one radius.
+
+| Surface | Treatment |
+| --- | --- |
+| Panel, banner, identity card | Translucent white panel, `1px` panel border, `backdrop-filter: blur(18px)`, shared shadow, 18px radius |
+| Forms, navigation, ordinary rows | White/translucent surface with subtle border; normally 12px radius |
+| Product cards, alerts, compact result cards | 8px radius |
+| Buttons and compact header controls | 4px radius when carrying the `.button` class |
+| Status badges, dots, spinners, icon-only controls | Fully pill/round (`999px`) |
+| Modal card | 22px radius |
+
+Use `.panel` for a general padded surface (`1.4rem` padding), `.hero-panel` for a large introductory panel with a faint blue-and-gold overlay, and `.banner` for a padded message surface. Success and error banners use white text on green and terracotta gradients respectively.
+
+## Controls
+
+- Native buttons default to a dark `--bullet-accent` to `--bullet-accent-strong` diagonal gradient, white text, a generous `0.9rem 1.25rem` padding, a soft blue shadow, and a pill radius.
+- App buttons rendered through `Button` receive the `.button` class and therefore use a 4px radius. This is the standard for product and workflow actions.
+- `.secondary-button` is transparent with ink text, a subtle border, and no shadow. `compact-header-button` adds compact padding and a dark ink fill with white text.
+- Disabled buttons are gray (`#9ca3af`), retain light text, remove the shadow, and show `not-allowed` cursor behavior.
+- Inputs and selects span their container, have 12px corners, a subtle ink border, and an almost-opaque white fill. Invalid inputs use the terracotta error border and focus ring; read-only inputs use muted text on a cool gray fill.
+- Forms use `.field` with a `0.4rem` gap. Keep field errors in `--bullet-error`.
+- Use `.icon-button` only for compact destructive icon actions: transparent, round, terracotta icon/text, and a light terracotta border.
+
+## Semantic color
+
+| Meaning | Primary treatment |
+| --- | --- |
+| Success / active | `--bullet-success` (`#1f7a57`); pale green backgrounds for rows and diagnostics |
+| Error / rejected | `--bullet-error` (`#b94d36`); pale terracotta backgrounds or white-on-terracotta banner |
+| Warning / needs review | `--bullet-gold` (`#b6872c`); pale gold background; dark gold `#735710` for white-text badges |
+| Processing / informational | `--bullet-accent` with pale blue background |
+| Neutral / unavailable | `#6b7280` |
+
+Membership cards express state with a 5px colored left border and a matching pill badge. Status dots and division badges follow the same mapping. Do not use a color alone where a textual status is already available.
+
+## Badges
+
+A badge is a compact notice that communicates a state. Base a badge on `.division-status`: `0.3rem 0.55rem` padding, a `999px` pill radius, white text, and an `0.82rem` bold type size. Use a semantic modifier to set its background and text color for its state.
+
+```css
+.badge {
+	padding: 0.3rem 0.55rem;
+	border-radius: 999px;
+	font-size: 0.82rem;
+	font-weight: 700;
+}
+
+.badge-active { background: var(--bullet-success); color: white; }
+.badge-inactive { background: #6b7280; color: white; }
+.badge-processing { background: var(--bullet-accent); color: white; }
+.badge-review { background: #735710; color: white; }
+.badge-rejected { background: var(--bullet-error); color: white; }
+```
+
+Use the state label as the badge text (for example, “Active”, “Processing”, or “Needs review”). Keep badges reserved for concise state notices, not for navigation, primary actions, or arbitrary categorization.
+
+## Listing tables
+
+A listing table presents comparable records in columns. It is a layout pattern, not a native HTML table: build it with `div` and `span` elements (and semantic interactive controls where needed), never with the `<table>` element.
+
+- Embed the listing in a container with padding, a subtle rounded border, and the same translucent or transparent surface as the panel that contains it.
+- Use a grid for the header and every row. Give the header and rows matching column definitions so values remain aligned.
+- Separate data rows with a bottom divider inset slightly from each side. Do not draw vertical column separators in data rows; distinguish columns with grid gaps and aligned content.
+- Give the header a soft contrasting fill, tight top and bottom borders, and heavier, optionally darker text for scanning. Header column separators are permitted; inset them slightly from the top and bottom of the header.
+- On hover, a data row receives only a faint shadow. Its fill, border, spacing, and content must remain stable so the hover state does not shift the layout.
+- A badge column may contain one or more badges. Keep that column compact and allow badges to wrap when space is constrained.
+- Prefer icon-only controls for row actions, using an accessible name. Use a text button only when the action cannot be communicated clearly by an icon.
+
+```html
+<div class="listing-table" role="table">
+  <div class="listing-table-header" role="row">
+    <span role="columnheader">Name</span>
+    <span role="columnheader">Status</span>
+    <span role="columnheader" aria-label="Actions"></span>
+  </div>
+  <div class="listing-table-row" role="row">
+    <span role="cell">Spring Festival</span>
+    <span class="listing-table-badges" role="cell">
+      <span class="badge badge-active">Active</span>
+    </span>
+    <span class="listing-table-actions" role="cell">
+      <button class="icon-button" type="button" aria-label="Edit Spring Festival">…</button>
+    </span>
+  </div>
+</div>
+```
+
+Keep the table background transparent or visually continuous with its enclosing container. Do not introduce alternating row colors, boxed cells, or full-height grid lines; the header and understated row dividers provide the necessary structure.
+
+## Major components
+
+- **Organization landing:** Present festival items as unbordered translucent rows with 12px corners. Audience links are bold, large role banners with an 18px radius and shadow: teachers blue (`#4459d6`), parents terracotta, volunteers green, accompanists gold.
+- **Navigation:** The organization side navigation is a sticky, translucent 13.5rem panel. Compact navigation links use 6px corners; its collapsed state is 4.25rem wide and hides labels and section headings.
+- **Membership purchasing:** Use responsive product cards (`minmax(240px, 1fr)`), 8px corners, and 1.2rem padding. Checkout content is centered and no wider than 640px, with horizontal dividers between summary, steps, and actions.
+- **Customer memberships:** Use 12px translucent cards, a 5px semantic left border, grid-based details, and a pill badge. Section headers and card headers stack on small screens.
+- **Administration:** Use white/translucent 12px workflow cards and rows with minimal shadows. Prefer `grid` for list rows, settings values, and two-column admin layouts. Use green and gold fills to distinguish accepted/active from pending state.
+- **Modal:** Overlay the page with `rgba(31, 36, 49, 0.42)` and center a blurred, 22px card. Authentication action stacks are full width.
+
+## Responsive behavior
+
+- At `760px` and below, membership administration layouts and controls become a single column; metadata aligns left; prerequisites stack vertically.
+- At `720px` and below, mastheads, administration card grids, user/festival rows, and settings values become single column. Organization headers and welcome boxes stack vertically. Full-width secondary actions are used where their header stacks.
+- Preserve the side navigation and shell structure; narrow layouts reduce gaps rather than removing page hierarchy.
+
+## Implementation rules
+
+- Add styles to `packages/frontend/src/styles.css`; reuse an existing component class and token when it fits.
+- Do not introduce Skeleton theme tokens, a `data-theme` dependency, a sans-serif replacement, generic utility-framework colors, or a new global radius scale.
+- Keep decoration restrained: translucent panels, fine borders, sparse shadows, and the existing blue/gold highlights are the visual signature.
+- Match component-specific radii and fills instead of relying on the global native-button default.
