@@ -370,6 +370,13 @@ describe("CustomerAccountService", () => {
 			),
 		).rejects.toMatchObject({ status: 404 });
 	});
+	it("does not allow a customer session to read children across tenants", async () => {
+		const f = await fixture();
+		const auth = await f.authenticate();
+		await expect(
+			f.service.listChildren("other", auth.sessionId),
+		).rejects.toMatchObject({ status: 401 });
+	});
 	it("keeps configuration separate, validates discovery, and never returns the secret", async () => {
 		const f = await fixture();
 		const stored = await f.repository.getIntegration(f.org.id);
