@@ -171,6 +171,13 @@ describe("customer account repository contract", () => {
 		expect(source).toContain("festival_customers");
 		expect(source).toContain("festival_customer_staff_consents");
 		expect(source).toContain("festival_customer_profile_access_audit");
+		expect(source).toContain("festival_children");
+		expect(source).toContain("festival_child_age_snapshots");
+		expect(source).toContain(
+			"UNIQUE(organization_id,parent_customer_id,LOWER(display_name))",
+		);
+		expect(source).toContain("superseded_at");
+		expect(source).not.toContain("birth_date");
 		expect(source).toContain("customer_id");
 		expect(source).toContain(
 			"ON CONFLICT (organization_id,shopify_customer_gid)",
