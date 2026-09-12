@@ -277,6 +277,26 @@ export const CURRENT_ROUTE_SECURITY = [
 		authenticationClass: "admin",
 	},
 	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/class-subtypes/reorder",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/instruments/reorder",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/class-subtypes/:id",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/instruments/:id",
+		authenticationClass: "admin",
+	},
+	{
 		method: "GET",
 		path: "/api/organizations/:slug/membership-products",
 		authenticationClass: "public",

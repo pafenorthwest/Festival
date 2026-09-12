@@ -285,6 +285,79 @@ export class OrganizationService {
 		}
 	}
 
+	async updateRegistrationCatalogValueForTenant(
+		tenant: TenantContext,
+		kind: "class_subtype" | "instrument",
+		id: string,
+		input: { displayName?: unknown; isActive?: unknown },
+	) {
+		if (
+			!input ||
+			(input.displayName === undefined && input.isActive === undefined)
+		)
+			throw new AppError("Registration catalog update is required.", 400);
+		if (input.isActive !== undefined && typeof input.isActive !== "boolean")
+			throw new AppError(
+				"Registration catalog active state must be a boolean.",
+				400,
+			);
+		const displayName =
+			input.displayName === undefined
+				? undefined
+				: this.requireDivisionName(input.displayName);
+		try {
+			const value = await this.repository.updateRegistrationCatalogValue({
+				organizationId: tenant.organization.id,
+				kind,
+				id,
+				displayName,
+				normalizedName:
+					displayName === undefined
+						? undefined
+						: divisionNameUniquenessKey(displayName),
+				isActive: input.isActive as boolean | undefined,
+			});
+			if (!value)
+				throw new AppError("Registration catalog value not found.", 404);
+			return { value };
+		} catch (error) {
+			if (
+				error instanceof Error &&
+				error.message === "Registration catalog value already exists."
+			)
+				throw new AppError(error.message, 409);
+			throw error;
+		}
+	}
+
+	async reorderRegistrationCatalogValuesForTenant(
+		tenant: TenantContext,
+		kind: "class_subtype" | "instrument",
+		ids: unknown,
+	) {
+		if (
+			!Array.isArray(ids) ||
+			ids.some((id) => typeof id !== "string" || !id.trim())
+		)
+			throw new AppError("Registration catalog order is invalid.", 400);
+		try {
+			return {
+				values: await this.repository.reorderRegistrationCatalogValues(
+					tenant.organization.id,
+					kind,
+					ids,
+				),
+			};
+		} catch (error) {
+			throw new AppError(
+				error instanceof Error
+					? error.message
+					: "Registration catalog order is invalid.",
+				400,
+			);
+		}
+	}
+
 	async createDivisionForTenant(
 		tenant: TenantContext,
 		input: CreateOrganizationDivisionInput,

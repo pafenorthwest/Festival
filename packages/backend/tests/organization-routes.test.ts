@@ -1980,6 +1980,27 @@ describe("organization routes", () => {
 			),
 		);
 		expect(subtype.status).toBe(201);
+		const subtypeValue = (await subtype.json()).value as { id: string };
+		const deactivated = await app.fetch(
+			new Request(
+				`http://test/api/organizations/pafe/admin/class-subtypes/${subtypeValue.id}`,
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({ displayName: "Solo Piano", isActive: false }),
+				}),
+			),
+		);
+		expect(deactivated.status).toBe(200);
+		const reordered = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/class-subtypes/reorder",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({ ids: [subtypeValue.id] }),
+				}),
+			),
+		);
+		expect(reordered.status).toBe(200);
 		const configuration = await app.fetch(
 			new Request(
 				"http://test/api/organizations/pafe/admin/registration-configuration",
@@ -1988,7 +2009,7 @@ describe("organization routes", () => {
 		);
 		expect(await configuration.json()).toMatchObject({
 			ageConfiguration: { registrationAgeDate: "2027-01-01" },
-			classSubtypes: [{ displayName: "Solo", isActive: true }],
+			classSubtypes: [{ displayName: "Solo Piano", isActive: false }],
 		});
 	});
 });

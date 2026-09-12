@@ -586,6 +586,62 @@ export function buildApiRouter(
 			},
 		);
 	}
+	for (const [kind, path] of [
+		["class_subtype", "class-subtypes"],
+		["instrument", "instruments"],
+	] as const) {
+		router.post(
+			`/organizations/:slug/admin/${path}/reorder`,
+			requireAuth(authVerifier),
+			requireTenant(repository),
+			requireTenantRole(["Admin"]),
+			async (c) => {
+				try {
+					const payload = await c.req.json();
+					assertAllowedFields(
+						payload,
+						["ids"],
+						"Registration catalog reorder request",
+					);
+					return c.json(
+						await organizationService.reorderRegistrationCatalogValuesForTenant(
+							getRequiredTenant(c),
+							kind,
+							(payload as { ids?: unknown })?.ids,
+						),
+					);
+				} catch (error) {
+					return toJsonError(c, error);
+				}
+			},
+		);
+		router.post(
+			`/organizations/:slug/admin/${path}/:id`,
+			requireAuth(authVerifier),
+			requireTenant(repository),
+			requireTenantRole(["Admin"]),
+			async (c) => {
+				try {
+					const payload = await c.req.json();
+					assertAllowedFields(
+						payload,
+						["displayName", "isActive"],
+						"Registration catalog update request",
+					);
+					return c.json(
+						await organizationService.updateRegistrationCatalogValueForTenant(
+							getRequiredTenant(c),
+							kind,
+							c.req.param("id"),
+							payload as { displayName?: unknown; isActive?: unknown },
+						),
+					);
+				} catch (error) {
+					return toJsonError(c, error);
+				}
+			},
+		);
+	}
 
 	router.post(
 		"/organizations/:slug/admin/accompanist-policy",
