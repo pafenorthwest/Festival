@@ -6,6 +6,7 @@ import { ShopifyOrderProjectionService } from "../src/commerce/shopify-order-pro
 import { InMemoryCustomerAccountRepository } from "../src/customer/in-memory-customer-account-repository.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
 import { ShopifySecretKeyring } from "../src/shopify/encryption.js";
+import { ShopifyAdminApiError } from "../src/shopify/errors.js";
 import type {
 	ShopifyOrderCustomerProfile,
 	ShopifyPaidOrder,
@@ -22,8 +23,10 @@ class Orders implements ShopifyPaidOrderReader {
 	profile: ShopifyOrderCustomerProfile | null = null;
 	profileReads = 0;
 	profileFailure = false;
+	readFailure: Error | undefined;
 	async readPaidOrderByGid(_context: unknown, orderGid: string) {
 		this.reads.push(orderGid);
+		if (this.readFailure) throw this.readFailure;
 		return { value: this.values.get(orderGid) ?? null };
 	}
 	async listPaidOrdersSince(_context: unknown, _sinceIso: string) {
@@ -220,6 +223,50 @@ async function delivery(
 }
 
 describe("Shopify order projection", () => {
+	it("records bounded Shopify read diagnostics and safely retries the delivery", async () => {
+		const f = await fixture();
+		f.orders.readFailure = new ShopifyAdminApiError(
+			"Shopify denied the read.",
+			{
+				requestId: "request-123",
+			},
+		);
+		const received = await delivery(
+			f.commerce,
+			f.organization.id,
+			"webhook-0000000000",
+		);
+
+		expect(await f.service.processDelivery(received.id)).toBe("failed");
+		const failed = await f.commerce.recordDelivery({
+			organizationId: f.organization.id,
+			shopDomain: "festival.myshopify.com",
+			webhookId: "webhook-0000000000",
+			topic: "orders/paid",
+			apiVersion: "2026-07",
+			shopifyOrderGid: "gid://shopify/Order/1",
+			payloadSha256: "a".repeat(64),
+			receivedAtIso: NOW.toISOString(),
+		});
+		if (failed.kind !== "duplicate")
+			throw new Error("Expected failed delivery.");
+		expect(failed.delivery).toMatchObject({
+			status: "failed",
+			failureCategory: "upstream",
+			failureStage: "order_read",
+			failureCode: "shopify_upstream",
+			shopifyRequestId: "request-123",
+			failedAtIso: NOW.toISOString(),
+		});
+
+		f.orders.readFailure = undefined;
+		f.orders.values.set(
+			"gid://shopify/Order/1",
+			paidOrder(f.intent.correlationId),
+		);
+		expect(await f.service.processDelivery(received.id)).toBe("processed");
+	});
+
 	it("issues exactly one immutable grant from an Admin-read, correlated paid order", async () => {
 		const f = await fixture();
 		await f.organizations.updateDivision({
