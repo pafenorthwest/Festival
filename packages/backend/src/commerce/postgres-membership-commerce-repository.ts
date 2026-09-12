@@ -62,6 +62,19 @@ function delivery(row: Record<string, unknown>): ShopifyWebhookDelivery {
 			row.failure_category === null
 				? undefined
 				: (row.failure_category as ShopifyWebhookDelivery["failureCategory"]),
+		failureStage:
+			row.failure_stage == null
+				? undefined
+				: (row.failure_stage as ShopifyWebhookDelivery["failureStage"]),
+		failureCode:
+			row.failure_code == null
+				? undefined
+				: (row.failure_code as ShopifyWebhookDelivery["failureCode"]),
+		shopifyRequestId:
+			row.shopify_request_id == null
+				? undefined
+				: String(row.shopify_request_id),
+		failedAtIso: row.failed_at == null ? undefined : String(row.failed_at),
 		receivedAtIso: String(row.received_at),
 		processedAtIso:
 			row.processed_at === null ? undefined : String(row.processed_at),
@@ -174,6 +187,11 @@ export class PostgresMembershipCommerceRepository
 				WHERE checkout_intent_id IS NOT NULL;
 			CREATE INDEX IF NOT EXISTS shopify_webhook_reclaim_idx
 				ON ${this.schema}.shopify_webhook_deliveries (organization_id, status, received_at);
+			ALTER TABLE ${this.schema}.shopify_webhook_deliveries
+				ADD COLUMN IF NOT EXISTS failure_stage TEXT NULL CHECK (failure_stage IN ('order_read', 'projection')),
+				ADD COLUMN IF NOT EXISTS failure_code TEXT NULL CHECK (failure_code IN ('shopify_upstream', 'shopify_transport', 'invalid_data', 'persistence', 'unexpected')),
+				ADD COLUMN IF NOT EXISTS shopify_request_id TEXT NULL CHECK (shopify_request_id ~ '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'),
+				ADD COLUMN IF NOT EXISTS failed_at TIMESTAMPTZ NULL;
 			ALTER TABLE ${this.schema}.membership_validation_decisions
 				DROP CONSTRAINT IF EXISTS membership_validation_decisions_reason_code_check;
 			ALTER TABLE ${this.schema}.membership_validation_decisions
@@ -247,11 +265,29 @@ export class PostgresMembershipCommerceRepository
 
 	async markDeliveryFailed(
 		deliveryId: string,
-		failureCategory: "upstream" | "persistence" | "invalid",
+		failure: {
+			category: "upstream" | "persistence" | "invalid";
+			stage: "order_read" | "projection";
+			code:
+				| "shopify_upstream"
+				| "shopify_transport"
+				| "invalid_data"
+				| "persistence"
+				| "unexpected";
+			requestId?: string;
+			failedAtIso: string;
+		},
 	) {
 		await sql.unsafe(
-			`UPDATE ${this.schema}.shopify_webhook_deliveries SET status = 'failed', failure_category = $1, processing_started_at = NULL WHERE id = $2 AND status = 'processing'`,
-			[failureCategory, deliveryId],
+			`UPDATE ${this.schema}.shopify_webhook_deliveries SET status = 'failed', failure_category = $1, failure_stage = $2, failure_code = $3, shopify_request_id = $4, failed_at = $5::timestamptz, processing_started_at = NULL WHERE id = $6 AND status = 'processing'`,
+			[
+				failure.category,
+				failure.stage,
+				failure.code,
+				failure.requestId ?? null,
+				failure.failedAtIso,
+				deliveryId,
+			],
 		);
 	}
 

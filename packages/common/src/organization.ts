@@ -50,6 +50,74 @@ export interface OrganizationTimezoneResponse {
 	timezone: string;
 }
 
+export interface RegistrationCatalogValue {
+	id: string;
+	organizationId: string;
+	displayName: string;
+	isActive: boolean;
+	displayOrder: number;
+	createdAtIso: string;
+	updatedAtIso: string;
+}
+
+export interface RegistrationAgeConfiguration {
+	organizationId: string;
+	registrationAgeDate: string;
+	updatedAtIso: string;
+}
+
+export interface FestivalClassConfiguration {
+	id: string;
+	organizationId: string;
+	festivalId: string;
+	displayName: string;
+	classSubtypeId: string;
+	divisionId: string;
+	minimumAge: number;
+	maximumAge: number;
+	price: string;
+	maximumPerformancePieces: 1 | 2 | 3;
+	performanceMinutes: number;
+	capacity: number;
+	isActive: boolean;
+	shopifyProductGid: string;
+	shopifyVariantGid: string;
+	createdAtIso: string;
+	updatedAtIso: string;
+}
+
+export interface FestivalChildRecord {
+	id: string;
+	organizationId: string;
+	parentCustomerId: string;
+	displayName: string;
+	createdAtIso: string;
+}
+
+export interface FestivalChildAgeSnapshot {
+	id: string;
+	childId: string;
+	organizationId: string;
+	age: number;
+	createdAtIso: string;
+	validUntilIso: string;
+	supersededAtIso?: string;
+}
+
+export function validateRegistrationAgeDate(value: unknown): string {
+	if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+		throw new Error("Registration age date must use YYYY-MM-DD.");
+	}
+	const date = new Date(`${value}T00:00:00.000Z`);
+	if (
+		Number.isNaN(date.valueOf()) ||
+		date.toISOString().slice(0, 10) !== value
+	) {
+		throw new Error("Registration age date is invalid.");
+	}
+	return value;
+}
+
 export interface CreateOrganizationDivisionInput {
 	displayName: string;
 }
@@ -182,6 +250,8 @@ export interface FestivalRecord {
 	id: string;
 	organizationId: string;
 	code: string;
+	shortName: string;
+	isPrimary: boolean;
 	name: string;
 	startDate: string;
 	endDate: string;
@@ -191,6 +261,8 @@ export interface FestivalRecord {
 export interface FestivalSummary {
 	id: string;
 	code: string;
+	shortName: string;
+	isPrimary: boolean;
 	name: string;
 	startDate: string;
 	endDate: string;
@@ -250,6 +322,7 @@ export interface CreateInviteResponse {
 }
 
 export interface CreateFestivalInput {
+	shortName: string;
 	name: string;
 	startDate: string;
 	endDate: string;

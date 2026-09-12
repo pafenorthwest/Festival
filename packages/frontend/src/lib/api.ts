@@ -150,6 +150,53 @@ export function getCustomerProfile(slug: string) {
 	);
 }
 
+export interface CustomerChildDto {
+	id: string;
+	displayName: string;
+	hasCurrentValidAgeSnapshot: boolean;
+}
+export function getCustomerChildren(slug: string) {
+	return requestJson<{ children: CustomerChildDto[] }>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/children`,
+		undefined,
+		undefined,
+		"",
+	);
+}
+export function createCustomerChild(
+	slug: string,
+	csrfToken: string,
+	input: { displayName: string; birthday: string },
+) {
+	return requestJson<{ child: CustomerChildDto }>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/children`,
+		{
+			method: "POST",
+			headers: { "X-CSRF-Token": csrfToken },
+			body: JSON.stringify(input),
+		},
+		undefined,
+		"",
+	);
+}
+export function refreshCustomerChildAgeSnapshot(
+	slug: string,
+	childId: string,
+	csrfToken: string,
+	birthday: string,
+) {
+	return requestJson(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/children/${encodeURIComponent(childId)}/age-snapshot`,
+		{
+			method: "POST",
+			headers: { "X-CSRF-Token": csrfToken },
+			body: JSON.stringify({ birthday }),
+		},
+		undefined,
+		"",
+	);
+}
+
 export function updateCustomerProfile(
 	slug: string,
 	csrfToken: string,
@@ -261,6 +308,12 @@ export function getPublicOrganizationLanding(slug: string) {
 	);
 }
 
+export function getPrimaryFestivalPath(slug: string) {
+	return requestJson<{ status: 301 | 404; path: string }>(
+		`/api/organizations/${encodeURIComponent(slug)}/primary`,
+	);
+}
+
 export function customerLandingSignInPath(slug: string) {
 	const returnTo = `/org/${encodeURIComponent(slug)}`;
 	return `/api/organizations/${encodeURIComponent(slug)}/customer-auth/start?returnTo=${encodeURIComponent(returnTo)}`;
@@ -269,6 +322,48 @@ export function customerLandingSignInPath(slug: string) {
 export function getMembershipProducts(slug: string) {
 	return requestJson<PublicMembershipProductsListResponse>(
 		`/api/organizations/${slug}/membership-products`,
+	);
+}
+
+export function acquireAccompanistMembership(
+	slug: string,
+	csrfToken: string,
+	input: {
+		name: string;
+		email: string;
+		city: string;
+		phone: string;
+		divisionIds: string[];
+	},
+) {
+	return requestJson<{
+		membership: {
+			id: string;
+			startsOn: string;
+			endsOn: string;
+			status: string;
+		};
+	}>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/accompanist-membership`,
+		{
+			method: "POST",
+			headers: { "X-CSRF-Token": csrfToken },
+			body: JSON.stringify(input),
+		},
+		undefined,
+		"",
+	);
+}
+
+export function getAccompanistMembershipForm(slug: string) {
+	return requestJson<{
+		policy: { policy: "exactly_one" | "one_to_two" | "one_to_all" };
+		divisions: OrganizationDivision[];
+	}>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/accompanist-membership`,
+		undefined,
+		undefined,
+		"",
 	);
 }
 
@@ -323,6 +418,27 @@ export function startCustomerCheckout(
 export function getAdminMembershipProducts(idToken: string, slug: string) {
 	return requestJson<MembershipProductsListResponse>(
 		`/api/organizations/${slug}/admin/membership-products`,
+		undefined,
+		idToken,
+	);
+}
+
+export function getStaffAccompanists(idToken: string, slug: string) {
+	return requestJson<{
+		accompanists: Array<{
+			offeringName: string;
+			source: string;
+			status: string;
+			startsOn: string;
+			endsOn: string;
+			name: string;
+			email: string;
+			phone: string;
+			city: string;
+			divisions: Array<{ divisionId: string; divisionName: string }>;
+		}>;
+	}>(
+		`/api/organizations/${encodeURIComponent(slug)}/staff/accompanists`,
 		undefined,
 		idToken,
 	);
@@ -408,6 +524,18 @@ export function createFestival(
 			method: "POST",
 			body: JSON.stringify(input),
 		},
+		idToken,
+	);
+}
+
+export function setPrimaryFestival(
+	idToken: string,
+	slug: string,
+	festivalShortName: string,
+) {
+	return requestJson<CreateFestivalResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/festivals/${encodeURIComponent(festivalShortName)}/primary`,
+		{ method: "POST" },
 		idToken,
 	);
 }

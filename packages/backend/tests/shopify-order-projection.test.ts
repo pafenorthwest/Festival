@@ -6,6 +6,7 @@ import { ShopifyOrderProjectionService } from "../src/commerce/shopify-order-pro
 import { InMemoryCustomerAccountRepository } from "../src/customer/in-memory-customer-account-repository.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
 import { ShopifySecretKeyring } from "../src/shopify/encryption.js";
+import { ShopifyAdminApiError } from "../src/shopify/errors.js";
 import type {
 	ShopifyOrderCustomerProfile,
 	ShopifyPaidOrder,
@@ -22,8 +23,10 @@ class Orders implements ShopifyPaidOrderReader {
 	profile: ShopifyOrderCustomerProfile | null = null;
 	profileReads = 0;
 	profileFailure = false;
+	readFailure: Error | undefined;
 	async readPaidOrderByGid(_context: unknown, orderGid: string) {
 		this.reads.push(orderGid);
+		if (this.readFailure) throw this.readFailure;
 		return { value: this.values.get(orderGid) ?? null };
 	}
 	async listPaidOrdersSince(_context: unknown, _sinceIso: string) {
@@ -220,6 +223,50 @@ async function delivery(
 }
 
 describe("Shopify order projection", () => {
+	it("records bounded Shopify read diagnostics and safely retries the delivery", async () => {
+		const f = await fixture();
+		f.orders.readFailure = new ShopifyAdminApiError(
+			"Shopify denied the read.",
+			{
+				requestId: "request-123",
+			},
+		);
+		const received = await delivery(
+			f.commerce,
+			f.organization.id,
+			"webhook-0000000000",
+		);
+
+		expect(await f.service.processDelivery(received.id)).toBe("failed");
+		const failed = await f.commerce.recordDelivery({
+			organizationId: f.organization.id,
+			shopDomain: "festival.myshopify.com",
+			webhookId: "webhook-0000000000",
+			topic: "orders/paid",
+			apiVersion: "2026-07",
+			shopifyOrderGid: "gid://shopify/Order/1",
+			payloadSha256: "a".repeat(64),
+			receivedAtIso: NOW.toISOString(),
+		});
+		if (failed.kind !== "duplicate")
+			throw new Error("Expected failed delivery.");
+		expect(failed.delivery).toMatchObject({
+			status: "failed",
+			failureCategory: "upstream",
+			failureStage: "order_read",
+			failureCode: "shopify_upstream",
+			shopifyRequestId: "request-123",
+			failedAtIso: NOW.toISOString(),
+		});
+
+		f.orders.readFailure = undefined;
+		f.orders.values.set(
+			"gid://shopify/Order/1",
+			paidOrder(f.intent.correlationId),
+		);
+		expect(await f.service.processDelivery(received.id)).toBe("processed");
+	});
+
 	it("issues exactly one immutable grant from an Admin-read, correlated paid order", async () => {
 		const f = await fixture();
 		await f.organizations.updateDivision({
@@ -228,10 +275,10 @@ describe("Shopify order projection", () => {
 			displayName: "Piano & Strings",
 			normalizedName: "piano-strings",
 		});
-		f.orders.values.set(
-			"gid://shopify/Order/1",
-			paidOrder(f.intent.correlationId),
-		);
+		f.orders.values.set("gid://shopify/Order/1", {
+			...paidOrder(f.intent.correlationId),
+			fullyPaidAtIso: "2026-08-28T18:00:00.001Z",
+		});
 		const first = await delivery(
 			f.commerce,
 			f.organization.id,
@@ -426,10 +473,10 @@ describe("Shopify order projection", () => {
 
 	it("terminally reviews a paid order whose checkout intent expired", async () => {
 		const f = await fixture("2026-08-28T18:00:00.000Z");
-		f.orders.values.set(
-			"gid://shopify/Order/1",
-			paidOrder(f.intent.correlationId),
-		);
+		f.orders.values.set("gid://shopify/Order/1", {
+			...paidOrder(f.intent.correlationId),
+			fullyPaidAtIso: "2026-08-28T18:00:00.001Z",
+		});
 		const received = await delivery(
 			f.commerce,
 			f.organization.id,
@@ -455,11 +502,34 @@ describe("Shopify order projection", () => {
 		).toBeFalse();
 	});
 
+	it("approves a payment before a PostgreSQL-formatted checkout expiry", async () => {
+		const f = await fixture("2026-09-12 15:00:21.026-07");
+		f.orders.values.set("gid://shopify/Order/1", {
+			...paidOrder(f.intent.correlationId),
+			fullyPaidAtIso: "2026-09-12T21:30:37.000Z",
+		});
+		const received = await delivery(
+			f.commerce,
+			f.organization.id,
+			"webhook-0000000010",
+		);
+
+		expect(await f.service.processDelivery(received.id)).toBe("processed");
+		expect(
+			await f.organizations.listEntitlementGrantSnapshots(
+				f.organization.id,
+				f.customer.id,
+			),
+		).toHaveLength(1);
+		expect(
+			await f.commerce.listCustomerDecisions(f.organization.id, f.customer.id),
+		).toMatchObject([{ status: "approved" }]);
+	});
+
 	// Regression harness for https://github.com/pafenorthwest/Festival/issues/126.
 	// Snapshot source: the 2026-09-10 production delivery that was accepted, then
 	// failed because Shopify denied the Admin GraphQL ReadPaidOrder operation.
-	// Remove .skip only with the expiry-vs-paid-time implementation from #126.
-	it.skip("approves the captured paid-before-expiry order when reconciliation runs after intent expiry", async () => {
+	it("approves the captured paid-before-expiry order when reconciliation runs after intent expiry", async () => {
 		const paidAtIso = "2026-09-11T06:04:01.203Z";
 		const expiresAtIso = "2026-09-11T06:33:32.656Z";
 		const reconciledAt = new Date("2026-09-11T07:00:00.000Z");
@@ -473,7 +543,6 @@ describe("Shopify order projection", () => {
 			currencyCode: "USD",
 			divisionName: "Cello/Bass",
 		});
-		const correlationId = "619b61e4-6cf7-4333-a37e-f61fe9b82543";
 		f.orders.values.set(orderGid, {
 			id: orderGid,
 			customerGid: "gid://shopify/Customer/9381966446781",
@@ -481,7 +550,7 @@ describe("Shopify order projection", () => {
 			fullyPaidAtIso: paidAtIso,
 			currencyCode: "USD",
 			customAttributes: [
-				{ key: "festival_checkout_intent_id", value: correlationId },
+				{ key: "festival_checkout_intent_id", value: f.intent.correlationId },
 			],
 			lineItems: [
 				{

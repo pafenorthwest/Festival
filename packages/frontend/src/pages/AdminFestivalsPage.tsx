@@ -3,6 +3,7 @@ import { formatDateOnly } from "../app/appFormatting.js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { AccessDeniedPanel } from "../components/AccessDeniedPanel.js";
 import { Button } from "../components/Button.js";
+import { setPrimaryFestival } from "../lib/api.js";
 
 interface AdminFestivalsPageProps {
 	app: FestivalAppController;
@@ -28,12 +29,62 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 						{(festival) => (
 							<div class="festival-row">
 								<strong>{festival.name}</strong>
+								<span>
+									{festival.shortName}
+									{festival.isPrimary ? " (Primary)" : ""}
+								</span>
 								<span>{formatDateOnly(festival.startDate)}</span>
 								<span>{formatDateOnly(festival.endDate)}</span>
+								<Show when={!festival.isPrimary}>
+									<Button
+										type="button"
+										disabled={props.app.isBusy()}
+										onClick={async () => {
+											const current = props.app
+												.festivals()
+												.find((item) => item.isPrimary);
+											if (
+												!confirm(
+													`Make ${festival.name} primary instead of ${current?.name ?? "the current Festival"}?`,
+												)
+											)
+												return;
+											const user = props.app.firebaseUser();
+											if (!user) return;
+											props.app.setIsBusy(true);
+											try {
+												await setPrimaryFestival(
+													await user.getIdToken(),
+													(props.app.route() as { slug: string }).slug,
+													festival.shortName,
+												);
+												location.reload();
+											} finally {
+												props.app.setIsBusy(false);
+											}
+										}}
+									>
+										Make primary
+									</Button>
+								</Show>
 							</div>
 						)}
 					</For>
 				</div>
+				<label class="field">
+					<span>Festival short name</span>
+					<input
+						type="text"
+						maxLength={64}
+						value={props.app.festivalDraft().shortName}
+						onInput={(event) =>
+							props.app.setFestivalDraft((current) => ({
+								...current,
+								shortName: event.currentTarget.value.toLowerCase(),
+							}))
+						}
+					/>
+				</label>
 				<label class="field">
 					<span>Festival name</span>
 					<input

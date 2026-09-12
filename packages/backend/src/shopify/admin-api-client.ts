@@ -83,6 +83,7 @@ interface ShopifyVariantNode {
 	price?: string | { amount?: string; currencyCode?: string };
 	product?: { id?: string };
 	selectedOptions?: Array<{ name?: string; value?: string }>;
+	inventoryItem?: { requiresShipping?: boolean | null } | null;
 }
 
 interface ShopifyOrderAttributeNode {
@@ -203,6 +204,7 @@ function mapProductNode(
 						name: option.name ?? "",
 						value: option.value ?? "",
 					})) ?? [],
+				requiresShipping: variant.inventoryItem?.requiresShipping ?? undefined,
 			};
 		}),
 	};
@@ -762,6 +764,9 @@ export class ShopifyAdminApiClient
 									name
 									value
 								}
+								inventoryItem {
+									requiresShipping
+								}
 							}
 						}
 					}
@@ -806,6 +811,7 @@ export class ShopifyAdminApiClient
 			productId: string;
 			variantId: string;
 			price: string;
+			requiresShipping?: boolean;
 		},
 	): Promise<ShopifyAdminResult<ShopifyProductDetails>> {
 		this.assertOperationContext(context, "write_products");
@@ -849,6 +855,9 @@ export class ShopifyAdminApiClient
 									name
 									value
 								}
+								inventoryItem {
+									requiresShipping
+								}
 							}
 						}
 					}
@@ -865,6 +874,13 @@ export class ShopifyAdminApiClient
 					{
 						id: input.variantId,
 						price: input.price,
+						...(input.requiresShipping === undefined
+							? {}
+							: {
+									inventoryItem: {
+										requiresShipping: input.requiresShipping,
+									},
+								}),
 					},
 				],
 			},
@@ -884,6 +900,59 @@ export class ShopifyAdminApiClient
 		return {
 			value: mapProductNode(
 				payload.productVariantsBulkUpdate.product,
+				shopCurrencyCode,
+			),
+			requestId: response.requestId,
+		};
+	}
+
+	async updateProductDetails(
+		context: ShopifyAdminOperationContext,
+		input: { productId: string; name: string; description?: string },
+	): Promise<ShopifyAdminResult<ShopifyProductDetails>> {
+		this.assertOperationContext(context, "write_products");
+		const { credentials } = context;
+		const { accessToken } = await this.fetchOperationAccessToken(
+			context,
+			"write_products",
+		);
+		const shopCurrencyCode = await this.fetchShopCurrencyCode(
+			credentials.storeDomain,
+			accessToken,
+		);
+		const response = await this.graphqlRequest<{
+			productUpdate?: {
+				product?: ShopifyProductNode;
+				userErrors?: ShopifyUserErrorPayload[];
+			};
+		}>(
+			credentials.storeDomain,
+			accessToken,
+			`mutation UpdateMembershipProduct($product: ProductUpdateInput!) {
+				productUpdate(product: $product) {
+					product { id title descriptionHtml status variants(first: 2) { nodes { id title price product { id } selectedOptions { name value } inventoryItem { requiresShipping } } } }
+					userErrors { field message }
+				}
+			}`,
+			{
+				product: {
+					id: input.productId,
+					title: input.name,
+					descriptionHtml: input.description ?? "",
+				},
+			},
+		);
+		throwIfUserErrors(
+			response.value.productUpdate?.userErrors,
+			response.requestId,
+		);
+		if (!response.value.productUpdate?.product)
+			throw new ShopifyAdminApiError(
+				"Shopify product update returned no product.",
+			);
+		return {
+			value: mapProductNode(
+				response.value.productUpdate.product,
 				shopCurrencyCode,
 			),
 			requestId: response.requestId,
@@ -932,6 +1001,9 @@ export class ShopifyAdminApiClient
 								selectedOptions {
 									name
 									value
+								}
+								inventoryItem {
+									requiresShipping
 								}
 							}
 						}

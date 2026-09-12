@@ -5,6 +5,8 @@ import { AppHeader } from "./components/AppHeader.js";
 import { OrganizationSideNavigation } from "./components/OrganizationSideNavigation.js";
 import { SignInModal } from "./components/SignInModal.js";
 import { isOrganizationPageRoute } from "./lib/routes.js";
+import { AccompanistMembershipPage } from "./pages/AccompanistMembershipPage.js";
+import { AdminAccompanistsPage } from "./pages/AdminAccompanistsPage.js";
 import { AdminDivisionsPage } from "./pages/AdminDivisionsPage.js";
 import { AdminFestivalsPage } from "./pages/AdminFestivalsPage.js";
 import { AdminHomePage } from "./pages/AdminHomePage.js";
@@ -15,6 +17,8 @@ import { CreateOrganizationPage } from "./pages/CreateOrganizationPage.js";
 import { CustomerAccountContactPage } from "./pages/CustomerAccountContactPage.js";
 import { CustomerAccountMembershipsPage } from "./pages/CustomerAccountMembershipsPage.js";
 import { CustomerAccountOrdersPage } from "./pages/CustomerAccountOrdersPage.js";
+import { CustomerChildrenPage } from "./pages/CustomerChildrenPage.js";
+import { FestivalLandingPage } from "./pages/FestivalLandingPage.js";
 import { HomePage } from "./pages/HomePage.js";
 import { InviteLandingPage } from "./pages/InviteLandingPage.js";
 import { LegacyCustomerAccountRedirect } from "./pages/LegacyCustomerAccountRedirect.js";
@@ -64,8 +68,34 @@ export default function App() {
 						<Match when={app.route().kind === "org-root"}>
 							<OrganizationRootPage app={app} />
 						</Match>
+						<Match when={app.route().kind === "festival-public"}>
+							<FestivalLandingPage
+								slug={(app.route() as { slug: string }).slug}
+							/>
+						</Match>
+						<Match when={app.route().kind === "festival-admin"}>
+							<section class="panel">
+								<h2>Festival dashboard</h2>
+								<p>
+									<a
+										href={`/org/${(app.route() as { slug: string }).slug}/admin/festivals`}
+									>
+										Festival management
+									</a>
+								</p>
+								<p>
+									Classes management is available after the catalog is
+									configured.
+								</p>
+							</section>
+						</Match>
 						<Match when={app.route().kind === "org-membership"}>
 							<MembershipPage app={app} />
+						</Match>
+						<Match when={app.route().kind === "org-accompanist-membership"}>
+							<AccompanistMembershipPage
+								slug={(app.route() as { slug: string }).slug}
+							/>
 						</Match>
 						<Match when={app.route().kind === "org-customer-account-legacy"}>
 							<LegacyCustomerAccountRedirect
@@ -81,6 +111,11 @@ export default function App() {
 						</Match>
 						<Match when={app.route().kind === "org-customer-account-contact"}>
 							<CustomerAccountContactPage
+								slug={(app.route() as { slug: string }).slug}
+							/>
+						</Match>
+						<Match when={app.route().kind === "org-customer-account-children"}>
+							<CustomerChildrenPage
 								slug={(app.route() as { slug: string }).slug}
 							/>
 						</Match>
@@ -106,6 +141,9 @@ export default function App() {
 						</Match>
 						<Match when={app.route().kind === "org-admin-divisions"}>
 							<AdminDivisionsPage app={app} />
+						</Match>
+						<Match when={app.route().kind === "org-admin-accompanists"}>
+							<AdminAccompanistsPage app={app} />
 						</Match>
 					</Switch>
 				</div>

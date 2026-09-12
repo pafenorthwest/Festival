@@ -13,6 +13,7 @@ export interface InviteFeedback {
 }
 
 export interface FestivalDraft {
+	shortName: string;
 	name: string;
 	startDate: string;
 	endDate: string;
