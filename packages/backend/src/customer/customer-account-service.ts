@@ -978,13 +978,22 @@ export class CustomerAccountService {
 		);
 		return {
 			children: await Promise.all(
-				children.map(async (child) => ({
-					...child,
-					ageSnapshots: await this.repository.listChildAgeSnapshots(
+				children.map(async (child) => {
+					const ageSnapshots = await this.repository.listChildAgeSnapshots(
 						access.organizationId,
 						child.id,
-					),
-				})),
+					);
+					const current = ageSnapshots.find(
+						(snapshot) => !snapshot.supersededAtIso,
+					);
+					return {
+						...child,
+						ageSnapshots,
+						hasCurrentValidAgeSnapshot: Boolean(
+							current && new Date(current.validUntilIso) > this.now(),
+						),
+					};
+				}),
 			),
 		};
 	}

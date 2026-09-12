@@ -345,6 +345,31 @@ describe("CustomerAccountService", () => {
 			),
 		).rejects.toMatchObject({ status: 403 });
 	});
+	it("does not allow a parent to refresh another parent's child", async () => {
+		const f = await fixture();
+		await f.organizations.updateRegistrationAgeConfiguration({
+			organizationId: f.org.id,
+			registrationAgeDate: "2026-06-01",
+		});
+		const auth = await f.authenticate();
+		const session = await f.repository.getSession(auth.sessionId);
+		if (!session) throw new Error("session");
+		const child = await f.repository.createChild({
+			organizationId: f.org.id,
+			parentCustomerId: "other-parent",
+			displayName: "Other",
+		});
+		await expect(
+			f.service.refreshChildAgeSnapshot(
+				"festival",
+				auth.sessionId,
+				session.csrfToken,
+				"https://festival.example.com",
+				child.id,
+				{ birthday: "2016-06-01" },
+			),
+		).rejects.toMatchObject({ status: 404 });
+	});
 	it("keeps configuration separate, validates discovery, and never returns the secret", async () => {
 		const f = await fixture();
 		const stored = await f.repository.getIntegration(f.org.id);
