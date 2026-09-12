@@ -1,4 +1,5 @@
 import type {
+	AccompanistDivisionSelectionPolicy,
 	AuthenticatedUser,
 	CreateEntitlementGrantSnapshotInput,
 	EntitlementClass,
@@ -10,6 +11,8 @@ import type {
 	OrganizationMembershipRecord,
 	OrganizationRecord,
 	OrganizationUserRecord,
+	RegistrationAgeConfiguration,
+	RegistrationCatalogValue,
 	ShopifyCapabilityDiagnostics,
 	ShopifyFailureCategory,
 	ShopifyVerificationStatus,
@@ -157,6 +160,14 @@ export interface CreateMembershipProductRecordInput {
 	productNameSnapshot: string;
 }
 
+export interface AccompanistDivisionPolicyRecord {
+	organizationId: string;
+	policy: AccompanistDivisionSelectionPolicy;
+	updatedAtIso: string;
+}
+
+export type RegistrationCatalogKind = "class_subtype" | "instrument";
+
 export interface OrganizationRepository {
 	ensureReady(): Promise<void>;
 	upsertUser(user: AuthenticatedUser): Promise<OrganizationUserRecord>;
@@ -265,6 +276,44 @@ export interface OrganizationRepository {
 		organizationId: string,
 		entitlementClass: EntitlementClass,
 	): Promise<ProductRecord | null>;
+	getAccompanistDivisionPolicy(
+		organizationId: string,
+	): Promise<AccompanistDivisionPolicyRecord>;
+	updateAccompanistDivisionPolicy(input: {
+		organizationId: string;
+		policy: AccompanistDivisionSelectionPolicy;
+	}): Promise<AccompanistDivisionPolicyRecord>;
+	getRegistrationAgeConfiguration(
+		organizationId: string,
+	): Promise<RegistrationAgeConfiguration | null>;
+	updateRegistrationAgeConfiguration(input: {
+		organizationId: string;
+		registrationAgeDate: string;
+	}): Promise<RegistrationAgeConfiguration>;
+	listRegistrationCatalogValues(
+		organizationId: string,
+		kind: RegistrationCatalogKind,
+		activeOnly?: boolean,
+	): Promise<RegistrationCatalogValue[]>;
+	createRegistrationCatalogValue(input: {
+		organizationId: string;
+		kind: RegistrationCatalogKind;
+		displayName: string;
+		normalizedName: string;
+	}): Promise<RegistrationCatalogValue>;
+	updateRegistrationCatalogValue(input: {
+		organizationId: string;
+		kind: RegistrationCatalogKind;
+		id: string;
+		displayName?: string;
+		normalizedName?: string;
+		isActive?: boolean;
+	}): Promise<RegistrationCatalogValue | null>;
+	reorderRegistrationCatalogValues(
+		organizationId: string,
+		kind: RegistrationCatalogKind,
+		ids: string[],
+	): Promise<RegistrationCatalogValue[]>;
 	findProductRecordByShopifyProductGid(
 		shopifyProductGid: string,
 	): Promise<ProductRecord | null>;

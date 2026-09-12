@@ -222,6 +222,46 @@ export const CURRENT_ROUTE_SECURITY = [
 		authenticationClass: "admin",
 	},
 	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/accompanist-offering",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/accompanist-offering/:offeringId",
+		authenticationClass: "admin",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/admin/accompanist-policy",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/accompanist-policy",
+		authenticationClass: "admin",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/admin/registration-configuration",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/registration-age-date",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/class-subtypes",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/instruments",
+		authenticationClass: "admin",
+	},
+	{
 		method: "GET",
 		path: "/api/organizations/:slug/membership-products",
 		authenticationClass: "public",

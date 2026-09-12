@@ -37,6 +37,7 @@ import {
 	validateFestivalName,
 	validateOrganizationName,
 	validateOrganizationShortName,
+	validateRegistrationAgeDate,
 } from "@festival/common";
 import type { TenantContext } from "../auth/tenant-context.js";
 import { AppError } from "../errors/app-error.js";
@@ -219,6 +220,69 @@ export class OrganizationService {
 			throw new AppError("Division is not available for a new purchase.", 400);
 		}
 		return division;
+	}
+
+	async getRegistrationConfigurationForTenant(tenant: TenantContext) {
+		return {
+			ageConfiguration: await this.repository.getRegistrationAgeConfiguration(
+				tenant.organization.id,
+			),
+			classSubtypes: await this.repository.listRegistrationCatalogValues(
+				tenant.organization.id,
+				"class_subtype",
+			),
+			instruments: await this.repository.listRegistrationCatalogValues(
+				tenant.organization.id,
+				"instrument",
+			),
+		};
+	}
+
+	async updateRegistrationAgeDateForTenant(
+		tenant: TenantContext,
+		value: unknown,
+	) {
+		try {
+			return {
+				ageConfiguration:
+					await this.repository.updateRegistrationAgeConfiguration({
+						organizationId: tenant.organization.id,
+						registrationAgeDate: validateRegistrationAgeDate(value),
+					}),
+			};
+		} catch (error) {
+			throw new AppError(
+				error instanceof Error
+					? error.message
+					: "Registration age date is invalid.",
+				400,
+			);
+		}
+	}
+
+	async createRegistrationCatalogValueForTenant(
+		tenant: TenantContext,
+		kind: "class_subtype" | "instrument",
+		value: unknown,
+	) {
+		const displayName = this.requireDivisionName(value);
+		try {
+			return {
+				value: await this.repository.createRegistrationCatalogValue({
+					organizationId: tenant.organization.id,
+					kind,
+					displayName,
+					normalizedName: divisionNameUniquenessKey(displayName),
+				}),
+			};
+		} catch (error) {
+			if (
+				error instanceof Error &&
+				error.message === "Registration catalog value already exists."
+			)
+				throw new AppError(error.message, 409);
+			throw error;
+		}
 	}
 
 	async createDivisionForTenant(

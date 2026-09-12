@@ -110,6 +110,12 @@ class FakeShopifyProductClient implements ShopifyMembershipProductClient {
 		return { value: this.updateResponse, requestId: "request-update" };
 	}
 
+	async updateProductDetails(): Promise<
+		ShopifyAdminResult<ShopifyProductDetails>
+	> {
+		return { value: this.updateResponse, requestId: "request-product-update" };
+	}
+
 	async readProductsByGid(
 		_context: ShopifyAdminOperationContext,
 		productGids: string[],

@@ -50,6 +50,36 @@ export interface OrganizationTimezoneResponse {
 	timezone: string;
 }
 
+export interface RegistrationCatalogValue {
+	id: string;
+	organizationId: string;
+	displayName: string;
+	isActive: boolean;
+	displayOrder: number;
+	createdAtIso: string;
+	updatedAtIso: string;
+}
+
+export interface RegistrationAgeConfiguration {
+	organizationId: string;
+	registrationAgeDate: string;
+	updatedAtIso: string;
+}
+
+export function validateRegistrationAgeDate(value: unknown): string {
+	if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+		throw new Error("Registration age date must use YYYY-MM-DD.");
+	}
+	const date = new Date(`${value}T00:00:00.000Z`);
+	if (
+		Number.isNaN(date.valueOf()) ||
+		date.toISOString().slice(0, 10) !== value
+	) {
+		throw new Error("Registration age date is invalid.");
+	}
+	return value;
+}
+
 export interface CreateOrganizationDivisionInput {
 	displayName: string;
 }

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
+	AccompanistDivisionSelectionPolicy,
 	AuthenticatedUser,
 	CreateEntitlementGrantSnapshotInput,
 	EntitlementClass,
@@ -13,6 +14,8 @@ import type {
 	OrganizationRecord,
 	OrganizationRole,
 	OrganizationUserRecord,
+	RegistrationAgeConfiguration,
+	RegistrationCatalogValue,
 	ShopifyCapabilityDiagnostics,
 	ShopifyFailureCategory,
 	ShopifyVerificationStatus,
@@ -25,6 +28,7 @@ import {
 } from "@festival/common";
 import { sql } from "bun";
 import type {
+	AccompanistDivisionPolicyRecord,
 	CreateFestivalRecordInput,
 	CreateInviteRecordInput,
 	CreateMembershipInput,
@@ -33,6 +37,7 @@ import type {
 	MembershipWithOrganization,
 	OrganizationRepository,
 	ProductRecord,
+	RegistrationCatalogKind,
 	ShopifyIntegrationRecord,
 	UpdateShopifyVerificationInput,
 	UpdateShopifyWebhookReadinessInput,
@@ -179,6 +184,28 @@ interface EntitlementGrantRow {
 	ends_on: string;
 	status: EntitlementGrantStatus;
 	created_at: string;
+}
+
+interface AccompanistDivisionPolicyRow {
+	organization_id: string;
+	policy: AccompanistDivisionSelectionPolicy;
+	updated_at: string;
+}
+
+interface RegistrationAgeConfigurationRow {
+	organization_id: string;
+	registration_age_date: string;
+	updated_at: string;
+}
+interface RegistrationCatalogValueRow {
+	id: string;
+	organization_id: string;
+	kind: RegistrationCatalogKind;
+	display_name: string;
+	is_active: boolean;
+	display_order: number;
+	created_at: string;
+	updated_at: string;
 }
 
 function sanitizeSchemaName(schema: string): string {
@@ -500,6 +527,30 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 					CHECK (entitlement_class IN ('teacher_membership', 'accompanist_membership')),
 				CONSTRAINT products_duration_days_check
 					CHECK (duration_days > 0 AND duration_days <= 36500)
+			);
+
+			CREATE TABLE IF NOT EXISTS ${schema}.accompanist_division_policies (
+				organization_id TEXT PRIMARY KEY REFERENCES ${schema}.organizations (id) ON DELETE CASCADE,
+				policy TEXT NOT NULL DEFAULT 'one_to_all'
+					CHECK (policy IN ('exactly_one', 'one_to_two', 'one_to_all')),
+				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			);
+
+			CREATE TABLE IF NOT EXISTS ${schema}.registration_age_configurations (
+				organization_id TEXT PRIMARY KEY REFERENCES ${schema}.organizations (id) ON DELETE CASCADE,
+				registration_age_date DATE NOT NULL,
+				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			);
+			CREATE TABLE IF NOT EXISTS ${schema}.registration_catalog_values (
+				id TEXT PRIMARY KEY,
+				organization_id TEXT NOT NULL REFERENCES ${schema}.organizations (id) ON DELETE CASCADE,
+				kind TEXT NOT NULL CHECK (kind IN ('class_subtype', 'instrument')),
+				display_name TEXT NOT NULL,
+				normalized_name TEXT NOT NULL,
+				is_active BOOLEAN NOT NULL DEFAULT TRUE,
+				display_order INTEGER NOT NULL CHECK (display_order >= 0),
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				UNIQUE (organization_id, kind, normalized_name), UNIQUE (organization_id, kind, display_order)
 			);
 
 			ALTER TABLE ${schema}.products
@@ -1922,6 +1973,203 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		)) as ProductRow[];
 
 		return rows[0] ? mapProduct(rows[0]) : null;
+	}
+
+	async getAccompanistDivisionPolicy(
+		organizationId: string,
+	): Promise<AccompanistDivisionPolicyRecord> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT organization_id, policy, updated_at
+			 FROM ${this.schema}.accompanist_division_policies
+			 WHERE organization_id = $1`,
+			[organizationId],
+		)) as AccompanistDivisionPolicyRow[];
+		const row = rows[0];
+		return row
+			? {
+					organizationId: row.organization_id,
+					policy: row.policy,
+					updatedAtIso: row.updated_at,
+				}
+			: {
+					organizationId,
+					policy: "one_to_all",
+					updatedAtIso: new Date().toISOString(),
+				};
+	}
+
+	async updateAccompanistDivisionPolicy(input: {
+		organizationId: string;
+		policy: AccompanistDivisionSelectionPolicy;
+	}): Promise<AccompanistDivisionPolicyRecord> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`INSERT INTO ${this.schema}.accompanist_division_policies
+				(organization_id, policy, updated_at)
+			 VALUES ($1, $2, NOW())
+			 ON CONFLICT (organization_id) DO UPDATE
+			 SET policy = EXCLUDED.policy, updated_at = NOW()
+			 RETURNING organization_id, policy, updated_at`,
+			[input.organizationId, input.policy],
+		)) as AccompanistDivisionPolicyRow[];
+		const row = rows[0];
+		if (!row) throw new Error("Unable to save accompanist division policy.");
+		return {
+			organizationId: row.organization_id,
+			policy: row.policy,
+			updatedAtIso: row.updated_at,
+		};
+	}
+
+	async getRegistrationAgeConfiguration(
+		organizationId: string,
+	): Promise<RegistrationAgeConfiguration | null> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT organization_id, registration_age_date::text, updated_at FROM ${this.schema}.registration_age_configurations WHERE organization_id = $1`,
+			[organizationId],
+		)) as RegistrationAgeConfigurationRow[];
+		const row = rows[0];
+		return row
+			? {
+					organizationId: row.organization_id,
+					registrationAgeDate: row.registration_age_date,
+					updatedAtIso: row.updated_at,
+				}
+			: null;
+	}
+
+	async updateRegistrationAgeConfiguration(input: {
+		organizationId: string;
+		registrationAgeDate: string;
+	}): Promise<RegistrationAgeConfiguration> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`INSERT INTO ${this.schema}.registration_age_configurations (organization_id, registration_age_date, updated_at) VALUES ($1, $2, NOW()) ON CONFLICT (organization_id) DO UPDATE SET registration_age_date = EXCLUDED.registration_age_date, updated_at = NOW() RETURNING organization_id, registration_age_date::text, updated_at`,
+			[input.organizationId, input.registrationAgeDate],
+		)) as RegistrationAgeConfigurationRow[];
+		const row = rows[0];
+		if (!row) throw new Error("Unable to save registration age configuration.");
+		return {
+			organizationId: row.organization_id,
+			registrationAgeDate: row.registration_age_date,
+			updatedAtIso: row.updated_at,
+		};
+	}
+
+	async listRegistrationCatalogValues(
+		organizationId: string,
+		kind: RegistrationCatalogKind,
+		activeOnly = false,
+	): Promise<RegistrationCatalogValue[]> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT id, organization_id, kind, display_name, is_active, display_order, created_at, updated_at FROM ${this.schema}.registration_catalog_values WHERE organization_id = $1 AND kind = $2 AND ($3::boolean = FALSE OR is_active) ORDER BY display_order, id`,
+			[organizationId, kind, activeOnly],
+		)) as RegistrationCatalogValueRow[];
+		return rows.map((row) => ({
+			id: row.id,
+			organizationId: row.organization_id,
+			displayName: row.display_name,
+			isActive: row.is_active,
+			displayOrder: row.display_order,
+			createdAtIso: row.created_at,
+			updatedAtIso: row.updated_at,
+		}));
+	}
+
+	async createRegistrationCatalogValue(input: {
+		organizationId: string;
+		kind: RegistrationCatalogKind;
+		displayName: string;
+		normalizedName: string;
+	}): Promise<RegistrationCatalogValue> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`INSERT INTO ${this.schema}.registration_catalog_values (id, organization_id, kind, display_name, normalized_name, display_order) SELECT $1, $2, $3, $4, $5, COUNT(*)::integer FROM ${this.schema}.registration_catalog_values WHERE organization_id = $2 AND kind = $3 RETURNING id, organization_id, kind, display_name, is_active, display_order, created_at, updated_at`,
+			[
+				randomUUID(),
+				input.organizationId,
+				input.kind,
+				input.displayName,
+				input.normalizedName,
+			],
+		)) as RegistrationCatalogValueRow[];
+		const row = rows[0];
+		if (!row) throw new Error("Unable to create registration catalog value.");
+		return {
+			id: row.id,
+			organizationId: row.organization_id,
+			displayName: row.display_name,
+			isActive: row.is_active,
+			displayOrder: row.display_order,
+			createdAtIso: row.created_at,
+			updatedAtIso: row.updated_at,
+		};
+	}
+
+	async updateRegistrationCatalogValue(input: {
+		organizationId: string;
+		kind: RegistrationCatalogKind;
+		id: string;
+		displayName?: string;
+		normalizedName?: string;
+		isActive?: boolean;
+	}): Promise<RegistrationCatalogValue | null> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`UPDATE ${this.schema}.registration_catalog_values SET display_name = COALESCE($4, display_name), normalized_name = COALESCE($5, normalized_name), is_active = COALESCE($6, is_active), updated_at = NOW() WHERE organization_id = $1 AND kind = $2 AND id = $3 RETURNING id, organization_id, kind, display_name, is_active, display_order, created_at, updated_at`,
+			[
+				input.organizationId,
+				input.kind,
+				input.id,
+				input.displayName ?? null,
+				input.normalizedName ?? null,
+				input.isActive ?? null,
+			],
+		)) as RegistrationCatalogValueRow[];
+		const row = rows[0];
+		return row
+			? {
+					id: row.id,
+					organizationId: row.organization_id,
+					displayName: row.display_name,
+					isActive: row.is_active,
+					displayOrder: row.display_order,
+					createdAtIso: row.created_at,
+					updatedAtIso: row.updated_at,
+				}
+			: null;
+	}
+
+	async reorderRegistrationCatalogValues(
+		organizationId: string,
+		kind: RegistrationCatalogKind,
+		ids: string[],
+	): Promise<RegistrationCatalogValue[]> {
+		await this.ensureReady();
+		const current = await this.listRegistrationCatalogValues(
+			organizationId,
+			kind,
+		);
+		if (
+			current.length !== ids.length ||
+			new Set(ids).size !== ids.length ||
+			ids.some((id) => !current.some((value) => value.id === id))
+		)
+			throw new Error(
+				"Registration catalog order must contain every value exactly once.",
+			);
+		await Promise.all(
+			ids.map((id, index) =>
+				sql.unsafe(
+					`UPDATE ${this.schema}.registration_catalog_values SET display_order = $4, updated_at = NOW() WHERE organization_id = $1 AND kind = $2 AND id = $3`,
+					[organizationId, kind, id, index],
+				),
+			),
+		);
+		return this.listRegistrationCatalogValues(organizationId, kind);
 	}
 
 	async findProductRecordByShopifyProductGid(

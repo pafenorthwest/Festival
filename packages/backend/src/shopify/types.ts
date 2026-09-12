@@ -86,6 +86,10 @@ export interface ShopifyMembershipProductClient {
 			requiresShipping?: boolean;
 		},
 	): Promise<ShopifyAdminResult<ShopifyProductDetails>>;
+	updateProductDetails(
+		context: ShopifyAdminOperationContext,
+		input: { productId: string; name: string; description?: string },
+	): Promise<ShopifyAdminResult<ShopifyProductDetails>>;
 	readProductsByGid(
 		context: ShopifyAdminOperationContext,
 		productGids: string[],

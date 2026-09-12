@@ -11,7 +11,44 @@ export const ENTITLEMENT_CLASSES = [
 export type EntitlementClass = (typeof ENTITLEMENT_CLASSES)[number];
 
 export const INITIAL_TEACHER_MEMBERSHIP_DURATION_DAYS = 365;
+export const INITIAL_ACCOMPANIST_MEMBERSHIP_DURATION_DAYS = 365;
 export const MAX_ENTITLEMENT_DURATION_DAYS = 36_500;
+
+export const ACCOMPANIST_DIVISION_SELECTION_POLICIES = [
+	"exactly_one",
+	"one_to_two",
+	"one_to_all",
+] as const;
+export type AccompanistDivisionSelectionPolicy =
+	(typeof ACCOMPANIST_DIVISION_SELECTION_POLICIES)[number];
+
+export function isAccompanistDivisionSelectionPolicy(
+	value: unknown,
+): value is AccompanistDivisionSelectionPolicy {
+	return ACCOMPANIST_DIVISION_SELECTION_POLICIES.includes(
+		value as AccompanistDivisionSelectionPolicy,
+	);
+}
+
+export function validateAccompanistDivisionSelection(
+	policy: AccompanistDivisionSelectionPolicy,
+	selectedDivisionIds: readonly string[],
+	activeDivisionCount: number,
+): void {
+	if (new Set(selectedDivisionIds).size !== selectedDivisionIds.length) {
+		throw new Error("Each accompanist division may be selected only once.");
+	}
+	const count = selectedDivisionIds.length;
+	if (
+		(policy === "exactly_one" && count !== 1) ||
+		(policy === "one_to_two" && (count < 1 || count > 2)) ||
+		(policy === "one_to_all" && (count < 1 || count > activeDivisionCount))
+	) {
+		throw new Error(
+			"Selected divisions do not satisfy the accompanist policy.",
+		);
+	}
+}
 
 export const ENTITLEMENT_GRANT_STATUSES = [
 	"active",
