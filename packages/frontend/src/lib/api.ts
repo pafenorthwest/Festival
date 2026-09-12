@@ -179,6 +179,23 @@ export function createCustomerChild(
 		"",
 	);
 }
+export function refreshCustomerChildAgeSnapshot(
+	slug: string,
+	childId: string,
+	csrfToken: string,
+	birthday: string,
+) {
+	return requestJson(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/children/${encodeURIComponent(childId)}/age-snapshot`,
+		{
+			method: "POST",
+			headers: { "X-CSRF-Token": csrfToken },
+			body: JSON.stringify({ birthday }),
+		},
+		undefined,
+		"",
+	);
+}
 
 export function updateCustomerProfile(
 	slug: string,
