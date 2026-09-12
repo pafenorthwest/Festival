@@ -18,6 +18,7 @@ import { CustomerAccountContactPage } from "./pages/CustomerAccountContactPage.j
 import { CustomerAccountMembershipsPage } from "./pages/CustomerAccountMembershipsPage.js";
 import { CustomerAccountOrdersPage } from "./pages/CustomerAccountOrdersPage.js";
 import { CustomerChildrenPage } from "./pages/CustomerChildrenPage.js";
+import { FestivalLandingPage } from "./pages/FestivalLandingPage.js";
 import { HomePage } from "./pages/HomePage.js";
 import { InviteLandingPage } from "./pages/InviteLandingPage.js";
 import { LegacyCustomerAccountRedirect } from "./pages/LegacyCustomerAccountRedirect.js";
@@ -68,10 +69,9 @@ export default function App() {
 							<OrganizationRootPage app={app} />
 						</Match>
 						<Match when={app.route().kind === "festival-public"}>
-							<section class="panel">
-								<h2>Festival</h2>
-								<p>Festival registration will be available here.</p>
-							</section>
+							<FestivalLandingPage
+								slug={(app.route() as { slug: string }).slug}
+							/>
 						</Match>
 						<Match when={app.route().kind === "festival-admin"}>
 							<section class="panel">
