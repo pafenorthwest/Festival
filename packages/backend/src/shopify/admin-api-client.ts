@@ -83,6 +83,7 @@ interface ShopifyVariantNode {
 	price?: string | { amount?: string; currencyCode?: string };
 	product?: { id?: string };
 	selectedOptions?: Array<{ name?: string; value?: string }>;
+	inventoryItem?: { requiresShipping?: boolean | null } | null;
 }
 
 interface ShopifyOrderAttributeNode {
@@ -203,6 +204,7 @@ function mapProductNode(
 						name: option.name ?? "",
 						value: option.value ?? "",
 					})) ?? [],
+				requiresShipping: variant.inventoryItem?.requiresShipping ?? undefined,
 			};
 		}),
 	};
@@ -762,6 +764,9 @@ export class ShopifyAdminApiClient
 									name
 									value
 								}
+								inventoryItem {
+									requiresShipping
+								}
 							}
 						}
 					}
@@ -806,6 +811,7 @@ export class ShopifyAdminApiClient
 			productId: string;
 			variantId: string;
 			price: string;
+			requiresShipping?: boolean;
 		},
 	): Promise<ShopifyAdminResult<ShopifyProductDetails>> {
 		this.assertOperationContext(context, "write_products");
@@ -849,6 +855,9 @@ export class ShopifyAdminApiClient
 									name
 									value
 								}
+								inventoryItem {
+									requiresShipping
+								}
 							}
 						}
 					}
@@ -865,6 +874,13 @@ export class ShopifyAdminApiClient
 					{
 						id: input.variantId,
 						price: input.price,
+						...(input.requiresShipping === undefined
+							? {}
+							: {
+									inventoryItem: {
+										requiresShipping: input.requiresShipping,
+									},
+								}),
 					},
 				],
 			},
@@ -932,6 +948,9 @@ export class ShopifyAdminApiClient
 								selectedOptions {
 									name
 									value
+								}
+								inventoryItem {
+									requiresShipping
 								}
 							}
 						}

@@ -124,6 +124,13 @@ function assertSupportedProductShape(
 		);
 	}
 
+	if (variant.requiresShipping !== false) {
+		throw new AppError(
+			"Shopify membership product variant must not require shipping.",
+			502,
+		);
+	}
+
 	return variant;
 }
 
@@ -211,6 +218,7 @@ export class ShopifyMembershipProductService {
 						productId: createdProduct?.id ?? "",
 						variantId: variant.id,
 						price: validation.input.price,
+						requiresShipping: false,
 					}),
 			);
 			variant = assertSupportedProductShape(pricedProduct, createdProduct.id);
