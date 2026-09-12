@@ -1,5 +1,6 @@
 import type {
 	AccompanistDivisionSelectionPolicy,
+	AccompanistMembershipGrant,
 	AuthenticatedUser,
 	CreateEntitlementGrantSnapshotInput,
 	EntitlementClass,
@@ -174,6 +175,14 @@ export interface AccompanistDivisionPolicyHistoryRecord
 
 export type RegistrationCatalogKind = "class_subtype" | "instrument";
 
+export interface CreateAccompanistMembershipGrantInput
+	extends Omit<
+		AccompanistMembershipGrant,
+		"id" | "createdAtIso" | "status" | "isCurrent"
+	> {
+	supersedeGrantId?: string;
+}
+
 export interface OrganizationRepository {
 	ensureReady(): Promise<void>;
 	upsertUser(user: AuthenticatedUser): Promise<OrganizationUserRecord>;
@@ -292,6 +301,15 @@ export interface OrganizationRepository {
 	listAccompanistDivisionPolicyHistory(
 		organizationId: string,
 	): Promise<AccompanistDivisionPolicyHistoryRecord[]>;
+	createAccompanistMembershipGrant(
+		input: CreateAccompanistMembershipGrantInput,
+	): Promise<AccompanistMembershipGrant>;
+	listAccompanistMembershipGrants(input: {
+		organizationId: string;
+		customerId?: string;
+		normalizedEmail?: string;
+		currentOnly?: boolean;
+	}): Promise<AccompanistMembershipGrant[]>;
 	getRegistrationAgeConfiguration(
 		organizationId: string,
 	): Promise<RegistrationAgeConfiguration | null>;

@@ -26,6 +26,7 @@ import {
 	type CustomerAccountService,
 } from "../customer/customer-account-service.js";
 import { AppError } from "../errors/app-error.js";
+import type { AccompanistMembershipService } from "../services/accompanist-membership-service.js";
 import type { OrganizationService } from "../services/organization-service.js";
 import type { PublicMembershipProductService } from "../shopify/public-membership-product-service.js";
 import type { ShopifyIntegrationDiagnosticService } from "../shopify/shopify-integration-diagnostic-service.js";
@@ -142,6 +143,7 @@ export function buildApiRouter(
 	shopifyIntegrationDiagnosticService?: ShopifyIntegrationDiagnosticService,
 	membershipCheckoutService?: MembershipCheckoutService,
 	membershipStatusService?: MembershipStatusService,
+	accompanistMembershipService?: AccompanistMembershipService,
 ): Hono<{ Variables: Partial<ApiVariables> }> {
 	const router = new Hono<{ Variables: Partial<ApiVariables> }>();
 	const repository = organizationService.repository;
@@ -983,6 +985,82 @@ export function buildApiRouter(
 			return toJsonError(c, error);
 		}
 	});
+
+	router.post(
+		"/organizations/:slug/customer/accompanist-membership",
+		async (c) => {
+			try {
+				assertNoBearerPrincipal(c.req.header("Authorization"));
+				if (!customerAccountService || !accompanistMembershipService)
+					throw new AppError("Accompanist membership is unavailable.", 503);
+				const referer = c.req.header("Referer");
+				const origin =
+					c.req.header("Origin") ??
+					(referer ? new URL(referer).origin : undefined);
+				const access = await customerAccountService.formAccess(
+					c.req.param("slug"),
+					getCookie(c, CUSTOMER_SESSION_COOKIE),
+					c.req.header("X-CSRF-Token"),
+					origin,
+				);
+				c.header("Cache-Control", "no-store");
+				return c.json(
+					await accompanistMembershipService.acquire({
+						...access,
+						payload: await c.req.json(),
+					}),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.get(
+		"/organizations/:slug/customer/accompanist-membership",
+		async (c) => {
+			try {
+				assertNoBearerPrincipal(c.req.header("Authorization"));
+				if (!customerAccountService)
+					throw new AppError("Accompanist membership is unavailable.", 503);
+				const access = await customerAccountService.customerReadAccess(
+					c.req.param("slug"),
+					getCookie(c, CUSTOMER_SESSION_COOKIE),
+				);
+				return c.json({
+					policy: await repository.getAccompanistDivisionPolicy(
+						access.organizationId,
+					),
+					divisions: await repository.listDivisions(
+						access.organizationId,
+						true,
+					),
+				});
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.get(
+		"/organizations/:slug/staff/accompanists",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin", "Division Chair", "Concert Chair"]),
+		async (c) => {
+			try {
+				if (!accompanistMembershipService)
+					throw new AppError("Accompanist roster is unavailable.", 503);
+				return c.json(
+					await accompanistMembershipService.listCurrentRoster(
+						getRequiredTenant(c).organization.id,
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
 
 	router.get("/organizations/:slug/customer/profile", async (c) => {
 		try {

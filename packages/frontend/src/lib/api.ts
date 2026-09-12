@@ -272,6 +272,48 @@ export function getMembershipProducts(slug: string) {
 	);
 }
 
+export function acquireAccompanistMembership(
+	slug: string,
+	csrfToken: string,
+	input: {
+		name: string;
+		email: string;
+		city: string;
+		phone: string;
+		divisionIds: string[];
+	},
+) {
+	return requestJson<{
+		membership: {
+			id: string;
+			startsOn: string;
+			endsOn: string;
+			status: string;
+		};
+	}>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/accompanist-membership`,
+		{
+			method: "POST",
+			headers: { "X-CSRF-Token": csrfToken },
+			body: JSON.stringify(input),
+		},
+		undefined,
+		"",
+	);
+}
+
+export function getAccompanistMembershipForm(slug: string) {
+	return requestJson<{
+		policy: { policy: "exactly_one" | "one_to_two" | "one_to_all" };
+		divisions: OrganizationDivision[];
+	}>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/accompanist-membership`,
+		undefined,
+		undefined,
+		"",
+	);
+}
+
 export function getPublicDivisions(slug: string) {
 	return requestJson<OrganizationDivisionListResponse>(
 		`/api/organizations/${encodeURIComponent(slug)}/divisions`,
@@ -323,6 +365,27 @@ export function startCustomerCheckout(
 export function getAdminMembershipProducts(idToken: string, slug: string) {
 	return requestJson<MembershipProductsListResponse>(
 		`/api/organizations/${slug}/admin/membership-products`,
+		undefined,
+		idToken,
+	);
+}
+
+export function getStaffAccompanists(idToken: string, slug: string) {
+	return requestJson<{
+		accompanists: Array<{
+			offeringName: string;
+			source: string;
+			status: string;
+			startsOn: string;
+			endsOn: string;
+			name: string;
+			email: string;
+			phone: string;
+			city: string;
+			divisions: Array<{ divisionId: string; divisionName: string }>;
+		}>;
+	}>(
+		`/api/organizations/${encodeURIComponent(slug)}/staff/accompanists`,
 		undefined,
 		idToken,
 	);

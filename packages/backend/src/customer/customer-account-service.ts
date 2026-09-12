@@ -914,6 +914,37 @@ export class CustomerAccountService {
 			shopifyCustomerAccessToken: bundle.accessToken,
 		};
 	}
+
+	/** Customer-session and CSRF boundary for Festival-owned, non-payment forms. */
+	async formAccess(
+		slug: string,
+		sessionId: string | undefined,
+		csrf: string | undefined,
+		origin: string | undefined,
+	) {
+		const org = await this.organizations.findOrganizationBySlug(slug);
+		if (!org || !sessionId)
+			throw new AppError("Customer session is invalid.", 401);
+		const valid = await this.validSession(sessionId, org.id);
+		if (
+			!csrf ||
+			csrf !== valid.session.csrfToken ||
+			origin !== this.publicOrigin
+		) {
+			throw new AppError("CSRF validation failed.", 403);
+		}
+		const touched = await this.repository.touchSession(
+			this.sessionTouch(valid.session, this.now()),
+		);
+		if (!touched) throw new AppError("Customer session is invalid.", 401);
+		return {
+			organizationId: org.id,
+			organizationTimezone: org.timezone,
+			customerId: valid.customer.id,
+			name: valid.customer.name.value,
+			email: valid.customer.email.value,
+		};
+	}
 	/** Trusted server-side continuation after checkoutAccess has verified the session and CSRF token. */
 	async recordCheckoutStaffAccessConsent(
 		organizationId: string,

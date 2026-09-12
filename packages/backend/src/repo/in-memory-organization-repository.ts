@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
 	AccompanistDivisionSelectionPolicy,
+	AccompanistMembershipGrant,
 	AuthenticatedUser,
 	CreateEntitlementGrantSnapshotInput,
 	EntitlementClass,
@@ -24,6 +25,7 @@ import {
 import type {
 	AccompanistDivisionPolicyHistoryRecord,
 	AccompanistDivisionPolicyRecord,
+	CreateAccompanistMembershipGrantInput,
 	CreateFestivalRecordInput,
 	CreateInviteRecordInput,
 	CreateMembershipInput,
@@ -74,6 +76,10 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 	>();
 	private readonly accompanistPolicyHistory: AccompanistDivisionPolicyHistoryRecord[] =
 		[];
+	private readonly accompanistMembershipGrants = new Map<
+		string,
+		AccompanistMembershipGrant
+	>();
 	private readonly registrationAgeConfigurations = new Map<
 		string,
 		RegistrationAgeConfiguration
@@ -878,6 +884,73 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		return this.accompanistPolicyHistory
 			.filter((record) => record.organizationId === organizationId)
 			.map((record) => ({ ...record }));
+	}
+
+	async createAccompanistMembershipGrant(
+		input: CreateAccompanistMembershipGrantInput,
+	): Promise<AccompanistMembershipGrant> {
+		if (input.supersedeGrantId) {
+			const prior = this.accompanistMembershipGrants.get(
+				input.supersedeGrantId,
+			);
+			if (
+				!prior ||
+				prior.organizationId !== input.organizationId ||
+				!prior.isCurrent
+			) {
+				throw new Error("Current accompanist membership was not found.");
+			}
+			this.accompanistMembershipGrants.set(prior.id, {
+				...prior,
+				isCurrent: false,
+				status: "superseded",
+			});
+		}
+		if (
+			[...this.accompanistMembershipGrants.values()].some(
+				(grant) =>
+					grant.organizationId === input.organizationId &&
+					grant.isCurrent &&
+					(grant.customerId === input.customerId ||
+						grant.normalizedEmail === input.normalizedEmail),
+			)
+		) {
+			throw new Error("An active accompanist membership already exists.");
+		}
+		const grant: AccompanistMembershipGrant = {
+			id: randomUUID(),
+			...input,
+			divisions: input.divisions.map((division) => ({ ...division })),
+			contact: { ...input.contact },
+			status: "active",
+			isCurrent: true,
+			createdAtIso: new Date().toISOString(),
+		};
+		this.accompanistMembershipGrants.set(grant.id, grant);
+		return grant;
+	}
+
+	async listAccompanistMembershipGrants(input: {
+		organizationId: string;
+		customerId?: string;
+		normalizedEmail?: string;
+		currentOnly?: boolean;
+	}): Promise<AccompanistMembershipGrant[]> {
+		return [...this.accompanistMembershipGrants.values()]
+			.filter(
+				(grant) =>
+					grant.organizationId === input.organizationId &&
+					(!input.customerId || grant.customerId === input.customerId) &&
+					(!input.normalizedEmail ||
+						grant.normalizedEmail === input.normalizedEmail) &&
+					(!input.currentOnly || grant.isCurrent),
+			)
+			.sort((a, b) => a.createdAtIso.localeCompare(b.createdAtIso))
+			.map((grant) => ({
+				...grant,
+				contact: { ...grant.contact },
+				divisions: grant.divisions.map((division) => ({ ...division })),
+			}));
 	}
 
 	async getRegistrationAgeConfiguration(

@@ -287,6 +287,63 @@ export class ShopifyMembershipProductService {
 		}
 	}
 
+	async resolveActiveFreeAccompanistOffering(
+		organizationId: string,
+	): Promise<ProductRecord> {
+		const offering = await this.repository.findMembershipProductRecordByClass(
+			organizationId,
+			ACCOMPANIST_MEMBERSHIP_ENTITLEMENT_CLASS,
+		);
+		if (!offering?.isActive)
+			throw new AppError("Accompanist offering is unavailable.", 409);
+		const integration =
+			await this.repository.getShopifyIntegration(organizationId);
+		this.assertVerifiedIntegration(integration, "read_products");
+		const context: ShopifyAdminOperationContext = {
+			organizationId,
+			firebaseActorUid: "accompanist-form",
+			verifiedShopGid: integration.verifiedShopGid,
+			verifiedShopDomain: integration.verifiedShopDomain,
+			integrationVersion: integration.integrationVersion,
+			grantedScopes: [...integration.grantedScopes],
+			capability: "read_products",
+			credentials: {
+				organizationId,
+				storeDomain: integration.storeDomain,
+				clientId: integration.clientId,
+				clientSecret: this.secretKeyring.decrypt(
+					integration.encryptedClientSecret,
+					{ organizationId, purpose: SHOPIFY_CLIENT_SECRET_PURPOSE },
+				),
+				integrationVersion: integration.integrationVersion,
+			},
+		};
+		try {
+			const { value } = await this.shopifyClient.readProductsByGid(context, [
+				offering.shopifyProductGid,
+			]);
+			const product = value[0];
+			if (!product)
+				throw new AppError("Accompanist offering is unavailable.", 409);
+			const variant = assertSupportedProductShape(
+				product,
+				offering.shopifyProductGid,
+			);
+			if (
+				variant.id !== offering.shopifyVariantGid ||
+				!/^0(?:\.0{1,2})?$/.test(variant.price.amount)
+			) {
+				throw new AppError(
+					"Accompanist offering is not available for free acquisition.",
+					409,
+				);
+			}
+			return offering;
+		} catch (error) {
+			throw toAppError(error);
+		}
+	}
+
 	private async createOffering(
 		tenant: TenantContext,
 		input: unknown,

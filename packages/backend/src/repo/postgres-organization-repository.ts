@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
 	AccompanistDivisionSelectionPolicy,
+	AccompanistMembershipGrant,
 	AuthenticatedUser,
 	CreateEntitlementGrantSnapshotInput,
 	EntitlementClass,
@@ -30,6 +31,7 @@ import { sql } from "bun";
 import type {
 	AccompanistDivisionPolicyHistoryRecord,
 	AccompanistDivisionPolicyRecord,
+	CreateAccompanistMembershipGrantInput,
 	CreateFestivalRecordInput,
 	CreateInviteRecordInput,
 	CreateMembershipInput,
@@ -197,6 +199,25 @@ interface AccompanistDivisionPolicyHistoryRow
 	id: string;
 	created_at: string;
 }
+interface AccompanistMembershipGrantRow {
+	id: string;
+	organization_id: string;
+	customer_id: string;
+	normalized_email: string;
+	offering_id: string;
+	offering_name_snapshot: string;
+	source: "accompanist_form";
+	contact_name: string;
+	contact_email: string;
+	contact_city: string;
+	contact_phone: string;
+	divisions: unknown;
+	starts_on: string;
+	ends_on: string;
+	status: "active" | "superseded" | "expired";
+	is_current: boolean;
+	created_at: string;
+}
 
 interface RegistrationAgeConfigurationRow {
 	organization_id: string;
@@ -276,6 +297,34 @@ function mapEntitlementGrant(
 	};
 	assertValidEntitlementGrantSnapshotInput(grant);
 	return grant;
+}
+
+function mapAccompanistGrant(
+	row: AccompanistMembershipGrantRow,
+): AccompanistMembershipGrant {
+	if (!Array.isArray(row.divisions))
+		throw new Error("Accompanist division snapshot is invalid.");
+	return {
+		id: row.id,
+		organizationId: row.organization_id,
+		customerId: row.customer_id,
+		normalizedEmail: row.normalized_email,
+		offeringId: row.offering_id,
+		offeringNameSnapshot: row.offering_name_snapshot,
+		source: row.source,
+		contact: {
+			name: row.contact_name,
+			email: row.contact_email,
+			city: row.contact_city,
+			phone: row.contact_phone,
+		},
+		divisions: row.divisions as AccompanistMembershipGrant["divisions"],
+		startsOn: row.starts_on,
+		endsOn: row.ends_on,
+		status: row.status,
+		isCurrent: row.is_current,
+		createdAtIso: row.created_at,
+	};
 }
 
 function mapUser(row: {
@@ -547,6 +596,26 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				policy TEXT NOT NULL CHECK (policy IN ('exactly_one', 'one_to_two', 'one_to_all')),
 				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 			);
+			CREATE TABLE IF NOT EXISTS ${schema}.accompanist_membership_grants (
+				id TEXT PRIMARY KEY,
+				organization_id TEXT NOT NULL REFERENCES ${schema}.organizations (id) ON DELETE CASCADE,
+				customer_id TEXT NOT NULL,
+				normalized_email TEXT NOT NULL,
+				offering_id TEXT NOT NULL REFERENCES ${schema}.products (id),
+				offering_name_snapshot TEXT NOT NULL,
+				source TEXT NOT NULL CHECK (source = 'accompanist_form'),
+				contact_name TEXT NOT NULL, contact_email TEXT NOT NULL, contact_city TEXT NOT NULL, contact_phone TEXT NOT NULL,
+				divisions JSONB NOT NULL,
+				starts_on DATE NOT NULL, ends_on DATE NOT NULL,
+				status TEXT NOT NULL CHECK (status IN ('active', 'superseded', 'expired')),
+				is_current BOOLEAN NOT NULL DEFAULT TRUE,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				CHECK (ends_on > starts_on)
+			);
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_accompanist_current_customer
+				ON ${schema}.accompanist_membership_grants (organization_id, customer_id) WHERE is_current;
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_accompanist_current_email
+				ON ${schema}.accompanist_membership_grants (organization_id, normalized_email) WHERE is_current;
 
 			CREATE TABLE IF NOT EXISTS ${schema}.registration_age_configurations (
 				organization_id TEXT PRIMARY KEY REFERENCES ${schema}.organizations (id) ON DELETE CASCADE,
@@ -2054,6 +2123,68 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			updatedAtIso: row.created_at,
 			createdAtIso: row.created_at,
 		}));
+	}
+
+	async createAccompanistMembershipGrant(
+		input: CreateAccompanistMembershipGrantInput,
+	): Promise<AccompanistMembershipGrant> {
+		await this.ensureReady();
+		try {
+			return await sql.begin(async (transaction) => {
+				if (input.supersedeGrantId) {
+					const updated = await transaction.unsafe(
+						`UPDATE ${this.schema}.accompanist_membership_grants SET is_current = FALSE, status = 'superseded' WHERE id = $1 AND organization_id = $2 AND is_current`,
+						[input.supersedeGrantId, input.organizationId],
+					);
+					if (updated.count !== 1)
+						throw new Error("Current accompanist membership was not found.");
+				}
+				const rows = (await transaction.unsafe(
+					`INSERT INTO ${this.schema}.accompanist_membership_grants (id, organization_id, customer_id, normalized_email, offering_id, offering_name_snapshot, source, contact_name, contact_email, contact_city, contact_phone, divisions, starts_on, ends_on, status, is_current) VALUES ($1, $2, $3, $4, $5, $6, 'accompanist_form', $7, $8, $9, $10, $11::jsonb, $12, $13, 'active', TRUE) RETURNING id, organization_id, customer_id, normalized_email, offering_id, offering_name_snapshot, source, contact_name, contact_email, contact_city, contact_phone, divisions, starts_on::text, ends_on::text, status, is_current, created_at`,
+					[
+						randomUUID(),
+						input.organizationId,
+						input.customerId,
+						input.normalizedEmail,
+						input.offeringId,
+						input.offeringNameSnapshot,
+						input.contact.name,
+						input.contact.email,
+						input.contact.city,
+						input.contact.phone,
+						JSON.stringify(input.divisions),
+						input.startsOn,
+						input.endsOn,
+					],
+				)) as AccompanistMembershipGrantRow[];
+				const row = rows[0];
+				if (!row) throw new Error("Unable to create accompanist membership.");
+				return mapAccompanistGrant(row);
+			});
+		} catch (error) {
+			if (error instanceof Error && /unique|duplicate/i.test(error.message))
+				throw new Error("An active accompanist membership already exists.");
+			throw error;
+		}
+	}
+
+	async listAccompanistMembershipGrants(input: {
+		organizationId: string;
+		customerId?: string;
+		normalizedEmail?: string;
+		currentOnly?: boolean;
+	}): Promise<AccompanistMembershipGrant[]> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT id, organization_id, customer_id, normalized_email, offering_id, offering_name_snapshot, source, contact_name, contact_email, contact_city, contact_phone, divisions, starts_on::text, ends_on::text, status, is_current, created_at FROM ${this.schema}.accompanist_membership_grants WHERE organization_id = $1 AND ($2::text IS NULL OR customer_id = $2) AND ($3::text IS NULL OR normalized_email = $3) AND ($4::boolean = FALSE OR is_current) ORDER BY created_at, id`,
+			[
+				input.organizationId,
+				input.customerId ?? null,
+				input.normalizedEmail ?? null,
+				input.currentOnly ?? false,
+			],
+		)) as AccompanistMembershipGrantRow[];
+		return rows.map(mapAccompanistGrant);
 	}
 
 	async getRegistrationAgeConfiguration(

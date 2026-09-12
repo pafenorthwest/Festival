@@ -5,6 +5,7 @@ export type AppRoute =
 	| { kind: "invite"; token: string }
 	| { kind: "org-root"; slug: string }
 	| { kind: "org-membership"; slug: string }
+	| { kind: "org-accompanist-membership"; slug: string }
 	| { kind: "org-customer-account-legacy"; slug: string }
 	| { kind: "org-customer-account-memberships"; slug: string }
 	| { kind: "org-customer-account-contact"; slug: string }
@@ -14,7 +15,8 @@ export type AppRoute =
 	| { kind: "org-admin-integrations"; slug: string }
 	| { kind: "org-admin-memberships"; slug: string }
 	| { kind: "org-admin-festivals"; slug: string }
-	| { kind: "org-admin-divisions"; slug: string };
+	| { kind: "org-admin-divisions"; slug: string }
+	| { kind: "org-admin-accompanists"; slug: string };
 
 export function buildOrgPath(slug: string): string {
 	return `/org/${slug}/admin`;
@@ -26,6 +28,10 @@ export function buildOrgRootPath(slug: string): string {
 
 export function buildOrgMembershipPath(slug: string): string {
 	return `/org/${slug}/membership`;
+}
+
+export function buildOrgAccompanistMembershipPath(slug: string): string {
+	return `/org/${slug}/accompanist-membership`;
 }
 
 export function buildOrgCustomerAccountPath(slug: string): string {
@@ -63,6 +69,9 @@ export function buildOrgAdminFestivalsPath(slug: string): string {
 export function buildOrgAdminDivisionsPath(slug: string): string {
 	return `/org/${slug}/admin/divisions`;
 }
+export function buildOrgAdminAccompanistsPath(slug: string): string {
+	return `/org/${slug}/admin/accompanists`;
+}
 
 export function buildInvitePath(token: string): string {
 	return `/invite/${token}`;
@@ -76,6 +85,7 @@ export function isOrganizationPageRoute(route: AppRoute): boolean {
 	return (
 		route.kind === "org-root" ||
 		route.kind === "org-membership" ||
+		route.kind === "org-accompanist-membership" ||
 		route.kind === "org-customer-account-legacy" ||
 		route.kind === "org-customer-account-memberships" ||
 		route.kind === "org-customer-account-contact" ||
@@ -109,6 +119,15 @@ export function parseRoute(pathname: string): AppRoute {
 	const orgMembershipMatch = pathname.match(/^\/org\/([^/]+)\/membership$/);
 	if (orgMembershipMatch) {
 		return { kind: "org-membership", slug: orgMembershipMatch[1] ?? "" };
+	}
+	const accompanistMembershipMatch = pathname.match(
+		/^\/org\/([^/]+)\/accompanist-membership$/,
+	);
+	if (accompanistMembershipMatch) {
+		return {
+			kind: "org-accompanist-membership",
+			slug: accompanistMembershipMatch[1] ?? "",
+		};
 	}
 
 	const customerAccountMatch = pathname.match(/^\/org\/([^/]+)\/account\/?$/);
@@ -194,6 +213,14 @@ export function parseRoute(pathname: string): AppRoute {
 			slug: orgAdminDivisionsMatch[1] ?? "",
 		};
 	}
+	const orgAdminAccompanistsMatch = pathname.match(
+		/^\/org\/([^/]+)\/admin\/accompanists$/,
+	);
+	if (orgAdminAccompanistsMatch)
+		return {
+			kind: "org-admin-accompanists",
+			slug: orgAdminAccompanistsMatch[1] ?? "",
+		};
 
 	return { kind: "home" };
 }

@@ -69,6 +69,21 @@ export const CURRENT_ROUTE_SECURITY = [
 		authenticationClass: "customer",
 	},
 	{
+		method: "POST",
+		path: "/api/organizations/:slug/customer/accompanist-membership",
+		authenticationClass: "customer",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/customer/accompanist-membership",
+		authenticationClass: "customer",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/staff/accompanists",
+		authenticationClass: "firebase",
+	},
+	{
 		method: "GET",
 		path: "/api/organizations/:slug/customer/membership-status",
 		authenticationClass: "customer",

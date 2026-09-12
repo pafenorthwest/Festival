@@ -5,6 +5,8 @@ import { AppHeader } from "./components/AppHeader.js";
 import { OrganizationSideNavigation } from "./components/OrganizationSideNavigation.js";
 import { SignInModal } from "./components/SignInModal.js";
 import { isOrganizationPageRoute } from "./lib/routes.js";
+import { AccompanistMembershipPage } from "./pages/AccompanistMembershipPage.js";
+import { AdminAccompanistsPage } from "./pages/AdminAccompanistsPage.js";
 import { AdminDivisionsPage } from "./pages/AdminDivisionsPage.js";
 import { AdminFestivalsPage } from "./pages/AdminFestivalsPage.js";
 import { AdminHomePage } from "./pages/AdminHomePage.js";
@@ -67,6 +69,11 @@ export default function App() {
 						<Match when={app.route().kind === "org-membership"}>
 							<MembershipPage app={app} />
 						</Match>
+						<Match when={app.route().kind === "org-accompanist-membership"}>
+							<AccompanistMembershipPage
+								slug={(app.route() as { slug: string }).slug}
+							/>
+						</Match>
 						<Match when={app.route().kind === "org-customer-account-legacy"}>
 							<LegacyCustomerAccountRedirect
 								slug={(app.route() as { slug: string }).slug}
@@ -106,6 +113,9 @@ export default function App() {
 						</Match>
 						<Match when={app.route().kind === "org-admin-divisions"}>
 							<AdminDivisionsPage app={app} />
+						</Match>
+						<Match when={app.route().kind === "org-admin-accompanists"}>
+							<AdminAccompanistsPage app={app} />
 						</Match>
 					</Switch>
 				</div>
