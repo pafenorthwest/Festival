@@ -89,6 +89,21 @@ export const CURRENT_ROUTE_SECURITY = [
 		authenticationClass: "customer",
 	},
 	{
+		method: "GET",
+		path: "/api/organizations/:slug/customer/children",
+		authenticationClass: "customer",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/customer/children",
+		authenticationClass: "customer",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/customer/children/:childId/age-snapshot",
+		authenticationClass: "customer",
+	},
+	{
 		method: "POST",
 		path: "/api/shopify/webhooks/orders-paid",
 		authenticationClass: "shopify-webhook",
