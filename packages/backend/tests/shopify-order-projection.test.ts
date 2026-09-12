@@ -502,6 +502,30 @@ describe("Shopify order projection", () => {
 		).toBeFalse();
 	});
 
+	it("approves a payment before a PostgreSQL-formatted checkout expiry", async () => {
+		const f = await fixture("2026-09-12 15:00:21.026-07");
+		f.orders.values.set("gid://shopify/Order/1", {
+			...paidOrder(f.intent.correlationId),
+			fullyPaidAtIso: "2026-09-12T21:30:37.000Z",
+		});
+		const received = await delivery(
+			f.commerce,
+			f.organization.id,
+			"webhook-0000000010",
+		);
+
+		expect(await f.service.processDelivery(received.id)).toBe("processed");
+		expect(
+			await f.organizations.listEntitlementGrantSnapshots(
+				f.organization.id,
+				f.customer.id,
+			),
+		).toHaveLength(1);
+		expect(
+			await f.commerce.listCustomerDecisions(f.organization.id, f.customer.id),
+		).toMatchObject([{ status: "approved" }]);
+	});
+
 	// Regression harness for https://github.com/pafenorthwest/Festival/issues/126.
 	// Snapshot source: the 2026-09-10 production delivery that was accepted, then
 	// failed because Shopify denied the Admin GraphQL ReadPaidOrder operation.

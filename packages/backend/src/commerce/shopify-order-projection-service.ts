@@ -44,6 +44,13 @@ function nowIso(clock: () => Date): string {
 	return clock().toISOString();
 }
 
+function timestampMilliseconds(value: string, field: string) {
+	const timestamp = Date.parse(value);
+	if (!Number.isFinite(timestamp))
+		throw new Error(`${field} timestamp is invalid.`);
+	return timestamp;
+}
+
 function isCorrelationId(value: string): boolean {
 	return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
 		value,
@@ -465,7 +472,11 @@ export class ShopifyOrderProjectionService {
 	): Promise<MembershipReasonCode | undefined> {
 		if (!order.fullyPaid) return "order_not_paid";
 		if (!order.fullyPaidAtIso) return "payment_incomplete";
-		if (intent.expiresAtIso <= order.fullyPaidAtIso) return "intent_expired";
+		if (
+			timestampMilliseconds(intent.expiresAtIso, "Checkout intent expiry") <=
+			timestampMilliseconds(order.fullyPaidAtIso, "Shopify payment")
+		)
+			return "intent_expired";
 		if (!this.customers) return "upstream_invalid";
 		const customer = await this.customers.getCustomer(
 			organizationId,
