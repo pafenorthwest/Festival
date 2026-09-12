@@ -417,9 +417,9 @@ export class ShopifyOrderProjectionService {
 		intent: CheckoutIntentRecord,
 		order: ShopifyPaidOrder,
 	): Promise<MembershipReasonCode | undefined> {
-		if (intent.expiresAtIso <= nowIso(this.now)) return "intent_expired";
 		if (!order.fullyPaid) return "order_not_paid";
 		if (!order.fullyPaidAtIso) return "payment_incomplete";
+		if (intent.expiresAtIso <= order.fullyPaidAtIso) return "intent_expired";
 		if (!this.customers) return "upstream_invalid";
 		const customer = await this.customers.getCustomer(
 			organizationId,

@@ -228,10 +228,10 @@ describe("Shopify order projection", () => {
 			displayName: "Piano & Strings",
 			normalizedName: "piano-strings",
 		});
-		f.orders.values.set(
-			"gid://shopify/Order/1",
-			paidOrder(f.intent.correlationId),
-		);
+		f.orders.values.set("gid://shopify/Order/1", {
+			...paidOrder(f.intent.correlationId),
+			fullyPaidAtIso: "2026-08-28T18:00:00.001Z",
+		});
 		const first = await delivery(
 			f.commerce,
 			f.organization.id,
@@ -426,10 +426,10 @@ describe("Shopify order projection", () => {
 
 	it("terminally reviews a paid order whose checkout intent expired", async () => {
 		const f = await fixture("2026-08-28T18:00:00.000Z");
-		f.orders.values.set(
-			"gid://shopify/Order/1",
-			paidOrder(f.intent.correlationId),
-		);
+		f.orders.values.set("gid://shopify/Order/1", {
+			...paidOrder(f.intent.correlationId),
+			fullyPaidAtIso: "2026-08-28T18:00:00.001Z",
+		});
 		const received = await delivery(
 			f.commerce,
 			f.organization.id,
@@ -458,8 +458,7 @@ describe("Shopify order projection", () => {
 	// Regression harness for https://github.com/pafenorthwest/Festival/issues/126.
 	// Snapshot source: the 2026-09-10 production delivery that was accepted, then
 	// failed because Shopify denied the Admin GraphQL ReadPaidOrder operation.
-	// Remove .skip only with the expiry-vs-paid-time implementation from #126.
-	it.skip("approves the captured paid-before-expiry order when reconciliation runs after intent expiry", async () => {
+	it("approves the captured paid-before-expiry order when reconciliation runs after intent expiry", async () => {
 		const paidAtIso = "2026-09-11T06:04:01.203Z";
 		const expiresAtIso = "2026-09-11T06:33:32.656Z";
 		const reconciledAt = new Date("2026-09-11T07:00:00.000Z");
@@ -473,7 +472,6 @@ describe("Shopify order projection", () => {
 			currencyCode: "USD",
 			divisionName: "Cello/Bass",
 		});
-		const correlationId = "619b61e4-6cf7-4333-a37e-f61fe9b82543";
 		f.orders.values.set(orderGid, {
 			id: orderGid,
 			customerGid: "gid://shopify/Customer/9381966446781",
@@ -481,7 +479,7 @@ describe("Shopify order projection", () => {
 			fullyPaidAtIso: paidAtIso,
 			currencyCode: "USD",
 			customAttributes: [
-				{ key: "festival_checkout_intent_id", value: correlationId },
+				{ key: "festival_checkout_intent_id", value: f.intent.correlationId },
 			],
 			lineItems: [
 				{
