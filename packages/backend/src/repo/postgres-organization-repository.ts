@@ -7,6 +7,7 @@ import type {
 	EntitlementClass,
 	EntitlementGrantSnapshot,
 	EntitlementGrantStatus,
+	FestivalClassConfiguration,
 	FestivalRecord,
 	OrganizationAdminUserEntry,
 	OrganizationDivision,
@@ -32,6 +33,7 @@ import type {
 	AccompanistDivisionPolicyHistoryRecord,
 	AccompanistDivisionPolicyRecord,
 	CreateAccompanistMembershipGrantInput,
+	CreateFestivalClassConfigurationInput,
 	CreateFestivalRecordInput,
 	CreateInviteRecordInput,
 	CreateMembershipInput,
@@ -236,6 +238,25 @@ interface RegistrationCatalogValueRow {
 	created_at: string;
 	updated_at: string;
 }
+interface FestivalClassConfigurationRow {
+	id: string;
+	organization_id: string;
+	festival_id: string;
+	display_name: string;
+	class_subtype_id: string;
+	division_id: string;
+	minimum_age: number;
+	maximum_age: number;
+	price: string;
+	maximum_performance_pieces: 1 | 2 | 3;
+	performance_minutes: number;
+	capacity: number;
+	is_active: boolean;
+	shopify_product_gid: string;
+	shopify_variant_gid: string;
+	created_at: string;
+	updated_at: string;
+}
 
 function sanitizeSchemaName(schema: string): string {
 	if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(schema)) {
@@ -270,6 +291,30 @@ function mapDivision(row: DivisionRow): OrganizationDivision {
 		displayName: row.display_name,
 		isActive: row.is_active,
 		displayOrder: row.display_order,
+		createdAtIso: row.created_at,
+		updatedAtIso: row.updated_at,
+	};
+}
+
+function mapFestivalClassConfiguration(
+	row: FestivalClassConfigurationRow,
+): FestivalClassConfiguration {
+	return {
+		id: row.id,
+		organizationId: row.organization_id,
+		festivalId: row.festival_id,
+		displayName: row.display_name,
+		classSubtypeId: row.class_subtype_id,
+		divisionId: row.division_id,
+		minimumAge: Number(row.minimum_age),
+		maximumAge: Number(row.maximum_age),
+		price: row.price,
+		maximumPerformancePieces: row.maximum_performance_pieces,
+		performanceMinutes: Number(row.performance_minutes),
+		capacity: Number(row.capacity),
+		isActive: row.is_active,
+		shopifyProductGid: row.shopify_product_gid,
+		shopifyVariantGid: row.shopify_variant_gid,
 		createdAtIso: row.created_at,
 		updatedAtIso: row.updated_at,
 	};
@@ -643,6 +688,14 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				display_order INTEGER NOT NULL CHECK (display_order >= 0),
 				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 				UNIQUE (organization_id, kind, normalized_name), UNIQUE (organization_id, kind, display_order)
+			);
+			CREATE TABLE IF NOT EXISTS ${schema}.festival_class_configurations (
+				id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES ${schema}.organizations (id) ON DELETE CASCADE,
+				festival_id TEXT NOT NULL REFERENCES ${schema}.festivals (id) ON DELETE RESTRICT,
+				display_name TEXT NOT NULL, class_subtype_id TEXT NOT NULL REFERENCES ${schema}.registration_catalog_values (id), division_id TEXT NOT NULL REFERENCES ${schema}.organization_divisions (id),
+				minimum_age INTEGER NOT NULL, maximum_age INTEGER NOT NULL, price TEXT NOT NULL, maximum_performance_pieces INTEGER NOT NULL, performance_minutes INTEGER NOT NULL, capacity INTEGER NOT NULL, is_active BOOLEAN NOT NULL DEFAULT TRUE,
+				shopify_product_gid TEXT NOT NULL UNIQUE, shopify_variant_gid TEXT NOT NULL UNIQUE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				CHECK (minimum_age >= 0 AND maximum_age >= minimum_age AND maximum_performance_pieces IN (1, 2, 3) AND performance_minutes > 0 AND capacity > 0)
 			);
 
 			ALTER TABLE ${schema}.products
@@ -2395,6 +2448,47 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			),
 		);
 		return this.listRegistrationCatalogValues(organizationId, kind);
+	}
+
+	async createFestivalClassConfiguration(
+		input: CreateFestivalClassConfigurationInput,
+	): Promise<FestivalClassConfiguration> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`INSERT INTO ${this.schema}.festival_class_configurations (id, organization_id, festival_id, display_name, class_subtype_id, division_id, minimum_age, maximum_age, price, maximum_performance_pieces, performance_minutes, capacity, shopify_product_gid, shopify_variant_gid) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id, organization_id, festival_id, display_name, class_subtype_id, division_id, minimum_age, maximum_age, price, maximum_performance_pieces, performance_minutes, capacity, is_active, shopify_product_gid, shopify_variant_gid, created_at, updated_at`,
+			[
+				randomUUID(),
+				input.organizationId,
+				input.festivalId,
+				input.displayName,
+				input.classSubtypeId,
+				input.divisionId,
+				input.minimumAge,
+				input.maximumAge,
+				input.price,
+				input.maximumPerformancePieces,
+				input.performanceMinutes,
+				input.capacity,
+				input.shopifyProductGid,
+				input.shopifyVariantGid,
+			],
+		)) as FestivalClassConfigurationRow[];
+		const row = rows[0];
+		if (!row) throw new Error("Unable to create Festival class.");
+		return mapFestivalClassConfiguration(row);
+	}
+
+	async listFestivalClassConfigurations(
+		organizationId: string,
+		festivalId: string,
+		activeOnly = false,
+	): Promise<FestivalClassConfiguration[]> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT id, organization_id, festival_id, display_name, class_subtype_id, division_id, minimum_age, maximum_age, price, maximum_performance_pieces, performance_minutes, capacity, is_active, shopify_product_gid, shopify_variant_gid, created_at, updated_at FROM ${this.schema}.festival_class_configurations WHERE organization_id = $1 AND festival_id = $2 AND ($3::boolean = FALSE OR is_active) ORDER BY created_at, id`,
+			[organizationId, festivalId, activeOnly],
+		)) as FestivalClassConfigurationRow[];
+		return rows.map(mapFestivalClassConfiguration);
 	}
 
 	async findProductRecordByShopifyProductGid(

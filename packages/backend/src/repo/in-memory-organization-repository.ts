@@ -6,6 +6,7 @@ import type {
 	CreateEntitlementGrantSnapshotInput,
 	EntitlementClass,
 	EntitlementGrantSnapshot,
+	FestivalClassConfiguration,
 	FestivalRecord,
 	OrganizationAdminUserEntry,
 	OrganizationDivision,
@@ -26,6 +27,7 @@ import type {
 	AccompanistDivisionPolicyHistoryRecord,
 	AccompanistDivisionPolicyRecord,
 	CreateAccompanistMembershipGrantInput,
+	CreateFestivalClassConfigurationInput,
 	CreateFestivalRecordInput,
 	CreateInviteRecordInput,
 	CreateMembershipInput,
@@ -90,6 +92,10 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			kind: RegistrationCatalogKind;
 			normalizedName: string;
 		}
+	>();
+	private readonly festivalClassConfigurations = new Map<
+		string,
+		FestivalClassConfiguration
 	>();
 
 	async ensureReady(): Promise<void> {}
@@ -1134,6 +1140,41 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			});
 		});
 		return this.listRegistrationCatalogValues(organizationId, kind);
+	}
+
+	async createFestivalClassConfiguration(
+		input: CreateFestivalClassConfigurationInput,
+	): Promise<FestivalClassConfiguration> {
+		if (
+			!this.organizations.has(input.organizationId) ||
+			!this.festivals.has(input.festivalId)
+		)
+			throw new Error("Festival was not found.");
+		const now = new Date().toISOString();
+		const record: FestivalClassConfiguration = {
+			id: randomUUID(),
+			...input,
+			isActive: true,
+			createdAtIso: now,
+			updatedAtIso: now,
+		};
+		this.festivalClassConfigurations.set(record.id, record);
+		return { ...record };
+	}
+
+	async listFestivalClassConfigurations(
+		organizationId: string,
+		festivalId: string,
+		activeOnly = false,
+	): Promise<FestivalClassConfiguration[]> {
+		return [...this.festivalClassConfigurations.values()]
+			.filter(
+				(record) =>
+					record.organizationId === organizationId &&
+					record.festivalId === festivalId &&
+					(!activeOnly || record.isActive),
+			)
+			.map((record) => ({ ...record }));
 	}
 
 	async findProductRecordByShopifyProductGid(

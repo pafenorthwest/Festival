@@ -5,6 +5,7 @@ import type {
 	CreateEntitlementGrantSnapshotInput,
 	EntitlementClass,
 	EntitlementGrantSnapshot,
+	FestivalClassConfiguration,
 	FestivalRecord,
 	OrganizationAdminUserEntry,
 	OrganizationDivision,
@@ -175,6 +176,12 @@ export interface AccompanistDivisionPolicyHistoryRecord
 }
 
 export type RegistrationCatalogKind = "class_subtype" | "instrument";
+
+export interface CreateFestivalClassConfigurationInput
+	extends Omit<
+		FestivalClassConfiguration,
+		"id" | "createdAtIso" | "updatedAtIso" | "isActive"
+	> {}
 
 export interface CreateAccompanistMembershipGrantInput
 	extends Omit<
@@ -350,6 +357,14 @@ export interface OrganizationRepository {
 		kind: RegistrationCatalogKind,
 		ids: string[],
 	): Promise<RegistrationCatalogValue[]>;
+	createFestivalClassConfiguration(
+		input: CreateFestivalClassConfigurationInput,
+	): Promise<FestivalClassConfiguration>;
+	listFestivalClassConfigurations(
+		organizationId: string,
+		festivalId: string,
+		activeOnly?: boolean,
+	): Promise<FestivalClassConfiguration[]>;
 	findProductRecordByShopifyProductGid(
 		shopifyProductGid: string,
 	): Promise<ProductRecord | null>;

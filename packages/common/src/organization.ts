@@ -66,6 +66,26 @@ export interface RegistrationAgeConfiguration {
 	updatedAtIso: string;
 }
 
+export interface FestivalClassConfiguration {
+	id: string;
+	organizationId: string;
+	festivalId: string;
+	displayName: string;
+	classSubtypeId: string;
+	divisionId: string;
+	minimumAge: number;
+	maximumAge: number;
+	price: string;
+	maximumPerformancePieces: 1 | 2 | 3;
+	performanceMinutes: number;
+	capacity: number;
+	isActive: boolean;
+	shopifyProductGid: string;
+	shopifyVariantGid: string;
+	createdAtIso: string;
+	updatedAtIso: string;
+}
+
 export function validateRegistrationAgeDate(value: unknown): string {
 	if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
 		throw new Error("Registration age date must use YYYY-MM-DD.");
