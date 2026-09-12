@@ -1,9 +1,9 @@
 import { For, Show } from "solid-js";
-import { setPrimaryFestival } from "../lib/api.js";
 import { formatDateOnly } from "../app/appFormatting.js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { AccessDeniedPanel } from "../components/AccessDeniedPanel.js";
 import { Button } from "../components/Button.js";
+import { setPrimaryFestival } from "../lib/api.js";
 
 interface AdminFestivalsPageProps {
 	app: FestivalAppController;
