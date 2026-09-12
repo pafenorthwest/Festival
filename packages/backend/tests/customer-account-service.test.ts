@@ -227,6 +227,7 @@ async function fixture(repository = new InMemoryCustomerAccountRepository()) {
 	return {
 		service,
 		repository,
+		organizations,
 		org,
 		other,
 		keyring,
@@ -258,6 +259,40 @@ async function fixture(repository = new InMemoryCustomerAccountRepository()) {
 }
 
 describe("CustomerAccountService", () => {
+	it("creates and refreshes age snapshots without retaining birthdays", async () => {
+		const f = await fixture();
+		await f.organizations.updateRegistrationAgeConfiguration({
+			organizationId: f.org.id,
+			registrationAgeDate: "2026-06-01",
+		});
+		const auth = await f.authenticate();
+		const session = await f.repository.getSession(auth.sessionId);
+		if (!session) throw new Error("session");
+		const created = await f.service.createChild(
+			"festival",
+			auth.sessionId,
+			session.csrfToken,
+			"https://festival.example.com",
+			{ displayName: "Alex", birthday: "2016-06-01" },
+		);
+		expect(created.ageSnapshot.age).toBe(10);
+		expect(JSON.stringify(created)).not.toContain("2016-06-01");
+		const refreshed = await f.service.refreshChildAgeSnapshot(
+			"festival",
+			auth.sessionId,
+			session.csrfToken,
+			"https://festival.example.com",
+			created.child.id,
+			{ birthday: "2015-06-02" },
+		);
+		expect(refreshed.ageSnapshot.age).toBe(10);
+		const snapshots = await f.repository.listChildAgeSnapshots(
+			f.org.id,
+			created.child.id,
+		);
+		expect(snapshots).toHaveLength(2);
+		expect(snapshots[0]?.supersededAtIso).toBeDefined();
+	});
 	it("keeps configuration separate, validates discovery, and never returns the secret", async () => {
 		const f = await fixture();
 		const stored = await f.repository.getIntegration(f.org.id);
