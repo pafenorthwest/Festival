@@ -6,10 +6,14 @@ import {
 	calendarDateInTimezone,
 	deriveEntitlementDates,
 	INITIAL_TEACHER_MEMBERSHIP_DURATION_DAYS,
+	isEntitlementClass,
 	MAX_ENTITLEMENT_DURATION_DAYS,
 } from "../src/entitlements.js";
 
 describe("Teacher Membership entitlement contracts", () => {
+	it("allows the bounded accompanist entitlement class without changing grant rules", () => {
+		expect(isEntitlementClass("accompanist_membership")).toBe(true);
+	});
 	it("accepts bounded positive integer durations", () => {
 		expect(
 			assertValidEntitlementDurationDays(

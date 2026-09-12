@@ -497,7 +497,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				CONSTRAINT products_product_category_check
 					CHECK (product_category IN ('membership')),
 				CONSTRAINT products_entitlement_class_check
-					CHECK (entitlement_class = 'teacher_membership'),
+					CHECK (entitlement_class IN ('teacher_membership', 'accompanist_membership')),
 				CONSTRAINT products_duration_days_check
 					CHECK (duration_days > 0 AND duration_days <= 36500)
 			);
@@ -538,9 +538,16 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 
 			ALTER TABLE ${schema}.products
 				ADD CONSTRAINT products_entitlement_class_check
-					CHECK (entitlement_class = 'teacher_membership'),
+					CHECK (entitlement_class IN ('teacher_membership', 'accompanist_membership')),
 				ADD CONSTRAINT products_duration_days_check
 					CHECK (duration_days > 0 AND duration_days <= 36500);
+
+			ALTER TABLE ${schema}.entitlement_grants
+				DROP CONSTRAINT IF EXISTS entitlement_grants_class_check;
+
+			ALTER TABLE ${schema}.entitlement_grants
+				ADD CONSTRAINT entitlement_grants_class_check
+					CHECK (entitlement_class IN ('teacher_membership', 'accompanist_membership'));
 
 			CREATE TABLE IF NOT EXISTS ${schema}.entitlement_grants (
 				id TEXT PRIMARY KEY,
@@ -561,7 +568,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				status TEXT NOT NULL,
 				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 				CONSTRAINT entitlement_grants_class_check
-					CHECK (entitlement_class = 'teacher_membership'),
+					CHECK (entitlement_class IN ('teacher_membership', 'accompanist_membership')),
 				CONSTRAINT entitlement_grants_duration_check
 					CHECK (duration_days > 0 AND duration_days <= 36500),
 				CONSTRAINT entitlement_grants_currency_check

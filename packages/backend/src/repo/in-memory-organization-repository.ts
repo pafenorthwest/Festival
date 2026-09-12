@@ -16,7 +16,7 @@ import {
 	assertValidEntitlementDurationDays,
 	assertValidEntitlementGrantSnapshotInput,
 	EMPTY_SHOPIFY_CAPABILITIES,
-	TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+	isEntitlementClass,
 } from "@festival/common";
 import type {
 	CreateFestivalRecordInput,
@@ -700,8 +700,8 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		if (!this.organizations.has(input.organizationId)) {
 			throw new Error("Organization not found.");
 		}
-		if (input.entitlementClass !== TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS) {
-			throw new Error("Entitlement class must be teacher_membership.");
+		if (!isEntitlementClass(input.entitlementClass)) {
+			throw new Error("Entitlement class is invalid.");
 		}
 		if (
 			[...this.products.values()].some(

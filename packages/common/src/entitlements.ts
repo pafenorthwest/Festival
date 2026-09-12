@@ -2,7 +2,13 @@ import { isValidIanaTimezone } from "./organization.js";
 
 export const TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS =
 	"teacher_membership" as const;
-export type EntitlementClass = typeof TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS;
+export const ACCOMPANIST_MEMBERSHIP_ENTITLEMENT_CLASS =
+	"accompanist_membership" as const;
+export const ENTITLEMENT_CLASSES = [
+	TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+	ACCOMPANIST_MEMBERSHIP_ENTITLEMENT_CLASS,
+] as const;
+export type EntitlementClass = (typeof ENTITLEMENT_CLASSES)[number];
 
 export const INITIAL_TEACHER_MEMBERSHIP_DURATION_DAYS = 365;
 export const MAX_ENTITLEMENT_DURATION_DAYS = 36_500;
@@ -54,7 +60,7 @@ export type CreateEntitlementGrantSnapshotInput = Omit<
 >;
 
 export function isEntitlementClass(value: unknown): value is EntitlementClass {
-	return value === TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS;
+	return ENTITLEMENT_CLASSES.includes(value as EntitlementClass);
 }
 
 export function isEntitlementGrantStatus(
@@ -101,7 +107,7 @@ export function assertValidEntitlementGrantSnapshotInput(
 	input: CreateEntitlementGrantSnapshotInput,
 ): void {
 	if (!isEntitlementClass(input.entitlementClass)) {
-		throw new Error("Entitlement class must be teacher_membership.");
+		throw new Error("Entitlement class is invalid.");
 	}
 	assertValidEntitlementDurationDays(input.durationDays);
 	for (const [label, value] of [
