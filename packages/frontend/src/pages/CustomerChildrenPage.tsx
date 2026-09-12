@@ -1,10 +1,10 @@
-import { For, createSignal } from "solid-js";
+import { createSignal, For } from "solid-js";
 import { Button } from "../components/Button.js";
 import {
-	createCustomerChild,
-	refreshCustomerChildAgeSnapshot,
-	getCustomerChildren,
 	type CustomerChildDto,
+	createCustomerChild,
+	getCustomerChildren,
+	refreshCustomerChildAgeSnapshot,
 } from "../lib/api.js";
 import { CustomerAccountPageLayout } from "./CustomerAccountPageLayout.js";
 

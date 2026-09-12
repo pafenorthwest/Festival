@@ -15,9 +15,9 @@ import { AdminMembershipProductsPage } from "./pages/AdminMembershipProductsPage
 import { AdminUsersPage } from "./pages/AdminUsersPage.js";
 import { CreateOrganizationPage } from "./pages/CreateOrganizationPage.js";
 import { CustomerAccountContactPage } from "./pages/CustomerAccountContactPage.js";
-import { CustomerChildrenPage } from "./pages/CustomerChildrenPage.js";
 import { CustomerAccountMembershipsPage } from "./pages/CustomerAccountMembershipsPage.js";
 import { CustomerAccountOrdersPage } from "./pages/CustomerAccountOrdersPage.js";
+import { CustomerChildrenPage } from "./pages/CustomerChildrenPage.js";
 import { HomePage } from "./pages/HomePage.js";
 import { InviteLandingPage } from "./pages/InviteLandingPage.js";
 import { LegacyCustomerAccountRedirect } from "./pages/LegacyCustomerAccountRedirect.js";

@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { CustomerMailingAddress } from "@festival/common";
-import { sql } from "bun";
 import type {
+	CustomerMailingAddress,
 	FestivalChildAgeSnapshot,
 	FestivalChildRecord,
 } from "@festival/common";
+import { sql } from "bun";
 import type {
 	ApplyCustomerProfileInput,
 	CustomerAccountIntegrationRecord,
