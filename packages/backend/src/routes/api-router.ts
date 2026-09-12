@@ -1105,6 +1105,28 @@ export function buildApiRouter(
 			return toJsonError(c, error);
 		}
 	});
+	router.post(
+		"/organizations/:slug/customer/children/:childId/age-snapshot",
+		async (c) => {
+			try {
+				assertNoBearerPrincipal(c.req.header("Authorization"));
+				if (!customerAccountService)
+					throw new AppError("Customer Account is unavailable.", 503);
+				return c.json(
+					await customerAccountService.refreshChildAgeSnapshot(
+						c.req.param("slug"),
+						getCookie(c, CUSTOMER_SESSION_COOKIE),
+						c.req.header("X-CSRF-Token"),
+						c.req.header("Origin"),
+						c.req.param("childId"),
+						await c.req.json(),
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
 
 	router.post(
 		"/organizations/:slug/customer/accompanist-membership",

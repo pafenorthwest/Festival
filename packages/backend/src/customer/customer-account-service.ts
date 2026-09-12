@@ -1043,6 +1043,58 @@ export class CustomerAccountService {
 		});
 		return { child, ageSnapshot };
 	}
+	async refreshChildAgeSnapshot(
+		slug: string,
+		sessionId: string | undefined,
+		csrf: string | undefined,
+		origin: string | undefined,
+		childId: string,
+		input: unknown,
+	) {
+		const access = await this.formAccess(slug, sessionId, csrf, origin);
+		const child = (
+			await this.repository.listChildren(
+				access.organizationId,
+				access.customerId,
+			)
+		).find((item) => item.id === childId);
+		if (!child) throw new AppError("Child not found.", 404);
+		const birthday = (input as { birthday?: unknown })?.birthday;
+		if (typeof birthday !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(birthday))
+			throw new AppError("Birthday must use YYYY-MM-DD.", 400);
+		const config = await this.organizations.getRegistrationAgeConfiguration(
+			access.organizationId,
+		);
+		if (!config)
+			throw new AppError(
+				"Registration age date must be configured before refreshing an age snapshot.",
+				409,
+			);
+		const birth = new Date(`${birthday}T00:00:00.000Z`);
+		const reference = new Date(`${config.registrationAgeDate}T00:00:00.000Z`);
+		if (Number.isNaN(birth.getTime()) || birth > reference)
+			throw new AppError(
+				"Birthday is invalid for the registration age date.",
+				400,
+			);
+		let age = reference.getUTCFullYear() - birth.getUTCFullYear();
+		if (
+			reference.getUTCMonth() < birth.getUTCMonth() ||
+			(reference.getUTCMonth() === birth.getUTCMonth() &&
+				reference.getUTCDate() < birth.getUTCDate())
+		)
+			age -= 1;
+		const validUntil = new Date(this.now());
+		validUntil.setUTCDate(validUntil.getUTCDate() + 90);
+		return {
+			ageSnapshot: await this.repository.createChildAgeSnapshot({
+				organizationId: access.organizationId,
+				childId,
+				age,
+				validUntilIso: validUntil.toISOString(),
+			}),
+		};
+	}
 	async customerProfile(
 		slug: string,
 		sessionId: string | undefined,
