@@ -143,6 +143,7 @@ function shopifyProduct(
 				price: { amount: "75.00", currencyCode: "USD" },
 				productId: id,
 				selectedOptions: [{ name: "Plan", value: "Standard" }],
+				requiresShipping: false,
 			},
 		],
 		...overrides,
