@@ -81,6 +81,8 @@ interface FestivalRow {
 	id: string;
 	organization_id: string;
 	code: string;
+	short_name: string;
+	is_primary: boolean;
 	name: string;
 	start_date: string;
 	end_date: string;
@@ -350,6 +352,8 @@ function mapFestival(row: FestivalRow): FestivalRecord {
 		id: row.id,
 		organizationId: row.organization_id,
 		code: row.code,
+		shortName: row.short_name,
+		isPrimary: row.is_primary,
 		name: row.name,
 		startDate: row.start_date,
 		endDate: row.end_date,
@@ -529,11 +533,18 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				id TEXT PRIMARY KEY,
 				organization_id TEXT NOT NULL REFERENCES ${schema}.organizations (id) ON DELETE CASCADE,
 				code TEXT NOT NULL,
+				short_name TEXT NOT NULL DEFAULT 'jan-00',
+				is_primary BOOLEAN NOT NULL DEFAULT FALSE,
 				name TEXT NOT NULL,
 				start_date DATE NOT NULL,
 				end_date DATE NOT NULL,
 				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 			);
+
+			ALTER TABLE ${schema}.festivals ADD COLUMN IF NOT EXISTS short_name TEXT;
+			ALTER TABLE ${schema}.festivals ADD COLUMN IF NOT EXISTS is_primary BOOLEAN NOT NULL DEFAULT FALSE;
+			UPDATE ${schema}.festivals SET short_name = 'jan-00' WHERE short_name IS NULL;
+			ALTER TABLE ${schema}.festivals ALTER COLUMN short_name SET NOT NULL;
 
 			CREATE TABLE IF NOT EXISTS ${schema}.shopify_integrations (
 				organization_id TEXT PRIMARY KEY REFERENCES ${schema}.organizations (id) ON DELETE CASCADE,
@@ -853,6 +864,12 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 
 			CREATE UNIQUE INDEX IF NOT EXISTS idx_festivals_org_code
 				ON ${schema}.festivals (organization_id, code);
+
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_festivals_org_short_name
+				ON ${schema}.festivals (organization_id, short_name);
+
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_festivals_one_primary
+				ON ${schema}.festivals (organization_id) WHERE is_primary;
 
 			CREATE UNIQUE INDEX IF NOT EXISTS idx_festivals_org_name_lower
 				ON ${schema}.festivals (organization_id, LOWER(name));
@@ -1300,7 +1317,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				email,
 				role,
 				invited_by_user_id
-			) VALUES ($1, $2, $3, $4, $5, $6)
+			) VALUES ($1, $2, $3, $4, NOT EXISTS (SELECT 1 FROM ${this.schema}.festivals WHERE organization_id = $2), $5, $6, $7)
 			RETURNING
 				id,
 				token,
@@ -1498,6 +1515,8 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				id,
 				organization_id,
 				code,
+				short_name,
+				is_primary,
 				name,
 				start_date::text AS start_date,
 				end_date::text AS end_date,
@@ -1521,6 +1540,8 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				id,
 				organization_id,
 				code,
+				short_name,
+				is_primary,
 				name,
 				start_date,
 				end_date
@@ -1529,6 +1550,8 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				id,
 				organization_id,
 				code,
+				short_name,
+				is_primary,
 				name,
 				start_date::text AS start_date,
 				end_date::text AS end_date,
@@ -1537,6 +1560,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				input.id,
 				input.organizationId,
 				input.code,
+				input.shortName,
 				input.name,
 				input.startDate,
 				input.endDate,
@@ -1569,6 +1593,42 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		)) as FestivalRow[];
 
 		return rows[0] ? mapFestival(rows[0]) : null;
+	}
+
+	async findFestivalByShortName(
+		organizationId: string,
+		shortName: string,
+	): Promise<FestivalRecord | null> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT id, organization_id, code, short_name, is_primary, name, start_date::text AS start_date, end_date::text AS end_date, created_at FROM ${this.schema}.festivals WHERE organization_id = $1 AND short_name = $2 LIMIT 1`,
+			[organizationId, shortName],
+		)) as FestivalRow[];
+		return rows[0] ? mapFestival(rows[0]) : null;
+	}
+
+	async setPrimaryFestival(
+		organizationId: string,
+		festivalId: string,
+	): Promise<FestivalRecord> {
+		await this.ensureReady();
+		await sql.begin(async (transaction) => {
+			await transaction.unsafe(
+				`UPDATE ${this.schema}.festivals SET is_primary = FALSE WHERE organization_id = $1`,
+				[organizationId],
+			);
+			const rows = (await transaction.unsafe(
+				`UPDATE ${this.schema}.festivals SET is_primary = TRUE WHERE organization_id = $1 AND id = $2 RETURNING id`,
+				[organizationId, festivalId],
+			)) as { id: string }[];
+			if (!rows[0]) throw new Error("Festival not found.");
+		});
+		const rows = (await sql.unsafe(
+			`SELECT id, organization_id, code, short_name, is_primary, name, start_date::text AS start_date, end_date::text AS end_date, created_at FROM ${this.schema}.festivals WHERE organization_id = $1 AND id = $2`,
+			[organizationId, festivalId],
+		)) as FestivalRow[];
+		if (!rows[0]) throw new Error("Festival not found.");
+		return mapFestival(rows[0]);
 	}
 
 	async dismissWelcome(

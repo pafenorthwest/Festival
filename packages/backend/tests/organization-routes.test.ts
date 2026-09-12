@@ -1100,6 +1100,7 @@ describe("organization routes", () => {
 					method: "POST",
 					body: JSON.stringify({
 						name: "Spring Festival (West)",
+						shortName: "jun-27",
 						startDate: "2027-06-10",
 						endDate: "2027-06-12",
 					}),
@@ -1120,6 +1121,7 @@ describe("organization routes", () => {
 					method: "POST",
 					body: JSON.stringify({
 						name: "spring festival (west)",
+						shortName: "jun-27",
 						startDate: "2027-06-10",
 						endDate: "2027-06-12",
 					}),
@@ -1135,6 +1137,7 @@ describe("organization routes", () => {
 					method: "POST",
 					body: JSON.stringify({
 						name: "Summer Festival",
+						shortName: "jun-27",
 						startDate: "2027-06-12",
 						endDate: "2027-06-10",
 					}),
@@ -1150,6 +1153,7 @@ describe("organization routes", () => {
 					method: "POST",
 					body: JSON.stringify({
 						name: "Past Festival",
+						shortName: "jun-27",
 						startDate: "2020-06-10",
 						endDate: "2020-06-12",
 					}),
@@ -1196,6 +1200,7 @@ describe("organization routes", () => {
 					method: "POST",
 					body: JSON.stringify({
 						name: "Spring Festival",
+						shortName: "jun-27",
 						startDate: "2027-06-10",
 						endDate: "2027-06-12",
 					}),

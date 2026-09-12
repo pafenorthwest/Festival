@@ -172,6 +172,16 @@ export const CURRENT_ROUTE_SECURITY = [
 		authenticationClass: "admin",
 	},
 	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/festivals/:festivalShortName/primary",
+		authenticationClass: "admin",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/primary",
+		authenticationClass: "public",
+	},
+	{
 		method: "GET",
 		path: "/api/organizations/:slug/divisions",
 		authenticationClass: "public",

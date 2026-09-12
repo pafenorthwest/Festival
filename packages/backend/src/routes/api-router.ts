@@ -380,6 +380,35 @@ export function buildApiRouter(
 		},
 	);
 
+	router.post(
+		"/organizations/:slug/admin/festivals/:festivalShortName/primary",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				return c.json(
+					await organizationService.setPrimaryFestivalForTenant(
+						getRequiredTenant(c),
+						c.req.param("festivalShortName"),
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.get("/organizations/:slug/primary", async (c) => {
+		try {
+			return c.json(
+				await organizationService.getPrimaryFestivalPath(c.req.param("slug")),
+			);
+		} catch (error) {
+			return toJsonError(c, error);
+		}
+	});
+
 	router.get("/organizations/:slug/divisions", async (c) => {
 		try {
 			return c.json(

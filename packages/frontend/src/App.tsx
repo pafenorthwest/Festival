@@ -66,6 +66,28 @@ export default function App() {
 						<Match when={app.route().kind === "org-root"}>
 							<OrganizationRootPage app={app} />
 						</Match>
+						<Match when={app.route().kind === "festival-public"}>
+							<section class="panel">
+								<h2>Festival</h2>
+								<p>Festival registration will be available here.</p>
+							</section>
+						</Match>
+						<Match when={app.route().kind === "festival-admin"}>
+							<section class="panel">
+								<h2>Festival dashboard</h2>
+								<p>
+									<a
+										href={`/org/${(app.route() as { slug: string }).slug}/admin/festivals`}
+									>
+										Festival management
+									</a>
+								</p>
+								<p>
+									Classes management is available after the catalog is
+									configured.
+								</p>
+							</section>
+						</Match>
 						<Match when={app.route().kind === "org-membership"}>
 							<MembershipPage app={app} />
 						</Match>

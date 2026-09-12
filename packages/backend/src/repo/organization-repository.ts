@@ -49,6 +49,7 @@ export interface CreateFestivalRecordInput {
 	id: string;
 	organizationId: string;
 	code: string;
+	shortName: string;
 	name: string;
 	startDate: string;
 	endDate: string;
@@ -257,6 +258,14 @@ export interface OrganizationRepository {
 		organizationId: string,
 		name: string,
 	): Promise<FestivalRecord | null>;
+	findFestivalByShortName(
+		organizationId: string,
+		shortName: string,
+	): Promise<FestivalRecord | null>;
+	setPrimaryFestival(
+		organizationId: string,
+		festivalId: string,
+	): Promise<FestivalRecord>;
 	dismissWelcome(
 		userId: string,
 		organizationId: string,

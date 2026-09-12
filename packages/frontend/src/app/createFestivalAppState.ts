@@ -114,6 +114,7 @@ export function createFestivalAppState() {
 	const [inviteFeedback, setInviteFeedback] =
 		createSignal<InviteFeedback | null>(null);
 	const [festivalDraft, setFestivalDraft] = createSignal<FestivalDraft>({
+		shortName: "",
 		name: "",
 		startDate: "",
 		endDate: "",

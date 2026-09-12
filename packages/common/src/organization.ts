@@ -212,6 +212,8 @@ export interface FestivalRecord {
 	id: string;
 	organizationId: string;
 	code: string;
+	shortName: string;
+	isPrimary: boolean;
 	name: string;
 	startDate: string;
 	endDate: string;
@@ -221,6 +223,8 @@ export interface FestivalRecord {
 export interface FestivalSummary {
 	id: string;
 	code: string;
+	shortName: string;
+	isPrimary: boolean;
 	name: string;
 	startDate: string;
 	endDate: string;
@@ -280,6 +284,7 @@ export interface CreateInviteResponse {
 }
 
 export interface CreateFestivalInput {
+	shortName: string;
 	name: string;
 	startDate: string;
 	endDate: string;

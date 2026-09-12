@@ -82,6 +82,8 @@ function toFestivalSummary(record: FestivalRecord): FestivalSummary {
 	return {
 		id: record.id,
 		code: record.code,
+		shortName: record.shortName,
+		isPrimary: record.isPrimary,
 		name: record.name,
 		startDate: record.startDate,
 		endDate: record.endDate,
@@ -696,7 +698,12 @@ export class OrganizationService {
 	): Promise<CreateFestivalResponse> {
 		const nameValidation = validateFestivalName(input.name);
 		const dateValidation = validateFestivalDates(input);
-		const errors = [...nameValidation.errors, ...dateValidation.errors];
+		const shortNameValidation = validateOrganizationShortName(input.shortName);
+		const errors = [
+			...nameValidation.errors,
+			...dateValidation.errors,
+			...shortNameValidation.errors,
+		];
 		if (errors.length > 0) {
 			throw new AppError(errors.join(" "), 400);
 		}
@@ -708,12 +715,21 @@ export class OrganizationService {
 		if (existingFestival) {
 			throw new AppError("Festival name is already registered.", 409);
 		}
+		if (
+			await this.repository.findFestivalByShortName(
+				tenant.organization.id,
+				shortNameValidation.normalized,
+			)
+		) {
+			throw new AppError("Festival short name is already registered.", 409);
+		}
 
 		const id = randomUUID();
 		const festival = await this.repository.createFestival({
 			id,
 			organizationId: tenant.organization.id,
 			code: deriveFestivalCode(id),
+			shortName: shortNameValidation.normalized,
 			name: nameValidation.normalized,
 			startDate: dateValidation.startDate,
 			endDate: dateValidation.endDate,
@@ -721,6 +737,41 @@ export class OrganizationService {
 
 		return {
 			festival: toFestivalSummary(festival),
+		};
+	}
+
+	async getPrimaryFestivalPath(
+		slug: string,
+	): Promise<{ status: 301 | 404; path: string }> {
+		const organization = await this.repository.findOrganizationBySlug(slug);
+		if (!organization) throw new AppError("Organization not found.", 404);
+		const primary = (await this.repository.listFestivals(organization.id)).find(
+			(festival) => festival.isPrimary,
+		);
+		return primary
+			? {
+					status: 301,
+					path: `/org/${organization.slug}/festival/${primary.shortName}`,
+				}
+			: { status: 404, path: "" };
+	}
+
+	async setPrimaryFestivalForTenant(
+		tenant: TenantContext,
+		shortName: string,
+	): Promise<CreateFestivalResponse> {
+		const festival = await this.repository.findFestivalByShortName(
+			tenant.organization.id,
+			shortName,
+		);
+		if (!festival) throw new AppError("Festival not found.", 404);
+		return {
+			festival: toFestivalSummary(
+				await this.repository.setPrimaryFestival(
+					tenant.organization.id,
+					festival.id,
+				),
+			),
 		};
 	}
 

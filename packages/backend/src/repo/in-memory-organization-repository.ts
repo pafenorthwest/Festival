@@ -534,7 +534,8 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 				(festival) =>
 					festival.organizationId === input.organizationId &&
 					(festival.name.toLowerCase() === input.name.toLowerCase() ||
-						festival.code === input.code),
+						festival.code === input.code ||
+						festival.shortName === input.shortName),
 			)
 		) {
 			throw new Error("Festival already exists for this organization.");
@@ -544,6 +545,11 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			id: input.id,
 			organizationId: input.organizationId,
 			code: input.code,
+			shortName: input.shortName,
+			isPrimary: ![...this.festivals.values()].some(
+				(item) =>
+					item.organizationId === input.organizationId && item.isPrimary,
+			),
 			name: input.name,
 			startDate: input.startDate,
 			endDate: input.endDate,
@@ -565,6 +571,36 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 					festival.name.toLowerCase() === name.toLowerCase(),
 			) ?? null
 		);
+	}
+
+	async findFestivalByShortName(
+		organizationId: string,
+		shortName: string,
+	): Promise<FestivalRecord | null> {
+		return (
+			[...this.festivals.values()].find(
+				(festival) =>
+					festival.organizationId === organizationId &&
+					festival.shortName === shortName,
+			) ?? null
+		);
+	}
+
+	async setPrimaryFestival(
+		organizationId: string,
+		festivalId: string,
+	): Promise<FestivalRecord> {
+		const selected = this.festivals.get(festivalId);
+		if (!selected || selected.organizationId !== organizationId)
+			throw new Error("Festival not found.");
+		for (const festival of this.festivals.values()) {
+			if (festival.organizationId === organizationId)
+				this.festivals.set(festival.id, {
+					...festival,
+					isPrimary: festival.id === festivalId,
+				});
+		}
+		return { ...selected, isPrimary: true };
 	}
 
 	async dismissWelcome(

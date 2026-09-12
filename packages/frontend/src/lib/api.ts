@@ -261,6 +261,12 @@ export function getPublicOrganizationLanding(slug: string) {
 	);
 }
 
+export function getPrimaryFestivalPath(slug: string) {
+	return requestJson<{ status: 301 | 404; path: string }>(
+		`/api/organizations/${encodeURIComponent(slug)}/primary`,
+	);
+}
+
 export function customerLandingSignInPath(slug: string) {
 	const returnTo = `/org/${encodeURIComponent(slug)}`;
 	return `/api/organizations/${encodeURIComponent(slug)}/customer-auth/start?returnTo=${encodeURIComponent(returnTo)}`;

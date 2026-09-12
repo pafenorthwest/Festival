@@ -28,12 +28,30 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 						{(festival) => (
 							<div class="festival-row">
 								<strong>{festival.name}</strong>
+								<span>
+									{festival.shortName}
+									{festival.isPrimary ? " (Primary)" : ""}
+								</span>
 								<span>{formatDateOnly(festival.startDate)}</span>
 								<span>{formatDateOnly(festival.endDate)}</span>
 							</div>
 						)}
 					</For>
 				</div>
+				<label class="field">
+					<span>Festival short name</span>
+					<input
+						type="text"
+						maxLength={64}
+						value={props.app.festivalDraft().shortName}
+						onInput={(event) =>
+							props.app.setFestivalDraft((current) => ({
+								...current,
+								shortName: event.currentTarget.value.toLowerCase(),
+							}))
+						}
+					/>
+				</label>
 				<label class="field">
 					<span>Festival name</span>
 					<input
