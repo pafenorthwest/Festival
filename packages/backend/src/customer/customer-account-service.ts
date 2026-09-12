@@ -970,6 +970,79 @@ export class CustomerAccountService {
 		if (!touched) throw new AppError("Customer session is invalid.", 401);
 		return { organizationId: org.id, customerId: valid.customer.id };
 	}
+	async listChildren(slug: string, sessionId: string | undefined) {
+		const access = await this.customerReadAccess(slug, sessionId);
+		const children = await this.repository.listChildren(
+			access.organizationId,
+			access.customerId,
+		);
+		return {
+			children: await Promise.all(
+				children.map(async (child) => ({
+					...child,
+					ageSnapshots: await this.repository.listChildAgeSnapshots(
+						access.organizationId,
+						child.id,
+					),
+				})),
+			),
+		};
+	}
+	async createChild(
+		slug: string,
+		sessionId: string | undefined,
+		csrf: string | undefined,
+		origin: string | undefined,
+		input: unknown,
+	) {
+		const access = await this.formAccess(slug, sessionId, csrf, origin);
+		if (!input || typeof input !== "object")
+			throw new AppError("Child input is invalid.", 400);
+		const { displayName, birthday } = input as {
+			displayName?: unknown;
+			birthday?: unknown;
+		};
+		if (typeof displayName !== "string" || !displayName.trim())
+			throw new AppError("Child display name is required.", 400);
+		if (typeof birthday !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(birthday))
+			throw new AppError("Birthday must use YYYY-MM-DD.", 400);
+		const config = await this.organizations.getRegistrationAgeConfiguration(
+			access.organizationId,
+		);
+		if (!config)
+			throw new AppError(
+				"Registration age date must be configured before creating a child.",
+				409,
+			);
+		const birth = new Date(`${birthday}T00:00:00.000Z`);
+		const reference = new Date(`${config.registrationAgeDate}T00:00:00.000Z`);
+		if (Number.isNaN(birth.getTime()) || birth > reference)
+			throw new AppError(
+				"Birthday is invalid for the registration age date.",
+				400,
+			);
+		let age = reference.getUTCFullYear() - birth.getUTCFullYear();
+		if (
+			reference.getUTCMonth() < birth.getUTCMonth() ||
+			(reference.getUTCMonth() === birth.getUTCMonth() &&
+				reference.getUTCDate() < birth.getUTCDate())
+		)
+			age -= 1;
+		const child = await this.repository.createChild({
+			organizationId: access.organizationId,
+			parentCustomerId: access.customerId,
+			displayName: displayName.trim(),
+		});
+		const validUntil = new Date(this.now());
+		validUntil.setUTCDate(validUntil.getUTCDate() + 90);
+		const ageSnapshot = await this.repository.createChildAgeSnapshot({
+			organizationId: access.organizationId,
+			childId: child.id,
+			age,
+			validUntilIso: validUntil.toISOString(),
+		});
+		return { child, ageSnapshot };
+	}
 	async customerProfile(
 		slug: string,
 		sessionId: string | undefined,

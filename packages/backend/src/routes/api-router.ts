@@ -1071,6 +1071,41 @@ export function buildApiRouter(
 		}
 	});
 
+	router.get("/organizations/:slug/customer/children", async (c) => {
+		try {
+			assertNoBearerPrincipal(c.req.header("Authorization"));
+			if (!customerAccountService)
+				throw new AppError("Customer Account is unavailable.", 503);
+			return c.json(
+				await customerAccountService.listChildren(
+					c.req.param("slug"),
+					getCookie(c, CUSTOMER_SESSION_COOKIE),
+				),
+			);
+		} catch (error) {
+			return toJsonError(c, error);
+		}
+	});
+	router.post("/organizations/:slug/customer/children", async (c) => {
+		try {
+			assertNoBearerPrincipal(c.req.header("Authorization"));
+			if (!customerAccountService)
+				throw new AppError("Customer Account is unavailable.", 503);
+			c.status(201);
+			return c.json(
+				await customerAccountService.createChild(
+					c.req.param("slug"),
+					getCookie(c, CUSTOMER_SESSION_COOKIE),
+					c.req.header("X-CSRF-Token"),
+					c.req.header("Origin"),
+					await c.req.json(),
+				),
+			);
+		} catch (error) {
+			return toJsonError(c, error);
+		}
+	});
+
 	router.post(
 		"/organizations/:slug/customer/accompanist-membership",
 		async (c) => {
