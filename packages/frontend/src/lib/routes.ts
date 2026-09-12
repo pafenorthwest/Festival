@@ -11,6 +11,7 @@ export type AppRoute =
 	| { kind: "org-customer-account-legacy"; slug: string }
 	| { kind: "org-customer-account-memberships"; slug: string }
 	| { kind: "org-customer-account-contact"; slug: string }
+	| { kind: "org-customer-account-children"; slug: string }
 	| { kind: "org-customer-account-orders"; slug: string }
 	| { kind: "org-admin"; slug: string }
 	| { kind: "org-admin-users"; slug: string }
@@ -46,6 +47,9 @@ export function buildOrgCustomerAccountMembershipsPath(slug: string): string {
 
 export function buildOrgCustomerAccountContactPath(slug: string): string {
 	return `/org/${slug}/account/contact`;
+}
+export function buildOrgCustomerAccountChildrenPath(slug: string): string {
+	return `/org/${slug}/account/children`;
 }
 
 export function buildOrgCustomerAccountOrdersPath(slug: string): string {
@@ -93,6 +97,7 @@ export function isOrganizationPageRoute(route: AppRoute): boolean {
 		route.kind === "org-customer-account-legacy" ||
 		route.kind === "org-customer-account-memberships" ||
 		route.kind === "org-customer-account-contact" ||
+		route.kind === "org-customer-account-children" ||
 		route.kind === "org-customer-account-orders"
 	);
 }
@@ -190,6 +195,14 @@ export function parseRoute(pathname: string): AppRoute {
 	if (orgAdminMatch) {
 		return { kind: "org-admin", slug: orgAdminMatch[1] ?? "" };
 	}
+	const customerAccountChildrenMatch = pathname.match(
+		/^\/org\/([^/]+)\/account\/children$/,
+	);
+	if (customerAccountChildrenMatch)
+		return {
+			kind: "org-customer-account-children",
+			slug: customerAccountChildrenMatch[1] ?? "",
+		};
 
 	const orgAdminUsersMatch = pathname.match(/^\/org\/([^/]+)\/admin\/users$/);
 	if (orgAdminUsersMatch) {

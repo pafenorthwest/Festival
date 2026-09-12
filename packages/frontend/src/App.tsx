@@ -15,6 +15,7 @@ import { AdminMembershipProductsPage } from "./pages/AdminMembershipProductsPage
 import { AdminUsersPage } from "./pages/AdminUsersPage.js";
 import { CreateOrganizationPage } from "./pages/CreateOrganizationPage.js";
 import { CustomerAccountContactPage } from "./pages/CustomerAccountContactPage.js";
+import { CustomerChildrenPage } from "./pages/CustomerChildrenPage.js";
 import { CustomerAccountMembershipsPage } from "./pages/CustomerAccountMembershipsPage.js";
 import { CustomerAccountOrdersPage } from "./pages/CustomerAccountOrdersPage.js";
 import { HomePage } from "./pages/HomePage.js";
@@ -110,6 +111,11 @@ export default function App() {
 						</Match>
 						<Match when={app.route().kind === "org-customer-account-contact"}>
 							<CustomerAccountContactPage
+								slug={(app.route() as { slug: string }).slug}
+							/>
+						</Match>
+						<Match when={app.route().kind === "org-customer-account-children"}>
+							<CustomerChildrenPage
 								slug={(app.route() as { slug: string }).slug}
 							/>
 						</Match>

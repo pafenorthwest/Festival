@@ -1,6 +1,7 @@
 import { Button } from "../components/Button.js";
 import {
 	buildOrgCustomerAccountContactPath,
+	buildOrgCustomerAccountChildrenPath,
 	buildOrgCustomerAccountMembershipsPath,
 	buildOrgCustomerAccountOrdersPath,
 } from "../lib/routes.js";
@@ -12,6 +13,15 @@ export function CustomerAccountNavigation(props: { slug: string }) {
 
 	return (
 		<nav class="customer-account-navigation" aria-label="Customer account">
+			<Button
+				type="button"
+				variant="compact-header"
+				onClick={() =>
+					navigate(buildOrgCustomerAccountChildrenPath(props.slug))
+				}
+			>
+				Children
+			</Button>
 			<Button
 				type="button"
 				variant="compact-header"
