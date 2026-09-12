@@ -28,6 +28,7 @@ import {
 } from "@festival/common";
 import { sql } from "bun";
 import type {
+	AccompanistDivisionPolicyHistoryRecord,
 	AccompanistDivisionPolicyRecord,
 	CreateFestivalRecordInput,
 	CreateInviteRecordInput,
@@ -190,6 +191,11 @@ interface AccompanistDivisionPolicyRow {
 	organization_id: string;
 	policy: AccompanistDivisionSelectionPolicy;
 	updated_at: string;
+}
+interface AccompanistDivisionPolicyHistoryRow
+	extends AccompanistDivisionPolicyRow {
+	id: string;
+	created_at: string;
 }
 
 interface RegistrationAgeConfigurationRow {
@@ -534,6 +540,12 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				policy TEXT NOT NULL DEFAULT 'one_to_all'
 					CHECK (policy IN ('exactly_one', 'one_to_two', 'one_to_all')),
 				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			);
+			CREATE TABLE IF NOT EXISTS ${schema}.accompanist_division_policy_history (
+				id TEXT PRIMARY KEY,
+				organization_id TEXT NOT NULL REFERENCES ${schema}.organizations (id) ON DELETE CASCADE,
+				policy TEXT NOT NULL CHECK (policy IN ('exactly_one', 'one_to_two', 'one_to_all')),
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 			);
 
 			CREATE TABLE IF NOT EXISTS ${schema}.registration_age_configurations (
@@ -2015,11 +2027,33 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		)) as AccompanistDivisionPolicyRow[];
 		const row = rows[0];
 		if (!row) throw new Error("Unable to save accompanist division policy.");
-		return {
+		const record = {
 			organizationId: row.organization_id,
 			policy: row.policy,
 			updatedAtIso: row.updated_at,
 		};
+		await sql.unsafe(
+			`INSERT INTO ${this.schema}.accompanist_division_policy_history (id, organization_id, policy) VALUES ($1, $2, $3)`,
+			[randomUUID(), record.organizationId, record.policy],
+		);
+		return record;
+	}
+
+	async listAccompanistDivisionPolicyHistory(
+		organizationId: string,
+	): Promise<AccompanistDivisionPolicyHistoryRecord[]> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT id, organization_id, policy, created_at FROM ${this.schema}.accompanist_division_policy_history WHERE organization_id = $1 ORDER BY created_at, id`,
+			[organizationId],
+		)) as AccompanistDivisionPolicyHistoryRow[];
+		return rows.map((row) => ({
+			id: row.id,
+			organizationId: row.organization_id,
+			policy: row.policy,
+			updatedAtIso: row.created_at,
+			createdAtIso: row.created_at,
+		}));
 	}
 
 	async getRegistrationAgeConfiguration(

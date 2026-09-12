@@ -22,6 +22,7 @@ import {
 	isEntitlementClass,
 } from "@festival/common";
 import type {
+	AccompanistDivisionPolicyHistoryRecord,
 	AccompanistDivisionPolicyRecord,
 	CreateFestivalRecordInput,
 	CreateInviteRecordInput,
@@ -71,6 +72,8 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		string,
 		AccompanistDivisionPolicyRecord
 	>();
+	private readonly accompanistPolicyHistory: AccompanistDivisionPolicyHistoryRecord[] =
+		[];
 	private readonly registrationAgeConfigurations = new Map<
 		string,
 		RegistrationAgeConfiguration
@@ -861,7 +864,20 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			updatedAtIso: new Date().toISOString(),
 		};
 		this.accompanistPolicies.set(input.organizationId, record);
+		this.accompanistPolicyHistory.push({
+			id: randomUUID(),
+			...record,
+			createdAtIso: record.updatedAtIso,
+		});
 		return record;
+	}
+
+	async listAccompanistDivisionPolicyHistory(
+		organizationId: string,
+	): Promise<AccompanistDivisionPolicyHistoryRecord[]> {
+		return this.accompanistPolicyHistory
+			.filter((record) => record.organizationId === organizationId)
+			.map((record) => ({ ...record }));
 	}
 
 	async getRegistrationAgeConfiguration(

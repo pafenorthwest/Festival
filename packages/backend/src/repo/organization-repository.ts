@@ -166,6 +166,12 @@ export interface AccompanistDivisionPolicyRecord {
 	updatedAtIso: string;
 }
 
+export interface AccompanistDivisionPolicyHistoryRecord
+	extends AccompanistDivisionPolicyRecord {
+	id: string;
+	createdAtIso: string;
+}
+
 export type RegistrationCatalogKind = "class_subtype" | "instrument";
 
 export interface OrganizationRepository {
@@ -283,6 +289,9 @@ export interface OrganizationRepository {
 		organizationId: string;
 		policy: AccompanistDivisionSelectionPolicy;
 	}): Promise<AccompanistDivisionPolicyRecord>;
+	listAccompanistDivisionPolicyHistory(
+		organizationId: string,
+	): Promise<AccompanistDivisionPolicyHistoryRecord[]>;
 	getRegistrationAgeConfiguration(
 		organizationId: string,
 	): Promise<RegistrationAgeConfiguration | null>;
