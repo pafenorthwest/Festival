@@ -26,6 +26,13 @@ describe("product repository", () => {
 		expect(source).toContain(
 			"CREATE TABLE IF NOT EXISTS $" + "{schema}.entitlement_grants",
 		);
+		const createEntitlementGrants = source.indexOf(
+			"CREATE TABLE IF NOT EXISTS $" + "{schema}.entitlement_grants",
+		);
+		const alterEntitlementGrants = source.indexOf(
+			"ALTER TABLE $" + "{schema}.entitlement_grants",
+		);
+		expect(alterEntitlementGrants).toBeGreaterThan(createEntitlementGrants);
 		expect(source).toContain("shopify_order_line_gid TEXT NOT NULL UNIQUE");
 		expect(source).toContain("CHECK (ends_on > starts_on)");
 		expect(source).not.toContain(

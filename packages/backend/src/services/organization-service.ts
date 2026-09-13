@@ -37,6 +37,7 @@ import {
 	validateFestivalName,
 	validateOrganizationName,
 	validateOrganizationShortName,
+	validateRegistrationAgeDate,
 } from "@festival/common";
 import type { TenantContext } from "../auth/tenant-context.js";
 import { AppError } from "../errors/app-error.js";
@@ -81,6 +82,8 @@ function toFestivalSummary(record: FestivalRecord): FestivalSummary {
 	return {
 		id: record.id,
 		code: record.code,
+		shortName: record.shortName,
+		isPrimary: record.isPrimary,
 		name: record.name,
 		startDate: record.startDate,
 		endDate: record.endDate,
@@ -219,6 +222,142 @@ export class OrganizationService {
 			throw new AppError("Division is not available for a new purchase.", 400);
 		}
 		return division;
+	}
+
+	async getRegistrationConfigurationForTenant(tenant: TenantContext) {
+		return {
+			ageConfiguration: await this.repository.getRegistrationAgeConfiguration(
+				tenant.organization.id,
+			),
+			classSubtypes: await this.repository.listRegistrationCatalogValues(
+				tenant.organization.id,
+				"class_subtype",
+			),
+			instruments: await this.repository.listRegistrationCatalogValues(
+				tenant.organization.id,
+				"instrument",
+			),
+		};
+	}
+
+	async updateRegistrationAgeDateForTenant(
+		tenant: TenantContext,
+		value: unknown,
+	) {
+		try {
+			return {
+				ageConfiguration:
+					await this.repository.updateRegistrationAgeConfiguration({
+						organizationId: tenant.organization.id,
+						registrationAgeDate: validateRegistrationAgeDate(value),
+					}),
+			};
+		} catch (error) {
+			throw new AppError(
+				error instanceof Error
+					? error.message
+					: "Registration age date is invalid.",
+				400,
+			);
+		}
+	}
+
+	async createRegistrationCatalogValueForTenant(
+		tenant: TenantContext,
+		kind: "class_subtype" | "instrument",
+		value: unknown,
+	) {
+		const displayName = this.requireDivisionName(value);
+		try {
+			return {
+				value: await this.repository.createRegistrationCatalogValue({
+					organizationId: tenant.organization.id,
+					kind,
+					displayName,
+					normalizedName: divisionNameUniquenessKey(displayName),
+				}),
+			};
+		} catch (error) {
+			if (
+				error instanceof Error &&
+				error.message === "Registration catalog value already exists."
+			)
+				throw new AppError(error.message, 409);
+			throw error;
+		}
+	}
+
+	async updateRegistrationCatalogValueForTenant(
+		tenant: TenantContext,
+		kind: "class_subtype" | "instrument",
+		id: string,
+		input: { displayName?: unknown; isActive?: unknown },
+	) {
+		if (
+			!input ||
+			(input.displayName === undefined && input.isActive === undefined)
+		)
+			throw new AppError("Registration catalog update is required.", 400);
+		if (input.isActive !== undefined && typeof input.isActive !== "boolean")
+			throw new AppError(
+				"Registration catalog active state must be a boolean.",
+				400,
+			);
+		const displayName =
+			input.displayName === undefined
+				? undefined
+				: this.requireDivisionName(input.displayName);
+		try {
+			const value = await this.repository.updateRegistrationCatalogValue({
+				organizationId: tenant.organization.id,
+				kind,
+				id,
+				displayName,
+				normalizedName:
+					displayName === undefined
+						? undefined
+						: divisionNameUniquenessKey(displayName),
+				isActive: input.isActive as boolean | undefined,
+			});
+			if (!value)
+				throw new AppError("Registration catalog value not found.", 404);
+			return { value };
+		} catch (error) {
+			if (
+				error instanceof Error &&
+				error.message === "Registration catalog value already exists."
+			)
+				throw new AppError(error.message, 409);
+			throw error;
+		}
+	}
+
+	async reorderRegistrationCatalogValuesForTenant(
+		tenant: TenantContext,
+		kind: "class_subtype" | "instrument",
+		ids: unknown,
+	) {
+		if (
+			!Array.isArray(ids) ||
+			ids.some((id) => typeof id !== "string" || !id.trim())
+		)
+			throw new AppError("Registration catalog order is invalid.", 400);
+		try {
+			return {
+				values: await this.repository.reorderRegistrationCatalogValues(
+					tenant.organization.id,
+					kind,
+					ids,
+				),
+			};
+		} catch (error) {
+			throw new AppError(
+				error instanceof Error
+					? error.message
+					: "Registration catalog order is invalid.",
+				400,
+			);
+		}
 	}
 
 	async createDivisionForTenant(
@@ -559,7 +698,12 @@ export class OrganizationService {
 	): Promise<CreateFestivalResponse> {
 		const nameValidation = validateFestivalName(input.name);
 		const dateValidation = validateFestivalDates(input);
-		const errors = [...nameValidation.errors, ...dateValidation.errors];
+		const shortNameValidation = validateOrganizationShortName(input.shortName);
+		const errors = [
+			...nameValidation.errors,
+			...dateValidation.errors,
+			...shortNameValidation.errors,
+		];
 		if (errors.length > 0) {
 			throw new AppError(errors.join(" "), 400);
 		}
@@ -571,12 +715,21 @@ export class OrganizationService {
 		if (existingFestival) {
 			throw new AppError("Festival name is already registered.", 409);
 		}
+		if (
+			await this.repository.findFestivalByShortName(
+				tenant.organization.id,
+				shortNameValidation.normalized,
+			)
+		) {
+			throw new AppError("Festival short name is already registered.", 409);
+		}
 
 		const id = randomUUID();
 		const festival = await this.repository.createFestival({
 			id,
 			organizationId: tenant.organization.id,
 			code: deriveFestivalCode(id),
+			shortName: shortNameValidation.normalized,
 			name: nameValidation.normalized,
 			startDate: dateValidation.startDate,
 			endDate: dateValidation.endDate,
@@ -584,6 +737,41 @@ export class OrganizationService {
 
 		return {
 			festival: toFestivalSummary(festival),
+		};
+	}
+
+	async getPrimaryFestivalPath(
+		slug: string,
+	): Promise<{ status: 301 | 404; path: string }> {
+		const organization = await this.repository.findOrganizationBySlug(slug);
+		if (!organization) throw new AppError("Organization not found.", 404);
+		const primary = (await this.repository.listFestivals(organization.id)).find(
+			(festival) => festival.isPrimary,
+		);
+		return primary
+			? {
+					status: 301,
+					path: `/org/${organization.slug}/festival/${primary.shortName}`,
+				}
+			: { status: 404, path: "" };
+	}
+
+	async setPrimaryFestivalForTenant(
+		tenant: TenantContext,
+		shortName: string,
+	): Promise<CreateFestivalResponse> {
+		const festival = await this.repository.findFestivalByShortName(
+			tenant.organization.id,
+			shortName,
+		);
+		if (!festival) throw new AppError("Festival not found.", 404);
+		return {
+			festival: toFestivalSummary(
+				await this.repository.setPrimaryFestival(
+					tenant.organization.id,
+					festival.id,
+				),
+			),
 		};
 	}
 

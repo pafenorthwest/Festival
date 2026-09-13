@@ -76,19 +76,10 @@ describe("public organization landing page", () => {
 		expect(styles).toContain("opacity: 1;");
 	});
 
-	it("renders the approved banner sequence and destinations", () => {
-		const teachers = page.indexOf('class="role-banner teachers"');
-		const parents = page.indexOf('class="role-banner parents"');
-		const volunteers = page.indexOf('class="role-banner volunteers"');
-		const accompanists = page.indexOf('class="role-banner accompanists"');
-		expect(teachers).toBeGreaterThan(-1);
-		expect(teachers).toBeLessThan(parents);
-		expect(parents).toBeLessThan(volunteers);
-		expect(volunteers).toBeLessThan(accompanists);
-		expect(page).toContain("All Memberships");
-		expect(page).toContain(
-			'class="button secondary-button compact-header-button all-memberships-link"',
-		);
+	it("renders the primary Festival link or no-Festival state", () => {
+		expect(page).toContain("Our Next Festival");
+		expect(page).toContain("Welcome currently no festivals scheduled");
+		expect(page).toContain("getPrimaryFestivalPath");
 		expect(appHeader).toContain('variant="compact-header"');
 		expect(appHeader).toContain("onClick={login}");
 		expect(appHeader).toContain(

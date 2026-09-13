@@ -4,6 +4,7 @@ import type {
 	CreateInviteInput,
 	CreateOrganizationInput,
 } from "@festival/common";
+import { isAccompanistDivisionSelectionPolicy } from "@festival/common";
 import { type Context, Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import {
@@ -25,6 +26,7 @@ import {
 	type CustomerAccountService,
 } from "../customer/customer-account-service.js";
 import { AppError } from "../errors/app-error.js";
+import type { AccompanistMembershipService } from "../services/accompanist-membership-service.js";
 import type { OrganizationService } from "../services/organization-service.js";
 import type { PublicMembershipProductService } from "../shopify/public-membership-product-service.js";
 import type { ShopifyIntegrationDiagnosticService } from "../shopify/shopify-integration-diagnostic-service.js";
@@ -141,6 +143,7 @@ export function buildApiRouter(
 	shopifyIntegrationDiagnosticService?: ShopifyIntegrationDiagnosticService,
 	membershipCheckoutService?: MembershipCheckoutService,
 	membershipStatusService?: MembershipStatusService,
+	accompanistMembershipService?: AccompanistMembershipService,
 ): Hono<{ Variables: Partial<ApiVariables> }> {
 	const router = new Hono<{ Variables: Partial<ApiVariables> }>();
 	const repository = organizationService.repository;
@@ -377,6 +380,35 @@ export function buildApiRouter(
 		},
 	);
 
+	router.post(
+		"/organizations/:slug/admin/festivals/:festivalShortName/primary",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				return c.json(
+					await organizationService.setPrimaryFestivalForTenant(
+						getRequiredTenant(c),
+						c.req.param("festivalShortName"),
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.get("/organizations/:slug/primary", async (c) => {
+		try {
+			return c.json(
+				await organizationService.getPrimaryFestivalPath(c.req.param("slug")),
+			);
+		} catch (error) {
+			return toJsonError(c, error);
+		}
+	});
+
 	router.get("/organizations/:slug/divisions", async (c) => {
 		try {
 			return c.json(
@@ -486,6 +518,187 @@ export function buildApiRouter(
 						payload,
 					),
 				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.get(
+		"/organizations/:slug/admin/accompanist-policy",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				const tenant = getRequiredTenant(c);
+				return c.json({
+					policy: await repository.getAccompanistDivisionPolicy(
+						tenant.organization.id,
+					),
+				});
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.get(
+		"/organizations/:slug/admin/registration-configuration",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				return c.json(
+					await organizationService.getRegistrationConfigurationForTenant(
+						getRequiredTenant(c),
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+	router.post(
+		"/organizations/:slug/admin/registration-age-date",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				const payload = await c.req.json();
+				assertAllowedFields(
+					payload,
+					["registrationAgeDate"],
+					"Registration age configuration",
+				);
+				return c.json(
+					await organizationService.updateRegistrationAgeDateForTenant(
+						getRequiredTenant(c),
+						(payload as { registrationAgeDate?: unknown })?.registrationAgeDate,
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+	for (const [kind, path] of [
+		["class_subtype", "class-subtypes"],
+		["instrument", "instruments"],
+	] as const) {
+		router.post(
+			`/organizations/:slug/admin/${path}`,
+			requireAuth(authVerifier),
+			requireTenant(repository),
+			requireTenantRole(["Admin"]),
+			async (c) => {
+				try {
+					const payload = await c.req.json();
+					assertAllowedFields(
+						payload,
+						["displayName"],
+						"Registration catalog request",
+					);
+					c.status(201);
+					return c.json(
+						await organizationService.createRegistrationCatalogValueForTenant(
+							getRequiredTenant(c),
+							kind,
+							(payload as { displayName?: unknown })?.displayName,
+						),
+					);
+				} catch (error) {
+					return toJsonError(c, error);
+				}
+			},
+		);
+	}
+	for (const [kind, path] of [
+		["class_subtype", "class-subtypes"],
+		["instrument", "instruments"],
+	] as const) {
+		router.post(
+			`/organizations/:slug/admin/${path}/reorder`,
+			requireAuth(authVerifier),
+			requireTenant(repository),
+			requireTenantRole(["Admin"]),
+			async (c) => {
+				try {
+					const payload = await c.req.json();
+					assertAllowedFields(
+						payload,
+						["ids"],
+						"Registration catalog reorder request",
+					);
+					return c.json(
+						await organizationService.reorderRegistrationCatalogValuesForTenant(
+							getRequiredTenant(c),
+							kind,
+							(payload as { ids?: unknown })?.ids,
+						),
+					);
+				} catch (error) {
+					return toJsonError(c, error);
+				}
+			},
+		);
+		router.post(
+			`/organizations/:slug/admin/${path}/:id`,
+			requireAuth(authVerifier),
+			requireTenant(repository),
+			requireTenantRole(["Admin"]),
+			async (c) => {
+				try {
+					const payload = await c.req.json();
+					assertAllowedFields(
+						payload,
+						["displayName", "isActive"],
+						"Registration catalog update request",
+					);
+					return c.json(
+						await organizationService.updateRegistrationCatalogValueForTenant(
+							getRequiredTenant(c),
+							kind,
+							c.req.param("id"),
+							payload as { displayName?: unknown; isActive?: unknown },
+						),
+					);
+				} catch (error) {
+					return toJsonError(c, error);
+				}
+			},
+		);
+	}
+
+	router.post(
+		"/organizations/:slug/admin/accompanist-policy",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				const payload = await c.req.json();
+				assertAllowedFields(payload, ["policy"], "Accompanist policy request");
+				if (
+					!payload ||
+					typeof payload !== "object" ||
+					!isAccompanistDivisionSelectionPolicy(
+						(payload as { policy?: unknown }).policy,
+					)
+				) {
+					throw new AppError("Accompanist division policy is invalid.", 400);
+				}
+				const tenant = getRequiredTenant(c);
+				return c.json({
+					policy: await repository.updateAccompanistDivisionPolicy({
+						organizationId: tenant.organization.id,
+						policy: (
+							payload as { policy: "exactly_one" | "one_to_two" | "one_to_all" }
+						).policy,
+					}),
+				});
 			} catch (error) {
 				return toJsonError(c, error);
 			}
@@ -858,6 +1071,139 @@ export function buildApiRouter(
 		}
 	});
 
+	router.get("/organizations/:slug/customer/children", async (c) => {
+		try {
+			assertNoBearerPrincipal(c.req.header("Authorization"));
+			if (!customerAccountService)
+				throw new AppError("Customer Account is unavailable.", 503);
+			return c.json(
+				await customerAccountService.listChildren(
+					c.req.param("slug"),
+					getCookie(c, CUSTOMER_SESSION_COOKIE),
+				),
+			);
+		} catch (error) {
+			return toJsonError(c, error);
+		}
+	});
+	router.post("/organizations/:slug/customer/children", async (c) => {
+		try {
+			assertNoBearerPrincipal(c.req.header("Authorization"));
+			if (!customerAccountService)
+				throw new AppError("Customer Account is unavailable.", 503);
+			c.status(201);
+			return c.json(
+				await customerAccountService.createChild(
+					c.req.param("slug"),
+					getCookie(c, CUSTOMER_SESSION_COOKIE),
+					c.req.header("X-CSRF-Token"),
+					c.req.header("Origin"),
+					await c.req.json(),
+				),
+			);
+		} catch (error) {
+			return toJsonError(c, error);
+		}
+	});
+	router.post(
+		"/organizations/:slug/customer/children/:childId/age-snapshot",
+		async (c) => {
+			try {
+				assertNoBearerPrincipal(c.req.header("Authorization"));
+				if (!customerAccountService)
+					throw new AppError("Customer Account is unavailable.", 503);
+				return c.json(
+					await customerAccountService.refreshChildAgeSnapshot(
+						c.req.param("slug"),
+						getCookie(c, CUSTOMER_SESSION_COOKIE),
+						c.req.header("X-CSRF-Token"),
+						c.req.header("Origin"),
+						c.req.param("childId"),
+						await c.req.json(),
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.post(
+		"/organizations/:slug/customer/accompanist-membership",
+		async (c) => {
+			try {
+				assertNoBearerPrincipal(c.req.header("Authorization"));
+				if (!customerAccountService || !accompanistMembershipService)
+					throw new AppError("Accompanist membership is unavailable.", 503);
+				const referer = c.req.header("Referer");
+				const origin =
+					c.req.header("Origin") ??
+					(referer ? new URL(referer).origin : undefined);
+				const access = await customerAccountService.formAccess(
+					c.req.param("slug"),
+					getCookie(c, CUSTOMER_SESSION_COOKIE),
+					c.req.header("X-CSRF-Token"),
+					origin,
+				);
+				c.header("Cache-Control", "no-store");
+				return c.json(
+					await accompanistMembershipService.acquire({
+						...access,
+						payload: await c.req.json(),
+					}),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.get(
+		"/organizations/:slug/customer/accompanist-membership",
+		async (c) => {
+			try {
+				assertNoBearerPrincipal(c.req.header("Authorization"));
+				if (!customerAccountService)
+					throw new AppError("Accompanist membership is unavailable.", 503);
+				const access = await customerAccountService.customerReadAccess(
+					c.req.param("slug"),
+					getCookie(c, CUSTOMER_SESSION_COOKIE),
+				);
+				return c.json({
+					policy: await repository.getAccompanistDivisionPolicy(
+						access.organizationId,
+					),
+					divisions: await repository.listDivisions(
+						access.organizationId,
+						true,
+					),
+				});
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.get(
+		"/organizations/:slug/staff/accompanists",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin", "Division Chair", "Concert Chair"]),
+		async (c) => {
+			try {
+				if (!accompanistMembershipService)
+					throw new AppError("Accompanist roster is unavailable.", 503);
+				return c.json(
+					await accompanistMembershipService.listCurrentRoster(
+						getRequiredTenant(c).organization.id,
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
 	router.get("/organizations/:slug/customer/profile", async (c) => {
 		try {
 			assertNoBearerPrincipal(c.req.header("Authorization"));
@@ -1041,6 +1387,64 @@ export function buildApiRouter(
 					);
 				c.status(201);
 				return c.json({ membershipProduct });
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.post(
+		"/organizations/:slug/admin/accompanist-offering",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				if (!shopifyMembershipProductService) {
+					throw new AppError("Shopify integration is not configured.", 503);
+				}
+				const payload = await c.req.json();
+				assertAllowedFields(
+					payload,
+					["name", "description", "price", "durationDays"],
+					"Accompanist offering request",
+				);
+				const membershipProduct =
+					await shopifyMembershipProductService.createAccompanistOffering(
+						getRequiredTenant(c),
+						payload,
+					);
+				c.status(201);
+				return c.json({ membershipProduct });
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.post(
+		"/organizations/:slug/admin/accompanist-offering/:offeringId",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				if (!shopifyMembershipProductService)
+					throw new AppError("Shopify integration is not configured.", 503);
+				const payload = await c.req.json();
+				assertAllowedFields(
+					payload,
+					["name", "description", "price", "durationDays"],
+					"Accompanist offering request",
+				);
+				return c.json({
+					membershipProduct:
+						await shopifyMembershipProductService.updateAccompanistOffering(
+							getRequiredTenant(c),
+							c.req.param("offeringId"),
+							payload,
+						),
+				});
 			} catch (error) {
 				return toJsonError(c, error);
 			}

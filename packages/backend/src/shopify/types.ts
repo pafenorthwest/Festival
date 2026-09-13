@@ -57,6 +57,8 @@ export interface ShopifyProductVariant {
 		name: string;
 		value: string;
 	}>;
+	/** Server-only confirmation that a membership is a digital product. */
+	requiresShipping?: boolean;
 }
 
 export interface ShopifyProductDetails {
@@ -81,7 +83,12 @@ export interface ShopifyMembershipProductClient {
 			productId: string;
 			variantId: string;
 			price: string;
+			requiresShipping?: boolean;
 		},
+	): Promise<ShopifyAdminResult<ShopifyProductDetails>>;
+	updateProductDetails(
+		context: ShopifyAdminOperationContext,
+		input: { productId: string; name: string; description?: string },
 	): Promise<ShopifyAdminResult<ShopifyProductDetails>>;
 	readProductsByGid(
 		context: ShopifyAdminOperationContext,

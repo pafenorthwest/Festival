@@ -1,5 +1,5 @@
 code_review:
-  base_branch: main
+  base_branch: ericp/exp-long-running-agent
 
 github_cli:
   owner_token_env:
@@ -13,15 +13,10 @@ notes:
   - "Store env var names only; never store token values in this file."
 
 
-
-
-
-
 # PREPARE-TAKEOFF BOOTSTRAP START
 bootstrap:
   codex_root: "/Users/eric/pafenorthwest/Festival/.codex"
   codex_scripts_dir: "/Users/eric/pafenorthwest/Festival/.codex/scripts"
   canonical_scripts_path: "./.codex/scripts"
   repository_local_fallback_scripts_path: "./codex/scripts"
-  home_fallback_scripts_path: "$HOME/.codex/scripts"
 # PREPARE-TAKEOFF BOOTSTRAP END

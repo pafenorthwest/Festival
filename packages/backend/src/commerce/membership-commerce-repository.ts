@@ -44,6 +44,16 @@ export interface ShopifyWebhookDelivery {
 	status: "received" | "processing" | "processed" | "failed";
 	attemptCount: number;
 	failureCategory?: "upstream" | "persistence" | "invalid";
+	failureStage?: "order_read" | "projection";
+	/** Bounded operational category; never contains upstream response text. */
+	failureCode?:
+		| "shopify_upstream"
+		| "shopify_transport"
+		| "invalid_data"
+		| "persistence"
+		| "unexpected";
+	shopifyRequestId?: string;
+	failedAtIso?: string;
 	receivedAtIso: string;
 	processingStartedAtIso?: string;
 	processedAtIso?: string;
@@ -110,7 +120,18 @@ export interface MembershipCommerceRepository {
 	claimDelivery(deliveryId: string): Promise<ShopifyWebhookDelivery | null>;
 	markDeliveryFailed(
 		deliveryId: string,
-		failureCategory: "upstream" | "persistence" | "invalid",
+		failure: {
+			category: "upstream" | "persistence" | "invalid";
+			stage: "order_read" | "projection";
+			code:
+				| "shopify_upstream"
+				| "shopify_transport"
+				| "invalid_data"
+				| "persistence"
+				| "unexpected";
+			requestId?: string;
+			failedAtIso: string;
+		},
 	): Promise<void>;
 	markDeliveryProcessed(deliveryId: string): Promise<void>;
 	listReclaimableDeliveries(
@@ -222,18 +243,37 @@ export class InMemoryMembershipCommerceRepository
 		delivery.status = "processing";
 		delivery.attemptCount += 1;
 		delivery.failureCategory = undefined;
+		delivery.failureStage = undefined;
+		delivery.failureCode = undefined;
+		delivery.shopifyRequestId = undefined;
+		delivery.failedAtIso = undefined;
 		delivery.processingStartedAtIso = this.now().toISOString();
 		return { ...delivery };
 	}
 
 	async markDeliveryFailed(
 		deliveryId: string,
-		failureCategory: "upstream" | "persistence" | "invalid",
+		failure: {
+			category: "upstream" | "persistence" | "invalid";
+			stage: "order_read" | "projection";
+			code:
+				| "shopify_upstream"
+				| "shopify_transport"
+				| "invalid_data"
+				| "persistence"
+				| "unexpected";
+			requestId?: string;
+			failedAtIso: string;
+		},
 	) {
 		const delivery = this.deliveries.get(deliveryId);
 		if (!delivery) return;
 		delivery.status = "failed";
-		delivery.failureCategory = failureCategory;
+		delivery.failureCategory = failure.category;
+		delivery.failureStage = failure.stage;
+		delivery.failureCode = failure.code;
+		delivery.shopifyRequestId = failure.requestId;
+		delivery.failedAtIso = failure.failedAtIso;
 		delivery.processingStartedAtIso = undefined;
 	}
 
@@ -243,6 +283,10 @@ export class InMemoryMembershipCommerceRepository
 		delivery.status = "processed";
 		delivery.processedAtIso = this.now().toISOString();
 		delivery.failureCategory = undefined;
+		delivery.failureStage = undefined;
+		delivery.failureCode = undefined;
+		delivery.shopifyRequestId = undefined;
+		delivery.failedAtIso = undefined;
 		delivery.processingStartedAtIso = undefined;
 	}
 
@@ -260,6 +304,9 @@ export class InMemoryMembershipCommerceRepository
 			) {
 				delivery.status = "failed";
 				delivery.failureCategory = "upstream";
+				delivery.failureStage = "projection";
+				delivery.failureCode = "unexpected";
+				delivery.failedAtIso = this.now().toISOString();
 				delivery.processingStartedAtIso = undefined;
 			}
 		}

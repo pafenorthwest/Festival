@@ -63,6 +63,7 @@ function shopifyProduct(
 				},
 				productId: id,
 				selectedOptions: [{ name: "Plan", value: "Standard" }],
+				requiresShipping: false,
 			},
 		],
 		...overrides,
@@ -73,6 +74,12 @@ class FakeShopifyProductClient implements ShopifyMembershipProductClient {
 	createCalls = 0;
 	readonly deletedProductGids: string[] = [];
 	readonly readProductGids: string[][] = [];
+	readonly variantUpdates: Array<{
+		productId: string;
+		variantId: string;
+		price: string;
+		requiresShipping?: boolean;
+	}> = [];
 	createResponse = shopifyProduct();
 	updateResponse = shopifyProduct();
 	readResponse = [shopifyProduct()];
@@ -92,8 +99,21 @@ class FakeShopifyProductClient implements ShopifyMembershipProductClient {
 
 	async updateVariantPrice(
 		_context: ShopifyAdminOperationContext,
+		input: {
+			productId: string;
+			variantId: string;
+			price: string;
+			requiresShipping?: boolean;
+		},
 	): Promise<ShopifyAdminResult<ShopifyProductDetails>> {
+		this.variantUpdates.push(input);
 		return { value: this.updateResponse, requestId: "request-update" };
+	}
+
+	async updateProductDetails(): Promise<
+		ShopifyAdminResult<ShopifyProductDetails>
+	> {
+		return { value: this.updateResponse, requestId: "request-product-update" };
 	}
 
 	async readProductsByGid(
@@ -274,6 +294,14 @@ describe("ShopifyMembershipProductService", () => {
 		expect(created.durationDays).toBe(365);
 		expect(created.isActive).toBeTrue();
 		expect(created.price).toEqual({ amount: "75.00", currencyCode: "USD" });
+		expect(client.variantUpdates).toEqual([
+			{
+				productId: "gid://shopify/Product/not-a-number",
+				variantId: "gid://shopify/ProductVariant/not-a-number-either",
+				price: "75.00",
+				requiresShipping: false,
+			},
+		]);
 		await expect(
 			repository.listMembershipProductRecords(organization.id),
 		).resolves.toMatchObject([
@@ -521,6 +549,42 @@ describe("ShopifyMembershipProductService", () => {
 				membershipInput(),
 			),
 		).rejects.toThrow("Plan = Standard");
+	});
+
+	it("rejects a product whose inventory item is not confirmed as digital", async () => {
+		const repository = new InMemoryOrganizationRepository();
+		const organization = await createOrganization(repository);
+		const encryptor = await saveIntegration(repository, organization);
+		const client = new FakeShopifyProductClient();
+		client.readResponse = [
+			shopifyProduct({
+				variants: [
+					{
+						...shopifyProduct().variants[0],
+						requiresShipping: true,
+					},
+				],
+			}),
+		];
+		const service = new ShopifyMembershipProductService(
+			repository,
+			encryptor,
+			client,
+			new FakeAuditWriter(),
+		);
+
+		await expect(
+			service.createMembershipProduct(
+				tenantFor(organization),
+				membershipInput(),
+			),
+		).rejects.toThrow("must not require shipping");
+		expect(client.deletedProductGids).toEqual([
+			"gid://shopify/Product/not-a-number",
+		]);
+		await expect(
+			repository.listMembershipProductRecords(organization.id),
+		).resolves.toEqual([]);
 	});
 
 	it("cleans up the Shopify product when local persistence fails", async () => {

@@ -17,6 +17,10 @@ import {
 	SHOPIFY_CLIENT_SECRET_PURPOSE,
 	type ShopifySecretKeyring,
 } from "../shopify/encryption.js";
+import {
+	ShopifyIntegrationError,
+	ShopifyTransportError,
+} from "../shopify/errors.js";
 import type {
 	ShopifyAdminOperationContext,
 	ShopifyPaidOrder,
@@ -38,6 +42,13 @@ type ProcessingResult = "processed" | "skipped" | "failed";
 
 function nowIso(clock: () => Date): string {
 	return clock().toISOString();
+}
+
+function timestampMilliseconds(value: string, field: string) {
+	const timestamp = Date.parse(value);
+	if (!Number.isFinite(timestamp))
+		throw new Error(`${field} timestamp is invalid.`);
+	return timestamp;
 }
 
 function isCorrelationId(value: string): boolean {
@@ -70,6 +81,45 @@ function failureCategory(
 		return "invalid";
 	}
 	return "upstream";
+}
+
+function failureDiagnostic(
+	error: unknown,
+	stage: "order_read" | "projection",
+	failedAtIso: string,
+) {
+	if (error instanceof ShopifyTransportError) {
+		return {
+			category: "upstream" as const,
+			stage,
+			code: "shopify_transport" as const,
+			failedAtIso,
+		};
+	}
+	if (error instanceof ShopifyIntegrationError) {
+		return {
+			category: "upstream" as const,
+			stage,
+			code: "shopify_upstream" as const,
+			...(error.requestId &&
+			/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(error.requestId)
+				? { requestId: error.requestId }
+				: {}),
+			failedAtIso,
+		};
+	}
+	const category = failureCategory(error);
+	return {
+		category,
+		stage,
+		code:
+			category === "invalid"
+				? ("invalid_data" as const)
+				: category === "persistence"
+					? ("persistence" as const)
+					: ("unexpected" as const),
+		failedAtIso,
+	};
 }
 
 function reconciliationWebhookId(orderGid: string): string {
@@ -116,6 +166,7 @@ export class ShopifyOrderProjectionService {
 	async processDelivery(deliveryId: string): Promise<ProcessingResult> {
 		const delivery = await this.commerce.claimDelivery(deliveryId);
 		if (!delivery) return "skipped";
+		let failureStage: "order_read" | "projection" = "projection";
 		try {
 			const pending = await this.commerce.recordPendingDecision({
 				organizationId: delivery.organizationId,
@@ -130,10 +181,12 @@ export class ShopifyOrderProjectionService {
 				return "skipped";
 			}
 
+			failureStage = "order_read";
 			const order = await this.readOrder(
 				delivery.organizationId,
 				delivery.shopifyOrderGid,
 			);
+			failureStage = "projection";
 			if (!order) {
 				await this.finalize(delivery, {
 					status: "needs_review",
@@ -275,7 +328,7 @@ export class ShopifyOrderProjectionService {
 		} catch (error) {
 			await this.commerce.markDeliveryFailed(
 				delivery.id,
-				failureCategory(error),
+				failureDiagnostic(error, failureStage, nowIso(this.now)),
 			);
 			return "failed";
 		}
@@ -417,9 +470,13 @@ export class ShopifyOrderProjectionService {
 		intent: CheckoutIntentRecord,
 		order: ShopifyPaidOrder,
 	): Promise<MembershipReasonCode | undefined> {
-		if (intent.expiresAtIso <= nowIso(this.now)) return "intent_expired";
 		if (!order.fullyPaid) return "order_not_paid";
 		if (!order.fullyPaidAtIso) return "payment_incomplete";
+		if (
+			timestampMilliseconds(intent.expiresAtIso, "Checkout intent expiry") <=
+			timestampMilliseconds(order.fullyPaidAtIso, "Shopify payment")
+		)
+			return "intent_expired";
 		if (!this.customers) return "upstream_invalid";
 		const customer = await this.customers.getCustomer(
 			organizationId,

@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type {
+	AccompanistDivisionSelectionPolicy,
+	AccompanistMembershipGrant,
 	AuthenticatedUser,
 	CreateEntitlementGrantSnapshotInput,
 	EntitlementClass,
 	EntitlementGrantSnapshot,
+	FestivalClassConfiguration,
 	FestivalRecord,
 	OrganizationAdminUserEntry,
 	OrganizationDivision,
@@ -11,14 +14,20 @@ import type {
 	OrganizationMembershipRecord,
 	OrganizationRecord,
 	OrganizationUserRecord,
+	RegistrationAgeConfiguration,
+	RegistrationCatalogValue,
 } from "@festival/common";
 import {
 	assertValidEntitlementDurationDays,
 	assertValidEntitlementGrantSnapshotInput,
 	EMPTY_SHOPIFY_CAPABILITIES,
-	TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+	isEntitlementClass,
 } from "@festival/common";
 import type {
+	AccompanistDivisionPolicyHistoryRecord,
+	AccompanistDivisionPolicyRecord,
+	CreateAccompanistMembershipGrantInput,
+	CreateFestivalClassConfigurationInput,
 	CreateFestivalRecordInput,
 	CreateInviteRecordInput,
 	CreateMembershipInput,
@@ -27,6 +36,7 @@ import type {
 	MembershipWithOrganization,
 	OrganizationRepository,
 	ProductRecord,
+	RegistrationCatalogKind,
 	ShopifyIntegrationRecord,
 	UpdateShopifyVerificationInput,
 	UpdateShopifyWebhookReadinessInput,
@@ -61,6 +71,31 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 	private readonly divisions = new Map<
 		string,
 		OrganizationDivision & { normalizedName: string }
+	>();
+	private readonly accompanistPolicies = new Map<
+		string,
+		AccompanistDivisionPolicyRecord
+	>();
+	private readonly accompanistPolicyHistory: AccompanistDivisionPolicyHistoryRecord[] =
+		[];
+	private readonly accompanistMembershipGrants = new Map<
+		string,
+		AccompanistMembershipGrant
+	>();
+	private readonly registrationAgeConfigurations = new Map<
+		string,
+		RegistrationAgeConfiguration
+	>();
+	private readonly registrationCatalogValues = new Map<
+		string,
+		RegistrationCatalogValue & {
+			kind: RegistrationCatalogKind;
+			normalizedName: string;
+		}
+	>();
+	private readonly festivalClassConfigurations = new Map<
+		string,
+		FestivalClassConfiguration
 	>();
 
 	async ensureReady(): Promise<void> {}
@@ -505,7 +540,8 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 				(festival) =>
 					festival.organizationId === input.organizationId &&
 					(festival.name.toLowerCase() === input.name.toLowerCase() ||
-						festival.code === input.code),
+						festival.code === input.code ||
+						festival.shortName === input.shortName),
 			)
 		) {
 			throw new Error("Festival already exists for this organization.");
@@ -515,6 +551,11 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			id: input.id,
 			organizationId: input.organizationId,
 			code: input.code,
+			shortName: input.shortName,
+			isPrimary: ![...this.festivals.values()].some(
+				(item) =>
+					item.organizationId === input.organizationId && item.isPrimary,
+			),
 			name: input.name,
 			startDate: input.startDate,
 			endDate: input.endDate,
@@ -536,6 +577,36 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 					festival.name.toLowerCase() === name.toLowerCase(),
 			) ?? null
 		);
+	}
+
+	async findFestivalByShortName(
+		organizationId: string,
+		shortName: string,
+	): Promise<FestivalRecord | null> {
+		return (
+			[...this.festivals.values()].find(
+				(festival) =>
+					festival.organizationId === organizationId &&
+					festival.shortName === shortName,
+			) ?? null
+		);
+	}
+
+	async setPrimaryFestival(
+		organizationId: string,
+		festivalId: string,
+	): Promise<FestivalRecord> {
+		const selected = this.festivals.get(festivalId);
+		if (!selected || selected.organizationId !== organizationId)
+			throw new Error("Festival not found.");
+		for (const festival of this.festivals.values()) {
+			if (festival.organizationId === organizationId)
+				this.festivals.set(festival.id, {
+					...festival,
+					isPrimary: festival.id === festivalId,
+				});
+		}
+		return { ...selected, isPrimary: true };
 	}
 
 	async dismissWelcome(
@@ -700,8 +771,8 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		if (!this.organizations.has(input.organizationId)) {
 			throw new Error("Organization not found.");
 		}
-		if (input.entitlementClass !== TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS) {
-			throw new Error("Entitlement class must be teacher_membership.");
+		if (!isEntitlementClass(input.entitlementClass)) {
+			throw new Error("Entitlement class is invalid.");
 		}
 		if (
 			[...this.products.values()].some(
@@ -814,6 +885,296 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 					product.isActive,
 			) ?? null
 		);
+	}
+
+	async getAccompanistDivisionPolicy(
+		organizationId: string,
+	): Promise<AccompanistDivisionPolicyRecord> {
+		return (
+			this.accompanistPolicies.get(organizationId) ?? {
+				organizationId,
+				policy: "one_to_all",
+				updatedAtIso: new Date().toISOString(),
+			}
+		);
+	}
+
+	async updateAccompanistDivisionPolicy(input: {
+		organizationId: string;
+		policy: AccompanistDivisionSelectionPolicy;
+	}): Promise<AccompanistDivisionPolicyRecord> {
+		if (!this.organizations.has(input.organizationId)) {
+			throw new Error("Organization not found.");
+		}
+		const record: AccompanistDivisionPolicyRecord = {
+			organizationId: input.organizationId,
+			policy: input.policy,
+			updatedAtIso: new Date().toISOString(),
+		};
+		this.accompanistPolicies.set(input.organizationId, record);
+		this.accompanistPolicyHistory.push({
+			id: randomUUID(),
+			...record,
+			createdAtIso: record.updatedAtIso,
+		});
+		return record;
+	}
+
+	async listAccompanistDivisionPolicyHistory(
+		organizationId: string,
+	): Promise<AccompanistDivisionPolicyHistoryRecord[]> {
+		return this.accompanistPolicyHistory
+			.filter((record) => record.organizationId === organizationId)
+			.map((record) => ({ ...record }));
+	}
+
+	async createAccompanistMembershipGrant(
+		input: CreateAccompanistMembershipGrantInput,
+	): Promise<AccompanistMembershipGrant> {
+		if (input.supersedeGrantId) {
+			const prior = this.accompanistMembershipGrants.get(
+				input.supersedeGrantId,
+			);
+			if (
+				!prior ||
+				prior.organizationId !== input.organizationId ||
+				!prior.isCurrent
+			) {
+				throw new Error("Current accompanist membership was not found.");
+			}
+			this.accompanistMembershipGrants.set(prior.id, {
+				...prior,
+				isCurrent: false,
+				status: "superseded",
+			});
+		}
+		if (
+			[...this.accompanistMembershipGrants.values()].some(
+				(grant) =>
+					grant.organizationId === input.organizationId &&
+					grant.isCurrent &&
+					(grant.customerId === input.customerId ||
+						grant.normalizedEmail === input.normalizedEmail),
+			)
+		) {
+			throw new Error("An active accompanist membership already exists.");
+		}
+		const grant: AccompanistMembershipGrant = {
+			id: randomUUID(),
+			...input,
+			divisions: input.divisions.map((division) => ({ ...division })),
+			contact: { ...input.contact },
+			status: "active",
+			isCurrent: true,
+			createdAtIso: new Date().toISOString(),
+		};
+		this.accompanistMembershipGrants.set(grant.id, grant);
+		return grant;
+	}
+
+	async listAccompanistMembershipGrants(input: {
+		organizationId: string;
+		customerId?: string;
+		normalizedEmail?: string;
+		currentOnly?: boolean;
+	}): Promise<AccompanistMembershipGrant[]> {
+		return [...this.accompanistMembershipGrants.values()]
+			.filter(
+				(grant) =>
+					grant.organizationId === input.organizationId &&
+					(!input.customerId || grant.customerId === input.customerId) &&
+					(!input.normalizedEmail ||
+						grant.normalizedEmail === input.normalizedEmail) &&
+					(!input.currentOnly || grant.isCurrent),
+			)
+			.sort((a, b) => a.createdAtIso.localeCompare(b.createdAtIso))
+			.map((grant) => ({
+				...grant,
+				contact: { ...grant.contact },
+				divisions: grant.divisions.map((division) => ({ ...division })),
+			}));
+	}
+
+	async getRegistrationAgeConfiguration(
+		organizationId: string,
+	): Promise<RegistrationAgeConfiguration | null> {
+		return this.registrationAgeConfigurations.get(organizationId) ?? null;
+	}
+
+	async updateRegistrationAgeConfiguration(input: {
+		organizationId: string;
+		registrationAgeDate: string;
+	}): Promise<RegistrationAgeConfiguration> {
+		if (!this.organizations.has(input.organizationId)) {
+			throw new Error("Organization not found.");
+		}
+		const record = {
+			organizationId: input.organizationId,
+			registrationAgeDate: input.registrationAgeDate,
+			updatedAtIso: new Date().toISOString(),
+		};
+		this.registrationAgeConfigurations.set(input.organizationId, record);
+		return record;
+	}
+
+	async listRegistrationCatalogValues(
+		organizationId: string,
+		kind: RegistrationCatalogKind,
+		activeOnly = false,
+	): Promise<RegistrationCatalogValue[]> {
+		return [...this.registrationCatalogValues.values()]
+			.filter(
+				(value) =>
+					value.organizationId === organizationId &&
+					value.kind === kind &&
+					(!activeOnly || value.isActive),
+			)
+			.sort(
+				(a, b) => a.displayOrder - b.displayOrder || a.id.localeCompare(b.id),
+			)
+			.map(
+				({ kind: _kind, normalizedName: _normalizedName, ...value }) => value,
+			);
+	}
+
+	async createRegistrationCatalogValue(input: {
+		organizationId: string;
+		kind: RegistrationCatalogKind;
+		displayName: string;
+		normalizedName: string;
+	}): Promise<RegistrationCatalogValue> {
+		if (
+			[...this.registrationCatalogValues.values()].some(
+				(value) =>
+					value.organizationId === input.organizationId &&
+					value.kind === input.kind &&
+					value.normalizedName === input.normalizedName,
+			)
+		)
+			throw new Error("Registration catalog value already exists.");
+		const now = new Date().toISOString();
+		const record = {
+			id: randomUUID(),
+			organizationId: input.organizationId,
+			kind: input.kind,
+			displayName: input.displayName,
+			normalizedName: input.normalizedName,
+			isActive: true,
+			displayOrder: (
+				await this.listRegistrationCatalogValues(
+					input.organizationId,
+					input.kind,
+				)
+			).length,
+			createdAtIso: now,
+			updatedAtIso: now,
+		};
+		this.registrationCatalogValues.set(record.id, record);
+		const { kind: _kind, normalizedName: _normalizedName, ...result } = record;
+		return result;
+	}
+
+	async updateRegistrationCatalogValue(input: {
+		organizationId: string;
+		kind: RegistrationCatalogKind;
+		id: string;
+		displayName?: string;
+		normalizedName?: string;
+		isActive?: boolean;
+	}): Promise<RegistrationCatalogValue | null> {
+		const current = this.registrationCatalogValues.get(input.id);
+		if (
+			!current ||
+			current.organizationId !== input.organizationId ||
+			current.kind !== input.kind
+		)
+			return null;
+		if (
+			input.normalizedName &&
+			[...this.registrationCatalogValues.values()].some(
+				(value) =>
+					value.id !== current.id &&
+					value.organizationId === input.organizationId &&
+					value.kind === input.kind &&
+					value.normalizedName === input.normalizedName,
+			)
+		)
+			throw new Error("Registration catalog value already exists.");
+		const updated = {
+			...current,
+			displayName: input.displayName ?? current.displayName,
+			normalizedName: input.normalizedName ?? current.normalizedName,
+			isActive: input.isActive ?? current.isActive,
+			updatedAtIso: new Date().toISOString(),
+		};
+		this.registrationCatalogValues.set(updated.id, updated);
+		const { kind: _kind, normalizedName: _normalizedName, ...result } = updated;
+		return result;
+	}
+
+	async reorderRegistrationCatalogValues(
+		organizationId: string,
+		kind: RegistrationCatalogKind,
+		ids: string[],
+	): Promise<RegistrationCatalogValue[]> {
+		const current = await this.listRegistrationCatalogValues(
+			organizationId,
+			kind,
+		);
+		if (
+			current.length !== ids.length ||
+			new Set(ids).size !== ids.length ||
+			ids.some((id) => !current.some((value) => value.id === id))
+		)
+			throw new Error(
+				"Registration catalog order must contain every value exactly once.",
+			);
+		const now = new Date().toISOString();
+		ids.forEach((id, displayOrder) => {
+			const value = this.registrationCatalogValues.get(id);
+			if (!value) throw new Error("Registration catalog value not found.");
+			this.registrationCatalogValues.set(id, {
+				...value,
+				displayOrder,
+				updatedAtIso: now,
+			});
+		});
+		return this.listRegistrationCatalogValues(organizationId, kind);
+	}
+
+	async createFestivalClassConfiguration(
+		input: CreateFestivalClassConfigurationInput,
+	): Promise<FestivalClassConfiguration> {
+		if (
+			!this.organizations.has(input.organizationId) ||
+			!this.festivals.has(input.festivalId)
+		)
+			throw new Error("Festival was not found.");
+		const now = new Date().toISOString();
+		const record: FestivalClassConfiguration = {
+			id: randomUUID(),
+			...input,
+			isActive: true,
+			createdAtIso: now,
+			updatedAtIso: now,
+		};
+		this.festivalClassConfigurations.set(record.id, record);
+		return { ...record };
+	}
+
+	async listFestivalClassConfigurations(
+		organizationId: string,
+		festivalId: string,
+		activeOnly = false,
+	): Promise<FestivalClassConfiguration[]> {
+		return [...this.festivalClassConfigurations.values()]
+			.filter(
+				(record) =>
+					record.organizationId === organizationId &&
+					record.festivalId === festivalId &&
+					(!activeOnly || record.isActive),
+			)
+			.map((record) => ({ ...record }));
 	}
 
 	async findProductRecordByShopifyProductGid(

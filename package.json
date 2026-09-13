@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "packageManager": "bun@1.2.23",
+  "packageManager": "bun@1.4.2",
   "workspaces": [
     "packages/*"
   ],
@@ -22,12 +22,13 @@
     "format:backend": "biome check --write packages/backend",
     "format:frontend": "biome check --write packages/frontend",
     "format:check": "biome check packages",
-    "build": "bun run build:common && bun run build:backend && bun run build:frontend && bun run build:confirmation",
+    "verify:toolchain": "bun scripts/verify-toolchain.ts",
+    "build": "bun run verify:toolchain && bun run build:common && bun run build:backend && bun run build:frontend && bun run build:confirmation",
     "build:confirmation": "bun run --cwd packages/shopify-confirmation build",
     "build:common": "bun run --cwd packages/common build",
     "build:backend": "bun run --cwd packages/backend build",
     "build:frontend": "bun run --cwd packages/frontend build",
-    "test": "bun run build:common && bun run test:common && bun run test:backend && bun run test:frontend && bun run test:confirmation",
+    "test": "bun run verify:toolchain && bun run build:common && bun run test:common && bun run test:backend && bun run test:frontend && bun run test:confirmation",
     "test:confirmation": "bun run --cwd packages/shopify-confirmation test",
     "test:common": "bun run --cwd packages/common test",
     "test:backend": "bun run --cwd packages/backend test",
@@ -38,7 +39,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.4.9",
     "@types/bun": "^1.3.11",
-    "typescript": "^5.9.2"
+    "typescript": "5.9.3"
   },
   "dependencies": {
     "firebase": "^12.10.0",

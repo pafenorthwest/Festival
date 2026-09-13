@@ -1,3 +1,4 @@
+export * from "./accompanist.js";
 export * from "./catalog.js";
 export * from "./customer-account.js";
 export * from "./domain.js";

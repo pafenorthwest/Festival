@@ -227,6 +227,7 @@ async function fixture(repository = new InMemoryCustomerAccountRepository()) {
 	return {
 		service,
 		repository,
+		organizations,
 		org,
 		other,
 		keyring,
@@ -258,6 +259,159 @@ async function fixture(repository = new InMemoryCustomerAccountRepository()) {
 }
 
 describe("CustomerAccountService", () => {
+	it("creates and refreshes age snapshots without retaining birthdays", async () => {
+		const f = await fixture();
+		await f.organizations.updateRegistrationAgeConfiguration({
+			organizationId: f.org.id,
+			registrationAgeDate: "2026-06-01",
+		});
+		const auth = await f.authenticate();
+		const session = await f.repository.getSession(auth.sessionId);
+		if (!session) throw new Error("session");
+		const created = await f.service.createChild(
+			"festival",
+			auth.sessionId,
+			session.csrfToken,
+			"https://festival.example.com",
+			{ displayName: "Alex", birthday: "2016-06-01" },
+		);
+		expect(created.ageSnapshot.age).toBe(10);
+		expect(JSON.stringify(created)).not.toContain("2016-06-01");
+		const refreshed = await f.service.refreshChildAgeSnapshot(
+			"festival",
+			auth.sessionId,
+			session.csrfToken,
+			"https://festival.example.com",
+			created.child.id,
+			{ birthday: "2015-06-02" },
+		);
+		expect(refreshed.ageSnapshot.age).toBe(10);
+		const snapshots = await f.repository.listChildAgeSnapshots(
+			f.org.id,
+			created.child.id,
+		);
+		expect(snapshots).toHaveLength(2);
+		expect(snapshots[0]?.supersededAtIso).toBeDefined();
+	});
+	it("calculates registration ages at before, on, and after birthday boundaries", async () => {
+		const f = await fixture();
+		f.setNow(new Date("2026-01-01T00:00:00.000Z"));
+		await f.organizations.updateRegistrationAgeConfiguration({
+			organizationId: f.org.id,
+			registrationAgeDate: "2026-06-01",
+		});
+		const auth = await f.authenticate();
+		const session = await f.repository.getSession(auth.sessionId);
+		if (!session) throw new Error("session");
+		const create = (displayName: string, birthday: string) =>
+			f.service.createChild(
+				"festival",
+				auth.sessionId,
+				session.csrfToken,
+				"https://festival.example.com",
+				{ displayName, birthday },
+			);
+		expect((await create("Before", "2016-05-31")).ageSnapshot.age).toBe(10);
+		expect((await create("On", "2016-06-01")).ageSnapshot.age).toBe(10);
+		expect((await create("After", "2016-06-02")).ageSnapshot.age).toBe(9);
+		const created = await create("Validity", "2016-01-01");
+		expect(created.ageSnapshot.validUntilIso).toBe("2026-04-01T00:00:00.000Z");
+	});
+	it("rejects calendar-invalid birthdays without normalizing them", async () => {
+		const f = await fixture();
+		await f.organizations.updateRegistrationAgeConfiguration({
+			organizationId: f.org.id,
+			registrationAgeDate: "2026-06-01",
+		});
+		const auth = await f.authenticate();
+		const session = await f.repository.getSession(auth.sessionId);
+		if (!session) throw new Error("session");
+		await expect(
+			f.service.createChild(
+				"festival",
+				auth.sessionId,
+				session.csrfToken,
+				"https://festival.example.com",
+				{ displayName: "Invalid", birthday: "2016-02-31" },
+			),
+		).rejects.toMatchObject({ status: 400 });
+		const created = await f.service.createChild(
+			"festival",
+			auth.sessionId,
+			session.csrfToken,
+			"https://festival.example.com",
+			{ displayName: "Leap", birthday: "2016-02-29" },
+		);
+		expect(created.ageSnapshot.age).toBe(10);
+		await expect(
+			f.service.refreshChildAgeSnapshot(
+				"festival",
+				auth.sessionId,
+				session.csrfToken,
+				"https://festival.example.com",
+				created.child.id,
+				{ birthday: "2015-02-29" },
+			),
+		).rejects.toMatchObject({ status: 400 });
+	});
+	it("rejects child writes without the customer CSRF boundary", async () => {
+		const f = await fixture();
+		await f.organizations.updateRegistrationAgeConfiguration({
+			organizationId: f.org.id,
+			registrationAgeDate: "2026-06-01",
+		});
+		const auth = await f.authenticate();
+		await expect(
+			f.service.createChild(
+				"festival",
+				auth.sessionId,
+				"wrong",
+				"https://festival.example.com",
+				{ displayName: "Alex", birthday: "2016-06-01" },
+			),
+		).rejects.toMatchObject({ status: 403 });
+		await expect(
+			f.service.createChild(
+				"festival",
+				auth.sessionId,
+				"",
+				"https://festival.example.com",
+				{ displayName: "Alex", birthday: "2016-06-01" },
+			),
+		).rejects.toMatchObject({ status: 403 });
+	});
+	it("does not allow a parent to refresh another parent's child", async () => {
+		const f = await fixture();
+		await f.organizations.updateRegistrationAgeConfiguration({
+			organizationId: f.org.id,
+			registrationAgeDate: "2026-06-01",
+		});
+		const auth = await f.authenticate();
+		const session = await f.repository.getSession(auth.sessionId);
+		if (!session) throw new Error("session");
+		const child = await f.repository.createChild({
+			organizationId: f.org.id,
+			parentCustomerId: "other-parent",
+			displayName: "Other",
+		});
+		await expect(
+			f.service.refreshChildAgeSnapshot(
+				"festival",
+				auth.sessionId,
+				session.csrfToken,
+				"https://festival.example.com",
+				child.id,
+				{ birthday: "2016-06-01" },
+			),
+		).rejects.toMatchObject({ status: 404 });
+	});
+	it("does not allow a customer session to read children across tenants", async () => {
+		const f = await fixture();
+		const auth = await f.authenticate();
+		await expect(
+			f.service.listChildren("other", auth.sessionId),
+		).rejects.toMatchObject({ status: 401 });
+	});
 	it("keeps configuration separate, validates discovery, and never returns the secret", async () => {
 		const f = await fixture();
 		const stored = await f.repository.getIntegration(f.org.id);

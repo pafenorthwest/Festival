@@ -14,6 +14,13 @@ function schemaName(value: string) {
 	return value;
 }
 
+function isoTimestamp(value: unknown, field: string) {
+	const timestamp = Date.parse(String(value));
+	if (!Number.isFinite(timestamp))
+		throw new Error(`${field} timestamp is invalid.`);
+	return new Date(timestamp).toISOString();
+}
+
 export class PostgresCheckoutRepository implements CheckoutRepository {
 	private readonly schema: string;
 	constructor(schema: string) {
@@ -259,8 +266,8 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 			sessionId: String(row.session_id),
 			integrationVersion: Number(row.integration_version),
 			status: row.status as CheckoutCartRecord["status"],
-			expiresAtIso: String(row.expires_at),
-			createdAtIso: String(row.created_at),
+			expiresAtIso: isoTimestamp(row.expires_at, "Checkout cart expiry"),
+			createdAtIso: isoTimestamp(row.created_at, "Checkout cart creation"),
 		};
 	}
 	private intent(row: Record<string, unknown>): CheckoutIntentRecord {
@@ -292,8 +299,8 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 			cartReference:
 				row.cart_reference === null ? null : String(row.cart_reference),
 			status: row.status as CheckoutIntentRecord["status"],
-			expiresAtIso: String(row.expires_at),
-			createdAtIso: String(row.created_at),
+			expiresAtIso: isoTimestamp(row.expires_at, "Checkout intent expiry"),
+			createdAtIso: isoTimestamp(row.created_at, "Checkout intent creation"),
 		};
 	}
 	private async outcomeFor(intent: CheckoutIntentRecord) {

@@ -322,11 +322,13 @@ export function createFestivalActions(
 		try {
 			const token = await user.getIdToken();
 			await createFestival(token, currentRoute.slug, {
+				shortName: draft.shortName,
 				name: nameValidation.normalized,
 				startDate: draft.startDate,
 				endDate: draft.endDate,
 			});
 			state.setFestivalDraft({
+				shortName: "",
 				name: "",
 				startDate: "",
 				endDate: "",

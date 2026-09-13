@@ -2,10 +2,53 @@ import { isValidIanaTimezone } from "./organization.js";
 
 export const TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS =
 	"teacher_membership" as const;
-export type EntitlementClass = typeof TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS;
+export const ACCOMPANIST_MEMBERSHIP_ENTITLEMENT_CLASS =
+	"accompanist_membership" as const;
+export const ENTITLEMENT_CLASSES = [
+	TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+	ACCOMPANIST_MEMBERSHIP_ENTITLEMENT_CLASS,
+] as const;
+export type EntitlementClass = (typeof ENTITLEMENT_CLASSES)[number];
 
 export const INITIAL_TEACHER_MEMBERSHIP_DURATION_DAYS = 365;
+export const INITIAL_ACCOMPANIST_MEMBERSHIP_DURATION_DAYS = 365;
 export const MAX_ENTITLEMENT_DURATION_DAYS = 36_500;
+
+export const ACCOMPANIST_DIVISION_SELECTION_POLICIES = [
+	"exactly_one",
+	"one_to_two",
+	"one_to_all",
+] as const;
+export type AccompanistDivisionSelectionPolicy =
+	(typeof ACCOMPANIST_DIVISION_SELECTION_POLICIES)[number];
+
+export function isAccompanistDivisionSelectionPolicy(
+	value: unknown,
+): value is AccompanistDivisionSelectionPolicy {
+	return ACCOMPANIST_DIVISION_SELECTION_POLICIES.includes(
+		value as AccompanistDivisionSelectionPolicy,
+	);
+}
+
+export function validateAccompanistDivisionSelection(
+	policy: AccompanistDivisionSelectionPolicy,
+	selectedDivisionIds: readonly string[],
+	activeDivisionCount: number,
+): void {
+	if (new Set(selectedDivisionIds).size !== selectedDivisionIds.length) {
+		throw new Error("Each accompanist division may be selected only once.");
+	}
+	const count = selectedDivisionIds.length;
+	if (
+		(policy === "exactly_one" && count !== 1) ||
+		(policy === "one_to_two" && (count < 1 || count > 2)) ||
+		(policy === "one_to_all" && (count < 1 || count > activeDivisionCount))
+	) {
+		throw new Error(
+			"Selected divisions do not satisfy the accompanist policy.",
+		);
+	}
+}
 
 export const ENTITLEMENT_GRANT_STATUSES = [
 	"active",
@@ -54,7 +97,7 @@ export type CreateEntitlementGrantSnapshotInput = Omit<
 >;
 
 export function isEntitlementClass(value: unknown): value is EntitlementClass {
-	return value === TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS;
+	return ENTITLEMENT_CLASSES.includes(value as EntitlementClass);
 }
 
 export function isEntitlementGrantStatus(
@@ -101,7 +144,7 @@ export function assertValidEntitlementGrantSnapshotInput(
 	input: CreateEntitlementGrantSnapshotInput,
 ): void {
 	if (!isEntitlementClass(input.entitlementClass)) {
-		throw new Error("Entitlement class must be teacher_membership.");
+		throw new Error("Entitlement class is invalid.");
 	}
 	assertValidEntitlementDurationDays(input.durationDays);
 	for (const [label, value] of [

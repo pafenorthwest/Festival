@@ -143,6 +143,7 @@ function shopifyProduct(
 				price: { amount: "75.00", currencyCode: "USD" },
 				productId: id,
 				selectedOptions: [{ name: "Plan", value: "Standard" }],
+				requiresShipping: false,
 			},
 		],
 		...overrides,
@@ -152,6 +153,7 @@ function shopifyProduct(
 class FakeShopifyProductClient implements ShopifyMembershipProductClient {
 	readonly deletedProductGids: string[] = [];
 	readonly readProductGids: string[][] = [];
+	readonly variantUpdates: Array<{ requiresShipping: boolean }> = [];
 	createResponse = shopifyProduct();
 	updateResponse = shopifyProduct();
 	readResponse = [shopifyProduct()];
@@ -161,7 +163,15 @@ class FakeShopifyProductClient implements ShopifyMembershipProductClient {
 		return { value: this.createResponse };
 	}
 
-	async updateVariantPrice(): Promise<
+	async updateVariantPrice(
+		_context: ShopifyAdminOperationContext,
+		input: { requiresShipping: boolean },
+	): Promise<ShopifyAdminResult<ShopifyProductDetails>> {
+		this.variantUpdates.push({ requiresShipping: input.requiresShipping });
+		return { value: this.updateResponse };
+	}
+
+	async updateProductDetails(): Promise<
 		ShopifyAdminResult<ShopifyProductDetails>
 	> {
 		return { value: this.updateResponse };
@@ -1090,6 +1100,7 @@ describe("organization routes", () => {
 					method: "POST",
 					body: JSON.stringify({
 						name: "Spring Festival (West)",
+						shortName: "jun-27",
 						startDate: "2027-06-10",
 						endDate: "2027-06-12",
 					}),
@@ -1110,6 +1121,7 @@ describe("organization routes", () => {
 					method: "POST",
 					body: JSON.stringify({
 						name: "spring festival (west)",
+						shortName: "jun-27",
 						startDate: "2027-06-10",
 						endDate: "2027-06-12",
 					}),
@@ -1125,6 +1137,7 @@ describe("organization routes", () => {
 					method: "POST",
 					body: JSON.stringify({
 						name: "Summer Festival",
+						shortName: "jun-27",
 						startDate: "2027-06-12",
 						endDate: "2027-06-10",
 					}),
@@ -1140,6 +1153,7 @@ describe("organization routes", () => {
 					method: "POST",
 					body: JSON.stringify({
 						name: "Past Festival",
+						shortName: "jun-27",
 						startDate: "2020-06-10",
 						endDate: "2020-06-12",
 					}),
@@ -1186,6 +1200,7 @@ describe("organization routes", () => {
 					method: "POST",
 					body: JSON.stringify({
 						name: "Spring Festival",
+						shortName: "jun-27",
 						startDate: "2027-06-10",
 						endDate: "2027-06-12",
 					}),
@@ -1843,5 +1858,163 @@ describe("organization routes", () => {
 		);
 		expect(invalidLength.status).toBe(400);
 		expect(publicCatalogClient.calls).toHaveLength(0);
+	});
+
+	it("creates an Admin-only digital accompanist offering with its selected duration", async () => {
+		const { app, repository, encryptor, shopifyProductClient } =
+			await createTestAppWithMembershipProducts();
+		await createOrganizationViaApi(app);
+		await saveVerifiedShopifyIntegration(repository, encryptor);
+
+		const response = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/accompanist-offering",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						name: "Accompanist Membership",
+						description: "For festival accompanists.",
+						price: "0.00",
+						durationDays: 365,
+					}),
+				}),
+			),
+		);
+		expect(response.status).toBe(201);
+		expect((await response.json()).membershipProduct).toMatchObject({
+			entitlementClass: "accompanist_membership",
+			durationDays: 365,
+		});
+		expect(shopifyProductClient.variantUpdates[0]?.requiresShipping).toBe(
+			false,
+		);
+	});
+
+	it("persists the Admin-only accompanist policy and defaults it to one-to-all", async () => {
+		const { app, repository } = await createTestAppWithMembershipProducts();
+		await createOrganizationViaApi(app);
+		const initial = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/accompanist-policy",
+				withAuth("admin"),
+			),
+		);
+		expect(await initial.json()).toMatchObject({
+			policy: { policy: "one_to_all" },
+		});
+		const updated = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/accompanist-policy",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({ policy: "one_to_two" }),
+				}),
+			),
+		);
+		expect(updated.status).toBe(200);
+		expect(
+			await repository.getAccompanistDivisionPolicy(
+				(await repository.findOrganizationBySlug("pafe"))?.id ?? "",
+			),
+		).toMatchObject({ policy: "one_to_two" });
+	});
+
+	it("updates only the active accompanist offering after Shopify readback", async () => {
+		const { app, repository, encryptor } =
+			await createTestAppWithMembershipProducts();
+		await createOrganizationViaApi(app);
+		await saveVerifiedShopifyIntegration(repository, encryptor);
+		const created = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/accompanist-offering",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						name: "Accompanist",
+						price: "0.00",
+						durationDays: 365,
+					}),
+				}),
+			),
+		);
+		const { membershipProduct } = await created.json();
+		const updated = await app.fetch(
+			new Request(
+				`http://test/api/organizations/pafe/admin/accompanist-offering/${membershipProduct.id}`,
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						name: "Updated Accompanist",
+						price: "0.00",
+						durationDays: 730,
+					}),
+				}),
+			),
+		);
+		expect(updated.status).toBe(200);
+		expect((await updated.json()).membershipProduct).toMatchObject({
+			durationDays: 730,
+		});
+		const saved = await repository.findMembershipProductRecordByClass(
+			(await repository.findOrganizationBySlug("pafe"))?.id ?? "",
+			"accompanist_membership",
+		);
+		expect(saved?.durationDays).toBe(730);
+	});
+
+	it("keeps registration age configuration and catalog values tenant-admin scoped", async () => {
+		const { app } = await createTestAppWithMembershipProducts();
+		await createOrganizationViaApi(app);
+		const age = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/registration-age-date",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({ registrationAgeDate: "2027-01-01" }),
+				}),
+			),
+		);
+		expect(age.status).toBe(200);
+		const subtype = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/class-subtypes",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({ displayName: "Solo" }),
+				}),
+			),
+		);
+		expect(subtype.status).toBe(201);
+		const subtypeValue = (await subtype.json()).value as { id: string };
+		const deactivated = await app.fetch(
+			new Request(
+				`http://test/api/organizations/pafe/admin/class-subtypes/${subtypeValue.id}`,
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({ displayName: "Solo Piano", isActive: false }),
+				}),
+			),
+		);
+		expect(deactivated.status).toBe(200);
+		const reordered = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/class-subtypes/reorder",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({ ids: [subtypeValue.id] }),
+				}),
+			),
+		);
+		expect(reordered.status).toBe(200);
+		const configuration = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/registration-configuration",
+				withAuth("admin"),
+			),
+		);
+		expect(await configuration.json()).toMatchObject({
+			ageConfiguration: { registrationAgeDate: "2027-01-01" },
+			classSubtypes: [{ displayName: "Solo Piano", isActive: false }],
+		});
 	});
 });

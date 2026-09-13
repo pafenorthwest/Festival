@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type {
+	FestivalChildAgeSnapshot,
+	FestivalChildRecord,
+} from "@festival/common";
+import type {
 	ApplyCustomerProfileInput,
 	CustomerAccountIntegrationRecord,
 	CustomerAccountRepository,
@@ -30,6 +34,8 @@ export class InMemoryCustomerAccountRepository
 	private customers = new Map<string, FestivalCustomerRecord>();
 	private customerByShopifyIdentity = new Map<string, string>();
 	private consents = new Map<string, CustomerStaffAccessConsentRecord>();
+	private children = new Map<string, FestivalChildRecord>();
+	private childAgeSnapshots = new Map<string, FestivalChildAgeSnapshot>();
 	readonly profileAccessAudits: CustomerProfileAccessAuditRecord[] = [];
 	private customerIdentityKey(
 		organizationId: string,
@@ -286,5 +292,58 @@ export class InMemoryCustomerAccountRepository
 		for (const [id, session] of this.sessions)
 			if (session.organizationId === org && !session.revokedAtIso)
 				this.sessions.set(id, { ...session, revokedAtIso: at });
+	}
+	async createChild(input: Omit<FestivalChildRecord, "id" | "createdAtIso">) {
+		if (
+			[...this.children.values()].some(
+				(child) =>
+					child.organizationId === input.organizationId &&
+					child.parentCustomerId === input.parentCustomerId &&
+					child.displayName.toLowerCase() === input.displayName.toLowerCase(),
+			)
+		)
+			throw new Error("Child display name is already registered.");
+		const child = {
+			...input,
+			id: randomUUID(),
+			createdAtIso: new Date().toISOString(),
+		};
+		this.children.set(child.id, child);
+		return child;
+	}
+	async listChildren(organizationId: string, parentCustomerId: string) {
+		return [...this.children.values()].filter(
+			(child) =>
+				child.organizationId === organizationId &&
+				child.parentCustomerId === parentCustomerId,
+		);
+	}
+	async createChildAgeSnapshot(
+		input: Omit<
+			FestivalChildAgeSnapshot,
+			"id" | "createdAtIso" | "supersededAtIso"
+		>,
+	) {
+		const now = new Date().toISOString();
+		for (const snapshot of this.childAgeSnapshots.values())
+			if (
+				snapshot.organizationId === input.organizationId &&
+				snapshot.childId === input.childId &&
+				!snapshot.supersededAtIso
+			)
+				this.childAgeSnapshots.set(snapshot.id, {
+					...snapshot,
+					supersededAtIso: now,
+				});
+		const snapshot = { ...input, id: randomUUID(), createdAtIso: now };
+		this.childAgeSnapshots.set(snapshot.id, snapshot);
+		return snapshot;
+	}
+	async listChildAgeSnapshots(organizationId: string, childId: string) {
+		return [...this.childAgeSnapshots.values()].filter(
+			(snapshot) =>
+				snapshot.organizationId === organizationId &&
+				snapshot.childId === childId,
+		);
 	}
 }

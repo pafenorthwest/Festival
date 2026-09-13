@@ -23,6 +23,48 @@ async function createSession(
 }
 
 describe("customer account repository contract", () => {
+	it("keeps parent child names unique and supersedes immutable age snapshots", async () => {
+		const repo = new InMemoryCustomerAccountRepository();
+		const child = await repo.createChild({
+			organizationId: "org",
+			parentCustomerId: "parent",
+			displayName: "Alex",
+		});
+		await expect(
+			repo.createChild({
+				organizationId: "org",
+				parentCustomerId: "parent",
+				displayName: "alex",
+			}),
+		).rejects.toThrow("Child display name is already registered.");
+		expect(
+			await repo.createChild({
+				organizationId: "org",
+				parentCustomerId: "other-parent",
+				displayName: "Alex",
+			}),
+		).toMatchObject({ displayName: "Alex" });
+		const first = await repo.createChildAgeSnapshot({
+			organizationId: "org",
+			childId: child.id,
+			age: 9,
+			validUntilIso: "2027-01-01T00:00:00.000Z",
+		});
+		const second = await repo.createChildAgeSnapshot({
+			organizationId: "org",
+			childId: child.id,
+			age: 10,
+			validUntilIso: "2027-04-01T00:00:00.000Z",
+		});
+		const snapshots = await repo.listChildAgeSnapshots("org", child.id);
+		expect(snapshots).toHaveLength(2);
+		expect(
+			snapshots.find((snapshot) => snapshot.id === first.id)?.supersededAtIso,
+		).toBeDefined();
+		expect(
+			snapshots.find((snapshot) => snapshot.id === second.id)?.supersededAtIso,
+		).toBeUndefined();
+	});
 	it("consumes OAuth state once and revokes sessions when credentials rotate", async () => {
 		const repo = new InMemoryCustomerAccountRepository();
 		const now = new Date().toISOString();
@@ -129,6 +171,13 @@ describe("customer account repository contract", () => {
 		expect(source).toContain("festival_customers");
 		expect(source).toContain("festival_customer_staff_consents");
 		expect(source).toContain("festival_customer_profile_access_audit");
+		expect(source).toContain("festival_children");
+		expect(source).toContain("festival_child_age_snapshots");
+		expect(source).toContain(
+			"UNIQUE(organization_id,parent_customer_id,LOWER(display_name))",
+		);
+		expect(source).toContain("superseded_at");
+		expect(source).not.toContain("birth_date");
 		expect(source).toContain("customer_id");
 		expect(source).toContain(
 			"ON CONFLICT (organization_id,shopify_customer_gid)",
