@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { readFile } from "node:fs/promises";
 import { TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS } from "@festival/common";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
+import { buildCanonicalPostgresSchemaSql } from "../src/repo/postgres-schema.js";
 
 async function createOrganization(repository: InMemoryOrganizationRepository) {
 	return repository.createOrganization({
@@ -11,36 +11,16 @@ async function createOrganization(repository: InMemoryOrganizationRepository) {
 }
 
 describe("product repository", () => {
-	it("defines the bounded offering migration and immutable grant schema", async () => {
-		const source = await readFile(
-			new URL(
-				"../src/repo/postgres-organization-repository.ts",
-				import.meta.url,
-			),
-			"utf8",
-		);
-		expect(source).toContain("ADD COLUMN IF NOT EXISTS duration_days INTEGER");
-		expect(source).toContain("WHEN '1_year' THEN 365");
+	it("defines the bounded offering and immutable grant schema", () => {
+		const source = buildCanonicalPostgresSchemaSql("schema");
 		expect(source).toContain("duration_days > 0 AND duration_days <= 36500");
 		expect(source).toContain("idx_products_org_active_entitlement_class");
 		expect(source).toContain(
-			"CREATE TABLE IF NOT EXISTS $" + "{schema}.entitlement_grants",
+			"CREATE TABLE IF NOT EXISTS schema.entitlement_grants",
 		);
-		const createEntitlementGrants = source.indexOf(
-			"CREATE TABLE IF NOT EXISTS $" + "{schema}.entitlement_grants",
-		);
-		const alterEntitlementGrants = source.indexOf(
-			"ALTER TABLE $" + "{schema}.entitlement_grants",
-		);
-		expect(alterEntitlementGrants).toBeGreaterThan(createEntitlementGrants);
 		expect(source).toContain("shopify_order_line_gid TEXT NOT NULL UNIQUE");
 		expect(source).toContain("CHECK (ends_on > starts_on)");
-		expect(source).not.toContain(
-			"entitlement_period IS NULL OR entitlement_period IN",
-		);
-		expect(source).not.toContain(
-			"UPDATE $" + "{this.schema}.entitlement_grants",
-		);
+		expect(source).not.toMatch(/ALTER TABLE|entitlement_period/);
 	});
 
 	it("creates and lists membership product associations", async () => {

@@ -5,6 +5,7 @@ import type {
 } from "@festival/common";
 import { assertValidEntitlementGrantSnapshotInput } from "@festival/common";
 import { sql } from "bun";
+import { initializePostgresSchema } from "../repo/postgres-schema.js";
 import type {
 	MembershipCommerceRepository,
 	MembershipDecisionStatus,
@@ -135,81 +136,7 @@ export class PostgresMembershipCommerceRepository
 	}
 
 	async ensureReady() {
-		await sql.unsafe(`
-			CREATE TABLE IF NOT EXISTS ${this.schema}.shopify_webhook_deliveries (
-				id TEXT PRIMARY KEY,
-				organization_id TEXT NOT NULL REFERENCES ${this.schema}.organizations (id) ON DELETE CASCADE,
-				shop_domain TEXT NOT NULL,
-				webhook_id TEXT NOT NULL,
-				topic TEXT NOT NULL CHECK (topic = 'orders/paid'),
-				api_version TEXT NOT NULL CHECK (api_version = '2026-07'),
-				shopify_order_gid TEXT NOT NULL,
-				payload_sha256 TEXT NOT NULL CHECK (payload_sha256 ~ '^[0-9a-f]{64}$'),
-				status TEXT NOT NULL CHECK (status IN ('received', 'processing', 'processed', 'failed')),
-				attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
-				failure_category TEXT NULL CHECK (failure_category IN ('upstream', 'persistence', 'invalid')),
-				received_at TIMESTAMPTZ NOT NULL,
-				processing_started_at TIMESTAMPTZ NULL,
-				processed_at TIMESTAMPTZ NULL,
-				UNIQUE (organization_id, webhook_id)
-			);
-			CREATE TABLE IF NOT EXISTS ${this.schema}.shopify_order_projections (
-				organization_id TEXT NOT NULL REFERENCES ${this.schema}.organizations (id) ON DELETE CASCADE,
-				shopify_order_gid TEXT NOT NULL,
-				shopify_customer_gid TEXT NULL,
-				correlation_id TEXT NULL,
-				fully_paid_at TIMESTAMPTZ NULL,
-				currency_code TEXT NULL,
-				created_at TIMESTAMPTZ NOT NULL,
-				updated_at TIMESTAMPTZ NOT NULL,
-				PRIMARY KEY (organization_id, shopify_order_gid)
-			);
-			CREATE TABLE IF NOT EXISTS ${this.schema}.membership_validation_decisions (
-				id TEXT PRIMARY KEY,
-				organization_id TEXT NOT NULL REFERENCES ${this.schema}.organizations (id) ON DELETE CASCADE,
-				customer_id TEXT NULL,
-				checkout_intent_id TEXT NULL,
-				shopify_order_gid TEXT NOT NULL,
-				shopify_order_line_gid TEXT NULL,
-				status TEXT NOT NULL CHECK (status IN ('pending_validation', 'approved', 'rejected', 'needs_review')),
-				reason_code TEXT NULL CHECK (reason_code IN ('correlation_missing', 'correlation_invalid', 'intent_expired', 'order_not_paid', 'payment_incomplete', 'payment_mismatch', 'customer_mismatch', 'offering_mismatch', 'division_invalid', 'duplicate_purchase', 'policy_mismatch', 'upstream_invalid')),
-				created_at TIMESTAMPTZ NOT NULL,
-				updated_at TIMESTAMPTZ NOT NULL,
-				UNIQUE (organization_id, shopify_order_gid),
-				UNIQUE (organization_id, shopify_order_line_gid)
-			);
-			ALTER TABLE ${this.schema}.shopify_webhook_deliveries
-				ADD COLUMN IF NOT EXISTS processing_started_at TIMESTAMPTZ NULL;
-			CREATE INDEX IF NOT EXISTS membership_validation_customer_idx
-				ON ${this.schema}.membership_validation_decisions (organization_id, customer_id, created_at DESC);
-			CREATE UNIQUE INDEX IF NOT EXISTS membership_validation_checkout_intent_idx
-				ON ${this.schema}.membership_validation_decisions (organization_id, checkout_intent_id)
-				WHERE checkout_intent_id IS NOT NULL;
-			CREATE INDEX IF NOT EXISTS shopify_webhook_reclaim_idx
-				ON ${this.schema}.shopify_webhook_deliveries (organization_id, status, received_at);
-			ALTER TABLE ${this.schema}.shopify_webhook_deliveries
-				ADD COLUMN IF NOT EXISTS failure_stage TEXT NULL CHECK (failure_stage IN ('order_read', 'projection')),
-				ADD COLUMN IF NOT EXISTS failure_code TEXT NULL CHECK (failure_code IN ('shopify_upstream', 'shopify_transport', 'invalid_data', 'persistence', 'unexpected')),
-				ADD COLUMN IF NOT EXISTS shopify_request_id TEXT NULL CHECK (shopify_request_id ~ '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'),
-				ADD COLUMN IF NOT EXISTS failed_at TIMESTAMPTZ NULL;
-			ALTER TABLE ${this.schema}.membership_validation_decisions
-				DROP CONSTRAINT IF EXISTS membership_validation_decisions_reason_code_check;
-			ALTER TABLE ${this.schema}.membership_validation_decisions
-				ADD CONSTRAINT membership_validation_decisions_reason_code_check
-				CHECK (reason_code IS NULL OR reason_code IN ('correlation_missing', 'correlation_invalid', 'intent_expired', 'order_not_paid', 'payment_incomplete', 'payment_mismatch', 'customer_mismatch', 'offering_mismatch', 'division_invalid', 'duplicate_purchase', 'policy_mismatch', 'upstream_invalid'));
-			CREATE TABLE IF NOT EXISTS ${this.schema}.membership_reconciliation_runs (
-				id TEXT PRIMARY KEY,
-				organization_id TEXT NOT NULL REFERENCES ${this.schema}.organizations (id) ON DELETE CASCADE,
-				status TEXT NOT NULL CHECK (status IN ('completed', 'failed')),
-				discovered_count INTEGER NOT NULL CHECK (discovered_count >= 0),
-				processed_count INTEGER NOT NULL CHECK (processed_count >= 0),
-				started_at TIMESTAMPTZ NOT NULL,
-				finished_at TIMESTAMPTZ NOT NULL,
-				failure_category TEXT NULL CHECK (failure_category IN ('upstream', 'persistence', 'invalid'))
-			);
-			CREATE INDEX IF NOT EXISTS membership_reconciliation_runs_tenant_idx
-				ON ${this.schema}.membership_reconciliation_runs (organization_id, finished_at DESC);
-		`);
+		await initializePostgresSchema(this.schema);
 	}
 
 	async recordDelivery(input: {

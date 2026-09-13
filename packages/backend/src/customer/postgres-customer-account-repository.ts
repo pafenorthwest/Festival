@@ -5,6 +5,7 @@ import type {
 	FestivalChildRecord,
 } from "@festival/common";
 import { sql } from "bun";
+import { initializePostgresSchema } from "../repo/postgres-schema.js";
 import type {
 	ApplyCustomerProfileInput,
 	CustomerAccountIntegrationRecord,
@@ -150,87 +151,11 @@ function customer(row: CustomerRow): FestivalCustomerRecord {
 export class PostgresCustomerAccountRepository
 	implements CustomerAccountRepository
 {
-	private ready?: Promise<void>;
 	constructor(private schema: string) {
 		this.schema = schemaName(schema);
 	}
 	async ensureReady() {
-		this.ready ??= this.migrate();
-		await this.ready;
-	}
-	private async migrate() {
-		await sql.unsafe(`
-		CREATE TABLE IF NOT EXISTS ${this.schema}.shopify_customer_account_integrations (
-			organization_id TEXT PRIMARY KEY REFERENCES ${this.schema}.organizations(id) ON DELETE CASCADE,
-			storefront_domain TEXT NOT NULL, client_id TEXT NOT NULL, encrypted_client_secret TEXT NOT NULL,
-			readiness TEXT NOT NULL DEFAULT 'unknown' CHECK (readiness IN ('unknown','ready','failed')),
-			can_read_orders BOOLEAN NOT NULL DEFAULT FALSE, integration_version BIGINT NOT NULL DEFAULT 1 CHECK (integration_version > 0),
-			verified_at TIMESTAMPTZ NULL, last_error TEXT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		);
-			CREATE TABLE IF NOT EXISTS ${this.schema}.shopify_customer_oauth_states (
-				state_hash TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES ${this.schema}.organizations(id) ON DELETE CASCADE,
-				nonce TEXT NOT NULL, return_to TEXT NOT NULL, offering_id TEXT NULL, expires_at TIMESTAMPTZ NOT NULL
-			);
-			ALTER TABLE ${this.schema}.shopify_customer_oauth_states ADD COLUMN IF NOT EXISTS offering_id TEXT NULL;
-		CREATE TABLE IF NOT EXISTS ${this.schema}.festival_customers (
-			id TEXT PRIMARY KEY,
-			organization_id TEXT NOT NULL REFERENCES ${this.schema}.organizations(id) ON DELETE CASCADE,
-			shopify_customer_gid TEXT NOT NULL,
-			name TEXT NULL, name_source TEXT NULL CHECK (name_source IN ('shopify','festival')), name_updated_at TIMESTAMPTZ NULL,
-			email TEXT NULL, email_source TEXT NULL CHECK (email_source IN ('shopify','festival')), email_updated_at TIMESTAMPTZ NULL,
-			mailing_address JSONB NULL, mailing_address_source TEXT NULL CHECK (mailing_address_source IN ('shopify','festival')), mailing_address_updated_at TIMESTAMPTZ NULL,
-			phone TEXT NULL, phone_source TEXT NULL CHECK (phone_source IN ('shopify','festival')), phone_updated_at TIMESTAMPTZ NULL,
-			created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL,
-			UNIQUE (organization_id, shopify_customer_gid),
-			UNIQUE (id, organization_id),
-			UNIQUE (id, organization_id, shopify_customer_gid)
-		);
-		CREATE TABLE IF NOT EXISTS ${this.schema}.shopify_customer_sessions (
-			session_id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES ${this.schema}.organizations(id) ON DELETE CASCADE,
-			customer_id TEXT NULL, shopify_customer_gid TEXT NOT NULL, encrypted_tokens TEXT NOT NULL, csrf_token TEXT NOT NULL,
-			integration_version BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL, last_seen_at TIMESTAMPTZ NOT NULL,
-			expires_at TIMESTAMPTZ NOT NULL, revoked_at TIMESTAMPTZ NULL
-		);
-		ALTER TABLE ${this.schema}.shopify_customer_sessions ADD COLUMN IF NOT EXISTS customer_id TEXT NULL;
-		INSERT INTO ${this.schema}.festival_customers (id,organization_id,shopify_customer_gid,created_at,updated_at)
-			SELECT 'cus_' || md5(s.organization_id || chr(31) || s.shopify_customer_gid || random()::text || clock_timestamp()::text), s.organization_id, s.shopify_customer_gid, MIN(s.created_at), MAX(s.last_seen_at)
-		FROM ${this.schema}.shopify_customer_sessions s
-		WHERE s.customer_id IS NULL
-		GROUP BY s.organization_id, s.shopify_customer_gid
-		ON CONFLICT (organization_id,shopify_customer_gid) DO NOTHING;
-		UPDATE ${this.schema}.shopify_customer_sessions s
-		SET customer_id=c.id
-		FROM ${this.schema}.festival_customers c
-		WHERE s.customer_id IS NULL AND c.organization_id=s.organization_id AND c.shopify_customer_gid=s.shopify_customer_gid;
-		ALTER TABLE ${this.schema}.shopify_customer_sessions ALTER COLUMN customer_id SET NOT NULL;
-		DO $migration$
-		BEGIN
-			IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='shopify_customer_sessions_customer_identity_fk' AND conrelid='${this.schema}.shopify_customer_sessions'::regclass) THEN
-				ALTER TABLE ${this.schema}.shopify_customer_sessions ADD CONSTRAINT shopify_customer_sessions_customer_identity_fk FOREIGN KEY (customer_id,organization_id,shopify_customer_gid) REFERENCES ${this.schema}.festival_customers(id,organization_id,shopify_customer_gid) ON DELETE CASCADE;
-			END IF;
-		END $migration$;
-		CREATE TABLE IF NOT EXISTS ${this.schema}.festival_customer_staff_consents (
-			customer_id TEXT NOT NULL,
-			organization_id TEXT NOT NULL,
-			privacy_notice_version TEXT NOT NULL,
-			consented_at TIMESTAMPTZ NOT NULL,
-			PRIMARY KEY (customer_id,privacy_notice_version),
-			FOREIGN KEY (customer_id,organization_id) REFERENCES ${this.schema}.festival_customers(id,organization_id) ON DELETE CASCADE
-		);
-		CREATE TABLE IF NOT EXISTS ${this.schema}.festival_customer_profile_access_audit (
-			id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-			organization_id TEXT NOT NULL REFERENCES ${this.schema}.organizations(id) ON DELETE CASCADE,
-			actor_uid TEXT NOT NULL,
-			action TEXT NOT NULL CHECK (action IN ('view','search')),
-			target_customer_id TEXT NULL,
-			result_count INTEGER NULL CHECK (result_count >= 0),
-			occurred_at TIMESTAMPTZ NOT NULL
-		);
-		CREATE INDEX IF NOT EXISTS idx_shopify_customer_sessions_org ON ${this.schema}.shopify_customer_sessions(organization_id);
-		CREATE INDEX IF NOT EXISTS idx_festival_customers_org_name ON ${this.schema}.festival_customers(organization_id,LOWER(name));
-		CREATE INDEX IF NOT EXISTS idx_festival_customers_org_email ON ${this.schema}.festival_customers(organization_id,LOWER(email));
-		CREATE INDEX IF NOT EXISTS idx_festival_customers_org_phone ON ${this.schema}.festival_customers(organization_id,phone);
-	`);
+		await initializePostgresSchema(this.schema);
 	}
 	async getIntegration(id: string) {
 		await this.ensureReady();
@@ -540,9 +465,6 @@ export class PostgresCustomerAccountRepository
 		const id = randomUUID();
 		const createdAtIso = new Date().toISOString();
 		await sql.unsafe(
-			`CREATE TABLE IF NOT EXISTS ${this.schema}.festival_children (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, parent_customer_id TEXT NOT NULL, display_name TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL, UNIQUE(organization_id,parent_customer_id,LOWER(display_name)))`,
-		);
-		await sql.unsafe(
 			`INSERT INTO ${this.schema}.festival_children (id,organization_id,parent_customer_id,display_name,created_at) VALUES ($1,$2,$3,$4,$5)`,
 			[
 				id,
@@ -586,9 +508,6 @@ export class PostgresCustomerAccountRepository
 		await this.ensureReady();
 		const id = randomUUID();
 		const createdAtIso = new Date().toISOString();
-		await sql.unsafe(
-			`CREATE TABLE IF NOT EXISTS ${this.schema}.festival_child_age_snapshots (id TEXT PRIMARY KEY, child_id TEXT NOT NULL, organization_id TEXT NOT NULL, age INTEGER NOT NULL, created_at TIMESTAMPTZ NOT NULL, valid_until TIMESTAMPTZ NOT NULL, superseded_at TIMESTAMPTZ NULL)`,
-		);
 		await sql.unsafe(
 			`UPDATE ${this.schema}.festival_child_age_snapshots SET superseded_at=$3 WHERE organization_id=$1 AND child_id=$2 AND superseded_at IS NULL`,
 			[input.organizationId, input.childId, createdAtIso],

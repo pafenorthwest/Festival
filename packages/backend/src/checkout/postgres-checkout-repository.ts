@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { sql } from "bun";
+import { initializePostgresSchema } from "../repo/postgres-schema.js";
 import type {
 	CheckoutCartRecord,
 	CheckoutIntentOutcome,
@@ -27,33 +28,7 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 		this.schema = schemaName(schema);
 	}
 	async ensureReady() {
-		await sql.unsafe(`
-			CREATE TABLE IF NOT EXISTS ${this.schema}.checkout_carts (
-				reference TEXT PRIMARY KEY, shopify_cart_id TEXT NOT NULL,
-				organization_id TEXT NOT NULL REFERENCES ${this.schema}.organizations (id) ON DELETE CASCADE,
-				customer_id TEXT NOT NULL, session_id TEXT NOT NULL, integration_version BIGINT NOT NULL,
-				status TEXT NOT NULL CHECK (status IN ('ready', 'checkout_started', 'expired', 'superseded')),
-				expires_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
-			CREATE TABLE IF NOT EXISTS ${this.schema}.checkout_intents (
-				id TEXT PRIMARY KEY, correlation_id TEXT NOT NULL UNIQUE,
-				organization_id TEXT NOT NULL REFERENCES ${this.schema}.organizations (id) ON DELETE CASCADE,
-				customer_id TEXT NOT NULL, session_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, offering_id TEXT NOT NULL REFERENCES ${this.schema}.products (id),
-				entitlement_class TEXT NOT NULL, duration_days INTEGER NOT NULL,
-				shopify_product_gid TEXT NOT NULL, shopify_variant_gid TEXT NOT NULL, policy_version TEXT NOT NULL,
-				division_id TEXT NULL, division_name_snapshot TEXT NULL, staff_access_consent BOOLEAN NOT NULL DEFAULT FALSE,
-				amount TEXT NOT NULL, currency_code TEXT NOT NULL,
-				cart_reference TEXT NULL REFERENCES ${this.schema}.checkout_carts (reference),
-				status TEXT NOT NULL CHECK (status IN ('creating', 'ready', 'checkout_started', 'failed', 'expired', 'superseded', 'approved', 'rejected', 'needs_review')),
-				expires_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
-			ALTER TABLE ${this.schema}.checkout_intents ADD COLUMN IF NOT EXISTS session_id TEXT;
-			ALTER TABLE ${this.schema}.checkout_intents ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
-			ALTER TABLE ${this.schema}.checkout_intents ADD COLUMN IF NOT EXISTS division_id TEXT;
-			ALTER TABLE ${this.schema}.checkout_intents ADD COLUMN IF NOT EXISTS division_name_snapshot TEXT;
-			ALTER TABLE ${this.schema}.checkout_intents ADD COLUMN IF NOT EXISTS staff_access_consent BOOLEAN NOT NULL DEFAULT FALSE;
-			ALTER TABLE ${this.schema}.checkout_intents DROP CONSTRAINT IF EXISTS checkout_intents_status_check;
-			ALTER TABLE ${this.schema}.checkout_intents ADD CONSTRAINT checkout_intents_status_check CHECK (status IN ('creating', 'ready', 'checkout_started', 'failed', 'expired', 'superseded', 'approved', 'rejected', 'needs_review'));
-			CREATE UNIQUE INDEX IF NOT EXISTS checkout_intents_scope_key ON ${this.schema}.checkout_intents(organization_id, customer_id, session_id, idempotency_key);
-		`);
+		await initializePostgresSchema(this.schema);
 	}
 	async getOutcome(input: {
 		organizationId: string;

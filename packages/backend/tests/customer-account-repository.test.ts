@@ -158,7 +158,10 @@ describe("customer account repository contract", () => {
 		);
 	});
 	it("defines distinct durable PostgreSQL configuration, state, and session tables", async () => {
-		const source = await Bun.file(
+		const source = (
+			await import("../src/repo/postgres-schema.js")
+		).buildCanonicalPostgresSchemaSql("schema");
+		const repositorySource = await Bun.file(
 			new URL(
 				"../src/customer/postgres-customer-account-repository.ts",
 				import.meta.url,
@@ -173,25 +176,23 @@ describe("customer account repository contract", () => {
 		expect(source).toContain("festival_customer_profile_access_audit");
 		expect(source).toContain("festival_children");
 		expect(source).toContain("festival_child_age_snapshots");
-		expect(source).toContain(
-			"UNIQUE(organization_id,parent_customer_id,LOWER(display_name))",
-		);
+		expect(source).toContain("idx_festival_children_parent_name");
 		expect(source).toContain("superseded_at");
 		expect(source).not.toContain("birth_date");
 		expect(source).toContain("customer_id");
-		expect(source).toContain(
+		expect(repositorySource).toContain(
 			"ON CONFLICT (organization_id,shopify_customer_gid)",
 		);
-		expect(source).toContain("ALTER COLUMN customer_id SET NOT NULL");
-		expect(source).toContain("chr(31)");
-		expect(source).not.toContain("E'\\\\000'");
-		expect(source).toContain("encrypted_tokens");
-		expect(source).not.toContain("access_token TEXT");
-		expect(source).toContain("revoked_at IS NULL");
-		expect(source).toContain("encrypted_tokens=$4");
-		expect(source).toContain("sql.begin");
-		expect(source).not.toContain("festival_entitlements");
-		expect(source).not.toContain("festival_orders");
+		expect(source).toContain("customer_id TEXT NOT NULL");
+		expect(repositorySource).not.toContain("chr(31)");
+		expect(repositorySource).not.toContain("E'\\\\000'");
+		expect(repositorySource).toContain("encrypted_tokens");
+		expect(repositorySource).not.toContain("access_token TEXT");
+		expect(repositorySource).toContain("revoked_at IS NULL");
+		expect(repositorySource).toContain("encrypted_tokens=$4");
+		expect(repositorySource).toContain("sql.begin");
+		expect(repositorySource).not.toContain("festival_entitlements");
+		expect(repositorySource).not.toContain("festival_orders");
 	});
 	it("resolves concurrent sessions to one tenant customer", async () => {
 		const repo = new InMemoryCustomerAccountRepository();

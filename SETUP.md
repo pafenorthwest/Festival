@@ -79,7 +79,7 @@ psql -U postgres -f database/init-user-db.sql
 
 The checked-in script currently creates:
 - role `festivaladmin`
-- database `festival_db`
+- database `festival_sepv2_db`
 
 ### 3.2 Create the application schema
 
@@ -88,7 +88,7 @@ The backend creates tables inside `${DB_SCHEMA}`, but it does not create the sch
 Example using the default local values in the env files:
 
 ```bash
-psql -U festivaladmin -d festival_db -c 'CREATE SCHEMA IF NOT EXISTS orgs AUTHORIZATION festivaladmin;'
+psql -U festivaladmin -d festival_sepv2_db -c 'CREATE SCHEMA IF NOT EXISTS orgs AUTHORIZATION festivaladmin;'
 ```
 
 If you change `DB_SCHEMA`, change the SQL command to use the same schema name.
@@ -168,7 +168,7 @@ These values come from your local PostgreSQL install and the bootstrap you ran a
 | --- | --- | --- |
 | `DB_USER` | yes | PostgreSQL role used by the app. |
 | `DB_PASSWORD` | yes | Password for `DB_USER`. |
-| `DATABASE` | yes | Database name, for example `festival_db`. |
+| `DATABASE` | yes | Database name, for example `festival_sepv2_db`. |
 | `DB_HOST` | yes | Usually `localhost`. |
 | `DB_PORT` | yes | Usually `5432`. |
 | `DB_SSL` | yes | Use `false` for normal local Postgres unless your local setup requires SSL. |
@@ -525,7 +525,7 @@ Services and ports:
 
 What this command does:
 - builds `festival-backend:local` and `festival-frontend:local`
-- pulls `postgres:16-alpine`
+- pulls `postgres:17-alpine`
 - starts services in dependency order
 
 When finished, stop with:
@@ -680,7 +680,30 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-## 8. Sanity checks
+## 8. Clean-slate Admin Tool onboarding
+
+`festival_sepv2_db` is intentionally disposable. It starts empty and must be
+configured through Festival's supported Admin Tool workflows; do not import or
+backfill prior organizations, users, integrations, catalogs, or operational
+data.
+
+Before merging a clean-schema change, an authorized operator must complete a
+manual **Admin Tool Shopify Integration Run** against a new database:
+
+1. Create the administrator and organization, then create a Festival and its
+   divisions.
+2. In **Admin > Integrations**, save and verify the Shopify integration and run
+   **Shopify Integration > Diagnostics** so the paid-order webhook is checked.
+3. Recreate the registration/catalog configuration and the required membership
+   and accompanist offerings.
+4. Record any Shopify Dev Dashboard or protected-customer-data setup that could
+   not be completed through the Admin Tool.
+
+The automated PostgreSQL 17 schema contract covers fresh initialization and
+representative schema writes. It cannot authorize or substitute for the live
+Shopify/Admin Tool run.
+
+## 9. Sanity checks
 
 Run the repo verification commands after setup changes:
 

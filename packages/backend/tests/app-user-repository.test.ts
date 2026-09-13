@@ -1,10 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import { InMemoryAppUserRepository } from "../src/repo/in-memory-app-user-repository.js";
-import { buildAppUserMigrationSql } from "../src/repo/postgres-app-user-repository.js";
+import { buildCanonicalPostgresSchemaSql } from "../src/repo/postgres-schema.js";
 
 describe("app user repository", () => {
-	it("builds the app user and login event schema without organization tables", () => {
-		const ddl = buildAppUserMigrationSql("tenant_schema").replace(/\s+/g, " ");
+	it("builds the app user and login event tables in the canonical schema", () => {
+		const ddl = buildCanonicalPostgresSchemaSql("tenant_schema").replace(
+			/\s+/g,
+			" ",
+		);
 
 		expect(ddl).toContain("CREATE TABLE IF NOT EXISTS tenant_schema.app_user");
 		expect(ddl).toContain("id UUID PRIMARY KEY DEFAULT gen_random_uuid()");
@@ -26,9 +29,6 @@ describe("app user repository", () => {
 		expect(ddl).toContain(
 			"CREATE UNIQUE INDEX IF NOT EXISTS idx_app_user_email_lower",
 		);
-		expect(ddl).not.toContain("organizations");
-		expect(ddl).not.toContain("memberships");
-		expect(ddl).not.toContain("invites");
 	});
 
 	it("upserts users by Firebase UID and updates changed profile fields", async () => {

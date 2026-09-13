@@ -41,3 +41,4 @@ number,taskname,first_create_date,first_create_hhmmss,first_create_git_hash
 40,issue-153-postgres-festival-insert,2026-09-13,000000,-------
 41,issue-156-calendar-birthday-validation,2026-09-13,000000,-------
 42,review-pr-150-fix-open-issue,2026-09-13,000000,-------
+43,issue-157-sql-migrations,2026-09-13,000000,-------

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { PostgresCheckoutRepository } from "../src/checkout/postgres-checkout-repository.js";
+import { buildCanonicalPostgresSchemaSql } from "../src/repo/postgres-schema.js";
 
 async function source() {
 	return Bun.file("src/checkout/postgres-checkout-repository.ts").text();
@@ -12,24 +13,13 @@ describe("PostgresCheckoutRepository", () => {
 		).toThrow("Database schema is invalid.");
 	});
 
-	it("upgrades the intent schema with scoped idempotency and lifecycle states", async () => {
-		const value = await source();
+	it("defines the intent schema with scoped idempotency and lifecycle states", () => {
+		const value = buildCanonicalPostgresSchemaSql("schema");
 		expect(value).toContain(
-			"ALTER TABLE $" +
-				"{this.schema}.checkout_intents ADD COLUMN IF NOT EXISTS session_id TEXT",
-		);
-		expect(value).toContain(
-			"ALTER TABLE $" +
-				"{this.schema}.checkout_intents ADD COLUMN IF NOT EXISTS idempotency_key TEXT",
-		);
-		expect(value).toContain(
-			"CREATE UNIQUE INDEX IF NOT EXISTS checkout_intents_scope_key ON $" +
-				"{this.schema}.checkout_intents(organization_id, customer_id, session_id, idempotency_key)",
+			"CREATE UNIQUE INDEX IF NOT EXISTS checkout_intents_scope_key ON schema.checkout_intents(organization_id, customer_id, session_id, idempotency_key)",
 		);
 		expect(value).toContain("'checkout_started', 'failed'");
-		expect(value).toContain(
-			"DROP CONSTRAINT IF EXISTS checkout_intents_status_check",
-		);
+		expect(value).not.toContain("ALTER TABLE");
 	});
 
 	it("serializes local processing intent checks without holding the transaction across Shopify", async () => {

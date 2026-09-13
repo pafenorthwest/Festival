@@ -16,7 +16,7 @@
     },
     "packages/backend": {
       "name": "@festival/backend",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@festival/common": "workspace:*",
         "firebase-admin": "^13.6.0",
@@ -25,11 +25,11 @@
     },
     "packages/common": {
       "name": "@festival/common",
-      "version": "0.1.0",
+      "version": "0.2.0",
     },
     "packages/frontend": {
       "name": "@festival/frontend",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@festival/common": "workspace:*",
         "@solidjs/router": "^1.0.0",
@@ -44,7 +44,7 @@
     },
     "packages/shopify-confirmation": {
       "name": "@festival/shopify-confirmation",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "devDependencies": {
         "@shopify/ui-extensions": "2026.7.0",
       },
