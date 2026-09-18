@@ -26,4 +26,17 @@ describe("PostgresMembershipCommerceRepository", () => {
 		expect(value).toContain("grantInput = undefined;");
 		expect(value).toContain("startsOn,");
 	});
+
+	it("checks scheduled entitlements within the requested class only", async () => {
+		const value = await source();
+		const scheduledCheck = value.slice(
+			value.indexOf("async hasScheduledEntitlement("),
+			value.indexOf("async listCustomerDecisions("),
+		);
+
+		expect(scheduledCheck).toContain("entitlement_class = $3");
+		expect(scheduledCheck).toContain(
+			"[organizationId, customerId, entitlementClass, today]",
+		);
+	});
 });

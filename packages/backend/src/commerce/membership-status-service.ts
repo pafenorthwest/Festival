@@ -2,9 +2,9 @@ import {
 	type CustomerMembershipStatusEntry,
 	type CustomerMembershipStatusResponse,
 	calendarDateInTimezone,
-	deriveEntitlementLifecycle,
 } from "@festival/common";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
+import { lifecycleForEntitlementRead } from "./entitlement-lifecycle.js";
 import type { MembershipCommerceRepository } from "./membership-commerce-repository.js";
 
 export class MembershipStatusService {
@@ -72,10 +72,7 @@ export class MembershipStatusService {
 			});
 		const entitlements: CustomerMembershipStatusEntry[] = grants.map(
 			(grant) => ({
-				status:
-					grant.status === "revoked"
-						? "revoked"
-						: deriveEntitlementLifecycle(grant, today),
+				status: lifecycleForEntitlementRead(grant, today),
 				entitlementClass: grant.entitlementClass,
 				displayName,
 				divisionName: grant.divisionNameSnapshot,
@@ -88,10 +85,7 @@ export class MembershipStatusService {
 		);
 		const accompanistEntitlements: CustomerMembershipStatusEntry[] =
 			accompanistGrants.map((grant) => ({
-				status:
-					grant.status === "revoked"
-						? "revoked"
-						: deriveEntitlementLifecycle(grant, today),
+				status: lifecycleForEntitlementRead(grant, today),
 				entitlementClass: "accompanist_membership",
 				displayName: grant.offeringNameSnapshot,
 				divisionName:

@@ -27,6 +27,7 @@ import type {
 import {
 	assertValidEntitlementDurationDays,
 	assertValidEntitlementGrantSnapshotInput,
+	normalizeVerifiedShopifyIdentityEmail,
 } from "@festival/common";
 import { sql } from "bun";
 import type {
@@ -2191,6 +2192,9 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 	): Promise<EntitlementGrantSnapshot> {
 		await this.ensureReady();
 		assertValidEntitlementGrantSnapshotInput(input);
+		const verifiedIdentityEmail = normalizeVerifiedShopifyIdentityEmail(
+			input.verifiedIdentityEmail,
+		);
 		if (input.entitlementClass !== "teacher_membership") {
 			throw new Error(
 				"Teacher checkout source requires a teacher entitlement.",
@@ -2199,8 +2203,15 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 
 		const id = randomUUID();
 		await sql.begin(async (transaction) => {
+			const identityRows = (await transaction.unsafe(
+				`INSERT INTO ${this.schema}.membership_identity_emails (organization_id, normalized_email, customer_id) VALUES ($1,$2,$3) ON CONFLICT (organization_id, normalized_email) DO UPDATE SET customer_id = EXCLUDED.customer_id WHERE ${this.schema}.membership_identity_emails.customer_id = EXCLUDED.customer_id RETURNING customer_id`,
+				[input.organizationId, verifiedIdentityEmail, input.customerId],
+			)) as Array<Record<string, unknown>>;
+			if (!identityRows[0]) {
+				throw new Error("Shopify identity email belongs to another customer.");
+			}
 			const inserted = await transaction.unsafe(
-				`INSERT INTO ${this.schema}.membership_entitlements (id,organization_id,customer_id,entitlement_class,source,offering_id,starts_on,ends_on) SELECT $1,$2,$3,$4,'teacher_checkout',$5,$6::date,$7::date FROM ${this.schema}.products WHERE id=$5 AND organization_id=$2 RETURNING id`,
+				`INSERT INTO ${this.schema}.membership_entitlements (id,organization_id,customer_id,entitlement_class,source,offering_id,starts_on,ends_on) SELECT $1,$2,$3,$4,'teacher_checkout',$5,$6::date,$7::date FROM ${this.schema}.products WHERE id=$5 AND organization_id=$2 AND entitlement_class=$4 RETURNING id`,
 				[
 					id,
 					input.organizationId,

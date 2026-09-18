@@ -1,4 +1,7 @@
-import { calendarDateInTimezone } from "@festival/common";
+import {
+	calendarDateInTimezone,
+	TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+} from "@festival/common";
 import type { MembershipCommerceRepository } from "../commerce/membership-commerce-repository.js";
 import { AppError } from "../errors/app-error.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
@@ -67,14 +70,15 @@ export class MembershipCheckoutService {
 			);
 			const today = calendarDateInTimezone(this.now().toISOString(), timezone);
 			if (
-				await this.commerce.hasActiveGrant(
+				await this.commerce.hasScheduledEntitlement(
 					input.organizationId,
 					input.customerId,
+					TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
 					today,
 				)
 			) {
 				throw new AppError(
-					"An active Teacher Membership already exists.",
+					"A Teacher Membership renewal is already scheduled.",
 					409,
 					"membership_active",
 				);

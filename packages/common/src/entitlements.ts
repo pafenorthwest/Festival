@@ -105,26 +105,27 @@ export const ENTITLEMENT_LIFECYCLES = [
 ] as const;
 export type EntitlementLifecycleState = (typeof ENTITLEMENT_LIFECYCLES)[number];
 
+/** Minimal immutable data needed to derive an entitlement's lifecycle. */
+export interface EntitlementLifecycleInput {
+	readonly startsOn: string;
+	readonly endsOn: string;
+	readonly revokedAtIso?: string;
+}
+
 /** Canonical clean-slate lifecycle record. State is intentionally derived. */
-export interface MembershipEntitlement {
+export interface MembershipEntitlement extends EntitlementLifecycleInput {
 	readonly id: string;
 	readonly organizationId: string;
 	readonly customerId: string;
 	readonly entitlementClass: EntitlementClass;
 	readonly source: "teacher_checkout" | "accompanist_form";
 	readonly offeringId: string;
-	readonly startsOn: string;
-	readonly endsOn: string;
-	readonly revokedAtIso?: string;
 	readonly revokedReason?: string;
 	readonly createdAtIso: string;
 }
 
 export function deriveEntitlementLifecycle(
-	entitlement: Pick<
-		MembershipEntitlement,
-		"startsOn" | "endsOn" | "revokedAtIso"
-	>,
+	entitlement: EntitlementLifecycleInput,
 	today: string,
 ): EntitlementLifecycleState {
 	parseCalendarDate(today);
@@ -137,7 +138,16 @@ export function deriveEntitlementLifecycle(
 export type CreateEntitlementGrantSnapshotInput = Omit<
 	EntitlementGrantSnapshot,
 	"id" | "createdAtIso"
-> & { verifiedIdentityEmail?: string };
+> & { verifiedIdentityEmail: string };
+
+/** Normalizes an email already verified by Shopify before it binds entitlement ownership. */
+export function normalizeVerifiedShopifyIdentityEmail(value: string): string {
+	const normalized = value.trim().toLowerCase();
+	if ((normalized.match(/[a-z0-9]/gi) ?? []).length < 8) {
+		throw new Error("Verified Shopify identity email is required.");
+	}
+	return normalized;
+}
 
 export function isEntitlementClass(value: unknown): value is EntitlementClass {
 	return ENTITLEMENT_CLASSES.includes(value as EntitlementClass);
@@ -184,7 +194,7 @@ function parseCalendarDate(value: string): Date {
 }
 
 export function assertValidEntitlementGrantSnapshotInput(
-	input: CreateEntitlementGrantSnapshotInput,
+	input: Omit<CreateEntitlementGrantSnapshotInput, "verifiedIdentityEmail">,
 ): void {
 	if (!isEntitlementClass(input.entitlementClass)) {
 		throw new Error("Entitlement class is invalid.");

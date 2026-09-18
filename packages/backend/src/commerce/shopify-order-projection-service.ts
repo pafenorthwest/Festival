@@ -560,9 +560,10 @@ export class ShopifyOrderProjectionService {
 			durationDays: 1,
 		}).startsOn;
 		if (
-			await this.commerce.hasActiveGrant(
+			await this.commerce.hasScheduledEntitlement(
 				organizationId,
 				intent.customerId,
+				TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
 				today,
 			)
 		) {

@@ -3,11 +3,11 @@ import {
 	type AccompanistMembershipGrant,
 	addCalendarDays,
 	calendarDateInTimezone,
-	deriveEntitlementLifecycle,
 	INITIAL_ACCOMPANIST_MEMBERSHIP_DURATION_DAYS,
 	validateAccompanistContact,
 	validateAccompanistDivisionSelection,
 } from "@festival/common";
+import { lifecycleForEntitlementRead } from "../commerce/entitlement-lifecycle.js";
 import { AppError } from "../errors/app-error.js";
 import {
 	AccompanistMembershipConflictError,
@@ -117,18 +117,22 @@ export class AccompanistMembershipService {
 			input.organizationTimezone,
 		);
 		let startsOn = today;
-		const candidates = await this.organizations.listAccompanistMembershipGrants(
-			{
+		const candidates = (
+			await this.organizations.listAccompanistMembershipGrants({
 				organizationId: input.organizationId,
-			},
-		);
-		const prior = candidates.find(
-			(grant) => grant.customerId === input.customerId,
-		);
-		if (prior && prior.startsOn > startsOn) {
+				customerId: input.customerId,
+			})
+		).map((grant) => ({
+			grant,
+			status: lifecycleForEntitlementRead(grant, today),
+		}));
+		if (candidates.some((candidate) => candidate.status === "scheduled")) {
 			throw new AppError("An accompanist renewal is already scheduled.", 409);
 		}
-		if (prior && prior.endsOn > startsOn) {
+		const prior = candidates.find(
+			(candidate) => candidate.status === "active",
+		)?.grant;
+		if (prior) {
 			if (calendarDaysUntil(startsOn, prior.endsOn) > RENEWAL_WINDOW_DAYS) {
 				throw new AppError(
 					"An active accompanist membership already exists.",
@@ -176,7 +180,7 @@ export class AccompanistMembershipService {
 				id: grant.id,
 				startsOn: grant.startsOn,
 				endsOn: grant.endsOn,
-				status: deriveEntitlementLifecycle(grant, today),
+				status: lifecycleForEntitlementRead(grant, today),
 			},
 		};
 	}
@@ -191,16 +195,15 @@ export class AccompanistMembershipService {
 		});
 		return {
 			accompanists: grants
-				.filter(
-					(grant) =>
-						grant.status === "active" &&
-						grant.startsOn <= today &&
-						grant.endsOn > today,
-				)
 				.map((grant) => ({
+					grant,
+					status: lifecycleForEntitlementRead(grant, today),
+				}))
+				.filter((candidate) => candidate.status === "active")
+				.map(({ grant, status }) => ({
 					offeringName: grant.offeringNameSnapshot,
 					source: grant.source,
-					status: grant.status,
+					status,
 					startsOn: grant.startsOn,
 					endsOn: grant.endsOn,
 					name: grant.contact.name,

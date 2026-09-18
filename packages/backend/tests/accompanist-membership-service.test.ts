@@ -77,6 +77,46 @@ describe("AccompanistMembershipService", () => {
 		).rejects.toMatchObject({ status: 409 });
 	});
 
+	it("allows reacquisition after a prior entitlement is revoked", async () => {
+		const { repository, organization, division, service } = await setup();
+		const input = {
+			organizationId: organization.id,
+			organizationTimezone: "UTC",
+			customerId: "customer-1",
+			verifiedShopifyCustomerEmail: "shopper@example.com",
+			payload: {
+				name: "Ava Piano",
+				email: "ava@example.com",
+				city: "Seattle",
+				phone: "+1 206 555 0100",
+				divisionIds: [division.id],
+			},
+		};
+		await service.acquire(input);
+		const [prior] = await repository.listAccompanistMembershipGrants({
+			organizationId: organization.id,
+			customerId: input.customerId,
+		});
+		if (!prior) throw new Error("Expected Accompanist entitlement.");
+		await repository.revokeEntitlement({
+			organizationId: organization.id,
+			entitlementId: prior.id,
+			actorUserId: "admin",
+			reason: "Refunded",
+			revokedAtIso: "2026-09-12T13:00:00.000Z",
+		});
+
+		await expect(service.acquire(input)).resolves.toMatchObject({
+			membership: { status: "active" },
+		});
+		expect(
+			await repository.listAccompanistMembershipGrants({
+				organizationId: organization.id,
+				customerId: input.customerId,
+			}),
+		).toMatchObject([{ status: "revoked" }, { status: "active" }]);
+	});
+
 	it("returns a conflict when the repository settles a concurrent acquisition", async () => {
 		const { repository, organization, division, service } = await setup();
 		repository.createAccompanistMembershipGrant = async () => {

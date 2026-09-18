@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
 	CreateEntitlementGrantSnapshotInput,
+	EntitlementClass,
 	EntitlementGrantSnapshot,
 } from "@festival/common";
 import { assertValidEntitlementGrantSnapshotInput } from "@festival/common";
@@ -162,9 +163,10 @@ export interface MembershipCommerceRepository {
 		grant?: EntitlementGrantSnapshot;
 		existing: boolean;
 	}>;
-	hasActiveGrant(
+	hasScheduledEntitlement(
 		organizationId: string,
 		customerId: string,
+		entitlementClass: EntitlementClass,
 		today: string,
 	): Promise<boolean>;
 	listCustomerDecisions(
@@ -489,17 +491,34 @@ export class InMemoryMembershipCommerceRepository
 		);
 	}
 
-	async hasActiveGrant(
+	async hasScheduledEntitlement(
 		organizationId: string,
 		customerId: string,
+		entitlementClass: EntitlementClass,
 		today: string,
 	) {
+		if (entitlementClass === "accompanist_membership") {
+			const grants = await this.organizations.listAccompanistMembershipGrants({
+				organizationId,
+				customerId,
+			});
+			return grants.some(
+				(grant) =>
+					grant.status !== "revoked" &&
+					grant.startsOn > today &&
+					grant.endsOn > grant.startsOn,
+			);
+		}
 		const grants = await this.organizations.listEntitlementGrantSnapshots(
 			organizationId,
 			customerId,
 		);
 		return grants.some(
-			(grant) => grant.status === "active" && grant.startsOn > today,
+			(grant) =>
+				grant.entitlementClass === entitlementClass &&
+				grant.status !== "revoked" &&
+				grant.startsOn > today &&
+				grant.endsOn > grant.startsOn,
 		);
 	}
 

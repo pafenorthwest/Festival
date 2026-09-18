@@ -39,6 +39,17 @@ describe("PostgresCheckoutRepository", () => {
 		expect(value).not.toContain("checkoutUrl");
 	});
 
+	it("checks a scheduled entitlement only within the checkout entitlement class", async () => {
+		const value = await source();
+		const scheduledCheck = value.slice(
+			value.indexOf("const activeGrant ="),
+			value.indexOf("const existingRows ="),
+		);
+
+		expect(scheduledCheck).toContain("grants.entitlement_class = $3");
+		expect(scheduledCheck).toContain("record.entitlementClass");
+	});
+
 	it("persists and reads safe idempotency outcomes with expiry and ownership constraints", async () => {
 		const value = await source();
 		expect(value).toContain(

@@ -55,8 +55,8 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 				`${record.organizationId}:${record.customerId}`,
 			]);
 			const activeGrant = (await tx.unsafe(
-				`SELECT 1 FROM ${this.schema}.membership_entitlements grants JOIN ${this.schema}.organizations organization ON organization.id = grants.organization_id WHERE grants.organization_id = $1 AND grants.customer_id = $2 AND grants.revoked_at IS NULL AND grants.starts_on > (NOW() AT TIME ZONE organization.timezone)::date LIMIT 1`,
-				[record.organizationId, record.customerId],
+				`SELECT 1 FROM ${this.schema}.membership_entitlements grants JOIN ${this.schema}.organizations organization ON organization.id = grants.organization_id WHERE grants.organization_id = $1 AND grants.customer_id = $2 AND grants.entitlement_class = $3 AND grants.revoked_at IS NULL AND grants.starts_on > (NOW() AT TIME ZONE organization.timezone)::date LIMIT 1`,
+				[record.organizationId, record.customerId, record.entitlementClass],
 			)) as Array<Record<string, unknown>>;
 			if (activeGrant[0]) return { kind: "active" as const };
 			const existingRows = (await tx.unsafe(

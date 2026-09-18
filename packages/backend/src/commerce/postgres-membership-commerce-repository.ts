@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
 	CreateEntitlementGrantSnapshotInput,
+	EntitlementClass,
 	EntitlementGrantSnapshot,
 } from "@festival/common";
 import {
@@ -502,7 +503,7 @@ export class PostgresMembershipCommerceRepository
 			if (grantInput) {
 				const entitlementId = randomUUID();
 				const entitlementRows = (await tx.unsafe(
-					`INSERT INTO ${this.schema}.membership_entitlements (id,organization_id,customer_id,entitlement_class,source,offering_id,starts_on,ends_on) SELECT $1,$2,$3,$4,'teacher_checkout',$5,$6::date,$7::date FROM ${this.schema}.products WHERE id=$5 AND organization_id=$2 RETURNING id`,
+					`INSERT INTO ${this.schema}.membership_entitlements (id,organization_id,customer_id,entitlement_class,source,offering_id,starts_on,ends_on) SELECT $1,$2,$3,$4,'teacher_checkout',$5,$6::date,$7::date FROM ${this.schema}.products WHERE id=$5 AND organization_id=$2 AND entitlement_class=$4 RETURNING id`,
 					[
 						entitlementId,
 						grantInput.organizationId,
@@ -593,14 +594,15 @@ export class PostgresMembershipCommerceRepository
 		});
 	}
 
-	async hasActiveGrant(
+	async hasScheduledEntitlement(
 		organizationId: string,
 		customerId: string,
+		entitlementClass: EntitlementClass,
 		today: string,
 	) {
 		const rows = (await sql.unsafe(
-			`SELECT 1 FROM ${this.schema}.membership_entitlements WHERE organization_id = $1 AND customer_id = $2 AND revoked_at IS NULL AND starts_on > $3::date LIMIT 1`,
-			[organizationId, customerId, today],
+			`SELECT 1 FROM ${this.schema}.membership_entitlements WHERE organization_id = $1 AND customer_id = $2 AND entitlement_class = $3 AND revoked_at IS NULL AND starts_on > $4::date LIMIT 1`,
+			[organizationId, customerId, entitlementClass, today],
 		)) as Array<Record<string, unknown>>;
 		return Boolean(rows[0]);
 	}

@@ -38,6 +38,7 @@ describe("entitlement revocation", () => {
 			startsOn: "2026-01-01",
 			endsOn: "2027-01-01",
 			status: "active",
+			verifiedIdentityEmail: "shopper@example.com",
 		});
 		const first = await repository.revokeEntitlement({
 			organizationId: organization.id,
