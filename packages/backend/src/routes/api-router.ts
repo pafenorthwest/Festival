@@ -136,21 +136,39 @@ function assertAllowedCustomerAuthStartQuery(url: string): void {
 	}
 }
 
+export interface ApiRouterOptions {
+	organizationService: OrganizationService;
+	authVerifier: AuthVerifier;
+	shopifyIntegrationService?: ShopifyIntegrationService;
+	shopifyMembershipProductService?: ShopifyMembershipProductService;
+	customerAccountService?: CustomerAccountService;
+	publicMembershipProductService?: PublicMembershipProductService;
+	shopifyIntegrationDiagnosticService?: ShopifyIntegrationDiagnosticService;
+	membershipCheckoutService?: MembershipCheckoutService;
+	membershipStatusService?: MembershipStatusService;
+	accompanistMembershipService?: AccompanistMembershipService;
+	volunteerRepository?: VolunteerRepository;
+	classCheckoutService?: ClassCheckoutService;
+}
+
 export function buildApiRouter(
-	organizationService: OrganizationService,
-	authVerifier: AuthVerifier,
-	shopifyIntegrationService?: ShopifyIntegrationService,
-	shopifyMembershipProductService?: ShopifyMembershipProductService,
-	customerAccountService?: CustomerAccountService,
-	publicMembershipProductService?: PublicMembershipProductService,
-	shopifyIntegrationDiagnosticService?: ShopifyIntegrationDiagnosticService,
-	membershipCheckoutService?: MembershipCheckoutService,
-	membershipStatusService?: MembershipStatusService,
-	accompanistMembershipService?: AccompanistMembershipService,
-	volunteerRepository?: VolunteerRepository,
-	classCheckoutService?: ClassCheckoutService,
+	options: ApiRouterOptions,
 ): Hono<{ Variables: Partial<ApiVariables> }> {
 	const router = new Hono<{ Variables: Partial<ApiVariables> }>();
+	const {
+		organizationService,
+		authVerifier,
+		shopifyIntegrationService,
+		shopifyMembershipProductService,
+		customerAccountService,
+		publicMembershipProductService,
+		shopifyIntegrationDiagnosticService,
+		membershipCheckoutService,
+		membershipStatusService,
+		accompanistMembershipService,
+		volunteerRepository,
+		classCheckoutService,
+	} = options;
 	const repository = organizationService.repository;
 
 	router.get("/bootstrap", async (c) => {

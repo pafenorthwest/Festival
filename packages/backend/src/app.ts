@@ -7,6 +7,7 @@ import {
 	type CheckoutRepository,
 	InMemoryCheckoutRepository,
 } from "./checkout/checkout-repository.js";
+import { ClassCheckoutService } from "./checkout/class-checkout-service.js";
 import { MembershipCheckoutService } from "./checkout/membership-checkout-service.js";
 import { PostgresCheckoutRepository } from "./checkout/postgres-checkout-repository.js";
 import { ShopifyMembershipCheckoutClient } from "./checkout/shopify-membership-checkout-client.js";
@@ -62,6 +63,7 @@ export interface CreateAppOptions {
 	customerAccountService?: CustomerAccountService;
 	checkoutRepository?: CheckoutRepository;
 	membershipCheckoutService?: MembershipCheckoutService;
+	classCheckoutService?: ClassCheckoutService;
 	commerceRepository?: MembershipCommerceRepository;
 	shopifyOrderProjectionService?: ShopifyOrderProjectionService;
 	shopifyWebhookService?: ShopifyWebhookService;
@@ -171,6 +173,22 @@ export async function createApp(options: CreateAppOptions = {}) {
 			? new PostgresCustomerAccountRepository(env.databaseSchema)
 			: undefined);
 	if (customerAccountRepository) await customerAccountRepository.ensureReady();
+	const checkoutRepository =
+		options.checkoutRepository ??
+		(env.databaseSchema
+			? new PostgresCheckoutRepository(env.databaseSchema)
+			: new InMemoryCheckoutRepository());
+	if (checkoutRepository instanceof PostgresCheckoutRepository)
+		await checkoutRepository.ensureReady();
+	const commerceRepository =
+		options.commerceRepository ??
+		(env.databaseSchema
+			? new PostgresMembershipCommerceRepository(env.databaseSchema)
+			: new InMemoryMembershipCommerceRepository(
+					repository,
+					checkoutRepository,
+				));
+	await commerceRepository.ensureReady();
 	const customerAccountService =
 		options.customerAccountService ??
 		(secretKeyring && customerAccountRepository && env.publicOrigin
@@ -203,30 +221,27 @@ export async function createApp(options: CreateAppOptions = {}) {
 						),
 						cacheMaxEntryBytes: env.customerCacheMaxEntryBytes,
 					},
+					commerceRepository,
+					checkoutRepository,
 				)
 			: undefined);
-	const checkoutRepository =
-		options.checkoutRepository ??
-		(env.databaseSchema
-			? new PostgresCheckoutRepository(env.databaseSchema)
-			: new InMemoryCheckoutRepository());
-	if (checkoutRepository instanceof PostgresCheckoutRepository)
-		await checkoutRepository.ensureReady();
-	const commerceRepository =
-		options.commerceRepository ??
-		(env.databaseSchema
-			? new PostgresMembershipCommerceRepository(env.databaseSchema)
-			: new InMemoryMembershipCommerceRepository(
-					repository,
-					checkoutRepository,
-				));
-	await commerceRepository.ensureReady();
 	const membershipCheckoutService =
 		options.membershipCheckoutService ??
 		(secretKeyring
 			? new MembershipCheckoutService(
 					repository,
 					publicMembershipProductService,
+					checkoutRepository,
+					new ShopifyMembershipCheckoutClient(repository, secretKeyring),
+					commerceRepository,
+				)
+			: undefined);
+	const classCheckoutService =
+		options.classCheckoutService ??
+		(secretKeyring && customerAccountRepository
+			? new ClassCheckoutService(
+					repository,
+					customerAccountRepository,
 					checkoutRepository,
 					new ShopifyMembershipCheckoutClient(repository, secretKeyring),
 					commerceRepository,
@@ -311,7 +326,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 		cors({
 			origin: (origin) => (allowedApiOrigins.has(origin) ? origin : undefined),
 			allowHeaders: ["Authorization", "Content-Type", "X-CSRF-Token"],
-			allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
+			allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
 			credentials: true,
 		}),
 	);
@@ -323,7 +338,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 
 	app.route(
 		"/api",
-		buildApiRouter(
+		buildApiRouter({
 			organizationService,
 			authVerifier,
 			shopifyIntegrationService,
@@ -335,7 +350,8 @@ export async function createApp(options: CreateAppOptions = {}) {
 			membershipStatusService,
 			accompanistMembershipService,
 			volunteerRepository,
-		),
+			classCheckoutService,
+		}),
 	);
 	app.route(
 		"/api/v1/auth",
