@@ -45,6 +45,7 @@ import type {
 	ProductRecord,
 	RegistrationCatalogKind,
 	ShopifyIntegrationRecord,
+	UpdateFestivalClassConfigurationInput,
 	UpdateShopifyVerificationInput,
 	UpdateShopifyWebhookReadinessInput,
 	UpsertShopifyIntegrationInput,
@@ -2118,6 +2119,51 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		)) as FestivalClassConfigurationRow[];
 		const row = rows[0];
 		if (!row) throw new Error("Unable to create Festival class.");
+		return mapFestivalClassConfiguration(row);
+	}
+
+	async updateFestivalClassConfiguration(
+		input: UpdateFestivalClassConfigurationInput,
+	): Promise<FestivalClassConfiguration> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`UPDATE ${this.schema}.festival_class_configurations
+			 SET
+				display_name = COALESCE($4, display_name),
+				class_subtype_id = COALESCE($5, class_subtype_id),
+				division_id = COALESCE($6, division_id),
+				minimum_age = COALESCE($7, minimum_age),
+				maximum_age = COALESCE($8, maximum_age),
+				price = COALESCE($9, price),
+				maximum_performance_pieces = COALESCE($10, maximum_performance_pieces),
+				performance_minutes = COALESCE($11, performance_minutes),
+				capacity = COALESCE($12, capacity),
+				is_active = COALESCE($13, is_active),
+				shopify_product_gid = COALESCE($14, shopify_product_gid),
+				shopify_variant_gid = COALESCE($15, shopify_variant_gid),
+				updated_at = NOW()
+			 WHERE organization_id = $1 AND festival_id = $2 AND id = $3
+			 RETURNING id, organization_id, festival_id, display_name, class_subtype_id, division_id, minimum_age, maximum_age, price, maximum_performance_pieces, performance_minutes, capacity, is_active, shopify_product_gid, shopify_variant_gid, created_at, updated_at`,
+			[
+				input.organizationId,
+				input.festivalId,
+				input.id,
+				input.displayName ?? null,
+				input.classSubtypeId ?? null,
+				input.divisionId ?? null,
+				input.minimumAge ?? null,
+				input.maximumAge ?? null,
+				input.price ?? null,
+				input.maximumPerformancePieces ?? null,
+				input.performanceMinutes ?? null,
+				input.capacity ?? null,
+				input.isActive ?? null,
+				input.shopifyProductGid ?? null,
+				input.shopifyVariantGid ?? null,
+			],
+		)) as FestivalClassConfigurationRow[];
+		const row = rows[0];
+		if (!row) throw new Error("Festival class configuration not found.");
 		return mapFestivalClassConfiguration(row);
 	}
 

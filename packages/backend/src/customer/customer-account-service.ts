@@ -8,11 +8,15 @@ import {
 import type {
 	AdminCustomerProfileSummary,
 	AdminCustomerSearchResponse,
+	ClassEntitlement,
+	ClassRegistrationMetadata,
 	CustomerAccountSettings,
 	CustomerOrdersResponse,
 	CustomerProfile,
 	CustomerProfileResponse,
 	CustomerSessionResponse,
+	FestivalClassConfiguration,
+	FestivalRecord,
 	RegistrationAccompanistSummary,
 	RegistrationEligibleClass,
 	RegistrationTeacherSummary,
@@ -26,7 +30,9 @@ import {
 	validateCustomerAccountSettings,
 	validateCustomerProfileInput,
 } from "@festival/common";
+import type { CheckoutRepository } from "../checkout/checkout-repository.js";
 import { lifecycleForEntitlementRead } from "../commerce/entitlement-lifecycle.js";
+import type { MembershipCommerceRepository } from "../commerce/membership-commerce-repository.js";
 import { AppError } from "../errors/app-error.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
 import {
@@ -163,6 +169,17 @@ function adminSearchResult(record: FestivalCustomerRecord) {
 	};
 }
 
+export interface CustomerClassRegistrationItem {
+	entitlement: ClassEntitlement;
+	festivalClass?: FestivalClassConfiguration;
+	child?: { id: string; name: string };
+	metadata?: ClassRegistrationMetadata | null;
+}
+
+export interface CustomerClassRegistrationsResponse {
+	registrations: CustomerClassRegistrationItem[];
+}
+
 export interface CustomerAccountServiceOptions {
 	publicOrigin: string;
 	idleDays?: number;
@@ -193,11 +210,17 @@ export class CustomerAccountService {
 		{ oidc: Discovery; api: ApiDiscovery }
 	>;
 	private jwksCache: BoundedAsyncCache<string, readonly JsonRecord[]>;
+	private get customers(): CustomerAccountRepository {
+		return this.repository;
+	}
+
 	constructor(
 		private repository: CustomerAccountRepository,
 		private organizations: OrganizationRepository,
 		private keyring: ShopifySecretKeyring,
 		options: CustomerAccountServiceOptions,
+		private readonly commerce?: MembershipCommerceRepository,
+		private readonly checkout?: CheckoutRepository,
 	) {
 		const origin = new URL(options.publicOrigin);
 		if (
@@ -1036,6 +1059,101 @@ export class CustomerAccountService {
 				}),
 			),
 		};
+	}
+
+	async validateSession(slug: string, sessionToken: string) {
+		return this.customerReadAccess(slug, sessionToken);
+	}
+
+	async listClassRegistrations(
+		slug: string,
+		sessionToken: string,
+		festivalShortName?: string,
+	): Promise<CustomerClassRegistrationsResponse> {
+		const session = await this.validateSession(slug, sessionToken);
+		const children = await this.customers.listChildren(
+			session.organizationId,
+			session.customerId,
+		);
+
+		let festival: FestivalRecord | undefined;
+		if (festivalShortName) {
+			const found = await this.organizations.findFestivalByShortName(
+				session.organizationId,
+				festivalShortName,
+			);
+			if (!found) {
+				throw new AppError("Festival not found.", 404);
+			}
+			festival = found;
+		}
+
+		if (!this.commerce || !this.checkout) {
+			throw new AppError(
+				"Commerce or checkout repository is not configured.",
+				500,
+			);
+		}
+
+		const entitlements = await this.commerce.listClassEntitlements({
+			organizationId: session.organizationId,
+			parentCustomerId: session.customerId,
+			festivalId: festival?.id,
+		});
+
+		const classConfigCache = new Map<
+			string,
+			Map<string, FestivalClassConfiguration>
+		>();
+		const getClassConfig = async (
+			festivalId: string,
+			festivalClassId: string,
+		): Promise<FestivalClassConfiguration | undefined> => {
+			let configs = classConfigCache.get(festivalId);
+			if (!configs) {
+				const list =
+					await this.organizations.listFestivalClassConfigurations(
+						session.organizationId,
+						festivalId,
+					);
+				configs = new Map(list.map((c) => [c.id, c]));
+				classConfigCache.set(festivalId, configs);
+			}
+			return configs.get(festivalClassId);
+		};
+
+		const registrations: CustomerClassRegistrationItem[] = await Promise.all(
+			entitlements.map(async (entitlement) => {
+				const festivalClass = await getClassConfig(
+					entitlement.festivalId,
+					entitlement.festivalClassId,
+				);
+				const matchedChild = children.find(
+					(c) => c.id === entitlement.childId,
+				);
+				const child = matchedChild
+					? {
+							id: matchedChild.id,
+							name:
+								(matchedChild as { name?: string; displayName?: string })
+									.name ?? matchedChild.displayName,
+					  }
+					: undefined;
+				const metadata =
+					await this.checkout!.getRegistrationMetadataByEntitlementId(
+						session.organizationId,
+						entitlement.id,
+					);
+				return {
+					entitlement,
+					festivalClass,
+					child,
+					metadata,
+				};
+			}),
+		);
+
+		return { registrations };
 	}
 	async createChild(
 		slug: string,
