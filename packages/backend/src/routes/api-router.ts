@@ -36,6 +36,7 @@ import type { ShopifyMembershipProductService } from "../shopify/shopify-members
 import type { VolunteerRepository } from "../volunteers/volunteer-repository.js";
 import { buildVolunteerRoutes } from "./volunteers.routes.js";
 import { buildCatalogRoutes } from "./catalog/catalog.routes.js";
+import { buildOrgInfoRoutes } from "./org-info/org-info.routes.js";
 
 const ALLOWED_SHOPIFY_SETTINGS_FIELDS = new Set([
 	"storeUrl",
@@ -249,46 +250,7 @@ export function buildApiRouter(
 		},
 	);
 
-	router.get(
-		"/organizations/:slug",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		async (c) => {
-			try {
-				return c.json(
-					organizationService.getOrganizationLandingForTenant(
-						getRequiredTenant(c),
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
 
-	router.post(
-		"/organizations/:slug/welcome/dismiss",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole([
-			"Admin",
-			"Division Chair",
-			"Music Reviewer",
-			"Concert Chair",
-			"Read Only",
-		]),
-		async (c) => {
-			try {
-				return c.json(
-					await organizationService.dismissWelcomeForTenant(
-						getRequiredTenant(c),
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
 
 	router.get(
 		"/organizations/:slug/admin/users",
@@ -404,15 +366,6 @@ export function buildApiRouter(
 		},
 	);
 
-	router.get("/organizations/:slug/primary", async (c) => {
-		try {
-			return c.json(
-				await organizationService.getPrimaryFestivalPath(c.req.param("slug")),
-			);
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
 
 	router.get(
 		"/organizations/:slug/admin/festivals/:festivalShortName",
@@ -514,38 +467,8 @@ export function buildApiRouter(
 		},
 	);
 
-	router.get("/organizations/:slug/festivals/:festivalShortName", async (c) => {
-		try {
-			return c.json(
-				await organizationService.getPublicFestival(
-					c.req.param("slug"),
-					c.req.param("festivalShortName"),
-				),
-			);
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
 
-	router.get("/organizations/:slug/divisions", async (c) => {
-		try {
-			return c.json(
-				await organizationService.listPublicDivisions(c.req.param("slug")),
-			);
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
 
-	router.get("/organizations/:slug/landing", async (c) => {
-		try {
-			return c.json(
-				await organizationService.getPublicLanding(c.req.param("slug")),
-			);
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
 
 	router.get(
 		"/organizations/:slug/admin/divisions",
@@ -1808,6 +1731,11 @@ export function buildApiRouter(
 	router.route(
 		"/organizations/:slug",
 		buildCatalogRoutes({ publicMembershipProductService }),
+	);
+
+	router.route(
+		"/organizations/:slug",
+		buildOrgInfoRoutes({ organizationService, authVerifier, repository }),
 	);
 
 	router.route(
