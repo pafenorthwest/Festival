@@ -43,6 +43,7 @@ import type {
 	ProductRecord,
 	RegistrationCatalogKind,
 	ShopifyIntegrationRecord,
+	UpdateFestivalClassConfigurationInput,
 	UpdateShopifyVerificationInput,
 	UpdateShopifyWebhookReadinessInput,
 	UpsertShopifyIntegrationInput,
@@ -1182,6 +1183,39 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		};
 		this.festivalClassConfigurations.set(record.id, record);
 		return { ...record };
+	}
+
+	async updateFestivalClassConfiguration(
+		input: UpdateFestivalClassConfigurationInput,
+	): Promise<FestivalClassConfiguration> {
+		const current = this.festivalClassConfigurations.get(input.id);
+		if (
+			!current ||
+			current.organizationId !== input.organizationId ||
+			current.festivalId !== input.festivalId
+		) {
+			throw new Error("Festival class configuration not found.");
+		}
+		const updated: FestivalClassConfiguration = {
+			...current,
+			displayName: input.displayName ?? current.displayName,
+			classSubtypeId: input.classSubtypeId ?? current.classSubtypeId,
+			divisionId: input.divisionId ?? current.divisionId,
+			minimumAge: input.minimumAge ?? current.minimumAge,
+			maximumAge: input.maximumAge ?? current.maximumAge,
+			price: input.price ?? current.price,
+			maximumPerformancePieces:
+				input.maximumPerformancePieces ?? current.maximumPerformancePieces,
+			performanceMinutes:
+				input.performanceMinutes ?? current.performanceMinutes,
+			capacity: input.capacity ?? current.capacity,
+			isActive: input.isActive ?? current.isActive,
+			shopifyProductGid: input.shopifyProductGid ?? current.shopifyProductGid,
+			shopifyVariantGid: input.shopifyVariantGid ?? current.shopifyVariantGid,
+			updatedAtIso: new Date().toISOString(),
+		};
+		this.festivalClassConfigurations.set(updated.id, updated);
+		return { ...updated };
 	}
 
 	async listFestivalClassConfigurations(

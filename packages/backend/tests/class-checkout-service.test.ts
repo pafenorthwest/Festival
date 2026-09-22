@@ -1,8 +1,14 @@
 import { describe, expect, it } from "bun:test";
-import type { FestivalRecord } from "@festival/common";
+import type {
+	AccompanistMembershipGrant,
+	EntitlementGrantSnapshot,
+	FestivalRecord,
+	RepertoirePiece,
+} from "@festival/common";
 import { InMemoryCheckoutRepository } from "../src/checkout/checkout-repository.js";
 import {
 	ClassCheckoutService,
+	type ClassCheckoutStorefront,
 	type StartClassCheckoutInput,
 } from "../src/checkout/class-checkout-service.js";
 import { InMemoryCustomerAccountRepository } from "../src/customer/in-memory-customer-account-repository.js";
@@ -17,6 +23,10 @@ interface FixtureOptions {
 	snapshotValidDays?: number;
 	snapshotCreatedDaysAgo?: number;
 	isPrimaryFestival?: boolean;
+	maximumPerformancePieces?: number;
+	performanceMinutes?: number;
+	storeDomain?: string;
+	mockStorefront?: Partial<ClassCheckoutStorefront>;
 }
 
 async function createFixture(options: FixtureOptions = {}) {
@@ -38,6 +48,14 @@ async function createFixture(options: FixtureOptions = {}) {
 		normalizedName: "junior piano",
 	});
 
+	const storeDomain = options.storeDomain ?? "festival.myshopify.com";
+	await organizations.upsertShopifyIntegration({
+		organizationId: organization.id,
+		storeDomain,
+		clientId: "client-id",
+		encryptedClientSecret: "encrypted-secret",
+	});
+
 	const subtype = await organizations.createRegistrationCatalogValue({
 		organizationId: organization.id,
 		kind: "class_subtype",
@@ -46,7 +64,16 @@ async function createFixture(options: FixtureOptions = {}) {
 	});
 
 	let festival: FestivalRecord | undefined;
-	let classConfig: { id: string } = { id: "dummy-class-id" };
+	let classConfig: {
+		id: string;
+		divisionId?: string;
+		maximumPerformancePieces: number;
+		performanceMinutes: number;
+	} = {
+		id: "dummy-class-id",
+		maximumPerformancePieces: options.maximumPerformancePieces ?? 2,
+		performanceMinutes: options.performanceMinutes ?? 10,
+	};
 
 	if (options.isPrimaryFestival !== false) {
 		festival = await organizations.createFestival({
@@ -69,8 +96,8 @@ async function createFixture(options: FixtureOptions = {}) {
 			minimumAge: options.classMinAge ?? 8,
 			maximumAge: options.classMaxAge ?? 12,
 			price: "45.00",
-			maximumPerformancePieces: 2,
-			performanceMinutes: 10,
+			maximumPerformancePieces: options.maximumPerformancePieces ?? 2,
+			performanceMinutes: options.performanceMinutes ?? 10,
 			capacity: 25,
 			isActive: options.isClassActive !== false,
 			shopifyProductGid: "gid://shopify/Product/100",
@@ -115,12 +142,84 @@ async function createFixture(options: FixtureOptions = {}) {
 		});
 	}
 
+	const teacherOffering = await organizations.createMembershipProductRecord({
+		organizationId: organization.id,
+		entitlementClass: "teacher_membership",
+		durationDays: 365,
+		isActive: true,
+		shopifyProductGid: "gid://shopify/Product/1",
+		shopifyVariantGid: "gid://shopify/ProductVariant/1",
+		productNameSnapshot: "Teacher Membership",
+	});
+
+	const teacherId = "teacher-customer-1";
+	const teacherEntitlement: EntitlementGrantSnapshot =
+		await organizations.createEntitlementGrantSnapshot({
+			organizationId: organization.id,
+			customerId: teacherId,
+			entitlementClass: "teacher_membership",
+			offeringId: teacherOffering.id,
+			durationDays: 365,
+			divisionId: division.id,
+			divisionNameSnapshot: division.displayName,
+			paidAmount: "50.00",
+			paidCurrencyCode: "USD",
+			checkoutIntentId: "teacher-intent-1",
+			shopifyOrderGid: "gid://shopify/Order/teacher",
+			shopifyOrderLineGid: "gid://shopify/LineItem/teacher",
+			startsOn: "2026-01-01",
+			endsOn: "2027-01-01",
+			status: "active",
+			verifiedIdentityEmail: "teacher@example.com",
+		});
+
+	const accompanistId = "accompanist-customer-1";
+	const accompanistGrant: AccompanistMembershipGrant =
+		await organizations.createAccompanistMembershipGrant({
+			organizationId: organization.id,
+			customerId: accompanistId,
+			normalizedEmail: "accompanist@example.com",
+			offeringNameSnapshot: "Accompanist Membership",
+			source: "accompanist_form",
+			contact: {
+				name: "Sam Accompanist",
+				email: "accompanist@example.com",
+				city: "Seattle",
+				phone: "555-555-5555",
+			},
+			divisions: [
+				{ divisionId: division.id, divisionName: division.displayName },
+			],
+			startsOn: "2026-01-01",
+			endsOn: "2027-01-01",
+		});
+
+	const storefront: ClassCheckoutStorefront = {
+		createCart: async () => ({
+			shopifyCartId: "gid://shopify/Cart/test-cart-1",
+		}),
+		checkout: async () => ({
+			checkoutUrl: `https://${storeDomain}/checkouts/c123`,
+		}),
+		...options.mockStorefront,
+	};
+
 	const service = new ClassCheckoutService(
 		organizations,
 		customers,
 		checkout,
+		storefront,
+		undefined,
 		nowFn,
 	);
+
+	const defaultPieces: RepertoirePiece[] = [
+		{
+			title: "Sonatina in C Major, Op. 36 No. 1",
+			composer: "Muzio Clementi",
+			durationSeconds: 150,
+		},
+	];
 
 	const defaultInput: StartClassCheckoutInput = {
 		organizationId: organization.id,
@@ -129,6 +228,9 @@ async function createFixture(options: FixtureOptions = {}) {
 		idempotencyKey: "11111111-2222-3333-4444-555555555555",
 		festivalClassId: classConfig.id,
 		childId: child.id,
+		buyerAccessToken: "buyer-token-test",
+		teacherId,
+		pieces: defaultPieces,
 		currency: "USD",
 	};
 
@@ -137,12 +239,20 @@ async function createFixture(options: FixtureOptions = {}) {
 		customers,
 		checkout,
 		organization,
+		division,
 		festival,
 		classConfig,
 		customer,
 		session,
 		child,
+		teacherId,
+		teacherEntitlement,
+		accompanistId,
+		accompanistGrant,
+		storefront,
+		storeDomain,
 		service,
+		defaultPieces,
 		defaultInput,
 		now,
 	};
@@ -160,20 +270,8 @@ describe("ClassCheckoutService", () => {
 
 		expect(result).toBeDefined();
 		expect(result.correlationId).toBeDefined();
-		expect(result.intent).toBeDefined();
-		expect(result.intent.correlationId).toBe(result.correlationId);
-		expect(result.intent.intentType).toBe("class_entry");
-		expect(result.intent.festivalClassId).toBe(f.classConfig.id);
-		expect(result.intent.childId).toBe(f.child.id);
-		expect(result.intent.shopifyProductGid).toBe("gid://shopify/Product/100");
-		expect(result.intent.shopifyVariantGid).toBe(
-			"gid://shopify/ProductVariant/200",
-		);
-		expect(result.intent.amount).toBe("45.00");
-		expect(result.intent.currencyCode).toBe("USD");
-		expect(result.intent.organizationId).toBe(f.organization.id);
-		expect(result.intent.customerId).toBe(f.customer.id);
-		expect(result.intent.status).toBe("creating");
+		expect(result.intentId).toBeDefined();
+		expect(result.checkoutUrl).toBe(`https://${f.storeDomain}/checkouts/c123`);
 
 		// Stored in checkout repository and findable by correlationId
 		const stored = await f.checkout.findIntentByCorrelation(
@@ -181,10 +279,35 @@ describe("ClassCheckoutService", () => {
 			result.correlationId,
 		);
 		expect(stored).toBeDefined();
-		expect(stored?.id).toBe(result.intent.id);
+		expect(stored?.id).toBe(result.intentId);
 		expect(stored?.intentType).toBe("class_entry");
 		expect(stored?.festivalClassId).toBe(f.classConfig.id);
 		expect(stored?.childId).toBe(f.child.id);
+		expect(stored?.shopifyProductGid).toBe("gid://shopify/Product/100");
+		expect(stored?.shopifyVariantGid).toBe("gid://shopify/ProductVariant/200");
+		expect(stored?.amount).toBe("45.00");
+		expect(stored?.currencyCode).toBe("USD");
+		expect(stored?.organizationId).toBe(f.organization.id);
+		expect(stored?.customerId).toBe(f.customer.id);
+		expect(stored?.status).toBe("checkout_started");
+
+		// Registration metadata record inserted
+		const metadata = (
+			f.checkout as unknown as {
+				registrationMetadata: Map<
+					string,
+					{
+						teacherMembershipId: string;
+						accompanistMembershipId: string | null;
+						repertoireJson: RepertoirePiece[];
+					}
+				>;
+			}
+		).registrationMetadata.get(result.intentId);
+		expect(metadata).toBeDefined();
+		expect(metadata?.teacherMembershipId).toBe(f.teacherEntitlement.id);
+		expect(metadata?.accompanistMembershipId).toBeNull();
+		expect(metadata?.repertoireJson).toEqual(f.defaultPieces);
 	});
 
 	it("handles exact boundary ages for minimum_age and maximum_age", async () => {
@@ -195,7 +318,7 @@ describe("ClassCheckoutService", () => {
 			childAge: 8,
 		});
 		const resultMin = await fMin.service.start(fMin.defaultInput);
-		expect(resultMin.intent.festivalClassId).toBe(fMin.classConfig.id);
+		expect(resultMin.intentId).toBeDefined();
 
 		// Maximum age boundary
 		const fMax = await createFixture({
@@ -203,8 +326,11 @@ describe("ClassCheckoutService", () => {
 			classMaxAge: 12,
 			childAge: 12,
 		});
-		const resultMax = await fMax.service.start(fMax.defaultInput);
-		expect(resultMax.intent.festivalClassId).toBe(fMax.classConfig.id);
+		const resultMax = await fMax.service.start({
+			...fMax.defaultInput,
+			idempotencyKey: "boundary-max-idempotency",
+		});
+		expect(resultMax.intentId).toBeDefined();
 	});
 
 	it("fails when customer session is invalid or revoked", async () => {
@@ -237,6 +363,8 @@ describe("ClassCheckoutService", () => {
 			f.organizations,
 			f.customers,
 			f.checkout,
+			f.storefront,
+			undefined,
 			() => laterNow,
 		);
 
@@ -290,7 +418,6 @@ describe("ClassCheckoutService", () => {
 	});
 
 	it("fails when child age snapshot is expired", async () => {
-		// Valid until was in the past (e.g. -1 day)
 		const f = await createFixture({
 			snapshotValidDays: -1,
 		});
@@ -301,10 +428,9 @@ describe("ClassCheckoutService", () => {
 	});
 
 	it("fails when child age snapshot exceeds 90 days validity window", async () => {
-		// Snapshot created 95 days ago
 		const f = await createFixture({
 			snapshotCreatedDaysAgo: 95,
-			snapshotValidDays: 120, // validUntil is future, but snapshot was created > 90 days ago
+			snapshotValidDays: 120,
 		});
 
 		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
@@ -385,5 +511,192 @@ describe("ClassCheckoutService", () => {
 			status: 409,
 			code: "checkout_in_progress",
 		});
+	});
+
+	it("fails when repertoire piece count exceeds maximumPerformancePieces", async () => {
+		const f = await createFixture({
+			maximumPerformancePieces: 2,
+		});
+
+		const threePieces: RepertoirePiece[] = [
+			{ title: "Piece 1", durationSeconds: 60 },
+			{ title: "Piece 2", durationSeconds: 60 },
+			{ title: "Piece 3", durationSeconds: 60 },
+		];
+
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				pieces: threePieces,
+			}),
+		).rejects.toMatchObject({
+			status: 400,
+		});
+	});
+
+	it("fails when repertoire total duration exceeds performanceMinutes", async () => {
+		const f = await createFixture({
+			performanceMinutes: 5, // 300 seconds max
+			maximumPerformancePieces: 3,
+		});
+
+		const longPieces: RepertoirePiece[] = [
+			{ title: "Piece 1", durationSeconds: 200 },
+			{ title: "Piece 2", durationSeconds: 150 }, // 350s = 5.83 mins > 5 mins
+		];
+
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				pieces: longPieces,
+			}),
+		).rejects.toMatchObject({
+			status: 400,
+		});
+	});
+
+	it("fails when teacherId is invalid or inactive", async () => {
+		const f = await createFixture();
+
+		// Unknown teacher ID
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				teacherId: "unknown-teacher-id",
+			}),
+		).rejects.toMatchObject({
+			status: 400,
+		});
+
+		// Revoked teacher entitlement
+		await f.organizations.revokeEntitlement({
+			organizationId: f.organization.id,
+			entitlementId: f.teacherEntitlement.id,
+			actorUserId: "admin",
+			reason: "Test revocation",
+			revokedAtIso: f.now.toISOString(),
+		});
+
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				idempotencyKey: "after-revoke-key",
+			}),
+		).rejects.toMatchObject({
+			status: 400,
+		});
+	});
+
+	it("fails when accompanistId is invalid or inactive", async () => {
+		const f = await createFixture();
+
+		// Unknown accompanist ID
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				accompanistId: "unknown-accompanist-id",
+			}),
+		).rejects.toMatchObject({
+			status: 400,
+		});
+
+		// Revoked accompanist entitlement
+		await f.organizations.revokeEntitlement({
+			organizationId: f.organization.id,
+			entitlementId: f.accompanistGrant.id,
+			actorUserId: "admin",
+			reason: "Test revocation",
+			revokedAtIso: f.now.toISOString(),
+		});
+
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				accompanistId: f.accompanistId,
+				idempotencyKey: "accompanist-revoked-key",
+			}),
+		).rejects.toMatchObject({
+			status: 400,
+		});
+	});
+
+	it("successfully checks out with optional accompanistId and records metadata", async () => {
+		const f = await createFixture();
+
+		const result = await f.service.start({
+			...f.defaultInput,
+			accompanistId: f.accompanistId,
+		});
+
+		expect(result).toBeDefined();
+		expect(result.checkoutUrl).toBe(`https://${f.storeDomain}/checkouts/c123`);
+		expect(result.intentId).toBeDefined();
+
+		const metadata = (
+			f.checkout as unknown as {
+				registrationMetadata: Map<
+					string,
+					{
+						teacherMembershipId: string;
+						accompanistMembershipId: string | null;
+						repertoireJson: RepertoirePiece[];
+					}
+				>;
+			}
+		).registrationMetadata.get(result.intentId);
+		expect(metadata).toBeDefined();
+		expect(metadata?.teacherMembershipId).toBe(f.teacherEntitlement.id);
+		expect(metadata?.accompanistMembershipId).toBe(f.accompanistGrant.id);
+		expect(metadata?.repertoireJson).toEqual(f.defaultPieces);
+	});
+
+	it("triggers markFailed compensation and throws 503 on upstream storefront failure", async () => {
+		const f = await createFixture({
+			mockStorefront: {
+				checkout: async () => {
+					throw new Error("Storefront unavailable");
+				},
+			},
+		});
+
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			status: 503,
+			code: "checkout_retryable_upstream",
+		});
+
+		// Intent should be marked failed in repository
+		const intents = (
+			f.checkout as unknown as {
+				intents: Map<string, { status: string }>;
+			}
+		).intents;
+		const createdIntent = [...intents.values()][0];
+		expect(createdIntent).toBeDefined();
+		expect(createdIntent?.status).toBe("failed");
+	});
+
+	it("triggers markFailed compensation and throws 503 on disallowed checkout URL domain", async () => {
+		const f = await createFixture({
+			mockStorefront: {
+				checkout: async () => ({
+					checkoutUrl: "https://evil-phishing-domain.com/checkout",
+				}),
+			},
+		});
+
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			status: 503,
+			code: "checkout_retryable_upstream",
+		});
+
+		// Intent should be marked failed in repository
+		const intents = (
+			f.checkout as unknown as {
+				intents: Map<string, { status: string }>;
+			}
+		).intents;
+		const createdIntent = [...intents.values()][0];
+		expect(createdIntent).toBeDefined();
+		expect(createdIntent?.status).toBe("failed");
 	});
 });

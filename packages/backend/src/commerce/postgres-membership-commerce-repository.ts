@@ -650,6 +650,13 @@ export class PostgresMembershipCommerceRepository
 				)) as Array<Record<string, unknown>>;
 				if (entitlementRows[0]) {
 					createdClassEntitlement = classEntitlementFromRow(entitlementRows[0]);
+					await tx.unsafe(
+						`UPDATE ${this.schema}.registration_metadata SET class_entitlement_id = $1 WHERE checkout_intent_id = $2`,
+						[
+							createdClassEntitlement.id,
+							classEntitlementInput.checkoutIntentId,
+						],
+					);
 				}
 			}
 			const now = finalDecision.updatedAtIso;

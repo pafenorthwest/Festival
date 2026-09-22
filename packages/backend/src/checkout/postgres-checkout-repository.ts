@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import type {
+	ClassRegistrationMetadata,
+	RepertoirePiece,
+} from "@festival/common";
 import { sql } from "bun";
 import { initializePostgresSchema } from "../repo/postgres-schema.js";
 import type {
@@ -313,5 +317,80 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 		return rows[0]
 			? { kind: "ready" as const, intent, cart: this.cart(rows[0]) }
 			: { kind: "failed" as const };
+	}
+	async insertRegistrationMetadata(params: {
+		id: string;
+		organizationId: string;
+		festivalId: string;
+		checkoutIntentId: string;
+		teacherMembershipId: string;
+		accompanistMembershipId: string | null;
+		repertoireJson: RepertoirePiece[];
+	}): Promise<ClassRegistrationMetadata> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`INSERT INTO ${this.schema}.registration_metadata (id, organization_id, festival_id, checkout_intent_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json) VALUES ($1,$2,$3,$4,NULL,$5,$6,$7) RETURNING id, organization_id, festival_id, checkout_intent_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json, created_at`,
+			[
+				params.id,
+				params.organizationId,
+				params.festivalId,
+				params.checkoutIntentId,
+				params.teacherMembershipId,
+				params.accompanistMembershipId ?? null,
+				JSON.stringify(params.repertoireJson),
+			],
+		)) as Array<Record<string, unknown>>;
+		if (!rows[0])
+			throw new Error("Registration metadata could not be inserted.");
+		return this.registrationMetadataFromRow(rows[0]);
+	}
+	async linkRegistrationMetadataToEntitlement(params: {
+		checkoutIntentId: string;
+		classEntitlementId: string;
+		tx?: { unsafe(sql: string, params?: unknown[]): Promise<unknown> };
+	}): Promise<void> {
+		const runner = params.tx ?? sql;
+		await runner.unsafe(
+			`UPDATE ${this.schema}.registration_metadata SET class_entitlement_id = $1 WHERE checkout_intent_id = $2`,
+			[params.classEntitlementId, params.checkoutIntentId],
+		);
+	}
+	async getRegistrationMetadataByEntitlementId(
+		organizationId: string,
+		classEntitlementId: string,
+	): Promise<ClassRegistrationMetadata | null> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT id, organization_id, festival_id, checkout_intent_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json, created_at FROM ${this.schema}.registration_metadata WHERE organization_id = $1 AND class_entitlement_id = $2 LIMIT 1`,
+			[organizationId, classEntitlementId],
+		)) as Array<Record<string, unknown>>;
+		if (!rows[0]) return null;
+		return this.registrationMetadataFromRow(rows[0]);
+	}
+	private registrationMetadataFromRow(
+		row: Record<string, unknown>,
+	): ClassRegistrationMetadata {
+		return {
+			id: String(row.id),
+			organizationId: String(row.organization_id),
+			festivalId: String(row.festival_id),
+			checkoutIntentId: String(row.checkout_intent_id),
+			classEntitlementId:
+				row.class_entitlement_id === null ||
+				row.class_entitlement_id === undefined
+					? null
+					: String(row.class_entitlement_id),
+			teacherMembershipId: String(row.teacher_membership_id),
+			accompanistMembershipId:
+				row.accompanist_membership_id === null ||
+				row.accompanist_membership_id === undefined
+					? null
+					: String(row.accompanist_membership_id),
+			repertoireJson:
+				typeof row.repertoire_json === "string"
+					? (JSON.parse(row.repertoire_json) as RepertoirePiece[])
+					: (row.repertoire_json as RepertoirePiece[]),
+			createdAt: new Date(String(row.created_at)),
+		};
 	}
 }
