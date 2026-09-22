@@ -19,6 +19,7 @@ import {
 	toJsonError,
 } from "../auth/tenant-context.js";
 import type { AuthVerifier } from "../auth/types.js";
+import type { ClassCheckoutService } from "../checkout/class-checkout-service.js";
 import type { MembershipCheckoutService } from "../checkout/membership-checkout-service.js";
 import type { MembershipStatusService } from "../commerce/membership-status-service.js";
 import {
@@ -33,6 +34,7 @@ import type { ShopifyIntegrationDiagnosticService } from "../shopify/shopify-int
 import type { ShopifyIntegrationService } from "../shopify/shopify-integration-service.js";
 import type { ShopifyMembershipProductService } from "../shopify/shopify-membership-product-service.js";
 import type { VolunteerRepository } from "../volunteers/volunteer-repository.js";
+import { buildVolunteerRoutes } from "./volunteers.routes.js";
 
 const ALLOWED_SHOPIFY_SETTINGS_FIELDS = new Set([
 	"storeUrl",
@@ -146,6 +148,7 @@ export function buildApiRouter(
 	membershipStatusService?: MembershipStatusService,
 	accompanistMembershipService?: AccompanistMembershipService,
 	volunteerRepository?: VolunteerRepository,
+	classCheckoutService?: ClassCheckoutService,
 ): Hono<{ Variables: Partial<ApiVariables> }> {
 	const router = new Hono<{ Variables: Partial<ApiVariables> }>();
 	const repository = organizationService.repository;
@@ -422,6 +425,87 @@ export function buildApiRouter(
 					await organizationService.getAdminFestivalForTenant(
 						getRequiredTenant(c),
 						c.req.param("festivalShortName"),
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.get(
+		"/organizations/:slug/admin/festivals/:festivalShortName/classes",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				return c.json(
+					await organizationService.listFestivalClasses(
+						getRequiredTenant(c).organization.slug,
+						c.req.param("festivalShortName"),
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.post(
+		"/organizations/:slug/admin/festivals/:festivalShortName/classes",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				return c.json(
+					await organizationService.createFestivalClass(
+						getRequiredTenant(c).organization.slug,
+						c.req.param("festivalShortName"),
+						await c.req.json(),
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.patch(
+		"/organizations/:slug/admin/festivals/:festivalShortName/classes/:classId",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				return c.json(
+					await organizationService.updateFestivalClass(
+						getRequiredTenant(c).organization.slug,
+						c.req.param("festivalShortName"),
+						c.req.param("classId"),
+						await c.req.json(),
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.post(
+		"/organizations/:slug/admin/festivals/:festivalShortName/classes/:classId",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				return c.json(
+					await organizationService.updateFestivalClass(
+						getRequiredTenant(c).organization.slug,
+						c.req.param("festivalShortName"),
+						c.req.param("classId"),
+						await c.req.json(),
 					),
 				);
 			} catch (error) {
@@ -1266,6 +1350,105 @@ export function buildApiRouter(
 		},
 	);
 
+	const handleClassCheckout = async (
+		c: Context<{ Variables: Partial<ApiVariables> }>,
+	) => {
+		try {
+			assertNoBearerPrincipal(c.req.header("Authorization"));
+			if (!customerAccountService || !classCheckoutService) {
+				throw new AppError("Class checkout is unavailable.", 503);
+			}
+			const idempotencyKey = c.req.header("Idempotency-Key");
+			if (
+				!idempotencyKey ||
+				!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+					idempotencyKey,
+				)
+			) {
+				throw new AppError("Checkout request is invalid.", 400);
+			}
+			const referer = c.req.header("Referer");
+			let requestOrigin = c.req.header("Origin");
+			if (!requestOrigin && referer) {
+				try {
+					requestOrigin = new URL(referer).origin;
+				} catch {
+					throw new AppError("CSRF validation failed.", 403);
+				}
+			}
+			const slug = c.req.param("slug");
+			if (!slug) throw new AppError("Organization slug is required.", 400);
+			const access = await customerAccountService.checkoutAccess(
+				slug,
+				getCookie(c, CUSTOMER_SESSION_COOKIE),
+				c.req.header("X-CSRF-Token"),
+				requestOrigin,
+			);
+			const payload = await c.req.json();
+			c.header("Cache-Control", "no-store");
+			return c.json(
+				await classCheckoutService.start({
+					...payload,
+					...access,
+					buyerAccessToken: access.shopifyCustomerAccessToken,
+					idempotencyKey,
+				}),
+			);
+		} catch (error) {
+			return toJsonError(c, error);
+		}
+	};
+
+	router.post(
+		"/organizations/:slug/customer/class-checkout",
+		handleClassCheckout,
+	);
+	router.post(
+		"/organizations/:slug/customer/festivals/:festivalShortName/registration/checkout",
+		handleClassCheckout,
+	);
+
+	router.get(
+		"/organizations/:slug/customer/class-registrations",
+		async (c) => {
+			try {
+				assertNoBearerPrincipal(c.req.header("Authorization"));
+				if (!customerAccountService) {
+					throw new AppError("Customer Account is unavailable.", 503);
+				}
+				return c.json(
+					await customerAccountService.listClassRegistrations(
+						c.req.param("slug"),
+						getCookie(c, CUSTOMER_SESSION_COOKIE) ?? "",
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.get(
+		"/organizations/:slug/customer/festivals/:festivalShortName/registration/class-registrations",
+		async (c) => {
+			try {
+				assertNoBearerPrincipal(c.req.header("Authorization"));
+				if (!customerAccountService) {
+					throw new AppError("Customer Account is unavailable.", 503);
+				}
+				return c.json(
+					await customerAccountService.listClassRegistrations(
+						c.req.param("slug"),
+						getCookie(c, CUSTOMER_SESSION_COOKIE) ?? "",
+						c.req.param("festivalShortName"),
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
 	router.post(
 		"/organizations/:slug/customer/accompanist-membership",
 		async (c) => {
@@ -1653,22 +1836,13 @@ export function buildApiRouter(
 		});
 	});
 
-	router.get(
-		"/organizations/:slug/volunteers/roles",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		async (c) => {
-			try {
-				if (!volunteerRepository)
-					throw new AppError("Volunteer roles are unavailable.", 503);
-				const tenant = getRequiredTenant(c);
-				return c.json(
-					await volunteerRepository.listRoles(tenant.organization.id),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
+	router.route(
+		"/organizations/:slug/volunteers",
+		buildVolunteerRoutes({
+			authVerifier,
+			repository,
+			volunteerRepository,
+		}),
 	);
 
 	return router;
