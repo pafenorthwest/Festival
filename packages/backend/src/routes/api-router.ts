@@ -169,7 +169,7 @@ export function buildApiRouter(
 			try {
 				const tenant = getRequiredTenant(c);
 				return c.json({
-					policy: await repository.getAccompanistDivisionPolicy(
+					policy: await organizationService.getAccompanistDivisionPolicy(
 						tenant.organization.id,
 					),
 				});
@@ -367,7 +367,7 @@ export function buildApiRouter(
 				}
 				const tenant = getRequiredTenant(c);
 				return c.json({
-					policy: await repository.updateAccompanistDivisionPolicy({
+					policy: await organizationService.updateAccompanistDivisionPolicy({
 						organizationId: tenant.organization.id,
 						policy: (
 							payload as { policy: "exactly_one" | "one_to_two" | "one_to_all" }
@@ -973,10 +973,10 @@ export function buildApiRouter(
 					getCookie(c, CUSTOMER_SESSION_COOKIE),
 				);
 				return c.json({
-					policy: await repository.getAccompanistDivisionPolicy(
+					policy: await organizationService.getAccompanistDivisionPolicy(
 						access.organizationId,
 					),
-					divisions: await repository.listDivisions(
+					divisions: await organizationService.listDivisions(
 						access.organizationId,
 						true,
 					),

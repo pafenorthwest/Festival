@@ -13,6 +13,7 @@ import {
 	type DismissWelcomeResponse,
 	deriveDisplayName,
 	divisionNameUniquenessKey,
+	type FestivalClassConfiguration,
 	type FestivalRecord,
 	type FestivalSummary,
 	type InviteSummary,
@@ -42,8 +43,10 @@ import {
 import type { TenantContext } from "../auth/tenant-context.js";
 import { AppError } from "../errors/app-error.js";
 import type {
+	CreateFestivalClassConfigurationInput,
 	MembershipWithOrganization,
 	OrganizationRepository,
+	UpdateFestivalClassConfigurationInput,
 } from "../repo/organization-repository.js";
 
 function toSessionMembership(
@@ -197,6 +200,21 @@ export class OrganizationService {
 		return {
 			divisions: await this.repository.listDivisions(tenant.organization.id),
 		};
+	}
+
+	async getAccompanistDivisionPolicy(organizationId: string) {
+		return this.repository.getAccompanistDivisionPolicy(organizationId);
+	}
+
+	async updateAccompanistDivisionPolicy(options: {
+		organizationId: string;
+		policy: import("@festival/common").AccompanistDivisionSelectionPolicy;
+	}) {
+		return this.repository.updateAccompanistDivisionPolicy(options);
+	}
+
+	async listDivisions(organizationId: string, activeOnly?: boolean) {
+		return this.repository.listDivisions(organizationId, activeOnly);
 	}
 
 	async listPublicDivisions(organizationSlug: string) {
@@ -803,6 +821,115 @@ export class OrganizationService {
 				),
 			),
 		};
+	}
+
+	async listFestivalClasses(
+		orgSlug: string,
+		festivalShortName: string,
+	): Promise<FestivalClassConfiguration[]> {
+		const organization = await this.repository.findOrganizationBySlug(orgSlug);
+		if (!organization) throw new AppError("Organization not found.", 404);
+
+		const festival = await this.repository.findFestivalByShortName(
+			organization.id,
+			festivalShortName,
+		);
+		if (!festival) throw new AppError("Festival not found.", 404);
+
+		return this.repository.listFestivalClassConfigurations(
+			organization.id,
+			festival.id,
+		);
+	}
+
+	async createFestivalClass(
+		orgSlug: string,
+		festivalShortName: string,
+		input: Omit<
+			CreateFestivalClassConfigurationInput,
+			"organizationId" | "festivalId"
+		>,
+	): Promise<FestivalClassConfiguration> {
+		const organization = await this.repository.findOrganizationBySlug(orgSlug);
+		if (!organization) throw new AppError("Organization not found.", 404);
+
+		const festival = await this.repository.findFestivalByShortName(
+			organization.id,
+			festivalShortName,
+		);
+		if (!festival) throw new AppError("Festival not found.", 404);
+
+		if (input.divisionId) {
+			const divisions = await this.repository.listDivisions(organization.id);
+			const exists = divisions.some((d) => d.id === input.divisionId);
+			if (!exists) throw new AppError("Division not found.", 404);
+		}
+
+		if (input.classSubtypeId) {
+			const subtypes = await this.repository.listRegistrationCatalogValues(
+				organization.id,
+				"class_subtype",
+			);
+			const exists = subtypes.some((s) => s.id === input.classSubtypeId);
+			if (!exists) throw new AppError("Class subtype not found.", 404);
+		}
+
+		return this.repository.createFestivalClassConfiguration({
+			...input,
+			organizationId: organization.id,
+			festivalId: festival.id,
+		});
+	}
+
+	async updateFestivalClass(
+		orgSlug: string,
+		festivalShortName: string,
+		classId: string,
+		input: Omit<
+			UpdateFestivalClassConfigurationInput,
+			"id" | "organizationId" | "festivalId"
+		>,
+	): Promise<FestivalClassConfiguration> {
+		const organization = await this.repository.findOrganizationBySlug(orgSlug);
+		if (!organization) throw new AppError("Organization not found.", 404);
+
+		const festival = await this.repository.findFestivalByShortName(
+			organization.id,
+			festivalShortName,
+		);
+		if (!festival) throw new AppError("Festival not found.", 404);
+
+		if (input.divisionId !== undefined) {
+			const divisions = await this.repository.listDivisions(organization.id);
+			const exists = divisions.some((d) => d.id === input.divisionId);
+			if (!exists) throw new AppError("Division not found.", 404);
+		}
+
+		if (input.classSubtypeId !== undefined) {
+			const subtypes = await this.repository.listRegistrationCatalogValues(
+				organization.id,
+				"class_subtype",
+			);
+			const exists = subtypes.some((s) => s.id === input.classSubtypeId);
+			if (!exists) throw new AppError("Class subtype not found.", 404);
+		}
+
+		try {
+			return await this.repository.updateFestivalClassConfiguration({
+				...input,
+				id: classId,
+				organizationId: organization.id,
+				festivalId: festival.id,
+			});
+		} catch (error) {
+			if (
+				error instanceof Error &&
+				error.message === "Festival class configuration not found."
+			) {
+				throw new AppError(error.message, 404);
+			}
+			throw error;
+		}
 	}
 
 	async getInvite(token: string): Promise<{ invite: InviteSummary }> {
