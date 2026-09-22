@@ -1739,7 +1739,7 @@ export function buildApiRouter(
 	);
 
 	router.route(
-		"/organizations/:slug/volunteers",
+		"/organizations/:slug/festivals/:festivalShortName/volunteers",
 		buildVolunteerRoutes({
 			authVerifier,
 			repository,

@@ -379,7 +379,7 @@ export const CURRENT_ROUTE_SECURITY = [
 	{ method: "GET", path: "/api/v1/auth/me", authenticationClass: "firebase" },
 	{
 		method: "GET",
-		path: "/api/organizations/:slug/volunteers/roles",
+		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/roles",
 		authenticationClass: "tenant",
 	},
 	{

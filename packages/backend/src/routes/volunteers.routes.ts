@@ -17,6 +17,15 @@ export interface VolunteerRoutesOptions {
 	volunteerRepository?: VolunteerRepository;
 }
 
+/**
+ * Builds the volunteer sub-router.
+ *
+ * This router is mounted under `/organizations/:slug/festivals/:festivalShortName/volunteers`.
+ * All volunteer activity — roles, slots, assignments, and enrollment — is scoped to a single
+ * festival. The `:festivalShortName` param is accessible from handler context via
+ * `c.req.param("festivalShortName")` and must be used by future handlers to enforce
+ * festival isolation per specs/VOLUNTEER-PORTAL.md.
+ */
 export function buildVolunteerRoutes(
 	options: VolunteerRoutesOptions,
 ): Hono<{ Variables: Partial<ApiVariables> }> {
