@@ -38,6 +38,7 @@ import { buildVolunteerRoutes } from "./volunteers.routes.js";
 import { buildCatalogRoutes } from "./catalog/catalog.routes.js";
 import { buildOrgInfoRoutes } from "./org-info/org-info.routes.js";
 import { buildIdentityRoutes } from "./identity/identity.routes.js";
+import { buildStaffRoutes } from "./staff/staff.routes.js";
 
 const ALLOWED_SHOPIFY_SETTINGS_FIELDS = new Set([
 	"storeUrl",
@@ -1334,26 +1335,7 @@ export function buildApiRouter(
 			}
 		},
 	);
-
-	router.get(
-		"/organizations/:slug/staff/accompanists",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin", "Division Chair", "Concert Chair"]),
-		async (c) => {
-			try {
-				if (!accompanistMembershipService)
-					throw new AppError("Accompanist roster is unavailable.", 503);
-				return c.json(
-					await accompanistMembershipService.listCurrentRoster(
-						getRequiredTenant(c).organization.id,
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
+	router.route("/", buildStaffRoutes({ repository, authVerifier, accompanistMembershipService }));
 
 	router.get("/organizations/:slug/customer/profile", async (c) => {
 		try {
