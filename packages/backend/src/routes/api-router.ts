@@ -37,6 +37,7 @@ import type { VolunteerRepository } from "../volunteers/volunteer-repository.js"
 import { buildVolunteerRoutes } from "./volunteers.routes.js";
 import { buildCatalogRoutes } from "./catalog/catalog.routes.js";
 import { buildOrgInfoRoutes } from "./org-info/org-info.routes.js";
+import { buildIdentityRoutes } from "./identity/identity.routes.js";
 
 const ALLOWED_SHOPIFY_SETTINGS_FIELDS = new Set([
 	"storeUrl",
@@ -154,101 +155,7 @@ export function buildApiRouter(
 	} = options;
 	const repository = organizationService.repository;
 
-	router.get("/bootstrap", async (c) => {
-		try {
-			if (c.req.header("Authorization") !== undefined) {
-				throw new AppError(
-					"Authorization is not accepted on the bootstrap route.",
-					400,
-				);
-			}
-
-			return c.json(await organizationService.getSession());
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
-
-	router.get("/firebase-session", requireAuth(authVerifier), async (c) => {
-		try {
-			return c.json(
-				await organizationService.getSession(getRequiredIdentity(c)),
-			);
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
-
-	router.post("/organizations", requireAuth(authVerifier), async (c) => {
-		try {
-			const payload = (await c.req.json()) as CreateOrganizationInput;
-			c.status(201);
-			return c.json(
-				await organizationService.createOrganization(
-					getRequiredIdentity(c),
-					payload,
-				),
-			);
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
-
-	router.get("/memberships", requireAuth(authVerifier), async (c) => {
-		try {
-			return c.json(
-				await organizationService.listMemberships(getRequiredIdentity(c)),
-			);
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
-
-	router.post("/invites", requireAuth(authVerifier), async (c) => {
-		try {
-			const payload = (await c.req.json()) as CreateInviteInput;
-			const tenant = await resolveTenantContext(
-				c,
-				repository,
-				payload.organizationSlug,
-			);
-			assertTenantRole(tenant, ["Admin"]);
-			c.status(201);
-			return c.json(
-				await organizationService.createInviteForTenant(tenant, payload),
-			);
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
-
-	router.get("/invites/:token", async (c) => {
-		try {
-			return c.json(await organizationService.getInvite(c.req.param("token")));
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
-
-	router.post(
-		"/invites/:token/accept",
-		requireAuth(authVerifier),
-		async (c) => {
-			try {
-				const payload = (await c.req.json()) as AcceptInviteInput;
-				c.status(201);
-				return c.json(
-					await organizationService.acceptInvite(
-						getRequiredIdentity(c),
-						c.req.param("token"),
-						payload,
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
+	router.route("/", buildIdentityRoutes({ organizationService, authVerifier }));
 
 
 
