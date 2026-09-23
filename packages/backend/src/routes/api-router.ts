@@ -22,6 +22,8 @@ import { buildAdminRegistrationRoutes } from "./admin-registration/admin-registr
 import { buildAdminShopifyRoutes } from "./admin-shopify/admin-shopify.routes.js";
 import { buildCatalogRoutes } from "./catalog/catalog.routes.js";
 import { buildCustomerRoutes } from "./customer/customer.routes.js";
+import { buildCustomerChildrenRoutes } from "./customer/customer-children.routes.js";
+import { buildCustomerMembershipRoutes } from "./customer/customer-membership.routes.js";
 import {
 	assertNoBearerPrincipal,
 	buildCustomerAuthRoutes,
@@ -30,24 +32,6 @@ import { buildIdentityRoutes } from "./identity/identity.routes.js";
 import { buildOrgInfoRoutes } from "./org-info/org-info.routes.js";
 import { buildStaffRoutes } from "./staff/staff.routes.js";
 import { buildVolunteerRoutes } from "./volunteers.routes.js";
-
-function assertAllowedFields(
-	payload: unknown,
-	allowed: readonly string[],
-	label: string,
-): void {
-	if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
-	const allowedFields = new Set(allowed);
-	const extraFields = Object.keys(payload).filter(
-		(field) => !allowedFields.has(field),
-	);
-	if (extraFields.length > 0) {
-		throw new AppError(
-			`${label} cannot include browser-controlled fields: ${extraFields.join(", ")}.`,
-			400,
-		);
-	}
-}
 
 export interface ApiRouterOptions {
 	organizationService: OrganizationService;
@@ -115,179 +99,20 @@ export function buildApiRouter(
 		"/organizations/:slug/customer",
 		buildCustomerRoutes({ customerAccountService }),
 	);
-
-	router.get(
-		"/organizations/:slug/customer/membership-purchase/:offeringId",
-		async (c) => {
-			try {
-				assertNoBearerPrincipal(c.req.header("Authorization"));
-				if (!customerAccountService || !publicMembershipProductService)
-					throw new AppError("Membership purchase is unavailable.", 503);
-				const session = await customerAccountService.session(
-					c.req.param("slug"),
-					getCookie(c, CUSTOMER_SESSION_COOKIE),
-				);
-				if (!session.session.authenticated) {
-					throw new AppError("Customer session is invalid.", 401);
-				}
-				c.header("Cache-Control", "no-store");
-				return c.json(
-					await publicMembershipProductService.resolvePurchasable(
-						c.req.param("slug"),
-						c.req.param("offeringId"),
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
+	router.route(
+		"/organizations/:slug/customer",
+		buildCustomerChildrenRoutes({ customerAccountService }),
 	);
-
-	router.post("/organizations/:slug/customer/checkout", async (c) => {
-		try {
-			assertNoBearerPrincipal(c.req.header("Authorization"));
-			if (!customerAccountService || !membershipCheckoutService)
-				throw new AppError("Membership checkout is unavailable.", 503);
-			const idempotencyKey = c.req.header("Idempotency-Key");
-			if (
-				!idempotencyKey ||
-				!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-					idempotencyKey,
-				)
-			)
-				throw new AppError("Checkout request is invalid.", 400);
-			const payload = await c.req.json();
-			assertAllowedFields(
-				payload,
-				["offeringId", "divisionId", "staffAccessConsent"],
-				"Checkout request",
-			);
-			if (
-				!payload ||
-				typeof payload !== "object" ||
-				Array.isArray(payload) ||
-				typeof (payload as { offeringId?: unknown }).offeringId !== "string" ||
-				typeof (payload as { divisionId?: unknown }).divisionId !== "string" ||
-				!(payload as { divisionId: string }).divisionId.trim() ||
-				(payload as { staffAccessConsent?: unknown }).staffAccessConsent !==
-					true
-			)
-				throw new AppError("Checkout request is invalid.", 400);
-			const referer = c.req.header("Referer");
-			let requestOrigin = c.req.header("Origin");
-			if (!requestOrigin && referer) {
-				try {
-					requestOrigin = new URL(referer).origin;
-				} catch {
-					throw new AppError("CSRF validation failed.", 403);
-				}
-			}
-			const access = await customerAccountService.checkoutAccess(
-				c.req.param("slug"),
-				getCookie(c, CUSTOMER_SESSION_COOKIE),
-				c.req.header("X-CSRF-Token"),
-				requestOrigin,
-			);
-			if ((payload as { staffAccessConsent: boolean }).staffAccessConsent) {
-				await customerAccountService.recordCheckoutStaffAccessConsent(
-					access.organizationId,
-					access.customerId,
-				);
-			}
-			c.header("Cache-Control", "no-store");
-			return c.json(
-				await membershipCheckoutService.start({
-					...access,
-					buyerAccessToken: access.shopifyCustomerAccessToken,
-					idempotencyKey,
-					offeringId: (payload as { offeringId: string }).offeringId,
-					divisionId: (payload as { divisionId: string }).divisionId,
-					staffAccessConsent: (payload as { staffAccessConsent: boolean })
-						.staffAccessConsent,
-				}),
-			);
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
-
-	router.get("/organizations/:slug/customer/membership-status", async (c) => {
-		try {
-			assertNoBearerPrincipal(c.req.header("Authorization"));
-			if (!customerAccountService || !membershipStatusService) {
-				throw new AppError("Membership status is unavailable.", 503);
-			}
-			const access = await customerAccountService.customerReadAccess(
-				c.req.param("slug"),
-				getCookie(c, CUSTOMER_SESSION_COOKIE),
-			);
-			c.header("Cache-Control", "no-store");
-			return c.json(
-				await membershipStatusService.listForCustomer(
-					access.organizationId,
-					access.customerId,
-				),
-			);
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
-
-	router.get("/organizations/:slug/customer/children", async (c) => {
-		try {
-			assertNoBearerPrincipal(c.req.header("Authorization"));
-			if (!customerAccountService)
-				throw new AppError("Customer Account is unavailable.", 503);
-			return c.json(
-				await customerAccountService.listChildren(
-					c.req.param("slug"),
-					getCookie(c, CUSTOMER_SESSION_COOKIE),
-				),
-			);
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
-	router.post("/organizations/:slug/customer/children", async (c) => {
-		try {
-			assertNoBearerPrincipal(c.req.header("Authorization"));
-			if (!customerAccountService)
-				throw new AppError("Customer Account is unavailable.", 503);
-			c.status(201);
-			return c.json(
-				await customerAccountService.createChild(
-					c.req.param("slug"),
-					getCookie(c, CUSTOMER_SESSION_COOKIE),
-					c.req.header("X-CSRF-Token"),
-					c.req.header("Origin"),
-					await c.req.json(),
-				),
-			);
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
-	router.post(
-		"/organizations/:slug/customer/children/:childId/age-snapshot",
-		async (c) => {
-			try {
-				assertNoBearerPrincipal(c.req.header("Authorization"));
-				if (!customerAccountService)
-					throw new AppError("Customer Account is unavailable.", 503);
-				return c.json(
-					await customerAccountService.refreshChildAgeSnapshot(
-						c.req.param("slug"),
-						getCookie(c, CUSTOMER_SESSION_COOKIE),
-						c.req.header("X-CSRF-Token"),
-						c.req.header("Origin"),
-						c.req.param("childId"),
-						await c.req.json(),
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
+	router.route(
+		"/organizations/:slug/customer",
+		buildCustomerMembershipRoutes({
+			customerAccountService,
+			membershipCheckoutService,
+			membershipStatusService,
+			publicMembershipProductService,
+			accompanistMembershipService,
+			organizationService,
+		}),
 	);
 
 	router.get(
@@ -453,61 +278,6 @@ export function buildApiRouter(
 		},
 	);
 
-	router.post(
-		"/organizations/:slug/customer/accompanist-membership",
-		async (c) => {
-			try {
-				assertNoBearerPrincipal(c.req.header("Authorization"));
-				if (!customerAccountService || !accompanistMembershipService)
-					throw new AppError("Accompanist membership is unavailable.", 503);
-				const referer = c.req.header("Referer");
-				const origin =
-					c.req.header("Origin") ??
-					(referer ? new URL(referer).origin : undefined);
-				const access = await customerAccountService.formAccess(
-					c.req.param("slug"),
-					getCookie(c, CUSTOMER_SESSION_COOKIE),
-					c.req.header("X-CSRF-Token"),
-					origin,
-				);
-				c.header("Cache-Control", "no-store");
-				return c.json(
-					await accompanistMembershipService.acquire({
-						...access,
-						payload: await c.req.json(),
-					}),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	router.get(
-		"/organizations/:slug/customer/accompanist-membership",
-		async (c) => {
-			try {
-				assertNoBearerPrincipal(c.req.header("Authorization"));
-				if (!customerAccountService)
-					throw new AppError("Accompanist membership is unavailable.", 503);
-				const access = await customerAccountService.customerReadAccess(
-					c.req.param("slug"),
-					getCookie(c, CUSTOMER_SESSION_COOKIE),
-				);
-				return c.json({
-					policy: await organizationService.getAccompanistDivisionPolicy(
-						access.organizationId,
-					),
-					divisions: await organizationService.listDivisions(
-						access.organizationId,
-						true,
-					),
-				});
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
 	router.route(
 		"/",
 		buildStaffRoutes({
