@@ -1,5 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { PostgresCheckoutRepository } from "../src/checkout/postgres-checkout-repository.js";
+import {
+	legacyRepertoireCompatibilityProjection,
+	PostgresCheckoutRepository,
+} from "../src/checkout/postgres-checkout-repository.js";
 import { buildCanonicalPostgresSchemaSql } from "../src/repo/postgres-schema.js";
 
 async function source() {
@@ -18,6 +21,29 @@ describe("PostgresCheckoutRepository", () => {
 		expect(
 			() => new PostgresCheckoutRepository("festival; DROP SCHEMA public"),
 		).toThrow("Database schema is invalid.");
+	});
+
+	it("projects legacy repertoire deterministically and omits missing composers", () => {
+		const pieces = JSON.parse(
+			'[{"title":"Old work","composer":"","movement":"  I. Allegro  ","durationSeconds":120},{"title":"Older work","durationSeconds":90}]',
+		);
+		const first = legacyRepertoireCompatibilityProjection(
+			"metadata-a",
+			"org-a",
+			pieces,
+		);
+		const second = legacyRepertoireCompatibilityProjection(
+			"metadata-a",
+			"org-a",
+			pieces,
+		);
+
+		expect(first).toEqual(second);
+		expect(first[0]).toMatchObject({
+			performedMovementText: "I. Allegro",
+			contributors: [],
+		});
+		expect(first[1]?.contributors).toEqual([]);
 	});
 
 	it("defines the intent schema with scoped idempotency and lifecycle states", () => {

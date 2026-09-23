@@ -234,13 +234,29 @@ export class ClassCheckoutService {
 					400,
 				);
 			}
+			if (typeof piece.composer !== "string" || !piece.composer.trim()) {
+				throw new AppError(
+					"Each repertoire piece must have a valid composer.",
+					400,
+				);
+			}
+			if (
+				piece.movement !== undefined &&
+				typeof piece.movement !== "string"
+			) {
+				throw new AppError(
+					"Each repertoire piece must have a valid movement.",
+					400,
+				);
+			}
 			if (
 				typeof piece.durationSeconds !== "number" ||
 				piece.durationSeconds <= 0 ||
-				!Number.isFinite(piece.durationSeconds)
+				!Number.isSafeInteger(piece.durationSeconds) ||
+				piece.durationSeconds > 2_147_483_647
 			) {
 				throw new AppError(
-					"Each repertoire piece must have a duration greater than 0.",
+					"Each repertoire piece must have a positive whole-number duration in seconds.",
 					400,
 				);
 			}

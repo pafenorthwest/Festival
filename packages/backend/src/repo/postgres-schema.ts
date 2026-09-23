@@ -252,6 +252,19 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			FOREIGN KEY (parent_customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers(id, organization_id) ON DELETE RESTRICT
 		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.membership_entitlements (
+			id TEXT PRIMARY KEY,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			customer_id TEXT NOT NULL, entitlement_class TEXT NOT NULL CHECK (entitlement_class IN ('teacher_membership', 'accompanist_membership')),
+			source TEXT NOT NULL CHECK (source IN ('teacher_checkout', 'accompanist_form')),
+			offering_id TEXT NULL REFERENCES ${safeSchema}.products (id), starts_on DATE NOT NULL, ends_on DATE NOT NULL,
+			revoked_at TIMESTAMPTZ NULL, revoked_reason TEXT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			CHECK (ends_on > starts_on),
+			CHECK ((entitlement_class = 'teacher_membership' AND source = 'teacher_checkout') OR (entitlement_class = 'accompanist_membership' AND source = 'accompanist_form')),
+			FOREIGN KEY (customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers(id, organization_id) ON DELETE CASCADE,
+			EXCLUDE USING gist (organization_id WITH =, customer_id WITH =, entitlement_class WITH =, daterange(starts_on, ends_on, '[)') WITH &&) WHERE (revoked_at IS NULL)
+		);
+		-- Write-hot during the initial registration surge; avoid blocking DDL on this table.
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.registration_metadata (
 			id TEXT NOT NULL,
 			organization_id TEXT NOT NULL,
@@ -263,6 +276,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			repertoire_json JSONB NOT NULL,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			CONSTRAINT registration_metadata_pkey PRIMARY KEY (id),
+			CONSTRAINT registration_metadata_id_organization_id_key UNIQUE (id, organization_id),
 			CONSTRAINT registration_metadata_organization_id_fkey
 				FOREIGN KEY (organization_id) REFERENCES ${safeSchema}.organizations(id) ON DELETE CASCADE,
 			CONSTRAINT registration_metadata_festival_id_fkey
@@ -276,6 +290,84 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			CONSTRAINT registration_metadata_accompanist_membership_id_fkey
 				FOREIGN KEY (accompanist_membership_id) REFERENCES ${safeSchema}.membership_entitlements(id) ON DELETE RESTRICT
 		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.repertoire_contributors (
+			id TEXT PRIMARY KEY,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations(id) ON DELETE CASCADE,
+			display_name TEXT NOT NULL CHECK (btrim(display_name) <> ''),
+			normalized_name TEXT NOT NULL CHECK (btrim(normalized_name) <> ''),
+			is_active BOOLEAN NOT NULL DEFAULT TRUE,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE (id, organization_id),
+			UNIQUE (organization_id, normalized_name)
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.repertoire_works (
+			id TEXT PRIMARY KEY,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations(id) ON DELETE CASCADE,
+			display_title TEXT NOT NULL CHECK (btrim(display_title) <> ''),
+			normalized_title TEXT NOT NULL CHECK (btrim(normalized_title) <> ''),
+			is_active BOOLEAN NOT NULL DEFAULT TRUE,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE (id, organization_id)
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.repertoire_classifications (
+			id TEXT PRIMARY KEY,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations(id) ON DELETE CASCADE,
+			display_name TEXT NOT NULL CHECK (btrim(display_name) <> ''),
+			normalized_name TEXT NOT NULL CHECK (btrim(normalized_name) <> ''),
+			is_active BOOLEAN NOT NULL DEFAULT TRUE,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE (id, organization_id),
+			UNIQUE (organization_id, normalized_name)
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.repertoire_work_contributors (
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations(id) ON DELETE CASCADE,
+			repertoire_work_id TEXT NOT NULL,
+			repertoire_contributor_id TEXT NOT NULL,
+			contributor_role TEXT NOT NULL CHECK (contributor_role IN ('Composer', 'Copyist', 'Editor', 'Arranger', 'Transcriber', 'Realizer', 'Orchestrator')),
+			position SMALLINT NOT NULL CHECK (position BETWEEN 1 AND 3),
+			PRIMARY KEY (repertoire_work_id, position),
+			UNIQUE (repertoire_work_id, repertoire_contributor_id, contributor_role),
+			FOREIGN KEY (repertoire_work_id, organization_id) REFERENCES ${safeSchema}.repertoire_works(id, organization_id) ON DELETE CASCADE,
+			FOREIGN KEY (repertoire_contributor_id, organization_id) REFERENCES ${safeSchema}.repertoire_contributors(id, organization_id) ON DELETE RESTRICT
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.repertoire_work_classifications (
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations(id) ON DELETE CASCADE,
+			repertoire_work_id TEXT NOT NULL,
+			repertoire_classification_id TEXT NOT NULL,
+			PRIMARY KEY (repertoire_work_id, repertoire_classification_id),
+			FOREIGN KEY (repertoire_work_id, organization_id) REFERENCES ${safeSchema}.repertoire_works(id, organization_id) ON DELETE CASCADE,
+			FOREIGN KEY (repertoire_classification_id, organization_id) REFERENCES ${safeSchema}.repertoire_classifications(id, organization_id) ON DELETE RESTRICT
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.registration_repertoire_items (
+			id TEXT PRIMARY KEY,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations(id) ON DELETE CASCADE,
+			registration_metadata_id TEXT NOT NULL,
+			repertoire_work_id TEXT NULL,
+			title_snapshot TEXT NOT NULL CHECK (btrim(title_snapshot) <> ''),
+			performed_movement_text TEXT NULL,
+			duration_seconds INTEGER NOT NULL CHECK (duration_seconds > 0),
+			display_order SMALLINT NOT NULL CHECK (display_order >= 0),
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE (id, organization_id),
+			UNIQUE (registration_metadata_id, organization_id, display_order),
+			FOREIGN KEY (registration_metadata_id, organization_id) REFERENCES ${safeSchema}.registration_metadata(id, organization_id) ON DELETE CASCADE,
+			FOREIGN KEY (repertoire_work_id, organization_id) REFERENCES ${safeSchema}.repertoire_works(id, organization_id) ON DELETE SET NULL (repertoire_work_id)
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.registration_repertoire_item_contributors (
+			id TEXT PRIMARY KEY,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations(id) ON DELETE CASCADE,
+			registration_repertoire_item_id TEXT NOT NULL,
+			repertoire_contributor_id TEXT NULL,
+			display_name_snapshot TEXT NOT NULL CHECK (btrim(display_name_snapshot) <> ''),
+			contributor_role TEXT NOT NULL CHECK (contributor_role IN ('Composer', 'Copyist', 'Editor', 'Arranger', 'Transcriber', 'Realizer', 'Orchestrator')),
+			position SMALLINT NOT NULL CHECK (position BETWEEN 1 AND 3),
+			UNIQUE (registration_repertoire_item_id, position),
+			FOREIGN KEY (registration_repertoire_item_id, organization_id) REFERENCES ${safeSchema}.registration_repertoire_items(id, organization_id) ON DELETE CASCADE,
+			FOREIGN KEY (repertoire_contributor_id, organization_id) REFERENCES ${safeSchema}.repertoire_contributors(id, organization_id) ON DELETE SET NULL (repertoire_contributor_id)
+		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.membership_entitlement_cohorts (
 			organization_id TEXT NOT NULL, customer_id TEXT NOT NULL,
 			entitlement_class TEXT NOT NULL CHECK (entitlement_class IN ('teacher_membership', 'accompanist_membership')),
@@ -287,18 +379,6 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			organization_id TEXT NOT NULL, normalized_email TEXT NOT NULL, customer_id TEXT NOT NULL,
 			PRIMARY KEY (organization_id, normalized_email), UNIQUE (organization_id, customer_id),
 			FOREIGN KEY (customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers(id, organization_id) ON DELETE CASCADE
-		);
-		CREATE TABLE IF NOT EXISTS ${safeSchema}.membership_entitlements (
-			id TEXT PRIMARY KEY,
-			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
-			customer_id TEXT NOT NULL, entitlement_class TEXT NOT NULL CHECK (entitlement_class IN ('teacher_membership', 'accompanist_membership')),
-			source TEXT NOT NULL CHECK (source IN ('teacher_checkout', 'accompanist_form')),
-			offering_id TEXT NULL REFERENCES ${safeSchema}.products (id), starts_on DATE NOT NULL, ends_on DATE NOT NULL,
-			revoked_at TIMESTAMPTZ NULL, revoked_reason TEXT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			CHECK (ends_on > starts_on),
-			CHECK ((entitlement_class = 'teacher_membership' AND source = 'teacher_checkout') OR (entitlement_class = 'accompanist_membership' AND source = 'accompanist_form')),
-			FOREIGN KEY (customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers(id, organization_id) ON DELETE CASCADE,
-			EXCLUDE USING gist (organization_id WITH =, customer_id WITH =, entitlement_class WITH =, daterange(starts_on, ends_on, '[)') WITH &&) WHERE (revoked_at IS NULL)
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.membership_entitlement_divisions (
 			entitlement_id TEXT NOT NULL REFERENCES ${safeSchema}.membership_entitlements(id) ON DELETE CASCADE,
@@ -455,6 +535,18 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		CREATE INDEX IF NOT EXISTS registration_metadata_organization_class_entitlement_idx
 			ON ${safeSchema}.registration_metadata(organization_id, class_entitlement_id)
 			WHERE class_entitlement_id IS NOT NULL;
+		CREATE INDEX IF NOT EXISTS repertoire_works_organization_title_idx
+			ON ${safeSchema}.repertoire_works(organization_id, normalized_title);
+		CREATE INDEX IF NOT EXISTS repertoire_work_contributors_contributor_idx
+			ON ${safeSchema}.repertoire_work_contributors(organization_id, repertoire_contributor_id);
+		CREATE INDEX IF NOT EXISTS repertoire_work_classifications_classification_idx
+			ON ${safeSchema}.repertoire_work_classifications(organization_id, repertoire_classification_id, repertoire_work_id);
+		CREATE INDEX IF NOT EXISTS registration_repertoire_items_work_idx
+			ON ${safeSchema}.registration_repertoire_items(organization_id, repertoire_work_id)
+			WHERE repertoire_work_id IS NOT NULL;
+		CREATE INDEX IF NOT EXISTS registration_repertoire_item_contributors_contributor_idx
+			ON ${safeSchema}.registration_repertoire_item_contributors(organization_id, repertoire_contributor_id)
+			WHERE repertoire_contributor_id IS NOT NULL;
 	`;
 }
 

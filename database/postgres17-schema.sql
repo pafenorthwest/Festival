@@ -540,7 +540,46 @@ CREATE TABLE orgs.registration_catalog_values (
 
 
 --
+-- Name: registration_repertoire_item_contributors; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.registration_repertoire_item_contributors (
+    id text NOT NULL,
+    organization_id text NOT NULL,
+    registration_repertoire_item_id text NOT NULL,
+    repertoire_contributor_id text,
+    display_name_snapshot text NOT NULL,
+    contributor_role text NOT NULL,
+    position smallint NOT NULL,
+    CONSTRAINT registration_repertoire_item_contributors_contributor_role_check CHECK ((contributor_role = ANY (ARRAY['Composer'::text, 'Copyist'::text, 'Editor'::text, 'Arranger'::text, 'Transcriber'::text, 'Realizer'::text, 'Orchestrator'::text]))),
+    CONSTRAINT registration_repertoire_item_contributors_display_name_snapshot_check CHECK ((btrim(display_name_snapshot) <> ''::text)),
+    CONSTRAINT registration_repertoire_item_contributors_position_check CHECK (((position >= 1) AND (position <= 3)))
+);
+
+
+--
+-- Name: registration_repertoire_items; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.registration_repertoire_items (
+    id text NOT NULL,
+    organization_id text NOT NULL,
+    registration_metadata_id text NOT NULL,
+    repertoire_work_id text,
+    title_snapshot text NOT NULL,
+    performed_movement_text text,
+    duration_seconds integer NOT NULL,
+    display_order smallint NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT registration_repertoire_items_display_order_check CHECK ((display_order >= 0)),
+    CONSTRAINT registration_repertoire_items_duration_seconds_check CHECK ((duration_seconds > 0)),
+    CONSTRAINT registration_repertoire_items_title_snapshot_check CHECK ((btrim(title_snapshot) <> ''::text))
+);
+
+
+--
 -- Name: registration_metadata; Type: TABLE; Schema: orgs; Owner: -
+-- Write-hot during the initial registration surge; avoid blocking DDL on this table.
 --
 
 CREATE TABLE orgs.registration_metadata (
@@ -553,6 +592,83 @@ CREATE TABLE orgs.registration_metadata (
     accompanist_membership_id text,
     repertoire_json jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: repertoire_classifications; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.repertoire_classifications (
+    id text NOT NULL,
+    organization_id text NOT NULL,
+    display_name text NOT NULL,
+    normalized_name text NOT NULL,
+    is_active boolean DEFAULT true NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT repertoire_classifications_display_name_check CHECK ((btrim(display_name) <> ''::text)),
+    CONSTRAINT repertoire_classifications_normalized_name_check CHECK ((btrim(normalized_name) <> ''::text))
+);
+
+
+--
+-- Name: repertoire_contributors; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.repertoire_contributors (
+    id text NOT NULL,
+    organization_id text NOT NULL,
+    display_name text NOT NULL,
+    normalized_name text NOT NULL,
+    is_active boolean DEFAULT true NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT repertoire_contributors_display_name_check CHECK ((btrim(display_name) <> ''::text)),
+    CONSTRAINT repertoire_contributors_normalized_name_check CHECK ((btrim(normalized_name) <> ''::text))
+);
+
+
+--
+-- Name: repertoire_work_classifications; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.repertoire_work_classifications (
+    organization_id text NOT NULL,
+    repertoire_work_id text NOT NULL,
+    repertoire_classification_id text NOT NULL
+);
+
+
+--
+-- Name: repertoire_work_contributors; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.repertoire_work_contributors (
+    organization_id text NOT NULL,
+    repertoire_work_id text NOT NULL,
+    repertoire_contributor_id text NOT NULL,
+    contributor_role text NOT NULL,
+    position smallint NOT NULL,
+    CONSTRAINT repertoire_work_contributors_contributor_role_check CHECK ((contributor_role = ANY (ARRAY['Composer'::text, 'Copyist'::text, 'Editor'::text, 'Arranger'::text, 'Transcriber'::text, 'Realizer'::text, 'Orchestrator'::text]))),
+    CONSTRAINT repertoire_work_contributors_position_check CHECK (((position >= 1) AND (position <= 3)))
+);
+
+
+--
+-- Name: repertoire_works; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.repertoire_works (
+    id text NOT NULL,
+    organization_id text NOT NULL,
+    display_title text NOT NULL,
+    normalized_title text NOT NULL,
+    is_active boolean DEFAULT true NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT repertoire_works_display_title_check CHECK ((btrim(display_title) <> ''::text)),
+    CONSTRAINT repertoire_works_normalized_title_check CHECK ((btrim(normalized_title) <> ''::text))
 );
 
 
@@ -1157,6 +1273,142 @@ ALTER TABLE ONLY orgs.registration_metadata
 
 
 --
+-- Name: registration_metadata registration_metadata_id_organization_id_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.registration_metadata
+    ADD CONSTRAINT registration_metadata_id_organization_id_key UNIQUE (id, organization_id);
+
+
+--
+-- Name: registration_repertoire_item_contributors registration_repertoire_item_contributors_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.registration_repertoire_item_contributors
+    ADD CONSTRAINT registration_repertoire_item_contributors_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: registration_repertoire_item_contributors registration_repertoire_item_contributors_registration_repertoire_item_id_position_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.registration_repertoire_item_contributors
+    ADD CONSTRAINT registration_repertoire_item_contributors_registration_repertoire_item_id_position_key UNIQUE (registration_repertoire_item_id, position);
+
+
+--
+-- Name: registration_repertoire_items registration_repertoire_items_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.registration_repertoire_items
+    ADD CONSTRAINT registration_repertoire_items_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: registration_repertoire_items registration_repertoire_items_id_organization_id_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.registration_repertoire_items
+    ADD CONSTRAINT registration_repertoire_items_id_organization_id_key UNIQUE (id, organization_id);
+
+
+--
+-- Name: registration_repertoire_items registration_repertoire_items_registration_metadata_id_organization_id_display_order_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.registration_repertoire_items
+    ADD CONSTRAINT registration_repertoire_items_registration_metadata_id_organization_id_display_order_key UNIQUE (registration_metadata_id, organization_id, display_order);
+
+
+--
+-- Name: repertoire_classifications repertoire_classifications_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.repertoire_classifications
+    ADD CONSTRAINT repertoire_classifications_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: repertoire_classifications repertoire_classifications_id_organization_id_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.repertoire_classifications
+    ADD CONSTRAINT repertoire_classifications_id_organization_id_key UNIQUE (id, organization_id);
+
+
+--
+-- Name: repertoire_classifications repertoire_classifications_organization_id_normalized_name_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.repertoire_classifications
+    ADD CONSTRAINT repertoire_classifications_organization_id_normalized_name_key UNIQUE (organization_id, normalized_name);
+
+
+--
+-- Name: repertoire_contributors repertoire_contributors_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.repertoire_contributors
+    ADD CONSTRAINT repertoire_contributors_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: repertoire_contributors repertoire_contributors_id_organization_id_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.repertoire_contributors
+    ADD CONSTRAINT repertoire_contributors_id_organization_id_key UNIQUE (id, organization_id);
+
+
+--
+-- Name: repertoire_contributors repertoire_contributors_organization_id_normalized_name_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.repertoire_contributors
+    ADD CONSTRAINT repertoire_contributors_organization_id_normalized_name_key UNIQUE (organization_id, normalized_name);
+
+
+--
+-- Name: repertoire_work_classifications repertoire_work_classifications_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.repertoire_work_classifications
+    ADD CONSTRAINT repertoire_work_classifications_pkey PRIMARY KEY (repertoire_work_id, repertoire_classification_id);
+
+
+--
+-- Name: repertoire_work_contributors repertoire_work_contributors_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.repertoire_work_contributors
+    ADD CONSTRAINT repertoire_work_contributors_pkey PRIMARY KEY (repertoire_work_id, position);
+
+
+--
+-- Name: repertoire_work_contributors repertoire_work_contributors_repertoire_work_id_repertoire_contributor_id_contributor_role_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.repertoire_work_contributors
+    ADD CONSTRAINT repertoire_work_contributors_repertoire_work_id_repertoire_contributor_id_contributor_role_key UNIQUE (repertoire_work_id, repertoire_contributor_id, contributor_role);
+
+
+--
+-- Name: repertoire_works repertoire_works_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.repertoire_works
+    ADD CONSTRAINT repertoire_works_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: repertoire_works repertoire_works_id_organization_id_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.repertoire_works
+    ADD CONSTRAINT repertoire_works_id_organization_id_key UNIQUE (id, organization_id);
+
+
+--
 -- Name: shopify_customer_account_integrations shopify_customer_account_integrations_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
 --
 
@@ -1511,6 +1763,41 @@ CREATE INDEX registration_metadata_organization_class_entitlement_idx ON orgs.re
 
 
 --
+-- Name: registration_repertoire_item_contributors_contributor_idx; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX registration_repertoire_item_contributors_contributor_idx ON orgs.registration_repertoire_item_contributors USING btree (organization_id, repertoire_contributor_id) WHERE (repertoire_contributor_id IS NOT NULL);
+
+
+--
+-- Name: registration_repertoire_items_work_idx; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX registration_repertoire_items_work_idx ON orgs.registration_repertoire_items USING btree (organization_id, repertoire_work_id) WHERE (repertoire_work_id IS NOT NULL);
+
+
+--
+-- Name: repertoire_work_classifications_classification_idx; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX repertoire_work_classifications_classification_idx ON orgs.repertoire_work_classifications USING btree (organization_id, repertoire_classification_id, repertoire_work_id);
+
+
+--
+-- Name: repertoire_work_contributors_contributor_idx; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX repertoire_work_contributors_contributor_idx ON orgs.repertoire_work_contributors USING btree (organization_id, repertoire_contributor_id);
+
+
+--
+-- Name: repertoire_works_organization_title_idx; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX repertoire_works_organization_title_idx ON orgs.repertoire_works USING btree (organization_id, normalized_title);
+
+
+--
 -- Name: shopify_webhook_reclaim_idx; Type: INDEX; Schema: orgs; Owner: -
 --
 
@@ -1840,6 +2127,126 @@ ALTER TABLE ONLY orgs.registration_metadata
 
 ALTER TABLE ONLY orgs.registration_metadata
     ADD CONSTRAINT registration_metadata_accompanist_membership_id_fkey FOREIGN KEY (accompanist_membership_id) REFERENCES orgs.membership_entitlements(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: registration_repertoire_item_contributors registration_repertoire_item_contributors_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.registration_repertoire_item_contributors
+    ADD CONSTRAINT registration_repertoire_item_contributors_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: registration_repertoire_item_contributors registration_repertoire_item_contributors_registration_repertoire_item_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.registration_repertoire_item_contributors
+    ADD CONSTRAINT registration_repertoire_item_contributors_registration_repertoire_item_id_organization_id_fkey FOREIGN KEY (registration_repertoire_item_id, organization_id) REFERENCES orgs.registration_repertoire_items(id, organization_id) ON DELETE CASCADE;
+
+
+--
+-- Name: registration_repertoire_item_contributors registration_repertoire_item_contributors_repertoire_contributor_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.registration_repertoire_item_contributors
+    ADD CONSTRAINT registration_repertoire_item_contributors_repertoire_contributor_id_organization_id_fkey FOREIGN KEY (repertoire_contributor_id, organization_id) REFERENCES orgs.repertoire_contributors(id, organization_id) ON DELETE SET NULL (repertoire_contributor_id);
+
+
+--
+-- Name: registration_repertoire_items registration_repertoire_items_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.registration_repertoire_items
+    ADD CONSTRAINT registration_repertoire_items_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: registration_repertoire_items registration_repertoire_items_registration_metadata_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.registration_repertoire_items
+    ADD CONSTRAINT registration_repertoire_items_registration_metadata_id_organization_id_fkey FOREIGN KEY (registration_metadata_id, organization_id) REFERENCES orgs.registration_metadata(id, organization_id) ON DELETE CASCADE;
+
+
+--
+-- Name: registration_repertoire_items registration_repertoire_items_repertoire_work_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.registration_repertoire_items
+    ADD CONSTRAINT registration_repertoire_items_repertoire_work_id_organization_id_fkey FOREIGN KEY (repertoire_work_id, organization_id) REFERENCES orgs.repertoire_works(id, organization_id) ON DELETE SET NULL (repertoire_work_id);
+
+
+--
+-- Name: repertoire_classifications repertoire_classifications_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.repertoire_classifications
+    ADD CONSTRAINT repertoire_classifications_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: repertoire_contributors repertoire_contributors_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.repertoire_contributors
+    ADD CONSTRAINT repertoire_contributors_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: repertoire_work_classifications repertoire_work_classifications_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.repertoire_work_classifications
+    ADD CONSTRAINT repertoire_work_classifications_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: repertoire_work_classifications repertoire_work_classifications_repertoire_classification_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.repertoire_work_classifications
+    ADD CONSTRAINT repertoire_work_classifications_repertoire_classification_id_organization_id_fkey FOREIGN KEY (repertoire_classification_id, organization_id) REFERENCES orgs.repertoire_classifications(id, organization_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: repertoire_work_classifications repertoire_work_classifications_repertoire_work_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.repertoire_work_classifications
+    ADD CONSTRAINT repertoire_work_classifications_repertoire_work_id_organization_id_fkey FOREIGN KEY (repertoire_work_id, organization_id) REFERENCES orgs.repertoire_works(id, organization_id) ON DELETE CASCADE;
+
+
+--
+-- Name: repertoire_work_contributors repertoire_work_contributors_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.repertoire_work_contributors
+    ADD CONSTRAINT repertoire_work_contributors_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: repertoire_work_contributors repertoire_work_contributors_repertoire_contributor_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.repertoire_work_contributors
+    ADD CONSTRAINT repertoire_work_contributors_repertoire_contributor_id_organization_id_fkey FOREIGN KEY (repertoire_contributor_id, organization_id) REFERENCES orgs.repertoire_contributors(id, organization_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: repertoire_work_contributors repertoire_work_contributors_repertoire_work_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.repertoire_work_contributors
+    ADD CONSTRAINT repertoire_work_contributors_repertoire_work_id_organization_id_fkey FOREIGN KEY (repertoire_work_id, organization_id) REFERENCES orgs.repertoire_works(id, organization_id) ON DELETE CASCADE;
+
+
+--
+-- Name: repertoire_works repertoire_works_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.repertoire_works
+    ADD CONSTRAINT repertoire_works_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
 
 
 --

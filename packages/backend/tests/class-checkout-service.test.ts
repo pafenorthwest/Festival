@@ -519,9 +519,9 @@ describe("ClassCheckoutService", () => {
 		});
 
 		const threePieces: RepertoirePiece[] = [
-			{ title: "Piece 1", durationSeconds: 60 },
-			{ title: "Piece 2", durationSeconds: 60 },
-			{ title: "Piece 3", durationSeconds: 60 },
+			{ title: "Piece 1", composer: "Composer 1", durationSeconds: 60 },
+			{ title: "Piece 2", composer: "Composer 2", durationSeconds: 60 },
+			{ title: "Piece 3", composer: "Composer 3", durationSeconds: 60 },
 		];
 
 		await expect(
@@ -541,8 +541,12 @@ describe("ClassCheckoutService", () => {
 		});
 
 		const longPieces: RepertoirePiece[] = [
-			{ title: "Piece 1", durationSeconds: 200 },
-			{ title: "Piece 2", durationSeconds: 150 }, // 350s = 5.83 mins > 5 mins
+			{ title: "Piece 1", composer: "Composer 1", durationSeconds: 200 },
+			{
+				title: "Piece 2",
+				composer: "Composer 2",
+				durationSeconds: 150,
+			}, // 350s = 5.83 mins > 5 mins
 		];
 
 		await expect(
@@ -552,6 +556,76 @@ describe("ClassCheckoutService", () => {
 			}),
 		).rejects.toMatchObject({
 			status: 400,
+		});
+	});
+
+	it("rejects a repertoire piece without a composer before persistence", async () => {
+		const f = await createFixture();
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				pieces: [{ title: "Untitled", composer: "   ", durationSeconds: 60 }],
+			}),
+		).rejects.toMatchObject({
+			status: 400,
+			message: "Each repertoire piece must have a valid composer.",
+		});
+	});
+
+	it("rejects a repertoire piece with a non-string movement before persistence", async () => {
+		const f = await createFixture();
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				pieces: [
+					{
+						title: "Untitled",
+						composer: "Composer",
+						movement: 42 as never,
+						durationSeconds: 60,
+					},
+				],
+			}),
+		).rejects.toMatchObject({
+			status: 400,
+			message: "Each repertoire piece must have a valid movement.",
+		});
+		expect(
+			await f.checkout.getOutcome({
+				organizationId: f.organization.id,
+				customerId: f.customer.id,
+				sessionId: f.session.sessionId,
+				idempotencyKey: f.defaultInput.idempotencyKey,
+			}),
+		).toBeNull();
+	});
+
+	it.each([
+		["a fractional duration", 1.5],
+		["zero duration", 0],
+		["a negative duration", -1],
+		["NaN duration", Number.NaN],
+		["an infinite duration", Number.POSITIVE_INFINITY],
+		["a duration above the PostgreSQL INTEGER limit", 2_147_483_648],
+		["an unsafe integer duration", Number.MAX_SAFE_INTEGER + 1],
+	])("rejects %s before persistence", async (_description, durationSeconds) => {
+		const f = await createFixture();
+
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				pieces: [
+					{
+						title: "Invalid duration piece",
+						composer: "Composer",
+						durationSeconds,
+					},
+				],
+			}),
+		).rejects.toMatchObject({
+			status: 400,
+			message:
+				"Each repertoire piece must have a positive whole-number duration in seconds.",
 		});
 	});
 
