@@ -1,8 +1,5 @@
 import { type Context, Hono } from "hono";
-import {
-	type ApiVariables,
-	toJsonError,
-} from "../../auth/tenant-context.js";
+import { type ApiVariables, toJsonError } from "../../auth/tenant-context.js";
 import { AppError } from "../../errors/app-error.js";
 import type { PublicMembershipProductService } from "../../shopify/public-membership-product-service.js";
 

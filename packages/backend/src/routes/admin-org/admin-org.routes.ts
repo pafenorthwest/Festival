@@ -1,6 +1,5 @@
 import type { CreateFestivalInput } from "@festival/common";
 import { Hono } from "hono";
-import { AppError } from "../../errors/app-error.js";
 import {
 	type ApiVariables,
 	getRequiredTenant,
@@ -10,6 +9,7 @@ import {
 	toJsonError,
 } from "../../auth/tenant-context.js";
 import type { AuthVerifier } from "../../auth/types.js";
+import { AppError } from "../../errors/app-error.js";
 import type { OrganizationService } from "../../services/organization-service.js";
 
 function assertAllowedFields(

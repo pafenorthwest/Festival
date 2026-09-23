@@ -1,9 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import type { AuthenticatedUser } from "@festival/common";
-import { createApp } from "../src/app.js";
+import { Hono } from "hono";
 import type { AuthVerifier } from "../src/auth/types.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
-import { Hono } from "hono";
 import { buildIdentityRoutes } from "../src/routes/identity/identity.routes.js";
 import { OrganizationService } from "../src/services/organization-service.js";
 
@@ -44,7 +43,7 @@ async function createTestApp() {
 		role: "Admin",
 		origin: "creator",
 	});
-	
+
 	const authVerifier = new FakeAuth();
 	const organizationService = new OrganizationService(repository);
 	const app = new Hono();
@@ -147,7 +146,11 @@ describe("identity routes", () => {
 					Authorization: "Bearer admin",
 					"Content-Type": "application/json",
 				},
-				body: JSON.stringify({ organizationSlug: "pafe", role: "Admin", email: "invitee@example.com" }),
+				body: JSON.stringify({
+					organizationSlug: "pafe",
+					role: "Admin",
+					email: "invitee@example.com",
+				}),
 			});
 			if (response.status !== 201) {
 				console.error(await response.text());

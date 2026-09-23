@@ -1088,7 +1088,8 @@ export class CustomerAccountService {
 			festival = found;
 		}
 
-		if (!this.commerce || !this.checkout) {
+		const checkout = this.checkout;
+		if (!this.commerce || !checkout) {
 			throw new AppError(
 				"Commerce or checkout repository is not configured.",
 				500,
@@ -1111,11 +1112,10 @@ export class CustomerAccountService {
 		): Promise<FestivalClassConfiguration | undefined> => {
 			let configs = classConfigCache.get(festivalId);
 			if (!configs) {
-				const list =
-					await this.organizations.listFestivalClassConfigurations(
-						session.organizationId,
-						festivalId,
-					);
+				const list = await this.organizations.listFestivalClassConfigurations(
+					session.organizationId,
+					festivalId,
+				);
 				configs = new Map(list.map((c) => [c.id, c]));
 				classConfigCache.set(festivalId, configs);
 			}
@@ -1128,22 +1128,19 @@ export class CustomerAccountService {
 					entitlement.festivalId,
 					entitlement.festivalClassId,
 				);
-				const matchedChild = children.find(
-					(c) => c.id === entitlement.childId,
-				);
+				const matchedChild = children.find((c) => c.id === entitlement.childId);
 				const child = matchedChild
 					? {
 							id: matchedChild.id,
 							name:
 								(matchedChild as { name?: string; displayName?: string })
 									.name ?? matchedChild.displayName,
-					  }
+						}
 					: undefined;
-				const metadata =
-					await this.checkout!.getRegistrationMetadataByEntitlementId(
-						session.organizationId,
-						entitlement.id,
-					);
+				const metadata = await checkout.getRegistrationMetadataByEntitlementId(
+					session.organizationId,
+					entitlement.id,
+				);
 				return {
 					entitlement,
 					festivalClass,

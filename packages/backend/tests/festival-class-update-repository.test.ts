@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
 import { InMemoryCheckoutRepository } from "../src/checkout/checkout-repository.js";
+import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
 
 describe("festival class updates and registration metadata repository lookups", () => {
 	it("updates festival class configuration in memory", async () => {

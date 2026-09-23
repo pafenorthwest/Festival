@@ -1,16 +1,16 @@
 import { Hono } from "hono";
 import {
 	type ApiVariables,
+	getRequiredTenant,
 	requireAuth,
 	requireTenant,
 	requireTenantRole,
-	getRequiredTenant,
 	toJsonError,
 } from "../../auth/tenant-context.js";
-import type { OrganizationRepository } from "../../repo/organization-repository.js";
 import type { AuthVerifier } from "../../auth/types.js";
-import type { AccompanistMembershipService } from "../../services/accompanist-membership-service.js";
 import { AppError } from "../../errors/app-error.js";
+import type { OrganizationRepository } from "../../repo/organization-repository.js";
+import type { AccompanistMembershipService } from "../../services/accompanist-membership-service.js";
 
 export function buildStaffRoutes(options: {
 	repository: OrganizationRepository;

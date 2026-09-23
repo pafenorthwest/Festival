@@ -3,8 +3,8 @@ import type { AuthenticatedUser } from "@festival/common";
 import { Hono } from "hono";
 import type { AuthVerifier } from "../src/auth/types.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
-import { OrganizationService } from "../src/services/organization-service.js";
 import { buildAdminRegistrationRoutes } from "../src/routes/admin-registration/admin-registration.routes.js";
+import { OrganizationService } from "../src/services/organization-service.js";
 
 class FakeAuth implements AuthVerifier {
 	async verify(token: string): Promise<AuthenticatedUser> {
@@ -48,7 +48,10 @@ async function createTestApp() {
 	const authVerifier = new FakeAuth();
 
 	const app = new Hono();
-	app.route("/", buildAdminRegistrationRoutes({ organizationService, authVerifier }));
+	app.route(
+		"/",
+		buildAdminRegistrationRoutes({ organizationService, authVerifier }),
+	);
 
 	return { app, organization, repository };
 }
@@ -103,11 +106,11 @@ describe("admin registration routes", () => {
 				`/organizations/${organization.slug}/admin/class-subtypes`,
 				{
 					method: "POST",
-					headers: { 
+					headers: {
 						Authorization: "Bearer admin",
-						"Content-Type": "application/json"
+						"Content-Type": "application/json",
 					},
-					body: JSON.stringify({ displayName: "Solo" })
+					body: JSON.stringify({ displayName: "Solo" }),
 				},
 			);
 			expect(response.status).toBe(201);

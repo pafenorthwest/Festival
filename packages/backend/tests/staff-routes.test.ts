@@ -3,8 +3,8 @@ import type { AuthenticatedUser } from "@festival/common";
 import { Hono } from "hono";
 import type { AuthVerifier } from "../src/auth/types.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
-import { AccompanistMembershipService } from "../src/services/accompanist-membership-service.js";
 import { buildStaffRoutes } from "../src/routes/staff/staff.routes.js";
+import { AccompanistMembershipService } from "../src/services/accompanist-membership-service.js";
 
 class FakeAuth implements AuthVerifier {
 	async verify(token: string): Promise<AuthenticatedUser> {
@@ -43,14 +43,21 @@ async function createTestApp(withAccompanistService = true) {
 		role: "Admin",
 		origin: "creator",
 	});
-	
+
 	const authVerifier = new FakeAuth();
-	const accompanistMembershipService = withAccompanistService 
-		? new AccompanistMembershipService(repository) 
+	const accompanistMembershipService = withAccompanistService
+		? new AccompanistMembershipService(repository)
 		: undefined;
 
 	const app = new Hono();
-	app.route("/", buildStaffRoutes({ repository, authVerifier, accompanistMembershipService }));
+	app.route(
+		"/",
+		buildStaffRoutes({
+			repository,
+			authVerifier,
+			accompanistMembershipService,
+		}),
+	);
 
 	return { app, organization, repository };
 }
@@ -59,9 +66,12 @@ describe("staff routes", () => {
 	describe("GET /organizations/:slug/staff/accompanists", () => {
 		it("returns 200 and roster when requested by an admin", async () => {
 			const { app, organization } = await createTestApp();
-			const response = await app.request(`/organizations/${organization.slug}/staff/accompanists`, {
-				headers: { Authorization: "Bearer admin" },
-			});
+			const response = await app.request(
+				`/organizations/${organization.slug}/staff/accompanists`,
+				{
+					headers: { Authorization: "Bearer admin" },
+				},
+			);
 			expect(response.status).toBe(200);
 			const body = await response.json();
 			expect(body.accompanists).toBeDefined();
@@ -70,9 +80,12 @@ describe("staff routes", () => {
 
 		it("returns 503 when AccompanistMembershipService is undefined", async () => {
 			const { app, organization } = await createTestApp(false);
-			const response = await app.request(`/organizations/${organization.slug}/staff/accompanists`, {
-				headers: { Authorization: "Bearer admin" },
-			});
+			const response = await app.request(
+				`/organizations/${organization.slug}/staff/accompanists`,
+				{
+					headers: { Authorization: "Bearer admin" },
+				},
+			);
 			expect(response.status).toBe(503);
 			const body = await response.json();
 			expect(body.error).toBe("Accompanist roster is unavailable.");
@@ -80,9 +93,12 @@ describe("staff routes", () => {
 
 		it("returns 403 for unauthorized users", async () => {
 			const { app, organization } = await createTestApp();
-			const response = await app.request(`/organizations/${organization.slug}/staff/accompanists`, {
-				headers: { Authorization: "Bearer outsider" },
-			});
+			const response = await app.request(
+				`/organizations/${organization.slug}/staff/accompanists`,
+				{
+					headers: { Authorization: "Bearer outsider" },
+				},
+			);
 			expect(response.status).toBe(403);
 		});
 	});

@@ -1,12 +1,14 @@
-import { Hono } from "hono";
 import { describe, expect, it } from "bun:test";
+import { Hono } from "hono";
 import { createApp } from "../src/app.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
-import type { PublicMembershipProductService } from "../src/shopify/public-membership-product-service.js";
 import { buildCatalogRoutes } from "../src/routes/catalog/catalog.routes.js";
+import type { PublicMembershipProductService } from "../src/shopify/public-membership-product-service.js";
 
 function fakeCatalogService(
-	overrides: Partial<Record<keyof PublicMembershipProductService, unknown>> = {},
+	overrides: Partial<
+		Record<keyof PublicMembershipProductService, unknown>
+	> = {},
 ) {
 	return {
 		list: async (slug: string) => ({
@@ -76,7 +78,9 @@ describe("catalog routes", () => {
 			);
 			expect(response.status).toBe(400);
 			const body = await response.json();
-			expect(body).toMatchObject({ error: expect.stringContaining("Authorization") });
+			expect(body).toMatchObject({
+				error: expect.stringContaining("Authorization"),
+			});
 		});
 
 		it("returns 400 when a request body is present", async () => {
@@ -85,7 +89,10 @@ describe("catalog routes", () => {
 				"/api/organizations/test/membership-products",
 				{
 					method: "GET",
-					headers: { "Content-Length": "5", "Content-Type": "application/json" },
+					headers: {
+						"Content-Length": "5",
+						"Content-Type": "application/json",
+					},
 					body: "hello",
 				},
 			);

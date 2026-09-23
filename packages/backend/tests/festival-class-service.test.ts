@@ -508,10 +508,7 @@ describe("CustomerAccountService - Customer Class Registrations", () => {
 		);
 
 		await expect(
-			serviceWithoutCommerce.listClassRegistrations(
-				f.org.slug,
-				f.sessionId,
-			),
+			serviceWithoutCommerce.listClassRegistrations(f.org.slug, f.sessionId),
 		).rejects.toThrow("Commerce or checkout repository is not configured.");
 	});
 });
