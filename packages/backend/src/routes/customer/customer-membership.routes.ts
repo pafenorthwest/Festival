@@ -61,6 +61,22 @@ function requireIdempotencyKey(c: Context): string {
 	return key;
 }
 
+function requireOrganizationSlug(c: Context): string {
+	const slug = c.req.param("slug");
+	if (!slug) {
+		throw new AppError("Organization slug is required.", 400);
+	}
+	return slug;
+}
+
+function requireOfferingId(c: Context): string {
+	const offeringId = c.req.param("offeringId");
+	if (!offeringId) {
+		throw new AppError("Offering ID is required.", 400);
+	}
+	return offeringId;
+}
+
 export function buildCustomerMembershipRoutes({
 	customerAccountService,
 	membershipCheckoutService,
@@ -77,8 +93,9 @@ export function buildCustomerMembershipRoutes({
 			if (!customerAccountService || !publicMembershipProductService) {
 				throw new AppError("Membership purchase is unavailable.", 503);
 			}
+			const slug = requireOrganizationSlug(c);
 			const session = await customerAccountService.session(
-				c.req.param("slug"),
+				slug,
 				getCookie(c, CUSTOMER_SESSION_COOKIE),
 			);
 			if (!session.session.authenticated) {
@@ -87,8 +104,8 @@ export function buildCustomerMembershipRoutes({
 			c.header("Cache-Control", "no-store");
 			return c.json(
 				await publicMembershipProductService.resolvePurchasable(
-					c.req.param("slug"),
-					c.req.param("offeringId"),
+					slug,
+					requireOfferingId(c),
 				),
 			);
 		} catch (error) {
@@ -105,7 +122,7 @@ export function buildCustomerMembershipRoutes({
 			const idempotencyKey = requireIdempotencyKey(c);
 			const payload = validateCheckoutPayload(await c.req.json());
 			const access = await customerAccountService.checkoutAccess(
-				c.req.param("slug"),
+				requireOrganizationSlug(c),
 				getCookie(c, CUSTOMER_SESSION_COOKIE),
 				c.req.header("X-CSRF-Token"),
 				resolveRequestOrigin(c),
@@ -135,7 +152,7 @@ export function buildCustomerMembershipRoutes({
 				throw new AppError("Membership status is unavailable.", 503);
 			}
 			const access = await customerAccountService.customerReadAccess(
-				c.req.param("slug"),
+				requireOrganizationSlug(c),
 				getCookie(c, CUSTOMER_SESSION_COOKIE),
 			);
 			c.header("Cache-Control", "no-store");
@@ -157,7 +174,7 @@ export function buildCustomerMembershipRoutes({
 				throw new AppError("Accompanist membership is unavailable.", 503);
 			}
 			const access = await customerAccountService.customerReadAccess(
-				c.req.param("slug"),
+				requireOrganizationSlug(c),
 				getCookie(c, CUSTOMER_SESSION_COOKIE),
 			);
 			const orgId = access.organizationId;
@@ -177,7 +194,7 @@ export function buildCustomerMembershipRoutes({
 				throw new AppError("Accompanist membership is unavailable.", 503);
 			}
 			const access = await customerAccountService.formAccess(
-				c.req.param("slug"),
+				requireOrganizationSlug(c),
 				getCookie(c, CUSTOMER_SESSION_COOKIE),
 				c.req.header("X-CSRF-Token"),
 				resolveRequestOrigin(c),
