@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { RepertoirePiece } from "@festival/common";
+import type { FestivalRecord, RepertoirePiece } from "@festival/common";
 import type { MembershipCommerceRepository } from "../commerce/membership-commerce-repository.js";
 import type { CustomerAccountRepository } from "../customer/customer-account-repository.js";
 import { AppError } from "../errors/app-error.js";
@@ -25,6 +25,8 @@ export interface ClassCheckoutStorefront {
 export interface StartClassCheckoutInput {
 	organizationId: string;
 	organizationSlug?: string;
+	festivalId?: string;
+	festivalShortName?: string;
 	customerId: string;
 	sessionId: string;
 	idempotencyKey: string;
@@ -171,25 +173,59 @@ export class ClassCheckoutService {
 			throw new AppError("Child age snapshot has expired.", 400);
 		}
 
-		// 5. Verifies class configuration exists, is active, and is tied to the active festival and organization
+		// 5. Verifies class configuration exists, is active, and is tied to the target festival and organization
 		const festivals = await this.organizations.listFestivals(
 			input.organizationId,
 		);
-		const activeFestival = festivals.find((item) => item.isPrimary);
-		if (!activeFestival) {
+		let targetFestival: FestivalRecord | undefined;
+		if (input.festivalId?.trim() && input.festivalShortName?.trim()) {
+			const targetShortName = input.festivalShortName.trim().toLowerCase();
+			targetFestival = festivals.find(
+				(item) =>
+					item.id === input.festivalId?.trim() &&
+					item.shortName.toLowerCase() === targetShortName,
+			);
+		} else if (input.festivalId?.trim()) {
+			targetFestival = festivals.find(
+				(item) => item.id === input.festivalId?.trim(),
+			);
+		} else if (input.festivalShortName?.trim()) {
+			const targetShortName = input.festivalShortName.trim().toLowerCase();
+			targetFestival = festivals.find(
+				(item) => item.shortName.toLowerCase() === targetShortName,
+			);
+		} else {
+			targetFestival = festivals.find((item) => item.isPrimary);
+		}
+		if (!targetFestival) {
 			throw new AppError("Active festival not found.", 404);
 		}
 
 		const classConfigs =
 			await this.organizations.listFestivalClassConfigurations(
 				input.organizationId,
-				activeFestival.id,
+				targetFestival.id,
 				false,
 			);
 		const classConfig = classConfigs.find(
 			(item) => item.id === input.festivalClassId,
 		);
 		if (!classConfig) {
+			for (const otherFest of festivals) {
+				if (otherFest.id === targetFestival.id) continue;
+				const otherConfigs =
+					await this.organizations.listFestivalClassConfigurations(
+						input.organizationId,
+						otherFest.id,
+						false,
+					);
+				if (otherConfigs.some((item) => item.id === input.festivalClassId)) {
+					throw new AppError(
+						"Festival class configuration does not belong to the active festival.",
+						400,
+					);
+				}
+			}
 			throw new AppError("Festival class configuration not found.", 404);
 		}
 		if (!classConfig.isActive) {
@@ -197,7 +233,7 @@ export class ClassCheckoutService {
 		}
 		if (
 			classConfig.organizationId !== input.organizationId ||
-			classConfig.festivalId !== activeFestival.id
+			classConfig.festivalId !== targetFestival.id
 		) {
 			throw new AppError(
 				"Festival class configuration does not belong to the active festival.",
@@ -366,7 +402,7 @@ export class ClassCheckoutService {
 		await this.checkout.insertRegistrationMetadata({
 			id: randomUUID(),
 			organizationId: input.organizationId,
-			festivalId: activeFestival.id,
+			festivalId: targetFestival.id,
 			checkoutIntentId: intent.id,
 			teacherMembershipId: teacherEntitlementId,
 			accompanistMembershipId: accompanistEntitlementId,

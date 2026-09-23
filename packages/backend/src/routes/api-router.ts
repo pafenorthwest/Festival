@@ -484,12 +484,14 @@ export function buildApiRouter(
 				c.req.header("X-CSRF-Token"),
 				requestOrigin,
 			);
+			const festivalShortName = c.req.param("festivalShortName");
 			const payload = await c.req.json();
 			c.header("Cache-Control", "no-store");
 			return c.json(
 				await classCheckoutService.start({
 					...payload,
 					...access,
+					festivalShortName: festivalShortName || payload.festivalShortName,
 					buyerAccessToken: access.shopifyCustomerAccessToken,
 					idempotencyKey,
 				}),

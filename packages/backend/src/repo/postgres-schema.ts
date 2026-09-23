@@ -252,6 +252,18 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			FOREIGN KEY (parent_customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers(id, organization_id) ON DELETE RESTRICT
 		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.membership_entitlements (
+			id TEXT PRIMARY KEY,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			customer_id TEXT NOT NULL, entitlement_class TEXT NOT NULL CHECK (entitlement_class IN ('teacher_membership', 'accompanist_membership')),
+			source TEXT NOT NULL CHECK (source IN ('teacher_checkout', 'accompanist_form')),
+			offering_id TEXT NULL REFERENCES ${safeSchema}.products (id), starts_on DATE NOT NULL, ends_on DATE NOT NULL,
+			revoked_at TIMESTAMPTZ NULL, revoked_reason TEXT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			CHECK (ends_on > starts_on),
+			CHECK ((entitlement_class = 'teacher_membership' AND source = 'teacher_checkout') OR (entitlement_class = 'accompanist_membership' AND source = 'accompanist_form')),
+			FOREIGN KEY (customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers(id, organization_id) ON DELETE CASCADE,
+			EXCLUDE USING gist (organization_id WITH =, customer_id WITH =, entitlement_class WITH =, daterange(starts_on, ends_on, '[)') WITH &&) WHERE (revoked_at IS NULL)
+		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.registration_metadata (
 			id TEXT NOT NULL,
 			organization_id TEXT NOT NULL,
@@ -287,18 +299,6 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			organization_id TEXT NOT NULL, normalized_email TEXT NOT NULL, customer_id TEXT NOT NULL,
 			PRIMARY KEY (organization_id, normalized_email), UNIQUE (organization_id, customer_id),
 			FOREIGN KEY (customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers(id, organization_id) ON DELETE CASCADE
-		);
-		CREATE TABLE IF NOT EXISTS ${safeSchema}.membership_entitlements (
-			id TEXT PRIMARY KEY,
-			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
-			customer_id TEXT NOT NULL, entitlement_class TEXT NOT NULL CHECK (entitlement_class IN ('teacher_membership', 'accompanist_membership')),
-			source TEXT NOT NULL CHECK (source IN ('teacher_checkout', 'accompanist_form')),
-			offering_id TEXT NULL REFERENCES ${safeSchema}.products (id), starts_on DATE NOT NULL, ends_on DATE NOT NULL,
-			revoked_at TIMESTAMPTZ NULL, revoked_reason TEXT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			CHECK (ends_on > starts_on),
-			CHECK ((entitlement_class = 'teacher_membership' AND source = 'teacher_checkout') OR (entitlement_class = 'accompanist_membership' AND source = 'accompanist_form')),
-			FOREIGN KEY (customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers(id, organization_id) ON DELETE CASCADE,
-			EXCLUDE USING gist (organization_id WITH =, customer_id WITH =, entitlement_class WITH =, daterange(starts_on, ends_on, '[)') WITH &&) WHERE (revoked_at IS NULL)
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.membership_entitlement_divisions (
 			entitlement_id TEXT NOT NULL REFERENCES ${safeSchema}.membership_entitlements(id) ON DELETE CASCADE,
