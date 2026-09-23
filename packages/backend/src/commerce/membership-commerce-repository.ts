@@ -538,6 +538,12 @@ export class InMemoryMembershipCommerceRepository
 				classEntitlement = await this.createClassEntitlement(
 					input.classEntitlement,
 				);
+				if (this.checkout && input.classEntitlement.checkoutIntentId) {
+					await this.checkout.linkRegistrationMetadataToEntitlement({
+						checkoutIntentId: input.classEntitlement.checkoutIntentId,
+						classEntitlementId: classEntitlement.id,
+					});
+				}
 			}
 		} else if (input.grant || input.classEntitlement) {
 			throw new Error(

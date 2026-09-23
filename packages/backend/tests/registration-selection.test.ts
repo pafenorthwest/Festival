@@ -21,16 +21,16 @@ class MockAuthVerifier implements AuthVerifier {
 }
 
 async function createSelectionFixture() {
-	const organizations = new InMemoryOrganizationRepository();
+	let currentDate = new Date("2026-06-01T12:00:00.000Z");
+	const now = () => currentDate;
+
+	const organizations = new InMemoryOrganizationRepository(now);
 	const repository = new InMemoryCustomerAccountRepository();
 	const keyring = ShopifySecretKeyring.fromEnvironment(
 		JSON.stringify({ test: Buffer.alloc(32, 7).toString("base64") }),
 		"test",
 	);
 	if (!keyring) throw new Error("keyring");
-
-	let currentDate = new Date("2026-06-01T12:00:00.000Z");
-	const now = () => currentDate;
 
 	const org = await organizations.createOrganization({
 		name: "Pacific Northwest Festival",
@@ -970,5 +970,437 @@ describe("Registration Selection APIs (#143)", () => {
 				name: "Teacher Bach",
 			},
 		]);
+	});
+
+	it("rejects class eligibility for teacher with inactive or revoked entitlement (#189)", async () => {
+		const f = await createSelectionFixture();
+		const parent = await f.createParentSession();
+
+		const child = await f.repository.createChild({
+			organizationId: f.org.id,
+			parentCustomerId: parent.customer.id,
+			displayName: "Oliver",
+		});
+		await f.repository.createChildAgeSnapshot({
+			organizationId: f.org.id,
+			childId: child.id,
+			age: 10,
+			validUntilIso: new Date(
+				f.now().getTime() + 90 * 86_400_000,
+			).toISOString(),
+		});
+
+		const offering = await f.organizations.createMembershipProductRecord({
+			organizationId: f.org.id,
+			entitlementClass: "teacher_membership",
+			durationDays: 365,
+			isActive: true,
+			shopifyProductGid: "gid://shopify/Product/189-1",
+			shopifyVariantGid: "gid://shopify/ProductVariant/189-1",
+			productNameSnapshot: "Teacher Membership",
+		});
+
+		// 1. Revoked teacher entitlement
+		const revokedTeacher = await f.createCustomer(
+			"Revoked Teacher",
+			"revoked.teacher@example.com",
+			"t-revoked",
+		);
+		const revokedGrant = await f.organizations.createEntitlementGrantSnapshot({
+			organizationId: f.org.id,
+			customerId: revokedTeacher.id,
+			entitlementClass: "teacher_membership",
+			offeringId: offering.id,
+			durationDays: 365,
+			divisionId: f.pianoDivision.id,
+			divisionNameSnapshot: "Piano",
+			paidAmount: "50.00",
+			paidCurrencyCode: "USD",
+			checkoutIntentId: "intent-revoked-1",
+			shopifyOrderGid: "gid://shopify/Order/revoked-1",
+			shopifyOrderLineGid: "gid://shopify/LineItem/revoked-1",
+			startsOn: "2026-01-01",
+			endsOn: "2027-01-01",
+			status: "active",
+			verifiedIdentityEmail: "revoked.teacher@example.com",
+		});
+		await f.organizations.revokeEntitlement({
+			organizationId: f.org.id,
+			entitlementId: revokedGrant.id,
+			actorUserId: "admin-actor",
+			reason: "Revoked for policy violation",
+			revokedAtIso: f.now().toISOString(),
+		});
+
+		// 2. Future / inactive teacher entitlement
+		const futureTeacher = await f.createCustomer(
+			"Future Teacher",
+			"future.teacher@example.com",
+			"t-future",
+		);
+		await f.organizations.createEntitlementGrantSnapshot({
+			organizationId: f.org.id,
+			customerId: futureTeacher.id,
+			entitlementClass: "teacher_membership",
+			offeringId: offering.id,
+			durationDays: 365,
+			divisionId: f.pianoDivision.id,
+			divisionNameSnapshot: "Piano",
+			paidAmount: "50.00",
+			paidCurrencyCode: "USD",
+			checkoutIntentId: "intent-future-1",
+			shopifyOrderGid: "gid://shopify/Order/future-1",
+			shopifyOrderLineGid: "gid://shopify/LineItem/future-1",
+			startsOn: "2026-07-01",
+			endsOn: "2027-07-01",
+			status: "active",
+			verifiedIdentityEmail: "future.teacher@example.com",
+		});
+
+		const { app } = await createApp({
+			env: { port: 3000, trustProxyHeaders: false },
+			repository: f.organizations,
+			authVerifier: new MockAuthVerifier(),
+			customerAccountService: f.service,
+		});
+		const authCookie = `${CUSTOMER_SESSION_COOKIE}=${parent.sessionId}`;
+
+		// Direct service calls
+		await expect(
+			f.service.listRegistrationEligibleClasses(
+				f.org.slug,
+				f.festival.shortName,
+				parent.sessionId,
+				child.id,
+				f.pianoDivision.id,
+				revokedTeacher.id,
+			),
+		).rejects.toMatchObject({
+			status: 400,
+			message: "Selected teacher is not eligible in this division.",
+		});
+
+		await expect(
+			f.service.listRegistrationEligibleClasses(
+				f.org.slug,
+				f.festival.shortName,
+				parent.sessionId,
+				child.id,
+				f.pianoDivision.id,
+				futureTeacher.id,
+			),
+		).rejects.toMatchObject({
+			status: 400,
+			message: "Selected teacher is not eligible in this division.",
+		});
+
+		// HTTP API calls
+		const revokedRes = await app.request(
+			`/api/organizations/${f.org.slug}/customer/festivals/${f.festival.shortName}/registration/eligible-classes?childId=${child.id}&divisionId=${f.pianoDivision.id}&teacherId=${revokedTeacher.id}`,
+			{
+				headers: {
+					Cookie: authCookie,
+				},
+			},
+		);
+		expect(revokedRes.status).toBe(400);
+		const revokedJson = await revokedRes.json();
+		expect(revokedJson).toEqual({
+			error: "Selected teacher is not eligible in this division.",
+		});
+
+		const futureRes = await app.request(
+			`/api/organizations/${f.org.slug}/customer/festivals/${f.festival.shortName}/registration/eligible-classes?childId=${child.id}&divisionId=${f.pianoDivision.id}&teacherId=${futureTeacher.id}`,
+			{
+				headers: {
+					Cookie: authCookie,
+				},
+			},
+		);
+		expect(futureRes.status).toBe(400);
+		const futureJson = await futureRes.json();
+		expect(futureJson).toEqual({
+			error: "Selected teacher is not eligible in this division.",
+		});
+	});
+
+	it("rejects class eligibility for teacher with expired entitlement (#189)", async () => {
+		const f = await createSelectionFixture();
+		const parent = await f.createParentSession();
+
+		const child = await f.repository.createChild({
+			organizationId: f.org.id,
+			parentCustomerId: parent.customer.id,
+			displayName: "Sophie",
+		});
+		await f.repository.createChildAgeSnapshot({
+			organizationId: f.org.id,
+			childId: child.id,
+			age: 11,
+			validUntilIso: new Date(
+				f.now().getTime() + 90 * 86_400_000,
+			).toISOString(),
+		});
+
+		const offering = await f.organizations.createMembershipProductRecord({
+			organizationId: f.org.id,
+			entitlementClass: "teacher_membership",
+			durationDays: 365,
+			isActive: true,
+			shopifyProductGid: "gid://shopify/Product/189-2",
+			shopifyVariantGid: "gid://shopify/ProductVariant/189-2",
+			productNameSnapshot: "Teacher Membership",
+		});
+
+		const expiredTeacher = await f.createCustomer(
+			"Expired Teacher",
+			"expired.teacher@example.com",
+			"t-expired",
+		);
+		await f.organizations.createEntitlementGrantSnapshot({
+			organizationId: f.org.id,
+			customerId: expiredTeacher.id,
+			entitlementClass: "teacher_membership",
+			offeringId: offering.id,
+			durationDays: 365,
+			divisionId: f.pianoDivision.id,
+			divisionNameSnapshot: "Piano",
+			paidAmount: "50.00",
+			paidCurrencyCode: "USD",
+			checkoutIntentId: "intent-expired-1",
+			shopifyOrderGid: "gid://shopify/Order/expired-1",
+			shopifyOrderLineGid: "gid://shopify/LineItem/expired-1",
+			startsOn: "2025-01-01",
+			endsOn: "2026-01-01",
+			status: "active",
+			verifiedIdentityEmail: "expired.teacher@example.com",
+		});
+
+		const { app } = await createApp({
+			env: { port: 3000, trustProxyHeaders: false },
+			repository: f.organizations,
+			authVerifier: new MockAuthVerifier(),
+			customerAccountService: f.service,
+		});
+		const authCookie = `${CUSTOMER_SESSION_COOKIE}=${parent.sessionId}`;
+
+		// Direct service call
+		await expect(
+			f.service.listRegistrationEligibleClasses(
+				f.org.slug,
+				f.festival.shortName,
+				parent.sessionId,
+				child.id,
+				f.pianoDivision.id,
+				expiredTeacher.id,
+			),
+		).rejects.toMatchObject({
+			status: 400,
+			message: "Selected teacher is not eligible in this division.",
+		});
+
+		// HTTP API call
+		const res = await app.request(
+			`/api/organizations/${f.org.slug}/customer/festivals/${f.festival.shortName}/registration/eligible-classes?childId=${child.id}&divisionId=${f.pianoDivision.id}&teacherId=${expiredTeacher.id}`,
+			{
+				headers: {
+					Cookie: authCookie,
+				},
+			},
+		);
+		expect(res.status).toBe(400);
+		const json = await res.json();
+		expect(json).toEqual({
+			error: "Selected teacher is not eligible in this division.",
+		});
+	});
+
+	it("rejects class eligibility for teacher belonging to another tenant (#189)", async () => {
+		const f = await createSelectionFixture();
+		const parent = await f.createParentSession();
+
+		const child = await f.repository.createChild({
+			organizationId: f.org.id,
+			parentCustomerId: parent.customer.id,
+			displayName: "Liam",
+		});
+		await f.repository.createChildAgeSnapshot({
+			organizationId: f.org.id,
+			childId: child.id,
+			age: 12,
+			validUntilIso: new Date(
+				f.now().getTime() + 90 * 86_400_000,
+			).toISOString(),
+		});
+
+		const otherDivision = await f.organizations.createDivision({
+			organizationId: f.otherOrg.id,
+			displayName: "Piano",
+			normalizedName: "piano",
+		});
+		const otherOffering = await f.organizations.createMembershipProductRecord({
+			organizationId: f.otherOrg.id,
+			entitlementClass: "teacher_membership",
+			durationDays: 365,
+			isActive: true,
+			shopifyProductGid: "gid://shopify/Product/189-3",
+			shopifyVariantGid: "gid://shopify/ProductVariant/189-3",
+			productNameSnapshot: "Teacher Membership",
+		});
+
+		const otherTenantTeacher = await f.createCustomer(
+			"Other Tenant Teacher",
+			"other.tenant.teacher@example.com",
+			"t-other-tenant-189",
+			f.otherOrg.id,
+		);
+		await f.organizations.createEntitlementGrantSnapshot({
+			organizationId: f.otherOrg.id,
+			customerId: otherTenantTeacher.id,
+			entitlementClass: "teacher_membership",
+			offeringId: otherOffering.id,
+			durationDays: 365,
+			divisionId: otherDivision.id,
+			divisionNameSnapshot: "Piano",
+			paidAmount: "50.00",
+			paidCurrencyCode: "USD",
+			checkoutIntentId: "intent-other-tenant-1",
+			shopifyOrderGid: "gid://shopify/Order/other-tenant-1",
+			shopifyOrderLineGid: "gid://shopify/LineItem/other-tenant-1",
+			startsOn: "2026-01-01",
+			endsOn: "2027-01-01",
+			status: "active",
+			verifiedIdentityEmail: "other.tenant.teacher@example.com",
+		});
+
+		const { app } = await createApp({
+			env: { port: 3000, trustProxyHeaders: false },
+			repository: f.organizations,
+			authVerifier: new MockAuthVerifier(),
+			customerAccountService: f.service,
+		});
+		const authCookie = `${CUSTOMER_SESSION_COOKIE}=${parent.sessionId}`;
+
+		// Direct service call against f.org
+		await expect(
+			f.service.listRegistrationEligibleClasses(
+				f.org.slug,
+				f.festival.shortName,
+				parent.sessionId,
+				child.id,
+				f.pianoDivision.id,
+				otherTenantTeacher.id,
+			),
+		).rejects.toMatchObject({
+			status: 400,
+			message: "Selected teacher is not eligible in this division.",
+		});
+
+		// HTTP API call against f.org
+		const res = await app.request(
+			`/api/organizations/${f.org.slug}/customer/festivals/${f.festival.shortName}/registration/eligible-classes?childId=${child.id}&divisionId=${f.pianoDivision.id}&teacherId=${otherTenantTeacher.id}`,
+			{
+				headers: {
+					Cookie: authCookie,
+				},
+			},
+		);
+		expect(res.status).toBe(400);
+		const json = await res.json();
+		expect(json).toEqual({
+			error: "Selected teacher is not eligible in this division.",
+		});
+	});
+
+	it("rejects class eligibility for teacher entitled only in a different division (#189)", async () => {
+		const f = await createSelectionFixture();
+		const parent = await f.createParentSession();
+
+		const child = await f.repository.createChild({
+			organizationId: f.org.id,
+			parentCustomerId: parent.customer.id,
+			displayName: "Mia",
+		});
+		await f.repository.createChildAgeSnapshot({
+			organizationId: f.org.id,
+			childId: child.id,
+			age: 9,
+			validUntilIso: new Date(
+				f.now().getTime() + 90 * 86_400_000,
+			).toISOString(),
+		});
+
+		const offering = await f.organizations.createMembershipProductRecord({
+			organizationId: f.org.id,
+			entitlementClass: "teacher_membership",
+			durationDays: 365,
+			isActive: true,
+			shopifyProductGid: "gid://shopify/Product/189-4",
+			shopifyVariantGid: "gid://shopify/ProductVariant/189-4",
+			productNameSnapshot: "Teacher Membership",
+		});
+
+		// Teacher entitled only in Strings division
+		const stringsTeacher = await f.createCustomer(
+			"Strings Only Teacher",
+			"strings.only@example.com",
+			"t-strings-only",
+		);
+		await f.organizations.createEntitlementGrantSnapshot({
+			organizationId: f.org.id,
+			customerId: stringsTeacher.id,
+			entitlementClass: "teacher_membership",
+			offeringId: offering.id,
+			durationDays: 365,
+			divisionId: f.stringsDivision.id,
+			divisionNameSnapshot: "Strings",
+			paidAmount: "50.00",
+			paidCurrencyCode: "USD",
+			checkoutIntentId: "intent-strings-only-1",
+			shopifyOrderGid: "gid://shopify/Order/strings-only-1",
+			shopifyOrderLineGid: "gid://shopify/LineItem/strings-only-1",
+			startsOn: "2026-01-01",
+			endsOn: "2027-01-01",
+			status: "active",
+			verifiedIdentityEmail: "strings.only@example.com",
+		});
+
+		const { app } = await createApp({
+			env: { port: 3000, trustProxyHeaders: false },
+			repository: f.organizations,
+			authVerifier: new MockAuthVerifier(),
+			customerAccountService: f.service,
+		});
+		const authCookie = `${CUSTOMER_SESSION_COOKIE}=${parent.sessionId}`;
+
+		// Direct service call for Piano division with Strings teacher
+		await expect(
+			f.service.listRegistrationEligibleClasses(
+				f.org.slug,
+				f.festival.shortName,
+				parent.sessionId,
+				child.id,
+				f.pianoDivision.id,
+				stringsTeacher.id,
+			),
+		).rejects.toMatchObject({
+			status: 400,
+			message: "Selected teacher is not eligible in this division.",
+		});
+
+		// HTTP API call for Piano division with Strings teacher
+		const res = await app.request(
+			`/api/organizations/${f.org.slug}/customer/festivals/${f.festival.shortName}/registration/eligible-classes?childId=${child.id}&divisionId=${f.pianoDivision.id}&teacherId=${stringsTeacher.id}`,
+			{
+				headers: {
+					Cookie: authCookie,
+				},
+			},
+		);
+		expect(res.status).toBe(400);
+		const json = await res.json();
+		expect(json).toEqual({
+			error: "Selected teacher is not eligible in this division.",
+		});
 	});
 });

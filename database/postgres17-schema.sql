@@ -540,6 +540,23 @@ CREATE TABLE orgs.registration_catalog_values (
 
 
 --
+-- Name: registration_metadata; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.registration_metadata (
+    id text NOT NULL,
+    organization_id text NOT NULL,
+    festival_id text NOT NULL,
+    checkout_intent_id text NOT NULL,
+    class_entitlement_id text,
+    teacher_membership_id text NOT NULL,
+    accompanist_membership_id text,
+    repertoire_json jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
 -- Name: shopify_customer_account_integrations; Type: TABLE; Schema: orgs; Owner: -
 --
 
@@ -1132,6 +1149,14 @@ ALTER TABLE ONLY orgs.registration_catalog_values
 
 
 --
+-- Name: registration_metadata registration_metadata_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.registration_metadata
+    ADD CONSTRAINT registration_metadata_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: shopify_customer_account_integrations shopify_customer_account_integrations_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
 --
 
@@ -1472,6 +1497,20 @@ CREATE INDEX membership_validation_customer_idx ON orgs.membership_validation_de
 
 
 --
+-- Name: registration_metadata_checkout_intent_id_unique; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE UNIQUE INDEX registration_metadata_checkout_intent_id_unique ON orgs.registration_metadata USING btree (checkout_intent_id);
+
+
+--
+-- Name: registration_metadata_organization_class_entitlement_idx; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX registration_metadata_organization_class_entitlement_idx ON orgs.registration_metadata USING btree (organization_id, class_entitlement_id) WHERE (class_entitlement_id IS NOT NULL);
+
+
+--
 -- Name: shopify_webhook_reclaim_idx; Type: INDEX; Schema: orgs; Owner: -
 --
 
@@ -1753,6 +1792,54 @@ ALTER TABLE ONLY orgs.registration_age_configurations
 
 ALTER TABLE ONLY orgs.registration_catalog_values
     ADD CONSTRAINT registration_catalog_values_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: registration_metadata registration_metadata_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.registration_metadata
+    ADD CONSTRAINT registration_metadata_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: registration_metadata registration_metadata_festival_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.registration_metadata
+    ADD CONSTRAINT registration_metadata_festival_id_fkey FOREIGN KEY (festival_id) REFERENCES orgs.festivals(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: registration_metadata registration_metadata_checkout_intent_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.registration_metadata
+    ADD CONSTRAINT registration_metadata_checkout_intent_id_fkey FOREIGN KEY (checkout_intent_id) REFERENCES orgs.checkout_intents(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: registration_metadata registration_metadata_class_entitlement_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.registration_metadata
+    ADD CONSTRAINT registration_metadata_class_entitlement_id_fkey FOREIGN KEY (class_entitlement_id) REFERENCES orgs.class_entitlements(id) ON DELETE SET NULL;
+
+
+--
+-- Name: registration_metadata registration_metadata_teacher_membership_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.registration_metadata
+    ADD CONSTRAINT registration_metadata_teacher_membership_id_fkey FOREIGN KEY (teacher_membership_id) REFERENCES orgs.membership_entitlements(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: registration_metadata registration_metadata_accompanist_membership_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.registration_metadata
+    ADD CONSTRAINT registration_metadata_accompanist_membership_id_fkey FOREIGN KEY (accompanist_membership_id) REFERENCES orgs.membership_entitlements(id) ON DELETE RESTRICT;
 
 
 --

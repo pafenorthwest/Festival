@@ -252,18 +252,6 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			FOREIGN KEY (parent_customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers(id, organization_id) ON DELETE RESTRICT
 		);
-		CREATE TABLE IF NOT EXISTS ${safeSchema}.membership_entitlement_cohorts (
-			organization_id TEXT NOT NULL, customer_id TEXT NOT NULL,
-			entitlement_class TEXT NOT NULL CHECK (entitlement_class IN ('teacher_membership', 'accompanist_membership')),
-			version BIGINT NOT NULL DEFAULT 0 CHECK (version >= 0),
-			PRIMARY KEY (organization_id, customer_id, entitlement_class),
-			FOREIGN KEY (customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers(id, organization_id) ON DELETE CASCADE
-		);
-		CREATE TABLE IF NOT EXISTS ${safeSchema}.membership_identity_emails (
-			organization_id TEXT NOT NULL, normalized_email TEXT NOT NULL, customer_id TEXT NOT NULL,
-			PRIMARY KEY (organization_id, normalized_email), UNIQUE (organization_id, customer_id),
-			FOREIGN KEY (customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers(id, organization_id) ON DELETE CASCADE
-		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.membership_entitlements (
 			id TEXT PRIMARY KEY,
 			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
@@ -275,6 +263,42 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			CHECK ((entitlement_class = 'teacher_membership' AND source = 'teacher_checkout') OR (entitlement_class = 'accompanist_membership' AND source = 'accompanist_form')),
 			FOREIGN KEY (customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers(id, organization_id) ON DELETE CASCADE,
 			EXCLUDE USING gist (organization_id WITH =, customer_id WITH =, entitlement_class WITH =, daterange(starts_on, ends_on, '[)') WITH &&) WHERE (revoked_at IS NULL)
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.registration_metadata (
+			id TEXT NOT NULL,
+			organization_id TEXT NOT NULL,
+			festival_id TEXT NOT NULL,
+			checkout_intent_id TEXT NOT NULL,
+			class_entitlement_id TEXT,
+			teacher_membership_id TEXT NOT NULL,
+			accompanist_membership_id TEXT,
+			repertoire_json JSONB NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			CONSTRAINT registration_metadata_pkey PRIMARY KEY (id),
+			CONSTRAINT registration_metadata_organization_id_fkey
+				FOREIGN KEY (organization_id) REFERENCES ${safeSchema}.organizations(id) ON DELETE CASCADE,
+			CONSTRAINT registration_metadata_festival_id_fkey
+				FOREIGN KEY (festival_id) REFERENCES ${safeSchema}.festivals(id) ON DELETE RESTRICT,
+			CONSTRAINT registration_metadata_checkout_intent_id_fkey
+				FOREIGN KEY (checkout_intent_id) REFERENCES ${safeSchema}.checkout_intents(id) ON DELETE RESTRICT,
+			CONSTRAINT registration_metadata_class_entitlement_id_fkey
+				FOREIGN KEY (class_entitlement_id) REFERENCES ${safeSchema}.class_entitlements(id) ON DELETE SET NULL,
+			CONSTRAINT registration_metadata_teacher_membership_id_fkey
+				FOREIGN KEY (teacher_membership_id) REFERENCES ${safeSchema}.membership_entitlements(id) ON DELETE RESTRICT,
+			CONSTRAINT registration_metadata_accompanist_membership_id_fkey
+				FOREIGN KEY (accompanist_membership_id) REFERENCES ${safeSchema}.membership_entitlements(id) ON DELETE RESTRICT
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.membership_entitlement_cohorts (
+			organization_id TEXT NOT NULL, customer_id TEXT NOT NULL,
+			entitlement_class TEXT NOT NULL CHECK (entitlement_class IN ('teacher_membership', 'accompanist_membership')),
+			version BIGINT NOT NULL DEFAULT 0 CHECK (version >= 0),
+			PRIMARY KEY (organization_id, customer_id, entitlement_class),
+			FOREIGN KEY (customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers(id, organization_id) ON DELETE CASCADE
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.membership_identity_emails (
+			organization_id TEXT NOT NULL, normalized_email TEXT NOT NULL, customer_id TEXT NOT NULL,
+			PRIMARY KEY (organization_id, normalized_email), UNIQUE (organization_id, customer_id),
+			FOREIGN KEY (customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers(id, organization_id) ON DELETE CASCADE
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.membership_entitlement_divisions (
 			entitlement_id TEXT NOT NULL REFERENCES ${safeSchema}.membership_entitlements(id) ON DELETE CASCADE,
@@ -426,6 +450,11 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_class_entitlements_order_line ON ${safeSchema}.class_entitlements (organization_id, shopify_order_line_gid);
 		CREATE INDEX IF NOT EXISTS idx_checkout_intents_org_class ON ${safeSchema}.checkout_intents (organization_id, festival_class_id) WHERE festival_class_id IS NOT NULL;
 		CREATE INDEX IF NOT EXISTS idx_checkout_intents_org_child ON ${safeSchema}.checkout_intents (organization_id, child_id) WHERE child_id IS NOT NULL;
+		CREATE UNIQUE INDEX IF NOT EXISTS registration_metadata_checkout_intent_id_unique
+			ON ${safeSchema}.registration_metadata(checkout_intent_id);
+		CREATE INDEX IF NOT EXISTS registration_metadata_organization_class_entitlement_idx
+			ON ${safeSchema}.registration_metadata(organization_id, class_entitlement_id)
+			WHERE class_entitlement_id IS NOT NULL;
 	`;
 }
 

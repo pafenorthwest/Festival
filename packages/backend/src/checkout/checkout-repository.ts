@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import type {
+	ClassRegistrationMetadata,
+	RepertoirePiece,
+} from "@festival/common";
 
 export type CheckoutCartStatus =
 	| "ready"
@@ -102,6 +106,24 @@ export interface CheckoutRepository {
 		intentId: string,
 		resolution: "approved" | "rejected" | "needs_review",
 	): Promise<void>;
+	insertRegistrationMetadata(params: {
+		id: string;
+		organizationId: string;
+		festivalId: string;
+		checkoutIntentId: string;
+		teacherMembershipId: string;
+		accompanistMembershipId: string | null;
+		repertoireJson: RepertoirePiece[];
+	}): Promise<ClassRegistrationMetadata>;
+	linkRegistrationMetadataToEntitlement(params: {
+		checkoutIntentId: string;
+		classEntitlementId: string;
+		tx?: { unsafe(sql: string, params?: unknown[]): Promise<unknown> };
+	}): Promise<void>;
+	getRegistrationMetadataByEntitlementId(
+		organizationId: string,
+		classEntitlementId: string,
+	): Promise<ClassRegistrationMetadata | null>;
 }
 
 export type CreateCheckoutIntentInput = Omit<
@@ -137,6 +159,10 @@ export type CreateCheckoutIntentInput = Omit<
 export class InMemoryCheckoutRepository implements CheckoutRepository {
 	private readonly carts = new Map<string, CheckoutCartRecord>();
 	private readonly intents = new Map<string, CheckoutIntentRecord>();
+	private readonly registrationMetadata = new Map<
+		string,
+		ClassRegistrationMetadata
+	>();
 
 	async getOutcome(input: {
 		organizationId: string;
@@ -291,6 +317,53 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 	) {
 		const intent = this.intents.get(intentId);
 		if (intent) intent.status = resolution;
+	}
+
+	async insertRegistrationMetadata(params: {
+		id: string;
+		organizationId: string;
+		festivalId: string;
+		checkoutIntentId: string;
+		teacherMembershipId: string;
+		accompanistMembershipId: string | null;
+		repertoireJson: RepertoirePiece[];
+	}): Promise<ClassRegistrationMetadata> {
+		const record: ClassRegistrationMetadata = {
+			id: params.id,
+			organizationId: params.organizationId,
+			festivalId: params.festivalId,
+			checkoutIntentId: params.checkoutIntentId,
+			classEntitlementId: null,
+			teacherMembershipId: params.teacherMembershipId,
+			accompanistMembershipId: params.accompanistMembershipId,
+			repertoireJson: params.repertoireJson,
+			createdAt: new Date(),
+		};
+		this.registrationMetadata.set(params.checkoutIntentId, record);
+		return { ...record };
+	}
+
+	async linkRegistrationMetadataToEntitlement(params: {
+		checkoutIntentId: string;
+		classEntitlementId: string;
+		tx?: { unsafe(sql: string, params?: unknown[]): Promise<unknown> };
+	}): Promise<void> {
+		const record = this.registrationMetadata.get(params.checkoutIntentId);
+		if (record) {
+			record.classEntitlementId = params.classEntitlementId;
+		}
+	}
+
+	async getRegistrationMetadataByEntitlementId(
+		organizationId: string,
+		classEntitlementId: string,
+	): Promise<ClassRegistrationMetadata | null> {
+		const match = [...this.registrationMetadata.values()].find(
+			(meta) =>
+				meta.organizationId === organizationId &&
+				meta.classEntitlementId === classEntitlementId,
+		);
+		return match ? { ...match } : null;
 	}
 
 	private outcomeFor(

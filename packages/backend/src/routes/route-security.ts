@@ -15,7 +15,7 @@ export type RouteAuthenticationClass =
 	(typeof ROUTE_AUTHENTICATION_CLASSES)[number];
 
 export interface RouteSecurityDeclaration {
-	method: "GET" | "HEAD" | "POST" | "DELETE";
+	method: "GET" | "HEAD" | "POST" | "PATCH" | "DELETE";
 	path: string;
 	authenticationClass: RouteAuthenticationClass;
 }
@@ -379,8 +379,48 @@ export const CURRENT_ROUTE_SECURITY = [
 	{ method: "GET", path: "/api/v1/auth/me", authenticationClass: "firebase" },
 	{
 		method: "GET",
-		path: "/api/organizations/:slug/volunteers/roles",
+		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/roles",
 		authenticationClass: "tenant",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/customer/class-checkout",
+		authenticationClass: "customer",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/registration/checkout",
+		authenticationClass: "customer",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/customer/class-registrations",
+		authenticationClass: "customer",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/registration/class-registrations",
+		authenticationClass: "customer",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/admin/festivals/:festivalShortName/classes",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/festivals/:festivalShortName/classes",
+		authenticationClass: "admin",
+	},
+	{
+		method: "PATCH",
+		path: "/api/organizations/:slug/admin/festivals/:festivalShortName/classes/:classId",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/festivals/:festivalShortName/classes/:classId",
+		authenticationClass: "admin",
 	},
 ] as const satisfies readonly RouteSecurityDeclaration[];
 

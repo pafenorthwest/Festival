@@ -192,6 +192,24 @@ export interface CreateFestivalClassConfigurationInput
 	isActive?: boolean;
 }
 
+export interface UpdateFestivalClassConfigurationInput {
+	id: string;
+	organizationId: string;
+	festivalId: string;
+	displayName?: string;
+	classSubtypeId?: string;
+	divisionId?: string;
+	minimumAge?: number;
+	maximumAge?: number;
+	price?: string;
+	maximumPerformancePieces?: 1 | 2 | 3;
+	performanceMinutes?: number;
+	capacity?: number;
+	isActive?: boolean;
+	shopifyProductGid?: string;
+	shopifyVariantGid?: string;
+}
+
 export interface CreateAccompanistMembershipGrantInput
 	extends Omit<
 		AccompanistMembershipGrant,
@@ -377,6 +395,9 @@ export interface OrganizationRepository {
 	): Promise<RegistrationCatalogValue[]>;
 	createFestivalClassConfiguration(
 		input: CreateFestivalClassConfigurationInput,
+	): Promise<FestivalClassConfiguration>;
+	updateFestivalClassConfiguration(
+		input: UpdateFestivalClassConfigurationInput,
 	): Promise<FestivalClassConfiguration>;
 	listFestivalClassConfigurations(
 		organizationId: string,
