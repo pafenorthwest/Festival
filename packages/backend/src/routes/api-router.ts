@@ -1,5 +1,5 @@
 import { type Context, Hono } from "hono";
-import { deleteCookie, getCookie } from "hono/cookie";
+import { getCookie } from "hono/cookie";
 import { type ApiVariables, toJsonError } from "../auth/tenant-context.js";
 import type { AuthVerifier } from "../auth/types.js";
 import type { ClassCheckoutService } from "../checkout/class-checkout-service.js";
@@ -21,6 +21,7 @@ import { buildAdminOrgRoutes } from "./admin-org/admin-org.routes.js";
 import { buildAdminRegistrationRoutes } from "./admin-registration/admin-registration.routes.js";
 import { buildAdminShopifyRoutes } from "./admin-shopify/admin-shopify.routes.js";
 import { buildCatalogRoutes } from "./catalog/catalog.routes.js";
+import { buildCustomerRoutes } from "./customer/customer.routes.js";
 import {
 	assertNoBearerPrincipal,
 	buildCustomerAuthRoutes,
@@ -110,24 +111,10 @@ export function buildApiRouter(
 		}),
 	);
 
-	router.get("/organizations/:slug/customer/session", async (c) => {
-		try {
-			assertNoBearerPrincipal(c.req.header("Authorization"));
-			if (!customerAccountService)
-				throw new AppError(
-					"Customer Account integration is not configured.",
-					503,
-				);
-			return c.json(
-				await customerAccountService.session(
-					c.req.param("slug"),
-					getCookie(c, CUSTOMER_SESSION_COOKIE),
-				),
-			);
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
+	router.route(
+		"/organizations/:slug/customer",
+		buildCustomerRoutes({ customerAccountService }),
+	);
 
 	router.get(
 		"/organizations/:slug/customer/membership-purchase/:offeringId",
@@ -529,97 +516,6 @@ export function buildApiRouter(
 			accompanistMembershipService,
 		}),
 	);
-
-	router.get("/organizations/:slug/customer/profile", async (c) => {
-		try {
-			assertNoBearerPrincipal(c.req.header("Authorization"));
-			if (!customerAccountService)
-				throw new AppError(
-					"Customer Account integration is not configured.",
-					503,
-				);
-			return c.json(
-				await customerAccountService.customerProfile(
-					c.req.param("slug"),
-					getCookie(c, CUSTOMER_SESSION_COOKIE),
-				),
-			);
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
-
-	router.post("/organizations/:slug/customer/profile", async (c) => {
-		try {
-			assertNoBearerPrincipal(c.req.header("Authorization"));
-			if (!customerAccountService)
-				throw new AppError(
-					"Customer Account integration is not configured.",
-					503,
-				);
-			const referer = c.req.header("Referer");
-			const requestOrigin =
-				c.req.header("Origin") ??
-				(referer ? new URL(referer).origin : undefined);
-			return c.json(
-				await customerAccountService.updateCustomerProfile(
-					c.req.param("slug"),
-					getCookie(c, CUSTOMER_SESSION_COOKIE),
-					c.req.header("X-CSRF-Token"),
-					requestOrigin,
-					await c.req.json(),
-				),
-			);
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
-
-	router.get("/organizations/:slug/customer/orders", async (c) => {
-		try {
-			assertNoBearerPrincipal(c.req.header("Authorization"));
-			if (!customerAccountService)
-				throw new AppError(
-					"Customer Account integration is not configured.",
-					503,
-				);
-			return c.json(
-				await customerAccountService.orders(
-					c.req.param("slug"),
-					getCookie(c, CUSTOMER_SESSION_COOKIE),
-					c.req.query("after"),
-				),
-			);
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
-
-	router.post("/organizations/:slug/customer/logout", async (c) => {
-		try {
-			assertNoBearerPrincipal(c.req.header("Authorization"));
-			if (!customerAccountService)
-				throw new AppError(
-					"Customer Account integration is not configured.",
-					503,
-				);
-			const body = await c.req.parseBody();
-			const referer = c.req.header("Referer");
-			const requestOrigin =
-				c.req.header("Origin") ??
-				(referer ? new URL(referer).origin : undefined);
-			const redirect = await customerAccountService.logout(
-				c.req.param("slug"),
-				getCookie(c, CUSTOMER_SESSION_COOKIE),
-				typeof body.csrfToken === "string" ? body.csrfToken : undefined,
-				requestOrigin,
-			);
-			deleteCookie(c, CUSTOMER_SESSION_COOKIE, { path: "/api/", secure: true });
-			return c.redirect(redirect);
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
 
 	router.route(
 		"/organizations/:slug",
