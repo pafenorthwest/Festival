@@ -495,6 +495,97 @@ describe("ClassCheckoutService", () => {
 		});
 	});
 
+	it("successfully checks out with explicit festivalShortName", async () => {
+		const f = await createFixture();
+
+		const result = await f.service.start({
+			...f.defaultInput,
+			festivalShortName: "pnw2026",
+		});
+
+		expect(result.checkoutUrl).toBeDefined();
+	});
+
+	it("successfully checks out with explicit festivalId for non-primary festival", async () => {
+		const f = await createFixture();
+
+		const secondFest = await f.organizations.createFestival({
+			id: "fest-secondary",
+			organizationId: f.organization.id,
+			code: "PNW2027",
+			shortName: "pnw2027",
+			name: "PNW Festival 2027",
+			startDate: "2027-11-01",
+			endDate: "2027-11-10",
+		});
+
+		const subtype = await f.organizations.createRegistrationCatalogValue({
+			organizationId: f.organization.id,
+			kind: "class_subtype",
+			displayName: "Solo Strings",
+			normalizedName: "solo strings",
+		});
+
+		const secondClass = await f.organizations.createFestivalClassConfiguration({
+			organizationId: f.organization.id,
+			festivalId: secondFest.id,
+			displayName: "Junior Solo Violin",
+			classSubtypeId: subtype.id,
+			divisionId: f.division.id,
+			minimumAge: 8,
+			maximumAge: 12,
+			price: "50.00",
+			maximumPerformancePieces: 2,
+			performanceMinutes: 10,
+		});
+
+		const result = await f.service.start({
+			...f.defaultInput,
+			idempotencyKey: "22222222-3333-4444-5555-666666666666",
+			festivalId: secondFest.id,
+			festivalClassId: secondClass.id,
+		});
+
+		expect(result.checkoutUrl).toBeDefined();
+	});
+
+	it("fails when explicit festivalId does not exist", async () => {
+		const f = await createFixture();
+
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				festivalId: "non-existent-festival-id",
+			}),
+		).rejects.toMatchObject({
+			status: 404,
+		});
+	});
+
+	it("fails when class configuration does not belong to specified festival", async () => {
+		const f = await createFixture();
+
+		const otherFest = await f.organizations.createFestival({
+			id: "fest-other",
+			organizationId: f.organization.id,
+			code: "PNWOTHER",
+			shortName: "pnwother",
+			name: "PNW Other 2026",
+			startDate: "2026-11-01",
+			endDate: "2026-11-10",
+		});
+
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				festivalId: otherFest.id,
+				festivalClassId: f.classConfig.id,
+			}),
+		).rejects.toMatchObject({
+			status: 400,
+		});
+	});
+
 	it("prevents multiple concurrent checkouts in progress", async () => {
 		const f = await createFixture();
 
