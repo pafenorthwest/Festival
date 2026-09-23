@@ -1,0 +1,352 @@
+import { describe, expect, it } from "bun:test";
+import { Hono } from "hono";
+import type { ClassCheckoutService } from "../src/checkout/class-checkout-service.js";
+import {
+	CUSTOMER_SESSION_COOKIE,
+	type CustomerAccountService,
+} from "../src/customer/customer-account-service.js";
+import { AppError } from "../src/errors/app-error.js";
+import {
+	buildCustomerRegistrationRoutes,
+	type CustomerRegistrationRoutesOptions,
+} from "../src/routes/customer/customer-registration.routes.js";
+
+type Headers = Record<string, string>;
+
+const AUTH = { Cookie: `${CUSTOMER_SESSION_COOKIE}=sess_1` };
+const JSON_HDR = { "Content-Type": "application/json" };
+const VALID_UUID = "12345678-1234-4234-8234-1234567890ab";
+
+function createFakeServices() {
+	const calls: Record<string, unknown[]> = {
+		listTeachers: [],
+		listEligibleClasses: [],
+		listAccompanists: [],
+		listClassRegistrations: [],
+		checkoutAccess: [],
+		startCheckout: [],
+	};
+
+	const customerAccountService = {
+		listRegistrationTeachers: async (
+			slug: string,
+			festivalShortName: string,
+			sessionId?: string,
+			childId?: string,
+			divisionId?: string,
+		) => {
+			calls.listTeachers.push({
+				slug,
+				festivalShortName,
+				sessionId,
+				childId,
+				divisionId,
+			});
+			return { teachers: [{ id: "teacher_1", name: "Jane Doe" }] };
+		},
+		listRegistrationEligibleClasses: async (
+			slug: string,
+			festivalShortName: string,
+			sessionId?: string,
+			childId?: string,
+			divisionId?: string,
+			teacherId?: string,
+		) => {
+			calls.listEligibleClasses.push({
+				slug,
+				festivalShortName,
+				sessionId,
+				childId,
+				divisionId,
+				teacherId,
+			});
+			return { classes: [{ id: "class_1", displayName: "Piano Solo" }] };
+		},
+		listRegistrationAccompanists: async (
+			slug: string,
+			festivalShortName: string,
+			sessionId?: string,
+		) => {
+			calls.listAccompanists.push({ slug, festivalShortName, sessionId });
+			return { accompanists: [{ id: "acc_1", name: "John Smith" }] };
+		},
+		listClassRegistrations: async (
+			slug: string,
+			sessionId: string,
+			festivalShortName?: string,
+		) => {
+			calls.listClassRegistrations.push({ slug, sessionId, festivalShortName });
+			return { registrations: [{ id: "reg_1", festivalShortName }] };
+		},
+		checkoutAccess: async (
+			slug: string,
+			sessionId?: string,
+			csrfToken?: string,
+			origin?: string,
+		) => {
+			calls.checkoutAccess.push({ slug, sessionId, csrfToken, origin });
+			if (!sessionId) throw new AppError("Customer session is invalid.", 401);
+			return {
+				organizationId: "org_1",
+				customerId: "cust_1",
+				shopifyCustomerAccessToken: "buyer_tok_1",
+			};
+		},
+	} as unknown as CustomerAccountService;
+
+	const classCheckoutService = {
+		start: async (input: unknown) => {
+			calls.startCheckout.push(input);
+			return {
+				checkoutUrl: "https://checkout.example.com/c/123",
+				intentId: "intent_1",
+				correlationId: "corr_1",
+			};
+		},
+	} as unknown as ClassCheckoutService;
+
+	return { customerAccountService, classCheckoutService, calls };
+}
+
+function createTestApp(options: CustomerRegistrationRoutesOptions = {}) {
+	const app = new Hono();
+	app.route(
+		"/organizations/:slug/customer",
+		buildCustomerRegistrationRoutes(options),
+	);
+	return app;
+}
+
+function req(
+	app: Hono,
+	method: string,
+	path: string,
+	headers?: Headers,
+	body?: string,
+) {
+	return app.request(`/organizations/fest/customer${path}`, {
+		method,
+		headers,
+		body,
+	});
+}
+
+describe("Customer Registration Routes", () => {
+	describe("GET /festivals/:festivalShortName/registration/teachers", () => {
+		it("returns teachers list with valid session", async () => {
+			const { customerAccountService, calls } = createFakeServices();
+			const app = createTestApp({ customerAccountService });
+			const path =
+				"/festivals/spring-2026/registration/teachers?childId=c1&divisionId=d1";
+			const res = await req(app, "GET", path, AUTH);
+			expect(res.status).toBe(200);
+			expect(await res.json()).toEqual({
+				teachers: [{ id: "teacher_1", name: "Jane Doe" }],
+			});
+			expect(calls.listTeachers[0]).toEqual({
+				slug: "fest",
+				festivalShortName: "spring-2026",
+				sessionId: "sess_1",
+				childId: "c1",
+				divisionId: "d1",
+			});
+		});
+
+		it("returns 503 when customerAccountService is missing", async () => {
+			const app = createTestApp({});
+			const res = await req(
+				app,
+				"GET",
+				"/festivals/spring-2026/registration/teachers",
+				AUTH,
+			);
+			expect(res.status).toBe(503);
+			expect(await res.json()).toEqual({
+				error: "Customer Account is unavailable.",
+			});
+		});
+	});
+
+	describe("GET /festivals/:festivalShortName/registration/eligible-classes", () => {
+		it("returns eligible classes with query params", async () => {
+			const { customerAccountService, calls } = createFakeServices();
+			const app = createTestApp({ customerAccountService });
+			const path =
+				"/festivals/spring-2026/registration/eligible-classes?childId=c1&divisionId=d1&teacherId=t1";
+			const res = await req(app, "GET", path, AUTH);
+			expect(res.status).toBe(200);
+			expect(await res.json()).toEqual({
+				classes: [{ id: "class_1", displayName: "Piano Solo" }],
+			});
+			expect(calls.listEligibleClasses[0]).toEqual({
+				slug: "fest",
+				festivalShortName: "spring-2026",
+				sessionId: "sess_1",
+				childId: "c1",
+				divisionId: "d1",
+				teacherId: "t1",
+			});
+		});
+	});
+
+	describe("GET /festivals/:festivalShortName/registration/accompanists", () => {
+		it("returns accompanists list with valid session", async () => {
+			const { customerAccountService, calls } = createFakeServices();
+			const app = createTestApp({ customerAccountService });
+			const path = "/festivals/spring-2026/registration/accompanists";
+			const res = await req(app, "GET", path, AUTH);
+			expect(res.status).toBe(200);
+			expect(await res.json()).toEqual({
+				accompanists: [{ id: "acc_1", name: "John Smith" }],
+			});
+			expect(calls.listAccompanists[0]).toEqual({
+				slug: "fest",
+				festivalShortName: "spring-2026",
+				sessionId: "sess_1",
+			});
+		});
+	});
+
+	describe("POST class checkout", () => {
+		it("handles valid checkout with session, CSRF, and idempotency key", async () => {
+			const { customerAccountService, classCheckoutService, calls } =
+				createFakeServices();
+			const app = createTestApp({
+				customerAccountService,
+				classCheckoutService,
+			});
+			const payload = { festivalClassId: "class_1", childId: "child_1" };
+			const headers = {
+				...AUTH,
+				...JSON_HDR,
+				"Idempotency-Key": VALID_UUID,
+				"X-CSRF-Token": "csrf_token_1",
+				Origin: "https://fest.example.com",
+			};
+			const res = await req(
+				app,
+				"POST",
+				"/festivals/spring-2026/registration/checkout",
+				headers,
+				JSON.stringify(payload),
+			);
+			expect(res.status).toBe(200);
+			expect(res.headers.get("Cache-Control")).toBe("no-store");
+			expect(calls.startCheckout.length).toBe(1);
+			expect(calls.startCheckout[0]).toMatchObject({
+				festivalClassId: "class_1",
+				childId: "child_1",
+				festivalShortName: "spring-2026",
+				buyerAccessToken: "buyer_tok_1",
+				idempotencyKey: VALID_UUID,
+			});
+		});
+
+		it("handles /class-checkout without festivalShortName in route", async () => {
+			const { customerAccountService, classCheckoutService, calls } =
+				createFakeServices();
+			const app = createTestApp({
+				customerAccountService,
+				classCheckoutService,
+			});
+			const payload = {
+				festivalClassId: "class_1",
+				childId: "child_1",
+				festivalShortName: "fest_from_body",
+			};
+			const headers = {
+				...AUTH,
+				...JSON_HDR,
+				"Idempotency-Key": VALID_UUID,
+				"X-CSRF-Token": "csrf_1",
+				Origin: "https://fest.example.com",
+			};
+			const res = await req(
+				app,
+				"POST",
+				"/class-checkout",
+				headers,
+				JSON.stringify(payload),
+			);
+			expect(res.status).toBe(200);
+			expect(calls.startCheckout[0]).toMatchObject({
+				festivalShortName: "fest_from_body",
+			});
+		});
+
+		it("returns 400 for invalid idempotency key", async () => {
+			const { customerAccountService, classCheckoutService } =
+				createFakeServices();
+			const app = createTestApp({
+				customerAccountService,
+				classCheckoutService,
+			});
+			const res = await req(
+				app,
+				"POST",
+				"/class-checkout",
+				{ ...AUTH, ...JSON_HDR, "Idempotency-Key": "invalid-uuid" },
+				JSON.stringify({}),
+			);
+			expect(res.status).toBe(400);
+			expect(await res.json()).toEqual({
+				error: "Checkout request is invalid.",
+			});
+		});
+
+		it("returns 503 when classCheckoutService is missing", async () => {
+			const { customerAccountService } = createFakeServices();
+			const app = createTestApp({ customerAccountService });
+			const res = await req(
+				app,
+				"POST",
+				"/class-checkout",
+				{ ...AUTH, ...JSON_HDR, "Idempotency-Key": VALID_UUID },
+				JSON.stringify({}),
+			);
+			expect(res.status).toBe(503);
+			expect(await res.json()).toEqual({
+				error: "Class checkout is unavailable.",
+			});
+		});
+	});
+
+	describe("GET class-registrations", () => {
+		it("lists registrations with festivalShortName", async () => {
+			const { customerAccountService, calls } = createFakeServices();
+			const app = createTestApp({ customerAccountService });
+			const path = "/festivals/spring-2026/registration/class-registrations";
+			const res = await req(app, "GET", path, AUTH);
+			expect(res.status).toBe(200);
+			expect(await res.json()).toEqual({
+				registrations: [{ id: "reg_1", festivalShortName: "spring-2026" }],
+			});
+			expect(calls.listClassRegistrations[0]).toEqual({
+				slug: "fest",
+				sessionId: "sess_1",
+				festivalShortName: "spring-2026",
+			});
+		});
+
+		it("lists registrations without festivalShortName", async () => {
+			const { customerAccountService, calls } = createFakeServices();
+			const app = createTestApp({ customerAccountService });
+			const res = await req(app, "GET", "/class-registrations", AUTH);
+			expect(res.status).toBe(200);
+			expect(calls.listClassRegistrations[0]).toEqual({
+				slug: "fest",
+				sessionId: "sess_1",
+				festivalShortName: undefined,
+			});
+		});
+
+		it("returns 503 when customerAccountService is missing", async () => {
+			const app = createTestApp({});
+			const res = await req(app, "GET", "/class-registrations", AUTH);
+			expect(res.status).toBe(503);
+			expect(await res.json()).toEqual({
+				error: "Customer Account is unavailable.",
+			});
+		});
+	});
+});
