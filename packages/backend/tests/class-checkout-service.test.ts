@@ -691,6 +691,50 @@ describe("ClassCheckoutService", () => {
 		).toBeNull();
 	});
 
+	it("accepts null movement and normalizes repertoire snapshot text", async () => {
+		const f = await createFixture();
+		const result = await f.service.start({
+			...f.defaultInput,
+			pieces: [
+				{
+					title: "  Sonata in C  ",
+					composer: "  Wolfgang Amadeus Mozart  ",
+					movement: null as never,
+					durationSeconds: 240,
+				},
+			],
+		});
+		const metadata = (
+			f.checkout as unknown as {
+				registrationMetadata: Map<
+					string,
+					{
+						repertoireJson: RepertoirePiece[];
+						repertoireItems: Array<{
+							titleSnapshot: string;
+							performedMovementText: string | null;
+							contributors: Array<{ displayNameSnapshot: string }>;
+						}>;
+					}
+				>;
+			}
+		).registrationMetadata.get(result.intentId);
+
+		expect(metadata?.repertoireJson).toEqual([
+			{
+				title: "  Sonata in C  ",
+				composer: "  Wolfgang Amadeus Mozart  ",
+				movement: null,
+				durationSeconds: 240,
+			},
+		]);
+		expect(metadata?.repertoireItems[0]).toMatchObject({
+			titleSnapshot: "Sonata in C",
+			performedMovementText: null,
+			contributors: [{ displayNameSnapshot: "Wolfgang Amadeus Mozart" }],
+		});
+	});
+
 	it.each([
 		["a fractional duration", 1.5],
 		["zero duration", 0],

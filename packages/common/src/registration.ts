@@ -1,7 +1,7 @@
 export interface RepertoirePiece {
 	title: string;
 	composer: string;
-	movement?: string;
+	movement?: string | null;
 	/** Positive whole seconds. */
 	durationSeconds: number;
 }

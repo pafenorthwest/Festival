@@ -115,6 +115,7 @@ export interface CheckoutRepository {
 		teacherMembershipId: string;
 		accompanistMembershipId: string | null;
 		repertoireJson: RepertoirePiece[];
+		repertoireSnapshotPieces?: RepertoirePiece[];
 	}): Promise<ClassRegistrationMetadata>;
 	linkRegistrationMetadataToEntitlement(params: {
 		checkoutIntentId: string;
@@ -328,11 +329,12 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		teacherMembershipId: string;
 		accompanistMembershipId: string | null;
 		repertoireJson: RepertoirePiece[];
+		repertoireSnapshotPieces?: RepertoirePiece[];
 	}): Promise<ClassRegistrationMetadata> {
 		const repertoireItems = repertoireItemsFromLegacyPieces(
 			params.id,
 			params.organizationId,
-			params.repertoireJson,
+			params.repertoireSnapshotPieces ?? params.repertoireJson,
 		);
 		const record: ClassRegistrationMetadata = {
 			id: params.id,

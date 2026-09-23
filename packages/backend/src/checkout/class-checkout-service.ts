@@ -278,6 +278,7 @@ export class ClassCheckoutService {
 			}
 			if (
 				piece.movement !== undefined &&
+				piece.movement !== null &&
 				typeof piece.movement !== "string"
 			) {
 				throw new AppError(
@@ -297,8 +298,18 @@ export class ClassCheckoutService {
 				);
 			}
 		}
+		// Relational snapshots use the validated, display-ready values.
+		const normalizedPieces: RepertoirePiece[] = input.pieces.map((piece) => ({
+			title: piece.title.trim(),
+			composer: piece.composer.trim(),
+			movement:
+				typeof piece.movement === "string"
+					? piece.movement.trim() || undefined
+					: undefined,
+			durationSeconds: piece.durationSeconds,
+		}));
 		const totalDurationMinutes =
-			input.pieces.reduce((sum, p) => sum + p.durationSeconds, 0) / 60;
+			normalizedPieces.reduce((sum, p) => sum + p.durationSeconds, 0) / 60;
 		if (totalDurationMinutes > classConfig.performanceMinutes) {
 			throw new AppError(
 				`Total performance duration (${totalDurationMinutes} minutes) exceeds the maximum allowed of ${classConfig.performanceMinutes} minutes.`,
@@ -423,6 +434,7 @@ export class ClassCheckoutService {
 			teacherMembershipId: teacherEntitlementId,
 			accompanistMembershipId: accompanistEntitlementId,
 			repertoireJson: input.pieces,
+			repertoireSnapshotPieces: normalizedPieces,
 		});
 
 		// 13. Storefront cart, checkout, and verification

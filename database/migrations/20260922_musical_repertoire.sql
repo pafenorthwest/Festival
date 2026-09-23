@@ -5,23 +5,12 @@
 -- development schema. The legacy JSON is retained as an audit payload; the rows
 -- below become the queryable representation.
 --
--- registration_metadata is write-hot during the initial registration surge. The
--- supporting unique index must be built outside a transaction so checkout writes
--- are not blocked while it is created. Migration runners must not wrap this file
--- in an outer transaction. If this migration fails before COMMIT, its transaction
--- is rolled back but this concurrent index can remain (including as an invalid
--- index). Before retrying, an operator must inspect the failed run and, when the
--- transaction did not commit, run:
---   DROP INDEX CONCURRENTLY IF EXISTS orgs.registration_metadata_id_organization_id_key;
--- Do not retry after COMMIT; record the migration as applied instead.
-CREATE UNIQUE INDEX CONCURRENTLY registration_metadata_id_organization_id_key
-    ON orgs.registration_metadata (id, organization_id);
+-- Run database/migrations/20260922_musical_repertoire.concurrent-index.sql
+-- first, outside a transaction. It creates the unique index that this
+-- transactional phase attaches as a constraint. See migrations/README.md for
+-- the required deployment and retry procedure.
 
 BEGIN;
-
-ALTER TABLE orgs.registration_metadata
-    ADD CONSTRAINT registration_metadata_id_organization_id_key
-    UNIQUE USING INDEX registration_metadata_id_organization_id_key;
 
 CREATE TABLE orgs.repertoire_contributors (
     id text PRIMARY KEY,
@@ -206,5 +195,15 @@ JOIN inserted_items AS items
   ON items.organization_id = pieces.organization_id
  AND items.registration_metadata_id = pieces.registration_metadata_id
  AND items.display_order = pieces.display_order;
+
+-- Attaching an existing index needs a brief DDL lock. Keep it last: an
+-- ACCESS EXCLUSIVE lock here must not be held while the tables are created and
+-- historic rows are backfilled. A timeout rolls this whole phase back and
+-- leaves the already-valid concurrent index available for a phase-two retry.
+SET LOCAL lock_timeout = '5s';
+
+ALTER TABLE orgs.registration_metadata
+    ADD CONSTRAINT registration_metadata_id_organization_id_key
+    UNIQUE USING INDEX registration_metadata_id_organization_id_key;
 
 COMMIT;

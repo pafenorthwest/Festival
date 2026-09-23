@@ -62,7 +62,9 @@ export function legacyRepertoireCompatibilityProjection(
 			catalogWorkId: null,
 			titleSnapshot: typeof piece.title === "string" ? piece.title : "",
 			performedMovementText:
-				typeof piece.movement === "string" ? piece.movement.trim() || null : null,
+				typeof piece.movement === "string"
+					? piece.movement.trim() || null
+					: null,
 			durationSeconds: piece.durationSeconds,
 			contributors: composer
 				? [
@@ -382,12 +384,13 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 		teacherMembershipId: string;
 		accompanistMembershipId: string | null;
 		repertoireJson: RepertoirePiece[];
+		repertoireSnapshotPieces?: RepertoirePiece[];
 	}): Promise<ClassRegistrationMetadata> {
 		await this.ensureReady();
 		const repertoireItems = repertoireItemsFromLegacyPieces(
 			params.id,
 			params.organizationId,
-			params.repertoireJson,
+			params.repertoireSnapshotPieces ?? params.repertoireJson,
 		);
 		const rows = (await sql.begin(async (tx) => {
 			const metadataRows = (await tx.unsafe(
@@ -484,6 +487,7 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 		if (!rows[0]) return null;
 		const repertoireItems = await this.registrationRepertoireItems(
 			String(rows[0].id),
+			organizationId,
 		);
 		return this.registrationMetadataFromRow(
 			rows[0],
@@ -492,47 +496,52 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 	}
 	private async registrationRepertoireItems(
 		registrationMetadataId: string,
+		organizationId: string,
 	): Promise<RegistrationRepertoireItem[]> {
-		const itemRows = (await sql.unsafe(
-			`SELECT id, organization_id, registration_metadata_id, repertoire_work_id, title_snapshot, performed_movement_text, duration_seconds, display_order FROM ${this.schema}.registration_repertoire_items WHERE registration_metadata_id = $1 ORDER BY display_order`,
-			[registrationMetadataId],
+		const rows = (await sql.unsafe(
+			`SELECT item.id, item.organization_id, item.registration_metadata_id, item.repertoire_work_id, item.title_snapshot, item.performed_movement_text, item.duration_seconds, item.display_order, contributor.id AS contributor_id, contributor.repertoire_contributor_id, contributor.display_name_snapshot, contributor.contributor_role, contributor.position AS contributor_position FROM ${this.schema}.registration_repertoire_items AS item LEFT JOIN ${this.schema}.registration_repertoire_item_contributors AS contributor ON contributor.registration_repertoire_item_id = item.id AND contributor.organization_id = item.organization_id WHERE item.registration_metadata_id = $1 AND item.organization_id = $2 ORDER BY item.display_order, contributor.position`,
+			[registrationMetadataId, organizationId],
 		)) as Array<Record<string, unknown>>;
-		return Promise.all(
-			itemRows.map(async (item) => {
-				const contributorRows = (await sql.unsafe(
-					`SELECT id, repertoire_contributor_id, display_name_snapshot, contributor_role, position FROM ${this.schema}.registration_repertoire_item_contributors WHERE registration_repertoire_item_id = $1 ORDER BY position`,
-					[String(item.id)],
-				)) as Array<Record<string, unknown>>;
-				return {
-					id: String(item.id),
-					organizationId: String(item.organization_id),
-					registrationMetadataId: String(item.registration_metadata_id),
-					displayOrder: Number(item.display_order),
+		const items = new Map<string, RegistrationRepertoireItem>();
+		for (const row of rows) {
+			const id = String(row.id);
+			let item = items.get(id);
+			if (!item) {
+				item = {
+					id,
+					organizationId: String(row.organization_id),
+					registrationMetadataId: String(row.registration_metadata_id),
+					displayOrder: Number(row.display_order),
 					catalogWorkId:
-						item.repertoire_work_id === null
+						row.repertoire_work_id === null
 							? null
-							: String(item.repertoire_work_id),
-					titleSnapshot: String(item.title_snapshot),
+							: String(row.repertoire_work_id),
+					titleSnapshot: String(row.title_snapshot),
 					performedMovementText:
-						item.performed_movement_text === null
+						row.performed_movement_text === null
 							? null
-							: String(item.performed_movement_text),
-					durationSeconds: Number(item.duration_seconds),
-					contributors: contributorRows.map((contributor) => ({
-						id: String(contributor.id),
-						displayOrder: Number(contributor.position) as 1 | 2 | 3,
-						role: String(
-							contributor.contributor_role,
-						) as RegistrationRepertoireItem["contributors"][number]["role"],
-						displayNameSnapshot: String(contributor.display_name_snapshot),
-						catalogContributorId:
-							contributor.repertoire_contributor_id === null
-								? null
-								: String(contributor.repertoire_contributor_id),
-					})),
-				} satisfies RegistrationRepertoireItem;
-			}),
-		);
+							: String(row.performed_movement_text),
+					durationSeconds: Number(row.duration_seconds),
+					contributors: [],
+				};
+				items.set(id, item);
+			}
+			if (row.contributor_id !== null && row.contributor_id !== undefined) {
+				item.contributors.push({
+					id: String(row.contributor_id),
+					displayOrder: Number(row.contributor_position) as 1 | 2 | 3,
+					role: String(
+						row.contributor_role,
+					) as RegistrationRepertoireItem["contributors"][number]["role"],
+					displayNameSnapshot: String(row.display_name_snapshot),
+					catalogContributorId:
+						row.repertoire_contributor_id === null
+							? null
+							: String(row.repertoire_contributor_id),
+				});
+			}
+		}
+		return [...items.values()];
 	}
 	private registrationMetadataFromRow(
 		row: Record<string, unknown>,
