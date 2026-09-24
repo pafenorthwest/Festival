@@ -880,6 +880,7 @@ CREATE TABLE orgs.volunteer_roles (
     id text NOT NULL,
     organization_id text NOT NULL,
     slug text NOT NULL,
+    display_name text NOT NULL,
     description text NOT NULL,
     details_url text,
     is_room_proctor boolean DEFAULT false NOT NULL,

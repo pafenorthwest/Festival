@@ -170,7 +170,10 @@ export function useFestivalLifecycle(
 			return;
 		}
 
-		if (currentRoute.kind === "org-admin-festivals") {
+		if (
+			currentRoute.kind === "org-admin-festivals" ||
+			currentRoute.kind === "org-admin-volunteers"
+		) {
 			void loaders.loadFestivals(currentRoute.slug);
 			return;
 		}

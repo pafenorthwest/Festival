@@ -48,10 +48,39 @@ export interface VolunteerRole {
 	id: string;
 	organizationId: string;
 	slug: string;
+	displayName: string;
 	description: string;
 	detailsUrl: string | null;
 	isRoomProctor: boolean;
 	createdAtIso: string;
+}
+
+export interface VolunteerShift {
+	id: string;
+	organizationId: string;
+	roleId: string;
+	date: string;
+	period: "AM" | "PM";
+	timeText: string | null;
+	division: string | null;
+	adjudicator: string | null;
+	createdAtIso: string;
+}
+
+export interface CreateVolunteerRoleInput {
+	slug: string;
+	displayName: string;
+	description: string;
+	detailsUrl?: string | null;
+	isRoomProctor: boolean;
+}
+
+export interface CreateVolunteerShiftInput {
+	date: string;
+	period: "AM" | "PM";
+	timeText?: string | null;
+	division?: string | null;
+	adjudicator?: string | null;
 }
 
 export class ApiError extends Error {
@@ -726,10 +755,60 @@ export function saveShopifySettings(
 	);
 }
 
-export function getVolunteerRoles(idToken: string, slug: string) {
+export function getVolunteerRoles(
+	idToken: string,
+	slug: string,
+	festivalShortName: string,
+) {
 	return requestJson<VolunteerRole[]>(
-		`/api/organizations/${slug}/volunteers/roles`,
+		`/api/organizations/${slug}/festivals/${festivalShortName}/volunteers/roles`,
 		undefined,
+		idToken,
+	);
+}
+
+export function createVolunteerRole(
+	idToken: string,
+	slug: string,
+	festivalShortName: string,
+	input: CreateVolunteerRoleInput,
+) {
+	return requestJson<VolunteerRole>(
+		`/api/organizations/${slug}/festivals/${festivalShortName}/volunteers/roles`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+		idToken,
+	);
+}
+
+export function getVolunteerShiftsForRole(
+	idToken: string,
+	slug: string,
+	festivalShortName: string,
+	roleId: string,
+) {
+	return requestJson<VolunteerShift[]>(
+		`/api/organizations/${slug}/festivals/${festivalShortName}/volunteers/roles/${roleId}/shifts`,
+		undefined,
+		idToken,
+	);
+}
+
+export function createVolunteerShift(
+	idToken: string,
+	slug: string,
+	festivalShortName: string,
+	roleId: string,
+	input: CreateVolunteerShiftInput,
+) {
+	return requestJson<VolunteerShift>(
+		`/api/organizations/${slug}/festivals/${festivalShortName}/volunteers/roles/${roleId}/shifts`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
 		idToken,
 	);
 }
