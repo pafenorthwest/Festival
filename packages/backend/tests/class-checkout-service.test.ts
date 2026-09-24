@@ -586,6 +586,32 @@ describe("ClassCheckoutService", () => {
 		});
 	});
 
+	it("verifies that providing a divisionId matching classConfig.divisionId succeeds", async () => {
+		const f = await createFixture();
+
+		const result = await f.service.start({
+			...f.defaultInput,
+			divisionId: f.division.id,
+		});
+
+		expect(result.checkoutUrl).toBeDefined();
+		expect(result.intentId).toBeDefined();
+	});
+
+	it("verifies that providing a mismatched divisionId throws 400 'Selected class does not belong to the requested division.'", async () => {
+		const f = await createFixture();
+
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				divisionId: "mismatched-division-id",
+			}),
+		).rejects.toMatchObject({
+			status: 400,
+			message: "Selected class does not belong to the requested division.",
+		});
+	});
+
 	it("prevents multiple concurrent checkouts in progress", async () => {
 		const f = await createFixture();
 

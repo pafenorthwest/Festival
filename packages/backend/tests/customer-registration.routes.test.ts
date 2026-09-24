@@ -101,6 +101,11 @@ function createFakeServices() {
 				checkoutUrl: "https://checkout.example.com/c/123",
 				intentId: "intent_1",
 				correlationId: "corr_1",
+				intent: {
+					id: "intent_1",
+					intentType: "class_entry",
+					status: "checkout_started",
+				},
 			};
 		},
 	} as unknown as ClassCheckoutService;
@@ -215,7 +220,11 @@ describe("Customer Registration Routes", () => {
 				customerAccountService,
 				classCheckoutService,
 			});
-			const payload = { festivalClassId: "class_1", childId: "child_1" };
+			const payload = {
+				festivalClassId: "class_1",
+				childId: "child_1",
+				divisionId: "div_1",
+			};
 			const headers = {
 				...AUTH,
 				...JSON_HDR,
@@ -232,10 +241,18 @@ describe("Customer Registration Routes", () => {
 			);
 			expect(res.status).toBe(200);
 			expect(res.headers.get("Cache-Control")).toBe("no-store");
+			const json = await res.json();
+			expect(json).toEqual({
+				checkoutUrl: "https://checkout.example.com/c/123",
+				correlationId: "corr_1",
+			});
+			expect(json).not.toHaveProperty("intent");
+			expect(json).not.toHaveProperty("intentId");
 			expect(calls.startCheckout.length).toBe(1);
 			expect(calls.startCheckout[0]).toMatchObject({
 				festivalClassId: "class_1",
 				childId: "child_1",
+				divisionId: "div_1",
 				festivalShortName: "spring-2026",
 				buyerAccessToken: "buyer_tok_1",
 				idempotencyKey: VALID_UUID,
@@ -252,6 +269,7 @@ describe("Customer Registration Routes", () => {
 			const payload = {
 				festivalClassId: "class_1",
 				childId: "child_1",
+				divisionId: "div_2",
 				festivalShortName: "fest_from_body",
 			};
 			const headers = {
@@ -269,9 +287,79 @@ describe("Customer Registration Routes", () => {
 				JSON.stringify(payload),
 			);
 			expect(res.status).toBe(200);
+			const json = await res.json();
+			expect(json).toEqual({
+				checkoutUrl: "https://checkout.example.com/c/123",
+				correlationId: "corr_1",
+			});
+			expect(json).not.toHaveProperty("intent");
+			expect(json).not.toHaveProperty("intentId");
 			expect(calls.startCheckout[0]).toMatchObject({
+				divisionId: "div_2",
 				festivalShortName: "fest_from_body",
 			});
+		});
+
+		it("passes divisionId through from payload to checkoutService.start", async () => {
+			const { customerAccountService, classCheckoutService, calls } =
+				createFakeServices();
+			const app = createTestApp({
+				customerAccountService,
+				classCheckoutService,
+			});
+			const payload = {
+				festivalClassId: "class_1",
+				childId: "child_1",
+				divisionId: "target-division-42",
+			};
+			const headers = {
+				...AUTH,
+				...JSON_HDR,
+				"Idempotency-Key": VALID_UUID,
+				"X-CSRF-Token": "csrf_1",
+				Origin: "https://fest.example.com",
+			};
+			const res = await req(
+				app,
+				"POST",
+				"/class-checkout",
+				headers,
+				JSON.stringify(payload),
+			);
+			expect(res.status).toBe(200);
+			expect(calls.startCheckout[0]).toMatchObject({
+				divisionId: "target-division-42",
+			});
+		});
+
+		it("does not forward unvalidated organizationSlug from payload", async () => {
+			const { customerAccountService, classCheckoutService, calls } =
+				createFakeServices();
+			const app = createTestApp({
+				customerAccountService,
+				classCheckoutService,
+			});
+			const payload = {
+				festivalClassId: "class_1",
+				childId: "child_1",
+				organizationSlug: "unvalidated_slug",
+			};
+			const headers = {
+				...AUTH,
+				...JSON_HDR,
+				"Idempotency-Key": VALID_UUID,
+				"X-CSRF-Token": "csrf_1",
+				Origin: "https://fest.example.com",
+			};
+			const res = await req(
+				app,
+				"POST",
+				"/class-checkout",
+				headers,
+				JSON.stringify(payload),
+			);
+			expect(res.status).toBe(200);
+			expect(calls.startCheckout[0]).not.toHaveProperty("organizationSlug");
 		});
 
 		it("returns 400 for invalid idempotency key", async () => {
