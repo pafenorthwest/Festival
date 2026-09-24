@@ -172,14 +172,22 @@ describe("organization helpers", () => {
 				"America/Los_Angeles",
 			);
 			expect(losAngelesSummer.toISOString()).toBe("2026-05-15T07:00:00.000Z");
-			assertTimezoneMidnight(losAngelesSummer, "2026-05-15", "America/Los_Angeles");
+			assertTimezoneMidnight(
+				losAngelesSummer,
+				"2026-05-15",
+				"America/Los_Angeles",
+			);
 
 			const losAngelesWinter = getStartOfDayInTimezone(
 				"2026-01-15",
 				"America/Los_Angeles",
 			);
 			expect(losAngelesWinter.toISOString()).toBe("2026-01-15T08:00:00.000Z");
-			assertTimezoneMidnight(losAngelesWinter, "2026-01-15", "America/Los_Angeles");
+			assertTimezoneMidnight(
+				losAngelesWinter,
+				"2026-01-15",
+				"America/Los_Angeles",
+			);
 		});
 
 		it("handles Daylight Saving boundaries accurately", () => {
@@ -199,7 +207,11 @@ describe("organization helpers", () => {
 				"America/Los_Angeles",
 			);
 			expect(afterSpringDay.toISOString()).toBe("2026-03-09T07:00:00.000Z");
-			assertTimezoneMidnight(afterSpringDay, "2026-03-09", "America/Los_Angeles");
+			assertTimezoneMidnight(
+				afterSpringDay,
+				"2026-03-09",
+				"America/Los_Angeles",
+			);
 
 			const fallBackDay = getStartOfDayInTimezone(
 				"2026-11-01",
@@ -243,7 +255,11 @@ describe("organization helpers", () => {
 				"America/Los_Angeles",
 			);
 			expect(losAngelesCutoff.toISOString()).toBe("2026-04-03T07:00:00.000Z");
-			assertTimezoneMidnight(losAngelesCutoff, "2026-04-03", "America/Los_Angeles");
+			assertTimezoneMidnight(
+				losAngelesCutoff,
+				"2026-04-03",
+				"America/Los_Angeles",
+			);
 
 			const tokyoCutoff = deriveFestivalMetadataCutoff(
 				"2026-05-15",
