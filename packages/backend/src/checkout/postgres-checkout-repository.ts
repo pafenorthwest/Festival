@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type {
 	ClassRegistrationMetadata,
 	RegistrationRepertoireItem,
@@ -27,62 +27,6 @@ function isoTimestamp(value: unknown, field: string) {
 	if (!Number.isFinite(timestamp))
 		throw new Error(`${field} timestamp is invalid.`);
 	return new Date(timestamp).toISOString();
-}
-
-/**
- * Legacy registrations predate relational repertoire snapshots. Their read-only
- * compatibility projection must be repeatable: these IDs are never persisted
- * and must not appear to be newly-created snapshots on each read.
- */
-function legacySnapshotId(...parts: string[]) {
-	const hex = createHash("sha256").update(parts.join("\u0000")).digest("hex");
-	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
-}
-
-export function legacyRepertoireCompatibilityProjection(
-	registrationMetadataId: string,
-	organizationId: string,
-	pieces: RepertoirePiece[],
-): RegistrationRepertoireItem[] {
-	return pieces.map((piece, index) => {
-		const composer =
-			typeof piece.composer === "string" && piece.composer.trim().length > 0
-				? piece.composer
-				: null;
-		const itemId = legacySnapshotId(
-			"legacy-repertoire-item",
-			registrationMetadataId,
-			String(index + 1),
-		);
-		return {
-			id: itemId,
-			registrationMetadataId,
-			organizationId,
-			displayOrder: index + 1,
-			catalogWorkId: null,
-			titleSnapshot: typeof piece.title === "string" ? piece.title : "",
-			performedMovementText:
-				typeof piece.movement === "string"
-					? piece.movement.trim() || null
-					: null,
-			durationSeconds: piece.durationSeconds,
-			contributors: composer
-				? [
-						{
-							id: legacySnapshotId(
-								"legacy-repertoire-contributor",
-								registrationMetadataId,
-								String(index + 1),
-							),
-							displayOrder: 1 as const,
-							role: "Composer" as const,
-							displayNameSnapshot: composer,
-							catalogContributorId: null,
-						},
-					]
-				: [],
-		} satisfies RegistrationRepertoireItem;
-	});
 }
 
 export class PostgresCheckoutRepository implements CheckoutRepository {
@@ -489,10 +433,7 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 			String(rows[0].id),
 			organizationId,
 		);
-		return this.registrationMetadataFromRow(
-			rows[0],
-			repertoireItems.length > 0 ? repertoireItems : undefined,
-		);
+		return this.registrationMetadataFromRow(rows[0], repertoireItems);
 	}
 	private async registrationRepertoireItems(
 		registrationMetadataId: string,
@@ -545,7 +486,7 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 	}
 	private registrationMetadataFromRow(
 		row: Record<string, unknown>,
-		repertoireItems?: RegistrationRepertoireItem[],
+		repertoireItems: RegistrationRepertoireItem[] = [],
 	): ClassRegistrationMetadata {
 		const repertoireJson =
 			typeof row.repertoire_json === "string"
@@ -568,13 +509,7 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 					? null
 					: String(row.accompanist_membership_id),
 			repertoireJson,
-			repertoireItems:
-				repertoireItems ??
-				legacyRepertoireCompatibilityProjection(
-					String(row.id),
-					String(row.organization_id),
-					repertoireJson,
-				),
+			repertoireItems: repertoireItems ?? [],
 			createdAt: new Date(String(row.created_at)),
 		};
 	}
