@@ -409,6 +409,16 @@ export const CURRENT_ROUTE_SECURITY = [
 		authenticationClass: "customer",
 	},
 	{
+		method: "PATCH",
+		path: "/api/organizations/:slug/customer/class-registrations/:registrationId/metadata",
+		authenticationClass: "customer",
+	},
+	{
+		method: "PATCH",
+		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/registration/class-registrations/:registrationId/metadata",
+		authenticationClass: "customer",
+	},
+	{
 		method: "GET",
 		path: "/api/organizations/:slug/admin/festivals/:festivalShortName/classes",
 		authenticationClass: "admin",

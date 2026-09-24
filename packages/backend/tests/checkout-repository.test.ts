@@ -336,4 +336,120 @@ describe("checkout repository", () => {
 
 		expect(metadata.repertoireItems[0]?.performedMovementText).toBeNull();
 	});
+
+	it("updates registration metadata repertoire pieces and accompanist", async () => {
+		const repository = new InMemoryCheckoutRepository();
+		await repository.insertRegistrationMetadata({
+			id: "reg-meta-1",
+			organizationId: "org-a",
+			festivalId: "festival-a",
+			checkoutIntentId: "intent-a",
+			teacherMembershipId: "teacher-1",
+			accompanistMembershipId: "accompanist-1",
+			repertoireJson: [
+				{
+					title: "Sonata in C",
+					composer: "Mozart",
+					durationSeconds: 180,
+				},
+			],
+		});
+
+		const updated = await repository.updateRegistrationMetadata(
+			"reg-meta-1",
+			"org-a",
+			{
+				accompanistMembershipId: "accompanist-2",
+				pieces: [
+					{
+						title: "Clair de Lune",
+						composer: "Debussy",
+						movement: "Suite bergamasque",
+						durationSeconds: 300,
+					},
+				],
+			},
+		);
+
+		expect(updated.accompanistMembershipId).toBe("accompanist-2");
+		expect(updated.repertoireJson).toEqual([
+			{
+				title: "Clair de Lune",
+				composer: "Debussy",
+				movement: "Suite bergamasque",
+				durationSeconds: 300,
+			},
+		]);
+		expect(updated.repertoireItems).toHaveLength(1);
+		expect(updated.repertoireItems[0]?.titleSnapshot).toBe("Clair de Lune");
+		expect(updated.repertoireItems[0]?.performedMovementText).toBe(
+			"Suite bergamasque",
+		);
+		expect(
+			updated.repertoireItems[0]?.contributors[0]?.displayNameSnapshot,
+		).toBe("Debussy");
+	});
+
+	it("unsets accompanist with null and preserves accompanist when undefined", async () => {
+		const repository = new InMemoryCheckoutRepository();
+		await repository.insertRegistrationMetadata({
+			id: "reg-meta-2",
+			organizationId: "org-a",
+			festivalId: "festival-a",
+			checkoutIntentId: "intent-b",
+			teacherMembershipId: "teacher-1",
+			accompanistMembershipId: "accompanist-1",
+			repertoireJson: [],
+		});
+
+		const kept = await repository.updateRegistrationMetadata(
+			"reg-meta-2",
+			"org-a",
+			{
+				pieces: [
+					{
+						title: "Nocturne Op. 9 No. 2",
+						composer: "Chopin",
+						durationSeconds: 270,
+					},
+				],
+			},
+		);
+		expect(kept.accompanistMembershipId).toBe("accompanist-1");
+
+		const unset = await repository.updateRegistrationMetadata(
+			"reg-meta-2",
+			"org-a",
+			{
+				accompanistMembershipId: null,
+				pieces: [],
+			},
+		);
+		expect(unset.accompanistMembershipId).toBeNull();
+	});
+
+	it("throws when registration metadata is not found", async () => {
+		const repository = new InMemoryCheckoutRepository();
+		await repository.insertRegistrationMetadata({
+			id: "reg-meta-3",
+			organizationId: "org-a",
+			festivalId: "festival-a",
+			checkoutIntentId: "intent-c",
+			teacherMembershipId: "teacher-1",
+			accompanistMembershipId: null,
+			repertoireJson: [],
+		});
+
+		await expect(
+			repository.updateRegistrationMetadata("non-existent", "org-a", {
+				pieces: [],
+			}),
+		).rejects.toThrow("Registration metadata not found.");
+
+		await expect(
+			repository.updateRegistrationMetadata("reg-meta-3", "wrong-org", {
+				pieces: [],
+			}),
+		).rejects.toThrow("Registration metadata not found.");
+	});
 });

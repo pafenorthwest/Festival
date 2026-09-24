@@ -25,6 +25,7 @@ function createFakeServices() {
 		listClassRegistrations: [],
 		checkoutAccess: [],
 		startCheckout: [],
+		updateRegistrationMetadata: [],
 	};
 
 	const customerAccountService = {
@@ -78,6 +79,70 @@ function createFakeServices() {
 			calls.listClassRegistrations.push({ slug, sessionId, festivalShortName });
 			return { registrations: [{ id: "reg_1", festivalShortName }] };
 		},
+		updateRegistrationMetadata: async (
+			slug: string,
+			festivalShortName: string | undefined,
+			registrationId: string,
+			sessionId: string | undefined,
+			csrfToken: string | undefined,
+			origin: string | undefined,
+			input: unknown,
+		) => {
+			calls.updateRegistrationMetadata.push({
+				slug,
+				festivalShortName,
+				registrationId,
+				sessionId,
+				csrfToken,
+				origin,
+				input,
+			});
+			if (!sessionId) {
+				throw new AppError("Customer session is invalid.", 401);
+			}
+			if (registrationId === "closed-reg") {
+				throw new AppError(
+					"Registration metadata edits are closed for this festival.",
+					422,
+				);
+			}
+			const typedInput = input as {
+				pieces?: Array<{ composer?: unknown; durationSeconds?: unknown }>;
+			};
+			if (Array.isArray(typedInput?.pieces)) {
+				for (const piece of typedInput.pieces) {
+					if (typeof piece?.composer !== "string" || !piece.composer.trim()) {
+						throw new AppError(
+							"Each repertoire piece must have a valid composer.",
+							400,
+						);
+					}
+					if (
+						typeof piece.durationSeconds !== "number" ||
+						piece.durationSeconds <= 0
+					) {
+						throw new AppError(
+							"Each repertoire piece must have a positive whole-number duration in seconds.",
+							400,
+						);
+					}
+				}
+			}
+			return {
+				metadata: {
+					id: "meta_1",
+					organizationId: "org_1",
+					checkoutIntentId: "intent_1",
+					classEntitlementId: registrationId,
+					festivalClassId: "class_1",
+					childId: "child_1",
+					teacherId: "teacher_1",
+					accompanistMembershipId: null,
+					repertoireJson: typedInput?.pieces ?? [],
+					createdAtIso: "2026-01-01T00:00:00.000Z",
+				},
+			};
+		},
 		checkoutAccess: async (
 			slug: string,
 			sessionId?: string,
@@ -97,6 +162,33 @@ function createFakeServices() {
 	const classCheckoutService = {
 		start: async (input: unknown) => {
 			calls.startCheckout.push(input);
+			const typedInput = input as {
+				festivalShortName?: string;
+				festivalClassId?: string;
+				pieces?: Array<{ composer?: unknown }>;
+			};
+			if (typedInput.festivalShortName === "nonexistent-festival") {
+				throw new AppError("Active festival not found.", 404);
+			}
+			if (typedInput.festivalClassId === "cross-festival-class") {
+				throw new AppError(
+					"Festival class configuration does not belong to the active festival.",
+					400,
+				);
+			}
+			if (typedInput.festivalClassId === "other-org-class") {
+				throw new AppError("Festival class configuration not found.", 404);
+			}
+			if (Array.isArray(typedInput.pieces)) {
+				for (const piece of typedInput.pieces) {
+					if (typeof piece?.composer !== "string" || !piece.composer.trim()) {
+						throw new AppError(
+							"Each repertoire piece must have a valid composer.",
+							400,
+						);
+					}
+				}
+			}
 			return {
 				checkoutUrl: "https://checkout.example.com/c/123",
 				intentId: "intent_1",
@@ -397,6 +489,206 @@ describe("Customer Registration Routes", () => {
 				error: "Class checkout is unavailable.",
 			});
 		});
+
+		it("returns 400 when repertoire piece has missing or blank composer", async () => {
+			const { customerAccountService, classCheckoutService } =
+				createFakeServices();
+			const app = createTestApp({
+				customerAccountService,
+				classCheckoutService,
+			});
+			const payload = {
+				festivalClassId: "class_1",
+				childId: "child_1",
+				pieces: [
+					{
+						title: "Minuet in G",
+						composer: "   ",
+						durationSeconds: 120,
+					},
+				],
+			};
+			const headers = {
+				...AUTH,
+				...JSON_HDR,
+				"Idempotency-Key": VALID_UUID,
+				"X-CSRF-Token": "csrf_1",
+				Origin: "https://fest.example.com",
+			};
+			const res = await req(
+				app,
+				"POST",
+				"/festivals/spring-2026/registration/checkout",
+				headers,
+				JSON.stringify(payload),
+			);
+			expect(res.status).toBe(400);
+			expect(await res.json()).toEqual({
+				error: "Each repertoire piece must have a valid composer.",
+			});
+		});
+
+		it("returns 400 when repertoire piece omits composer", async () => {
+			const { customerAccountService, classCheckoutService } =
+				createFakeServices();
+			const app = createTestApp({
+				customerAccountService,
+				classCheckoutService,
+			});
+			const payload = {
+				festivalClassId: "class_1",
+				childId: "child_1",
+				pieces: [
+					{
+						title: "Minuet in G",
+						durationSeconds: 120,
+					},
+				],
+			};
+			const headers = {
+				...AUTH,
+				...JSON_HDR,
+				"Idempotency-Key": VALID_UUID,
+				"X-CSRF-Token": "csrf_1",
+				Origin: "https://fest.example.com",
+			};
+			const res = await req(
+				app,
+				"POST",
+				"/festivals/spring-2026/registration/checkout",
+				headers,
+				JSON.stringify(payload),
+			);
+			expect(res.status).toBe(400);
+			expect(await res.json()).toEqual({
+				error: "Each repertoire piece must have a valid composer.",
+			});
+		});
+
+		it("passes festivalShortName from route param and succeeds for valid festival", async () => {
+			const { customerAccountService, classCheckoutService, calls } =
+				createFakeServices();
+			const app = createTestApp({
+				customerAccountService,
+				classCheckoutService,
+			});
+			const payload = {
+				festivalClassId: "class_1",
+				childId: "child_1",
+			};
+			const headers = {
+				...AUTH,
+				...JSON_HDR,
+				"Idempotency-Key": VALID_UUID,
+				"X-CSRF-Token": "csrf_1",
+				Origin: "https://fest.example.com",
+			};
+			const res = await req(
+				app,
+				"POST",
+				"/festivals/spring-2026/registration/checkout",
+				headers,
+				JSON.stringify(payload),
+			);
+			expect(res.status).toBe(200);
+			expect(calls.startCheckout[0]).toMatchObject({
+				festivalShortName: "spring-2026",
+			});
+		});
+
+		it("returns 404 when festival does not exist", async () => {
+			const { customerAccountService, classCheckoutService } =
+				createFakeServices();
+			const app = createTestApp({
+				customerAccountService,
+				classCheckoutService,
+			});
+			const payload = {
+				festivalClassId: "class_1",
+				childId: "child_1",
+			};
+			const headers = {
+				...AUTH,
+				...JSON_HDR,
+				"Idempotency-Key": VALID_UUID,
+				"X-CSRF-Token": "csrf_1",
+				Origin: "https://fest.example.com",
+			};
+			const res = await req(
+				app,
+				"POST",
+				"/festivals/nonexistent-festival/registration/checkout",
+				headers,
+				JSON.stringify(payload),
+			);
+			expect(res.status).toBe(404);
+			expect(await res.json()).toEqual({
+				error: "Active festival not found.",
+			});
+		});
+
+		it("returns 400 when class belongs to a different festival of the organization (no primary-festival fallback)", async () => {
+			const { customerAccountService, classCheckoutService } =
+				createFakeServices();
+			const app = createTestApp({
+				customerAccountService,
+				classCheckoutService,
+			});
+			const payload = {
+				festivalClassId: "cross-festival-class",
+				childId: "child_1",
+			};
+			const headers = {
+				...AUTH,
+				...JSON_HDR,
+				"Idempotency-Key": VALID_UUID,
+				"X-CSRF-Token": "csrf_1",
+				Origin: "https://fest.example.com",
+			};
+			const res = await req(
+				app,
+				"POST",
+				"/festivals/spring-2026/registration/checkout",
+				headers,
+				JSON.stringify(payload),
+			);
+			expect(res.status).toBe(400);
+			expect(await res.json()).toEqual({
+				error:
+					"Festival class configuration does not belong to the active festival.",
+			});
+		});
+
+		it("returns 404 when class belongs to another organization", async () => {
+			const { customerAccountService, classCheckoutService } =
+				createFakeServices();
+			const app = createTestApp({
+				customerAccountService,
+				classCheckoutService,
+			});
+			const payload = {
+				festivalClassId: "other-org-class",
+				childId: "child_1",
+			};
+			const headers = {
+				...AUTH,
+				...JSON_HDR,
+				"Idempotency-Key": VALID_UUID,
+				"X-CSRF-Token": "csrf_1",
+				Origin: "https://fest.example.com",
+			};
+			const res = await req(
+				app,
+				"POST",
+				"/festivals/spring-2026/registration/checkout",
+				headers,
+				JSON.stringify(payload),
+			);
+			expect(res.status).toBe(404);
+			expect(await res.json()).toEqual({
+				error: "Festival class configuration not found.",
+			});
+		});
 	});
 
 	describe("GET class-registrations", () => {
@@ -431,6 +723,175 @@ describe("Customer Registration Routes", () => {
 		it("returns 503 when customerAccountService is missing", async () => {
 			const app = createTestApp({});
 			const res = await req(app, "GET", "/class-registrations", AUTH);
+			expect(res.status).toBe(503);
+			expect(await res.json()).toEqual({
+				error: "Customer Account is unavailable.",
+			});
+		});
+	});
+
+	describe("PATCH metadata", () => {
+		const validPayload = {
+			pieces: [
+				{
+					title: "Sonata in C",
+					composer: "Mozart",
+					durationSeconds: 180,
+				},
+			],
+		};
+		const patchHeaders = {
+			...AUTH,
+			...JSON_HDR,
+			"X-CSRF-Token": "csrf_token_1",
+			Origin: "https://fest.example.com",
+		};
+
+		it("happy path with festivalShortName", async () => {
+			const { customerAccountService, calls } = createFakeServices();
+			const app = createTestApp({ customerAccountService });
+			const path =
+				"/festivals/spring-2026/registration/class-registrations/reg_1/metadata";
+			const res = await req(
+				app,
+				"PATCH",
+				path,
+				patchHeaders,
+				JSON.stringify(validPayload),
+			);
+			expect(res.status).toBe(200);
+			const json = await res.json();
+			expect(json).toHaveProperty("metadata");
+			expect(calls.updateRegistrationMetadata[0]).toMatchObject({
+				slug: "fest",
+				festivalShortName: "spring-2026",
+				registrationId: "reg_1",
+				sessionId: "sess_1",
+				csrfToken: "csrf_token_1",
+				origin: "https://fest.example.com",
+			});
+		});
+
+		it("happy path without festivalShortName", async () => {
+			const { customerAccountService, calls } = createFakeServices();
+			const app = createTestApp({ customerAccountService });
+			const path = "/class-registrations/reg_1/metadata";
+			const res = await req(
+				app,
+				"PATCH",
+				path,
+				patchHeaders,
+				JSON.stringify(validPayload),
+			);
+			expect(res.status).toBe(200);
+			const json = await res.json();
+			expect(json).toHaveProperty("metadata");
+			expect(calls.updateRegistrationMetadata[0]).toMatchObject({
+				slug: "fest",
+				festivalShortName: undefined,
+				registrationId: "reg_1",
+				sessionId: "sess_1",
+			});
+		});
+
+		it("returns 422 when edits are closed past cutoff", async () => {
+			const { customerAccountService } = createFakeServices();
+			const app = createTestApp({ customerAccountService });
+			const path = "/class-registrations/closed-reg/metadata";
+			const res = await req(
+				app,
+				"PATCH",
+				path,
+				patchHeaders,
+				JSON.stringify(validPayload),
+			);
+			expect(res.status).toBe(422);
+			expect(await res.json()).toEqual({
+				error: "Registration metadata edits are closed for this festival.",
+			});
+		});
+
+		it("returns 400 for invalid composer", async () => {
+			const { customerAccountService } = createFakeServices();
+			const app = createTestApp({ customerAccountService });
+			const invalidPayload = {
+				pieces: [
+					{
+						title: "Sonata in C",
+						composer: "   ",
+						durationSeconds: 180,
+					},
+				],
+			};
+			const res = await req(
+				app,
+				"PATCH",
+				"/class-registrations/reg_1/metadata",
+				patchHeaders,
+				JSON.stringify(invalidPayload),
+			);
+			expect(res.status).toBe(400);
+			expect(await res.json()).toEqual({
+				error: "Each repertoire piece must have a valid composer.",
+			});
+		});
+
+		it("returns 400 for invalid duration", async () => {
+			const { customerAccountService } = createFakeServices();
+			const app = createTestApp({ customerAccountService });
+			const invalidPayload = {
+				pieces: [
+					{
+						title: "Sonata in C",
+						composer: "Mozart",
+						durationSeconds: -10,
+					},
+				],
+			};
+			const res = await req(
+				app,
+				"PATCH",
+				"/class-registrations/reg_1/metadata",
+				patchHeaders,
+				JSON.stringify(invalidPayload),
+			);
+			expect(res.status).toBe(400);
+			expect(await res.json()).toEqual({
+				error:
+					"Each repertoire piece must have a positive whole-number duration in seconds.",
+			});
+		});
+
+		it("returns 401 when session cookie is missing", async () => {
+			const { customerAccountService } = createFakeServices();
+			const app = createTestApp({ customerAccountService });
+			const headersWithoutAuth = {
+				...JSON_HDR,
+				"X-CSRF-Token": "csrf_token_1",
+				Origin: "https://fest.example.com",
+			};
+			const res = await req(
+				app,
+				"PATCH",
+				"/class-registrations/reg_1/metadata",
+				headersWithoutAuth,
+				JSON.stringify(validPayload),
+			);
+			expect(res.status).toBe(401);
+			expect(await res.json()).toEqual({
+				error: "Customer session is invalid.",
+			});
+		});
+
+		it("returns 503 when customerAccountService is missing", async () => {
+			const app = createTestApp({});
+			const res = await req(
+				app,
+				"PATCH",
+				"/class-registrations/reg_1/metadata",
+				patchHeaders,
+				JSON.stringify(validPayload),
+			);
 			expect(res.status).toBe(503);
 			expect(await res.json()).toEqual({
 				error: "Customer Account is unavailable.",
