@@ -636,7 +636,7 @@ describe("organization onboarding integration", () => {
 
 		expect(apiSource).toContain("retireAdminMembershipProduct");
 		expect(apiSource).toContain(
-			`membership-products/${encodeURIComponent(offeringId)}/retire`,
+			`membership-products/\${encodeURIComponent(offeringId)}/retire`,
 		);
 		expect(apiSource).toContain("JSON.stringify({ confirmed: true })");
 		expect(pageSource).toContain("window.confirm(");
