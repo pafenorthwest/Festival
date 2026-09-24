@@ -9,6 +9,7 @@ import {
 	toJsonError,
 } from "../../auth/tenant-context.js";
 import type { AuthVerifier } from "../../auth/types.js";
+import { requireAdminIntent } from "../../auth/volunteer-context.js";
 import { AppError } from "../../errors/app-error.js";
 import type { OrganizationService } from "../../services/organization-service.js";
 
@@ -98,7 +99,7 @@ export function buildAdminOrgRoutes(options: {
 		"/organizations/:slug/admin/festivals",
 		requireAuth(authVerifier),
 		requireTenant(repository),
-		requireTenantRole(["Admin"]),
+		requireAdminIntent(),
 		async (c) => {
 			try {
 				return c.json(

@@ -761,7 +761,7 @@ export function getVolunteerRoles(
 	festivalShortName: string,
 ) {
 	return requestJson<VolunteerRole[]>(
-		`/api/organizations/${slug}/festivals/${festivalShortName}/volunteers/roles`,
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalShortName)}/volunteers/roles`,
 		undefined,
 		idToken,
 	);
@@ -774,7 +774,7 @@ export function createVolunteerRole(
 	input: CreateVolunteerRoleInput,
 ) {
 	return requestJson<VolunteerRole>(
-		`/api/organizations/${slug}/festivals/${festivalShortName}/volunteers/roles`,
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalShortName)}/volunteers/roles`,
 		{
 			method: "POST",
 			body: JSON.stringify(input),
@@ -790,7 +790,7 @@ export function getVolunteerShiftsForRole(
 	roleId: string,
 ) {
 	return requestJson<VolunteerShift[]>(
-		`/api/organizations/${slug}/festivals/${festivalShortName}/volunteers/roles/${roleId}/shifts`,
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalShortName)}/volunteers/roles/${encodeURIComponent(roleId)}/shifts`,
 		undefined,
 		idToken,
 	);
@@ -804,7 +804,7 @@ export function createVolunteerShift(
 	input: CreateVolunteerShiftInput,
 ) {
 	return requestJson<VolunteerShift>(
-		`/api/organizations/${slug}/festivals/${festivalShortName}/volunteers/roles/${roleId}/shifts`,
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalShortName)}/volunteers/roles/${encodeURIComponent(roleId)}/shifts`,
 		{
 			method: "POST",
 			body: JSON.stringify(input),

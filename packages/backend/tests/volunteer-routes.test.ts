@@ -243,4 +243,42 @@ describe("volunteer role and shift routes", () => {
 		);
 		expect(response.status).toBe(404);
 	});
+
+	it("does not expose a role from another festival through shift routes", async () => {
+		const { app } = await createTestApp();
+		await createOrgAndFestivalAsAdmin(app);
+		const roleResponse = await app.fetch(
+			new Request(
+				`${VOLUNTEERS_BASE}/roles`,
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify(createRolePayload()),
+				}),
+			),
+		);
+		const role = (await roleResponse.json()) as { id: string };
+
+		await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/festivals",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						name: "Fall Festival",
+						shortName: "fall",
+						startDate: "2027-10-01",
+						endDate: "2027-10-05",
+					}),
+				}),
+			),
+		);
+
+		const response = await app.fetch(
+			new Request(
+				`http://test/api/organizations/pafe/festivals/fall/volunteers/roles/${role.id}/shifts`,
+				withAuth("admin"),
+			),
+		);
+		expect(response.status).toBe(404);
+	});
 });

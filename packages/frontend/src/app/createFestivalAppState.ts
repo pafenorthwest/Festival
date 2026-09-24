@@ -206,6 +206,13 @@ export function createFestivalAppState() {
 		organizationValidationErrors().join(" "),
 	);
 	const isAdminMember = createMemo(() => sessionMembership()?.role === "Admin");
+	// Volunteer administration follows the product's admin intent, which is
+	// broader than the organization-wide Admin role used by other admin areas.
+	const hasVolunteerAdminIntent = createMemo(() =>
+		["Admin", "Division Chair", "Concert Chair"].includes(
+			sessionMembership()?.role ?? "",
+		),
+	);
 	const festivalNameValidation = createMemo(() =>
 		validateFestivalName(festivalDraft().name),
 	);
@@ -430,6 +437,7 @@ export function createFestivalAppState() {
 		hasFestivalNameError,
 		hasOrganizationNameError,
 		hasOrganizationShortNameError,
+		hasVolunteerAdminIntent,
 		invite,
 		inviteDraft,
 		inviteFeedback,

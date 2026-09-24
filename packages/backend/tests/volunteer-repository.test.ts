@@ -5,6 +5,7 @@ async function seedShift(
 	repository: InMemoryVolunteerRepository,
 	overrides: Partial<{
 		date: string;
+		festivalId: string;
 		period: "AM" | "PM";
 		roleId: string;
 	}> = {},
@@ -13,7 +14,9 @@ async function seedShift(
 		overrides.roleId === undefined
 			? await repository.createRole({
 					organizationId: "org-a",
+					festivalId: overrides.festivalId ?? "festival-a",
 					slug: "table-monitor",
+					displayName: "Table Monitor",
 					description: "Watch the table.",
 					detailsUrl: null,
 					isRoomProctor: false,
@@ -21,6 +24,7 @@ async function seedShift(
 			: null;
 	return repository.createShift({
 		organizationId: "org-a",
+		festivalId: overrides.festivalId ?? "festival-a",
 		roleId: overrides.roleId ?? (role?.id as string),
 		date: overrides.date ?? "2027-03-31",
 		period: overrides.period ?? "AM",
@@ -81,6 +85,7 @@ describe("volunteer repository", () => {
 
 		const outcome = await repository.bookShifts({
 			organizationId: "org-a",
+			festivalId: "festival-a",
 			volunteerId: volunteer.id,
 			shiftIds: [shift.id],
 		});
@@ -110,11 +115,13 @@ describe("volunteer repository", () => {
 
 		await repository.bookShifts({
 			organizationId: "org-a",
+			festivalId: "festival-a",
 			volunteerId: first.id,
 			shiftIds: [shift.id],
 		});
 		const outcome = await repository.bookShifts({
 			organizationId: "org-a",
+			festivalId: "festival-a",
 			volunteerId: second.id,
 			shiftIds: [shift.id],
 		});
@@ -138,7 +145,9 @@ describe("volunteer repository", () => {
 		});
 		const secondRole = await repository.createRole({
 			organizationId: "org-a",
+			festivalId: "festival-a",
 			slug: "registration-desk",
+			displayName: "Registration Desk",
 			description: "Check people in.",
 			detailsUrl: null,
 			isRoomProctor: false,
@@ -151,11 +160,13 @@ describe("volunteer repository", () => {
 
 		await repository.bookShifts({
 			organizationId: "org-a",
+			festivalId: "festival-a",
 			volunteerId: volunteer.id,
 			shiftIds: [firstShift.id],
 		});
 		const outcome = await repository.bookShifts({
 			organizationId: "org-a",
+			festivalId: "festival-a",
 			volunteerId: volunteer.id,
 			shiftIds: [secondShift.id],
 		});
@@ -179,13 +190,16 @@ describe("volunteer repository", () => {
 		});
 		const role = await repository.createRole({
 			organizationId: "org-a",
+			festivalId: "festival-a",
 			slug: "room-proctor",
+			displayName: "Room Proctor",
 			description: "Proctor a room.",
 			detailsUrl: null,
 			isRoomProctor: true,
 		});
 		const conflictingShiftA = await repository.createShift({
 			organizationId: "org-a",
+			festivalId: "festival-a",
 			roleId: role.id,
 			date: "2027-03-31",
 			period: "AM",
@@ -195,6 +209,7 @@ describe("volunteer repository", () => {
 		});
 		const conflictingShiftB = await repository.createShift({
 			organizationId: "org-a",
+			festivalId: "festival-a",
 			roleId: role.id,
 			date: "2027-03-31",
 			period: "AM",
@@ -205,12 +220,16 @@ describe("volunteer repository", () => {
 
 		const outcome = await repository.bookShifts({
 			organizationId: "org-a",
+			festivalId: "festival-a",
 			volunteerId: volunteer.id,
 			shiftIds: [validShift.id, conflictingShiftA.id, conflictingShiftB.id],
 		});
 
 		expect(outcome.kind).toBe("conflict");
-		const schedule = await repository.listScheduleForOrganization("org-a");
+		const schedule = await repository.listScheduleForOrganization(
+			"org-a",
+			"festival-a",
+		);
 		expect(schedule.every((entry) => entry.assignment === null)).toBe(true);
 	});
 
@@ -228,6 +247,7 @@ describe("volunteer repository", () => {
 
 		const booked = await repository.bookShifts({
 			organizationId: "org-a",
+			festivalId: "festival-a",
 			volunteerId: volunteer.id,
 			shiftIds: [shift.id],
 		});
@@ -235,15 +255,82 @@ describe("volunteer repository", () => {
 
 		await repository.cancelAssignment({
 			organizationId: "org-a",
+			festivalId: "festival-a",
 			assignmentId: booked.assignments[0].id,
 			cancelledAtIso: new Date().toISOString(),
 		});
 
 		const rebooked = await repository.bookShifts({
 			organizationId: "org-a",
+			festivalId: "festival-a",
 			volunteerId: volunteer.id,
 			shiftIds: [shift.id],
 		});
 		expect(rebooked.kind).toBe("booked");
+	});
+
+	it("keeps roles and shifts isolated between festivals in one organization", async () => {
+		const repository = new InMemoryVolunteerRepository();
+		const springRole = await repository.createRole({
+			organizationId: "org-a",
+			festivalId: "festival-spring",
+			slug: "spring-monitor",
+			displayName: "Spring Monitor",
+			description: "Spring only.",
+			detailsUrl: null,
+			isRoomProctor: false,
+		});
+		const fallRole = await repository.createRole({
+			organizationId: "org-a",
+			festivalId: "festival-fall",
+			slug: "fall-monitor",
+			displayName: "Fall Monitor",
+			description: "Fall only.",
+			detailsUrl: null,
+			isRoomProctor: false,
+		});
+		const springShift = await repository.createShift({
+			organizationId: "org-a",
+			festivalId: "festival-spring",
+			roleId: springRole.id,
+			date: "2027-03-31",
+			period: "AM",
+			timeText: null,
+			division: null,
+			adjudicator: null,
+		});
+		await repository.createShift({
+			organizationId: "org-a",
+			festivalId: "festival-fall",
+			roleId: fallRole.id,
+			date: "2027-10-31",
+			period: "PM",
+			timeText: null,
+			division: null,
+			adjudicator: null,
+		});
+
+		expect(
+			(await repository.listRoles("org-a", "festival-spring")).map(
+				(role) => role.id,
+			),
+		).toEqual([springRole.id]);
+		expect(springRole.displayName).toBe("Spring Monitor");
+		expect(
+			(
+				await repository.listShiftsForRole(
+					"org-a",
+					"festival-spring",
+					springRole.id,
+				)
+			).map((shift) => shift.id),
+		).toEqual([springShift.id]);
+		expect(
+			await repository.listShiftsForRole(
+				"org-a",
+				"festival-fall",
+				springRole.id,
+			),
+		).toEqual([]);
 	});
 });

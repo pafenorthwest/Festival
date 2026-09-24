@@ -10,26 +10,25 @@ describe("admin volunteer role and shift management", () => {
 		expect(api).toContain("export function getVolunteerShiftsForRole");
 		expect(api).toContain("export function createVolunteerShift");
 		expect(api).toContain("displayName: string;");
-		expect(api).toContain(
-			"/api/organizations/${slug}/festivals/${festivalShortName}/volunteers/roles",
-		);
+		expect(api).toContain("encodeURIComponent(slug)");
+		expect(api).toContain("encodeURIComponent(festivalShortName)");
 	});
 
-	it("only shows the create-role and shift-management forms to Admin members", async () => {
+	it("shows the create-role and shift-management forms to volunteer administrators", async () => {
 		const page = await read("../src/pages/VolunteerRolesPage.tsx");
 
-		expect(page).toContain("props.app.isAdminMember()");
+		expect(page).toContain("props.app.hasVolunteerAdminIntent()");
 		expect(page).toContain("Create a role");
 		expect(page).toContain("Add a shift");
 		expect(page).toContain("Room Proctor role");
 	});
 
-	it("defaults to the organization's primary festival", async () => {
+	it("defaults to the primary festival and permits selecting another festival", async () => {
 		const page = await read("../src/pages/VolunteerRolesPage.tsx");
 
-		expect(page).toContain("primaryFestivalShortName");
+		expect(page).toContain("selectedFestivalShortName");
 		expect(page).toContain("festival.isPrimary");
-		expect(page).toContain("has no primary festival yet");
+		expect(page).toContain("No festivals have been created yet.");
 	});
 
 	it("passes the app controller into the admin volunteers page", async () => {

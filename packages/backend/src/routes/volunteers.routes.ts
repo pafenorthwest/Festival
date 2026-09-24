@@ -44,15 +44,18 @@ export function buildVolunteerRoutes(
 	router.get(
 		"/roles",
 		requireAuth(options.authVerifier),
-		requireTenant(options.repository),
+		requireVolunteerScope(options.repository),
 		async (c) => {
 			try {
 				if (!options.volunteerRepository) {
 					throw new AppError("Volunteer roles are unavailable.", 503);
 				}
-				const tenant = getRequiredTenant(c);
+				const scope = getRequiredVolunteerScope(c);
 				return c.json(
-					await options.volunteerRepository.listRoles(tenant.organization.id),
+					await options.volunteerRepository.listRoles(
+						scope.organization.id,
+						scope.festival.id,
+					),
 				);
 			} catch (error) {
 				return toJsonError(c, error);
@@ -70,12 +73,14 @@ export function buildVolunteerRoutes(
 		requireAuth(options.authVerifier),
 		requireTenant(options.repository),
 		requireAdminIntent(),
+		requireVolunteerScope(options.repository),
 		async (c) => {
 			try {
 				if (!options.volunteerRepository) {
 					throw new AppError("Volunteer roles are unavailable.", 503);
 				}
 				const tenant = getRequiredTenant(c);
+				const scope = getRequiredVolunteerScope(c);
 				const payload = await c.req.json();
 				const validated = validateCreateRoleRequest(payload);
 				if ("errors" in validated) {
@@ -85,6 +90,7 @@ export function buildVolunteerRoutes(
 				return c.json(
 					await options.volunteerRepository.createRole({
 						organizationId: tenant.organization.id,
+						festivalId: scope.festival.id,
 						...validated.request,
 					}),
 				);
@@ -99,20 +105,24 @@ export function buildVolunteerRoutes(
 		requireAuth(options.authVerifier),
 		requireTenant(options.repository),
 		requireAdminIntent(),
+		requireVolunteerScope(options.repository),
 		async (c) => {
 			try {
 				if (!options.volunteerRepository) {
 					throw new AppError("Volunteer roles are unavailable.", 503);
 				}
 				const tenant = getRequiredTenant(c);
+				const scope = getRequiredVolunteerScope(c);
 				const role = await options.volunteerRepository.getRole(
 					tenant.organization.id,
+					scope.festival.id,
 					c.req.param("roleId"),
 				);
 				if (!role) throw new AppError("Volunteer role not found.", 404);
 				return c.json(
 					await options.volunteerRepository.listShiftsForRole(
 						tenant.organization.id,
+						scope.festival.id,
 						role.id,
 					),
 				);
@@ -127,14 +137,17 @@ export function buildVolunteerRoutes(
 		requireAuth(options.authVerifier),
 		requireTenant(options.repository),
 		requireAdminIntent(),
+		requireVolunteerScope(options.repository),
 		async (c) => {
 			try {
 				if (!options.volunteerRepository) {
 					throw new AppError("Volunteer roles are unavailable.", 503);
 				}
 				const tenant = getRequiredTenant(c);
+				const scope = getRequiredVolunteerScope(c);
 				const role = await options.volunteerRepository.getRole(
 					tenant.organization.id,
+					scope.festival.id,
 					c.req.param("roleId"),
 				);
 				if (!role) throw new AppError("Volunteer role not found.", 404);
@@ -147,6 +160,7 @@ export function buildVolunteerRoutes(
 				return c.json(
 					await options.volunteerRepository.createShift({
 						organizationId: tenant.organization.id,
+						festivalId: scope.festival.id,
 						roleId: role.id,
 						...validated.request,
 					}),
@@ -161,7 +175,7 @@ export function buildVolunteerRoutes(
 	// requireTenant: a volunteer is never required to be an organization
 	// member. Scope is resolved from the organization + festival named in
 	// the URL (both already present on this sub-router's mount path), per
-	// VOLUNTEER-PORTAL.md's festival-scoping requirement.
+	// festival-scoping requirement.
 	router.post(
 		"/enroll",
 		requireAuth(options.authVerifier),

@@ -52,12 +52,13 @@ export class PostgresVolunteerRepository implements VolunteerRepository {
 
 	async createRole(input: CreateRoleInput) {
 		const rows = (await sql.unsafe(
-			`INSERT INTO ${this.schema}.volunteer_roles (id, organization_id, slug, display_name, description, details_url, is_room_proctor)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7)
-			 RETURNING id, organization_id, slug, display_name, description, details_url, is_room_proctor, created_at::text`,
+			`INSERT INTO ${this.schema}.volunteer_roles (id, organization_id, festival_id, slug, display_name, description, details_url, is_room_proctor)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			 RETURNING id, organization_id, festival_id, slug, display_name, description, details_url, is_room_proctor, created_at::text`,
 			[
 				randomUUID(),
 				input.organizationId,
+				input.festivalId,
 				input.slug,
 				input.displayName,
 				input.description,
@@ -70,12 +71,17 @@ export class PostgresVolunteerRepository implements VolunteerRepository {
 
 	async createShift(input: CreateShiftInput) {
 		const rows = (await sql.unsafe(
-			`INSERT INTO ${this.schema}.volunteer_shifts (id, organization_id, role_id, date, period, time_text, division, adjudicator)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-			 RETURNING id, organization_id, role_id, date::text, period, time_text, division, adjudicator, created_at::text`,
+			`INSERT INTO ${this.schema}.volunteer_shifts (id, organization_id, festival_id, role_id, date, period, time_text, division, adjudicator)
+			 SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9
+			 WHERE EXISTS (
+				SELECT 1 FROM ${this.schema}.volunteer_roles
+				WHERE id = $4 AND organization_id = $2 AND festival_id = $3
+			 )
+			 RETURNING id, organization_id, festival_id, role_id, date::text, period, time_text, division, adjudicator, created_at::text`,
 			[
 				randomUUID(),
 				input.organizationId,
+				input.festivalId,
 				input.roleId,
 				input.date,
 				input.period,
@@ -84,38 +90,46 @@ export class PostgresVolunteerRepository implements VolunteerRepository {
 				input.adjudicator,
 			],
 		)) as Array<Record<string, unknown>>;
+		if (!rows[0]) {
+			throw new Error("Volunteer shift role is outside the selected festival.");
+		}
 		return this.shift(rows[0]);
 	}
 
-	async getRole(organizationId: string, roleId: string) {
+	async getRole(organizationId: string, festivalId: string, roleId: string) {
 		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, slug, display_name, description, details_url, is_room_proctor, created_at::text
-			 FROM ${this.schema}.volunteer_roles WHERE organization_id = $1 AND id = $2`,
-			[organizationId, roleId],
+			`SELECT id, organization_id, festival_id, slug, display_name, description, details_url, is_room_proctor, created_at::text
+			 FROM ${this.schema}.volunteer_roles WHERE organization_id = $1 AND festival_id = $2 AND id = $3`,
+			[organizationId, festivalId, roleId],
 		)) as Array<Record<string, unknown>>;
 		return rows[0] ? this.role(rows[0]) : null;
 	}
 
-	async listRoles(organizationId: string) {
+	async listRoles(organizationId: string, festivalId: string) {
 		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, slug, display_name, description, details_url, is_room_proctor, created_at::text
-			 FROM ${this.schema}.volunteer_roles WHERE organization_id = $1 ORDER BY created_at`,
-			[organizationId],
+			`SELECT id, organization_id, festival_id, slug, display_name, description, details_url, is_room_proctor, created_at::text
+			 FROM ${this.schema}.volunteer_roles WHERE organization_id = $1 AND festival_id = $2 ORDER BY created_at`,
+			[organizationId, festivalId],
 		)) as Array<Record<string, unknown>>;
 		return rows.map((row) => this.role(row));
 	}
 
-	async listShiftsForRole(organizationId: string, roleId: string) {
+	async listShiftsForRole(
+		organizationId: string,
+		festivalId: string,
+		roleId: string,
+	) {
 		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, role_id, date::text, period, time_text, division, adjudicator, created_at::text
-			 FROM ${this.schema}.volunteer_shifts WHERE organization_id = $1 AND role_id = $2 ORDER BY date, period`,
-			[organizationId, roleId],
+			`SELECT id, organization_id, festival_id, role_id, date::text, period, time_text, division, adjudicator, created_at::text
+			 FROM ${this.schema}.volunteer_shifts WHERE organization_id = $1 AND festival_id = $2 AND role_id = $3 ORDER BY date, period`,
+			[organizationId, festivalId, roleId],
 		)) as Array<Record<string, unknown>>;
 		return rows.map((row) => this.shift(row));
 	}
 
 	async bookShifts(_input: {
 		organizationId: string;
+		festivalId: string;
 		volunteerId: string;
 		shiftIds: string[];
 	}): Promise<BookShiftsOutcome> {
@@ -127,23 +141,34 @@ export class PostgresVolunteerRepository implements VolunteerRepository {
 
 	async cancelAssignment(input: {
 		organizationId: string;
+		festivalId: string;
 		assignmentId: string;
 		cancelledAtIso: string;
 	}) {
 		const rows = (await sql.unsafe(
-			`UPDATE ${this.schema}.volunteer_assignments
+			`UPDATE ${this.schema}.volunteer_assignments assignment
 			 SET status = 'cancelled', cancelled_at = $1
-			 WHERE id = $2 AND organization_id = $3 AND status = 'active'
-			 RETURNING id, organization_id, shift_id, volunteer_id, status, created_at::text, cancelled_at::text`,
-			[input.cancelledAtIso, input.assignmentId, input.organizationId],
+			 FROM ${this.schema}.volunteer_shifts shift
+			 WHERE assignment.id = $2 AND assignment.organization_id = $3 AND assignment.status = 'active'
+				AND shift.id = assignment.shift_id AND shift.festival_id = $4
+			 RETURNING assignment.id, assignment.organization_id, assignment.shift_id, assignment.volunteer_id, assignment.status, assignment.created_at::text, assignment.cancelled_at::text`,
+			[
+				input.cancelledAtIso,
+				input.assignmentId,
+				input.organizationId,
+				input.festivalId,
+			],
 		)) as Array<Record<string, unknown>>;
 		return rows[0] ? this.assignment(rows[0]) : null;
 	}
 
-	async listScheduleForOrganization(organizationId: string) {
+	async listScheduleForOrganization(
+		organizationId: string,
+		festivalId: string,
+	) {
 		const rows = (await sql.unsafe(
 			`SELECT
-				shift.id AS shift_id, shift.organization_id, shift.role_id, shift.date::text, shift.period,
+				shift.id AS shift_id, shift.organization_id, shift.festival_id, shift.role_id, shift.date::text, shift.period,
 				shift.time_text, shift.division, shift.adjudicator, shift.created_at::text AS shift_created_at,
 				role.slug, role.display_name, role.description, role.details_url, role.is_room_proctor, role.created_at::text AS role_created_at,
 				assignment.id AS assignment_id, assignment.status, assignment.created_at::text AS assignment_created_at,
@@ -156,15 +181,16 @@ export class PostgresVolunteerRepository implements VolunteerRepository {
 			 LEFT JOIN ${this.schema}.volunteer_assignments assignment
 				ON assignment.shift_id = shift.id AND assignment.status = 'active'
 			 LEFT JOIN ${this.schema}.volunteers volunteer ON volunteer.id = assignment.volunteer_id
-			 WHERE shift.organization_id = $1
-			 ORDER BY shift.date, shift.period`,
-			[organizationId],
+				WHERE shift.organization_id = $1 AND shift.festival_id = $2
+				ORDER BY shift.date, shift.period`,
+			[organizationId, festivalId],
 		)) as Array<Record<string, unknown>>;
 
 		return rows.map((row) => ({
 			shift: this.shift({
 				id: row.shift_id,
 				organization_id: row.organization_id,
+				festival_id: row.festival_id,
 				role_id: row.role_id,
 				date: row.date,
 				period: row.period,
@@ -176,6 +202,7 @@ export class PostgresVolunteerRepository implements VolunteerRepository {
 			role: this.role({
 				id: row.role_id,
 				organization_id: row.organization_id,
+				festival_id: row.festival_id,
 				slug: row.slug,
 				display_name: row.display_name,
 				description: row.description,
@@ -226,6 +253,7 @@ export class PostgresVolunteerRepository implements VolunteerRepository {
 		return {
 			id: String(row.id),
 			organizationId: String(row.organization_id),
+			festivalId: String(row.festival_id),
 			slug: String(row.slug),
 			displayName: String(row.display_name),
 			description: String(row.description),
@@ -239,6 +267,7 @@ export class PostgresVolunteerRepository implements VolunteerRepository {
 		return {
 			id: String(row.id),
 			organizationId: String(row.organization_id),
+			festivalId: String(row.festival_id),
 			roleId: String(row.role_id),
 			date: String(row.date),
 			period: row.period as VolunteerShiftRecord["period"],
