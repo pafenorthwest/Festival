@@ -384,6 +384,11 @@ export const CURRENT_ROUTE_SECURITY = [
 	},
 	{
 		method: "POST",
+		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/enroll",
+		authenticationClass: "firebase",
+	},
+	{
+		method: "POST",
 		path: "/api/organizations/:slug/customer/class-checkout",
 		authenticationClass: "customer",
 	},

@@ -6,6 +6,7 @@ export type VolunteerAssignmentStatus = "active" | "cancelled";
 export interface VolunteerRecord {
 	id: string;
 	organizationId: string;
+	festivalId: string;
 	firebaseUid: string;
 	accountEmail: string;
 	name: string;
@@ -51,6 +52,7 @@ export type BookShiftsOutcome =
 
 export interface UpsertVolunteerInput {
 	organizationId: string;
+	festivalId: string;
 	firebaseUid: string;
 	accountEmail: string;
 	name: string;
@@ -119,6 +121,7 @@ export class InMemoryVolunteerRepository implements VolunteerRepository {
 		const existing = [...this.volunteers.values()].find(
 			(volunteer) =>
 				volunteer.organizationId === input.organizationId &&
+				volunteer.festivalId === input.festivalId &&
 				volunteer.firebaseUid === input.firebaseUid,
 		);
 		if (existing) {

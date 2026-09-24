@@ -32,14 +32,15 @@ export class PostgresVolunteerRepository implements VolunteerRepository {
 
 	async upsertVolunteer(input: UpsertVolunteerInput) {
 		const rows = (await sql.unsafe(
-			`INSERT INTO ${this.schema}.volunteers (id, organization_id, firebase_uid, account_email, name, phone)
-			 VALUES ($1, $2, $3, $4, $5, $6)
-			 ON CONFLICT (organization_id, firebase_uid)
-			 DO UPDATE SET account_email = $4, name = $5, phone = $6
-			 RETURNING id, organization_id, firebase_uid, account_email, name, phone, created_at::text`,
+			`INSERT INTO ${this.schema}.volunteers (id, organization_id, festival_id, firebase_uid, account_email, name, phone)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7)
+			 ON CONFLICT (organization_id, festival_id, firebase_uid)
+			 DO UPDATE SET account_email = $5, name = $6, phone = $7
+			 RETURNING id, organization_id, festival_id, firebase_uid, account_email, name, phone, created_at::text`,
 			[
 				randomUUID(),
 				input.organizationId,
+				input.festivalId,
 				input.firebaseUid,
 				input.accountEmail,
 				input.name,
@@ -137,7 +138,8 @@ export class PostgresVolunteerRepository implements VolunteerRepository {
 				role.slug, role.description, role.details_url, role.is_room_proctor, role.created_at::text AS role_created_at,
 				assignment.id AS assignment_id, assignment.status, assignment.created_at::text AS assignment_created_at,
 				assignment.cancelled_at::text,
-				volunteer.id AS volunteer_id, volunteer.firebase_uid, volunteer.account_email, volunteer.name, volunteer.phone,
+				volunteer.id AS volunteer_id, volunteer.festival_id AS volunteer_festival_id, volunteer.firebase_uid,
+				volunteer.account_email, volunteer.name, volunteer.phone,
 				volunteer.created_at::text AS volunteer_created_at
 			 FROM ${this.schema}.volunteer_shifts shift
 			 JOIN ${this.schema}.volunteer_roles role ON role.id = shift.role_id
@@ -185,6 +187,7 @@ export class PostgresVolunteerRepository implements VolunteerRepository {
 				? this.volunteer({
 						id: row.volunteer_id,
 						organization_id: row.organization_id,
+						festival_id: row.volunteer_festival_id,
 						firebase_uid: row.firebase_uid,
 						account_email: row.account_email,
 						name: row.name,
@@ -199,6 +202,7 @@ export class PostgresVolunteerRepository implements VolunteerRepository {
 		return {
 			id: String(row.id),
 			organizationId: String(row.organization_id),
+			festivalId: String(row.festival_id),
 			firebaseUid: String(row.firebase_uid),
 			accountEmail: String(row.account_email),
 			name: String(row.name),

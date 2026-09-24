@@ -31,10 +31,47 @@ async function seedShift(
 }
 
 describe("volunteer repository", () => {
+	it("keeps separate enrollments for the same person in different festivals", async () => {
+		const repository = new InMemoryVolunteerRepository();
+
+		const springEnrollment = await repository.upsertVolunteer({
+			organizationId: "org-a",
+			festivalId: "festival-spring",
+			firebaseUid: "uid-1",
+			accountEmail: "a@example.com",
+			name: "Ada",
+			phone: "555-0100",
+		});
+		const fallEnrollment = await repository.upsertVolunteer({
+			organizationId: "org-a",
+			festivalId: "festival-fall",
+			firebaseUid: "uid-1",
+			accountEmail: "a@example.com",
+			name: "Ada",
+			phone: "555-0100",
+		});
+
+		expect(springEnrollment.id).not.toBe(fallEnrollment.id);
+		expect(springEnrollment.festivalId).toBe("festival-spring");
+		expect(fallEnrollment.festivalId).toBe("festival-fall");
+
+		const updatedSpringEnrollment = await repository.upsertVolunteer({
+			organizationId: "org-a",
+			festivalId: "festival-spring",
+			firebaseUid: "uid-1",
+			accountEmail: "a@example.com",
+			name: "Ada Updated",
+			phone: "555-0199",
+		});
+		expect(updatedSpringEnrollment.id).toBe(springEnrollment.id);
+		expect(updatedSpringEnrollment.name).toBe("Ada Updated");
+	});
+
 	it("books a shift for a volunteer", async () => {
 		const repository = new InMemoryVolunteerRepository();
 		const volunteer = await repository.upsertVolunteer({
 			organizationId: "org-a",
+			festivalId: "festival-a",
 			firebaseUid: "uid-1",
 			accountEmail: "a@example.com",
 			name: "Ada",
@@ -56,6 +93,7 @@ describe("volunteer repository", () => {
 		const shift = await seedShift(repository);
 		const first = await repository.upsertVolunteer({
 			organizationId: "org-a",
+			festivalId: "festival-a",
 			firebaseUid: "uid-1",
 			accountEmail: "a@example.com",
 			name: "Ada",
@@ -63,6 +101,7 @@ describe("volunteer repository", () => {
 		});
 		const second = await repository.upsertVolunteer({
 			organizationId: "org-a",
+			festivalId: "festival-a",
 			firebaseUid: "uid-2",
 			accountEmail: "b@example.com",
 			name: "Bea",
@@ -87,6 +126,7 @@ describe("volunteer repository", () => {
 		const repository = new InMemoryVolunteerRepository();
 		const volunteer = await repository.upsertVolunteer({
 			organizationId: "org-a",
+			festivalId: "festival-a",
 			firebaseUid: "uid-1",
 			accountEmail: "a@example.com",
 			name: "Ada",
@@ -127,6 +167,7 @@ describe("volunteer repository", () => {
 		const repository = new InMemoryVolunteerRepository();
 		const volunteer = await repository.upsertVolunteer({
 			organizationId: "org-a",
+			festivalId: "festival-a",
 			firebaseUid: "uid-1",
 			accountEmail: "a@example.com",
 			name: "Ada",
@@ -177,6 +218,7 @@ describe("volunteer repository", () => {
 		const repository = new InMemoryVolunteerRepository();
 		const volunteer = await repository.upsertVolunteer({
 			organizationId: "org-a",
+			festivalId: "festival-a",
 			firebaseUid: "uid-1",
 			accountEmail: "a@example.com",
 			name: "Ada",
