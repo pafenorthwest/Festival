@@ -586,6 +586,89 @@ describe("ClassCheckoutService", () => {
 		});
 	});
 
+	it("fails when festival class configuration belongs to a different organization", async () => {
+		const f = await createFixture();
+
+		const org2 = await f.organizations.createOrganization({
+			name: "Other Organization",
+			slug: "other-org",
+		});
+
+		const fest2 = await f.organizations.createFestival({
+			id: "fest-org-2",
+			organizationId: org2.id,
+			code: "ORG2FEST",
+			shortName: "org2fest",
+			name: "Org 2 Festival",
+			startDate: "2026-11-01",
+			endDate: "2026-11-10",
+		});
+
+		const subtype2 = await f.organizations.createRegistrationCatalogValue({
+			organizationId: org2.id,
+			kind: "class_subtype",
+			displayName: "Solo Piano",
+			normalizedName: "solo piano",
+		});
+
+		const division2 = await f.organizations.createDivision({
+			organizationId: org2.id,
+			displayName: "Junior Piano",
+			normalizedName: "junior piano",
+		});
+
+		const classInOrg2 = await f.organizations.createFestivalClassConfiguration({
+			organizationId: org2.id,
+			festivalId: fest2.id,
+			displayName: "Org 2 Solo Piano",
+			classSubtypeId: subtype2.id,
+			divisionId: division2.id,
+			minimumAge: 8,
+			maximumAge: 12,
+			price: "45.00",
+			maximumPerformancePieces: 2,
+			performanceMinutes: 10,
+			capacity: 25,
+			isActive: true,
+		});
+
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				festivalClassId: classInOrg2.id,
+			}),
+		).rejects.toMatchObject({
+			status: 404,
+			message: "Festival class configuration not found.",
+		});
+	});
+
+	it("fails with 400 when requested festivalShortName targets a festival and class belongs to primary festival", async () => {
+		const f = await createFixture();
+
+		await f.organizations.createFestival({
+			id: "fest-2027",
+			organizationId: f.organization.id,
+			code: "PNW2027",
+			shortName: "pnw2027",
+			name: "PNW Festival 2027",
+			startDate: "2027-11-01",
+			endDate: "2027-11-10",
+		});
+
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				festivalShortName: "pnw2027",
+				festivalClassId: f.classConfig.id,
+			}),
+		).rejects.toMatchObject({
+			status: 400,
+			message:
+				"Festival class configuration does not belong to the active festival.",
+		});
+	});
+
 	it("verifies that providing a divisionId matching classConfig.divisionId succeeds", async () => {
 		const f = await createFixture();
 
