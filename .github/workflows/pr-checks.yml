@@ -33,3 +33,23 @@ jobs:
 
       - name: Test
         run: bun run test
+
+  sql_parameter_check:
+    name: SQL parameter check (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: SQL parameter check
+        run: bun run check:sql

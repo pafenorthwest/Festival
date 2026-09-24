@@ -713,6 +713,13 @@ bun run build
 bun run test
 ```
 
+For backend SQL, schema, or PostgreSQL-fixture changes, also run the standalone
+SQL parameter check. It is intentionally separate from `bun run test`:
+
+```bash
+bun run check:sql
+```
+
 ## TODO
 
 //TODO: add a script that scaffolds or syncs the repo-root `.env` from the approved `develop.env` contract without overwriting local secrets.

@@ -222,6 +222,7 @@ processes.
 - `bun run prod:backend`
 - `bun run prod`
 - `bun run format:check`
+- `bun run check:sql` — standalone SQL parameter validation for backend SQL, schema, and PostgreSQL fixture changes; it is not run by `bun run test`.
 - `bun run build`
 - `bun run test`
 - `bun run benchmark:customer-account-cache`
@@ -244,5 +245,6 @@ For full Docker prerequisites, environment setup, ports, teardown, and troublesh
 
 ## Verification
 - `bun run format:check`
+- `bun run check:sql` for backend SQL, schema, or PostgreSQL fixture changes
 - `bun run build`
 - `bun run test`
