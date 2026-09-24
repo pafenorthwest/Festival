@@ -33,6 +33,8 @@ import { buildAuthRouter } from "./routes/auth-router.js";
 import { assertRouteSecurityInventory } from "./routes/route-security.js";
 import { apiRequestSecurity } from "./security/request-security.js";
 import { AccompanistMembershipService } from "./services/accompanist-membership-service.js";
+import { AdminClassCatalogService } from "./services/admin-class-catalog.service.js";
+import { AdminClassShopifySync } from "./services/admin-class-shopify-sync.js";
 import { OrganizationService } from "./services/organization-service.js";
 import { ShopifyAdminApiClient } from "./shopify/admin-api-client.js";
 import { FileShopifyMutationAuditWriter } from "./shopify/admin-mutation-audit.js";
@@ -55,6 +57,7 @@ export interface CreateAppOptions {
 	repository?: OrganizationRepository;
 	appUserRepository?: AppUserRepository;
 	authVerifier?: AuthVerifier;
+	adminClassCatalogService?: AdminClassCatalogService;
 	shopifyIntegrationService?: ShopifyIntegrationService;
 	shopifyMembershipProductService?: ShopifyMembershipProductService;
 	publicMembershipProductService?: PublicMembershipProductService;
@@ -117,11 +120,23 @@ export async function createApp(options: CreateAppOptions = {}) {
 			? new PostgresAppUserRepository(env.databaseSchema)
 			: new InMemoryAppUserRepository());
 	await appUserRepository.ensureReady();
-	const organizationService = new OrganizationService(repository);
 	const shopifyAdminApiClient = new ShopifyAdminApiClient();
 	const secretKeyring = ShopifySecretKeyring.fromEnvironment(
 		env.festivalSecretKeysJson,
 		env.festivalActiveSecretKeyId,
+	);
+	const adminClassShopifySync = new AdminClassShopifySync(
+		repository,
+		secretKeyring ?? undefined,
+		shopifyAdminApiClient,
+		new FileShopifyMutationAuditWriter(),
+	);
+	const adminClassCatalogService =
+		options.adminClassCatalogService ??
+		new AdminClassCatalogService(repository, adminClassShopifySync);
+	const organizationService = new OrganizationService(
+		repository,
+		adminClassCatalogService,
 	);
 	const shopifyWebhookSubscriptionService = secretKeyring
 		? new ShopifyWebhookSubscriptionService(

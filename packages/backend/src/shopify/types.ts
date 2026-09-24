@@ -96,7 +96,12 @@ export interface ShopifyMembershipProductClient {
 	): Promise<ShopifyAdminResult<void>>;
 	updateProductDetails(
 		context: ShopifyAdminOperationContext,
-		input: { productId: string; name: string; description?: string },
+		input: {
+			productId: string;
+			name?: string;
+			description?: string;
+			status?: "ACTIVE" | "DRAFT" | "ARCHIVED";
+		},
 	): Promise<ShopifyAdminResult<ShopifyProductDetails>>;
 	readProductsByGid(
 		context: ShopifyAdminOperationContext,

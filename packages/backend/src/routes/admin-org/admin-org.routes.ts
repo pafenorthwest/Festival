@@ -202,6 +202,7 @@ export function buildAdminOrgRoutes(options: {
 						getRequiredTenant(c).organization.slug,
 						c.req.param("festivalShortName"),
 						await c.req.json(),
+						getRequiredTenant(c).identity.uid,
 					),
 				);
 			} catch (error) {
@@ -223,6 +224,7 @@ export function buildAdminOrgRoutes(options: {
 						c.req.param("festivalShortName"),
 						c.req.param("classId"),
 						await c.req.json(),
+						getRequiredTenant(c).identity.uid,
 					),
 				);
 			} catch (error) {
@@ -244,6 +246,7 @@ export function buildAdminOrgRoutes(options: {
 						c.req.param("festivalShortName"),
 						c.req.param("classId"),
 						await c.req.json(),
+						getRequiredTenant(c).identity.uid,
 					),
 				);
 			} catch (error) {
