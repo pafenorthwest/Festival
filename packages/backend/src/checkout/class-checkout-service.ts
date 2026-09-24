@@ -24,7 +24,6 @@ export interface ClassCheckoutStorefront {
 
 export interface StartClassCheckoutInput {
 	organizationId: string;
-	organizationSlug?: string;
 	festivalId?: string;
 	festivalShortName?: string;
 	customerId: string;
@@ -237,6 +236,15 @@ export class ClassCheckoutService {
 		) {
 			throw new AppError(
 				"Festival class configuration does not belong to the active festival.",
+				400,
+			);
+		}
+		if (
+			input.divisionId !== undefined &&
+			input.divisionId !== classConfig.divisionId
+		) {
+			throw new AppError(
+				"Selected class does not belong to the requested division.",
 				400,
 			);
 		}

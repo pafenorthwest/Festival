@@ -1,3 +1,4 @@
+import type { RepertoirePiece } from "@festival/common";
 import { type Context, Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import { type ApiVariables, toJsonError } from "../../auth/tenant-context.js";
@@ -13,6 +14,11 @@ import { resolveRequestOrigin } from "../shared/csrf-guard.js";
 type CustomerEnv = { Variables: Partial<ApiVariables> };
 const UUID_REGEX =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export interface BrowserClassCheckoutDto {
+	checkoutUrl: string;
+	correlationId: string;
+}
 
 export interface CustomerRegistrationRoutesOptions {
 	customerAccountService?: CustomerAccountService;
@@ -39,85 +45,52 @@ function requireSlug(c: Context): string {
 	return slug;
 }
 
-async function listTeachersHandler(
+async function withCustomerAccount(
 	c: Context<CustomerEnv>,
-	service?: CustomerAccountService,
+	service: CustomerAccountService | undefined,
+	fn: (s: CustomerAccountService) => Promise<unknown>,
 ): Promise<Response> {
 	try {
 		assertNoBearerPrincipal(c.req.header("Authorization"));
-		const s = requireCustomerAccountService(service);
-		return c.json(
-			await s.listRegistrationTeachers(
-				requireSlug(c),
-				c.req.param("festivalShortName") ?? "",
-				getCookie(c, CUSTOMER_SESSION_COOKIE),
-				c.req.query("childId") ?? "",
-				c.req.query("divisionId") ?? "",
-			),
-		);
+		return c.json(await fn(requireCustomerAccountService(service)));
 	} catch (error) {
 		return toJsonError(c, error);
 	}
 }
 
-async function listEligibleClassesHandler(
-	c: Context<CustomerEnv>,
-	service?: CustomerAccountService,
-): Promise<Response> {
-	try {
-		assertNoBearerPrincipal(c.req.header("Authorization"));
-		const s = requireCustomerAccountService(service);
-		return c.json(
-			await s.listRegistrationEligibleClasses(
-				requireSlug(c),
-				c.req.param("festivalShortName") ?? "",
-				getCookie(c, CUSTOMER_SESSION_COOKIE),
-				c.req.query("childId") ?? "",
-				c.req.query("divisionId") ?? "",
-				c.req.query("teacherId") ?? "",
-			),
-		);
-	} catch (error) {
-		return toJsonError(c, error);
+function parseCheckoutPayload(raw: unknown): Record<string, unknown> {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+		throw new AppError("Checkout request is invalid.", 400);
 	}
+	return raw as Record<string, unknown>;
 }
 
-async function listAccompanistsHandler(
-	c: Context<CustomerEnv>,
-	service?: CustomerAccountService,
-): Promise<Response> {
-	try {
-		assertNoBearerPrincipal(c.req.header("Authorization"));
-		const s = requireCustomerAccountService(service);
-		return c.json(
-			await s.listRegistrationAccompanists(
-				requireSlug(c),
-				c.req.param("festivalShortName") ?? "",
-				getCookie(c, CUSTOMER_SESSION_COOKIE),
-			),
-		);
-	} catch (error) {
-		return toJsonError(c, error);
-	}
-}
-
-async function listClassRegistrationsHandler(
-	c: Context<CustomerEnv>,
-	service?: CustomerAccountService,
-): Promise<Response> {
-	try {
-		assertNoBearerPrincipal(c.req.header("Authorization"));
-		const s = requireCustomerAccountService(service);
-		return c.json(
-			await s.listClassRegistrations(
-				requireSlug(c),
-				getCookie(c, CUSTOMER_SESSION_COOKIE) ?? "",
-				c.req.param("festivalShortName"),
-			),
-		);
-	} catch (error) {
-		return toJsonError(c, error);
-	}
+function buildCheckoutInput(
+	access: Awaited<ReturnType<CustomerAccountService["checkoutAccess"]>>,
+	payload: Record<string, unknown>,
+	idempotencyKey: string,
+	festivalShortName?: string,
+) {
+	const opt = (key: string) =>
+		payload[key] !== undefined ? { [key]: payload[key] } : {};
+	return {
+		organizationId: access.organizationId,
+		customerId: access.customerId,
+		sessionId: access.sessionId,
+		integrationVersion: access.integrationVersion,
+		buyerAccessToken: access.shopifyCustomerAccessToken,
+		idempotencyKey,
+		festivalClassId: payload.festivalClassId as string,
+		childId: payload.childId as string,
+		teacherId: payload.teacherId as string,
+		pieces: payload.pieces as RepertoirePiece[],
+		...opt("divisionId"),
+		...opt("accompanistId"),
+		...opt("festivalId"),
+		...(festivalShortName !== undefined ? { festivalShortName } : {}),
+		...opt("currency"),
+		...opt("currencyCode"),
+	};
 }
 
 export async function handleClassCheckout(
@@ -138,18 +111,33 @@ export async function handleClassCheckout(
 			c.req.header("X-CSRF-Token"),
 			origin,
 		);
-		const festivalShortName = c.req.param("festivalShortName");
-		const payload = await c.req.json();
-		c.header("Cache-Control", "no-store");
-		return c.json(
-			await checkoutService.start({
-				...payload,
-				...access,
-				festivalShortName: festivalShortName || payload.festivalShortName,
-				buyerAccessToken: access.shopifyCustomerAccessToken,
-				idempotencyKey,
-			}),
+		let raw: unknown;
+		try {
+			raw = await c.req.json();
+		} catch {
+			throw new AppError("Checkout request is invalid.", 400);
+		}
+		const payload = parseCheckoutPayload(raw);
+		const routeShortName = c.req.param("festivalShortName");
+		const festShortName =
+			routeShortName ||
+			(typeof payload.festivalShortName === "string"
+				? payload.festivalShortName
+				: undefined);
+
+		const input = buildCheckoutInput(
+			access,
+			payload,
+			idempotencyKey,
+			festShortName,
 		);
+		const result = await checkoutService.start(input);
+		c.header("Cache-Control", "no-store");
+		const responseDto: BrowserClassCheckoutDto = {
+			checkoutUrl: result.checkoutUrl,
+			correlationId: result.correlationId,
+		};
+		return c.json(responseDto);
 	} catch (error) {
 		return toJsonError(c, error);
 	}
@@ -162,15 +150,48 @@ export function buildCustomerRegistrationRoutes(
 	const { customerAccountService: cas, classCheckoutService: ccs } = options;
 	const reg = "/festivals/:festivalShortName/registration";
 
-	router.get(`${reg}/teachers`, (c) => listTeachersHandler(c, cas));
-	router.get(`${reg}/eligible-classes`, (c) =>
-		listEligibleClassesHandler(c, cas),
+	router.get(`${reg}/teachers`, (c) =>
+		withCustomerAccount(c, cas, (s) =>
+			s.listRegistrationTeachers(
+				requireSlug(c),
+				c.req.param("festivalShortName") ?? "",
+				getCookie(c, CUSTOMER_SESSION_COOKIE),
+				c.req.query("childId") ?? "",
+				c.req.query("divisionId") ?? "",
+			),
+		),
 	);
-	router.get(`${reg}/accompanists`, (c) => listAccompanistsHandler(c, cas));
+	router.get(`${reg}/eligible-classes`, (c) =>
+		withCustomerAccount(c, cas, (s) =>
+			s.listRegistrationEligibleClasses(
+				requireSlug(c),
+				c.req.param("festivalShortName") ?? "",
+				getCookie(c, CUSTOMER_SESSION_COOKIE),
+				c.req.query("childId") ?? "",
+				c.req.query("divisionId") ?? "",
+				c.req.query("teacherId") ?? "",
+			),
+		),
+	);
+	router.get(`${reg}/accompanists`, (c) =>
+		withCustomerAccount(c, cas, (s) =>
+			s.listRegistrationAccompanists(
+				requireSlug(c),
+				c.req.param("festivalShortName") ?? "",
+				getCookie(c, CUSTOMER_SESSION_COOKIE),
+			),
+		),
+	);
 	router.post("/class-checkout", (c) => handleClassCheckout(c, cas, ccs));
 	router.post(`${reg}/checkout`, (c) => handleClassCheckout(c, cas, ccs));
 	const listRegs = (c: Context<CustomerEnv>) =>
-		listClassRegistrationsHandler(c, cas);
+		withCustomerAccount(c, cas, (s) =>
+			s.listClassRegistrations(
+				requireSlug(c),
+				getCookie(c, CUSTOMER_SESSION_COOKIE) ?? "",
+				c.req.param("festivalShortName"),
+			),
+		);
 	router.get("/class-registrations", listRegs);
 	router.get(`${reg}/class-registrations`, listRegs);
 
