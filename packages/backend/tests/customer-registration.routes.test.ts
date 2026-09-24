@@ -25,6 +25,7 @@ function createFakeServices() {
 		listClassRegistrations: [],
 		checkoutAccess: [],
 		startCheckout: [],
+		updateRegistrationMetadata: [],
 	};
 
 	const customerAccountService = {
@@ -77,6 +78,70 @@ function createFakeServices() {
 		) => {
 			calls.listClassRegistrations.push({ slug, sessionId, festivalShortName });
 			return { registrations: [{ id: "reg_1", festivalShortName }] };
+		},
+		updateRegistrationMetadata: async (
+			slug: string,
+			festivalShortName: string | undefined,
+			registrationId: string,
+			sessionId: string | undefined,
+			csrfToken: string | undefined,
+			origin: string | undefined,
+			input: unknown,
+		) => {
+			calls.updateRegistrationMetadata.push({
+				slug,
+				festivalShortName,
+				registrationId,
+				sessionId,
+				csrfToken,
+				origin,
+				input,
+			});
+			if (!sessionId) {
+				throw new AppError("Customer session is invalid.", 401);
+			}
+			if (registrationId === "closed-reg") {
+				throw new AppError(
+					"Registration metadata edits are closed for this festival.",
+					422,
+				);
+			}
+			const typedInput = input as {
+				pieces?: Array<{ composer?: unknown; durationSeconds?: unknown }>;
+			};
+			if (Array.isArray(typedInput?.pieces)) {
+				for (const piece of typedInput.pieces) {
+					if (typeof piece?.composer !== "string" || !piece.composer.trim()) {
+						throw new AppError(
+							"Each repertoire piece must have a valid composer.",
+							400,
+						);
+					}
+					if (
+						typeof piece.durationSeconds !== "number" ||
+						piece.durationSeconds <= 0
+					) {
+						throw new AppError(
+							"Each repertoire piece must have a positive whole-number duration in seconds.",
+							400,
+						);
+					}
+				}
+			}
+			return {
+				metadata: {
+					id: "meta_1",
+					organizationId: "org_1",
+					checkoutIntentId: "intent_1",
+					classEntitlementId: registrationId,
+					festivalClassId: "class_1",
+					childId: "child_1",
+					teacherId: "teacher_1",
+					accompanistMembershipId: null,
+					repertoireJson: typedInput?.pieces ?? [],
+					createdAtIso: "2026-01-01T00:00:00.000Z",
+				},
+			};
 		},
 		checkoutAccess: async (
 			slug: string,
@@ -658,6 +723,175 @@ describe("Customer Registration Routes", () => {
 		it("returns 503 when customerAccountService is missing", async () => {
 			const app = createTestApp({});
 			const res = await req(app, "GET", "/class-registrations", AUTH);
+			expect(res.status).toBe(503);
+			expect(await res.json()).toEqual({
+				error: "Customer Account is unavailable.",
+			});
+		});
+	});
+
+	describe("PATCH metadata", () => {
+		const validPayload = {
+			pieces: [
+				{
+					title: "Sonata in C",
+					composer: "Mozart",
+					durationSeconds: 180,
+				},
+			],
+		};
+		const patchHeaders = {
+			...AUTH,
+			...JSON_HDR,
+			"X-CSRF-Token": "csrf_token_1",
+			Origin: "https://fest.example.com",
+		};
+
+		it("happy path with festivalShortName", async () => {
+			const { customerAccountService, calls } = createFakeServices();
+			const app = createTestApp({ customerAccountService });
+			const path =
+				"/festivals/spring-2026/registration/class-registrations/reg_1/metadata";
+			const res = await req(
+				app,
+				"PATCH",
+				path,
+				patchHeaders,
+				JSON.stringify(validPayload),
+			);
+			expect(res.status).toBe(200);
+			const json = await res.json();
+			expect(json).toHaveProperty("metadata");
+			expect(calls.updateRegistrationMetadata[0]).toMatchObject({
+				slug: "fest",
+				festivalShortName: "spring-2026",
+				registrationId: "reg_1",
+				sessionId: "sess_1",
+				csrfToken: "csrf_token_1",
+				origin: "https://fest.example.com",
+			});
+		});
+
+		it("happy path without festivalShortName", async () => {
+			const { customerAccountService, calls } = createFakeServices();
+			const app = createTestApp({ customerAccountService });
+			const path = "/class-registrations/reg_1/metadata";
+			const res = await req(
+				app,
+				"PATCH",
+				path,
+				patchHeaders,
+				JSON.stringify(validPayload),
+			);
+			expect(res.status).toBe(200);
+			const json = await res.json();
+			expect(json).toHaveProperty("metadata");
+			expect(calls.updateRegistrationMetadata[0]).toMatchObject({
+				slug: "fest",
+				festivalShortName: undefined,
+				registrationId: "reg_1",
+				sessionId: "sess_1",
+			});
+		});
+
+		it("returns 422 when edits are closed past cutoff", async () => {
+			const { customerAccountService } = createFakeServices();
+			const app = createTestApp({ customerAccountService });
+			const path = "/class-registrations/closed-reg/metadata";
+			const res = await req(
+				app,
+				"PATCH",
+				path,
+				patchHeaders,
+				JSON.stringify(validPayload),
+			);
+			expect(res.status).toBe(422);
+			expect(await res.json()).toEqual({
+				error: "Registration metadata edits are closed for this festival.",
+			});
+		});
+
+		it("returns 400 for invalid composer", async () => {
+			const { customerAccountService } = createFakeServices();
+			const app = createTestApp({ customerAccountService });
+			const invalidPayload = {
+				pieces: [
+					{
+						title: "Sonata in C",
+						composer: "   ",
+						durationSeconds: 180,
+					},
+				],
+			};
+			const res = await req(
+				app,
+				"PATCH",
+				"/class-registrations/reg_1/metadata",
+				patchHeaders,
+				JSON.stringify(invalidPayload),
+			);
+			expect(res.status).toBe(400);
+			expect(await res.json()).toEqual({
+				error: "Each repertoire piece must have a valid composer.",
+			});
+		});
+
+		it("returns 400 for invalid duration", async () => {
+			const { customerAccountService } = createFakeServices();
+			const app = createTestApp({ customerAccountService });
+			const invalidPayload = {
+				pieces: [
+					{
+						title: "Sonata in C",
+						composer: "Mozart",
+						durationSeconds: -10,
+					},
+				],
+			};
+			const res = await req(
+				app,
+				"PATCH",
+				"/class-registrations/reg_1/metadata",
+				patchHeaders,
+				JSON.stringify(invalidPayload),
+			);
+			expect(res.status).toBe(400);
+			expect(await res.json()).toEqual({
+				error:
+					"Each repertoire piece must have a positive whole-number duration in seconds.",
+			});
+		});
+
+		it("returns 401 when session cookie is missing", async () => {
+			const { customerAccountService } = createFakeServices();
+			const app = createTestApp({ customerAccountService });
+			const headersWithoutAuth = {
+				...JSON_HDR,
+				"X-CSRF-Token": "csrf_token_1",
+				Origin: "https://fest.example.com",
+			};
+			const res = await req(
+				app,
+				"PATCH",
+				"/class-registrations/reg_1/metadata",
+				headersWithoutAuth,
+				JSON.stringify(validPayload),
+			);
+			expect(res.status).toBe(401);
+			expect(await res.json()).toEqual({
+				error: "Customer session is invalid.",
+			});
+		});
+
+		it("returns 503 when customerAccountService is missing", async () => {
+			const app = createTestApp({});
+			const res = await req(
+				app,
+				"PATCH",
+				"/class-registrations/reg_1/metadata",
+				patchHeaders,
+				JSON.stringify(validPayload),
+			);
 			expect(res.status).toBe(503);
 			expect(await res.json()).toEqual({
 				error: "Customer Account is unavailable.",

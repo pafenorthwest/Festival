@@ -20,6 +20,7 @@ import type {
 	RegistrationAccompanistSummary,
 	RegistrationEligibleClass,
 	RegistrationTeacherSummary,
+	RepertoirePiece,
 	SaveCustomerAccountSettingsResponse,
 	UpdateCustomerProfileInput,
 } from "@festival/common";
@@ -27,6 +28,7 @@ import {
 	CUSTOMER_ACCOUNT_API_VERSION,
 	CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION,
 	calendarDateInTimezone,
+	deriveFestivalMetadataCutoff,
 	validateCustomerAccountSettings,
 	validateCustomerProfileInput,
 } from "@festival/common";
@@ -1153,6 +1155,246 @@ export class CustomerAccountService {
 
 		return { registrations };
 	}
+
+	private assertRegistrationEditsOpen(
+		startDate: string,
+		timezone: string,
+	): void {
+		const cutoff = deriveFestivalMetadataCutoff(startDate, timezone);
+		if (this.now().getTime() >= cutoff.getTime()) {
+			throw new AppError(
+				"Registration metadata edits are closed for this festival.",
+				422,
+			);
+		}
+	}
+
+	private async lookupRegistrationFestival(
+		organizationId: string,
+		festivalId: string,
+		festivalShortName?: string,
+	): Promise<FestivalRecord> {
+		if (festivalShortName) {
+			const found = await this.organizations.findFestivalByShortName(
+				organizationId,
+				festivalShortName,
+			);
+			if (!found || found.id !== festivalId) {
+				throw new AppError("Festival not found.", 404);
+			}
+			return found;
+		}
+		const festivals = await this.organizations.listFestivals(organizationId);
+		const found = festivals.find((f) => f.id === festivalId);
+		if (!found) throw new AppError("Festival not found.", 404);
+		return found;
+	}
+
+	private async lookupRegistrationClassConfig(
+		organizationId: string,
+		festivalId: string,
+		festivalClassId: string,
+	): Promise<FestivalClassConfiguration> {
+		const configs = await this.organizations.listFestivalClassConfigurations(
+			organizationId,
+			festivalId,
+		);
+		const config = configs.find((c) => c.id === festivalClassId);
+		if (!config) {
+			throw new AppError("Festival class configuration not found.", 404);
+		}
+		return config;
+	}
+
+	private validatePieceItem(piece: unknown): RepertoirePiece {
+		const item = piece as Record<string, unknown> | null;
+		if (!item || typeof item.title !== "string" || !item.title.trim()) {
+			throw new AppError("Each repertoire piece must have a valid title.", 400);
+		}
+		if (typeof item.composer !== "string" || !item.composer.trim()) {
+			throw new AppError(
+				"Each repertoire piece must have a valid composer.",
+				400,
+			);
+		}
+		if (
+			item.movement !== undefined &&
+			item.movement !== null &&
+			typeof item.movement !== "string"
+		) {
+			throw new AppError(
+				"Each repertoire piece must have a valid movement.",
+				400,
+			);
+		}
+		if (
+			typeof item.durationSeconds !== "number" ||
+			item.durationSeconds <= 0 ||
+			!Number.isSafeInteger(item.durationSeconds) ||
+			item.durationSeconds > 2_147_483_647
+		) {
+			throw new AppError(
+				"Each repertoire piece must have a positive whole-number duration in seconds.",
+				400,
+			);
+		}
+		return {
+			title: item.title.trim(),
+			composer: item.composer.trim(),
+			movement:
+				typeof item.movement === "string"
+					? item.movement.trim() || undefined
+					: undefined,
+			durationSeconds: item.durationSeconds,
+		};
+	}
+
+	private validateRegistrationPieces(
+		pieces: unknown,
+		classConfig: FestivalClassConfiguration,
+	): RepertoirePiece[] {
+		if (!Array.isArray(pieces) || pieces.length === 0) {
+			throw new AppError("Repertoire pieces must be a non-empty array.", 400);
+		}
+		if (pieces.length > classConfig.maximumPerformancePieces) {
+			throw new AppError(
+				`Number of pieces (${pieces.length}) exceeds the maximum allowed (${classConfig.maximumPerformancePieces}).`,
+				400,
+			);
+		}
+		const normalized = pieces.map((p) => this.validatePieceItem(p));
+		const totalMinutes =
+			normalized.reduce((s, p) => s + p.durationSeconds, 0) / 60;
+		if (totalMinutes > classConfig.performanceMinutes) {
+			throw new AppError(
+				`Total performance duration (${totalMinutes} minutes) exceeds the maximum allowed of ${classConfig.performanceMinutes} minutes.`,
+				400,
+			);
+		}
+		return normalized;
+	}
+
+	private async validateRegistrationAccompanist(
+		organizationId: string,
+		rawAccompanist: unknown,
+		existingAccompanistId: string | null,
+	): Promise<string | null> {
+		if (rawAccompanist === undefined) {
+			return existingAccompanistId;
+		}
+		if (rawAccompanist === null) {
+			return null;
+		}
+		if (typeof rawAccompanist !== "string") {
+			throw new AppError(
+				"Selected accompanist does not have an active membership.",
+				400,
+			);
+		}
+		const trimmed = rawAccompanist.trim();
+		if (!trimmed) {
+			return null;
+		}
+		const grants = await this.organizations.listAccompanistMembershipGrants({
+			organizationId,
+			currentOnly: true,
+		});
+		const active = grants.find(
+			(g) =>
+				(g.id === trimmed || g.customerId === trimmed) &&
+				(g.status === "active" || g.isCurrent === true),
+		);
+		if (!active) {
+			throw new AppError(
+				"Selected accompanist does not have an active membership.",
+				400,
+			);
+		}
+		return active.id;
+	}
+
+	private parseRegistrationMetadataInput(input: unknown): {
+		pieces?: unknown;
+		accompanistMembershipId?: unknown;
+		accompanistId?: unknown;
+	} {
+		if (!input || typeof input !== "object" || Array.isArray(input)) {
+			throw new AppError("Invalid request body.", 400);
+		}
+		return input as Record<string, unknown>;
+	}
+
+	async updateRegistrationMetadata(
+		slug: string,
+		festivalShortName: string | undefined,
+		registrationId: string,
+		sessionId: string | undefined,
+		csrfToken: string | undefined,
+		origin: string | undefined,
+		input: unknown,
+	): Promise<{ metadata: ClassRegistrationMetadata }> {
+		const access = await this.checkoutAccess(
+			slug,
+			sessionId,
+			csrfToken,
+			origin,
+		);
+		const organization = await this.organizations.findOrganizationBySlug(slug);
+		if (!organization) throw new AppError("Organization not found.", 404);
+		if (!this.commerce || !this.checkout) {
+			throw new AppError(
+				"Commerce or checkout repository is not configured.",
+				500,
+			);
+		}
+		const entitlement = await this.commerce.getClassEntitlement(
+			access.organizationId,
+			registrationId,
+		);
+		if (!entitlement || entitlement.parentCustomerId !== access.customerId) {
+			throw new AppError("Registration not found.", 404);
+		}
+		const festival = await this.lookupRegistrationFestival(
+			access.organizationId,
+			entitlement.festivalId,
+			festivalShortName,
+		);
+		this.assertRegistrationEditsOpen(
+			festival.startDate,
+			organization.timezone || "UTC",
+		);
+		const existingMetadata =
+			await this.checkout.getRegistrationMetadataByEntitlementId(
+				access.organizationId,
+				entitlement.id,
+			);
+		if (!existingMetadata) {
+			throw new AppError("Registration metadata not found.", 404);
+		}
+		const classConfig = await this.lookupRegistrationClassConfig(
+			access.organizationId,
+			festival.id,
+			entitlement.festivalClassId,
+		);
+		const payload = this.parseRegistrationMetadataInput(input);
+		const pieces = this.validateRegistrationPieces(payload.pieces, classConfig);
+		const rawAcc =
+			payload.accompanistMembershipId !== undefined
+				? payload.accompanistMembershipId
+				: payload.accompanistId;
+		const accompanistMembershipId = await this.validateRegistrationAccompanist(
+			access.organizationId,
+			rawAcc,
+			existingMetadata.accompanistMembershipId,
+		);
+		const metadata = await this.checkout.updateRegistrationMetadata(
+			existingMetadata.id,
+			access.organizationId,
+			{ accompanistMembershipId, pieces },
+		);
+		return { metadata };
+	}
+
 	async createChild(
 		slug: string,
 		sessionId: string | undefined,

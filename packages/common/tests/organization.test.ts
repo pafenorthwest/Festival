@@ -1,10 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import {
 	deriveDisplayName,
+	deriveFestivalMetadataCutoff,
 	divisionNameUniquenessKey,
+	getStartOfDayInTimezone,
 	isValidIanaTimezone,
 	normalizeDivisionName,
 	ORGANIZATION_ROLES,
+	subtractCalendarDays,
 	validateFestivalDates,
 	validateFestivalName,
 	validateOrganizationName,
@@ -103,4 +106,205 @@ describe("organization helpers", () => {
 			"Festival start date cannot be in the past.",
 		);
 	});
+
+	describe("subtractCalendarDays", () => {
+		it("subtracts days correctly across normal calendar dates", () => {
+			expect(subtractCalendarDays("2026-05-15", 0)).toBe("2026-05-15");
+			expect(subtractCalendarDays("2026-05-15", 1)).toBe("2026-05-14");
+			expect(subtractCalendarDays("2026-05-15", 15)).toBe("2026-04-30");
+			expect(subtractCalendarDays("2026-05-15", 42)).toBe("2026-04-03");
+			expect(subtractCalendarDays("2026-01-05", 10)).toBe("2025-12-26");
+			expect(subtractCalendarDays("2026-01-01", 365)).toBe("2025-01-01");
+		});
+
+		it("handles leap year boundaries accurately", () => {
+			expect(subtractCalendarDays("2024-03-01", 1)).toBe("2024-02-29");
+			expect(subtractCalendarDays("2024-03-15", 42)).toBe("2024-02-02");
+			expect(subtractCalendarDays("2023-03-01", 1)).toBe("2023-02-28");
+			expect(subtractCalendarDays("2023-03-15", 42)).toBe("2023-02-01");
+			expect(subtractCalendarDays("2000-03-01", 1)).toBe("2000-02-29");
+			expect(subtractCalendarDays("1900-03-01", 1)).toBe("1900-02-28");
+		});
+
+		it("rejects invalid date format, invalid calendar date, and invalid days", () => {
+			expect(() => subtractCalendarDays("not-a-date", 1)).toThrow(
+				"Calendar date must use YYYY-MM-DD.",
+			);
+			expect(() => subtractCalendarDays("2026/05/15", 1)).toThrow(
+				"Calendar date must use YYYY-MM-DD.",
+			);
+			expect(() => subtractCalendarDays("2026-5-15", 1)).toThrow(
+				"Calendar date must use YYYY-MM-DD.",
+			);
+			expect(() => subtractCalendarDays("2026-02-30", 1)).toThrow(
+				"Calendar date is invalid.",
+			);
+			expect(() => subtractCalendarDays("2026-02-29", 1)).toThrow(
+				"Calendar date is invalid.",
+			);
+			expect(() => subtractCalendarDays("2026-13-01", 1)).toThrow(
+				"Calendar date is invalid.",
+			);
+			expect(() => subtractCalendarDays("2026-05-15", -1)).toThrow(
+				"Days must be a non-negative integer.",
+			);
+			expect(() => subtractCalendarDays("2026-05-15", 1.5)).toThrow(
+				"Days must be a non-negative integer.",
+			);
+			expect(() => subtractCalendarDays("2026-05-15", Number.NaN)).toThrow(
+				"Days must be a non-negative integer.",
+			);
+		});
+	});
+
+	describe("getStartOfDayInTimezone", () => {
+		it("returns exact midnight instant for UTC, America/Edmonton, and Asia/Tokyo", () => {
+			const utcDate = getStartOfDayInTimezone("2026-05-15", "UTC");
+			expect(utcDate.toISOString()).toBe("2026-05-15T00:00:00.000Z");
+			assertTimezoneMidnight(utcDate, "2026-05-15", "UTC");
+
+			const tokyoDate = getStartOfDayInTimezone("2026-05-15", "Asia/Tokyo");
+			expect(tokyoDate.toISOString()).toBe("2026-05-14T15:00:00.000Z");
+			assertTimezoneMidnight(tokyoDate, "2026-05-15", "Asia/Tokyo");
+
+			const edmontonSummer = getStartOfDayInTimezone(
+				"2026-05-15",
+				"America/Edmonton",
+			);
+			expect(edmontonSummer.toISOString()).toBe("2026-05-15T06:00:00.000Z");
+			assertTimezoneMidnight(edmontonSummer, "2026-05-15", "America/Edmonton");
+
+			const edmontonWinter = getStartOfDayInTimezone(
+				"2026-01-15",
+				"America/Edmonton",
+			);
+			expect(edmontonWinter.toISOString()).toBe("2026-01-15T07:00:00.000Z");
+			assertTimezoneMidnight(edmontonWinter, "2026-01-15", "America/Edmonton");
+		});
+
+		it("handles Daylight Saving boundaries accurately", () => {
+			const springForwardDay = getStartOfDayInTimezone(
+				"2026-03-08",
+				"America/Edmonton",
+			);
+			expect(springForwardDay.toISOString()).toBe("2026-03-08T07:00:00.000Z");
+			assertTimezoneMidnight(
+				springForwardDay,
+				"2026-03-08",
+				"America/Edmonton",
+			);
+
+			const afterSpringDay = getStartOfDayInTimezone(
+				"2026-03-09",
+				"America/Edmonton",
+			);
+			expect(afterSpringDay.toISOString()).toBe("2026-03-09T06:00:00.000Z");
+			assertTimezoneMidnight(afterSpringDay, "2026-03-09", "America/Edmonton");
+
+			const fallBackDay = getStartOfDayInTimezone(
+				"2026-11-01",
+				"America/Edmonton",
+			);
+			expect(fallBackDay.toISOString()).toBe("2026-11-01T06:00:00.000Z");
+			assertTimezoneMidnight(fallBackDay, "2026-11-01", "America/Edmonton");
+
+			const afterFallBackDay = getStartOfDayInTimezone(
+				"2026-11-02",
+				"America/Edmonton",
+			);
+			expect(afterFallBackDay.toISOString()).toBe("2026-11-02T07:00:00.000Z");
+			assertTimezoneMidnight(
+				afterFallBackDay,
+				"2026-11-02",
+				"America/Edmonton",
+			);
+		});
+
+		it("rejects invalid date format, invalid calendar date, and invalid timezone", () => {
+			expect(() => getStartOfDayInTimezone("bad-date", "UTC")).toThrow(
+				"Calendar date must use YYYY-MM-DD.",
+			);
+			expect(() => getStartOfDayInTimezone("2026-02-30", "UTC")).toThrow(
+				"Calendar date is invalid.",
+			);
+			expect(() =>
+				getStartOfDayInTimezone("2026-05-15", "Invalid/Timezone"),
+			).toThrow("Timezone must be a valid IANA timezone.");
+			expect(() => getStartOfDayInTimezone("2026-05-15", "")).toThrow(
+				"Timezone must be a valid IANA timezone.",
+			);
+		});
+	});
+
+	describe("deriveFestivalMetadataCutoff", () => {
+		it("derives exact 42-day cutoff instant at 00:00:00 across timezones and dates", () => {
+			const edmontonCutoff = deriveFestivalMetadataCutoff(
+				"2026-05-15",
+				"America/Edmonton",
+			);
+			expect(edmontonCutoff.toISOString()).toBe("2026-04-03T06:00:00.000Z");
+			assertTimezoneMidnight(edmontonCutoff, "2026-04-03", "America/Edmonton");
+
+			const tokyoCutoff = deriveFestivalMetadataCutoff(
+				"2026-05-15",
+				"Asia/Tokyo",
+			);
+			expect(tokyoCutoff.toISOString()).toBe("2026-04-02T15:00:00.000Z");
+			assertTimezoneMidnight(tokyoCutoff, "2026-04-03", "Asia/Tokyo");
+
+			const utcCutoff = deriveFestivalMetadataCutoff("2026-05-15", "UTC");
+			expect(utcCutoff.toISOString()).toBe("2026-04-03T00:00:00.000Z");
+			assertTimezoneMidnight(utcCutoff, "2026-04-03", "UTC");
+
+			const leapCutoff = deriveFestivalMetadataCutoff(
+				"2024-03-15",
+				"America/Edmonton",
+			);
+			expect(leapCutoff.toISOString()).toBe("2024-02-02T07:00:00.000Z");
+			assertTimezoneMidnight(leapCutoff, "2024-02-02", "America/Edmonton");
+
+			const dstCutoff = deriveFestivalMetadataCutoff(
+				"2026-04-19",
+				"America/Edmonton",
+			);
+			expect(dstCutoff.toISOString()).toBe("2026-03-08T07:00:00.000Z");
+			assertTimezoneMidnight(dstCutoff, "2026-03-08", "America/Edmonton");
+		});
+
+		it("rejects invalid inputs on deriveFestivalMetadataCutoff", () => {
+			expect(() =>
+				deriveFestivalMetadataCutoff("bad-date", "America/Edmonton"),
+			).toThrow("Calendar date must use YYYY-MM-DD.");
+			expect(() =>
+				deriveFestivalMetadataCutoff("2026-02-30", "America/Edmonton"),
+			).toThrow("Calendar date is invalid.");
+			expect(() =>
+				deriveFestivalMetadataCutoff("2026-05-15", "Mars/Colony"),
+			).toThrow("Timezone must be a valid IANA timezone.");
+		});
+	});
 });
+
+function assertTimezoneMidnight(
+	instant: Date,
+	expectedDate: string,
+	timezone: string,
+): void {
+	const dtf = new Intl.DateTimeFormat("en-US", {
+		timeZone: timezone,
+		hourCycle: "h23",
+		year: "numeric",
+		month: "2-digit",
+		day: "2-digit",
+		hour: "2-digit",
+		minute: "2-digit",
+		second: "2-digit",
+	});
+	const parts = dtf.formatToParts(instant);
+	const part = (type: Intl.DateTimeFormatPartTypes) =>
+		parts.find((p) => p.type === type)?.value;
+	expect(`${part("year")}-${part("month")}-${part("day")}`).toBe(expectedDate);
+	expect(part("hour")).toBe("00");
+	expect(part("minute")).toBe("00");
+	expect(part("second")).toBe("00");
+}

@@ -349,64 +349,144 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 					JSON.stringify(params.repertoireJson),
 				],
 			)) as Array<Record<string, unknown>>;
-			if (repertoireItems.length > 0) {
-				await tx.unsafe(
-					`INSERT INTO ${this.schema}.registration_repertoire_items (id, organization_id, registration_metadata_id, repertoire_work_id, title_snapshot, performed_movement_text, duration_seconds, display_order)
-					 SELECT id, organization_id, registration_metadata_id, NULL, title_snapshot, performed_movement_text, duration_seconds, display_order
-					 FROM jsonb_to_recordset($1::jsonb) AS item(
-						id TEXT,
-						organization_id TEXT,
-						registration_metadata_id TEXT,
-						title_snapshot TEXT,
-						performed_movement_text TEXT,
-						duration_seconds INTEGER,
-						display_order SMALLINT
-					 )`,
-					[
-						JSON.stringify(
-							repertoireItems.map((item) => ({
-								id: item.id,
-								organization_id: item.organizationId,
-								registration_metadata_id: item.registrationMetadataId,
-								title_snapshot: item.titleSnapshot,
-								performed_movement_text: item.performedMovementText,
-								duration_seconds: item.durationSeconds,
-								display_order: item.displayOrder,
-							})),
-						),
-					],
-				);
-			}
-			const contributors = repertoireItems.flatMap((item) =>
-				item.contributors.map((contributor) => ({
-					id: contributor.id,
-					organization_id: item.organizationId,
-					registration_repertoire_item_id: item.id,
-					display_name_snapshot: contributor.displayNameSnapshot,
-					contributor_role: contributor.role,
-					position: contributor.displayOrder,
-				})),
-			);
-			if (contributors.length > 0) {
-				await tx.unsafe(
-					`INSERT INTO ${this.schema}.registration_repertoire_item_contributors (id, organization_id, registration_repertoire_item_id, repertoire_contributor_id, display_name_snapshot, contributor_role, position)
-					 SELECT id, organization_id, registration_repertoire_item_id, NULL, display_name_snapshot, contributor_role, position
-					 FROM jsonb_to_recordset($1::jsonb) AS contributor(
-						id TEXT,
-						organization_id TEXT,
-						registration_repertoire_item_id TEXT,
-						display_name_snapshot TEXT,
-						contributor_role TEXT,
-						position SMALLINT
-					 )`,
-					[JSON.stringify(contributors)],
-				);
-			}
+			await this.insertRepertoireSnapshot(tx, repertoireItems);
 			return metadataRows;
 		})) as Array<Record<string, unknown>>;
 		if (!rows[0])
 			throw new Error("Registration metadata could not be inserted.");
 		return this.registrationMetadataFromRow(rows[0], repertoireItems);
+	}
+	async updateRegistrationMetadata(
+		registrationMetadataId: string,
+		organizationId: string,
+		input: {
+			accompanistMembershipId?: string | null;
+			pieces: RepertoirePiece[];
+		},
+	): Promise<ClassRegistrationMetadata> {
+		await this.ensureReady();
+		const repertoireItems = repertoireItemsFromLegacyPieces(
+			registrationMetadataId,
+			organizationId,
+			input.pieces,
+		);
+		const row = (await sql.begin(async (tx) =>
+			this.performMetadataUpdate(
+				tx,
+				{ id: registrationMetadataId, organizationId, items: repertoireItems },
+				input,
+			),
+		)) as Record<string, unknown>;
+		return this.registrationMetadataFromRow(row, repertoireItems);
+	}
+	private async performMetadataUpdate(
+		tx: { unsafe(sql: string, params?: unknown[]): Promise<unknown> },
+		target: {
+			id: string;
+			organizationId: string;
+			items: RegistrationRepertoireItem[];
+		},
+		input: {
+			accompanistMembershipId?: string | null;
+			pieces: RepertoirePiece[];
+		},
+	) {
+		await tx.unsafe(
+			`DELETE FROM ${this.schema}.registration_repertoire_items WHERE registration_metadata_id = $1 AND organization_id = $2`,
+			[target.id, target.organizationId],
+		);
+		const rows = await this.updateMetadataRow(tx, target, input);
+		if (!rows[0]) throw new Error("Registration metadata not found.");
+		await this.insertRepertoireSnapshot(tx, target.items);
+		return rows[0];
+	}
+	private async updateMetadataRow(
+		tx: { unsafe(sql: string, params?: unknown[]): Promise<unknown> },
+		target: { id: string; organizationId: string },
+		input: {
+			accompanistMembershipId?: string | null;
+			pieces: RepertoirePiece[];
+		},
+	) {
+		const json = JSON.stringify(input.pieces);
+		if (input.accompanistMembershipId !== undefined) {
+			return (await tx.unsafe(
+				`UPDATE ${this.schema}.registration_metadata SET accompanist_membership_id = $1, repertoire_json = $2 WHERE id = $3 AND organization_id = $4 RETURNING id, organization_id, festival_id, checkout_intent_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json, created_at`,
+				[input.accompanistMembershipId, json, target.id, target.organizationId],
+			)) as Array<Record<string, unknown>>;
+		}
+		return (await tx.unsafe(
+			`UPDATE ${this.schema}.registration_metadata SET repertoire_json = $1 WHERE id = $2 AND organization_id = $3 RETURNING id, organization_id, festival_id, checkout_intent_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json, created_at`,
+			[json, target.id, target.organizationId],
+		)) as Array<Record<string, unknown>>;
+	}
+	private async insertRepertoireSnapshot(
+		tx: { unsafe(sql: string, params?: unknown[]): Promise<unknown> },
+		items: RegistrationRepertoireItem[],
+	) {
+		await this.insertRepertoireItems(tx, items);
+		await this.insertRepertoireContributors(tx, items);
+	}
+	private async insertRepertoireItems(
+		tx: { unsafe(sql: string, params?: unknown[]): Promise<unknown> },
+		items: RegistrationRepertoireItem[],
+	) {
+		if (items.length === 0) return;
+		await tx.unsafe(
+			`INSERT INTO ${this.schema}.registration_repertoire_items (id, organization_id, registration_metadata_id, repertoire_work_id, title_snapshot, performed_movement_text, duration_seconds, display_order)
+			 SELECT id, organization_id, registration_metadata_id, NULL, title_snapshot, performed_movement_text, duration_seconds, display_order
+			 FROM jsonb_to_recordset($1::jsonb) AS item(
+				id TEXT,
+				organization_id TEXT,
+				registration_metadata_id TEXT,
+				title_snapshot TEXT,
+				performed_movement_text TEXT,
+				duration_seconds INTEGER,
+				display_order SMALLINT
+			 )`,
+			[
+				JSON.stringify(
+					items.map((item) => ({
+						id: item.id,
+						organization_id: item.organizationId,
+						registration_metadata_id: item.registrationMetadataId,
+						title_snapshot: item.titleSnapshot,
+						performed_movement_text: item.performedMovementText,
+						duration_seconds: item.durationSeconds,
+						display_order: item.displayOrder,
+					})),
+				),
+			],
+		);
+	}
+	private async insertRepertoireContributors(
+		tx: { unsafe(sql: string, params?: unknown[]): Promise<unknown> },
+		items: RegistrationRepertoireItem[],
+	) {
+		const contributors = items.flatMap((item) =>
+			item.contributors.map((contributor) => ({
+				id: contributor.id,
+				organization_id: item.organizationId,
+				registration_repertoire_item_id: item.id,
+				display_name_snapshot: contributor.displayNameSnapshot,
+				contributor_role: contributor.role,
+				position: contributor.displayOrder,
+			})),
+		);
+		if (contributors.length === 0) return;
+		await tx.unsafe(
+			`INSERT INTO ${this.schema}.registration_repertoire_item_contributors (id, organization_id, registration_repertoire_item_id, repertoire_contributor_id, display_name_snapshot, contributor_role, position)
+			 SELECT id, organization_id, registration_repertoire_item_id, NULL, display_name_snapshot, contributor_role, position
+			 FROM jsonb_to_recordset($1::jsonb) AS contributor(
+				id TEXT,
+				organization_id TEXT,
+				registration_repertoire_item_id TEXT,
+				display_name_snapshot TEXT,
+				contributor_role TEXT,
+				position SMALLINT
+			 )`,
+			[JSON.stringify(contributors)],
+		);
 	}
 	async linkRegistrationMetadataToEntitlement(params: {
 		checkoutIntentId: string;

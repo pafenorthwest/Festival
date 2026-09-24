@@ -195,5 +195,29 @@ export function buildCustomerRegistrationRoutes(
 	router.get("/class-registrations", listRegs);
 	router.get(`${reg}/class-registrations`, listRegs);
 
+	const updateMetadata = (c: Context<CustomerEnv>) =>
+		withCustomerAccount(c, cas, async (s) => {
+			let body: unknown;
+			try {
+				body = await c.req.json();
+			} catch {
+				throw new AppError("Invalid request body.", 400);
+			}
+			return s.updateRegistrationMetadata(
+				requireSlug(c),
+				c.req.param("festivalShortName"),
+				c.req.param("registrationId") ?? "",
+				getCookie(c, CUSTOMER_SESSION_COOKIE),
+				c.req.header("X-CSRF-Token"),
+				resolveRequestOrigin(c),
+				body,
+			);
+		});
+	router.patch("/class-registrations/:registrationId/metadata", updateMetadata);
+	router.patch(
+		`${reg}/class-registrations/:registrationId/metadata`,
+		updateMetadata,
+	);
+
 	return router;
 }
