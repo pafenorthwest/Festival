@@ -335,6 +335,61 @@ describe("Registration Selection APIs (#143)", () => {
 		expect(teacherResult.teachers).toEqual([]);
 	});
 
+	it("rejects stale-but-future-valid snapshot where createdAt is 95 days ago with 409", async () => {
+		const f = await createSelectionFixture();
+		const parent = await f.createParentSession();
+
+		const child = await f.repository.createChild({
+			organizationId: f.org.id,
+			parentCustomerId: parent.customer.id,
+			displayName: "Tommy",
+		});
+
+		const ninetyFiveDaysAgo = new Date(
+			f.now().getTime() - 95 * 24 * 60 * 60 * 1000,
+		).toISOString();
+		const futureValidUntil = new Date(
+			f.now().getTime() + 10 * 24 * 60 * 60 * 1000,
+		).toISOString();
+
+		await f.repository.createChildAgeSnapshot({
+			organizationId: f.org.id,
+			childId: child.id,
+			age: 10,
+			createdAtIso: ninetyFiveDaysAgo,
+			validUntilIso: futureValidUntil,
+		});
+
+		await expect(
+			f.service.listRegistrationTeachers(
+				f.org.slug,
+				f.festival.shortName,
+				parent.sessionId,
+				child.id,
+				f.pianoDivision.id,
+			),
+		).rejects.toMatchObject({
+			status: 409,
+			message:
+				"Child age snapshot is expired or missing. Please refresh age before selecting classes.",
+		});
+
+		await expect(
+			f.service.listRegistrationEligibleClasses(
+				f.org.slug,
+				f.festival.shortName,
+				parent.sessionId,
+				child.id,
+				f.pianoDivision.id,
+				"teacher-1",
+			),
+		).rejects.toMatchObject({
+			status: 409,
+			message:
+				"Child age snapshot is expired or missing. Please refresh age before selecting classes.",
+		});
+	});
+
 	it("returns only active teachers entitled in the requested division, with allowlisted fields", async () => {
 		const f = await createSelectionFixture();
 		const parent = await f.createParentSession();
