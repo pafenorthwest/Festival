@@ -160,7 +160,7 @@ export class AdminClassShopifySync {
 		if (isMock(cfg.shopifyProductGid) || !client) return;
 		const ctx = await this.loadWriteContext(orgId, actorUid);
 		if (!ctx) return;
-		const status = isActive ? "ACTIVE" : "ARCHIVED";
+		const status: "ACTIVE" | "ARCHIVED" = isActive ? "ACTIVE" : "ARCHIVED";
 		const input = { productId: cfg.shopifyProductGid, status };
 		await attemptAdminMutation(this.mutationAudit, ctx, "productUpdate", () =>
 			client.updateProductDetails(ctx, input),
@@ -186,11 +186,14 @@ export class AdminClassShopifySync {
 	): Promise<ShopifyAdminOperationContext | null> {
 		if (!this.secretKeyring) return null;
 		const int = await this.repository.getShopifyIntegration(orgId);
-		const ok =
-			int?.verifiedShopGid &&
-			int.verifiedShopDomain &&
-			int.verificationStatus === "ok";
-		if (!ok) return null;
+		if (
+			!int ||
+			int.verificationStatus !== "ok" ||
+			!int.verifiedShopGid ||
+			!int.verifiedShopDomain
+		) {
+			return null;
+		}
 		const credentials = loadCredentials(this.secretKeyring, orgId, int);
 		if (!credentials) return null;
 		return {
