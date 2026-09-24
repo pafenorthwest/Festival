@@ -147,10 +147,10 @@ export function AdminHomePage(props: AdminHomePageProps) {
 				<button
 					type="button"
 					class="admin-workflow-card"
-					disabled={!props.app.isAdminMember()}
+					disabled={!props.app.hasVolunteerAdminIntent()}
 					onClick={() => {
 						const membership = props.app.sessionMembership();
-						if (!membership || !props.app.isAdminMember()) {
+						if (!membership || !props.app.hasVolunteerAdminIntent()) {
 							return;
 						}
 

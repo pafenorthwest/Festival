@@ -726,9 +726,13 @@ export function saveShopifySettings(
 	);
 }
 
-export function getVolunteerRoles(idToken: string, slug: string) {
+export function getVolunteerRoles(
+	idToken: string,
+	slug: string,
+	festivalShortName: string,
+) {
 	return requestJson<VolunteerRole[]>(
-		`/api/organizations/${slug}/volunteers/roles`,
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalShortName)}/volunteers/roles`,
 		undefined,
 		idToken,
 	);

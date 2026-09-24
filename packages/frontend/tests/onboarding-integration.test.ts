@@ -636,6 +636,7 @@ describe("organization onboarding integration", () => {
 
 		expect(apiSource).toContain("retireAdminMembershipProduct");
 		expect(apiSource).toContain(
+			// biome-ignore lint/suspicious/noTemplateCurlyInString: assert the literal source fragment, including its interpolation syntax.
 			"membership-products/${encodeURIComponent(offeringId)}/retire",
 		);
 		expect(apiSource).toContain("JSON.stringify({ confirmed: true })");

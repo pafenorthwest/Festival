@@ -14,6 +14,7 @@ import {
 	VOLUNTEER_ADMIN_ROLES,
 } from "../src/auth/volunteer-context.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
+import { InMemoryVolunteerRepository } from "../src/volunteers/volunteer-repository.js";
 
 class FakeAuthVerifier implements AuthVerifier {
 	constructor(private readonly users: Record<string, AuthenticatedUser>) {}
@@ -38,9 +39,11 @@ function withAuth(token: string, init?: RequestInit): RequestInit {
 
 async function createTestApp() {
 	const repository = new InMemoryOrganizationRepository();
+	const volunteerRepository = new InMemoryVolunteerRepository();
 	const app = await createApp({
 		env: { port: 3000 },
 		repository,
+		volunteerRepository,
 		authVerifier: new FakeAuthVerifier({
 			admin: {
 				uid: "uid-admin",
@@ -59,7 +62,7 @@ async function createTestApp() {
 			},
 		}),
 	});
-	return { ...app, repository };
+	return { ...app, repository, volunteerRepository };
 }
 
 async function createOrgAndFestival(app: { fetch: typeof fetch }) {
@@ -103,6 +106,51 @@ async function createOrgAndFestival(app: { fetch: typeof fetch }) {
 }
 
 describe("volunteer enrollment (requireVolunteerScope)", () => {
+	it("returns roles only from the festival named in the URL", async () => {
+		const { app, repository, volunteerRepository } = await createTestApp();
+		await createOrgAndFestival(app);
+		const organization = await repository.findOrganizationBySlug("pafe");
+		if (!organization) throw new Error("Expected test organization.");
+		const spring = await repository.findFestivalByShortName(
+			organization.id,
+			"spring",
+		);
+		const fall = await repository.findFestivalByShortName(
+			organization.id,
+			"fall",
+		);
+		if (!spring || !fall) throw new Error("Expected test festivals.");
+
+		const springRole = await volunteerRepository.createRole({
+			organizationId: organization.id,
+			festivalId: spring.id,
+			slug: "spring-role",
+			description: "Spring role",
+			detailsUrl: null,
+			isRoomProctor: false,
+		});
+		await volunteerRepository.createRole({
+			organizationId: organization.id,
+			festivalId: fall.id,
+			slug: "fall-role",
+			description: "Fall role",
+			detailsUrl: null,
+			isRoomProctor: false,
+		});
+
+		const response = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/festivals/spring/volunteers/roles",
+				withAuth("volunteer"),
+			),
+		);
+
+		expect(response.status).toBe(200);
+		expect(
+			((await response.json()) as Array<{ id: string }>).map((role) => role.id),
+		).toEqual([springRole.id]);
+	});
+
 	it("lets a non-member enroll as a volunteer for a festival", async () => {
 		const { app } = await createTestApp();
 		await createOrgAndFestival(app);

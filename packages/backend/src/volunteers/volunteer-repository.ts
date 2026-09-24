@@ -17,6 +17,7 @@ export interface VolunteerRecord {
 export interface VolunteerRoleRecord {
 	id: string;
 	organizationId: string;
+	festivalId: string;
 	slug: string;
 	description: string;
 	detailsUrl: string | null;
@@ -27,6 +28,7 @@ export interface VolunteerRoleRecord {
 export interface VolunteerShiftRecord {
 	id: string;
 	organizationId: string;
+	festivalId: string;
 	roleId: string;
 	date: string;
 	period: ShiftPeriod;
@@ -61,6 +63,7 @@ export interface UpsertVolunteerInput {
 
 export interface CreateRoleInput {
 	organizationId: string;
+	festivalId: string;
 	slug: string;
 	description: string;
 	detailsUrl: string | null;
@@ -69,6 +72,7 @@ export interface CreateRoleInput {
 
 export interface CreateShiftInput {
 	organizationId: string;
+	festivalId: string;
 	roleId: string;
 	date: string;
 	period: ShiftPeriod;
@@ -83,25 +87,34 @@ export interface VolunteerRepository {
 	createRole(input: CreateRoleInput): Promise<VolunteerRoleRecord>;
 	createShift(input: CreateShiftInput): Promise<VolunteerShiftRecord>;
 
-	listRoles(organizationId: string): Promise<VolunteerRoleRecord[]>;
+	listRoles(
+		organizationId: string,
+		festivalId: string,
+	): Promise<VolunteerRoleRecord[]>;
 	listShiftsForRole(
 		organizationId: string,
+		festivalId: string,
 		roleId: string,
 	): Promise<VolunteerShiftRecord[]>;
 
 	bookShifts(input: {
 		organizationId: string;
+		festivalId: string;
 		volunteerId: string;
 		shiftIds: string[];
 	}): Promise<BookShiftsOutcome>;
 
 	cancelAssignment(input: {
 		organizationId: string;
+		festivalId: string;
 		assignmentId: string;
 		cancelledAtIso: string;
 	}): Promise<VolunteerAssignmentRecord | null>;
 
-	listScheduleForOrganization(organizationId: string): Promise<
+	listScheduleForOrganization(
+		organizationId: string,
+		festivalId: string,
+	): Promise<
 		Array<{
 			shift: VolunteerShiftRecord;
 			role: VolunteerRoleRecord;
@@ -150,6 +163,14 @@ export class InMemoryVolunteerRepository implements VolunteerRepository {
 	}
 
 	async createShift(input: CreateShiftInput) {
+		const role = this.roles.get(input.roleId);
+		if (
+			!role ||
+			role.organizationId !== input.organizationId ||
+			role.festivalId !== input.festivalId
+		) {
+			throw new Error("Volunteer shift role is outside the selected festival.");
+		}
 		const record: VolunteerShiftRecord = {
 			...input,
 			id: randomUUID(),
@@ -159,32 +180,53 @@ export class InMemoryVolunteerRepository implements VolunteerRepository {
 		return { ...record };
 	}
 
-	async listRoles(organizationId: string) {
+	async listRoles(organizationId: string, festivalId: string) {
 		return [...this.roles.values()]
-			.filter((role) => role.organizationId === organizationId)
+			.filter(
+				(role) =>
+					role.organizationId === organizationId &&
+					role.festivalId === festivalId,
+			)
 			.map((role) => ({ ...role }));
 	}
 
-	async listShiftsForRole(organizationId: string, roleId: string) {
+	async listShiftsForRole(
+		organizationId: string,
+		festivalId: string,
+		roleId: string,
+	) {
 		return [...this.shifts.values()]
 			.filter(
 				(shift) =>
-					shift.organizationId === organizationId && shift.roleId === roleId,
+					shift.organizationId === organizationId &&
+					shift.festivalId === festivalId &&
+					shift.roleId === roleId,
 			)
 			.map((shift) => ({ ...shift }));
 	}
 
 	async bookShifts(input: {
 		organizationId: string;
+		festivalId: string;
 		volunteerId: string;
 		shiftIds: string[];
 	}): Promise<BookShiftsOutcome> {
-		const { organizationId, volunteerId, shiftIds } = input;
+		const { organizationId, festivalId, volunteerId, shiftIds } = input;
+		const volunteer = this.volunteers.get(volunteerId);
+		if (
+			!volunteer ||
+			volunteer.organizationId !== organizationId ||
+			volunteer.festivalId !== festivalId
+		) {
+			return { kind: "conflict", shiftIds };
+		}
 
 		const shifts = shiftIds.map((id) => this.shifts.get(id));
 		const missingIds = shiftIds.filter(
 			(_, index) =>
-				!shifts[index] || shifts[index]?.organizationId !== organizationId,
+				!shifts[index] ||
+				shifts[index]?.organizationId !== organizationId ||
+				shifts[index]?.festivalId !== festivalId,
 		);
 		if (missingIds.length > 0)
 			return { kind: "conflict", shiftIds: missingIds };
@@ -206,6 +248,7 @@ export class InMemoryVolunteerRepository implements VolunteerRepository {
 				)
 				.map((assignment) => this.shifts.get(assignment.shiftId))
 				.filter((shift): shift is VolunteerShiftRecord => Boolean(shift))
+				.filter((shift) => shift.festivalId === festivalId)
 				.map((shift) => `${shift.date}:${shift.period}`),
 		);
 
@@ -243,6 +286,7 @@ export class InMemoryVolunteerRepository implements VolunteerRepository {
 
 	async cancelAssignment(input: {
 		organizationId: string;
+		festivalId: string;
 		assignmentId: string;
 		cancelledAtIso: string;
 	}) {
@@ -250,6 +294,7 @@ export class InMemoryVolunteerRepository implements VolunteerRepository {
 		if (
 			!assignment ||
 			assignment.organizationId !== input.organizationId ||
+			this.shifts.get(assignment.shiftId)?.festivalId !== input.festivalId ||
 			assignment.status !== "active"
 		)
 			return null;
@@ -258,7 +303,10 @@ export class InMemoryVolunteerRepository implements VolunteerRepository {
 		return { ...assignment };
 	}
 
-	async listScheduleForOrganization(organizationId: string) {
+	async listScheduleForOrganization(
+		organizationId: string,
+		festivalId: string,
+	) {
 		const activeByShiftId = new Map<string, VolunteerAssignmentRecord>();
 		for (const assignment of this.assignments.values()) {
 			if (
@@ -270,7 +318,11 @@ export class InMemoryVolunteerRepository implements VolunteerRepository {
 		}
 
 		return [...this.shifts.values()]
-			.filter((shift) => shift.organizationId === organizationId)
+			.filter(
+				(shift) =>
+					shift.organizationId === organizationId &&
+					shift.festivalId === festivalId,
+			)
 			.map((shift) => {
 				const role = this.roles.get(shift.roleId);
 				if (!role) {

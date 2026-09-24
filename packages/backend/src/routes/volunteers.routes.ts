@@ -1,9 +1,7 @@
 import { Hono } from "hono";
 import {
 	type ApiVariables,
-	getRequiredTenant,
 	requireAuth,
-	requireTenant,
 	toJsonError,
 } from "../auth/tenant-context.js";
 import type { AuthVerifier } from "../auth/types.js";
@@ -39,15 +37,18 @@ export function buildVolunteerRoutes(
 	router.get(
 		"/roles",
 		requireAuth(options.authVerifier),
-		requireTenant(options.repository),
+		requireVolunteerScope(options.repository),
 		async (c) => {
 			try {
 				if (!options.volunteerRepository) {
 					throw new AppError("Volunteer roles are unavailable.", 503);
 				}
-				const tenant = getRequiredTenant(c);
+				const scope = getRequiredVolunteerScope(c);
 				return c.json(
-					await options.volunteerRepository.listRoles(tenant.organization.id),
+					await options.volunteerRepository.listRoles(
+						scope.organization.id,
+						scope.festival.id,
+					),
 				);
 			} catch (error) {
 				return toJsonError(c, error);
@@ -55,11 +56,10 @@ export function buildVolunteerRoutes(
 		},
 	);
 
-	// Unlike /roles above, /enroll uses requireVolunteerScope rather than
-	// requireTenant: a volunteer is never required to be an organization
-	// member. Scope is resolved from the organization + festival named in
-	// the URL (both already present on this sub-router's mount path), per
-	// VOLUNTEER-PORTAL.md's festival-scoping requirement.
+	// A volunteer is never required to be an organization member. Scope is
+	// resolved from the organization + festival named in the URL (both already
+	// present on this sub-router's mount path), per VOLUNTEER-PORTAL.md's
+	// festival-scoping requirement.
 	router.post(
 		"/enroll",
 		requireAuth(options.authVerifier),
