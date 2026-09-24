@@ -433,20 +433,20 @@ export class ClassCheckoutService {
 
 		const intent = outcome.intent;
 
-		// 12. Insert registration_metadata
-		await this.checkout.insertRegistrationMetadata({
-			id: randomUUID(),
-			organizationId: input.organizationId,
-			festivalId: targetFestival.id,
-			checkoutIntentId: intent.id,
-			teacherMembershipId: teacherEntitlementId,
-			accompanistMembershipId: accompanistEntitlementId,
-			repertoireJson: input.pieces,
-			repertoireSnapshotPieces: normalizedPieces,
-		});
-
-		// 13. Storefront cart, checkout, and verification
+		// 12. Storefront cart, checkout, and verification
 		try {
+			await this.checkout.insertRegistrationMetadata({
+				id: randomUUID(),
+				organizationId: input.organizationId,
+				festivalId: targetFestival.id,
+				checkoutIntentId: intent.id,
+				teacherMembershipId: teacherEntitlementId,
+				accompanistMembershipId: accompanistEntitlementId,
+				repertoireJson: input.pieces,
+				repertoireSnapshotPieces: normalizedPieces,
+			});
+
+			// Pre-flight integration read: validates Shopify integration existence and captures initial integrationVersion before cart creation
 			const storefrontIntegration =
 				await this.organizations.getShopifyIntegration(input.organizationId);
 			if (!storefrontIntegration) {
@@ -482,6 +482,7 @@ export class ClassCheckoutService {
 				shopifyCartId: cart.shopifyCartId,
 			});
 
+			// Post-cart verification read: re-checks integration version to detect concurrent store updates (race conditions) and validates checkout URL domain
 			const integration = await this.organizations.getShopifyIntegration(
 				input.organizationId,
 			);
@@ -511,6 +512,7 @@ export class ClassCheckoutService {
 		input: { organizationId: string },
 	): Promise<ClassCheckoutResult> {
 		try {
+			// Pre-flight integration read: validates Shopify integration existence before resuming checkout
 			const storefrontIntegration =
 				await this.organizations.getShopifyIntegration(input.organizationId);
 			if (!storefrontIntegration) {
@@ -521,6 +523,7 @@ export class ClassCheckoutService {
 				organizationId: input.organizationId,
 				shopifyCartId: outcome.cart.shopifyCartId,
 			});
+			// Post-cart verification read: re-checks integration version to detect concurrent updates (race conditions) and validates checkout URL domain
 			const integration = await this.organizations.getShopifyIntegration(
 				input.organizationId,
 			);

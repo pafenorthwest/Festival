@@ -934,4 +934,59 @@ describe("ClassCheckoutService", () => {
 		expect(createdIntent).toBeDefined();
 		expect(createdIntent?.status).toBe("failed");
 	});
+
+	it("triggers markFailed compensation and throws 503 when insertRegistrationMetadata throws", async () => {
+		const f = await createFixture();
+
+		f.checkout.insertRegistrationMetadata = async () => {
+			throw new Error("Metadata write failure");
+		};
+
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			status: 503,
+			code: "checkout_retryable_upstream",
+		});
+
+		const intents = (
+			f.checkout as unknown as {
+				intents: Map<string, { status: string }>;
+			}
+		).intents;
+		const createdIntent = [...intents.values()][0];
+		expect(createdIntent).toBeDefined();
+		expect(createdIntent?.status).toBe("failed");
+	});
+
+	it("aborts with 503 retryableCheckoutError and marks intent failed when second getShopifyIntegration read returns incremented integrationVersion", async () => {
+		const f = await createFixture();
+
+		let readCount = 0;
+		const originalGetShopifyIntegration =
+			f.organizations.getShopifyIntegration.bind(f.organizations);
+		f.organizations.getShopifyIntegration = async (organizationId: string) => {
+			const record = await originalGetShopifyIntegration(organizationId);
+			readCount++;
+			if (readCount === 2 && record) {
+				return {
+					...record,
+					integrationVersion: record.integrationVersion + 1,
+				};
+			}
+			return record;
+		};
+
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			status: 503,
+			code: "checkout_retryable_upstream",
+		});
+
+		const intents = (
+			f.checkout as unknown as {
+				intents: Map<string, { status: string }>;
+			}
+		).intents;
+		const createdIntent = [...intents.values()][0];
+		expect(createdIntent).toBeDefined();
+		expect(createdIntent?.status).toBe("failed");
+	});
 });

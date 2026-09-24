@@ -58,6 +58,7 @@ const DEFAULT_CACHE_ENTRY_BYTES = 256 * 1024;
 const DEFAULT_DISCOVERY_CACHE_BYTES = 4 * 1024 * 1024;
 const DEFAULT_JWKS_CACHE_BYTES = 8 * 1024 * 1024;
 export const CUSTOMER_SESSION_COOKIE = "festival_customer_session";
+const MAX_SNAPSHOT_VALIDITY_MS = 90 * 24 * 60 * 60 * 1000;
 
 interface Discovery {
 	issuer: string;
@@ -1535,9 +1536,17 @@ export class CustomerAccountService {
 		const currentSnapshot = ageSnapshots.find(
 			(snapshot) => !snapshot.supersededAtIso,
 		);
+		if (!currentSnapshot) {
+			throw new AppError(
+				"Child age snapshot is expired or missing. Please refresh age before selecting classes.",
+				409,
+			);
+		}
+		const snapshotAgeMs =
+			this.now().getTime() - new Date(currentSnapshot.createdAtIso).getTime();
 		if (
-			!currentSnapshot ||
-			new Date(currentSnapshot.validUntilIso) <= this.now()
+			new Date(currentSnapshot.validUntilIso) <= this.now() ||
+			snapshotAgeMs > MAX_SNAPSHOT_VALIDITY_MS
 		) {
 			throw new AppError(
 				"Child age snapshot is expired or missing. Please refresh age before selecting classes.",
