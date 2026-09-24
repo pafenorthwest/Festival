@@ -446,6 +446,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.volunteers (
 			id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			festival_id TEXT NOT NULL REFERENCES ${safeSchema}.festivals (id) ON DELETE CASCADE,
 			firebase_uid TEXT NOT NULL, account_email TEXT NOT NULL, name TEXT NOT NULL, phone TEXT NOT NULL,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
@@ -519,7 +520,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		CREATE INDEX IF NOT EXISTS idx_user_login_user_id ON ${safeSchema}.user_login_event(user_id);
 		CREATE INDEX IF NOT EXISTS idx_user_login_firebase_uid ON ${safeSchema}.user_login_event(firebase_uid);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_app_user_email_lower ON ${safeSchema}.app_user(lower(email));
-		CREATE UNIQUE INDEX IF NOT EXISTS volunteers_org_uid_key ON ${safeSchema}.volunteers (organization_id, firebase_uid);
+		CREATE UNIQUE INDEX IF NOT EXISTS volunteers_org_festival_uid_key ON ${safeSchema}.volunteers (organization_id, festival_id, firebase_uid);
 		CREATE UNIQUE INDEX IF NOT EXISTS volunteer_assignments_active_shift_key ON ${safeSchema}.volunteer_assignments (shift_id) WHERE status = 'active';
 		CREATE INDEX IF NOT EXISTS idx_class_entitlements_org_class ON ${safeSchema}.class_entitlements (organization_id, festival_class_id);
 		CREATE INDEX IF NOT EXISTS idx_class_entitlements_org_parent ON ${safeSchema}.class_entitlements (organization_id, parent_customer_id);

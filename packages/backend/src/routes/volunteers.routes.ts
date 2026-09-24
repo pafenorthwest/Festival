@@ -7,9 +7,14 @@ import {
 	toJsonError,
 } from "../auth/tenant-context.js";
 import type { AuthVerifier } from "../auth/types.js";
+import {
+	getRequiredVolunteerScope,
+	requireVolunteerScope,
+} from "../auth/volunteer-context.js";
 import { AppError } from "../errors/app-error.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
 import type { VolunteerRepository } from "../volunteers/volunteer-repository.js";
+import { validateEnrollVolunteerRequest } from "../volunteers/volunteer-validation.js";
 
 export interface VolunteerRoutesOptions {
 	authVerifier: AuthVerifier;
@@ -43,6 +48,41 @@ export function buildVolunteerRoutes(
 				const tenant = getRequiredTenant(c);
 				return c.json(
 					await options.volunteerRepository.listRoles(tenant.organization.id),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	// Unlike /roles above, /enroll uses requireVolunteerScope rather than
+	// requireTenant: a volunteer is never required to be an organization
+	// member. Scope is resolved from the organization + festival named in
+	// the URL (both already present on this sub-router's mount path), per
+	// VOLUNTEER-PORTAL.md's festival-scoping requirement.
+	router.post(
+		"/enroll",
+		requireAuth(options.authVerifier),
+		requireVolunteerScope(options.repository),
+		async (c) => {
+			try {
+				if (!options.volunteerRepository) {
+					throw new AppError("Volunteer roles are unavailable.", 503);
+				}
+				const scope = getRequiredVolunteerScope(c);
+				const payload = await c.req.json();
+				const validated = validateEnrollVolunteerRequest(payload);
+				if ("errors" in validated) {
+					throw new AppError(validated.errors.join(" "), 400);
+				}
+				return c.json(
+					await options.volunteerRepository.upsertVolunteer({
+						organizationId: scope.organization.id,
+						festivalId: scope.festival.id,
+						firebaseUid: scope.identity.uid,
+						accountEmail: scope.identity.email,
+						...validated.request,
+					}),
 				);
 			} catch (error) {
 				return toJsonError(c, error);
