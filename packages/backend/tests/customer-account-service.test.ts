@@ -1,5 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { generateKeyPairSync, sign } from "node:crypto";
+import { deriveFestivalMetadataCutoff } from "@festival/common";
+import { InMemoryCheckoutRepository } from "../src/checkout/checkout-repository.js";
+import { InMemoryMembershipCommerceRepository } from "../src/commerce/membership-commerce-repository.js";
 import type {
 	CustomerSessionTokenReplacementInput,
 	CustomerSessionTouchInput,
@@ -90,8 +93,15 @@ class PausedTouchRepository extends InMemoryCustomerAccountRepository {
 	}
 }
 
-async function fixture(repository = new InMemoryCustomerAccountRepository()) {
+async function fixture(
+	repository = new InMemoryCustomerAccountRepository(),
+	commerce?: InMemoryMembershipCommerceRepository,
+	checkout?: InMemoryCheckoutRepository,
+) {
 	const organizations = new InMemoryOrganizationRepository();
+	const commerceRepo =
+		commerce ?? new InMemoryMembershipCommerceRepository(organizations);
+	const checkoutRepo = checkout ?? new InMemoryCheckoutRepository();
 	const org = await organizations.createOrganization({
 		name: "Festival",
 		slug: "festival",
@@ -208,6 +218,8 @@ async function fixture(repository = new InMemoryCustomerAccountRepository()) {
 			transport: transportFor(fetcher, () => now),
 			now: () => now,
 		},
+		commerceRepo,
+		checkoutRepo,
 	);
 	await service.saveAndVerify(org.id, org.slug, {
 		storefrontDomain: "store.example.com",
@@ -228,6 +240,8 @@ async function fixture(repository = new InMemoryCustomerAccountRepository()) {
 		service,
 		repository,
 		organizations,
+		commerce: commerceRepo,
+		checkout: checkoutRepo,
 		org,
 		other,
 		keyring,
@@ -921,5 +935,333 @@ describe("CustomerAccountService", () => {
 			clientSecret: "secret",
 		});
 		expect(explicitPort.settings.readiness).toBe("failed");
+	});
+
+	it("enforces cutoff boundary, customer ownership, pieces validation, and accompanist update on updateRegistrationMetadata", async () => {
+		const f = await fixture();
+		await f.organizations.updateOrganizationTimezone(
+			f.org.id,
+			"America/Edmonton",
+		);
+
+		const festival = await f.organizations.createFestival({
+			id: "fest-1",
+			organizationId: f.org.id,
+			code: "SPF26",
+			name: "Spring Festival 2026",
+			shortName: "spring-2026",
+			startDate: "2026-05-15",
+			endDate: "2026-05-20",
+		});
+
+		const classConfig = await f.organizations.createFestivalClassConfiguration({
+			organizationId: f.org.id,
+			festivalId: festival.id,
+			displayName: "Solo Piano",
+			classSubtypeId: "piano",
+			divisionId: "div_1",
+			minimumAge: 5,
+			maximumAge: 18,
+			price: 30,
+			maximumPerformancePieces: 2,
+			performanceMinutes: 10,
+			capacity: 20,
+		});
+
+		const auth = await f.authenticate();
+		const { session } = await f.service.session("festival", auth.sessionId);
+		const storedSession = await f.repository.getSession(auth.sessionId);
+		if (!storedSession) throw new Error("session");
+		const customerId = storedSession.customerId;
+		const csrfToken = session.csrfToken;
+		const origin = "https://festival.example.com";
+
+		const entitlement = await f.commerce.createClassEntitlement({
+			organizationId: f.org.id,
+			festivalId: festival.id,
+			festivalClassId: classConfig.id,
+			parentCustomerId: customerId,
+			childId: "child-1",
+			checkoutIntentId: "intent-1",
+			shopifyOrderGid: "gid://shopify/Order/1",
+			shopifyOrderLineGid: "gid://shopify/LineItem/1",
+			paidAmountCents: 3000,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+
+		await f.checkout.insertRegistrationMetadata({
+			id: "reg-meta-1",
+			organizationId: f.org.id,
+			festivalClassId: classConfig.id,
+			checkoutIntentId: "intent-1",
+			childId: "child-1",
+			teacherMembershipId: "teacher-1",
+			accompanistMembershipId: null,
+			repertoireJson: [
+				{
+					title: "Sonata 1",
+					composer: "Mozart",
+					durationSeconds: 120,
+				},
+			],
+		});
+		await f.checkout.linkRegistrationMetadataToEntitlement({
+			checkoutIntentId: "intent-1",
+			classEntitlementId: entitlement.id,
+		});
+
+		const accompanistGrant =
+			await f.organizations.createAccompanistMembershipGrant({
+				organizationId: f.org.id,
+				customerId: "acc-customer-1",
+				normalizedEmail: "accompanist@example.com",
+				offeringNameSnapshot: "Accompanist Annual",
+				source: "admin_grant",
+				contact: {
+					name: "Jane Accompanist",
+					email: "accompanist@example.com",
+				},
+				divisions: [],
+				startsOn: "2026-01-01",
+				endsOn: "2026-12-31",
+			});
+
+		const cutoff = deriveFestivalMetadataCutoff(
+			"2026-05-15",
+			"America/Edmonton",
+		);
+		const validPieces = [
+			{
+				title: "Nocturne",
+				composer: "Chopin",
+				durationSeconds: 180,
+			},
+		];
+
+		// 1. Cutoff boundary: before cutoff succeeds
+		f.setNow(new Date(cutoff.getTime() - 1000));
+		const successRes = await f.service.updateRegistrationMetadata(
+			"festival",
+			"spring-2026",
+			entitlement.id,
+			auth.sessionId,
+			csrfToken,
+			origin,
+			{ pieces: validPieces },
+		);
+		expect(successRes.metadata.repertoireJson[0].title).toBe("Nocturne");
+		expect(successRes.metadata.repertoireJson[0].composer).toBe("Chopin");
+
+		// 1b. Cutoff boundary: at cutoff throws 422
+		f.setNow(new Date(cutoff.getTime()));
+		await expect(
+			f.service.updateRegistrationMetadata(
+				"festival",
+				"spring-2026",
+				entitlement.id,
+				auth.sessionId,
+				csrfToken,
+				origin,
+				{ pieces: validPieces },
+			),
+		).rejects.toThrow(
+			"Registration metadata edits are closed for this festival.",
+		);
+
+		// 1c. Cutoff boundary: after cutoff throws 422
+		f.setNow(new Date(cutoff.getTime() + 1000));
+		await expect(
+			f.service.updateRegistrationMetadata(
+				"festival",
+				"spring-2026",
+				entitlement.id,
+				auth.sessionId,
+				csrfToken,
+				origin,
+				{ pieces: validPieces },
+			),
+		).rejects.toThrow(
+			"Registration metadata edits are closed for this festival.",
+		);
+
+		// Reset time to before cutoff for remaining tests
+		f.setNow(new Date(cutoff.getTime() - 1000));
+
+		// 2. Entitlement customer check: non-existent registration throws 404
+		await expect(
+			f.service.updateRegistrationMetadata(
+				"festival",
+				"spring-2026",
+				"non-existent-id",
+				auth.sessionId,
+				csrfToken,
+				origin,
+				{ pieces: validPieces },
+			),
+		).rejects.toThrow("Registration not found.");
+
+		// 2b. Entitlement customer check: entitlement belonging to another customer throws 404
+		const otherEntitlement = await f.commerce.createClassEntitlement({
+			organizationId: f.org.id,
+			festivalId: festival.id,
+			festivalClassId: classConfig.id,
+			parentCustomerId: "someone-else-customer-id",
+			childId: "child-2",
+			checkoutIntentId: "intent-2",
+			shopifyOrderGid: "gid://shopify/Order/2",
+			shopifyOrderLineGid: "gid://shopify/LineItem/2",
+			paidAmountCents: 3000,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+		await expect(
+			f.service.updateRegistrationMetadata(
+				"festival",
+				"spring-2026",
+				otherEntitlement.id,
+				auth.sessionId,
+				csrfToken,
+				origin,
+				{ pieces: validPieces },
+			),
+		).rejects.toThrow("Registration not found.");
+
+		// 3. Pieces validation
+		await expect(
+			f.service.updateRegistrationMetadata(
+				"festival",
+				"spring-2026",
+				entitlement.id,
+				auth.sessionId,
+				csrfToken,
+				origin,
+				{ pieces: [] },
+			),
+		).rejects.toThrow("Repertoire pieces must be a non-empty array.");
+
+		await expect(
+			f.service.updateRegistrationMetadata(
+				"festival",
+				"spring-2026",
+				entitlement.id,
+				auth.sessionId,
+				csrfToken,
+				origin,
+				{
+					pieces: [
+						{ title: "Piece 1", composer: "C1", durationSeconds: 60 },
+						{ title: "Piece 2", composer: "C2", durationSeconds: 60 },
+						{ title: "Piece 3", composer: "C3", durationSeconds: 60 },
+					],
+				},
+			),
+		).rejects.toThrow("exceeds the maximum allowed");
+
+		await expect(
+			f.service.updateRegistrationMetadata(
+				"festival",
+				"spring-2026",
+				entitlement.id,
+				auth.sessionId,
+				csrfToken,
+				origin,
+				{
+					pieces: [{ title: "Piece 1", composer: "   ", durationSeconds: 60 }],
+				},
+			),
+		).rejects.toThrow("Each repertoire piece must have a valid composer.");
+
+		await expect(
+			f.service.updateRegistrationMetadata(
+				"festival",
+				"spring-2026",
+				entitlement.id,
+				auth.sessionId,
+				csrfToken,
+				origin,
+				{
+					pieces: [{ title: "Piece 1", composer: "C1", durationSeconds: 0 }],
+				},
+			),
+		).rejects.toThrow(
+			"Each repertoire piece must have a positive whole-number duration in seconds.",
+		);
+
+		await expect(
+			f.service.updateRegistrationMetadata(
+				"festival",
+				"spring-2026",
+				entitlement.id,
+				auth.sessionId,
+				csrfToken,
+				origin,
+				{
+					pieces: [
+						{ title: "Long piece", composer: "Bach", durationSeconds: 700 },
+					],
+				},
+			),
+		).rejects.toThrow("Total performance duration");
+
+		// 4. Accompanist update: valid accompanist grant
+		const accRes = await f.service.updateRegistrationMetadata(
+			"festival",
+			"spring-2026",
+			entitlement.id,
+			auth.sessionId,
+			csrfToken,
+			origin,
+			{
+				pieces: validPieces,
+				accompanistMembershipId: accompanistGrant.id,
+			},
+		);
+		expect(accRes.metadata.accompanistMembershipId).toBe(accompanistGrant.id);
+
+		// 4b. Accompanist update: invalid accompanist throws 400
+		await expect(
+			f.service.updateRegistrationMetadata(
+				"festival",
+				"spring-2026",
+				entitlement.id,
+				auth.sessionId,
+				csrfToken,
+				origin,
+				{
+					pieces: validPieces,
+					accompanistMembershipId: "invalid-accompanist-id",
+				},
+			),
+		).rejects.toThrow(
+			"Selected accompanist does not have an active membership.",
+		);
+
+		// 4c. Accompanist update: clear accompanist to null
+		const clearRes = await f.service.updateRegistrationMetadata(
+			"festival",
+			"spring-2026",
+			entitlement.id,
+			auth.sessionId,
+			csrfToken,
+			origin,
+			{
+				pieces: validPieces,
+				accompanistMembershipId: null,
+			},
+		);
+		expect(clearRes.metadata.accompanistMembershipId).toBeNull();
+
+		// 4d. Lookup without festivalShortName
+		const noFestRes = await f.service.updateRegistrationMetadata(
+			"festival",
+			undefined,
+			entitlement.id,
+			auth.sessionId,
+			csrfToken,
+			origin,
+			{ pieces: validPieces },
+		);
+		expect(noFestRes.metadata.id).toBe("reg-meta-1");
 	});
 });

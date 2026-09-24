@@ -88,4 +88,20 @@ describe("PostgresCheckoutRepository", () => {
 		);
 		expect(value).not.toContain("itemRows.map(async");
 	});
+
+	it("updates registration metadata within a scoped transaction", async () => {
+		const value = await source();
+		expect(value).toContain(
+			"DELETE FROM $" +
+				"{this.schema}.registration_repertoire_items WHERE registration_metadata_id = $1 AND organization_id = $2",
+		);
+		expect(value).toContain(
+			"UPDATE $" +
+				"{this.schema}.registration_metadata SET accompanist_membership_id = $1, repertoire_json = $2 WHERE id = $3 AND organization_id = $4",
+		);
+		expect(value).toContain(
+			"UPDATE $" +
+				"{this.schema}.registration_metadata SET repertoire_json = $1 WHERE id = $2 AND organization_id = $3",
+		);
+	});
 });

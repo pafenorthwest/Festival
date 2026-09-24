@@ -551,3 +551,80 @@ export function deriveDisplayName(input: {
 
 	return input.email.split("@")[0] ?? input.email;
 }
+
+function parseCalendarDate(value: string): Date {
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+		throw new Error("Calendar date must use YYYY-MM-DD.");
+	}
+	const parsed = new Date(`${value}T00:00:00.000Z`);
+	if (
+		Number.isNaN(parsed.valueOf()) ||
+		parsed.toISOString().slice(0, 10) !== value
+	) {
+		throw new Error("Calendar date is invalid.");
+	}
+	return parsed;
+}
+
+function getLocalAsUtcMs(dtf: Intl.DateTimeFormat, date: Date): number {
+	const parts = dtf.formatToParts(date);
+	const part = (type: Intl.DateTimeFormatPartTypes) =>
+		Number(parts.find((p) => p.type === type)?.value);
+	return Date.UTC(
+		part("year"),
+		part("month") - 1,
+		part("day"),
+		part("hour"),
+		part("minute"),
+		part("second"),
+		0,
+	);
+}
+
+export function subtractCalendarDays(startDate: string, days: number): string {
+	if (!Number.isInteger(days) || days < 0) {
+		throw new Error("Days must be a non-negative integer.");
+	}
+	const parsed = parseCalendarDate(startDate);
+	parsed.setUTCDate(parsed.getUTCDate() - days);
+	return parsed.toISOString().slice(0, 10);
+}
+
+export function getStartOfDayInTimezone(
+	dateStr: string,
+	timezone: string,
+): Date {
+	parseCalendarDate(dateStr);
+	if (!isValidIanaTimezone(timezone)) {
+		throw new Error("Timezone must be a valid IANA timezone.");
+	}
+	const [year, month, day] = dateStr.split("-").map(Number);
+	const targetUtcMs = Date.UTC(year, month - 1, day, 0, 0, 0, 0);
+	const dtf = new Intl.DateTimeFormat("en-US", {
+		timeZone: timezone,
+		hourCycle: "h23",
+		year: "numeric",
+		month: "2-digit",
+		day: "2-digit",
+		hour: "2-digit",
+		minute: "2-digit",
+		second: "2-digit",
+	});
+	let guessMs = targetUtcMs;
+	for (let i = 0; i < 4; i++) {
+		const diff = getLocalAsUtcMs(dtf, new Date(guessMs)) - targetUtcMs;
+		if (diff === 0) {
+			break;
+		}
+		guessMs -= diff;
+	}
+	return new Date(guessMs);
+}
+
+export function deriveFestivalMetadataCutoff(
+	startDate: string,
+	timezone: string,
+): Date {
+	const cutoffDateStr = subtractCalendarDays(startDate, 42);
+	return getStartOfDayInTimezone(cutoffDateStr, timezone);
+}

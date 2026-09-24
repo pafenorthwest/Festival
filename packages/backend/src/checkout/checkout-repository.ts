@@ -126,6 +126,14 @@ export interface CheckoutRepository {
 		organizationId: string,
 		classEntitlementId: string,
 	): Promise<ClassRegistrationMetadata | null>;
+	updateRegistrationMetadata(
+		registrationMetadataId: string,
+		organizationId: string,
+		input: {
+			accompanistMembershipId?: string | null;
+			pieces: RepertoirePiece[];
+		},
+	): Promise<ClassRegistrationMetadata>;
 }
 
 export type CreateCheckoutIntentInput = Omit<
@@ -373,6 +381,32 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 				meta.classEntitlementId === classEntitlementId,
 		);
 		return match ? { ...match } : null;
+	}
+
+	async updateRegistrationMetadata(
+		registrationMetadataId: string,
+		organizationId: string,
+		input: {
+			accompanistMembershipId?: string | null;
+			pieces: RepertoirePiece[];
+		},
+	): Promise<ClassRegistrationMetadata> {
+		const record = [...this.registrationMetadata.values()].find(
+			(meta) =>
+				meta.id === registrationMetadataId &&
+				meta.organizationId === organizationId,
+		);
+		if (!record) throw new Error("Registration metadata not found.");
+		if (input.accompanistMembershipId !== undefined) {
+			record.accompanistMembershipId = input.accompanistMembershipId;
+		}
+		record.repertoireJson = input.pieces;
+		record.repertoireItems = repertoireItemsFromLegacyPieces(
+			record.id,
+			record.organizationId,
+			input.pieces,
+		);
+		return { ...record };
 	}
 
 	private outcomeFor(
