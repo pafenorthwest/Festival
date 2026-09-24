@@ -941,7 +941,7 @@ describe("CustomerAccountService", () => {
 		const f = await fixture();
 		await f.organizations.updateOrganizationTimezone(
 			f.org.id,
-			"America/Edmonton",
+			"America/Los_Angeles",
 		);
 
 		const festival = await f.organizations.createFestival({
@@ -1029,7 +1029,7 @@ describe("CustomerAccountService", () => {
 
 		const cutoff = deriveFestivalMetadataCutoff(
 			"2026-05-15",
-			"America/Edmonton",
+			"America/Los_Angeles",
 		);
 		const validPieces = [
 			{

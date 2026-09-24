@@ -158,7 +158,7 @@ describe("organization helpers", () => {
 	});
 
 	describe("getStartOfDayInTimezone", () => {
-		it("returns exact midnight instant for UTC, America/Edmonton, and Asia/Tokyo", () => {
+		it("returns exact midnight instant for UTC, America/Los_Angeles, and Asia/Tokyo", () => {
 			const utcDate = getStartOfDayInTimezone("2026-05-15", "UTC");
 			expect(utcDate.toISOString()).toBe("2026-05-15T00:00:00.000Z");
 			assertTimezoneMidnight(utcDate, "2026-05-15", "UTC");
@@ -167,56 +167,68 @@ describe("organization helpers", () => {
 			expect(tokyoDate.toISOString()).toBe("2026-05-14T15:00:00.000Z");
 			assertTimezoneMidnight(tokyoDate, "2026-05-15", "Asia/Tokyo");
 
-			const edmontonSummer = getStartOfDayInTimezone(
+			const losAngelesSummer = getStartOfDayInTimezone(
 				"2026-05-15",
-				"America/Edmonton",
+				"America/Los_Angeles",
 			);
-			expect(edmontonSummer.toISOString()).toBe("2026-05-15T06:00:00.000Z");
-			assertTimezoneMidnight(edmontonSummer, "2026-05-15", "America/Edmonton");
+			expect(losAngelesSummer.toISOString()).toBe("2026-05-15T07:00:00.000Z");
+			assertTimezoneMidnight(
+				losAngelesSummer,
+				"2026-05-15",
+				"America/Los_Angeles",
+			);
 
-			const edmontonWinter = getStartOfDayInTimezone(
+			const losAngelesWinter = getStartOfDayInTimezone(
 				"2026-01-15",
-				"America/Edmonton",
+				"America/Los_Angeles",
 			);
-			expect(edmontonWinter.toISOString()).toBe("2026-01-15T07:00:00.000Z");
-			assertTimezoneMidnight(edmontonWinter, "2026-01-15", "America/Edmonton");
+			expect(losAngelesWinter.toISOString()).toBe("2026-01-15T08:00:00.000Z");
+			assertTimezoneMidnight(
+				losAngelesWinter,
+				"2026-01-15",
+				"America/Los_Angeles",
+			);
 		});
 
 		it("handles Daylight Saving boundaries accurately", () => {
 			const springForwardDay = getStartOfDayInTimezone(
 				"2026-03-08",
-				"America/Edmonton",
+				"America/Los_Angeles",
 			);
-			expect(springForwardDay.toISOString()).toBe("2026-03-08T07:00:00.000Z");
+			expect(springForwardDay.toISOString()).toBe("2026-03-08T08:00:00.000Z");
 			assertTimezoneMidnight(
 				springForwardDay,
 				"2026-03-08",
-				"America/Edmonton",
+				"America/Los_Angeles",
 			);
 
 			const afterSpringDay = getStartOfDayInTimezone(
 				"2026-03-09",
-				"America/Edmonton",
+				"America/Los_Angeles",
 			);
-			expect(afterSpringDay.toISOString()).toBe("2026-03-09T06:00:00.000Z");
-			assertTimezoneMidnight(afterSpringDay, "2026-03-09", "America/Edmonton");
+			expect(afterSpringDay.toISOString()).toBe("2026-03-09T07:00:00.000Z");
+			assertTimezoneMidnight(
+				afterSpringDay,
+				"2026-03-09",
+				"America/Los_Angeles",
+			);
 
 			const fallBackDay = getStartOfDayInTimezone(
 				"2026-11-01",
-				"America/Edmonton",
+				"America/Los_Angeles",
 			);
-			expect(fallBackDay.toISOString()).toBe("2026-11-01T06:00:00.000Z");
-			assertTimezoneMidnight(fallBackDay, "2026-11-01", "America/Edmonton");
+			expect(fallBackDay.toISOString()).toBe("2026-11-01T07:00:00.000Z");
+			assertTimezoneMidnight(fallBackDay, "2026-11-01", "America/Los_Angeles");
 
 			const afterFallBackDay = getStartOfDayInTimezone(
 				"2026-11-02",
-				"America/Edmonton",
+				"America/Los_Angeles",
 			);
-			expect(afterFallBackDay.toISOString()).toBe("2026-11-02T07:00:00.000Z");
+			expect(afterFallBackDay.toISOString()).toBe("2026-11-02T08:00:00.000Z");
 			assertTimezoneMidnight(
 				afterFallBackDay,
 				"2026-11-02",
-				"America/Edmonton",
+				"America/Los_Angeles",
 			);
 		});
 
@@ -238,12 +250,16 @@ describe("organization helpers", () => {
 
 	describe("deriveFestivalMetadataCutoff", () => {
 		it("derives exact 42-day cutoff instant at 00:00:00 across timezones and dates", () => {
-			const edmontonCutoff = deriveFestivalMetadataCutoff(
+			const losAngelesCutoff = deriveFestivalMetadataCutoff(
 				"2026-05-15",
-				"America/Edmonton",
+				"America/Los_Angeles",
 			);
-			expect(edmontonCutoff.toISOString()).toBe("2026-04-03T06:00:00.000Z");
-			assertTimezoneMidnight(edmontonCutoff, "2026-04-03", "America/Edmonton");
+			expect(losAngelesCutoff.toISOString()).toBe("2026-04-03T07:00:00.000Z");
+			assertTimezoneMidnight(
+				losAngelesCutoff,
+				"2026-04-03",
+				"America/Los_Angeles",
+			);
 
 			const tokyoCutoff = deriveFestivalMetadataCutoff(
 				"2026-05-15",
@@ -258,25 +274,25 @@ describe("organization helpers", () => {
 
 			const leapCutoff = deriveFestivalMetadataCutoff(
 				"2024-03-15",
-				"America/Edmonton",
+				"America/Los_Angeles",
 			);
-			expect(leapCutoff.toISOString()).toBe("2024-02-02T07:00:00.000Z");
-			assertTimezoneMidnight(leapCutoff, "2024-02-02", "America/Edmonton");
+			expect(leapCutoff.toISOString()).toBe("2024-02-02T08:00:00.000Z");
+			assertTimezoneMidnight(leapCutoff, "2024-02-02", "America/Los_Angeles");
 
 			const dstCutoff = deriveFestivalMetadataCutoff(
 				"2026-04-19",
-				"America/Edmonton",
+				"America/Los_Angeles",
 			);
-			expect(dstCutoff.toISOString()).toBe("2026-03-08T07:00:00.000Z");
-			assertTimezoneMidnight(dstCutoff, "2026-03-08", "America/Edmonton");
+			expect(dstCutoff.toISOString()).toBe("2026-03-08T08:00:00.000Z");
+			assertTimezoneMidnight(dstCutoff, "2026-03-08", "America/Los_Angeles");
 		});
 
 		it("rejects invalid inputs on deriveFestivalMetadataCutoff", () => {
 			expect(() =>
-				deriveFestivalMetadataCutoff("bad-date", "America/Edmonton"),
+				deriveFestivalMetadataCutoff("bad-date", "America/Los_Angeles"),
 			).toThrow("Calendar date must use YYYY-MM-DD.");
 			expect(() =>
-				deriveFestivalMetadataCutoff("2026-02-30", "America/Edmonton"),
+				deriveFestivalMetadataCutoff("2026-02-30", "America/Los_Angeles"),
 			).toThrow("Calendar date is invalid.");
 			expect(() =>
 				deriveFestivalMetadataCutoff("2026-05-15", "Mars/Colony"),
