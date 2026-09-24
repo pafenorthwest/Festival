@@ -71,4 +71,21 @@ describe("PostgresCheckoutRepository", () => {
 		expect(value).toContain("SET status = 'checkout_started'");
 		expect(value).toContain("SET status = 'failed'");
 	});
+
+	it("loads repertoire snapshots with one tenant-scoped joined query", async () => {
+		const value = await source();
+		expect(value).toContain(
+			[
+				"LEFT JOIN $",
+				"{this.schema}.registration_repertoire_item_contributors AS contributor",
+			].join(""),
+		);
+		expect(value).toContain(
+			"WHERE item.registration_metadata_id = $1 AND item.organization_id = $2",
+		);
+		expect(value).toContain(
+			"contributor.organization_id = item.organization_id",
+		);
+		expect(value).not.toContain("itemRows.map(async");
+	});
 });

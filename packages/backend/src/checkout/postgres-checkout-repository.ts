@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
 	ClassRegistrationMetadata,
+	RegistrationRepertoireItem,
 	RepertoirePiece,
 } from "@festival/common";
 import { sql } from "bun";
@@ -13,6 +14,7 @@ import type {
 	CheckoutRepository,
 	CreateCheckoutIntentInput,
 } from "./checkout-repository.js";
+import { repertoireItemsFromLegacyPieces } from "./checkout-repository.js";
 
 function schemaName(value: string) {
 	if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(value))
@@ -326,23 +328,85 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 		teacherMembershipId: string;
 		accompanistMembershipId: string | null;
 		repertoireJson: RepertoirePiece[];
+		repertoireSnapshotPieces?: RepertoirePiece[];
 	}): Promise<ClassRegistrationMetadata> {
 		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`INSERT INTO ${this.schema}.registration_metadata (id, organization_id, festival_id, checkout_intent_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json) VALUES ($1,$2,$3,$4,NULL,$5,$6,$7) RETURNING id, organization_id, festival_id, checkout_intent_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json, created_at`,
-			[
-				params.id,
-				params.organizationId,
-				params.festivalId,
-				params.checkoutIntentId,
-				params.teacherMembershipId,
-				params.accompanistMembershipId ?? null,
-				JSON.stringify(params.repertoireJson),
-			],
-		)) as Array<Record<string, unknown>>;
+		const repertoireItems = repertoireItemsFromLegacyPieces(
+			params.id,
+			params.organizationId,
+			params.repertoireSnapshotPieces ?? params.repertoireJson,
+		);
+		const rows = (await sql.begin(async (tx) => {
+			const metadataRows = (await tx.unsafe(
+				`INSERT INTO ${this.schema}.registration_metadata (id, organization_id, festival_id, checkout_intent_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json) VALUES ($1,$2,$3,$4,NULL,$5,$6,$7) RETURNING id, organization_id, festival_id, checkout_intent_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json, created_at`,
+				[
+					params.id,
+					params.organizationId,
+					params.festivalId,
+					params.checkoutIntentId,
+					params.teacherMembershipId,
+					params.accompanistMembershipId ?? null,
+					JSON.stringify(params.repertoireJson),
+				],
+			)) as Array<Record<string, unknown>>;
+			if (repertoireItems.length > 0) {
+				await tx.unsafe(
+					`INSERT INTO ${this.schema}.registration_repertoire_items (id, organization_id, registration_metadata_id, repertoire_work_id, title_snapshot, performed_movement_text, duration_seconds, display_order)
+					 SELECT id, organization_id, registration_metadata_id, NULL, title_snapshot, performed_movement_text, duration_seconds, display_order
+					 FROM jsonb_to_recordset($1::jsonb) AS item(
+						id TEXT,
+						organization_id TEXT,
+						registration_metadata_id TEXT,
+						title_snapshot TEXT,
+						performed_movement_text TEXT,
+						duration_seconds INTEGER,
+						display_order SMALLINT
+					 )`,
+					[
+						JSON.stringify(
+							repertoireItems.map((item) => ({
+								id: item.id,
+								organization_id: item.organizationId,
+								registration_metadata_id: item.registrationMetadataId,
+								title_snapshot: item.titleSnapshot,
+								performed_movement_text: item.performedMovementText,
+								duration_seconds: item.durationSeconds,
+								display_order: item.displayOrder,
+							})),
+						),
+					],
+				);
+			}
+			const contributors = repertoireItems.flatMap((item) =>
+				item.contributors.map((contributor) => ({
+					id: contributor.id,
+					organization_id: item.organizationId,
+					registration_repertoire_item_id: item.id,
+					display_name_snapshot: contributor.displayNameSnapshot,
+					contributor_role: contributor.role,
+					position: contributor.displayOrder,
+				})),
+			);
+			if (contributors.length > 0) {
+				await tx.unsafe(
+					`INSERT INTO ${this.schema}.registration_repertoire_item_contributors (id, organization_id, registration_repertoire_item_id, repertoire_contributor_id, display_name_snapshot, contributor_role, position)
+					 SELECT id, organization_id, registration_repertoire_item_id, NULL, display_name_snapshot, contributor_role, position
+					 FROM jsonb_to_recordset($1::jsonb) AS contributor(
+						id TEXT,
+						organization_id TEXT,
+						registration_repertoire_item_id TEXT,
+						display_name_snapshot TEXT,
+						contributor_role TEXT,
+						position SMALLINT
+					 )`,
+					[JSON.stringify(contributors)],
+				);
+			}
+			return metadataRows;
+		})) as Array<Record<string, unknown>>;
 		if (!rows[0])
 			throw new Error("Registration metadata could not be inserted.");
-		return this.registrationMetadataFromRow(rows[0]);
+		return this.registrationMetadataFromRow(rows[0], repertoireItems);
 	}
 	async linkRegistrationMetadataToEntitlement(params: {
 		checkoutIntentId: string;
@@ -365,11 +429,69 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 			[organizationId, classEntitlementId],
 		)) as Array<Record<string, unknown>>;
 		if (!rows[0]) return null;
-		return this.registrationMetadataFromRow(rows[0]);
+		const repertoireItems = await this.registrationRepertoireItems(
+			String(rows[0].id),
+			organizationId,
+		);
+		return this.registrationMetadataFromRow(rows[0], repertoireItems);
+	}
+	private async registrationRepertoireItems(
+		registrationMetadataId: string,
+		organizationId: string,
+	): Promise<RegistrationRepertoireItem[]> {
+		const rows = (await sql.unsafe(
+			`SELECT item.id, item.organization_id, item.registration_metadata_id, item.repertoire_work_id, item.title_snapshot, item.performed_movement_text, item.duration_seconds, item.display_order, contributor.id AS contributor_id, contributor.repertoire_contributor_id, contributor.display_name_snapshot, contributor.contributor_role, contributor.position AS contributor_position FROM ${this.schema}.registration_repertoire_items AS item LEFT JOIN ${this.schema}.registration_repertoire_item_contributors AS contributor ON contributor.registration_repertoire_item_id = item.id AND contributor.organization_id = item.organization_id WHERE item.registration_metadata_id = $1 AND item.organization_id = $2 ORDER BY item.display_order, contributor.position`,
+			[registrationMetadataId, organizationId],
+		)) as Array<Record<string, unknown>>;
+		const items = new Map<string, RegistrationRepertoireItem>();
+		for (const row of rows) {
+			const id = String(row.id);
+			let item = items.get(id);
+			if (!item) {
+				item = {
+					id,
+					organizationId: String(row.organization_id),
+					registrationMetadataId: String(row.registration_metadata_id),
+					displayOrder: Number(row.display_order),
+					catalogWorkId:
+						row.repertoire_work_id === null
+							? null
+							: String(row.repertoire_work_id),
+					titleSnapshot: String(row.title_snapshot),
+					performedMovementText:
+						row.performed_movement_text === null
+							? null
+							: String(row.performed_movement_text),
+					durationSeconds: Number(row.duration_seconds),
+					contributors: [],
+				};
+				items.set(id, item);
+			}
+			if (row.contributor_id !== null && row.contributor_id !== undefined) {
+				item.contributors.push({
+					id: String(row.contributor_id),
+					displayOrder: Number(row.contributor_position) as 1 | 2 | 3,
+					role: String(
+						row.contributor_role,
+					) as RegistrationRepertoireItem["contributors"][number]["role"],
+					displayNameSnapshot: String(row.display_name_snapshot),
+					catalogContributorId:
+						row.repertoire_contributor_id === null
+							? null
+							: String(row.repertoire_contributor_id),
+				});
+			}
+		}
+		return [...items.values()];
 	}
 	private registrationMetadataFromRow(
 		row: Record<string, unknown>,
+		repertoireItems: RegistrationRepertoireItem[] = [],
 	): ClassRegistrationMetadata {
+		const repertoireJson =
+			typeof row.repertoire_json === "string"
+				? (JSON.parse(row.repertoire_json) as RepertoirePiece[])
+				: (row.repertoire_json as RepertoirePiece[]);
 		return {
 			id: String(row.id),
 			organizationId: String(row.organization_id),
@@ -386,10 +508,8 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 				row.accompanist_membership_id === undefined
 					? null
 					: String(row.accompanist_membership_id),
-			repertoireJson:
-				typeof row.repertoire_json === "string"
-					? (JSON.parse(row.repertoire_json) as RepertoirePiece[])
-					: (row.repertoire_json as RepertoirePiece[]),
+			repertoireJson,
+			repertoireItems: repertoireItems ?? [],
 			createdAt: new Date(String(row.created_at)),
 		};
 	}

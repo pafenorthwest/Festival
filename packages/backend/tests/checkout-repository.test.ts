@@ -275,4 +275,65 @@ describe("checkout repository", () => {
 			)?.kind,
 		).toBe("expired");
 	});
+
+	it("creates durable relational snapshots from the legacy repertoire payload", async () => {
+		const repository = new InMemoryCheckoutRepository();
+		const metadata = await repository.insertRegistrationMetadata({
+			id: "registration-metadata-1",
+			organizationId: "org-a",
+			festivalId: "festival-a",
+			checkoutIntentId: "intent-a",
+			teacherMembershipId: "teacher-membership-a",
+			accompanistMembershipId: null,
+			repertoireJson: [
+				{
+					title: "Sonata in C",
+					composer: "Wolfgang Amadeus Mozart",
+					movement: "I. Allegro (excerpt)",
+					durationSeconds: 240,
+				},
+			],
+		});
+		expect(metadata.repertoireItems).toEqual([
+			expect.objectContaining({
+				registrationMetadataId: "registration-metadata-1",
+				organizationId: "org-a",
+				displayOrder: 1,
+				catalogWorkId: null,
+				titleSnapshot: "Sonata in C",
+				performedMovementText: "I. Allegro (excerpt)",
+				durationSeconds: 240,
+				contributors: [
+					expect.objectContaining({
+						displayOrder: 1,
+						role: "Composer",
+						displayNameSnapshot: "Wolfgang Amadeus Mozart",
+						catalogContributorId: null,
+					}),
+				],
+			}),
+		]);
+	});
+
+	it("ignores a malformed legacy movement value", async () => {
+		const repository = new InMemoryCheckoutRepository();
+		const metadata = await repository.insertRegistrationMetadata({
+			id: "registration-metadata-malformed-movement",
+			organizationId: "org-a",
+			festivalId: "festival-a",
+			checkoutIntentId: "intent-malformed-movement",
+			teacherMembershipId: "teacher-membership-a",
+			accompanistMembershipId: null,
+			repertoireJson: [
+				{
+					title: "Sonata in C",
+					composer: "Wolfgang Amadeus Mozart",
+					movement: 42 as never,
+					durationSeconds: 240,
+				},
+			],
+		});
+
+		expect(metadata.repertoireItems[0]?.performedMovementText).toBeNull();
+	});
 });

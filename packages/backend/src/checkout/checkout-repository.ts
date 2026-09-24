@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
 	ClassRegistrationMetadata,
+	RegistrationRepertoireItem,
 	RepertoirePiece,
 } from "@festival/common";
 
@@ -114,6 +115,7 @@ export interface CheckoutRepository {
 		teacherMembershipId: string;
 		accompanistMembershipId: string | null;
 		repertoireJson: RepertoirePiece[];
+		repertoireSnapshotPieces?: RepertoirePiece[];
 	}): Promise<ClassRegistrationMetadata>;
 	linkRegistrationMetadataToEntitlement(params: {
 		checkoutIntentId: string;
@@ -327,7 +329,13 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		teacherMembershipId: string;
 		accompanistMembershipId: string | null;
 		repertoireJson: RepertoirePiece[];
+		repertoireSnapshotPieces?: RepertoirePiece[];
 	}): Promise<ClassRegistrationMetadata> {
+		const repertoireItems = repertoireItemsFromLegacyPieces(
+			params.id,
+			params.organizationId,
+			params.repertoireSnapshotPieces ?? params.repertoireJson,
+		);
 		const record: ClassRegistrationMetadata = {
 			id: params.id,
 			organizationId: params.organizationId,
@@ -337,6 +345,7 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 			teacherMembershipId: params.teacherMembershipId,
 			accompanistMembershipId: params.accompanistMembershipId,
 			repertoireJson: params.repertoireJson,
+			repertoireItems,
 			createdAt: new Date(),
 		};
 		this.registrationMetadata.set(params.checkoutIntentId, record);
@@ -386,4 +395,35 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 			return { kind: "ready", intent: { ...intent }, cart: { ...cart } };
 		return { kind: "failed" };
 	}
+}
+
+/**
+ * Compatibility mapping while callers still submit the MVP title/composer JSON
+ * shape. The relational snapshot is the durable source for new reads.
+ */
+export function repertoireItemsFromLegacyPieces(
+	registrationMetadataId: string,
+	organizationId: string,
+	pieces: RepertoirePiece[],
+): RegistrationRepertoireItem[] {
+	return pieces.map((piece, index) => ({
+		id: randomUUID(),
+		registrationMetadataId,
+		organizationId,
+		displayOrder: index + 1,
+		catalogWorkId: null,
+		titleSnapshot: piece.title,
+		performedMovementText:
+			typeof piece.movement === "string" ? piece.movement.trim() || null : null,
+		durationSeconds: piece.durationSeconds,
+		contributors: [
+			{
+				id: randomUUID(),
+				displayOrder: 1,
+				role: "Composer",
+				displayNameSnapshot: piece.composer,
+				catalogContributorId: null,
+			},
+		],
+	}));
 }

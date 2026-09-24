@@ -270,19 +270,46 @@ export class ClassCheckoutService {
 					400,
 				);
 			}
+			if (typeof piece.composer !== "string" || !piece.composer.trim()) {
+				throw new AppError(
+					"Each repertoire piece must have a valid composer.",
+					400,
+				);
+			}
+			if (
+				piece.movement !== undefined &&
+				piece.movement !== null &&
+				typeof piece.movement !== "string"
+			) {
+				throw new AppError(
+					"Each repertoire piece must have a valid movement.",
+					400,
+				);
+			}
 			if (
 				typeof piece.durationSeconds !== "number" ||
 				piece.durationSeconds <= 0 ||
-				!Number.isFinite(piece.durationSeconds)
+				!Number.isSafeInteger(piece.durationSeconds) ||
+				piece.durationSeconds > 2_147_483_647
 			) {
 				throw new AppError(
-					"Each repertoire piece must have a duration greater than 0.",
+					"Each repertoire piece must have a positive whole-number duration in seconds.",
 					400,
 				);
 			}
 		}
+		// Relational snapshots use the validated, display-ready values.
+		const normalizedPieces: RepertoirePiece[] = input.pieces.map((piece) => ({
+			title: piece.title.trim(),
+			composer: piece.composer.trim(),
+			movement:
+				typeof piece.movement === "string"
+					? piece.movement.trim() || undefined
+					: undefined,
+			durationSeconds: piece.durationSeconds,
+		}));
 		const totalDurationMinutes =
-			input.pieces.reduce((sum, p) => sum + p.durationSeconds, 0) / 60;
+			normalizedPieces.reduce((sum, p) => sum + p.durationSeconds, 0) / 60;
 		if (totalDurationMinutes > classConfig.performanceMinutes) {
 			throw new AppError(
 				`Total performance duration (${totalDurationMinutes} minutes) exceeds the maximum allowed of ${classConfig.performanceMinutes} minutes.`,
@@ -407,6 +434,7 @@ export class ClassCheckoutService {
 			teacherMembershipId: teacherEntitlementId,
 			accompanistMembershipId: accompanistEntitlementId,
 			repertoireJson: input.pieces,
+			repertoireSnapshotPieces: normalizedPieces,
 		});
 
 		// 13. Storefront cart, checkout, and verification
