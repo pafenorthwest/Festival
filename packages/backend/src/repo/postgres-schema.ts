@@ -452,7 +452,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.volunteer_roles (
 			id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
-			slug TEXT NOT NULL, description TEXT NOT NULL, details_url TEXT NULL,
+			slug TEXT NOT NULL, display_name TEXT NOT NULL, description TEXT NOT NULL, details_url TEXT NULL,
 			is_room_proctor BOOLEAN NOT NULL DEFAULT FALSE,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);

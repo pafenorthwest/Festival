@@ -49,6 +49,12 @@ test("canonical PostgreSQL schema enforces one active volunteer assignment per s
 	);
 });
 
+test("canonical PostgreSQL schema requires a volunteer role display name", () => {
+	const schema = buildCanonicalPostgresSchemaSql("fresh_orgs");
+
+	expect(schema).toContain("slug TEXT NOT NULL, display_name TEXT NOT NULL");
+});
+
 test("canonical PostgreSQL schema rejects unsafe schema identifiers", () => {
 	expect(() => postgresSchemaName("orgs; DROP SCHEMA orgs")).toThrow(
 		"Database schema is invalid.",

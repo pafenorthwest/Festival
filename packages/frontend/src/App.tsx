@@ -173,6 +173,7 @@ export default function App() {
 						</Match>
 						<Match when={app.route().kind === "org-admin-volunteers"}>
 							<VolunteerRolesPage
+								app={app}
 								slug={(app.route() as { slug: string }).slug}
 							/>
 						</Match>

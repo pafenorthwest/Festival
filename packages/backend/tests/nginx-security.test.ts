@@ -33,7 +33,7 @@ describe("repository nginx security policy", () => {
 				"customer/checkout",
 				"customer/logout",
 				"customer/profile",
-				"festivals/[^/]+/volunteers/(?:roles|enroll)",
+				"festivals/[^/]+/volunteers/(?:roles(?:/[^/]+/shifts)?|enroll)",
 				"shopify/webhooks/orders-paid",
 				"v1/auth/sync",
 				"v1/auth/login-event",

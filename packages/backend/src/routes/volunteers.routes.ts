@@ -9,12 +9,17 @@ import {
 import type { AuthVerifier } from "../auth/types.js";
 import {
 	getRequiredVolunteerScope,
+	requireAdminIntent,
 	requireVolunteerScope,
 } from "../auth/volunteer-context.js";
 import { AppError } from "../errors/app-error.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
 import type { VolunteerRepository } from "../volunteers/volunteer-repository.js";
-import { validateEnrollVolunteerRequest } from "../volunteers/volunteer-validation.js";
+import {
+	validateCreateRoleRequest,
+	validateCreateShiftRequest,
+	validateEnrollVolunteerRequest,
+} from "../volunteers/volunteer-validation.js";
 
 export interface VolunteerRoutesOptions {
 	authVerifier: AuthVerifier;
@@ -48,6 +53,103 @@ export function buildVolunteerRoutes(
 				const tenant = getRequiredTenant(c);
 				return c.json(
 					await options.volunteerRepository.listRoles(tenant.organization.id),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	// The three routes below are admin-only: creating roles and shifts is
+	// the "admin build screen" from VOLUNTEER-PORTAL.md, which requires
+	// requireAdminIntent (Admin, Division Chair, or Concert Chair) rather
+	// than the narrower requireTenantRole(["Admin"]) most admin routes
+	// elsewhere in this app use.
+	router.post(
+		"/roles",
+		requireAuth(options.authVerifier),
+		requireTenant(options.repository),
+		requireAdminIntent(),
+		async (c) => {
+			try {
+				if (!options.volunteerRepository) {
+					throw new AppError("Volunteer roles are unavailable.", 503);
+				}
+				const tenant = getRequiredTenant(c);
+				const payload = await c.req.json();
+				const validated = validateCreateRoleRequest(payload);
+				if ("errors" in validated) {
+					throw new AppError(validated.errors.join(" "), 400);
+				}
+				c.status(201);
+				return c.json(
+					await options.volunteerRepository.createRole({
+						organizationId: tenant.organization.id,
+						...validated.request,
+					}),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.get(
+		"/roles/:roleId/shifts",
+		requireAuth(options.authVerifier),
+		requireTenant(options.repository),
+		requireAdminIntent(),
+		async (c) => {
+			try {
+				if (!options.volunteerRepository) {
+					throw new AppError("Volunteer roles are unavailable.", 503);
+				}
+				const tenant = getRequiredTenant(c);
+				const role = await options.volunteerRepository.getRole(
+					tenant.organization.id,
+					c.req.param("roleId"),
+				);
+				if (!role) throw new AppError("Volunteer role not found.", 404);
+				return c.json(
+					await options.volunteerRepository.listShiftsForRole(
+						tenant.organization.id,
+						role.id,
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.post(
+		"/roles/:roleId/shifts",
+		requireAuth(options.authVerifier),
+		requireTenant(options.repository),
+		requireAdminIntent(),
+		async (c) => {
+			try {
+				if (!options.volunteerRepository) {
+					throw new AppError("Volunteer roles are unavailable.", 503);
+				}
+				const tenant = getRequiredTenant(c);
+				const role = await options.volunteerRepository.getRole(
+					tenant.organization.id,
+					c.req.param("roleId"),
+				);
+				if (!role) throw new AppError("Volunteer role not found.", 404);
+				const payload = await c.req.json();
+				const validated = validateCreateShiftRequest(payload, role);
+				if ("errors" in validated) {
+					throw new AppError(validated.errors.join(" "), 400);
+				}
+				c.status(201);
+				return c.json(
+					await options.volunteerRepository.createShift({
+						organizationId: tenant.organization.id,
+						roleId: role.id,
+						...validated.request,
+					}),
 				);
 			} catch (error) {
 				return toJsonError(c, error);

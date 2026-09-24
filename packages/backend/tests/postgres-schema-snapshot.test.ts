@@ -20,6 +20,7 @@ test("commits a normalized PostgreSQL 17 schema-only snapshot", async () => {
 	expect(snapshot).toContain("CREATE TABLE orgs.membership_identity_emails");
 	expect(snapshot).toContain("CREATE TABLE orgs.volunteers");
 	expect(snapshot).toContain("CREATE TABLE orgs.volunteer_roles");
+	expect(snapshot).toContain("display_name text NOT NULL");
 	expect(snapshot).toContain("CREATE TABLE orgs.volunteer_shifts");
 	expect(snapshot).toContain("CREATE TABLE orgs.volunteer_assignments");
 	expect(snapshot).toContain("volunteer_assignments_active_shift_key");

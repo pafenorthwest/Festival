@@ -52,13 +52,14 @@ export class PostgresVolunteerRepository implements VolunteerRepository {
 
 	async createRole(input: CreateRoleInput) {
 		const rows = (await sql.unsafe(
-			`INSERT INTO ${this.schema}.volunteer_roles (id, organization_id, slug, description, details_url, is_room_proctor)
-			 VALUES ($1, $2, $3, $4, $5, $6)
-			 RETURNING id, organization_id, slug, description, details_url, is_room_proctor, created_at::text`,
+			`INSERT INTO ${this.schema}.volunteer_roles (id, organization_id, slug, display_name, description, details_url, is_room_proctor)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7)
+			 RETURNING id, organization_id, slug, display_name, description, details_url, is_room_proctor, created_at::text`,
 			[
 				randomUUID(),
 				input.organizationId,
 				input.slug,
+				input.displayName,
 				input.description,
 				input.detailsUrl,
 				input.isRoomProctor,
@@ -86,9 +87,18 @@ export class PostgresVolunteerRepository implements VolunteerRepository {
 		return this.shift(rows[0]);
 	}
 
+	async getRole(organizationId: string, roleId: string) {
+		const rows = (await sql.unsafe(
+			`SELECT id, organization_id, slug, display_name, description, details_url, is_room_proctor, created_at::text
+			 FROM ${this.schema}.volunteer_roles WHERE organization_id = $1 AND id = $2`,
+			[organizationId, roleId],
+		)) as Array<Record<string, unknown>>;
+		return rows[0] ? this.role(rows[0]) : null;
+	}
+
 	async listRoles(organizationId: string) {
 		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, slug, description, details_url, is_room_proctor, created_at::text
+			`SELECT id, organization_id, slug, display_name, description, details_url, is_room_proctor, created_at::text
 			 FROM ${this.schema}.volunteer_roles WHERE organization_id = $1 ORDER BY created_at`,
 			[organizationId],
 		)) as Array<Record<string, unknown>>;
@@ -135,7 +145,7 @@ export class PostgresVolunteerRepository implements VolunteerRepository {
 			`SELECT
 				shift.id AS shift_id, shift.organization_id, shift.role_id, shift.date::text, shift.period,
 				shift.time_text, shift.division, shift.adjudicator, shift.created_at::text AS shift_created_at,
-				role.slug, role.description, role.details_url, role.is_room_proctor, role.created_at::text AS role_created_at,
+				role.slug, role.display_name, role.description, role.details_url, role.is_room_proctor, role.created_at::text AS role_created_at,
 				assignment.id AS assignment_id, assignment.status, assignment.created_at::text AS assignment_created_at,
 				assignment.cancelled_at::text,
 				volunteer.id AS volunteer_id, volunteer.festival_id AS volunteer_festival_id, volunteer.firebase_uid,
@@ -167,6 +177,7 @@ export class PostgresVolunteerRepository implements VolunteerRepository {
 				id: row.role_id,
 				organization_id: row.organization_id,
 				slug: row.slug,
+				display_name: row.display_name,
 				description: row.description,
 				details_url: row.details_url,
 				is_room_proctor: row.is_room_proctor,
@@ -216,6 +227,7 @@ export class PostgresVolunteerRepository implements VolunteerRepository {
 			id: String(row.id),
 			organizationId: String(row.organization_id),
 			slug: String(row.slug),
+			displayName: String(row.display_name),
 			description: String(row.description),
 			detailsUrl: row.details_url === null ? null : String(row.details_url),
 			isRoomProctor: row.is_room_proctor === true,

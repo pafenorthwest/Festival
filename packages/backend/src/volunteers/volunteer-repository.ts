@@ -18,6 +18,7 @@ export interface VolunteerRoleRecord {
 	id: string;
 	organizationId: string;
 	slug: string;
+	displayName: string;
 	description: string;
 	detailsUrl: string | null;
 	isRoomProctor: boolean;
@@ -62,6 +63,7 @@ export interface UpsertVolunteerInput {
 export interface CreateRoleInput {
 	organizationId: string;
 	slug: string;
+	displayName: string;
 	description: string;
 	detailsUrl: string | null;
 	isRoomProctor: boolean;
@@ -83,6 +85,10 @@ export interface VolunteerRepository {
 	createRole(input: CreateRoleInput): Promise<VolunteerRoleRecord>;
 	createShift(input: CreateShiftInput): Promise<VolunteerShiftRecord>;
 
+	getRole(
+		organizationId: string,
+		roleId: string,
+	): Promise<VolunteerRoleRecord | null>;
 	listRoles(organizationId: string): Promise<VolunteerRoleRecord[]>;
 	listShiftsForRole(
 		organizationId: string,
@@ -157,6 +163,12 @@ export class InMemoryVolunteerRepository implements VolunteerRepository {
 		};
 		this.shifts.set(record.id, record);
 		return { ...record };
+	}
+
+	async getRole(organizationId: string, roleId: string) {
+		const role = this.roles.get(roleId);
+		if (!role || role.organizationId !== organizationId) return null;
+		return { ...role };
 	}
 
 	async listRoles(organizationId: string) {
