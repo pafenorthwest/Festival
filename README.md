@@ -73,6 +73,7 @@ This architecture ensures reliability, scalability, and flexibility while levera
 Follow [SETUP.md](SETUP.md) for the full step-by-step setup, including:
 - Firebase project and service-account setup.
 - PostgreSQL role, database, and schema bootstrap.
+- Private scheduled reconciliation for Shopify orders and Firebase custom claims.
 - Required env-file values and how they map to the app.
 - Local development and production commands.
 

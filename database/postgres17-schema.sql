@@ -863,6 +863,7 @@ CREATE TABLE orgs.users (
 CREATE TABLE orgs.volunteer_assignments (
     id text NOT NULL,
     organization_id text NOT NULL,
+    festival_id text NOT NULL,
     shift_id text NOT NULL,
     volunteer_id text NOT NULL,
     status text NOT NULL,
@@ -879,6 +880,7 @@ CREATE TABLE orgs.volunteer_assignments (
 CREATE TABLE orgs.volunteer_roles (
     id text NOT NULL,
     organization_id text NOT NULL,
+    festival_id text NOT NULL,
     slug text NOT NULL,
     display_name text NOT NULL,
     description text NOT NULL,
@@ -895,6 +897,7 @@ CREATE TABLE orgs.volunteer_roles (
 CREATE TABLE orgs.volunteer_shifts (
     id text NOT NULL,
     organization_id text NOT NULL,
+    festival_id text NOT NULL,
     role_id text NOT NULL,
     date date NOT NULL,
     period text NOT NULL,
@@ -1064,6 +1067,14 @@ ALTER TABLE ONLY orgs.festival_customers
 
 ALTER TABLE ONLY orgs.festivals
     ADD CONSTRAINT festivals_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: festivals festivals_id_organization_id_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festivals
+    ADD CONSTRAINT festivals_id_organization_id_key UNIQUE (id, organization_id);
 
 
 --
@@ -1539,6 +1550,14 @@ ALTER TABLE ONLY orgs.volunteer_roles
 
 
 --
+-- Name: volunteer_roles volunteer_roles_id_festival_id_organization_id_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.volunteer_roles
+    ADD CONSTRAINT volunteer_roles_id_festival_id_organization_id_key UNIQUE (id, festival_id, organization_id);
+
+
+--
 -- Name: volunteer_shifts volunteer_shifts_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
 --
 
@@ -1547,11 +1566,27 @@ ALTER TABLE ONLY orgs.volunteer_shifts
 
 
 --
+-- Name: volunteer_shifts volunteer_shifts_id_festival_id_organization_id_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.volunteer_shifts
+    ADD CONSTRAINT volunteer_shifts_id_festival_id_organization_id_key UNIQUE (id, festival_id, organization_id);
+
+
+--
 -- Name: volunteers volunteers_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
 --
 
 ALTER TABLE ONLY orgs.volunteers
     ADD CONSTRAINT volunteers_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: volunteers volunteers_id_festival_id_organization_id_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.volunteers
+    ADD CONSTRAINT volunteers_id_festival_id_organization_id_key UNIQUE (id, festival_id, organization_id);
 
 
 --
@@ -1811,6 +1846,20 @@ CREATE INDEX shopify_webhook_reclaim_idx ON orgs.shopify_webhook_deliveries USIN
 --
 
 CREATE UNIQUE INDEX volunteer_assignments_active_shift_key ON orgs.volunteer_assignments USING btree (shift_id) WHERE (status = 'active'::text);
+
+
+--
+-- Name: volunteer_roles_org_festival_idx; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX volunteer_roles_org_festival_idx ON orgs.volunteer_roles USING btree (organization_id, festival_id);
+
+
+--
+-- Name: volunteer_shifts_org_festival_role_idx; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX volunteer_shifts_org_festival_role_idx ON orgs.volunteer_shifts USING btree (organization_id, festival_id, role_id);
 
 
 --
@@ -2332,19 +2381,35 @@ ALTER TABLE ONLY orgs.volunteer_assignments
 
 
 --
--- Name: volunteer_assignments volunteer_assignments_shift_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+-- Name: volunteer_assignments volunteer_assignments_festival_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
 --
 
 ALTER TABLE ONLY orgs.volunteer_assignments
-    ADD CONSTRAINT volunteer_assignments_shift_id_fkey FOREIGN KEY (shift_id) REFERENCES orgs.volunteer_shifts(id) ON DELETE CASCADE;
+    ADD CONSTRAINT volunteer_assignments_festival_id_fkey FOREIGN KEY (festival_id) REFERENCES orgs.festivals(id) ON DELETE CASCADE;
 
 
 --
--- Name: volunteer_assignments volunteer_assignments_volunteer_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+-- Name: volunteer_assignments volunteer_assignments_festival_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
 --
 
 ALTER TABLE ONLY orgs.volunteer_assignments
-    ADD CONSTRAINT volunteer_assignments_volunteer_id_fkey FOREIGN KEY (volunteer_id) REFERENCES orgs.volunteers(id) ON DELETE CASCADE;
+    ADD CONSTRAINT volunteer_assignments_festival_id_organization_id_fkey FOREIGN KEY (festival_id, organization_id) REFERENCES orgs.festivals(id, organization_id) ON DELETE CASCADE;
+
+
+--
+-- Name: volunteer_assignments volunteer_assignments_shift_id_festival_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.volunteer_assignments
+    ADD CONSTRAINT volunteer_assignments_shift_id_festival_id_organization_id_fkey FOREIGN KEY (shift_id, festival_id, organization_id) REFERENCES orgs.volunteer_shifts(id, festival_id, organization_id) ON DELETE CASCADE;
+
+
+--
+-- Name: volunteer_assignments volunteer_assignments_volunteer_id_festival_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.volunteer_assignments
+    ADD CONSTRAINT volunteer_assignments_volunteer_id_festival_id_organization_id_fkey FOREIGN KEY (volunteer_id, festival_id, organization_id) REFERENCES orgs.volunteers(id, festival_id, organization_id) ON DELETE CASCADE;
 
 
 --
@@ -2356,6 +2421,22 @@ ALTER TABLE ONLY orgs.volunteer_roles
 
 
 --
+-- Name: volunteer_roles volunteer_roles_festival_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.volunteer_roles
+    ADD CONSTRAINT volunteer_roles_festival_id_fkey FOREIGN KEY (festival_id) REFERENCES orgs.festivals(id) ON DELETE CASCADE;
+
+
+--
+-- Name: volunteer_roles volunteer_roles_festival_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.volunteer_roles
+    ADD CONSTRAINT volunteer_roles_festival_id_organization_id_fkey FOREIGN KEY (festival_id, organization_id) REFERENCES orgs.festivals(id, organization_id) ON DELETE CASCADE;
+
+
+--
 -- Name: volunteer_shifts volunteer_shifts_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
 --
 
@@ -2364,11 +2445,27 @@ ALTER TABLE ONLY orgs.volunteer_shifts
 
 
 --
--- Name: volunteer_shifts volunteer_shifts_role_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+-- Name: volunteer_shifts volunteer_shifts_festival_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
 --
 
 ALTER TABLE ONLY orgs.volunteer_shifts
-    ADD CONSTRAINT volunteer_shifts_role_id_fkey FOREIGN KEY (role_id) REFERENCES orgs.volunteer_roles(id) ON DELETE CASCADE;
+    ADD CONSTRAINT volunteer_shifts_festival_id_fkey FOREIGN KEY (festival_id) REFERENCES orgs.festivals(id) ON DELETE CASCADE;
+
+
+--
+-- Name: volunteer_shifts volunteer_shifts_festival_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.volunteer_shifts
+    ADD CONSTRAINT volunteer_shifts_festival_id_organization_id_fkey FOREIGN KEY (festival_id, organization_id) REFERENCES orgs.festivals(id, organization_id) ON DELETE CASCADE;
+
+
+--
+-- Name: volunteer_shifts volunteer_shifts_role_id_festival_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.volunteer_shifts
+    ADD CONSTRAINT volunteer_shifts_role_id_festival_id_organization_id_fkey FOREIGN KEY (role_id, festival_id, organization_id) REFERENCES orgs.volunteer_roles(id, festival_id, organization_id) ON DELETE CASCADE;
 
 
 --
@@ -2385,6 +2482,14 @@ ALTER TABLE ONLY orgs.volunteers
 
 ALTER TABLE ONLY orgs.volunteers
     ADD CONSTRAINT volunteers_festival_id_fkey FOREIGN KEY (festival_id) REFERENCES orgs.festivals(id) ON DELETE CASCADE;
+
+
+--
+-- Name: volunteers volunteers_festival_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.volunteers
+    ADD CONSTRAINT volunteers_festival_id_organization_id_fkey FOREIGN KEY (festival_id, organization_id) REFERENCES orgs.festivals(id, organization_id) ON DELETE CASCADE;
 
 
 --

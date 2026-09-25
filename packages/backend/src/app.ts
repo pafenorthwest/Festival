@@ -1,7 +1,20 @@
 import { timingSafeEqual } from "node:crypto";
+import { getAuth } from "firebase-admin/auth";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import {
+	type CustomClaimsWriter,
+	FirebaseCustomClaimsWriter,
+	NoopCustomClaimsWriter,
+	PostgresCustomClaimsLock,
+} from "./auth/custom-claims.js";
+import { getFirebaseApp } from "./auth/firebase-app.js";
 import { createFirebaseAuthVerifier } from "./auth/firebase-auth-verifier.js";
+import {
+	FirebaseClaimsReconciliationService as DefaultFirebaseClaimsReconciliationService,
+	type FirebaseClaimsReconciliationService,
+	PostgresFirebaseClaimsSource,
+} from "./auth/firebase-claims-reconciliation.js";
 import type { AuthVerifier } from "./auth/types.js";
 import {
 	type CheckoutRepository,
@@ -69,6 +82,8 @@ export interface CreateAppOptions {
 	shopifyWebhookService?: ShopifyWebhookService;
 	membershipStatusService?: MembershipStatusService;
 	volunteerRepository?: VolunteerRepository;
+	customClaimsWriter?: CustomClaimsWriter;
+	firebaseClaimsReconciliationService?: FirebaseClaimsReconciliationService;
 }
 
 function privateTokenMatches(
@@ -111,6 +126,29 @@ export async function createApp(options: CreateAppOptions = {}) {
 		createFirebaseAuthVerifier(
 			env as Required<Pick<AppEnv, "firebaseProjectId">> & AppEnv,
 		);
+	// Firebase custom claims can only be written with service-account
+	// credentials (firebaseClientEmail + firebasePrivateKey). Without
+	// them, fall back to a no-op writer rather than fail startup or
+	// throw on every write in local dev / tests.
+	const customClaimsWriter =
+		options.customClaimsWriter ??
+		(env.firebaseClientEmail && env.firebasePrivateKey
+			? new FirebaseCustomClaimsWriter(
+					getAuth(getFirebaseApp(env)),
+					new PostgresCustomClaimsLock(),
+				)
+			: new NoopCustomClaimsWriter());
+	const firebaseClaimsReconciliationService =
+		options.firebaseClaimsReconciliationService ??
+		(env.databaseSchema && env.firebaseClientEmail && env.firebasePrivateKey
+			? new DefaultFirebaseClaimsReconciliationService(
+					new PostgresFirebaseClaimsSource(env.databaseSchema),
+					new FirebaseCustomClaimsWriter(
+						getAuth(getFirebaseApp(env)),
+						new PostgresCustomClaimsLock(),
+					),
+				)
+			: undefined);
 	const appUserRepository =
 		options.appUserRepository ??
 		(env.databaseSchema
@@ -320,6 +358,41 @@ export async function createApp(options: CreateAppOptions = {}) {
 			return c.json({ error: "Shopify order reconciliation failed." }, 503);
 		}
 	});
+	app.post("/api/internal/reconcile/firebase-claims", async (c) => {
+		const expectedToken = env.reconciliationToken;
+		if (
+			!privateTokenMatches(
+				c.req.header("X-Festival-Reconciliation-Token"),
+				expectedToken,
+			) ||
+			c.req.header("Cookie") !== undefined ||
+			c.req.header("Authorization") !== undefined ||
+			c.req.header("Origin") !== undefined
+		) {
+			return c.json({ error: "Not found." }, 404);
+		}
+		if (!firebaseClaimsReconciliationService) {
+			return c.json(
+				{ error: "Firebase claims reconciliation is unavailable." },
+				503,
+			);
+		}
+		try {
+			const body = await c.req.json();
+			if (
+				!body ||
+				typeof body !== "object" ||
+				Array.isArray(body) ||
+				Object.keys(body).length !== 0
+			) {
+				return c.json({ error: "Reconciliation request is invalid." }, 400);
+			}
+			const result = await firebaseClaimsReconciliationService.reconcile();
+			return c.json(result, result.failedCount > 0 ? 503 : 200);
+		} catch {
+			return c.json({ error: "Firebase claims reconciliation failed." }, 503);
+		}
+	});
 
 	app.use(
 		"/api/*",
@@ -351,6 +424,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 			accompanistMembershipService,
 			volunteerRepository,
 			classCheckoutService,
+			customClaimsWriter,
 		}),
 	);
 	app.route(
