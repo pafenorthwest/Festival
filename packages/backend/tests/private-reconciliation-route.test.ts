@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { AuthenticatedUser } from "@festival/common";
 import { createApp } from "../src/app.js";
+import type { FirebaseClaimsReconciliationService } from "../src/auth/firebase-claims-reconciliation.js";
 import type { AuthVerifier } from "../src/auth/types.js";
 import type { ShopifyOrderProjectionService } from "../src/commerce/shopify-order-projection-service.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
@@ -64,5 +65,42 @@ describe("private Shopify reconciliation route", () => {
 				})
 			).status,
 		).toBe(404);
+	});
+});
+
+describe("private Firebase claims reconciliation route", () => {
+	it("requires the service token and returns reconciliation failures to the scheduler", async () => {
+		let calls = 0;
+		const { app } = await createApp({
+			env: { port: 3000, reconciliationToken: "x".repeat(32) },
+			repository: new InMemoryOrganizationRepository(),
+			authVerifier: new Auth(),
+			firebaseClaimsReconciliationService: {
+				reconcile: async () => {
+					calls += 1;
+					return { discoveredCount: 2, processedCount: 1, failedCount: 1 };
+				},
+			} as FirebaseClaimsReconciliationService,
+		});
+		const path = "/api/internal/reconcile/firebase-claims";
+		expect(
+			(await app.request(path, { method: "POST", body: "{}" })).status,
+		).toBe(404);
+		const response = await app.request(path, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				"X-Festival-Reconciliation-Token": "x".repeat(32),
+			},
+			body: "{}",
+		});
+		expect(response.status).toBe(503);
+		expect(response.headers.get("access-control-allow-origin")).toBeNull();
+		expect(await response.json()).toEqual({
+			discoveredCount: 2,
+			processedCount: 1,
+			failedCount: 1,
+		});
+		expect(calls).toBe(1);
 	});
 });

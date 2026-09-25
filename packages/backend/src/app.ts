@@ -6,9 +6,15 @@ import {
 	type CustomClaimsWriter,
 	FirebaseCustomClaimsWriter,
 	NoopCustomClaimsWriter,
+	PostgresCustomClaimsLock,
 } from "./auth/custom-claims.js";
 import { getFirebaseApp } from "./auth/firebase-app.js";
 import { createFirebaseAuthVerifier } from "./auth/firebase-auth-verifier.js";
+import {
+	FirebaseClaimsReconciliationService as DefaultFirebaseClaimsReconciliationService,
+	type FirebaseClaimsReconciliationService,
+	PostgresFirebaseClaimsSource,
+} from "./auth/firebase-claims-reconciliation.js";
 import type { AuthVerifier } from "./auth/types.js";
 import {
 	type CheckoutRepository,
@@ -77,6 +83,7 @@ export interface CreateAppOptions {
 	membershipStatusService?: MembershipStatusService;
 	volunteerRepository?: VolunteerRepository;
 	customClaimsWriter?: CustomClaimsWriter;
+	firebaseClaimsReconciliationService?: FirebaseClaimsReconciliationService;
 }
 
 function privateTokenMatches(
@@ -126,8 +133,22 @@ export async function createApp(options: CreateAppOptions = {}) {
 	const customClaimsWriter =
 		options.customClaimsWriter ??
 		(env.firebaseClientEmail && env.firebasePrivateKey
-			? new FirebaseCustomClaimsWriter(getAuth(getFirebaseApp(env)))
+			? new FirebaseCustomClaimsWriter(
+					getAuth(getFirebaseApp(env)),
+					new PostgresCustomClaimsLock(),
+				)
 			: new NoopCustomClaimsWriter());
+	const firebaseClaimsReconciliationService =
+		options.firebaseClaimsReconciliationService ??
+		(env.databaseSchema && env.firebaseClientEmail && env.firebasePrivateKey
+			? new DefaultFirebaseClaimsReconciliationService(
+					new PostgresFirebaseClaimsSource(env.databaseSchema),
+					new FirebaseCustomClaimsWriter(
+						getAuth(getFirebaseApp(env)),
+						new PostgresCustomClaimsLock(),
+					),
+				)
+			: undefined);
 	const appUserRepository =
 		options.appUserRepository ??
 		(env.databaseSchema
@@ -335,6 +356,41 @@ export async function createApp(options: CreateAppOptions = {}) {
 			);
 		} catch {
 			return c.json({ error: "Shopify order reconciliation failed." }, 503);
+		}
+	});
+	app.post("/api/internal/reconcile/firebase-claims", async (c) => {
+		const expectedToken = env.reconciliationToken;
+		if (
+			!privateTokenMatches(
+				c.req.header("X-Festival-Reconciliation-Token"),
+				expectedToken,
+			) ||
+			c.req.header("Cookie") !== undefined ||
+			c.req.header("Authorization") !== undefined ||
+			c.req.header("Origin") !== undefined
+		) {
+			return c.json({ error: "Not found." }, 404);
+		}
+		if (!firebaseClaimsReconciliationService) {
+			return c.json(
+				{ error: "Firebase claims reconciliation is unavailable." },
+				503,
+			);
+		}
+		try {
+			const body = await c.req.json();
+			if (
+				!body ||
+				typeof body !== "object" ||
+				Array.isArray(body) ||
+				Object.keys(body).length !== 0
+			) {
+				return c.json({ error: "Reconciliation request is invalid." }, 400);
+			}
+			const result = await firebaseClaimsReconciliationService.reconcile();
+			return c.json(result, result.failedCount > 0 ? 503 : 200);
+		} catch {
+			return c.json({ error: "Firebase claims reconciliation failed." }, 503);
 		}
 	});
 

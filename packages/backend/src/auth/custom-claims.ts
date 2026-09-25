@@ -1,4 +1,5 @@
 import type { OrganizationRole } from "@festival/common";
+import { sql } from "bun";
 
 /**
  * The "Firebase admin/volunteer intent" claims that specs/VOLUNTEER-PORTAL.md
@@ -51,24 +52,63 @@ export interface FirebaseAuthLike {
 }
 
 /**
+ * Serializes read/merge/write claim updates for one Firebase user. The
+ * production implementation must coordinate across backend instances, not
+ * merely within one process.
+ */
+export interface CustomClaimsLock {
+	withLock<T>(uid: string, operation: () => Promise<T>): Promise<T>;
+}
+
+/**
+ * A transaction-scoped PostgreSQL advisory lock. PostgreSQL releases the lock
+ * when the transaction completes, including if Firebase rejects the write.
+ */
+export class PostgresCustomClaimsLock implements CustomClaimsLock {
+	async withLock<T>(uid: string, operation: () => Promise<T>): Promise<T> {
+		return sql.begin(async (transaction) => {
+			await transaction.unsafe(
+				"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+				[`festival:firebase-custom-claims:${uid}`],
+			);
+			return operation();
+		});
+	}
+}
+
+/**
  * Writes claims are never allowed to fail the request that triggered
  * them — creating an org, accepting an invite, and enrolling as a
  * volunteer must all succeed even if this fails (e.g. missing Firebase
  * write credentials, a transient Admin SDK error).
  */
 export class FirebaseCustomClaimsWriter implements CustomClaimsWriter {
-	constructor(private readonly auth: FirebaseAuthLike) {}
+	constructor(
+		private readonly auth: FirebaseAuthLike,
+		private readonly lock: CustomClaimsLock,
+	) {}
 
 	private async withClaims(
 		uid: string,
 		update: (current: VolunteerIntentClaims) => VolunteerIntentClaims,
 	): Promise<void> {
-		try {
-			const user = await this.auth.getUser(uid);
-			const current = (user.customClaims ?? {}) as VolunteerIntentClaims;
-			await this.auth.setCustomUserClaims(uid, update(current));
-		} catch (error) {
-			console.error("Failed to update Firebase custom claims", error);
+		const retryDelaysMs = [100, 200];
+		for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
+			try {
+				await this.lock.withLock(uid, async () => {
+					const user = await this.auth.getUser(uid);
+					const current = (user.customClaims ?? {}) as VolunteerIntentClaims;
+					await this.auth.setCustomUserClaims(uid, update(current));
+				});
+				return;
+			} catch (error) {
+				const retryDelayMs = retryDelaysMs[attempt];
+				if (retryDelayMs !== undefined) {
+					await Bun.sleep(retryDelayMs);
+					continue;
+				}
+				console.error("Failed to update Firebase custom claims", error);
+			}
 		}
 	}
 
@@ -101,6 +141,52 @@ export class FirebaseCustomClaimsWriter implements CustomClaimsWriter {
 				},
 			};
 		});
+	}
+
+	/**
+	 * Rebuild Festival-managed keys from Postgres while retaining keys owned by
+	 * other Firebase consumers. Unlike request-time updates, callers receive a
+	 * rejection so a scheduled reconciliation can report and retry failures.
+	 */
+	async replaceVolunteerIntentClaims(
+		uid: string,
+		loadClaims: () => Promise<VolunteerIntentClaims>,
+	): Promise<void> {
+		const retryDelaysMs = [100, 200];
+		let lastError: unknown;
+		for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
+			try {
+				await this.lock.withLock(uid, async () => {
+					// Load Postgres state only after acquiring the same lock used for
+					// Firebase replacement. Otherwise a request-time update can land
+					// between an earlier snapshot and this replacement, then be lost.
+					const claims = await loadClaims();
+					const user = await this.auth.getUser(uid);
+					const current = (user.customClaims ?? {}) as Record<string, unknown>;
+					const {
+						orgRoles: _orgRoles,
+						volunteerFestivals: _volunteerFestivals,
+						...other
+					} = current;
+					await this.auth.setCustomUserClaims(uid, {
+						...other,
+						...(claims.orgRoles && Object.keys(claims.orgRoles).length > 0
+							? { orgRoles: claims.orgRoles }
+							: {}),
+						...(claims.volunteerFestivals &&
+						Object.keys(claims.volunteerFestivals).length > 0
+							? { volunteerFestivals: claims.volunteerFestivals }
+							: {}),
+					});
+				});
+				return;
+			} catch (error) {
+				lastError = error;
+				const retryDelayMs = retryDelaysMs[attempt];
+				if (retryDelayMs !== undefined) await Bun.sleep(retryDelayMs);
+			}
+		}
+		throw lastError;
 	}
 }
 

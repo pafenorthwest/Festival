@@ -300,6 +300,21 @@ The command exits non-zero on a failed reconciliation. Configure the scheduler t
 alert/retry on that exit status. It calls the token-authenticated private backend
 path, which nginx intentionally denies; never add a public nginx allowlist for it.
 
+#### Firebase custom-claims reconciliation
+
+When Firebase service-account credentials are configured, schedule this command at
+least daily as a second use of the same private scheduler credential:
+
+```bash
+bun run reconcile:firebase-claims
+```
+
+It rebuilds Festival-managed `orgRoles` and `volunteerFestivals` claims from
+Postgres, removes stale managed entries, and preserves unrelated Firebase custom
+claims. It exits non-zero if any Firebase write fails; configure the scheduler to
+alert and retry. Like Shopify reconciliation, this path is private-only and must
+not be exposed through nginx.
+
 #### Shopify Dev Dashboard app
 
 Festival uses Shopify's Dev Dashboard app install plus client credentials grant for backend Admin API access.

@@ -135,6 +135,11 @@ export const CURRENT_ROUTE_SECURITY = [
 		authenticationClass: "private-service",
 	},
 	{
+		method: "POST",
+		path: "/api/internal/reconcile/firebase-claims",
+		authenticationClass: "private-service",
+	},
+	{
 		method: "GET",
 		path: "/api/organizations/:slug/customer/profile",
 		authenticationClass: "customer",
