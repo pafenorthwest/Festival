@@ -194,33 +194,47 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 					<Show when={roles() && roles()?.length === 0}>
 						<p>No volunteer roles have been created yet.</p>
 					</Show>
-					<ul class="volunteer-role-list">
-						<For each={roles()}>
-							{(role) => (
-								<li class="volunteer-role-row">
-									<strong>{role.displayName}</strong>
-									<span>{role.description}</span>
-									<Show when={role.isRoomProctor}>
-										<span class="badge">Room Proctor</span>
-									</Show>
-									<Show when={props.app.hasVolunteerAdminIntent()}>
-										<Button
-											type="button"
-											onClick={() =>
-												setSelectedRoleId((current) =>
-													current === role.id ? null : role.id,
-												)
-											}
-										>
-											{selectedRoleId() === role.id
-												? "Hide shifts"
-												: "Manage shifts"}
-										</Button>
-									</Show>
-								</li>
-							)}
-						</For>
-					</ul>
+					<Show when={roles()?.length}>
+						<div class="listing-table volunteer-roles-table">
+							<div class="listing-table-header">
+								<span>Role</span>
+								<span>Type</span>
+								<span>Actions</span>
+							</div>
+							<For each={roles()}>
+								{(role) => (
+									<div class="listing-table-row">
+										<span>
+											<strong>{role.displayName}</strong>
+											<span class="muted"> — {role.description}</span>
+										</span>
+										<span class="listing-table-badges">
+											<Show when={role.isRoomProctor}>
+												<span class="badge badge-neutral">Room Proctor</span>
+											</Show>
+										</span>
+										<span class="listing-table-actions">
+											<Show when={props.app.hasVolunteerAdminIntent()}>
+												<Button
+													type="button"
+													variant="secondary"
+													onClick={() =>
+														setSelectedRoleId((current) =>
+															current === role.id ? null : role.id,
+														)
+													}
+												>
+													{selectedRoleId() === role.id
+														? "Hide shifts"
+														: "Manage shifts"}
+												</Button>
+											</Show>
+										</span>
+									</div>
+								)}
+							</For>
+						</div>
+					</Show>
 
 					<Show when={props.app.hasVolunteerAdminIntent() && selectedRole()}>
 						{(role) => (
@@ -232,25 +246,35 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 								<Show when={shifts() && shifts()?.length === 0}>
 									<p>No shifts have been created for this role yet.</p>
 								</Show>
-								<ul class="volunteer-role-list">
-									<For each={shifts()}>
-										{(shift) => (
-											<li class="volunteer-role-row">
-												<strong>
-													{shift.date} {shift.period}
-												</strong>
-												<Show when={shift.timeText}>
-													<span>{shift.timeText}</span>
-												</Show>
-												<Show when={shift.division || shift.adjudicator}>
+								<Show when={shifts()?.length}>
+									<div class="listing-table volunteer-shifts-table">
+										<div class="listing-table-header">
+											<span>Date</span>
+											<span>Details</span>
+										</div>
+										<For each={shifts()}>
+											{(shift) => (
+												<div class="listing-table-row">
 													<span>
-														{shift.division} / {shift.adjudicator}
+														<strong>
+															{shift.date} {shift.period}
+														</strong>
 													</span>
-												</Show>
-											</li>
-										)}
-									</For>
-								</ul>
+													<span>
+														<Show when={shift.timeText}>
+															<span>{shift.timeText}</span>
+														</Show>
+														<Show when={shift.division || shift.adjudicator}>
+															<span>
+																{shift.division} / {shift.adjudicator}
+															</span>
+														</Show>
+													</span>
+												</div>
+											)}
+										</For>
+									</div>
+								</Show>
 
 								<form class="flow-panel" onSubmit={handleCreateShift}>
 									<h3>Add a shift</h3>

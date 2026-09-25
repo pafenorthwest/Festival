@@ -1261,6 +1261,151 @@ form.shopify-integration-card {
 	box-shadow: none;
 }
 
+.badge {
+	display: inline-block;
+	padding: 0.3rem 0.55rem;
+	border-radius: 999px;
+	font-size: 0.82rem;
+	font-weight: 700;
+}
+
+.badge-processing {
+	background: var(--bullet-accent);
+	color: white;
+}
+
+.badge-active {
+	background: var(--bullet-success);
+	color: white;
+}
+
+.badge-inactive {
+	background: #6b7280;
+	color: white;
+}
+
+.badge-review {
+	background: #735710;
+	color: white;
+}
+
+.badge-rejected {
+	background: var(--bullet-error);
+	color: white;
+}
+
+.badge-neutral {
+	background: rgba(31, 36, 49, 0.08);
+	color: var(--bullet-ink);
+}
+
+/* Listing table: a layout pattern (div/span, not <table>) for comparable
+   records in columns. See specs/Style.md "Listing tables". */
+.listing-table {
+	display: grid;
+	border: 1px solid var(--bullet-panel-border);
+	border-radius: 12px;
+	background: transparent;
+	overflow: hidden;
+}
+
+.listing-table-header,
+.listing-table-row {
+	display: grid;
+	align-items: center;
+	gap: 0.75rem;
+	padding: 0.7rem 1rem;
+}
+
+.listing-table-header {
+	background: rgba(31, 36, 49, 0.05);
+	border-top: 1px solid var(--bullet-panel-border);
+	border-bottom: 1px solid var(--bullet-panel-border);
+	font-size: 0.78rem;
+	font-weight: 700;
+	color: var(--bullet-ink);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+
+.listing-table-row {
+	position: relative;
+	transition: box-shadow 0.15s ease;
+}
+
+.listing-table-row:not(:last-child)::after {
+	content: "";
+	position: absolute;
+	left: 1rem;
+	right: 1rem;
+	bottom: 0;
+	height: 1px;
+	background: rgba(31, 36, 49, 0.08);
+}
+
+.listing-table-row:hover {
+	box-shadow: 0 6px 16px rgba(31, 36, 49, 0.1);
+}
+
+.listing-table-badges {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.35rem;
+}
+
+.listing-table-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 0.4rem;
+}
+
+.listing-table-empty {
+	padding: 1rem;
+	color: var(--bullet-soft-ink);
+}
+
+.volunteer-roles-table .listing-table-header,
+.volunteer-roles-table .listing-table-row {
+	/* Fixed widths, not auto: each row is its own grid, so auto-sized
+	   columns can size independently per row and drift out of
+	   alignment with the header and with each other. */
+	grid-template-columns: minmax(0, 1fr) 7rem 9rem;
+}
+
+.volunteer-roles-table .listing-table-header span:last-child {
+	text-align: right;
+}
+
+.volunteer-roles-table .listing-table-badges {
+	justify-content: flex-start;
+}
+
+.volunteer-roles-table .listing-table-actions {
+	justify-content: flex-end;
+}
+
+.volunteer-roles-table .badge {
+	/* Same rectangle shape as the row-action control below, so the two
+	   read as related row furniture, but a compact tag rather than a
+	   button-sized control -- that size difference is what actually
+	   tells them apart, not just color. */
+	border-radius: 4px;
+}
+
+.volunteer-roles-table .listing-table-actions .secondary-button {
+	/* A lighter control for a per-row disclosure toggle: a solid dark
+	   button repeated down every row reads as louder and more numerous
+	   actions than this really is. */
+	padding: 0.55rem 0.9rem;
+	font-size: 0.86rem;
+	white-space: nowrap;
+}
+
+.volunteer-shifts-table .listing-table-header,
+.volunteer-shifts-table .listing-table-row {
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
 .trash-button::before {
 	content: "\1f5d1";
 	font-size: 1rem;
@@ -1483,6 +1628,17 @@ form.shopify-integration-card {
 	.admin-user-row,
 	.festival-row {
 		grid-template-columns: 1fr;
+	}
+
+	.volunteer-roles-table .listing-table-header,
+	.volunteer-roles-table .listing-table-row,
+	.volunteer-shifts-table .listing-table-header,
+	.volunteer-shifts-table .listing-table-row {
+		grid-template-columns: 1fr;
+	}
+
+	.listing-table-actions {
+		justify-content: flex-start;
 	}
 
 	.admin-page-header {

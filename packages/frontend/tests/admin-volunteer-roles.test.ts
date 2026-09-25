@@ -31,6 +31,25 @@ describe("admin volunteer role and shift management", () => {
 		expect(page).toContain("No festivals have been created yet.");
 	});
 
+	it("presents roles and shifts as listing tables, per specs/Style.md", async () => {
+		const page = await read("../src/pages/VolunteerRolesPage.tsx");
+		const styles = await read("../src/styles.css");
+
+		expect(page).toContain("listing-table volunteer-roles-table");
+		expect(page).toContain("listing-table volunteer-shifts-table");
+		expect(page).toContain("listing-table-header");
+		expect(page).toContain("listing-table-row");
+		expect(page).toContain("listing-table-badges");
+		expect(page).toContain("listing-table-actions");
+		expect(page).not.toContain("<table");
+		expect(page).not.toContain('role="table"');
+
+		expect(styles).toContain(".listing-table {");
+		expect(styles).toContain(".listing-table-row:not(:last-child)::after");
+		expect(styles).toContain(".badge-neutral");
+		expect(page).toContain("badge badge-neutral");
+	});
+
 	it("passes the app controller into the admin volunteers page", async () => {
 		const app = await read("../src/App.tsx");
 
