@@ -1,10 +1,7 @@
 import type { FestivalClassConfiguration } from "@festival/common";
 import { AppError } from "../errors/app-error.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
-import type {
-	CreateFestivalClassInput,
-	UpdateFestivalClassInput,
-} from "./admin-class-catalog-types.js";
+import type { UpdateFestivalClassInput } from "./admin-class-catalog-types.js";
 import {
 	validateCreateClassInput,
 	validateUpdateClassInput,
@@ -49,31 +46,6 @@ async function validateClassReferences(
 	}
 }
 
-async function resolveProductGids(
-	shopifySync: AdminClassShopifySync,
-	orgId: string,
-	festivalName: string,
-	input: CreateFestivalClassInput,
-	actorUid?: string,
-): Promise<{ shopifyProductGid: string; shopifyVariantGid: string }> {
-	if (input.shopifyProductGid && input.shopifyVariantGid) {
-		return {
-			shopifyProductGid: input.shopifyProductGid,
-			shopifyVariantGid: input.shopifyVariantGid,
-		};
-	}
-	const gids = await shopifySync.createClassProduct(
-		orgId,
-		festivalName,
-		{ displayName: input.displayName, price: input.price },
-		actorUid,
-	);
-	return {
-		shopifyProductGid: input.shopifyProductGid ?? gids.shopifyProductGid,
-		shopifyVariantGid: input.shopifyVariantGid ?? gids.shopifyVariantGid,
-	};
-}
-
 async function syncShopifyUpdates(
 	shopifySync: AdminClassShopifySync,
 	orgId: string,
@@ -100,14 +72,13 @@ async function findExistingClass(
 	festivalId: string,
 	classId: string,
 ): Promise<FestivalClassConfiguration> {
-	const classes = await repo.listFestivalClassConfigurations(
+	const existing = await repo.findFestivalClassConfigurationById(
 		orgId,
 		festivalId,
-		false,
+		classId,
 	);
-	const existing = classes.find((c) => c.id === classId);
 	if (!existing) {
-		throw new AppError("Festival class configuration not found.", 404);
+		throw new AppError("Festival class not found.", 404);
 	}
 	return existing;
 }
@@ -153,22 +124,30 @@ export class AdminClassCatalogService {
 			input.divisionId,
 			input.classSubtypeId,
 		);
-		const gids = await resolveProductGids(
-			this.shopifySync,
+		const gids = await this.shopifySync.syncNewClassProduct(
 			org.id,
-			festival.name,
+			festival,
 			input,
 			actorUid,
 		);
-		return this.repository.createFestivalClassConfiguration({
-			...input,
-			organizationId: org.id,
-			festivalId: festival.id,
-			maximumPerformancePieces: input.maximumPerformancePieces ?? 1,
-			capacity: input.capacity ?? 100,
-			shopifyProductGid: gids.shopifyProductGid,
-			shopifyVariantGid: gids.shopifyVariantGid,
-		});
+		try {
+			return await this.repository.createFestivalClassConfiguration({
+				...input,
+				organizationId: org.id,
+				festivalId: festival.id,
+				maximumPerformancePieces: input.maximumPerformancePieces ?? 1,
+				capacity: input.capacity ?? 100,
+				shopifyProductGid: gids.shopifyProductGid,
+				shopifyVariantGid: gids.shopifyVariantGid,
+			});
+		} catch (error) {
+			await this.shopifySync.tryCleanupProductGid(
+				org.id,
+				gids.shopifyProductGid,
+				actorUid,
+			);
+			throw error;
+		}
 	}
 
 	async updateClass(
@@ -190,12 +169,14 @@ export class AdminClassCatalogService {
 			classId,
 		);
 		const input = validateUpdateClassInput(rawInput);
-		await validateClassReferences(
-			this.repository,
-			org.id,
-			input.divisionId,
-			input.classSubtypeId,
-		);
+		const effectiveMin = input.minimumAge ?? existing.minimumAge;
+		const effectiveMax = input.maximumAge ?? existing.maximumAge;
+		if (effectiveMax < effectiveMin) {
+			throw new AppError(
+				"Maximum age must be greater than or equal to minimum age.",
+				400,
+			);
+		}
 		await syncShopifyUpdates(
 			this.shopifySync,
 			org.id,

@@ -467,4 +467,40 @@ describe("AdminClassShopifySync", () => {
 			);
 		});
 	});
+
+	describe("tryCleanupProductGid", () => {
+		it("skips cleanup when productGid is mock or empty", async () => {
+			const repo = new InMemoryOrganizationRepository();
+			const fakeLifecycle = new FakeLifecycleService();
+			const sync = new AdminClassShopifySync(
+				repo,
+				fakeLifecycle as unknown as ShopifyProductLifecycleService,
+			);
+
+			await sync.tryCleanupProductGid(orgId, "gid://shopify/Product/mock-123");
+			expect(fakeLifecycle.cleanupCalls.length).toBe(0);
+		});
+
+		it("cleans up live product when integration context is loaded", async () => {
+			const repo = new InMemoryOrganizationRepository();
+			const keyring = createKeyring();
+			await setupRepoWithIntegration(repo, keyring);
+			const fakeLifecycle = new FakeLifecycleService();
+			const sync = new AdminClassShopifySync(
+				repo,
+				fakeLifecycle as unknown as ShopifyProductLifecycleService,
+				keyring,
+			);
+
+			await sync.tryCleanupProductGid(
+				orgId,
+				"gid://shopify/Product/real-100",
+				"actor-1",
+			);
+			expect(fakeLifecycle.cleanupCalls.length).toBe(1);
+			expect(fakeLifecycle.cleanupCalls[0].productId).toBe(
+				"gid://shopify/Product/real-100",
+			);
+		});
+	});
 });

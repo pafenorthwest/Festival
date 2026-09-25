@@ -48,6 +48,7 @@ function parseNumeric(
 	name: string,
 	min: number,
 	required: boolean,
+	requireInteger?: boolean,
 ): number | undefined {
 	if (value === undefined) {
 		if (required) throw new AppError(`${name} is required.`, 400);
@@ -62,6 +63,9 @@ function parseNumeric(
 			min === 0 ? "greater than or equal to 0." : "greater than 0.";
 		throw new AppError(`${name} must be ${suffix}`, 400);
 	}
+	if (requireInteger && !Number.isInteger(value)) {
+		throw new AppError(`${name} must be an integer.`, 400);
+	}
 	return value;
 }
 
@@ -69,8 +73,8 @@ function parseAges(
 	raw: Record<string, unknown>,
 	required: boolean,
 ): { minimumAge?: number; maximumAge?: number } {
-	const min = parseNumeric(raw.minimumAge, "Minimum age", 0, required);
-	const max = parseNumeric(raw.maximumAge, "Maximum age", 0, required);
+	const min = parseNumeric(raw.minimumAge, "Minimum age", 0, required, true);
+	const max = parseNumeric(raw.maximumAge, "Maximum age", 0, required, true);
 	if (min !== undefined && max !== undefined && max < min) {
 		throw new AppError(
 			"Maximum age must be greater than or equal to minimum age.",
@@ -133,10 +137,6 @@ function parseOptionalUpdates(
 	const out: UpdateFestivalClassInput = {};
 	const name = parseString(raw.displayName, "Display name", false);
 	if (name !== undefined) out.displayName = name;
-	const subtype = parseString(raw.classSubtypeId, "Class subtype ID", false);
-	if (subtype !== undefined) out.classSubtypeId = subtype;
-	const div = parseString(raw.divisionId, "Division ID", false);
-	if (div !== undefined) out.divisionId = div;
 	const price = parsePrice(raw.price, false);
 	if (price !== undefined) out.price = price;
 	const pieces = parsePieces(raw.maximumPerformancePieces);
@@ -146,9 +146,10 @@ function parseOptionalUpdates(
 		"Performance minutes",
 		1,
 		false,
+		true,
 	);
 	if (mins !== undefined) out.performanceMinutes = mins;
-	const cap = parseNumeric(raw.capacity, "Capacity", 1, false);
+	const cap = parseNumeric(raw.capacity, "Capacity", 1, false, true);
 	if (cap !== undefined) out.capacity = cap;
 	return out;
 }
@@ -175,8 +176,9 @@ export function validateCreateClassInput(
 			"Performance minutes",
 			1,
 			true,
+			true,
 		) as number,
-		capacity: parseNumeric(raw.capacity, "Capacity", 1, false) ?? 100,
+		capacity: parseNumeric(raw.capacity, "Capacity", 1, false, true) ?? 100,
 		...parseMetadata(raw),
 	};
 }
@@ -185,6 +187,9 @@ export function validateUpdateClassInput(
 	input: unknown,
 ): UpdateFestivalClassInput {
 	const raw = parseRecord(input);
+	if ("divisionId" in raw || "classSubtypeId" in raw || "festivalId" in raw) {
+		throw new AppError("Division and class subtype are immutable.", 400);
+	}
 	return {
 		...parseOptionalUpdates(raw),
 		...parseAges(raw, false),

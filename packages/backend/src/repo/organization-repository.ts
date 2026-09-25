@@ -197,8 +197,6 @@ export interface UpdateFestivalClassConfigurationInput {
 	organizationId: string;
 	festivalId: string;
 	displayName?: string;
-	classSubtypeId?: string;
-	divisionId?: string;
 	minimumAge?: number;
 	maximumAge?: number;
 	price?: string;
@@ -399,6 +397,11 @@ export interface OrganizationRepository {
 	updateFestivalClassConfiguration(
 		input: UpdateFestivalClassConfigurationInput,
 	): Promise<FestivalClassConfiguration>;
+	findFestivalClassConfigurationById(
+		organizationId: string,
+		festivalId: string,
+		classId: string,
+	): Promise<FestivalClassConfiguration | null>;
 	listFestivalClassConfigurations(
 		organizationId: string,
 		festivalId: string,

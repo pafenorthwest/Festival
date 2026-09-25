@@ -25,6 +25,7 @@ import type {
 	ShopifyWebhookReadinessStatus,
 } from "@festival/common";
 import {
+	AppError,
 	assertValidEntitlementDurationDays,
 	assertValidEntitlementGrantSnapshotInput,
 	normalizeVerifiedShopifyIdentityEmail,
@@ -2126,45 +2127,85 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		input: UpdateFestivalClassConfigurationInput,
 	): Promise<FestivalClassConfiguration> {
 		await this.ensureReady();
+		try {
+			const rows = (await sql.unsafe(
+				`UPDATE ${this.schema}.festival_class_configurations
+				 SET
+					display_name = COALESCE($4, display_name),
+					minimum_age = COALESCE($5, minimum_age),
+					maximum_age = COALESCE($6, maximum_age),
+					price = COALESCE($7, price),
+					maximum_performance_pieces = COALESCE($8, maximum_performance_pieces),
+					performance_minutes = COALESCE($9, performance_minutes),
+					capacity = COALESCE($10, capacity),
+					is_active = COALESCE($11, is_active),
+					shopify_product_gid = COALESCE($12, shopify_product_gid),
+					shopify_variant_gid = COALESCE($13, shopify_variant_gid),
+					updated_at = NOW()
+				 WHERE organization_id = $1 AND festival_id = $2 AND id = $3
+				 RETURNING id, organization_id, festival_id, display_name, class_subtype_id, division_id, minimum_age, maximum_age, price, maximum_performance_pieces, performance_minutes, capacity, is_active, shopify_product_gid, shopify_variant_gid, created_at, updated_at`,
+				[
+					input.organizationId,
+					input.festivalId,
+					input.id,
+					input.displayName ?? null,
+					input.minimumAge ?? null,
+					input.maximumAge ?? null,
+					input.price ?? null,
+					input.maximumPerformancePieces ?? null,
+					input.performanceMinutes ?? null,
+					input.capacity ?? null,
+					input.isActive ?? null,
+					input.shopifyProductGid ?? null,
+					input.shopifyVariantGid ?? null,
+				],
+			)) as FestivalClassConfigurationRow[];
+			const row = rows[0];
+			if (!row) throw new Error("Festival class configuration not found.");
+			return mapFestivalClassConfiguration(row);
+		} catch (error) {
+			if (error instanceof AppError) {
+				throw error;
+			}
+			const code =
+				error && typeof error === "object"
+					? ((error as { code?: string; errno?: string }).code ??
+						(error as { code?: string; errno?: string }).errno)
+					: undefined;
+
+			if (code === "23503") {
+				throw new AppError(
+					"Foreign key constraint violation in festival class configuration.",
+					400,
+				);
+			}
+			if (code === "23505") {
+				throw new AppError(
+					"Unique constraint violation in festival class configuration.",
+					400,
+				);
+			}
+			if (code === "23514") {
+				throw new AppError(
+					"Check constraint violation in festival class configuration.",
+					400,
+				);
+			}
+			throw error;
+		}
+	}
+
+	async findFestivalClassConfigurationById(
+		organizationId: string,
+		festivalId: string,
+		classId: string,
+	): Promise<FestivalClassConfiguration | null> {
+		await this.ensureReady();
 		const rows = (await sql.unsafe(
-			`UPDATE ${this.schema}.festival_class_configurations
-			 SET
-				display_name = COALESCE($4, display_name),
-				class_subtype_id = COALESCE($5, class_subtype_id),
-				division_id = COALESCE($6, division_id),
-				minimum_age = COALESCE($7, minimum_age),
-				maximum_age = COALESCE($8, maximum_age),
-				price = COALESCE($9, price),
-				maximum_performance_pieces = COALESCE($10, maximum_performance_pieces),
-				performance_minutes = COALESCE($11, performance_minutes),
-				capacity = COALESCE($12, capacity),
-				is_active = COALESCE($13, is_active),
-				shopify_product_gid = COALESCE($14, shopify_product_gid),
-				shopify_variant_gid = COALESCE($15, shopify_variant_gid),
-				updated_at = NOW()
-			 WHERE organization_id = $1 AND festival_id = $2 AND id = $3
-			 RETURNING id, organization_id, festival_id, display_name, class_subtype_id, division_id, minimum_age, maximum_age, price, maximum_performance_pieces, performance_minutes, capacity, is_active, shopify_product_gid, shopify_variant_gid, created_at, updated_at`,
-			[
-				input.organizationId,
-				input.festivalId,
-				input.id,
-				input.displayName ?? null,
-				input.classSubtypeId ?? null,
-				input.divisionId ?? null,
-				input.minimumAge ?? null,
-				input.maximumAge ?? null,
-				input.price ?? null,
-				input.maximumPerformancePieces ?? null,
-				input.performanceMinutes ?? null,
-				input.capacity ?? null,
-				input.isActive ?? null,
-				input.shopifyProductGid ?? null,
-				input.shopifyVariantGid ?? null,
-			],
+			`SELECT * FROM ${this.schema}.festival_class_configurations WHERE organization_id = $1 AND festival_id = $2 AND id = $3 LIMIT 1`,
+			[organizationId, festivalId, classId],
 		)) as FestivalClassConfigurationRow[];
-		const row = rows[0];
-		if (!row) throw new Error("Festival class configuration not found.");
-		return mapFestivalClassConfiguration(row);
+		return rows[0] ? mapFestivalClassConfiguration(rows[0]) : null;
 	}
 
 	async listFestivalClassConfigurations(

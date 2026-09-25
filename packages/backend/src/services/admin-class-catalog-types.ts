@@ -15,8 +15,6 @@ export interface CreateFestivalClassInput {
 
 export interface UpdateFestivalClassInput {
 	displayName?: string;
-	classSubtypeId?: string;
-	divisionId?: string;
 	minimumAge?: number;
 	maximumAge?: number;
 	price?: string;

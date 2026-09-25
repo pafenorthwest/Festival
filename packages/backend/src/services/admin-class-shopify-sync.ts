@@ -54,10 +54,13 @@ function loadCredentials(
 }
 
 export interface SyncNewClassProductInput {
-	name: string;
+	name?: string;
+	displayName?: string;
 	price: string;
 	description?: string;
 	festivalShortName?: string;
+	shopifyProductGid?: string;
+	shopifyVariantGid?: string;
 }
 
 export interface FestivalRef {
@@ -79,6 +82,12 @@ export class AdminClassShopifySync {
 		input: SyncNewClassProductInput,
 		actorUid?: string,
 	): Promise<{ shopifyProductGid: string; shopifyVariantGid: string }> {
+		if (input.shopifyProductGid && input.shopifyVariantGid) {
+			return {
+				shopifyProductGid: input.shopifyProductGid,
+				shopifyVariantGid: input.shopifyVariantGid,
+			};
+		}
 		const int = await this.repository.getShopifyIntegration(orgId);
 		let credentials: ShopifyAdminOperationContext["credentials"] | undefined;
 
@@ -153,12 +162,13 @@ export class AdminClassShopifySync {
 			credentials,
 		};
 
-		const title = `${festival.name} - ${input.name}`;
+		const className = input.displayName || input.name || "";
+		const title = `${festival.name} - ${className}`;
 		const description =
 			input.description ||
 			(input.festivalShortName
-				? `${festival.name} class: ${input.name} (${input.festivalShortName})`
-				: `${festival.name} class: ${input.name}`);
+				? `${festival.name} class: ${className} (${input.festivalShortName})`
+				: `${festival.name} class: ${className}`);
 
 		try {
 			const result = await this.lifecycleService.createAndPublishDigitalProduct(
@@ -261,6 +271,20 @@ export class AdminClassShopifySync {
 		if (this.lifecycleService) {
 			await this.lifecycleService.tryCleanupProduct(ctx, productId);
 		}
+	}
+
+	async tryCleanupProductGid(
+		orgId: string,
+		productGid: string,
+		actorUid?: string,
+	): Promise<void> {
+		if (isMock(productGid) || !this.lifecycleService) return;
+		try {
+			const ctx = await this.loadWriteContext(orgId, actorUid);
+			if (ctx) {
+				await this.lifecycleService.tryCleanupProduct(ctx, productGid);
+			}
+		} catch {}
 	}
 
 	private async loadWriteContext(

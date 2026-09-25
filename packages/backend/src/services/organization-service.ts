@@ -931,19 +931,12 @@ export class OrganizationService {
 		);
 		if (!festival) throw new AppError("Festival not found.", 404);
 
-		if (input.divisionId !== undefined) {
-			const divisions = await this.repository.listDivisions(organization.id);
-			const exists = divisions.some((d) => d.id === input.divisionId);
-			if (!exists) throw new AppError("Division not found.", 404);
-		}
-
-		if (input.classSubtypeId !== undefined) {
-			const subtypes = await this.repository.listRegistrationCatalogValues(
-				organization.id,
-				"class_subtype",
-			);
-			const exists = subtypes.some((s) => s.id === input.classSubtypeId);
-			if (!exists) throw new AppError("Class subtype not found.", 404);
+		if (
+			"divisionId" in (input as object) ||
+			"classSubtypeId" in (input as object) ||
+			"festivalId" in (input as object)
+		) {
+			throw new AppError("Division and class subtype are immutable.", 400);
 		}
 
 		try {

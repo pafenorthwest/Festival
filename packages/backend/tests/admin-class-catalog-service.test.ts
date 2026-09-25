@@ -510,6 +510,96 @@ describe("Validation & Invariants", () => {
 			message: "Class subtype not found.",
 		});
 	});
+
+	it("rejects non-integer values for integer fields with 400", async () => {
+		const { createValid } = await setupFixture();
+		await expect(createValid({ minimumAge: 5.5 })).rejects.toMatchObject({
+			status: 400,
+			message: "Minimum age must be an integer.",
+		});
+		await expect(createValid({ maximumAge: 10.5 })).rejects.toMatchObject({
+			status: 400,
+			message: "Maximum age must be an integer.",
+		});
+		await expect(createValid({ capacity: 20.5 })).rejects.toMatchObject({
+			status: 400,
+			message: "Capacity must be an integer.",
+		});
+		await expect(
+			createValid({ performanceMinutes: 7.5 }),
+		).rejects.toMatchObject({
+			status: 400,
+			message: "Performance minutes must be an integer.",
+		});
+	});
+
+	it("rejects immutable divisionId, classSubtypeId, and festivalId on update with 400", async () => {
+		const { createValid, update } = await setupFixture();
+		const created = await createValid();
+
+		await expect(
+			update(created.id, {
+				divisionId: "other-div",
+			} as unknown as UpdateFestivalClassInput),
+		).rejects.toMatchObject({
+			status: 400,
+			message: "Division and class subtype are immutable.",
+		});
+		await expect(
+			update(created.id, {
+				classSubtypeId: "other-sub",
+			} as unknown as UpdateFestivalClassInput),
+		).rejects.toMatchObject({
+			status: 400,
+			message: "Division and class subtype are immutable.",
+		});
+		await expect(
+			update(created.id, {
+				festivalId: "other-fest",
+			} as unknown as UpdateFestivalClassInput),
+		).rejects.toMatchObject({
+			status: 400,
+			message: "Division and class subtype are immutable.",
+		});
+	});
+
+	it("cross-checks partial age updates against existing with 400", async () => {
+		const { createValid, update } = await setupFixture();
+		const created = await createValid({ minimumAge: 6, maximumAge: 12 });
+
+		await expect(update(created.id, { minimumAge: 15 })).rejects.toMatchObject({
+			status: 400,
+			message: "Maximum age must be greater than or equal to minimum age.",
+		});
+
+		await expect(update(created.id, { maximumAge: 4 })).rejects.toMatchObject({
+			status: 400,
+			message: "Maximum age must be greater than or equal to minimum age.",
+		});
+	});
+
+	it("throws 404 when updating non-existent class", async () => {
+		const { update } = await setupFixture();
+		await expect(
+			update("non-existent-class-id", { displayName: "New Name" }),
+		).rejects.toMatchObject({
+			status: 404,
+			message: "Festival class not found.",
+		});
+	});
+
+	it("cleans up Shopify product when database insert fails in createClass", async () => {
+		const { repo, org, festival, shopifyClient, service, input } =
+			await setupFixture(true);
+		repo.createFestivalClassConfiguration = async () => {
+			throw new Error("DB persistence failed");
+		};
+
+		await expect(
+			service.createClass(org.slug, festival.shortName, input()),
+		).rejects.toThrow("DB persistence failed");
+		expect(shopifyClient.deletedProductGids).toContain(PROD_GID);
+	});
 });
 
 describe("Checkout Blocking", () => {
