@@ -28,11 +28,12 @@ import {
 	type ShopifySecretKeyring,
 } from "./encryption.js";
 import { ShopifyIntegrationError, ShopifyScopeError } from "./errors.js";
+import { ShopifyProductLifecycleService } from "./shopify-product-lifecycle-service.js";
 import type {
 	ShopifyAdminOperationContext,
 	ShopifyAdminResult,
 	ShopifyCredentials,
-	ShopifyMembershipProductClient,
+	ShopifyProductClient,
 	ShopifyProductDetails,
 	ShopifyProductVariant,
 } from "./types.js";
@@ -170,9 +171,13 @@ export class ShopifyMembershipProductService {
 	constructor(
 		private readonly repository: OrganizationRepository,
 		private readonly secretKeyring: ShopifySecretKeyring,
-		private readonly shopifyClient: ShopifyMembershipProductClient,
+		private readonly shopifyClient: ShopifyProductClient,
 		private readonly mutationAudit: ShopifyMutationAuditWriter,
 		private readonly cleanupFailureLogger: ShopifyCleanupFailureLogger = silentCleanupFailureLogger,
+		private readonly lifecycleService: ShopifyProductLifecycleService = new ShopifyProductLifecycleService(
+			shopifyClient,
+			mutationAudit,
+		),
 	) {}
 
 	async createMembershipProduct(
@@ -247,20 +252,16 @@ export class ShopifyMembershipProductService {
 			"read_products",
 		);
 		try {
-			await this.attemptMutation(writeContext, "productUpdate", () =>
-				this.shopifyClient.updateProductDetails(writeContext, {
-					productId: offering.shopifyProductGid,
-					name: validation.input.name,
-					description: validation.input.description,
-				}),
-			);
-			await this.attemptMutation(writeContext, "productVariantUpdate", () =>
-				this.shopifyClient.updateVariantPrice(writeContext, {
-					productId: offering.shopifyProductGid,
-					variantId: offering.shopifyVariantGid,
-					price: validation.input.price,
-				}),
-			);
+			await this.lifecycleService.updateProductDetails(writeContext, {
+				productId: offering.shopifyProductGid,
+				name: validation.input.name,
+				description: validation.input.description,
+			});
+			await this.lifecycleService.updateVariantPrice(writeContext, {
+				productId: offering.shopifyProductGid,
+				variantId: offering.shopifyVariantGid,
+				price: validation.input.price,
+			});
 			await this.setInventoryItemShipping(
 				writeContext,
 				readContext,
@@ -389,66 +390,33 @@ export class ShopifyMembershipProductService {
 			tenant,
 			"read_products",
 		);
-		let createdProduct: ShopifyProductDetails | null = null;
+		let createdProductGid: string | null = null;
 
 		try {
-			createdProduct = await this.attemptMutation(
-				writeContext,
-				"productCreate",
-				() =>
-					this.shopifyClient.createProduct(writeContext, {
+			const { productGid, variantGid } =
+				await this.lifecycleService.createAndPublishDigitalProduct(
+					writeContext,
+					{
 						name: validation.input.name,
 						description: validation.input.description,
-					}),
-				(product) => {
-					createdProduct = product;
-				},
-			);
-			let variant = assertSupportedProductShape(
-				createdProduct,
-				undefined,
-				false,
-			);
-
-			const pricedProduct = await this.attemptMutation(
-				writeContext,
-				"productVariantUpdate",
-				() =>
-					this.shopifyClient.updateVariantPrice(writeContext, {
-						productId: createdProduct?.id ?? "",
-						variantId: variant.id,
 						price: validation.input.price,
-					}),
-			);
-			variant = assertSupportedProductShape(
-				pricedProduct,
-				createdProduct.id,
-				false,
-			);
-			await this.setInventoryItemShipping(
-				writeContext,
-				readContext,
-				variant.id,
-				createdProduct.id,
-			);
+					},
+				);
+			createdProductGid = productGid;
+
 			const { value: confirmedProducts } =
-				await this.shopifyClient.readProductsByGid(readContext, [
-					pricedProduct.id,
-				]);
+				await this.shopifyClient.readProductsByGid(readContext, [productGid]);
 			const [confirmedProduct] = confirmedProducts;
 			if (!confirmedProduct) {
 				throw new AppError("Shopify membership product was not found.", 502);
 			}
-			variant = assertSupportedProductShape(
-				confirmedProduct,
-				createdProduct.id,
-			);
-			await this.attemptMutation(writeContext, "productPublish", () =>
-				this.shopifyClient.publishProductToHeadlessStorefront(
-					writeContext,
-					confirmedProduct.id,
-				),
-			);
+			const variant = assertSupportedProductShape(confirmedProduct, productGid);
+			if (variant.id !== variantGid) {
+				throw new AppError(
+					"Shopify membership product variant did not match the local association.",
+					502,
+				);
+			}
 
 			const record = await this.repository.createMembershipProductRecord({
 				organizationId: tenant.organization.id,
@@ -462,8 +430,8 @@ export class ShopifyMembershipProductService {
 
 			return toSummary(record, confirmedProduct, variant);
 		} catch (error) {
-			if (createdProduct) {
-				await this.tryCleanupProduct(writeContext, createdProduct.id);
+			if (createdProductGid) {
+				await this.tryCleanupProduct(writeContext, createdProductGid);
 			}
 
 			throw toAppError(error);
@@ -695,18 +663,18 @@ export class ShopifyMembershipProductService {
 		context: ShopifyAdminOperationContext,
 		productGid: string,
 	): Promise<void> {
-		try {
-			await this.attemptMutation(context, "productDelete", () =>
-				this.shopifyClient.deleteProduct(context, productGid),
-			);
-		} catch (error) {
-			this.cleanupFailureLogger.error(
-				"Shopify membership product cleanup failed after local persistence failure.",
-				{
-					operation: "shopify.membershipProduct.cleanup",
-					errorName: error instanceof Error ? error.name : undefined,
-				},
-			);
-		}
+		await this.lifecycleService.tryCleanupProduct(
+			context,
+			productGid,
+			(error) => {
+				this.cleanupFailureLogger.error(
+					"Shopify membership product cleanup failed after local persistence failure.",
+					{
+						operation: "shopify.membershipProduct.cleanup",
+						errorName: error instanceof Error ? error.name : undefined,
+					},
+				);
+			},
+		);
 	}
 }

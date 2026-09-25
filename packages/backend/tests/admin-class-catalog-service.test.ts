@@ -19,9 +19,10 @@ import {
 	SHOPIFY_CLIENT_SECRET_PURPOSE,
 	ShopifySecretKeyring,
 } from "../src/shopify/encryption.js";
+import { ShopifyProductLifecycleService } from "../src/shopify/shopify-product-lifecycle-service.js";
 import type {
 	ShopifyAdminOperationContext,
-	ShopifyMembershipProductClient,
+	ShopifyProductClient,
 	ShopifyProductDetails,
 } from "../src/shopify/types.js";
 
@@ -66,7 +67,7 @@ function fakeProduct(
 	};
 }
 
-class FakeShopifyProductClient implements ShopifyMembershipProductClient {
+class FakeShopifyProductClient implements ShopifyProductClient {
 	createCalls = 0;
 	readonly publishedProductGids: string[] = [];
 	readonly deletedProductGids: string[] = [];
@@ -176,7 +177,7 @@ async function setupVerifiedIntegration(
 		lastTestedAtIso: new Date().toISOString(),
 		verifiedShopGid: "gid://shopify/Shop/1",
 		verifiedShopDomain: "test-shop.myshopify.com",
-		grantedScopes: ["write_products", "write_inventory"],
+		grantedScopes: ["write_products", "write_inventory", "write_publications"],
 		capabilities: {
 			...EMPTY_SHOPIFY_CAPABILITIES,
 			write_products: "granted",
@@ -221,9 +222,8 @@ async function setupFixture(live = false) {
 
 	const sync = new AdminClassShopifySync(
 		repo,
+		new ShopifyProductLifecycleService(shopifyClient, auditWriter),
 		keyring,
-		shopifyClient,
-		auditWriter,
 	);
 	const service = new AdminClassCatalogService(repo, sync);
 

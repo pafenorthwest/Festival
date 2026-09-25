@@ -20,7 +20,7 @@ import { ShopifyMembershipProductService } from "../src/shopify/shopify-membersh
 import type {
 	ShopifyAdminOperationContext,
 	ShopifyAdminResult,
-	ShopifyMembershipProductClient,
+	ShopifyProductClient,
 	ShopifyProductDetails,
 } from "../src/shopify/types.js";
 
@@ -71,7 +71,7 @@ function shopifyProduct(
 	};
 }
 
-class FakeShopifyProductClient implements ShopifyMembershipProductClient {
+class FakeShopifyProductClient implements ShopifyProductClient {
 	createCalls = 0;
 	readonly deletedProductGids: string[] = [];
 	readonly publishedProductGids: string[] = [];
@@ -87,7 +87,17 @@ class FakeShopifyProductClient implements ShopifyMembershipProductClient {
 	}> = [];
 	createResponse = shopifyProduct();
 	updateResponse = shopifyProduct();
-	readResponse = [shopifyProduct()];
+	private customReadResponse = false;
+	private _readResponse = [shopifyProduct()];
+
+	get readResponse(): ShopifyProductDetails[] {
+		return this.customReadResponse ? this._readResponse : [this.createResponse];
+	}
+
+	set readResponse(value: ShopifyProductDetails[]) {
+		this.customReadResponse = true;
+		this._readResponse = value;
+	}
 	createError: Error | null = null;
 	deleteError: Error | null = null;
 
@@ -111,6 +121,11 @@ class FakeShopifyProductClient implements ShopifyMembershipProductClient {
 		},
 	): Promise<ShopifyAdminResult<ShopifyProductDetails>> {
 		this.variantUpdates.push(input);
+		for (const variant of this.createResponse.variants) {
+			if (variant.id === input.variantId) {
+				variant.price = { ...variant.price, amount: input.price };
+			}
+		}
 		return { value: this.updateResponse, requestId: "request-update" };
 	}
 
@@ -119,6 +134,11 @@ class FakeShopifyProductClient implements ShopifyMembershipProductClient {
 		input: { inventoryItemId: string; requiresShipping: boolean },
 	): Promise<ShopifyAdminResult<{ requiresShipping: boolean }>> {
 		this.inventoryItemUpdates.push(input);
+		for (const variant of this.createResponse.variants) {
+			if (variant.inventoryItemId === input.inventoryItemId) {
+				variant.requiresShipping = input.requiresShipping;
+			}
+		}
 		return { value: { requiresShipping: input.requiresShipping } };
 	}
 

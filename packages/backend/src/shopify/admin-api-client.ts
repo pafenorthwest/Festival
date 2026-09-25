@@ -15,10 +15,10 @@ import type {
 	ShopifyAdminResult,
 	ShopifyConnectivityTester,
 	ShopifyCredentials,
-	ShopifyMembershipProductClient,
 	ShopifyOrderCustomerProfile,
 	ShopifyPaidOrder,
 	ShopifyPaidOrderReader,
+	ShopifyProductClient,
 	ShopifyProductDetails,
 	ShopifyVerificationResult,
 	ShopifyWebhookSubscriptionClient,
@@ -523,7 +523,7 @@ function throwIfWebhookUserErrors(
 export class ShopifyAdminApiClient
 	implements
 		ShopifyConnectivityTester,
-		ShopifyMembershipProductClient,
+		ShopifyProductClient,
 		ShopifyWebhookSubscriptionClient,
 		ShopifyPaidOrderReader
 {

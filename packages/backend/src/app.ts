@@ -44,6 +44,7 @@ import { ShopifyIntegrationDiagnosticService } from "./shopify/shopify-integrati
 import type { ShopifyIntegrationService } from "./shopify/shopify-integration-service.js";
 import { ShopifyIntegrationService as DefaultShopifyIntegrationService } from "./shopify/shopify-integration-service.js";
 import { ShopifyMembershipProductService } from "./shopify/shopify-membership-product-service.js";
+import { ShopifyProductLifecycleService } from "./shopify/shopify-product-lifecycle-service.js";
 import { TokenlessShopifyPublicCatalogClient } from "./shopify/shopify-public-catalog-client.js";
 import { ShopifyWebhookSubscriptionService } from "./shopify/shopify-webhook-subscription-service.js";
 import { PostgresVolunteerRepository } from "./volunteers/postgres-volunteer-repository.js";
@@ -121,15 +122,19 @@ export async function createApp(options: CreateAppOptions = {}) {
 			: new InMemoryAppUserRepository());
 	await appUserRepository.ensureReady();
 	const shopifyAdminApiClient = new ShopifyAdminApiClient();
+	const shopifyMutationAuditWriter = new FileShopifyMutationAuditWriter();
+	const shopifyLifecycleService = new ShopifyProductLifecycleService(
+		shopifyAdminApiClient,
+		shopifyMutationAuditWriter,
+	);
 	const secretKeyring = ShopifySecretKeyring.fromEnvironment(
 		env.festivalSecretKeysJson,
 		env.festivalActiveSecretKeyId,
 	);
 	const adminClassShopifySync = new AdminClassShopifySync(
 		repository,
+		shopifyLifecycleService,
 		secretKeyring ?? undefined,
-		shopifyAdminApiClient,
-		new FileShopifyMutationAuditWriter(),
 	);
 	const adminClassCatalogService =
 		options.adminClassCatalogService ??
@@ -163,7 +168,9 @@ export async function createApp(options: CreateAppOptions = {}) {
 					repository,
 					secretKeyring,
 					shopifyAdminApiClient,
-					new FileShopifyMutationAuditWriter(),
+					shopifyMutationAuditWriter,
+					undefined,
+					shopifyLifecycleService,
 				)
 			: undefined);
 	const shopifyPublicCatalogClient = new TokenlessShopifyPublicCatalogClient();

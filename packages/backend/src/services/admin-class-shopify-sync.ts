@@ -1,20 +1,19 @@
 import { randomUUID } from "node:crypto";
-import type { FestivalClassConfiguration } from "@festival/common";
+import {
+	type FestivalClassConfiguration,
+	normalizeEffectiveShopifyScopes,
+} from "@festival/common";
 import { AppError } from "../errors/app-error.js";
 import type {
 	OrganizationRepository,
 	ShopifyIntegrationRecord,
 } from "../repo/organization-repository.js";
-import type { ShopifyMutationAuditWriter } from "../shopify/admin-mutation-audit.js";
 import {
 	SHOPIFY_CLIENT_SECRET_PURPOSE,
 	type ShopifySecretKeyring,
 } from "../shopify/encryption.js";
-import type {
-	ShopifyAdminOperationContext,
-	ShopifyMembershipProductClient,
-} from "../shopify/types.js";
-import { attemptAdminMutation } from "./admin-class-shopify-audit.js";
+import type { ShopifyProductLifecycleService } from "../shopify/shopify-product-lifecycle-service.js";
+import type { ShopifyAdminOperationContext } from "../shopify/types.js";
 
 const mockGids = () => ({
 	shopifyProductGid: `gid://shopify/Product/mock-${randomUUID()}`,
@@ -54,77 +53,171 @@ function loadCredentials(
 	}
 }
 
-async function createAndPublishProduct(
-	client: ShopifyMembershipProductClient,
-	audit: ShopifyMutationAuditWriter | undefined,
-	ctx: ShopifyAdminOperationContext,
-	name: string,
-	price: string,
-	onCreated: (id: string) => void,
-): Promise<{ shopifyProductGid: string; shopifyVariantGid: string }> {
-	const prod = await attemptAdminMutation(audit, ctx, "productCreate", () =>
-		client.createProduct(ctx, { name }),
-	);
-	onCreated(prod.id);
-	const variant = prod.variants[0];
-	if (!variant?.id) throw new AppError("Shopify product missing variant.", 502);
-	const vInput = { productId: prod.id, variantId: variant.id, price };
-	const priced = await attemptAdminMutation(
-		audit,
-		ctx,
-		"productVariantUpdate",
-		() => client.updateVariantPrice(ctx, vInput),
-	);
-	const invId = priced.variants[0]?.inventoryItemId ?? variant.inventoryItemId;
-	if (invId) {
-		await attemptAdminMutation(audit, ctx, "inventoryItemUpdate", () =>
-			client.updateInventoryItem(ctx, {
-				inventoryItemId: invId,
-				requiresShipping: false,
-			}),
-		);
-	}
-	await attemptAdminMutation(audit, ctx, "productPublish", () =>
-		client.publishProductToHeadlessStorefront(ctx, prod.id),
-	);
-	return { shopifyProductGid: prod.id, shopifyVariantGid: variant.id };
+export interface SyncNewClassProductInput {
+	name: string;
+	price: string;
+	description?: string;
+	festivalShortName?: string;
+}
+
+export interface FestivalRef {
+	name: string;
+	shortName?: string;
 }
 
 export class AdminClassShopifySync {
 	constructor(
 		private readonly repository: OrganizationRepository,
+		private readonly lifecycleService?: ShopifyProductLifecycleService,
 		private readonly secretKeyring?: ShopifySecretKeyring,
-		private readonly shopifyClient?: ShopifyMembershipProductClient,
-		private readonly mutationAudit?: ShopifyMutationAuditWriter,
+		private readonly options?: { allowMockMode?: boolean },
 	) {}
+
+	async syncNewClassProduct(
+		orgId: string,
+		festival: FestivalRef,
+		input: SyncNewClassProductInput,
+		actorUid?: string,
+	): Promise<{ shopifyProductGid: string; shopifyVariantGid: string }> {
+		const int = await this.repository.getShopifyIntegration(orgId);
+		let credentials: ShopifyAdminOperationContext["credentials"] | undefined;
+
+		if (int) {
+			if (
+				int.verificationStatus !== "ok" ||
+				!int.verifiedShopDomain ||
+				!int.verifiedShopGid
+			) {
+				throw new AppError("Shopify integration has not been verified.", 409);
+			}
+
+			const scopes = new Set(
+				normalizeEffectiveShopifyScopes(int.grantedScopes ?? []),
+			);
+			const requiredScopes = [
+				"write_products",
+				"write_inventory",
+				"read_publications",
+				"write_publications",
+			];
+			if (!requiredScopes.every((scope) => scopes.has(scope))) {
+				throw new AppError(
+					"Shopify integration lacks required permissions.",
+					409,
+				);
+			}
+
+			if (!this.secretKeyring) {
+				throw new AppError("Shopify credentials could not be decrypted.", 500);
+			}
+
+			try {
+				credentials = {
+					organizationId: orgId,
+					storeDomain: int.storeDomain,
+					clientId: int.clientId,
+					clientSecret: this.secretKeyring.decrypt(int.encryptedClientSecret, {
+						organizationId: orgId,
+						purpose: SHOPIFY_CLIENT_SECRET_PURPOSE,
+					}),
+					integrationVersion: int.integrationVersion,
+				};
+			} catch {
+				throw new AppError("Shopify credentials could not be decrypted.", 500);
+			}
+		} else {
+			if (this.options?.allowMockMode !== false) {
+				return mockGids();
+			}
+			throw new AppError("Shopify integration is not configured.", 409);
+		}
+
+		if (!this.lifecycleService) {
+			if (this.options?.allowMockMode !== false) {
+				return mockGids();
+			}
+			throw new AppError(
+				"Shopify product lifecycle service is unavailable.",
+				500,
+			);
+		}
+
+		const ctx: ShopifyAdminOperationContext = {
+			organizationId: orgId,
+			firebaseActorUid: actorUid || "system:admin-class-shopify-sync",
+			verifiedShopGid: int.verifiedShopGid,
+			verifiedShopDomain: int.verifiedShopDomain,
+			integrationVersion: int.integrationVersion,
+			grantedScopes: [...int.grantedScopes],
+			capability: "write_products",
+			credentials,
+		};
+
+		const title = `${festival.name} - ${input.name}`;
+		const description =
+			input.description ||
+			(input.festivalShortName
+				? `${festival.name} class: ${input.name} (${input.festivalShortName})`
+				: `${festival.name} class: ${input.name}`);
+
+		try {
+			const result = await this.lifecycleService.createAndPublishDigitalProduct(
+				ctx,
+				{
+					name: title,
+					description,
+					price: input.price,
+				},
+			);
+
+			return {
+				shopifyProductGid: result.productGid,
+				shopifyVariantGid: result.variantGid,
+			};
+		} catch (error) {
+			throw toAppError(error);
+		}
+	}
 
 	async createClassProduct(
 		orgId: string,
 		festivalName: string,
-		input: { displayName: string; price: string },
+		input: {
+			displayName: string;
+			price: string;
+			description?: string;
+			festivalShortName?: string;
+		},
 		actorUid?: string,
 	): Promise<{ shopifyProductGid: string; shopifyVariantGid: string }> {
-		const client = this.shopifyClient;
-		if (!this.secretKeyring || !client) return mockGids();
+		return this.syncNewClassProduct(
+			orgId,
+			{ name: festivalName },
+			{
+				name: input.displayName,
+				price: input.price,
+				description: input.description,
+				festivalShortName: input.festivalShortName,
+			},
+			actorUid,
+		);
+	}
+
+	async syncClassPriceUpdate(
+		orgId: string,
+		cfg: FestivalClassConfiguration,
+		newPrice: string,
+		actorUid?: string,
+	): Promise<void> {
+		if (isMock(cfg.shopifyProductGid, cfg.shopifyVariantGid)) return;
+		if (!this.lifecycleService) return;
 		const ctx = await this.loadWriteContext(orgId, actorUid);
-		if (!ctx) return mockGids();
-		let productId: string | undefined;
-		try {
-			const name = festivalName
-				? `${festivalName} - ${input.displayName}`
-				: input.displayName;
-			return await createAndPublishProduct(
-				client,
-				this.mutationAudit,
-				ctx,
-				name,
-				input.price,
-				(id) => (productId = id),
-			);
-		} catch (error) {
-			if (productId) await this.tryCleanupProduct(ctx, productId);
-			throw toAppError(error);
-		}
+		if (!ctx) return;
+		await this.lifecycleService.updateVariantPrice(ctx, {
+			productId: cfg.shopifyProductGid,
+			variantId: cfg.shopifyVariantGid,
+			price: newPrice,
+		});
 	}
 
 	async syncPrice(
@@ -133,21 +226,23 @@ export class AdminClassShopifySync {
 		price: string,
 		actorUid?: string,
 	): Promise<void> {
-		const client = this.shopifyClient;
-		if (isMock(cfg.shopifyProductGid, cfg.shopifyVariantGid) || !client) return;
+		return this.syncClassPriceUpdate(orgId, cfg, price, actorUid);
+	}
+
+	async syncClassStatus(
+		orgId: string,
+		cfg: FestivalClassConfiguration,
+		isActive: boolean,
+		actorUid?: string,
+	): Promise<void> {
+		if (isMock(cfg.shopifyProductGid)) return;
+		if (!this.lifecycleService) return;
 		const ctx = await this.loadWriteContext(orgId, actorUid);
 		if (!ctx) return;
-		const input = {
+		await this.lifecycleService.updateProductStatus(ctx, {
 			productId: cfg.shopifyProductGid,
-			variantId: cfg.shopifyVariantGid,
-			price,
-		};
-		await attemptAdminMutation(
-			this.mutationAudit,
-			ctx,
-			"productVariantUpdate",
-			() => client.updateVariantPrice(ctx, input),
-		);
+			status: isActive ? "ACTIVE" : "ARCHIVED",
+		});
 	}
 
 	async syncActiveStatus(
@@ -156,28 +251,16 @@ export class AdminClassShopifySync {
 		isActive: boolean,
 		actorUid?: string,
 	): Promise<void> {
-		const client = this.shopifyClient;
-		if (isMock(cfg.shopifyProductGid) || !client) return;
-		const ctx = await this.loadWriteContext(orgId, actorUid);
-		if (!ctx) return;
-		const status: "ACTIVE" | "ARCHIVED" = isActive ? "ACTIVE" : "ARCHIVED";
-		const input = { productId: cfg.shopifyProductGid, status };
-		await attemptAdminMutation(this.mutationAudit, ctx, "productUpdate", () =>
-			client.updateProductDetails(ctx, input),
-		);
+		return this.syncClassStatus(orgId, cfg, isActive, actorUid);
 	}
 
 	async tryCleanupProduct(
 		ctx: ShopifyAdminOperationContext,
 		productId: string,
 	): Promise<void> {
-		const client = this.shopifyClient;
-		if (!client) return;
-		try {
-			await attemptAdminMutation(this.mutationAudit, ctx, "productDelete", () =>
-				client.deleteProduct(ctx, productId),
-			);
-		} catch {}
+		if (this.lifecycleService) {
+			await this.lifecycleService.tryCleanupProduct(ctx, productId);
+		}
 	}
 
 	private async loadWriteContext(
