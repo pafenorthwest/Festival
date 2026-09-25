@@ -1,5 +1,6 @@
 import type {
 	AcceptInviteInput,
+	CreateFestivalClassInput,
 	CreateFestivalInput,
 	CreateFestivalResponse,
 	CreateInviteInput,
@@ -15,6 +16,7 @@ import type {
 	CustomerProfileResponse,
 	CustomerSessionResponse,
 	DismissWelcomeResponse,
+	FestivalClassConfigurationDto,
 	FestivalSummary,
 	InviteSummary,
 	MembershipProductsListResponse,
@@ -29,6 +31,7 @@ import type {
 	PublicMembershipProductsListResponse,
 	PublicOrganizationLandingResponse,
 	RegistrationAgeConfiguration,
+	RegistrationCatalogValue,
 	ReorderOrganizationDivisionsInput,
 	SaveCustomerAccountSettingsInput,
 	SaveCustomerAccountSettingsResponse,
@@ -38,6 +41,7 @@ import type {
 	ShopifyIntegrationDiagnosticsResponse,
 	ShopifyIntegrationSettingsResponse,
 	UpdateCustomerProfileInput,
+	UpdateFestivalClassInput,
 	UpdateOrganizationDivisionInput,
 	UpdateOrganizationTimezoneInput,
 } from "@festival/common";
@@ -649,6 +653,8 @@ export function getAdminDivisions(idToken: string, slug: string) {
 	);
 }
 
+export const listDivisions = getAdminDivisions;
+
 export function createAdminDivision(
 	idToken: string,
 	slug: string,
@@ -710,7 +716,11 @@ export function getAdminRegistrationConfiguration(
 	idToken: string,
 	slug: string,
 ) {
-	return requestJson<{ ageConfiguration: RegistrationAgeConfiguration | null }>(
+	return requestJson<{
+		ageConfiguration: RegistrationAgeConfiguration | null;
+		classSubtypes: RegistrationCatalogValue[];
+		instruments: RegistrationCatalogValue[];
+	}>(
 		`/api/organizations/${slug}/admin/registration-configuration`,
 		undefined,
 		idToken,
@@ -817,6 +827,51 @@ export function runShopifyDiagnostics(idToken: string, slug: string) {
 	return requestJson<ShopifyIntegrationDiagnosticsResponse>(
 		`/api/organizations/${slug}/admin/shopify/diagnostics`,
 		{ method: "POST" },
+		idToken,
+	);
+}
+
+export function listFestivalClasses(
+	idToken: string,
+	slug: string,
+	festivalSlug: string,
+): Promise<FestivalClassConfigurationDto[]> {
+	return requestJson<FestivalClassConfigurationDto[]>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/festivals/${encodeURIComponent(festivalSlug)}/classes`,
+		undefined,
+		idToken,
+	);
+}
+
+export function createFestivalClass(
+	idToken: string,
+	slug: string,
+	festivalSlug: string,
+	input: CreateFestivalClassInput,
+): Promise<FestivalClassConfigurationDto> {
+	return requestJson<FestivalClassConfigurationDto>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/festivals/${encodeURIComponent(festivalSlug)}/classes`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+		idToken,
+	);
+}
+
+export function updateFestivalClass(
+	idToken: string,
+	slug: string,
+	festivalSlug: string,
+	classId: string,
+	input: UpdateFestivalClassInput,
+): Promise<FestivalClassConfigurationDto> {
+	return requestJson<FestivalClassConfigurationDto>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/festivals/${encodeURIComponent(festivalSlug)}/classes/${encodeURIComponent(classId)}`,
+		{
+			method: "PATCH",
+			body: JSON.stringify(input),
+		},
 		idToken,
 	);
 }
