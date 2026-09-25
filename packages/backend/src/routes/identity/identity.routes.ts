@@ -4,6 +4,7 @@ import type {
 	CreateOrganizationInput,
 } from "@festival/common";
 import { Hono } from "hono";
+import type { CustomClaimsWriter } from "../../auth/custom-claims.js";
 import {
 	type ApiVariables,
 	assertTenantRole,
@@ -19,13 +20,14 @@ import type { OrganizationService } from "../../services/organization-service.js
 export interface IdentityRoutesOptions {
 	organizationService: OrganizationService;
 	authVerifier: AuthVerifier;
+	customClaimsWriter?: CustomClaimsWriter;
 }
 
 export function buildIdentityRoutes(
 	options: IdentityRoutesOptions,
 ): Hono<{ Variables: Partial<ApiVariables> }> {
 	const router = new Hono<{ Variables: Partial<ApiVariables> }>();
-	const { organizationService, authVerifier } = options;
+	const { organizationService, authVerifier, customClaimsWriter } = options;
 	const repository = organizationService.repository;
 
 	router.get("/bootstrap", async (c) => {
@@ -55,14 +57,20 @@ export function buildIdentityRoutes(
 
 	router.post("/organizations", requireAuth(authVerifier), async (c) => {
 		try {
+			const identity = getRequiredIdentity(c);
 			const payload = (await c.req.json()) as CreateOrganizationInput;
-			c.status(201);
-			return c.json(
-				await organizationService.createOrganization(
-					getRequiredIdentity(c),
-					payload,
-				),
+			const response = await organizationService.createOrganization(
+				identity,
+				payload,
 			);
+			// Best-effort; never blocks the response. See auth/custom-claims.ts.
+			void customClaimsWriter?.setOrgRole(
+				identity.uid,
+				response.organization.id,
+				response.membership.role,
+			);
+			c.status(201);
+			return c.json(response);
 		} catch (error) {
 			return toJsonError(c, error);
 		}
@@ -109,15 +117,21 @@ export function buildIdentityRoutes(
 		requireAuth(authVerifier),
 		async (c) => {
 			try {
+				const identity = getRequiredIdentity(c);
 				const payload = (await c.req.json()) as AcceptInviteInput;
-				c.status(201);
-				return c.json(
-					await organizationService.acceptInvite(
-						getRequiredIdentity(c),
-						c.req.param("token"),
-						payload,
-					),
+				const response = await organizationService.acceptInvite(
+					identity,
+					c.req.param("token"),
+					payload,
 				);
+				// Best-effort; never blocks the response. See auth/custom-claims.ts.
+				void customClaimsWriter?.setOrgRole(
+					identity.uid,
+					response.organization.id,
+					response.membership.role,
+				);
+				c.status(201);
+				return c.json(response);
 			} catch (error) {
 				return toJsonError(c, error);
 			}

@@ -1,6 +1,13 @@
 import { timingSafeEqual } from "node:crypto";
+import { getAuth } from "firebase-admin/auth";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import {
+	type CustomClaimsWriter,
+	FirebaseCustomClaimsWriter,
+	NoopCustomClaimsWriter,
+} from "./auth/custom-claims.js";
+import { getFirebaseApp } from "./auth/firebase-app.js";
 import { createFirebaseAuthVerifier } from "./auth/firebase-auth-verifier.js";
 import type { AuthVerifier } from "./auth/types.js";
 import {
@@ -69,6 +76,7 @@ export interface CreateAppOptions {
 	shopifyWebhookService?: ShopifyWebhookService;
 	membershipStatusService?: MembershipStatusService;
 	volunteerRepository?: VolunteerRepository;
+	customClaimsWriter?: CustomClaimsWriter;
 }
 
 function privateTokenMatches(
@@ -111,6 +119,15 @@ export async function createApp(options: CreateAppOptions = {}) {
 		createFirebaseAuthVerifier(
 			env as Required<Pick<AppEnv, "firebaseProjectId">> & AppEnv,
 		);
+	// Firebase custom claims can only be written with service-account
+	// credentials (firebaseClientEmail + firebasePrivateKey). Without
+	// them, fall back to a no-op writer rather than fail startup or
+	// throw on every write in local dev / tests.
+	const customClaimsWriter =
+		options.customClaimsWriter ??
+		(env.firebaseClientEmail && env.firebasePrivateKey
+			? new FirebaseCustomClaimsWriter(getAuth(getFirebaseApp(env)))
+			: new NoopCustomClaimsWriter());
 	const appUserRepository =
 		options.appUserRepository ??
 		(env.databaseSchema
@@ -351,6 +368,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 			accompanistMembershipService,
 			volunteerRepository,
 			classCheckoutService,
+			customClaimsWriter,
 		}),
 	);
 	app.route(

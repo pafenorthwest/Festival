@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { CustomClaimsWriter } from "../auth/custom-claims.js";
 import {
 	type ApiVariables,
 	getRequiredTenant,
@@ -25,6 +26,7 @@ export interface VolunteerRoutesOptions {
 	authVerifier: AuthVerifier;
 	repository: OrganizationRepository;
 	volunteerRepository?: VolunteerRepository;
+	customClaimsWriter?: CustomClaimsWriter;
 }
 
 /**
@@ -191,15 +193,20 @@ export function buildVolunteerRoutes(
 				if ("errors" in validated) {
 					throw new AppError(validated.errors.join(" "), 400);
 				}
-				return c.json(
-					await options.volunteerRepository.upsertVolunteer({
-						organizationId: scope.organization.id,
-						festivalId: scope.festival.id,
-						firebaseUid: scope.identity.uid,
-						accountEmail: scope.identity.email,
-						...validated.request,
-					}),
+				const volunteer = await options.volunteerRepository.upsertVolunteer({
+					organizationId: scope.organization.id,
+					festivalId: scope.festival.id,
+					firebaseUid: scope.identity.uid,
+					accountEmail: scope.identity.email,
+					...validated.request,
+				});
+				// Best-effort; never blocks the response. See auth/custom-claims.ts.
+				void options.customClaimsWriter?.addVolunteerFestival(
+					scope.identity.uid,
+					scope.organization.id,
+					scope.festival.id,
 				);
+				return c.json(volunteer);
 			} catch (error) {
 				return toJsonError(c, error);
 			}

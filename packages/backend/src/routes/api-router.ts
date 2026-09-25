@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { CustomClaimsWriter } from "../auth/custom-claims.js";
 import type { ApiVariables } from "../auth/tenant-context.js";
 import type { AuthVerifier } from "../auth/types.js";
 import type { ClassCheckoutService } from "../checkout/class-checkout-service.js";
@@ -39,6 +40,7 @@ export interface ApiRouterOptions {
 	accompanistMembershipService?: AccompanistMembershipService;
 	volunteerRepository?: VolunteerRepository;
 	classCheckoutService?: ClassCheckoutService;
+	customClaimsWriter?: CustomClaimsWriter;
 }
 
 export function buildApiRouter(
@@ -58,10 +60,18 @@ export function buildApiRouter(
 		accompanistMembershipService,
 		volunteerRepository,
 		classCheckoutService,
+		customClaimsWriter,
 	} = options;
 	const repository = organizationService.repository;
 
-	router.route("/", buildIdentityRoutes({ organizationService, authVerifier }));
+	router.route(
+		"/",
+		buildIdentityRoutes({
+			organizationService,
+			authVerifier,
+			customClaimsWriter,
+		}),
+	);
 	router.route("/", buildAdminOrgRoutes({ organizationService, authVerifier }));
 
 	router.route(
@@ -141,6 +151,7 @@ export function buildApiRouter(
 			authVerifier,
 			repository,
 			volunteerRepository,
+			customClaimsWriter,
 		}),
 	);
 
