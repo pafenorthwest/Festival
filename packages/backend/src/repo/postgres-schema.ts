@@ -75,7 +75,8 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			name TEXT NOT NULL,
 			start_date DATE NOT NULL,
 			end_date DATE NOT NULL,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE (id, organization_id)
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.shopify_integrations (
 			organization_id TEXT PRIMARY KEY REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
@@ -446,28 +447,42 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.volunteers (
 			id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			festival_id TEXT NOT NULL REFERENCES ${safeSchema}.festivals (id) ON DELETE CASCADE,
 			firebase_uid TEXT NOT NULL, account_email TEXT NOT NULL, name TEXT NOT NULL, phone TEXT NOT NULL,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			FOREIGN KEY (festival_id, organization_id) REFERENCES ${safeSchema}.festivals (id, organization_id) ON DELETE CASCADE,
+			UNIQUE (id, festival_id, organization_id)
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.volunteer_roles (
 			id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
-			slug TEXT NOT NULL, description TEXT NOT NULL, details_url TEXT NULL,
+			festival_id TEXT NOT NULL REFERENCES ${safeSchema}.festivals (id) ON DELETE CASCADE,
+			slug TEXT NOT NULL, display_name TEXT NOT NULL, description TEXT NOT NULL, details_url TEXT NULL,
 			is_room_proctor BOOLEAN NOT NULL DEFAULT FALSE,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			FOREIGN KEY (festival_id, organization_id) REFERENCES ${safeSchema}.festivals (id, organization_id) ON DELETE CASCADE,
+			UNIQUE (id, festival_id, organization_id)
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.volunteer_shifts (
 			id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
-			role_id TEXT NOT NULL REFERENCES ${safeSchema}.volunteer_roles (id) ON DELETE CASCADE,
+			festival_id TEXT NOT NULL REFERENCES ${safeSchema}.festivals (id) ON DELETE CASCADE,
+			role_id TEXT NOT NULL,
 			date DATE NOT NULL, period TEXT NOT NULL CHECK (period IN ('AM', 'PM')),
 			time_text TEXT NULL, division TEXT NULL, adjudicator TEXT NULL,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			FOREIGN KEY (festival_id, organization_id) REFERENCES ${safeSchema}.festivals (id, organization_id) ON DELETE CASCADE,
+			FOREIGN KEY (role_id, festival_id, organization_id) REFERENCES ${safeSchema}.volunteer_roles (id, festival_id, organization_id) ON DELETE CASCADE,
+			UNIQUE (id, festival_id, organization_id)
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.volunteer_assignments (
 			id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
-			shift_id TEXT NOT NULL REFERENCES ${safeSchema}.volunteer_shifts (id) ON DELETE CASCADE,
-			volunteer_id TEXT NOT NULL REFERENCES ${safeSchema}.volunteers (id) ON DELETE CASCADE,
+			festival_id TEXT NOT NULL REFERENCES ${safeSchema}.festivals (id) ON DELETE CASCADE,
+			shift_id TEXT NOT NULL,
+			volunteer_id TEXT NOT NULL,
 			status TEXT NOT NULL CHECK (status IN ('active', 'cancelled')),
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), cancelled_at TIMESTAMPTZ NULL
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), cancelled_at TIMESTAMPTZ NULL,
+			FOREIGN KEY (festival_id, organization_id) REFERENCES ${safeSchema}.festivals (id, organization_id) ON DELETE CASCADE,
+			FOREIGN KEY (shift_id, festival_id, organization_id) REFERENCES ${safeSchema}.volunteer_shifts (id, festival_id, organization_id) ON DELETE CASCADE,
+			FOREIGN KEY (volunteer_id, festival_id, organization_id) REFERENCES ${safeSchema}.volunteers (id, festival_id, organization_id) ON DELETE CASCADE
 		);
 
 		CREATE OR REPLACE FUNCTION ${safeSchema}.enforce_shopify_shop_ownership()
@@ -519,7 +534,9 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		CREATE INDEX IF NOT EXISTS idx_user_login_user_id ON ${safeSchema}.user_login_event(user_id);
 		CREATE INDEX IF NOT EXISTS idx_user_login_firebase_uid ON ${safeSchema}.user_login_event(firebase_uid);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_app_user_email_lower ON ${safeSchema}.app_user(lower(email));
-		CREATE UNIQUE INDEX IF NOT EXISTS volunteers_org_uid_key ON ${safeSchema}.volunteers (organization_id, firebase_uid);
+		CREATE UNIQUE INDEX IF NOT EXISTS volunteers_org_festival_uid_key ON ${safeSchema}.volunteers (organization_id, festival_id, firebase_uid);
+		CREATE INDEX IF NOT EXISTS volunteer_roles_org_festival_idx ON ${safeSchema}.volunteer_roles (organization_id, festival_id);
+		CREATE INDEX IF NOT EXISTS volunteer_shifts_org_festival_role_idx ON ${safeSchema}.volunteer_shifts (organization_id, festival_id, role_id);
 		CREATE UNIQUE INDEX IF NOT EXISTS volunteer_assignments_active_shift_key ON ${safeSchema}.volunteer_assignments (shift_id) WHERE status = 'active';
 		CREATE INDEX IF NOT EXISTS idx_class_entitlements_org_class ON ${safeSchema}.class_entitlements (organization_id, festival_class_id);
 		CREATE INDEX IF NOT EXISTS idx_class_entitlements_org_parent ON ${safeSchema}.class_entitlements (organization_id, parent_customer_id);

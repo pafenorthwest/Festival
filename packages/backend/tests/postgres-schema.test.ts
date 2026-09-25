@@ -49,6 +49,21 @@ test("canonical PostgreSQL schema enforces one active volunteer assignment per s
 	);
 });
 
+test("canonical PostgreSQL schema requires a volunteer role display name and scopes volunteer work to a festival", () => {
+	const schema = buildCanonicalPostgresSchemaSql("fresh_orgs");
+
+	expect(schema).toContain("slug TEXT NOT NULL, display_name TEXT NOT NULL");
+	expect(schema).toContain(
+		"festival_id TEXT NOT NULL REFERENCES fresh_orgs.festivals (id) ON DELETE CASCADE",
+	);
+	expect(schema).toContain(
+		"FOREIGN KEY (role_id, festival_id, organization_id) REFERENCES fresh_orgs.volunteer_roles (id, festival_id, organization_id) ON DELETE CASCADE",
+	);
+	expect(schema).toContain(
+		"FOREIGN KEY (volunteer_id, festival_id, organization_id) REFERENCES fresh_orgs.volunteers (id, festival_id, organization_id) ON DELETE CASCADE",
+	);
+});
+
 test("canonical PostgreSQL schema rejects unsafe schema identifiers", () => {
 	expect(() => postgresSchemaName("orgs; DROP SCHEMA orgs")).toThrow(
 		"Database schema is invalid.",

@@ -3,6 +3,7 @@ export const ROUTE_AUTHENTICATION_CLASSES = [
 	"firebase",
 	"tenant",
 	"admin",
+	"volunteer-admin",
 	"private-health",
 	"customer-auth-start",
 	"customer-oauth-callback",
@@ -199,7 +200,7 @@ export const CURRENT_ROUTE_SECURITY = [
 	{
 		method: "GET",
 		path: "/api/organizations/:slug/admin/festivals",
-		authenticationClass: "admin",
+		authenticationClass: "volunteer-admin",
 	},
 	{
 		method: "POST",
@@ -380,7 +381,27 @@ export const CURRENT_ROUTE_SECURITY = [
 	{
 		method: "GET",
 		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/roles",
-		authenticationClass: "tenant",
+		authenticationClass: "firebase",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/roles",
+		authenticationClass: "volunteer-admin",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/roles/:roleId/shifts",
+		authenticationClass: "volunteer-admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/roles/:roleId/shifts",
+		authenticationClass: "volunteer-admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/enroll",
+		authenticationClass: "firebase",
 	},
 	{
 		method: "POST",

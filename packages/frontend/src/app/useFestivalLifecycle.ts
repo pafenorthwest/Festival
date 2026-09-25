@@ -129,7 +129,8 @@ export function useFestivalLifecycle(
 				currentRoute.kind === "org-admin-integrations" ||
 				currentRoute.kind === "org-admin-memberships" ||
 				currentRoute.kind === "org-admin-festivals" ||
-				currentRoute.kind === "org-admin-divisions") &&
+				currentRoute.kind === "org-admin-divisions" ||
+				currentRoute.kind === "org-admin-volunteers") &&
 			currentRoute.slug &&
 			state.firebaseUser()
 		) {
@@ -161,6 +162,14 @@ export function useFestivalLifecycle(
 
 	createEffect(() => {
 		const currentRoute = state.route();
+		if (
+			currentRoute.kind === "org-admin-volunteers" &&
+			state.hasVolunteerAdminIntent()
+		) {
+			void loaders.loadFestivals(currentRoute.slug);
+			return;
+		}
+
 		if (!state.isAdminMember()) {
 			return;
 		}
@@ -170,7 +179,10 @@ export function useFestivalLifecycle(
 			return;
 		}
 
-		if (currentRoute.kind === "org-admin-festivals") {
+		if (
+			currentRoute.kind === "org-admin-festivals" ||
+			currentRoute.kind === "org-admin-volunteers"
+		) {
 			void loaders.loadFestivals(currentRoute.slug);
 			return;
 		}

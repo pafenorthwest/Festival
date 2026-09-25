@@ -19,6 +19,16 @@ class FakeAuth implements AuthVerifier {
 				email: "outsider@example.com",
 				displayName: "Outsider",
 			},
+			"division-chair": {
+				uid: "uid-division-chair",
+				email: "division-chair@example.com",
+				displayName: "Division Chair",
+			},
+			"concert-chair": {
+				uid: "uid-concert-chair",
+				email: "concert-chair@example.com",
+				displayName: "Concert Chair",
+			},
 		};
 		const user = users[token];
 		if (!user) throw new Error(`Unknown token: ${token}`);
@@ -94,6 +104,72 @@ describe("admin org routes", () => {
 			const body = await response.json();
 			expect(body.festivals).toBeDefined();
 			expect(Array.isArray(body.festivals)).toBe(true);
+		});
+
+		it.each([
+			[
+				"division-chair",
+				"uid-division-chair",
+				"division-chair@example.com",
+				"Division Chair",
+			],
+			[
+				"concert-chair",
+				"uid-concert-chair",
+				"concert-chair@example.com",
+				"Concert Chair",
+			],
+		] as const)("returns 200 for a %s", async (token, uid, email, role) => {
+			const { app, organization, repository } = await createTestApp();
+			const chair = await repository.upsertUser({
+				uid,
+				email,
+				displayName: role,
+			});
+			await repository.createMembership({
+				organizationId: organization.id,
+				userId: chair.id,
+				role,
+				origin: "invite",
+			});
+
+			const response = await app.request(
+				`/organizations/${organization.slug}/admin/festivals`,
+				{ headers: { Authorization: `Bearer ${token}` } },
+			);
+
+			expect(response.status).toBe(200);
+		});
+
+		it("does not allow a Chair to create a festival", async () => {
+			const { app, organization, repository } = await createTestApp();
+			const chair = await repository.upsertUser({
+				uid: "uid-division-chair",
+				email: "division-chair@example.com",
+				displayName: "Division Chair",
+			});
+			await repository.createMembership({
+				organizationId: organization.id,
+				userId: chair.id,
+				role: "Division Chair",
+				origin: "invite",
+			});
+
+			const response = await app.request(
+				`/organizations/${organization.slug}/admin/festivals`,
+				{
+					method: "POST",
+					headers: { Authorization: "Bearer division-chair" },
+					body: JSON.stringify({
+						name: "Unauthorized Festival",
+						shortName: "unauthorized",
+						startDate: "2027-01-01",
+						endDate: "2027-01-02",
+					}),
+				},
+			);
+
+			expect(response.status).toBe(403);
 		});
 	});
 });

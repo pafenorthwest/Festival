@@ -1,5 +1,6 @@
 import {
 	deriveDisplayName,
+	type FestivalRecord,
 	type OrganizationMembershipRecord,
 	type OrganizationRecord,
 	type OrganizationRole,
@@ -29,9 +30,23 @@ export interface TenantContext extends AuthContext {
 	role: OrganizationRole;
 }
 
+/**
+ * The authorization model for volunteer-portal routes that a volunteer
+ * calls directly, without being a member of the organization. This is
+ * deliberately separate from TenantContext: a volunteer is scoped to one
+ * organization + one festival, never to an organization-wide membership
+ * or role. See VOLUNTEER-PORTAL.md's "Visibility and authorization" and
+ * "Festival scope" sections.
+ */
+export interface VolunteerScope extends AuthContext {
+	organization: OrganizationRecord;
+	festival: FestivalRecord;
+}
+
 export type ApiVariables = {
 	identity: AuthContext["identity"];
 	tenant: TenantContext;
+	volunteerScope: VolunteerScope;
 };
 
 type ApiContext = Context<{ Variables: Partial<ApiVariables> }>;

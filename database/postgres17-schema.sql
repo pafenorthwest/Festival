@@ -880,6 +880,7 @@ CREATE TABLE orgs.volunteer_roles (
     id text NOT NULL,
     organization_id text NOT NULL,
     slug text NOT NULL,
+    display_name text NOT NULL,
     description text NOT NULL,
     details_url text,
     is_room_proctor boolean DEFAULT false NOT NULL,
@@ -912,6 +913,7 @@ CREATE TABLE orgs.volunteer_shifts (
 CREATE TABLE orgs.volunteers (
     id text NOT NULL,
     organization_id text NOT NULL,
+    festival_id text NOT NULL,
     firebase_uid text NOT NULL,
     account_email text NOT NULL,
     name text NOT NULL,
@@ -1812,10 +1814,10 @@ CREATE UNIQUE INDEX volunteer_assignments_active_shift_key ON orgs.volunteer_ass
 
 
 --
--- Name: volunteers_org_uid_key; Type: INDEX; Schema: orgs; Owner: -
+-- Name: volunteers_org_festival_uid_key; Type: INDEX; Schema: orgs; Owner: -
 --
 
-CREATE UNIQUE INDEX volunteers_org_uid_key ON orgs.volunteers USING btree (organization_id, firebase_uid);
+CREATE UNIQUE INDEX volunteers_org_festival_uid_key ON orgs.volunteers USING btree (organization_id, festival_id, firebase_uid);
 
 
 --
@@ -2375,6 +2377,14 @@ ALTER TABLE ONLY orgs.volunteer_shifts
 
 ALTER TABLE ONLY orgs.volunteers
     ADD CONSTRAINT volunteers_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: volunteers volunteers_festival_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.volunteers
+    ADD CONSTRAINT volunteers_festival_id_fkey FOREIGN KEY (festival_id) REFERENCES orgs.festivals(id) ON DELETE CASCADE;
 
 
 --
