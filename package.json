@@ -23,6 +23,7 @@
     "format:frontend": "biome check --write packages/frontend",
     "format:check": "biome check packages",
     "verify:toolchain": "bun scripts/verify-toolchain.ts",
+    "check:sql": "bun scripts/check-sql.ts",
     "build": "bun run verify:toolchain && bun run build:common && bun run build:backend && bun run build:frontend && bun run build:confirmation",
     "build:confirmation": "bun run --cwd packages/shopify-confirmation build",
     "build:common": "bun run --cwd packages/common build",

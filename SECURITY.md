@@ -129,4 +129,4 @@ Future implementations require their own route classification, least-privilege n
 
 ## Verification
 
-Repository verification is `bun run format:check`, `bun run build`, and `bun run test`. Nginx policy is tested by deterministic config inspection; this security slice does not run containers, reload nginx, apply UFW, or perform external probes.
+Repository verification is `bun run format:check`, `bun run build`, and `bun run test`. Backend SQL, schema, and PostgreSQL-fixture changes additionally require `bun run check:sql`; it is a standalone parameter-validation task and is not included in `bun run test`. Nginx policy is tested by deterministic config inspection; this security slice does not run containers, reload nginx, apply UFW, or perform external probes.

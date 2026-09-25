@@ -26,31 +26,26 @@ integrationTest(
 			const divisionId = randomUUID();
 			const subtypeId = randomUUID();
 
-			await sql.unsafe(
-				`INSERT INTO ${schema}.organizations (id, name, slug) VALUES ($1, 'Test Org', 'test-org');
-				 INSERT INTO ${schema}.organization_divisions (id, organization_id, display_name, normalized_name, display_order) VALUES ($2, $1, 'Piano', 'piano', 0);
-				 INSERT INTO ${schema}.festivals (id, organization_id, code, short_name, is_primary, name, start_date, end_date) VALUES ($3, $1, 'FEST', 'fest', TRUE, 'Festival', '2027-01-01', '2027-01-02');
-				 INSERT INTO ${schema}.festival_customers (id, organization_id, shopify_customer_gid, created_at, updated_at) VALUES ($4, $1, 'gid://shopify/Customer/1', NOW(), NOW());
-				 INSERT INTO ${schema}.festival_children (id, organization_id, parent_customer_id, display_name, created_at) VALUES ($5, $1, $4, 'Child One', NOW());
-				 INSERT INTO ${schema}.registration_catalog_values (id, organization_id, kind, display_name, normalized_name, display_order) VALUES ($6, $1, 'class_subtype', 'Classical', 'classical', 0);
-				 INSERT INTO ${schema}.festival_class_configurations (id, organization_id, festival_id, display_name, class_subtype_id, division_id, minimum_age, maximum_age, price, maximum_performance_pieces, performance_minutes, capacity, shopify_product_gid, shopify_variant_gid) VALUES ($7, $1, $3, 'Class A', $6, $2, 5, 18, '50.00', 2, 10, 20, 'gid://shopify/Product/class', 'gid://shopify/ProductVariant/class');`,
-				[
-					orgId,
-					divisionId,
-					festivalId,
-					customerId,
-					childId,
-					subtypeId,
-					festivalClassId,
-				],
-			);
+			const insertOrganization = sql`INSERT INTO ${sql(`${schema}.organizations`)} (id, name, slug) VALUES (${orgId}, 'Test Org', 'test-org')`;
+			await insertOrganization;
+			const insertDivision = sql`INSERT INTO ${sql(`${schema}.organization_divisions`)} (id, organization_id, display_name, normalized_name, display_order) VALUES (${divisionId}, ${orgId}, 'Piano', 'piano', 0)`;
+			await insertDivision;
+			const insertFestival = sql`INSERT INTO ${sql(`${schema}.festivals`)} (id, organization_id, code, short_name, is_primary, name, start_date, end_date) VALUES (${festivalId}, ${orgId}, 'FEST', 'fest', TRUE, 'Festival', '2027-01-01', '2027-01-02')`;
+			await insertFestival;
+			const insertCustomer = sql`INSERT INTO ${sql(`${schema}.festival_customers`)} (id, organization_id, shopify_customer_gid, created_at, updated_at) VALUES (${customerId}, ${orgId}, 'gid://shopify/Customer/1', NOW(), NOW())`;
+			await insertCustomer;
+			const insertChild = sql`INSERT INTO ${sql(`${schema}.festival_children`)} (id, organization_id, parent_customer_id, display_name, created_at) VALUES (${childId}, ${orgId}, ${customerId}, 'Child One', NOW())`;
+			await insertChild;
+			const insertClassSubtype = sql`INSERT INTO ${sql(`${schema}.registration_catalog_values`)} (id, organization_id, kind, display_name, normalized_name, display_order) VALUES (${subtypeId}, ${orgId}, 'class_subtype', 'Classical', 'classical', 0)`;
+			await insertClassSubtype;
+			const insertFestivalClassConfiguration = sql`INSERT INTO ${sql(`${schema}.festival_class_configurations`)} (id, organization_id, festival_id, display_name, class_subtype_id, division_id, minimum_age, maximum_age, price, maximum_performance_pieces, performance_minutes, capacity, shopify_product_gid, shopify_variant_gid) VALUES (${festivalClassId}, ${orgId}, ${festivalId}, 'Class A', ${subtypeId}, ${divisionId}, 5, 18, '50.00', 2, 10, 20, 'gid://shopify/Product/class', 'gid://shopify/ProductVariant/class')`;
+			await insertFestivalClassConfiguration;
 
 			// Seed a membership_entitlements row so registration_metadata FK is satisfied
-			await sql.unsafe(
-				`INSERT INTO ${schema}.products (id, organization_id, product_category, entitlement_class, duration_days, shopify_product_gid, shopify_variant_gid, product_name_snapshot) VALUES ($1, $2, 'membership', 'teacher_membership', 365, 'gid://shopify/Product/teacher', 'gid://shopify/ProductVariant/teacher', 'Teacher Membership');
-				 INSERT INTO ${schema}.membership_entitlements (id, organization_id, customer_id, entitlement_class, source, offering_id, starts_on, ends_on) VALUES ($3, $2, $4, 'teacher_membership', 'teacher_checkout', $1, '2026-01-01', '2027-01-01');`,
-				["product-teacher", orgId, membershipId, customerId],
-			);
+			const insertTeacherMembershipProduct = sql`INSERT INTO ${sql(`${schema}.products`)} (id, organization_id, product_category, entitlement_class, duration_days, shopify_product_gid, shopify_variant_gid, product_name_snapshot) VALUES ('product-teacher', ${orgId}, 'membership', 'teacher_membership', 365, 'gid://shopify/Product/teacher', 'gid://shopify/ProductVariant/teacher', 'Teacher Membership')`;
+			await insertTeacherMembershipProduct;
+			const insertMembershipEntitlement = sql`INSERT INTO ${sql(`${schema}.membership_entitlements`)} (id, organization_id, customer_id, entitlement_class, source, offering_id, starts_on, ends_on) VALUES (${membershipId}, ${orgId}, ${customerId}, 'teacher_membership', 'teacher_checkout', 'product-teacher', '2026-01-01', '2027-01-01')`;
+			await insertMembershipEntitlement;
 
 			// Insert a checkout_intent of type class_entry
 			await sql.unsafe(
