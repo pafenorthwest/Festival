@@ -1,5 +1,6 @@
 import type {
 	AcceptInviteInput,
+	ClassRegistrationMetadata,
 	CreateFestivalClassInput,
 	CreateFestivalInput,
 	CreateFestivalResponse,
@@ -30,9 +31,13 @@ import type {
 	OrganizationTimezoneResponse,
 	PublicMembershipProductsListResponse,
 	PublicOrganizationLandingResponse,
+	RegistrationAccompanistSummary,
 	RegistrationAgeConfiguration,
 	RegistrationCatalogValue,
+	RegistrationEligibleClass,
+	RegistrationTeacherSummary,
 	ReorderOrganizationDivisionsInput,
+	RepertoirePiece,
 	SaveCustomerAccountSettingsInput,
 	SaveCustomerAccountSettingsResponse,
 	SaveShopifyIntegrationInput,
@@ -873,5 +878,232 @@ export function updateFestivalClass(
 			body: JSON.stringify(input),
 		},
 		idToken,
+	);
+}
+
+export function listRegistrationTeachers(
+	slug: string,
+	festivalSlug: string,
+	childIdOrParams?: string | { childId?: string; divisionId?: string },
+	divisionId?: string,
+): Promise<{ teachers: RegistrationTeacherSummary[] }> {
+	let childId = "";
+	let divId = "";
+	if (typeof childIdOrParams === "object" && childIdOrParams !== null) {
+		childId = childIdOrParams.childId ?? "";
+		divId = childIdOrParams.divisionId ?? "";
+	} else if (typeof childIdOrParams === "string") {
+		childId = childIdOrParams;
+		divId = divisionId ?? "";
+	}
+	const searchParams = new URLSearchParams();
+	if (childId) searchParams.set("childId", childId);
+	if (divId) searchParams.set("divisionId", divId);
+	const query = searchParams.toString() ? `?${searchParams.toString()}` : "";
+	return requestJson<{ teachers: RegistrationTeacherSummary[] }>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/registration/teachers${query}`,
+		undefined,
+		undefined,
+		"",
+	);
+}
+
+export function listRegistrationEligibleClasses(
+	slug: string,
+	festivalSlug: string,
+	childIdOrParams?:
+		| string
+		| { childId?: string; divisionId?: string; teacherId?: string },
+	divisionId?: string,
+	teacherId?: string,
+): Promise<{ classes: RegistrationEligibleClass[] }> {
+	let childId = "";
+	let divId = "";
+	let tId = "";
+	if (typeof childIdOrParams === "object" && childIdOrParams !== null) {
+		childId = childIdOrParams.childId ?? "";
+		divId = childIdOrParams.divisionId ?? "";
+		tId = childIdOrParams.teacherId ?? "";
+	} else if (typeof childIdOrParams === "string") {
+		childId = childIdOrParams;
+		divId = divisionId ?? "";
+		tId = teacherId ?? "";
+	}
+	const searchParams = new URLSearchParams();
+	if (childId) searchParams.set("childId", childId);
+	if (divId) searchParams.set("divisionId", divId);
+	if (tId) searchParams.set("teacherId", tId);
+	const query = searchParams.toString() ? `?${searchParams.toString()}` : "";
+	return requestJson<{ classes: RegistrationEligibleClass[] }>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/registration/eligible-classes${query}`,
+		undefined,
+		undefined,
+		"",
+	);
+}
+
+export function listRegistrationAccompanists(
+	slug: string,
+	festivalSlug: string,
+): Promise<{ accompanists: RegistrationAccompanistSummary[] }> {
+	return requestJson<{ accompanists: RegistrationAccompanistSummary[] }>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/registration/accompanists`,
+		undefined,
+		undefined,
+		"",
+	);
+}
+
+export interface StartClassCheckoutInput {
+	festivalClassId: string;
+	childId: string;
+	teacherId?: string;
+	pieces?: RepertoirePiece[];
+	divisionId?: string;
+	accompanistId?: string;
+	festivalId?: string;
+	festivalShortName?: string;
+	currency?: string;
+	currencyCode?: string;
+}
+
+export interface StartClassCheckoutResponse {
+	checkoutUrl: string;
+	correlationId: string;
+}
+
+export function startClassCheckout(
+	slug: string,
+	festivalSlug: string,
+	csrfTokenOrInput:
+		| string
+		| (StartClassCheckoutInput & {
+				csrfToken?: string;
+				idempotencyKey?: string;
+		  }),
+	inputOrToken?: string | StartClassCheckoutInput,
+	idempotencyKeyOrInput?: string | StartClassCheckoutInput,
+): Promise<StartClassCheckoutResponse> {
+	let csrfToken = "";
+	let idempotencyKey = "";
+	let input: StartClassCheckoutInput = {} as StartClassCheckoutInput;
+
+	if (typeof csrfTokenOrInput === "object" && csrfTokenOrInput !== null) {
+		const { csrfToken: c, idempotencyKey: k, ...rest } = csrfTokenOrInput;
+		csrfToken = (typeof inputOrToken === "string" ? inputOrToken : c) ?? "";
+		idempotencyKey =
+			(typeof idempotencyKeyOrInput === "string" ? idempotencyKeyOrInput : k) ??
+			"";
+		input = rest as StartClassCheckoutInput;
+	} else if (typeof csrfTokenOrInput === "string") {
+		csrfToken = csrfTokenOrInput;
+		if (typeof inputOrToken === "string") {
+			idempotencyKey = inputOrToken;
+			input =
+				(idempotencyKeyOrInput as StartClassCheckoutInput) ??
+				({} as StartClassCheckoutInput);
+		} else if (typeof inputOrToken === "object" && inputOrToken !== null) {
+			input = inputOrToken as StartClassCheckoutInput;
+			idempotencyKey =
+				(typeof idempotencyKeyOrInput === "string"
+					? idempotencyKeyOrInput
+					: "") ?? "";
+		}
+	}
+	if (!idempotencyKey && typeof crypto !== "undefined" && crypto.randomUUID) {
+		idempotencyKey = crypto.randomUUID();
+	}
+
+	const headers: Record<string, string> = {};
+	if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
+	if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
+
+	return requestJson<StartClassCheckoutResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/registration/checkout`,
+		{
+			method: "POST",
+			headers,
+			body: JSON.stringify(input),
+		},
+		undefined,
+		"",
+	);
+}
+
+export interface CustomerClassRegistrationItem {
+	entitlement: {
+		id: string;
+		status: string;
+		orderId?: string;
+		lineItemId?: string;
+		createdAt?: string;
+		updatedAt?: string;
+		[key: string]: unknown;
+	};
+	festivalClass?: {
+		id: string;
+		displayName: string;
+		[key: string]: unknown;
+	};
+	child?: { id: string; name: string };
+	metadata?: ClassRegistrationMetadata | null;
+}
+
+export interface CustomerClassRegistrationsResponse {
+	registrations: CustomerClassRegistrationItem[];
+}
+
+export function listCustomerClassRegistrations(
+	slug: string,
+	festivalSlug: string,
+): Promise<CustomerClassRegistrationsResponse> {
+	return requestJson<CustomerClassRegistrationsResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/registration/class-registrations`,
+		undefined,
+		undefined,
+		"",
+	);
+}
+
+export interface UpdateRegistrationMetadataInput {
+	pieces?: RepertoirePiece[];
+	accompanistId?: string | null;
+	[key: string]: unknown;
+}
+
+export function updateRegistrationMetadata(
+	slug: string,
+	festivalSlug: string,
+	registrationId: string,
+	csrfTokenOrInput: string | UpdateRegistrationMetadataInput,
+	inputOrCsrfToken?: UpdateRegistrationMetadataInput | string,
+): Promise<{ metadata: ClassRegistrationMetadata }> {
+	let csrfToken = "";
+	let input: UpdateRegistrationMetadataInput = {};
+
+	if (typeof csrfTokenOrInput === "string") {
+		csrfToken = csrfTokenOrInput;
+		input = (inputOrCsrfToken as UpdateRegistrationMetadataInput) ?? {};
+	} else if (
+		typeof csrfTokenOrInput === "object" &&
+		csrfTokenOrInput !== null
+	) {
+		input = csrfTokenOrInput;
+		csrfToken =
+			(typeof inputOrCsrfToken === "string" ? inputOrCsrfToken : "") ?? "";
+	}
+
+	const headers: Record<string, string> = {};
+	if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
+
+	return requestJson<{ metadata: ClassRegistrationMetadata }>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/registration/class-registrations/${encodeURIComponent(registrationId)}/metadata`,
+		{
+			method: "PATCH",
+			headers,
+			body: JSON.stringify(input),
+		},
+		undefined,
+		"",
 	);
 }

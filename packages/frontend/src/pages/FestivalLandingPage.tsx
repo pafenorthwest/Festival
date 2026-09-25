@@ -1,6 +1,9 @@
 import { createResource, Show } from "solid-js";
 import { getPublicFestival } from "../lib/api.js";
-import { buildFestivalVolunteersPath } from "../lib/routes.js";
+import {
+	buildFestivalRegistrationPath,
+	buildFestivalVolunteersPath,
+} from "../lib/routes.js";
 
 interface FestivalLandingPageProps {
 	slug: string;
@@ -34,7 +37,13 @@ export function FestivalLandingPage(props: FestivalLandingPageProps) {
 						<a class="role-banner teachers" href={membershipPath}>
 							Teachers
 						</a>
-						<a class="role-banner parents" href="/classes">
+						<a
+							class="role-banner parents"
+							href={buildFestivalRegistrationPath(
+								props.slug,
+								props.festivalSlug,
+							)}
+						>
 							Parents
 						</a>
 						<a
