@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, mock, spyOn } from "bun:test";
 import type {
 	AccompanistMembershipGrant,
 	EntitlementGrantSnapshot,
@@ -12,6 +12,7 @@ import {
 	type StartClassCheckoutInput,
 } from "../src/checkout/class-checkout-service.js";
 import { InMemoryCustomerAccountRepository } from "../src/customer/in-memory-customer-account-repository.js";
+import { AppError } from "../src/errors/app-error.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
 
 interface FixtureOptions {
@@ -1101,6 +1102,50 @@ describe("ClassCheckoutService", () => {
 		const createdIntent = [...intents.values()][0];
 		expect(createdIntent).toBeDefined();
 		expect(createdIntent?.status).toBe("failed");
+	});
+
+	it("compensates class-registration metadata write failures, marking intent failed and allowing retry", async () => {
+		const f = await createFixture();
+		const markFailedSpy = spyOn(f.checkout, "markFailed");
+
+		const originalInsert = f.checkout.insertRegistrationMetadata.bind(
+			f.checkout,
+		);
+		f.checkout.insertRegistrationMetadata = mock(async () => {
+			throw new Error("Database connection failed");
+		});
+
+		let thrownError: unknown;
+		try {
+			await f.service.start(f.defaultInput);
+		} catch (error) {
+			thrownError = error;
+		}
+
+		expect(thrownError).toBeInstanceOf(AppError);
+		expect((thrownError as AppError).status).toBe(503);
+		expect((thrownError as AppError).code).toBe("checkout_retryable_upstream");
+
+		const intents = (
+			f.checkout as unknown as {
+				intents: Map<string, { id: string; status: string }>;
+			}
+		).intents;
+		const createdIntent = [...intents.values()][0];
+		expect(createdIntent).toBeDefined();
+		expect(createdIntent?.status).toBe("failed");
+		expect(markFailedSpy).toHaveBeenCalledWith(createdIntent.id);
+
+		// Verify subsequent call with a new idempotency key is allowed (not blocked with 409 checkout_in_progress)
+		f.checkout.insertRegistrationMetadata = originalInsert;
+		const retryResult = await f.service.start({
+			...f.defaultInput,
+			idempotencyKey: "22222222-3333-4444-5555-666666666666",
+		});
+		expect(retryResult).toBeDefined();
+		expect(retryResult.checkoutUrl).toBe(
+			`https://${f.storeDomain}/checkouts/c123`,
+		);
 	});
 
 	it("aborts with 503 retryableCheckoutError and marks intent failed when second getShopifyIntegration read returns incremented integrationVersion", async () => {
