@@ -759,7 +759,26 @@ describe("ClassCheckoutService", () => {
 		});
 	});
 
-	it("rejects a repertoire piece without a composer before persistence", async () => {
+	it("rejects a repertoire piece with missing composer with 400", async () => {
+		const f = await createFixture();
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				pieces: [
+					{
+						title: "Untitled",
+						composer: undefined as never,
+						durationSeconds: 60,
+					},
+				],
+			}),
+		).rejects.toMatchObject({
+			status: 400,
+			message: "Each repertoire piece must have a valid composer.",
+		});
+	});
+
+	it("rejects a repertoire piece with whitespace-only composer with 400", async () => {
 		const f = await createFixture();
 		await expect(
 			f.service.start({
@@ -772,7 +791,7 @@ describe("ClassCheckoutService", () => {
 		});
 	});
 
-	it("rejects a repertoire piece with a non-string movement before persistence", async () => {
+	it("rejects a repertoire piece with a non-string movement with 400 if passed", async () => {
 		const f = await createFixture();
 		await expect(
 			f.service.start({
@@ -798,6 +817,50 @@ describe("ClassCheckoutService", () => {
 				idempotencyKey: f.defaultInput.idempotencyKey,
 			}),
 		).toBeNull();
+	});
+
+	it("persists trimmed composer and movement in registration metadata", async () => {
+		const f = await createFixture();
+		const result = await f.service.start({
+			...f.defaultInput,
+			pieces: [
+				{
+					title: "  Moonlight Sonata  ",
+					composer: "  Ludwig van Beethoven  ",
+					movement: "  I. Adagio sostenuto  ",
+					durationSeconds: 300,
+				},
+			],
+		});
+		const metadata = (
+			f.checkout as unknown as {
+				registrationMetadata: Map<
+					string,
+					{
+						repertoireJson: RepertoirePiece[];
+						repertoireItems: Array<{
+							titleSnapshot: string;
+							performedMovementText: string | null;
+							contributors: Array<{ displayNameSnapshot: string }>;
+						}>;
+					}
+				>;
+			}
+		).registrationMetadata.get(result.intentId);
+
+		expect(metadata?.repertoireJson).toEqual([
+			{
+				title: "Moonlight Sonata",
+				composer: "Ludwig van Beethoven",
+				movement: "I. Adagio sostenuto",
+				durationSeconds: 300,
+			},
+		]);
+		expect(metadata?.repertoireItems[0]).toMatchObject({
+			titleSnapshot: "Moonlight Sonata",
+			performedMovementText: "I. Adagio sostenuto",
+			contributors: [{ displayNameSnapshot: "Ludwig van Beethoven" }],
+		});
 	});
 
 	it("accepts null movement and normalizes repertoire snapshot text", async () => {
@@ -831,9 +894,9 @@ describe("ClassCheckoutService", () => {
 
 		expect(metadata?.repertoireJson).toEqual([
 			{
-				title: "  Sonata in C  ",
-				composer: "  Wolfgang Amadeus Mozart  ",
-				movement: null,
+				title: "Sonata in C",
+				composer: "Wolfgang Amadeus Mozart",
+				movement: undefined,
 				durationSeconds: 240,
 			},
 		]);

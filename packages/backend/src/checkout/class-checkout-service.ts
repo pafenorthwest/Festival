@@ -278,7 +278,10 @@ export class ClassCheckoutService {
 					400,
 				);
 			}
-			if (typeof piece.composer !== "string" || !piece.composer.trim()) {
+			if (
+				typeof piece.composer !== "string" ||
+				piece.composer.trim().length === 0
+			) {
 				throw new AppError(
 					"Each repertoire piece must have a valid composer.",
 					400,
@@ -442,7 +445,7 @@ export class ClassCheckoutService {
 				checkoutIntentId: intent.id,
 				teacherMembershipId: teacherEntitlementId,
 				accompanistMembershipId: accompanistEntitlementId,
-				repertoireJson: input.pieces,
+				repertoireJson: normalizedPieces,
 				repertoireSnapshotPieces: normalizedPieces,
 			});
 
