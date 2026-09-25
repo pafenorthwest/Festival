@@ -48,6 +48,7 @@ import type {
 	OrganizationRepository,
 	UpdateFestivalClassConfigurationInput,
 } from "../repo/organization-repository.js";
+import type { AdminClassCatalogService } from "./admin-class-catalog.service.js";
 
 function toSessionMembership(
 	record: MembershipWithOrganization,
@@ -99,7 +100,10 @@ function deriveFestivalCode(id: string): string {
 }
 
 export class OrganizationService {
-	constructor(readonly repository: OrganizationRepository) {}
+	constructor(
+		readonly repository: OrganizationRepository,
+		private readonly adminClassCatalogService?: AdminClassCatalogService,
+	) {}
 
 	async getSession(identity?: AuthenticatedUser): Promise<SessionResponse> {
 		if (!identity) {
@@ -827,6 +831,13 @@ export class OrganizationService {
 		orgSlug: string,
 		festivalShortName: string,
 	): Promise<FestivalClassConfiguration[]> {
+		if (this.adminClassCatalogService) {
+			return this.adminClassCatalogService.listClasses(
+				orgSlug,
+				festivalShortName,
+			);
+		}
+
 		const organization = await this.repository.findOrganizationBySlug(orgSlug);
 		if (!organization) throw new AppError("Organization not found.", 404);
 
@@ -849,7 +860,17 @@ export class OrganizationService {
 			CreateFestivalClassConfigurationInput,
 			"organizationId" | "festivalId"
 		>,
+		actorUid?: string,
 	): Promise<FestivalClassConfiguration> {
+		if (this.adminClassCatalogService) {
+			return this.adminClassCatalogService.createClass(
+				orgSlug,
+				festivalShortName,
+				input,
+				actorUid,
+			);
+		}
+
 		const organization = await this.repository.findOrganizationBySlug(orgSlug);
 		if (!organization) throw new AppError("Organization not found.", 404);
 
@@ -889,7 +910,18 @@ export class OrganizationService {
 			UpdateFestivalClassConfigurationInput,
 			"id" | "organizationId" | "festivalId"
 		>,
+		actorUid?: string,
 	): Promise<FestivalClassConfiguration> {
+		if (this.adminClassCatalogService) {
+			return this.adminClassCatalogService.updateClass(
+				orgSlug,
+				festivalShortName,
+				classId,
+				input,
+				actorUid,
+			);
+		}
+
 		const organization = await this.repository.findOrganizationBySlug(orgSlug);
 		if (!organization) throw new AppError("Organization not found.", 404);
 
@@ -899,19 +931,12 @@ export class OrganizationService {
 		);
 		if (!festival) throw new AppError("Festival not found.", 404);
 
-		if (input.divisionId !== undefined) {
-			const divisions = await this.repository.listDivisions(organization.id);
-			const exists = divisions.some((d) => d.id === input.divisionId);
-			if (!exists) throw new AppError("Division not found.", 404);
-		}
-
-		if (input.classSubtypeId !== undefined) {
-			const subtypes = await this.repository.listRegistrationCatalogValues(
-				organization.id,
-				"class_subtype",
-			);
-			const exists = subtypes.some((s) => s.id === input.classSubtypeId);
-			if (!exists) throw new AppError("Class subtype not found.", 404);
+		if (
+			"divisionId" in (input as object) ||
+			"classSubtypeId" in (input as object) ||
+			"festivalId" in (input as object)
+		) {
+			throw new AppError("Division and class subtype are immutable.", 400);
 		}
 
 		try {

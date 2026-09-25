@@ -70,7 +70,10 @@ export interface ShopifyProductDetails {
 	variants: ShopifyProductVariant[];
 }
 
-export interface ShopifyMembershipProductClient {
+/**
+ * Client for generic Shopify product operations.
+ */
+export interface ShopifyProductClient {
 	createProduct(
 		context: ShopifyAdminOperationContext,
 		input: {
@@ -96,7 +99,12 @@ export interface ShopifyMembershipProductClient {
 	): Promise<ShopifyAdminResult<void>>;
 	updateProductDetails(
 		context: ShopifyAdminOperationContext,
-		input: { productId: string; name: string; description?: string },
+		input: {
+			productId: string;
+			name?: string;
+			description?: string;
+			status?: "ACTIVE" | "DRAFT" | "ARCHIVED";
+		},
 	): Promise<ShopifyAdminResult<ShopifyProductDetails>>;
 	readProductsByGid(
 		context: ShopifyAdminOperationContext,
@@ -107,6 +115,11 @@ export interface ShopifyMembershipProductClient {
 		productGid: string,
 	): Promise<ShopifyAdminResult<void>>;
 }
+
+/**
+ * @deprecated Use {@link ShopifyProductClient} instead.
+ */
+export type ShopifyMembershipProductClient = ShopifyProductClient;
 
 export interface ShopifyWebhookSubscriptionClient {
 	reconcileOrdersPaidWebhook(

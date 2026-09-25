@@ -1199,8 +1199,8 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		const updated: FestivalClassConfiguration = {
 			...current,
 			displayName: input.displayName ?? current.displayName,
-			classSubtypeId: input.classSubtypeId ?? current.classSubtypeId,
-			divisionId: input.divisionId ?? current.divisionId,
+			classSubtypeId: current.classSubtypeId,
+			divisionId: current.divisionId,
 			minimumAge: input.minimumAge ?? current.minimumAge,
 			maximumAge: input.maximumAge ?? current.maximumAge,
 			price: input.price ?? current.price,
@@ -1216,6 +1216,23 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		};
 		this.festivalClassConfigurations.set(updated.id, updated);
 		return { ...updated };
+	}
+
+	async findFestivalClassConfigurationById(
+		organizationId: string,
+		festivalId: string,
+		classId: string,
+	): Promise<FestivalClassConfiguration | null> {
+		const record = this.festivalClassConfigurations.get(classId);
+		if (
+			!record ||
+			record.organizationId !== organizationId ||
+			record.festivalId !== festivalId ||
+			record.id !== classId
+		) {
+			return null;
+		}
+		return { ...record };
 	}
 
 	async listFestivalClassConfigurations(

@@ -15,10 +15,10 @@ import type {
 	ShopifyAdminResult,
 	ShopifyConnectivityTester,
 	ShopifyCredentials,
-	ShopifyMembershipProductClient,
 	ShopifyOrderCustomerProfile,
 	ShopifyPaidOrder,
 	ShopifyPaidOrderReader,
+	ShopifyProductClient,
 	ShopifyProductDetails,
 	ShopifyVerificationResult,
 	ShopifyWebhookSubscriptionClient,
@@ -523,7 +523,7 @@ function throwIfWebhookUserErrors(
 export class ShopifyAdminApiClient
 	implements
 		ShopifyConnectivityTester,
-		ShopifyMembershipProductClient,
+		ShopifyProductClient,
 		ShopifyWebhookSubscriptionClient,
 		ShopifyPaidOrderReader
 {
@@ -953,7 +953,12 @@ export class ShopifyAdminApiClient
 
 	async updateProductDetails(
 		context: ShopifyAdminOperationContext,
-		input: { productId: string; name: string; description?: string },
+		input: {
+			productId: string;
+			name?: string;
+			description?: string;
+			status?: "ACTIVE" | "DRAFT" | "ARCHIVED";
+		},
 	): Promise<ShopifyAdminResult<ShopifyProductDetails>> {
 		this.assertOperationContext(context, "write_products");
 		const { credentials } = context;
@@ -965,6 +970,18 @@ export class ShopifyAdminApiClient
 			credentials.storeDomain,
 			accessToken,
 		);
+		const productPayload: Record<string, unknown> = {
+			id: input.productId,
+		};
+		if (input.name !== undefined) {
+			productPayload.title = input.name;
+		}
+		if (input.description !== undefined) {
+			productPayload.descriptionHtml = input.description;
+		}
+		if (input.status !== undefined) {
+			productPayload.status = input.status;
+		}
 		const response = await this.graphqlRequest<{
 			productUpdate?: {
 				product?: ShopifyProductNode;
@@ -979,13 +996,7 @@ export class ShopifyAdminApiClient
 					userErrors { field message }
 				}
 			}`,
-			{
-				product: {
-					id: input.productId,
-					title: input.name,
-					descriptionHtml: input.description ?? "",
-				},
-			},
+			{ product: productPayload },
 		);
 		throwIfUserErrors(
 			response.value.productUpdate?.userErrors,

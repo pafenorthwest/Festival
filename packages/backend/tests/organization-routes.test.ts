@@ -37,7 +37,7 @@ import type {
 	ShopifyAdminResult,
 	ShopifyConnectivityTester,
 	ShopifyCredentials,
-	ShopifyMembershipProductClient,
+	ShopifyProductClient,
 	ShopifyProductDetails,
 } from "../src/shopify/types.js";
 
@@ -157,7 +157,7 @@ function shopifyProduct(
 	};
 }
 
-class FakeShopifyProductClient implements ShopifyMembershipProductClient {
+class FakeShopifyProductClient implements ShopifyProductClient {
 	readonly deletedProductGids: string[] = [];
 	readonly readProductGids: string[][] = [];
 	readonly inventoryItemUpdates: Array<{ requiresShipping: boolean }> = [];
@@ -1936,7 +1936,6 @@ describe("organization routes", () => {
 			price: { amount: "75.00", currencyCode: "USD" },
 		});
 		expect(shopifyProductClient.readProductGids).toEqual([
-			["gid://shopify/Product/generated"],
 			["gid://shopify/Product/generated"],
 		]);
 		const records = await repository.listMembershipProductRecords(

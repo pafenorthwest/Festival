@@ -46,6 +46,8 @@ import { buildAuthRouter } from "./routes/auth-router.js";
 import { assertRouteSecurityInventory } from "./routes/route-security.js";
 import { apiRequestSecurity } from "./security/request-security.js";
 import { AccompanistMembershipService } from "./services/accompanist-membership-service.js";
+import { AdminClassCatalogService } from "./services/admin-class-catalog.service.js";
+import { AdminClassShopifySync } from "./services/admin-class-shopify-sync.js";
 import { OrganizationService } from "./services/organization-service.js";
 import { ShopifyAdminApiClient } from "./shopify/admin-api-client.js";
 import { FileShopifyMutationAuditWriter } from "./shopify/admin-mutation-audit.js";
@@ -55,6 +57,7 @@ import { ShopifyIntegrationDiagnosticService } from "./shopify/shopify-integrati
 import type { ShopifyIntegrationService } from "./shopify/shopify-integration-service.js";
 import { ShopifyIntegrationService as DefaultShopifyIntegrationService } from "./shopify/shopify-integration-service.js";
 import { ShopifyMembershipProductService } from "./shopify/shopify-membership-product-service.js";
+import { ShopifyProductLifecycleService } from "./shopify/shopify-product-lifecycle-service.js";
 import { TokenlessShopifyPublicCatalogClient } from "./shopify/shopify-public-catalog-client.js";
 import { ShopifyWebhookSubscriptionService } from "./shopify/shopify-webhook-subscription-service.js";
 import { PostgresVolunteerRepository } from "./volunteers/postgres-volunteer-repository.js";
@@ -68,6 +71,7 @@ export interface CreateAppOptions {
 	repository?: OrganizationRepository;
 	appUserRepository?: AppUserRepository;
 	authVerifier?: AuthVerifier;
+	adminClassCatalogService?: AdminClassCatalogService;
 	shopifyIntegrationService?: ShopifyIntegrationService;
 	shopifyMembershipProductService?: ShopifyMembershipProductService;
 	publicMembershipProductService?: PublicMembershipProductService;
@@ -155,11 +159,27 @@ export async function createApp(options: CreateAppOptions = {}) {
 			? new PostgresAppUserRepository(env.databaseSchema)
 			: new InMemoryAppUserRepository());
 	await appUserRepository.ensureReady();
-	const organizationService = new OrganizationService(repository);
 	const shopifyAdminApiClient = new ShopifyAdminApiClient();
+	const shopifyMutationAuditWriter = new FileShopifyMutationAuditWriter();
+	const shopifyLifecycleService = new ShopifyProductLifecycleService(
+		shopifyAdminApiClient,
+		shopifyMutationAuditWriter,
+	);
 	const secretKeyring = ShopifySecretKeyring.fromEnvironment(
 		env.festivalSecretKeysJson,
 		env.festivalActiveSecretKeyId,
+	);
+	const adminClassShopifySync = new AdminClassShopifySync(
+		repository,
+		shopifyLifecycleService,
+		secretKeyring ?? undefined,
+	);
+	const adminClassCatalogService =
+		options.adminClassCatalogService ??
+		new AdminClassCatalogService(repository, adminClassShopifySync);
+	const organizationService = new OrganizationService(
+		repository,
+		adminClassCatalogService,
 	);
 	const shopifyWebhookSubscriptionService = secretKeyring
 		? new ShopifyWebhookSubscriptionService(
@@ -186,7 +206,9 @@ export async function createApp(options: CreateAppOptions = {}) {
 					repository,
 					secretKeyring,
 					shopifyAdminApiClient,
-					new FileShopifyMutationAuditWriter(),
+					shopifyMutationAuditWriter,
+					undefined,
+					shopifyLifecycleService,
 				)
 			: undefined);
 	const shopifyPublicCatalogClient = new TokenlessShopifyPublicCatalogClient();

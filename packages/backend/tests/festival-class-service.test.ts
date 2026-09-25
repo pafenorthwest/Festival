@@ -292,14 +292,14 @@ describe("OrganizationService - Festival Class Configuration", () => {
 		await expect(
 			orgService.updateFestivalClass("pafe-org", "pf2026", createdClass.id, {
 				divisionId: "invalid-div",
-			}),
-		).rejects.toThrow("Division not found.");
+			} as unknown as Parameters<typeof orgService.updateFestivalClass>[3]),
+		).rejects.toThrow("Division and class subtype are immutable.");
 
 		await expect(
 			orgService.updateFestivalClass("pafe-org", "pf2026", createdClass.id, {
 				classSubtypeId: "invalid-subtype",
-			}),
-		).rejects.toThrow("Class subtype not found.");
+			} as unknown as Parameters<typeof orgService.updateFestivalClass>[3]),
+		).rejects.toThrow("Division and class subtype are immutable.");
 
 		const updated = await orgService.updateFestivalClass(
 			"pafe-org",
