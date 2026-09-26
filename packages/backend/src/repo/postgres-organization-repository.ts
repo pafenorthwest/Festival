@@ -41,6 +41,7 @@ import type {
 	CreateMembershipInput,
 	CreateMembershipProductRecordInput,
 	InviteWithOrganization,
+	MembershipCustomerContact,
 	MembershipWithOrganization,
 	OrganizationRepository,
 	ProductRecord,
@@ -2341,15 +2342,57 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 
 	async listEntitlementGrantSnapshots(
 		organizationId: string,
-		customerId: string,
+		customerId?: string,
 	): Promise<EntitlementGrantSnapshot[]> {
 		await this.ensureReady();
 		const rows = (await sql.unsafe(
-			`SELECT e.id,e.organization_id,e.customer_id,e.entitlement_class,e.offering_id,d.duration_days,ed.division_id,ed.division_name_snapshot,d.paid_amount,d.paid_currency_code,d.checkout_intent_id,d.shopify_order_gid,d.shopify_order_line_gid,e.starts_on::text,e.ends_on::text,CASE WHEN e.revoked_at IS NOT NULL THEN 'revoked' WHEN e.starts_on > (NOW() AT TIME ZONE o.timezone)::date THEN 'scheduled' WHEN e.ends_on <= (NOW() AT TIME ZONE o.timezone)::date THEN 'expired' ELSE 'active' END AS status,e.created_at FROM ${this.schema}.membership_entitlements e JOIN ${this.schema}.organizations o ON o.id=e.organization_id JOIN ${this.schema}.teacher_membership_entitlement_details d ON d.entitlement_id=e.id JOIN ${this.schema}.membership_entitlement_divisions ed ON ed.entitlement_id=e.id WHERE e.organization_id=$1 AND e.customer_id=$2
+			`SELECT e.id,e.organization_id,e.customer_id,e.entitlement_class,e.offering_id,d.duration_days,ed.division_id,ed.division_name_snapshot,d.paid_amount,d.paid_currency_code,d.checkout_intent_id,d.shopify_order_gid,d.shopify_order_line_gid,e.starts_on::text,e.ends_on::text,CASE WHEN e.revoked_at IS NOT NULL THEN 'revoked' WHEN e.starts_on > (NOW() AT TIME ZONE o.timezone)::date THEN 'scheduled' WHEN e.ends_on <= (NOW() AT TIME ZONE o.timezone)::date THEN 'expired' ELSE 'active' END AS status,e.created_at FROM ${this.schema}.membership_entitlements e JOIN ${this.schema}.organizations o ON o.id=e.organization_id JOIN ${this.schema}.teacher_membership_entitlement_details d ON d.entitlement_id=e.id JOIN ${this.schema}.membership_entitlement_divisions ed ON ed.entitlement_id=e.id WHERE e.organization_id=$1 ${customerId ? "AND e.customer_id=$2" : ""}
 			 ORDER BY created_at ASC`,
-			[organizationId, customerId],
+			customerId ? [organizationId, customerId] : [organizationId],
 		)) as EntitlementGrantRow[];
 		return rows.map(mapEntitlementGrant);
+	}
+
+	async findMembershipCustomerContacts(
+		organizationId: string,
+		customerIds: string[],
+	): Promise<Map<string, MembershipCustomerContact>> {
+		await this.ensureReady();
+		const result = new Map<string, MembershipCustomerContact>();
+		const uniqueIds = Array.from(new Set(customerIds.filter(Boolean)));
+		if (uniqueIds.length === 0) {
+			return result;
+		}
+		const rows = (await sql.unsafe(
+			`SELECT
+				c.id AS customer_id,
+				c.name,
+				COALESCE(identity.normalized_email, c.email) AS email,
+				c.phone,
+				c.mailing_address->>'city' AS city
+			 FROM ${this.schema}.festival_customers c
+			 LEFT JOIN ${this.schema}.membership_identity_emails identity
+			   ON identity.organization_id = c.organization_id AND identity.customer_id = c.id
+			 WHERE c.organization_id = $1 AND c.id = ANY($2::text[])`,
+			[organizationId, uniqueIds],
+		)) as Array<{
+			customer_id: string;
+			name: string | null;
+			email: string | null;
+			phone: string | null;
+			city: string | null;
+		}>;
+
+		for (const row of rows) {
+			result.set(row.customer_id, {
+				customerId: row.customer_id,
+				...(row.name?.trim() ? { name: row.name.trim() } : {}),
+				...(row.email?.trim() ? { email: row.email.trim() } : {}),
+				...(row.phone?.trim() ? { phone: row.phone.trim() } : {}),
+				...(row.city?.trim() ? { city: row.city.trim() } : {}),
+			});
+		}
+		return result;
 	}
 
 	async revokeEntitlement(input: {

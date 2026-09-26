@@ -225,6 +225,14 @@ export interface EntitlementRevocationRecord {
 	revokedAtIso: string;
 }
 
+export interface MembershipCustomerContact {
+	customerId: string;
+	name?: string;
+	email?: string;
+	phone?: string;
+	city?: string;
+}
+
 export interface OrganizationRepository {
 	ensureReady(): Promise<void>;
 	upsertUser(user: AuthenticatedUser): Promise<OrganizationUserRecord>;
@@ -418,8 +426,12 @@ export interface OrganizationRepository {
 	): Promise<EntitlementGrantSnapshot>;
 	listEntitlementGrantSnapshots(
 		organizationId: string,
-		customerId: string,
+		customerId?: string,
 	): Promise<EntitlementGrantSnapshot[]>;
+	findMembershipCustomerContacts(
+		organizationId: string,
+		customerIds: string[],
+	): Promise<Map<string, MembershipCustomerContact>>;
 	revokeEntitlement(input: {
 		organizationId: string;
 		entitlementId: string;

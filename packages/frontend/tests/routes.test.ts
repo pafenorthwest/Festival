@@ -4,10 +4,12 @@ import {
 	buildFestivalAdminPath,
 	buildFestivalVolunteersPath,
 	buildInvitePath,
+	buildOrgAdminAccompanistsPath,
 	buildOrgAdminDivisionsPath,
 	buildOrgAdminFestivalsPath,
 	buildOrgAdminIntegrationsPath,
 	buildOrgAdminMembershipsPath,
+	buildOrgAdminRosterPath,
 	buildOrgAdminSettingsPath,
 	buildOrgAdminUsersPath,
 	buildOrgCustomerAccountContactPath,
@@ -100,6 +102,14 @@ describe("route helpers", () => {
 		});
 		expect(parseRoute("/org/festival-admins/admin/settings")).toEqual({
 			kind: "org-admin-settings",
+			slug: "festival-admins",
+		});
+		expect(parseRoute("/org/festival-admins/admin/roster")).toEqual({
+			kind: "org-admin-roster",
+			slug: "festival-admins",
+		});
+		expect(parseRoute("/org/festival-admins/admin/accompanists")).toEqual({
+			kind: "org-admin-roster",
 			slug: "festival-admins",
 		});
 		expect(parseRoute("/org/festival-admins/festival/jun-27")).toEqual({
@@ -201,6 +211,12 @@ describe("route helpers", () => {
 		);
 		expect(buildOrgAdminDivisionsPath("festival-admins")).toBe(
 			"/org/festival-admins/admin/divisions",
+		);
+		expect(buildOrgAdminRosterPath("festival-admins")).toBe(
+			"/org/festival-admins/admin/roster",
+		);
+		expect(buildOrgAdminAccompanistsPath("festival-admins")).toBe(
+			"/org/festival-admins/admin/roster",
 		);
 		expect(buildOrgAdminSettingsPath("festival-admins")).toBe(
 			"/org/festival-admins/admin/settings",
