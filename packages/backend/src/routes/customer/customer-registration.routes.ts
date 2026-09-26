@@ -10,6 +10,7 @@ import {
 import { AppError } from "../../errors/app-error.js";
 import { assertNoBearerPrincipal } from "../customer-auth/customer-auth.routes.js";
 import { resolveRequestOrigin } from "../shared/csrf-guard.js";
+import { assertAllowedFields } from "../shared/payload-guard.js";
 
 type CustomerEnv = { Variables: Partial<ApiVariables> };
 const UUID_REGEX =
@@ -65,6 +66,27 @@ function parseCheckoutPayload(raw: unknown): Record<string, unknown> {
 	return raw as Record<string, unknown>;
 }
 
+async function readJsonBody(c: Context): Promise<unknown> {
+	try {
+		return await c.req.json();
+	} catch {
+		throw new AppError("Checkout request is invalid.", 400);
+	}
+}
+
+function resolveFestivalShortName(
+	c: Context,
+	payload: Record<string, unknown>,
+): string | undefined {
+	const routeShortName = c.req.param("festivalShortName");
+	return (
+		routeShortName ||
+		(typeof payload.festivalShortName === "string"
+			? payload.festivalShortName
+			: undefined)
+	);
+}
+
 function buildCheckoutInput(
 	access: Awaited<ReturnType<CustomerAccountService["checkoutAccess"]>>,
 	payload: Record<string, unknown>,
@@ -88,8 +110,6 @@ function buildCheckoutInput(
 		...opt("accompanistId"),
 		...opt("festivalId"),
 		...(festivalShortName !== undefined ? { festivalShortName } : {}),
-		...opt("currency"),
-		...opt("currencyCode"),
 	};
 }
 
@@ -111,20 +131,25 @@ export async function handleClassCheckout(
 			c.req.header("X-CSRF-Token"),
 			origin,
 		);
-		let raw: unknown;
-		try {
-			raw = await c.req.json();
-		} catch {
-			throw new AppError("Checkout request is invalid.", 400);
-		}
-		const payload = parseCheckoutPayload(raw);
-		const routeShortName = c.req.param("festivalShortName");
-		const festShortName =
-			routeShortName ||
-			(typeof payload.festivalShortName === "string"
-				? payload.festivalShortName
-				: undefined);
-
+		const payload = parseCheckoutPayload(await readJsonBody(c));
+		assertAllowedFields(
+			payload,
+			[
+				"childId",
+				"festivalClassId",
+				"teacherId",
+				"divisionId",
+				"accompanistId",
+				"accompanistOption",
+				"pieces",
+				"instrument",
+				"festivalId",
+				"festivalShortName",
+				"organizationSlug",
+			],
+			"Class checkout request",
+		);
+		const festShortName = resolveFestivalShortName(c, payload);
 		const input = buildCheckoutInput(
 			access,
 			payload,

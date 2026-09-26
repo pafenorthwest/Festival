@@ -26,6 +26,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			name TEXT NOT NULL UNIQUE,
 			slug TEXT NOT NULL UNIQUE,
 			timezone TEXT NOT NULL DEFAULT 'UTC',
+			default_currency_code TEXT NOT NULL DEFAULT 'USD',
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.organization_divisions (
@@ -581,6 +582,9 @@ export async function initializePostgresSchema(schema: string): Promise<void> {
 			[safeSchema],
 		);
 		await transaction.unsafe(buildCanonicalPostgresSchemaSql(safeSchema));
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.organizations ADD COLUMN IF NOT EXISTS default_currency_code TEXT NOT NULL DEFAULT 'USD';`,
+		);
 	});
 	initializations.set(safeSchema, initialization);
 	try {

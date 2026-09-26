@@ -454,6 +454,71 @@ describe("Customer Registration Routes", () => {
 			expect(calls.startCheckout[0]).not.toHaveProperty("organizationSlug");
 		});
 
+		it("returns 400 when currency is passed in checkout body", async () => {
+			const { customerAccountService, classCheckoutService } =
+				createFakeServices();
+			const app = createTestApp({
+				customerAccountService,
+				classCheckoutService,
+			});
+			const payload = {
+				festivalClassId: "class_1",
+				childId: "child_1",
+				currency: "CAD",
+			};
+			const headers = {
+				...AUTH,
+				...JSON_HDR,
+				"Idempotency-Key": VALID_UUID,
+				"X-CSRF-Token": "csrf_1",
+				Origin: "https://fest.example.com",
+			};
+			const res = await req(
+				app,
+				"POST",
+				"/class-checkout",
+				headers,
+				JSON.stringify(payload),
+			);
+			expect(res.status).toBe(400);
+			expect(await res.json()).toEqual({
+				error: "Class checkout request contains unexpected fields: currency",
+			});
+		});
+
+		it("returns 400 when currencyCode is passed in checkout body", async () => {
+			const { customerAccountService, classCheckoutService } =
+				createFakeServices();
+			const app = createTestApp({
+				customerAccountService,
+				classCheckoutService,
+			});
+			const payload = {
+				festivalClassId: "class_1",
+				childId: "child_1",
+				currencyCode: "CAD",
+			};
+			const headers = {
+				...AUTH,
+				...JSON_HDR,
+				"Idempotency-Key": VALID_UUID,
+				"X-CSRF-Token": "csrf_1",
+				Origin: "https://fest.example.com",
+			};
+			const res = await req(
+				app,
+				"POST",
+				"/class-checkout",
+				headers,
+				JSON.stringify(payload),
+			);
+			expect(res.status).toBe(400);
+			expect(await res.json()).toEqual({
+				error:
+					"Class checkout request contains unexpected fields: currencyCode",
+			});
+		});
+
 		it("returns 400 for invalid idempotency key", async () => {
 			const { customerAccountService, classCheckoutService } =
 				createFakeServices();

@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
 	buildFestivalAdminClassesPath,
 	buildFestivalAdminPath,
+	buildFestivalRegistrationPath,
 	buildFestivalVolunteersPath,
 	buildInvitePath,
 	buildOrgAdminDivisionsPath,
@@ -119,6 +120,13 @@ describe("route helpers", () => {
 			slug: "festival-admins",
 			festivalSlug: "jun-27",
 		});
+		expect(parseRoute("/org/festival-admins/festival/jun-27/register")).toEqual(
+			{
+				kind: "festival-register",
+				slug: "festival-admins",
+				festivalSlug: "jun-27",
+			},
+		);
 	});
 
 	it("identifies public organization pages without treating Festival Admin routes as public", () => {
@@ -127,6 +135,11 @@ describe("route helpers", () => {
 		);
 		expect(
 			isOrganizationPageRoute(parseRoute("/org/festival-admins/membership")),
+		).toBe(true);
+		expect(
+			isOrganizationPageRoute(
+				parseRoute("/org/festival-admins/festival/jun-27/register"),
+			),
 		).toBe(true);
 		expect(
 			isOrganizationPageRoute(parseRoute("/org/festival-admins/account")),
@@ -170,6 +183,9 @@ describe("route helpers", () => {
 		);
 		expect(buildFestivalAdminPath("festival-admins", "jun-27")).toBe(
 			"/org/festival-admins/festival/jun-27/admin",
+		);
+		expect(buildFestivalRegistrationPath("festival-admins", "jun-27")).toBe(
+			"/org/festival-admins/festival/jun-27/register",
 		);
 		expect(buildOrgRootPath("festival-admins")).toBe("/org/festival-admins");
 		expect(buildOrgMembershipPath("festival-admins")).toBe(
@@ -227,5 +243,23 @@ describe("route helpers", () => {
 		expect(
 			parseRoute(buildFestivalVolunteersPath("pafe", "spring")),
 		).toMatchObject({ kind: "festival-volunteers" });
+	});
+
+	it("routes the festival registration page without treating it as public festival root", () => {
+		expect(parseRoute("/org/pafe/festival/spring/register")).toEqual({
+			kind: "festival-register",
+			slug: "pafe",
+			festivalSlug: "spring",
+		});
+		expect(buildFestivalRegistrationPath("pafe", "spring")).toBe(
+			"/org/pafe/festival/spring/register",
+		);
+		expect(parseRoute(buildFestivalRegistrationPath("pafe", "spring"))).toEqual(
+			{
+				kind: "festival-register",
+				slug: "pafe",
+				festivalSlug: "spring",
+			},
+		);
 	});
 });
