@@ -130,7 +130,9 @@ export function useFestivalLifecycle(
 				currentRoute.kind === "org-admin-memberships" ||
 				currentRoute.kind === "org-admin-festivals" ||
 				currentRoute.kind === "org-admin-divisions" ||
-				currentRoute.kind === "org-admin-volunteers") &&
+				currentRoute.kind === "org-admin-volunteers" ||
+				currentRoute.kind === "org-admin-accompanists" ||
+				currentRoute.kind === "org-admin-roster") &&
 			currentRoute.slug &&
 			state.firebaseUser()
 		) {

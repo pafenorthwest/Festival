@@ -38,6 +38,7 @@ import type {
 	CreateMembershipProductRecordInput,
 	EntitlementRevocationRecord,
 	InviteWithOrganization,
+	MembershipCustomerContact,
 	MembershipWithOrganization,
 	OrganizationRepository,
 	ProductRecord,
@@ -119,6 +120,10 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 	private readonly festivalClassConfigurations = new Map<
 		string,
 		FestivalClassConfiguration
+	>();
+	private readonly customerContacts = new Map<
+		string,
+		MembershipCustomerContact
 	>();
 
 	constructor(private readonly now: () => Date = () => new Date()) {}
@@ -1328,13 +1333,13 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 
 	async listEntitlementGrantSnapshots(
 		organizationId: string,
-		customerId: string,
+		customerId?: string,
 	): Promise<EntitlementGrantSnapshot[]> {
 		return [...this.entitlementGrants.values()]
 			.filter(
 				(grant) =>
 					grant.organizationId === organizationId &&
-					grant.customerId === customerId,
+					(!customerId || grant.customerId === customerId),
 			)
 			.sort((a, b) => a.createdAtIso.localeCompare(b.createdAtIso))
 			.map((grant) => this.withTeacherLifecycle(grant));
@@ -1451,6 +1456,57 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 
 	setCustomerName(customerId: string, name: string): void {
 		this.customerNames.set(customerId, name);
+	}
+
+	setCustomerContact(
+		organizationIdOrContact: string | MembershipCustomerContact,
+		contact?: MembershipCustomerContact,
+	): void {
+		if (typeof organizationIdOrContact === "string" && contact) {
+			this.customerContacts.set(
+				`${organizationIdOrContact}:${contact.customerId}`,
+				contact,
+			);
+		} else if (typeof organizationIdOrContact === "object") {
+			const c = organizationIdOrContact;
+			this.customerContacts.set(c.customerId, c);
+		}
+	}
+
+	async findMembershipCustomerContacts(
+		organizationId: string,
+		customerIds: string[],
+	): Promise<Map<string, MembershipCustomerContact>> {
+		const result = new Map<string, MembershipCustomerContact>();
+		for (const customerId of customerIds) {
+			const stored =
+				this.customerContacts.get(`${organizationId}:${customerId}`) ??
+				this.customerContacts.get(customerId);
+			const fallbackName = this.customerNames.get(customerId);
+			const fallbackEmail = this.membershipIdentityEmailsByCustomer.get(
+				`${organizationId}:${customerId}`,
+			);
+			const name = stored?.name ?? fallbackName;
+			const email = stored?.email ?? fallbackEmail;
+			const phone = stored?.phone;
+			const city = stored?.city;
+			if (
+				name !== undefined ||
+				email !== undefined ||
+				phone !== undefined ||
+				city !== undefined ||
+				stored !== undefined
+			) {
+				result.set(customerId, {
+					customerId,
+					...(name?.trim() ? { name: name.trim() } : {}),
+					...(email?.trim() ? { email: email.trim() } : {}),
+					...(phone?.trim() ? { phone: phone.trim() } : {}),
+					...(city?.trim() ? { city: city.trim() } : {}),
+				});
+			}
+		}
+		return result;
 	}
 
 	async listActiveTeachersForDivision(

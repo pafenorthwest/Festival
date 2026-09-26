@@ -30,4 +30,9 @@ describe("Admin page layout contract", () => {
 		expect(styles).toContain(".division-list-panel .field input");
 		expect(styles).toContain("width: min(40ch, 100%);");
 	});
+
+	it("keeps staff roster as direct flow panel", async () => {
+		const roster = await Bun.file("src/pages/AdminRosterPage.tsx").text();
+		expect(roster).toContain('<section class="panel flow-panel roster-panel">');
+	});
 });

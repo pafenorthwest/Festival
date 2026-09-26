@@ -334,4 +334,318 @@ describe("AccompanistMembershipService", () => {
 		expect(accompanistGrants).toHaveLength(1);
 		expect(accompanistGrants[0].status).toBe("active");
 	});
+
+	describe("listCurrentRoster", () => {
+		it("includes active teachers and accompanists in a unified sorted roster", async () => {
+			const { repository, organization, division, service } = await setup();
+
+			await service.acquire({
+				organizationId: organization.id,
+				organizationTimezone: "UTC",
+				customerId: "cust-accompanist",
+				verifiedShopifyCustomerEmail: "acc@example.com",
+				payload: {
+					name: "Beth Accompanist",
+					email: "acc@example.com",
+					city: "Seattle",
+					phone: "+1 206 555 0101",
+					divisionIds: [division.id],
+				},
+			});
+
+			const offering = await repository.createMembershipProductRecord({
+				organizationId: organization.id,
+				entitlementClass: "teacher_membership",
+				durationDays: 365,
+				isActive: true,
+				shopifyProductGid: "gid://shopify/Product/teacher",
+				shopifyVariantGid: "gid://shopify/ProductVariant/teacher",
+				productNameSnapshot: "Teacher Membership",
+			});
+
+			await repository.createEntitlementGrantSnapshot({
+				organizationId: organization.id,
+				customerId: "cust-teacher",
+				entitlementClass: "teacher_membership",
+				offeringId: offering.id,
+				durationDays: 365,
+				divisionId: division.id,
+				divisionNameSnapshot: division.displayName,
+				paidAmount: "75.00",
+				paidCurrencyCode: "USD",
+				checkoutIntentId: "checkout-teacher-active",
+				shopifyOrderGid: "gid://shopify/Order/teacher-active",
+				shopifyOrderLineGid: "gid://shopify/LineItem/teacher-active",
+				startsOn: "2026-09-12",
+				endsOn: "2027-09-12",
+				status: "active",
+				verifiedIdentityEmail: "teacher@example.com",
+			});
+
+			repository.setCustomerContact(organization.id, {
+				customerId: "cust-teacher",
+				name: "Aaron Teacher",
+				email: "teacher@example.com",
+				phone: "+1 206 555 0102",
+				city: "Bellevue",
+			});
+
+			const result = await service.listCurrentRoster(organization.id);
+			expect(result.roster).toHaveLength(2);
+
+			expect(result.roster[0]).toEqual({
+				membershipType: "Teacher",
+				offeringName: "Teacher Membership",
+				source: "teacher_checkout",
+				status: "active",
+				startsOn: "2026-09-12",
+				endsOn: "2027-09-12",
+				name: "Aaron Teacher",
+				email: "teacher@example.com",
+				phone: "+1 206 555 0102",
+				city: "Bellevue",
+				divisions: [
+					{
+						divisionId: division.id,
+						divisionName: division.displayName,
+					},
+				],
+			});
+
+			expect(result.roster[1]).toEqual({
+				membershipType: "Accompanist",
+				offeringName: "Accompanist Membership",
+				source: "accompanist_form",
+				status: "active",
+				startsOn: "2026-09-12",
+				endsOn: "2027-09-12",
+				name: "Beth Accompanist",
+				email: "acc@example.com",
+				phone: "+1 206 555 0101",
+				city: "Seattle",
+				divisions: [
+					{
+						divisionId: division.id,
+						divisionName: division.displayName,
+					},
+				],
+			});
+
+			expect(result.accompanists).toHaveLength(1);
+			expect(result.accompanists[0].name).toBe("Beth Accompanist");
+		});
+
+		it("resolves teacher contact from customer profile with fallback email", async () => {
+			const { repository, organization, division, service } = await setup();
+
+			const offering = await repository.createMembershipProductRecord({
+				organizationId: organization.id,
+				entitlementClass: "teacher_membership",
+				durationDays: 365,
+				isActive: true,
+				shopifyProductGid: "gid://shopify/Product/teacher",
+				shopifyVariantGid: "gid://shopify/ProductVariant/teacher",
+				productNameSnapshot: "Annual Teacher Pass",
+			});
+
+			await repository.createEntitlementGrantSnapshot({
+				organizationId: organization.id,
+				customerId: "cust-teacher-profile",
+				entitlementClass: "teacher_membership",
+				offeringId: offering.id,
+				durationDays: 365,
+				divisionId: division.id,
+				divisionNameSnapshot: division.displayName,
+				paidAmount: "80.00",
+				paidCurrencyCode: "USD",
+				checkoutIntentId: "checkout-teacher-profile",
+				shopifyOrderGid: "gid://shopify/Order/teacher-profile",
+				shopifyOrderLineGid: "gid://shopify/LineItem/teacher-profile",
+				startsOn: "2026-09-12",
+				endsOn: "2027-09-12",
+				status: "active",
+				verifiedIdentityEmail: "identity-email@example.com",
+			});
+
+			repository.setCustomerContact(organization.id, {
+				customerId: "cust-teacher-profile",
+				name: "Clara Schumann",
+				phone: "+1 425 555 1234",
+				city: "Kirkland",
+			});
+
+			const { roster } = await service.listCurrentRoster(organization.id);
+			expect(roster).toHaveLength(1);
+			expect(roster[0]).toMatchObject({
+				membershipType: "Teacher",
+				offeringName: "Annual Teacher Pass",
+				name: "Clara Schumann",
+				email: "identity-email@example.com",
+				phone: "+1 425 555 1234",
+				city: "Kirkland",
+			});
+		});
+
+		it("enforces strict allowlist and redacts sensitive commercial metadata", async () => {
+			const { repository, organization, division, service } = await setup();
+
+			const offering = await repository.createMembershipProductRecord({
+				organizationId: organization.id,
+				entitlementClass: "teacher_membership",
+				durationDays: 365,
+				isActive: true,
+				shopifyProductGid: "gid://shopify/Product/teacher",
+				shopifyVariantGid: "gid://shopify/ProductVariant/teacher",
+				productNameSnapshot: "Teacher Membership",
+			});
+
+			await repository.createEntitlementGrantSnapshot({
+				organizationId: organization.id,
+				customerId: "cust-teacher-sensitive",
+				entitlementClass: "teacher_membership",
+				offeringId: offering.id,
+				durationDays: 365,
+				divisionId: division.id,
+				divisionNameSnapshot: division.displayName,
+				paidAmount: "99.00",
+				paidCurrencyCode: "USD",
+				checkoutIntentId: "checkout-secret-123",
+				shopifyOrderGid: "gid://shopify/Order/secret-gid-456",
+				shopifyOrderLineGid: "gid://shopify/LineItem/secret-line-789",
+				startsOn: "2026-09-12",
+				endsOn: "2027-09-12",
+				status: "active",
+				verifiedIdentityEmail: "sensitive@example.com",
+			});
+
+			repository.setCustomerContact(organization.id, {
+				customerId: "cust-teacher-sensitive",
+				name: "Secret Teacher",
+				email: "sensitive@example.com",
+			});
+
+			const { roster } = await service.listCurrentRoster(organization.id);
+			expect(roster).toHaveLength(1);
+			const entry = roster[0] as unknown as Record<string, unknown>;
+
+			expect(entry.checkoutIntentId).toBeUndefined();
+			expect(entry.shopifyOrderGid).toBeUndefined();
+			expect(entry.shopifyOrderLineGid).toBeUndefined();
+			expect(entry.paidAmount).toBeUndefined();
+			expect(entry.paidCurrencyCode).toBeUndefined();
+			expect(entry.customerId).toBeUndefined();
+
+			const allowedKeys = new Set([
+				"membershipType",
+				"offeringName",
+				"source",
+				"status",
+				"startsOn",
+				"endsOn",
+				"name",
+				"email",
+				"phone",
+				"city",
+				"divisions",
+			]);
+			for (const key of Object.keys(entry)) {
+				expect(allowedKeys.has(key)).toBe(true);
+			}
+		});
+
+		it("handles absent optional contact fields gracefully", async () => {
+			const { repository, organization, division, service } = await setup();
+
+			const offering = await repository.createMembershipProductRecord({
+				organizationId: organization.id,
+				entitlementClass: "teacher_membership",
+				durationDays: 365,
+				isActive: true,
+				shopifyProductGid: "gid://shopify/Product/teacher",
+				shopifyVariantGid: "gid://shopify/ProductVariant/teacher",
+				productNameSnapshot: "Teacher Membership",
+			});
+
+			await repository.createEntitlementGrantSnapshot({
+				organizationId: organization.id,
+				customerId: "cust-teacher-minimal",
+				entitlementClass: "teacher_membership",
+				offeringId: offering.id,
+				durationDays: 365,
+				divisionId: division.id,
+				divisionNameSnapshot: division.displayName,
+				paidAmount: "75.00",
+				paidCurrencyCode: "USD",
+				checkoutIntentId: "checkout-minimal",
+				shopifyOrderGid: "gid://shopify/Order/minimal",
+				shopifyOrderLineGid: "gid://shopify/LineItem/minimal",
+				startsOn: "2026-09-12",
+				endsOn: "2027-09-12",
+				status: "active",
+				verifiedIdentityEmail: "minimal@example.com",
+			});
+
+			const { roster } = await service.listCurrentRoster(organization.id);
+			expect(roster).toHaveLength(1);
+			expect(roster[0].phone).toBeUndefined();
+			expect(roster[0].city).toBeUndefined();
+			expect(roster[0].email).toBe("minimal@example.com");
+			expect(roster[0].name).toBeUndefined();
+		});
+
+		it("excludes revoked, expired, and scheduled teacher grants from current roster", async () => {
+			const { repository, organization, division, service } = await setup();
+
+			const offering = await repository.createMembershipProductRecord({
+				organizationId: organization.id,
+				entitlementClass: "teacher_membership",
+				durationDays: 365,
+				isActive: true,
+				shopifyProductGid: "gid://shopify/Product/teacher",
+				shopifyVariantGid: "gid://shopify/ProductVariant/teacher",
+				productNameSnapshot: "Teacher Membership",
+			});
+
+			await repository.createEntitlementGrantSnapshot({
+				organizationId: organization.id,
+				customerId: "cust-teacher-future",
+				entitlementClass: "teacher_membership",
+				offeringId: offering.id,
+				durationDays: 365,
+				divisionId: division.id,
+				divisionNameSnapshot: division.displayName,
+				paidAmount: "75.00",
+				paidCurrencyCode: "USD",
+				checkoutIntentId: "checkout-future",
+				shopifyOrderGid: "gid://shopify/Order/future",
+				shopifyOrderLineGid: "gid://shopify/LineItem/future",
+				startsOn: "2027-01-01",
+				endsOn: "2028-01-01",
+				status: "scheduled",
+				verifiedIdentityEmail: "future@example.com",
+			});
+
+			await repository.createEntitlementGrantSnapshot({
+				organizationId: organization.id,
+				customerId: "cust-teacher-past",
+				entitlementClass: "teacher_membership",
+				offeringId: offering.id,
+				durationDays: 365,
+				divisionId: division.id,
+				divisionNameSnapshot: division.displayName,
+				paidAmount: "75.00",
+				paidCurrencyCode: "USD",
+				checkoutIntentId: "checkout-past",
+				shopifyOrderGid: "gid://shopify/Order/past",
+				shopifyOrderLineGid: "gid://shopify/LineItem/past",
+				startsOn: "2025-01-01",
+				endsOn: "2026-01-01",
+				status: "expired",
+				verifiedIdentityEmail: "past@example.com",
+			});
+
+			const { roster } = await service.listCurrentRoster(organization.id);
+			expect(roster).toEqual([]);
+		});
+	});
 });
