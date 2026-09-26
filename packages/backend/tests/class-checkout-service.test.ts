@@ -28,6 +28,7 @@ interface FixtureOptions {
 	performanceMinutes?: number;
 	storeDomain?: string;
 	mockStorefront?: Partial<ClassCheckoutStorefront>;
+	defaultCurrencyCode?: string;
 }
 
 async function createFixture(options: FixtureOptions = {}) {
@@ -41,6 +42,7 @@ async function createFixture(options: FixtureOptions = {}) {
 	const organization = await organizations.createOrganization({
 		name: "Pacific Northwest Music Festival",
 		slug: "pnw-festival",
+		defaultCurrencyCode: options.defaultCurrencyCode,
 	});
 
 	const division = await organizations.createDivision({
@@ -232,7 +234,6 @@ async function createFixture(options: FixtureOptions = {}) {
 		buyerAccessToken: "buyer-token-test",
 		teacherId,
 		pieces: defaultPieces,
-		currency: "USD",
 	};
 
 	return {
@@ -1179,5 +1180,68 @@ describe("ClassCheckoutService", () => {
 		const createdIntent = [...intents.values()][0];
 		expect(createdIntent).toBeDefined();
 		expect(createdIntent?.status).toBe("failed");
+	});
+
+	it("fails with 404 when organization is not found", async () => {
+		const f = await createFixture();
+		spyOn(f.organizations, "findOrganizationById").mockResolvedValue(null);
+
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			message: "Organization was not found.",
+			status: 404,
+		});
+	});
+
+	it("uses organization defaultCurrencyCode and passes it to createIntent and createCart", async () => {
+		let capturedCartInput: unknown;
+		const f = await createFixture({
+			defaultCurrencyCode: "CAD",
+			mockStorefront: {
+				createCart: async (input) => {
+					capturedCartInput = input;
+					return { shopifyCartId: "gid://shopify/Cart/cad-cart" };
+				},
+			},
+		});
+
+		const result = await f.service.start(f.defaultInput);
+		expect(result).toBeDefined();
+
+		const stored = await f.checkout.findIntentByCorrelation(
+			f.organization.id,
+			result.correlationId,
+		);
+		expect(stored?.currencyCode).toBe("CAD");
+		expect(capturedCartInput).toMatchObject({
+			currencyCode: "CAD",
+		});
+	});
+
+	it("falls back to USD when organization defaultCurrencyCode is empty", async () => {
+		let capturedCartInput: unknown;
+		const f = await createFixture({
+			mockStorefront: {
+				createCart: async (input) => {
+					capturedCartInput = input;
+					return { shopifyCartId: "gid://shopify/Cart/fallback-cart" };
+				},
+			},
+		});
+		spyOn(f.organizations, "findOrganizationById").mockResolvedValue({
+			...f.organization,
+			defaultCurrencyCode: "",
+		});
+
+		const result = await f.service.start(f.defaultInput);
+		expect(result).toBeDefined();
+
+		const stored = await f.checkout.findIntentByCorrelation(
+			f.organization.id,
+			result.correlationId,
+		);
+		expect(stored?.currencyCode).toBe("USD");
+		expect(capturedCartInput).toMatchObject({
+			currencyCode: "USD",
+		});
 	});
 });

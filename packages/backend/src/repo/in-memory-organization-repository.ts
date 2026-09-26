@@ -223,6 +223,12 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		return this.membershipWithOrganization(membershipId);
 	}
 
+	async findOrganizationById(
+		organizationId: string,
+	): Promise<OrganizationRecord | null> {
+		return this.organizations.get(organizationId) ?? null;
+	}
+
 	async findOrganizationBySlug(
 		slug: string,
 	): Promise<OrganizationRecord | null> {
@@ -248,12 +254,14 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 	async createOrganization(input: {
 		name: string;
 		slug: string;
+		defaultCurrencyCode?: string;
 	}): Promise<OrganizationRecord> {
 		const organization: OrganizationRecord = {
 			id: randomUUID(),
 			name: input.name,
 			slug: input.slug,
 			timezone: "UTC",
+			defaultCurrencyCode: input.defaultCurrencyCode ?? "USD",
 			createdAtIso: new Date().toISOString(),
 		};
 
@@ -667,7 +675,9 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		return this.shopifyIntegrations.get(organizationId) ?? null;
 	}
 
-	async findOrganizationByShopDomain(shopDomain: string) {
+	async findOrganizationByShopDomain(
+		shopDomain: string,
+	): Promise<OrganizationRecord | null> {
 		const normalized = shopDomain.toLowerCase();
 		const integration = [...this.shopifyIntegrations.values()].find(
 			(value) =>

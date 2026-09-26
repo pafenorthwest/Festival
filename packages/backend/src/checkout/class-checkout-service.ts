@@ -15,6 +15,7 @@ export interface ClassCheckoutStorefront {
 		shopifyVariantGid: string;
 		buyerAccessToken: string;
 		correlationId: string;
+		currencyCode?: string;
 	}): Promise<{ shopifyCartId: string }>;
 	checkout(input: {
 		organizationId: string;
@@ -37,8 +38,6 @@ export interface StartClassCheckoutInput {
 	teacherId: string;
 	accompanistId?: string | null;
 	pieces: RepertoirePiece[];
-	currency?: string;
-	currencyCode?: string;
 }
 
 export interface ClassCheckoutResult {
@@ -385,10 +384,17 @@ export class ClassCheckoutService {
 		}
 
 		// 11. Creates a checkout intent with intent_type: 'class_entry'
+		const organization = await this.organizations.findOrganizationById(
+			input.organizationId,
+		);
+		if (!organization) {
+			throw new AppError("Organization was not found.", 404);
+		}
+		const currencyCode = organization.defaultCurrencyCode || "USD";
+
 		const expiresAtIso = new Date(
 			currentTime.getTime() + 30 * 60_000,
 		).toISOString();
-		const currencyCode = input.currencyCode ?? input.currency ?? "USD";
 
 		const outcome = await this.checkout.createIntent({
 			organizationId: input.organizationId,
@@ -461,6 +467,7 @@ export class ClassCheckoutService {
 				shopifyVariantGid: classConfig.shopifyVariantGid,
 				buyerAccessToken: input.buyerAccessToken,
 				correlationId: intent.correlationId,
+				currencyCode,
 			});
 
 			const integrationVersion =
