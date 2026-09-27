@@ -809,6 +809,31 @@ export function getAdminRegistrationConfiguration(
 	);
 }
 
+export function listFestivalClassSubtypes(
+	idToken: string,
+	slug: string,
+	festivalSlug: string,
+) {
+	return requestJson<{ classSubtypes: RegistrationCatalogValue[] }>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/festivals/${encodeURIComponent(festivalSlug)}/class-subtypes`,
+		undefined,
+		idToken,
+	);
+}
+
+export function createFestivalClassSubtype(
+	idToken: string,
+	slug: string,
+	festivalSlug: string,
+	displayName: string,
+) {
+	return requestJson<{ value: RegistrationCatalogValue }>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/festivals/${encodeURIComponent(festivalSlug)}/class-subtypes`,
+		{ method: "POST", body: JSON.stringify({ displayName }) },
+		idToken,
+	);
+}
+
 export function updateAdminRegistrationAgeDate(
 	idToken: string,
 	slug: string,

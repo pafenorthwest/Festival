@@ -18,9 +18,9 @@ import { FestivalClassTable } from "../components/FestivalClassTable.js";
 import {
 	createFestivalClass,
 	getAdminFestival,
-	getAdminRegistrationConfiguration,
 	listDivisions,
 	listFestivalClasses,
+	listFestivalClassSubtypes,
 	updateFestivalClass,
 } from "../lib/api.js";
 import { buildFestivalAdminPath } from "../lib/routes.js";
@@ -72,14 +72,14 @@ export function FestivalAdminClassesPage(props: {
 		setDataError(null);
 		try {
 			const token = await user.getIdToken();
-			const [classList, divisionRes, regConfig] = await Promise.all([
+			const [classList, divisionRes, subtypeResponse] = await Promise.all([
 				listFestivalClasses(token, props.slug, props.festivalSlug),
 				listDivisions(token, props.slug),
-				getAdminRegistrationConfiguration(token, props.slug),
+				listFestivalClassSubtypes(token, props.slug, props.festivalSlug),
 			]);
 			setClasses(classList);
 			setDivisions(divisionRes.divisions);
-			setClassSubtypes(regConfig.classSubtypes ?? []);
+			setClassSubtypes(subtypeResponse.classSubtypes ?? []);
 		} catch (err) {
 			setDataError(
 				err instanceof Error ? err.message : "Could not load class catalog.",

@@ -1211,6 +1211,61 @@ describe("organization routes", () => {
 		});
 	});
 
+	it("keeps class subtypes isolated to their festival", async () => {
+		const { app } = await createTestApp();
+		await createOrganizationViaApi(app);
+
+		for (const [name, shortName, startDate] of [
+			["June Festival", "jun-27", "2027-06-10"],
+			["July Festival", "jul-27", "2027-07-10"],
+		]) {
+			const response = await app.fetch(
+				new Request(
+					"http://test/api/organizations/pafe/admin/festivals",
+					withAuth("admin", {
+						method: "POST",
+						body: JSON.stringify({
+							name,
+							shortName,
+							startDate,
+							endDate: `${startDate.slice(0, -2)}12`,
+						}),
+					}),
+				),
+			);
+			expect(response.status).toBe(201);
+		}
+
+		const createResponse = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/festivals/jun-27/class-subtypes",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({ displayName: "Solo" }),
+				}),
+			),
+		);
+		expect(createResponse.status).toBe(201);
+
+		const [firstFestival, secondFestival] = await Promise.all(
+			["jun-27", "jul-27"].map(async (shortName) => {
+				const response = await app.fetch(
+					new Request(
+						`http://test/api/organizations/pafe/admin/festivals/${shortName}/class-subtypes`,
+						withAuth("admin"),
+					),
+				);
+				expect(response.status).toBe(200);
+				return response.json();
+			}),
+		);
+
+		expect(firstFestival).toMatchObject({
+			classSubtypes: [{ displayName: "Solo" }],
+		});
+		expect(secondFestival).toEqual({ classSubtypes: [] });
+	});
+
 	it("serves a public organization landing with upcoming festivals", async () => {
 		const { app } = await createTestApp();
 		await app.fetch(

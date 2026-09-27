@@ -173,6 +173,52 @@ export function buildAdminOrgRoutes(options: {
 	);
 
 	router.get(
+		"/organizations/:slug/admin/festivals/:festivalShortName/class-subtypes",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				return c.json(
+					await organizationService.listFestivalClassSubtypesForTenant(
+						getRequiredTenant(c),
+						c.req.param("festivalShortName"),
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.post(
+		"/organizations/:slug/admin/festivals/:festivalShortName/class-subtypes",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				const payload = await c.req.json();
+				assertAllowedFields(
+					payload,
+					["displayName"],
+					"Festival class subtype request",
+				);
+				c.status(201);
+				return c.json(
+					await organizationService.createFestivalClassSubtypeForTenant(
+						getRequiredTenant(c),
+						c.req.param("festivalShortName"),
+						(payload as { displayName?: unknown })?.displayName,
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.get(
 		"/organizations/:slug/admin/festivals/:festivalShortName/classes",
 		requireAuth(authVerifier),
 		requireTenant(repository),

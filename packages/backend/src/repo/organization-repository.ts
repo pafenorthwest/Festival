@@ -384,6 +384,16 @@ export interface OrganizationRepository {
 		kind: RegistrationCatalogKind,
 		activeOnly?: boolean,
 	): Promise<RegistrationCatalogValue[]>;
+	listFestivalClassSubtypes(
+		organizationId: string,
+		festivalId: string,
+		activeOnly?: boolean,
+	): Promise<RegistrationCatalogValue[]>;
+	associateFestivalClassSubtype(input: {
+		organizationId: string;
+		festivalId: string;
+		classSubtypeId: string;
+	}): Promise<void>;
 	createRegistrationCatalogValue(input: {
 		organizationId: string;
 		kind: RegistrationCatalogKind;

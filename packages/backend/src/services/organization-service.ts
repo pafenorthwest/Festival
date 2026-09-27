@@ -853,6 +853,60 @@ export class OrganizationService {
 		);
 	}
 
+	async listFestivalClassSubtypesForTenant(
+		tenant: TenantContext,
+		festivalShortName: string,
+	) {
+		const festival = await this.repository.findFestivalByShortName(
+			tenant.organization.id,
+			festivalShortName,
+		);
+		if (!festival) throw new AppError("Festival not found.", 404);
+		return {
+			classSubtypes: await this.repository.listFestivalClassSubtypes(
+				tenant.organization.id,
+				festival.id,
+			),
+		};
+	}
+
+	async createFestivalClassSubtypeForTenant(
+		tenant: TenantContext,
+		festivalShortName: string,
+		value: unknown,
+	) {
+		const festival = await this.repository.findFestivalByShortName(
+			tenant.organization.id,
+			festivalShortName,
+		);
+		if (!festival) throw new AppError("Festival not found.", 404);
+		const displayName = this.requireDivisionName(value);
+		const normalizedName = divisionNameUniquenessKey(displayName);
+		const existing = (
+			await this.repository.listRegistrationCatalogValues(
+				tenant.organization.id,
+				"class_subtype",
+			)
+		).find(
+			(candidate) =>
+				divisionNameUniquenessKey(candidate.displayName) === normalizedName,
+		);
+		const created =
+			existing ??
+			(await this.repository.createRegistrationCatalogValue({
+				organizationId: tenant.organization.id,
+				kind: "class_subtype",
+				displayName,
+				normalizedName,
+			}));
+		await this.repository.associateFestivalClassSubtype({
+			organizationId: tenant.organization.id,
+			festivalId: festival.id,
+			classSubtypeId: created.id,
+		});
+		return { value: created };
+	}
+
 	async createFestivalClass(
 		orgSlug: string,
 		festivalShortName: string,
@@ -887,9 +941,9 @@ export class OrganizationService {
 		}
 
 		if (input.classSubtypeId) {
-			const subtypes = await this.repository.listRegistrationCatalogValues(
+			const subtypes = await this.repository.listFestivalClassSubtypes(
 				organization.id,
-				"class_subtype",
+				festival.id,
 			);
 			const exists = subtypes.some((s) => s.id === input.classSubtypeId);
 			if (!exists) throw new AppError("Class subtype not found.", 404);

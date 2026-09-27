@@ -116,6 +116,7 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			normalizedName: string;
 		}
 	>();
+	private readonly festivalClassSubtypeIds = new Set<string>();
 
 	private readonly festivalClassConfigurations = new Map<
 		string,
@@ -1110,6 +1111,43 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		this.registrationCatalogValues.set(record.id, record);
 		const { kind: _kind, normalizedName: _normalizedName, ...result } = record;
 		return result;
+	}
+
+	async listFestivalClassSubtypes(
+		organizationId: string,
+		festivalId: string,
+		activeOnly = false,
+	): Promise<RegistrationCatalogValue[]> {
+		return (
+			await this.listRegistrationCatalogValues(
+				organizationId,
+				"class_subtype",
+				activeOnly,
+			)
+		).filter((value) =>
+			this.festivalClassSubtypeIds.has(`${festivalId}:${value.id}`),
+		);
+	}
+
+	async associateFestivalClassSubtype(input: {
+		organizationId: string;
+		festivalId: string;
+		classSubtypeId: string;
+	}): Promise<void> {
+		const festival = this.festivals.get(input.festivalId);
+		const subtype = this.registrationCatalogValues.get(input.classSubtypeId);
+		if (
+			!festival ||
+			festival.organizationId !== input.organizationId ||
+			!subtype ||
+			subtype.organizationId !== input.organizationId ||
+			subtype.kind !== "class_subtype"
+		) {
+			throw new Error("Festival class subtype was not found.");
+		}
+		this.festivalClassSubtypeIds.add(
+			`${input.festivalId}:${input.classSubtypeId}`,
+		);
 	}
 
 	async updateRegistrationCatalogValue(input: {

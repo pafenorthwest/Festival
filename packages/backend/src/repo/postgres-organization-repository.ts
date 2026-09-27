@@ -2048,6 +2048,47 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		};
 	}
 
+	async listFestivalClassSubtypes(
+		organizationId: string,
+		festivalId: string,
+		activeOnly = false,
+	): Promise<RegistrationCatalogValue[]> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT v.id, v.organization_id, v.kind, v.display_name, v.is_active, v.display_order, v.created_at, v.updated_at FROM ${this.schema}.registration_catalog_values v INNER JOIN ${this.schema}.festival_class_subtypes scoped ON scoped.class_subtype_id = v.id AND scoped.organization_id = $1 AND scoped.festival_id = $2 WHERE v.organization_id = $1 AND v.kind = 'class_subtype' AND ($3::boolean = FALSE OR v.is_active) ORDER BY v.display_order, v.id`,
+			[organizationId, festivalId, activeOnly],
+		)) as RegistrationCatalogValueRow[];
+		return rows.map((row) => ({
+			id: row.id,
+			organizationId: row.organization_id,
+			displayName: row.display_name,
+			isActive: row.is_active,
+			displayOrder: row.display_order,
+			createdAtIso: row.created_at,
+			updatedAtIso: row.updated_at,
+		}));
+	}
+
+	async associateFestivalClassSubtype(input: {
+		organizationId: string;
+		festivalId: string;
+		classSubtypeId: string;
+	}): Promise<void> {
+		await this.ensureReady();
+		const rows = await sql.unsafe(
+			`INSERT INTO ${this.schema}.festival_class_subtypes (organization_id, festival_id, class_subtype_id) SELECT $1, $2, $3 WHERE EXISTS (SELECT 1 FROM ${this.schema}.festivals WHERE id = $2 AND organization_id = $1) AND EXISTS (SELECT 1 FROM ${this.schema}.registration_catalog_values WHERE id = $3 AND organization_id = $1 AND kind = 'class_subtype') ON CONFLICT DO NOTHING RETURNING festival_id`,
+			[input.organizationId, input.festivalId, input.classSubtypeId],
+		);
+		if (rows.length === 0) {
+			const existing = await sql.unsafe(
+				`SELECT 1 FROM ${this.schema}.festival_class_subtypes WHERE organization_id = $1 AND festival_id = $2 AND class_subtype_id = $3`,
+				[input.organizationId, input.festivalId, input.classSubtypeId],
+			);
+			if (existing.length === 0)
+				throw new Error("Festival class subtype was not found.");
+		}
+	}
+
 	async updateRegistrationCatalogValue(input: {
 		organizationId: string;
 		kind: RegistrationCatalogKind;

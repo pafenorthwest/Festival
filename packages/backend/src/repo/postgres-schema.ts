@@ -168,6 +168,13 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			CHECK (minimum_age >= 0 AND maximum_age >= minimum_age AND maximum_performance_pieces IN (1, 2, 3) AND performance_minutes > 0 AND capacity > 0)
 		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.festival_class_subtypes (
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			festival_id TEXT NOT NULL REFERENCES ${safeSchema}.festivals (id) ON DELETE CASCADE,
+			class_subtype_id TEXT NOT NULL REFERENCES ${safeSchema}.registration_catalog_values (id) ON DELETE RESTRICT,
+			PRIMARY KEY (festival_id, class_subtype_id),
+			FOREIGN KEY (festival_id, organization_id) REFERENCES ${safeSchema}.festivals (id, organization_id) ON DELETE CASCADE
+		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.festival_customers (
 			id TEXT PRIMARY KEY,
 			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations(id) ON DELETE CASCADE,
