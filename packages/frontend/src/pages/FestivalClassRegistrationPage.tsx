@@ -304,6 +304,8 @@ export function FestivalClassRegistrationPage(
 						<label class="field">
 							<span>Performer (Child)</span>
 							<select
+								id="registration-child"
+								name="registration-child"
 								value={selectedChildId()}
 								onChange={(e) => {
 									setSelectedChildId(e.currentTarget.value);
@@ -338,6 +340,8 @@ export function FestivalClassRegistrationPage(
 									<label class="field" style="flex: 1;">
 										<span>Birthdate</span>
 										<input
+											id="registration-birthdate"
+											name="registration-birthdate"
 											type="date"
 											value={birthdayDraft()}
 											onInput={(e) => setBirthdayDraft(e.currentTarget.value)}
@@ -362,6 +366,8 @@ export function FestivalClassRegistrationPage(
 							<label class="field">
 								<span>Division</span>
 								<select
+									id="registration-division"
+									name="registration-division"
 									value={selectedDivisionId()}
 									disabled={divisions.loading || Boolean(divisions.error)}
 									onChange={(e) => {
@@ -389,6 +395,8 @@ export function FestivalClassRegistrationPage(
 								<label class="field">
 									<span>Teacher</span>
 									<select
+										id="registration-teacher"
+										name="registration-teacher"
 										value={selectedTeacherId()}
 										onChange={(e) => {
 											setSelectedTeacherId(e.currentTarget.value);
@@ -407,6 +415,8 @@ export function FestivalClassRegistrationPage(
 								<label class="field">
 									<span>Eligible Class</span>
 									<select
+										id="registration-class"
+										name="registration-class"
 										value={selectedClassId()}
 										onChange={(e) => setSelectedClassId(e.currentTarget.value)}
 									>
@@ -427,6 +437,8 @@ export function FestivalClassRegistrationPage(
 								<label class="field">
 									<span>Accompanist</span>
 									<select
+										id="registration-accompanist"
+										name="registration-accompanist"
 										value={selectedAccompanistId()}
 										onChange={(e) =>
 											setSelectedAccompanistId(e.currentTarget.value)

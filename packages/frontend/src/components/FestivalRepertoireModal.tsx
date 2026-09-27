@@ -1,5 +1,5 @@
 import type { RepertoirePiece } from "@festival/common";
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, Index, Show } from "solid-js";
 import {
 	arePiecesValid,
 	createEmptyPieceDraft,
@@ -80,52 +80,55 @@ export function FestivalRepertoireModal(props: FestivalRepertoireModalProps) {
 					</header>
 
 					<form class="flow-panel" onSubmit={handleSave}>
-						<For each={pieces()}>
+						<Index each={pieces()}>
 							{(piece, index) => (
 								<div class="panel flow-panel repertoire-piece-box">
 									<div class="division-row-heading">
-										<strong>Piece {index() + 1}</strong>
+										<strong>Piece {index + 1}</strong>
 										<Show when={pieces().length > 1}>
 											<Button
 												type="button"
 												variant="secondary"
-												onClick={() => handleRemovePiece(index())}
+												onClick={() => handleRemovePiece(index)}
 											>
 												Remove piece
 											</Button>
 										</Show>
 									</div>
 
-									<label class="field">
+									<label class="field" for={`repertoire-piece-${index}-title`}>
 										<span>Title</span>
 										<input
+											id={`repertoire-piece-${index}-title`}
+											name={`repertoire-piece-${index}-title`}
 											type="text"
-											value={piece.title}
+											value={piece().title}
 											onInput={(e) =>
-												updatePieceField(
-													index(),
-													"title",
-													e.currentTarget.value,
-												)
+												updatePieceField(index, "title", e.currentTarget.value)
 											}
 											placeholder="e.g. Moonlight Sonata"
 											required
 										/>
-										<Show when={touched() && validatePieceTitle(piece.title)}>
+										<Show when={touched() && validatePieceTitle(piece().title)}>
 											<p class="field-error" role="alert">
-												{validatePieceTitle(piece.title)}
+												{validatePieceTitle(piece().title)}
 											</p>
 										</Show>
 									</label>
 
-									<label class="field">
+									<label
+										class="field"
+										for={`repertoire-piece-${index}-composer`}
+									>
 										<span>Composer</span>
 										<input
+											id={`repertoire-piece-${index}-composer`}
+											name={`repertoire-piece-${index}-composer`}
 											type="text"
-											value={piece.composer}
+											value={piece().composer}
 											onInput={(e) =>
 												updatePieceField(
-													index(),
+													index,
 													"composer",
 													e.currentTarget.value,
 												)
@@ -134,22 +137,29 @@ export function FestivalRepertoireModal(props: FestivalRepertoireModalProps) {
 											required
 										/>
 										<Show
-											when={touched() && validatePieceComposer(piece.composer)}
+											when={
+												touched() && validatePieceComposer(piece().composer)
+											}
 										>
 											<p class="field-error" role="alert">
-												{validatePieceComposer(piece.composer)}
+												{validatePieceComposer(piece().composer)}
 											</p>
 										</Show>
 									</label>
 
-									<label class="field">
+									<label
+										class="field"
+										for={`repertoire-piece-${index}-movement`}
+									>
 										<span>Movement / Section (optional)</span>
 										<input
+											id={`repertoire-piece-${index}-movement`}
+											name={`repertoire-piece-${index}-movement`}
 											type="text"
-											value={piece.movement}
+											value={piece().movement}
 											onInput={(e) =>
 												updatePieceField(
-													index(),
+													index,
 													"movement",
 													e.currentTarget.value,
 												)
@@ -162,32 +172,44 @@ export function FestivalRepertoireModal(props: FestivalRepertoireModalProps) {
 										class="duration-inputs"
 										style="display: flex; gap: 0.5rem; align-items: flex-end;"
 									>
-										<label class="field" style="flex: 1;">
+										<label
+											class="field"
+											for={`repertoire-piece-${index}-minutes`}
+											style="flex: 1;"
+										>
 											<span>Minutes</span>
 											<input
+												id={`repertoire-piece-${index}-minutes`}
+												name={`repertoire-piece-${index}-minutes`}
 												type="number"
 												min="0"
 												max="60"
-												value={piece.durationMinutes}
+												value={piece().durationMinutes}
 												onInput={(e) =>
 													updatePieceField(
-														index(),
+														index,
 														"durationMinutes",
 														Number(e.currentTarget.value),
 													)
 												}
 											/>
 										</label>
-										<label class="field" style="flex: 1;">
+										<label
+											class="field"
+											for={`repertoire-piece-${index}-seconds`}
+											style="flex: 1;"
+										>
 											<span>Seconds</span>
 											<input
+												id={`repertoire-piece-${index}-seconds`}
+												name={`repertoire-piece-${index}-seconds`}
 												type="number"
 												min="0"
 												max="59"
-												value={piece.durationSeconds}
+												value={piece().durationSeconds}
 												onInput={(e) =>
 													updatePieceField(
-														index(),
+														index,
 														"durationSeconds",
 														Number(e.currentTarget.value),
 													)
@@ -199,21 +221,21 @@ export function FestivalRepertoireModal(props: FestivalRepertoireModalProps) {
 										when={
 											touched() &&
 											validatePieceDuration(
-												piece.durationMinutes,
-												piece.durationSeconds,
+												piece().durationMinutes,
+												piece().durationSeconds,
 											)
 										}
 									>
 										<p class="field-error" role="alert">
 											{validatePieceDuration(
-												piece.durationMinutes,
-												piece.durationSeconds,
+												piece().durationMinutes,
+												piece().durationSeconds,
 											)}
 										</p>
 									</Show>
 								</div>
 							)}
-						</For>
+						</Index>
 
 						<Show when={pieces().length < props.maxPieces}>
 							<Button
