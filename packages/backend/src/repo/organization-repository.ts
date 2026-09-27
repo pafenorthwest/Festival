@@ -246,6 +246,9 @@ export interface OrganizationRepository {
 		userId: string,
 		slug: string,
 	): Promise<MembershipWithOrganization | null>;
+	findOrganizationById(
+		organizationId: string,
+	): Promise<OrganizationRecord | null>;
 	findOrganizationBySlug(slug: string): Promise<OrganizationRecord | null>;
 	findOrganizationByName(name: string): Promise<OrganizationRecord | null>;
 	findOrganizationByShopDomain(
@@ -254,6 +257,7 @@ export interface OrganizationRepository {
 	createOrganization(input: {
 		name: string;
 		slug: string;
+		defaultCurrencyCode?: string;
 	}): Promise<OrganizationRecord>;
 	listDivisions(
 		organizationId: string,

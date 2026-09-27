@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, mock, spyOn } from "bun:test";
 import type {
 	AccompanistMembershipGrant,
 	EntitlementGrantSnapshot,
@@ -12,6 +12,7 @@ import {
 	type StartClassCheckoutInput,
 } from "../src/checkout/class-checkout-service.js";
 import { InMemoryCustomerAccountRepository } from "../src/customer/in-memory-customer-account-repository.js";
+import { AppError } from "../src/errors/app-error.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
 
 interface FixtureOptions {
@@ -27,6 +28,7 @@ interface FixtureOptions {
 	performanceMinutes?: number;
 	storeDomain?: string;
 	mockStorefront?: Partial<ClassCheckoutStorefront>;
+	defaultCurrencyCode?: string;
 }
 
 async function createFixture(options: FixtureOptions = {}) {
@@ -40,6 +42,7 @@ async function createFixture(options: FixtureOptions = {}) {
 	const organization = await organizations.createOrganization({
 		name: "Pacific Northwest Music Festival",
 		slug: "pnw-festival",
+		defaultCurrencyCode: options.defaultCurrencyCode,
 	});
 
 	const division = await organizations.createDivision({
@@ -231,7 +234,6 @@ async function createFixture(options: FixtureOptions = {}) {
 		buyerAccessToken: "buyer-token-test",
 		teacherId,
 		pieces: defaultPieces,
-		currency: "USD",
 	};
 
 	return {
@@ -759,7 +761,26 @@ describe("ClassCheckoutService", () => {
 		});
 	});
 
-	it("rejects a repertoire piece without a composer before persistence", async () => {
+	it("rejects a repertoire piece with missing composer with 400", async () => {
+		const f = await createFixture();
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				pieces: [
+					{
+						title: "Untitled",
+						composer: undefined as never,
+						durationSeconds: 60,
+					},
+				],
+			}),
+		).rejects.toMatchObject({
+			status: 400,
+			message: "Each repertoire piece must have a valid composer.",
+		});
+	});
+
+	it("rejects a repertoire piece with whitespace-only composer with 400", async () => {
 		const f = await createFixture();
 		await expect(
 			f.service.start({
@@ -772,7 +793,7 @@ describe("ClassCheckoutService", () => {
 		});
 	});
 
-	it("rejects a repertoire piece with a non-string movement before persistence", async () => {
+	it("rejects a repertoire piece with a non-string movement with 400 if passed", async () => {
 		const f = await createFixture();
 		await expect(
 			f.service.start({
@@ -798,6 +819,50 @@ describe("ClassCheckoutService", () => {
 				idempotencyKey: f.defaultInput.idempotencyKey,
 			}),
 		).toBeNull();
+	});
+
+	it("persists trimmed composer and movement in registration metadata", async () => {
+		const f = await createFixture();
+		const result = await f.service.start({
+			...f.defaultInput,
+			pieces: [
+				{
+					title: "  Moonlight Sonata  ",
+					composer: "  Ludwig van Beethoven  ",
+					movement: "  I. Adagio sostenuto  ",
+					durationSeconds: 300,
+				},
+			],
+		});
+		const metadata = (
+			f.checkout as unknown as {
+				registrationMetadata: Map<
+					string,
+					{
+						repertoireJson: RepertoirePiece[];
+						repertoireItems: Array<{
+							titleSnapshot: string;
+							performedMovementText: string | null;
+							contributors: Array<{ displayNameSnapshot: string }>;
+						}>;
+					}
+				>;
+			}
+		).registrationMetadata.get(result.intentId);
+
+		expect(metadata?.repertoireJson).toEqual([
+			{
+				title: "Moonlight Sonata",
+				composer: "Ludwig van Beethoven",
+				movement: "I. Adagio sostenuto",
+				durationSeconds: 300,
+			},
+		]);
+		expect(metadata?.repertoireItems[0]).toMatchObject({
+			titleSnapshot: "Moonlight Sonata",
+			performedMovementText: "I. Adagio sostenuto",
+			contributors: [{ displayNameSnapshot: "Ludwig van Beethoven" }],
+		});
 	});
 
 	it("accepts null movement and normalizes repertoire snapshot text", async () => {
@@ -831,9 +896,9 @@ describe("ClassCheckoutService", () => {
 
 		expect(metadata?.repertoireJson).toEqual([
 			{
-				title: "  Sonata in C  ",
-				composer: "  Wolfgang Amadeus Mozart  ",
-				movement: null,
+				title: "Sonata in C",
+				composer: "Wolfgang Amadeus Mozart",
+				movement: undefined,
 				durationSeconds: 240,
 			},
 		]);
@@ -1040,6 +1105,50 @@ describe("ClassCheckoutService", () => {
 		expect(createdIntent?.status).toBe("failed");
 	});
 
+	it("compensates class-registration metadata write failures, marking intent failed and allowing retry", async () => {
+		const f = await createFixture();
+		const markFailedSpy = spyOn(f.checkout, "markFailed");
+
+		const originalInsert = f.checkout.insertRegistrationMetadata.bind(
+			f.checkout,
+		);
+		f.checkout.insertRegistrationMetadata = mock(async () => {
+			throw new Error("Database connection failed");
+		});
+
+		let thrownError: unknown;
+		try {
+			await f.service.start(f.defaultInput);
+		} catch (error) {
+			thrownError = error;
+		}
+
+		expect(thrownError).toBeInstanceOf(AppError);
+		expect((thrownError as AppError).status).toBe(503);
+		expect((thrownError as AppError).code).toBe("checkout_retryable_upstream");
+
+		const intents = (
+			f.checkout as unknown as {
+				intents: Map<string, { id: string; status: string }>;
+			}
+		).intents;
+		const createdIntent = [...intents.values()][0];
+		expect(createdIntent).toBeDefined();
+		expect(createdIntent?.status).toBe("failed");
+		expect(markFailedSpy).toHaveBeenCalledWith(createdIntent.id);
+
+		// Verify subsequent call with a new idempotency key is allowed (not blocked with 409 checkout_in_progress)
+		f.checkout.insertRegistrationMetadata = originalInsert;
+		const retryResult = await f.service.start({
+			...f.defaultInput,
+			idempotencyKey: "22222222-3333-4444-5555-666666666666",
+		});
+		expect(retryResult).toBeDefined();
+		expect(retryResult.checkoutUrl).toBe(
+			`https://${f.storeDomain}/checkouts/c123`,
+		);
+	});
+
 	it("aborts with 503 retryableCheckoutError and marks intent failed when second getShopifyIntegration read returns incremented integrationVersion", async () => {
 		const f = await createFixture();
 
@@ -1071,5 +1180,68 @@ describe("ClassCheckoutService", () => {
 		const createdIntent = [...intents.values()][0];
 		expect(createdIntent).toBeDefined();
 		expect(createdIntent?.status).toBe("failed");
+	});
+
+	it("fails with 404 when organization is not found", async () => {
+		const f = await createFixture();
+		spyOn(f.organizations, "findOrganizationById").mockResolvedValue(null);
+
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			message: "Organization was not found.",
+			status: 404,
+		});
+	});
+
+	it("uses organization defaultCurrencyCode and passes it to createIntent and createCart", async () => {
+		let capturedCartInput: unknown;
+		const f = await createFixture({
+			defaultCurrencyCode: "CAD",
+			mockStorefront: {
+				createCart: async (input) => {
+					capturedCartInput = input;
+					return { shopifyCartId: "gid://shopify/Cart/cad-cart" };
+				},
+			},
+		});
+
+		const result = await f.service.start(f.defaultInput);
+		expect(result).toBeDefined();
+
+		const stored = await f.checkout.findIntentByCorrelation(
+			f.organization.id,
+			result.correlationId,
+		);
+		expect(stored?.currencyCode).toBe("CAD");
+		expect(capturedCartInput).toMatchObject({
+			currencyCode: "CAD",
+		});
+	});
+
+	it("falls back to USD when organization defaultCurrencyCode is empty", async () => {
+		let capturedCartInput: unknown;
+		const f = await createFixture({
+			mockStorefront: {
+				createCart: async (input) => {
+					capturedCartInput = input;
+					return { shopifyCartId: "gid://shopify/Cart/fallback-cart" };
+				},
+			},
+		});
+		spyOn(f.organizations, "findOrganizationById").mockResolvedValue({
+			...f.organization,
+			defaultCurrencyCode: "",
+		});
+
+		const result = await f.service.start(f.defaultInput);
+		expect(result).toBeDefined();
+
+		const stored = await f.checkout.findIntentByCorrelation(
+			f.organization.id,
+			result.correlationId,
+		);
+		expect(stored?.currencyCode).toBe("USD");
+		expect(capturedCartInput).toMatchObject({
+			currencyCode: "USD",
+		});
 	});
 });

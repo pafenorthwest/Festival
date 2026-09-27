@@ -73,6 +73,7 @@ interface MembershipRow {
 	organization_slug: string;
 	organization_created_at: string;
 	organization_timezone: string;
+	organization_default_currency_code?: string | null;
 }
 
 interface InviteRow {
@@ -88,6 +89,7 @@ interface InviteRow {
 	organization_slug: string;
 	organization_created_at: string;
 	organization_timezone: string;
+	organization_default_currency_code?: string | null;
 }
 
 interface FestivalRow {
@@ -107,6 +109,7 @@ interface OrganizationRow {
 	name: string;
 	slug: string;
 	timezone: string;
+	default_currency_code?: string | null;
 	created_at: string;
 }
 
@@ -277,12 +280,14 @@ function mapOrganization(row: {
 	slug: string;
 	created_at: string;
 	timezone?: string;
+	default_currency_code?: string | null;
 }): OrganizationRecord {
 	return {
 		id: row.id,
 		name: row.name,
 		slug: row.slug,
 		timezone: row.timezone ?? "UTC",
+		defaultCurrencyCode: row.default_currency_code ?? "USD",
 		createdAtIso: row.created_at,
 	};
 }
@@ -484,6 +489,7 @@ function mapMembership(row: MembershipRow): MembershipWithOrganization {
 			name: row.organization_name,
 			slug: row.organization_slug,
 			timezone: row.organization_timezone,
+			defaultCurrencyCode: row.organization_default_currency_code ?? "USD",
 			createdAtIso: row.organization_created_at,
 		},
 	};
@@ -506,6 +512,7 @@ function mapInvite(row: InviteRow): InviteWithOrganization {
 			name: row.organization_name,
 			slug: row.organization_slug,
 			timezone: row.organization_timezone,
+			defaultCurrencyCode: row.organization_default_currency_code ?? "USD",
 			createdAtIso: row.organization_created_at,
 		},
 	};
@@ -608,7 +615,8 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				o.name AS organization_name,
 				o.slug AS organization_slug,
 				o.created_at AS organization_created_at,
-				o.timezone AS organization_timezone
+				o.timezone AS organization_timezone,
+				o.default_currency_code AS organization_default_currency_code
 			 FROM ${this.schema}.memberships m
 			 JOIN ${this.schema}.organizations o
 			   ON o.id = m.organization_id
@@ -638,7 +646,8 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				o.name AS organization_name,
 				o.slug AS organization_slug,
 				o.created_at AS organization_created_at,
-				o.timezone AS organization_timezone
+				o.timezone AS organization_timezone,
+				o.default_currency_code AS organization_default_currency_code
 			 FROM ${this.schema}.memberships m
 			 JOIN ${this.schema}.organizations o
 			   ON o.id = m.organization_id
@@ -651,24 +660,34 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		return rows[0] ? mapMembership(rows[0]) : null;
 	}
 
+	async findOrganizationById(
+		organizationId: string,
+	): Promise<OrganizationRecord | null> {
+		await this.ensureReady();
+
+		const rows = (await sql.unsafe(
+			`SELECT id, name, slug, timezone, default_currency_code, created_at
+			 FROM ${this.schema}.organizations
+			 WHERE id = $1
+			 LIMIT 1`,
+			[organizationId],
+		)) as OrganizationRow[];
+
+		return rows[0] ? mapOrganization(rows[0]) : null;
+	}
+
 	async findOrganizationBySlug(
 		slug: string,
 	): Promise<OrganizationRecord | null> {
 		await this.ensureReady();
 
 		const rows = (await sql.unsafe(
-			`SELECT id, name, slug, timezone, created_at
+			`SELECT id, name, slug, timezone, default_currency_code, created_at
 			 FROM ${this.schema}.organizations
 			 WHERE slug = $1
 			 LIMIT 1`,
 			[slug],
-		)) as Array<{
-			id: string;
-			name: string;
-			slug: string;
-			timezone: string;
-			created_at: string;
-		}>;
+		)) as OrganizationRow[];
 
 		return rows[0] ? mapOrganization(rows[0]) : null;
 	}
@@ -679,18 +698,12 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		await this.ensureReady();
 
 		const rows = (await sql.unsafe(
-			`SELECT id, name, slug, timezone, created_at
+			`SELECT id, name, slug, timezone, default_currency_code, created_at
 			 FROM ${this.schema}.organizations
 			 WHERE LOWER(name) = LOWER($1)
 			 LIMIT 1`,
 			[name],
-		)) as Array<{
-			id: string;
-			name: string;
-			slug: string;
-			timezone: string;
-			created_at: string;
-		}>;
+		)) as OrganizationRow[];
 
 		return rows[0] ? mapOrganization(rows[0]) : null;
 	}
@@ -698,21 +711,21 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 	async createOrganization(input: {
 		name: string;
 		slug: string;
+		defaultCurrencyCode?: string;
 	}): Promise<OrganizationRecord> {
 		await this.ensureReady();
 
 		const [row] = (await sql.unsafe(
-			`INSERT INTO ${this.schema}.organizations (id, name, slug)
-			 VALUES ($1, $2, $3)
-			 RETURNING id, name, slug, timezone, created_at`,
-			[randomUUID(), input.name, input.slug],
-		)) as Array<{
-			id: string;
-			name: string;
-			slug: string;
-			timezone: string;
-			created_at: string;
-		}>;
+			`INSERT INTO ${this.schema}.organizations (id, name, slug, default_currency_code)
+			 VALUES ($1, $2, $3, $4)
+			 RETURNING id, name, slug, timezone, default_currency_code, created_at`,
+			[
+				randomUUID(),
+				input.name,
+				input.slug,
+				input.defaultCurrencyCode ?? "USD",
+			],
+		)) as OrganizationRow[];
 
 		return mapOrganization(row);
 	}
@@ -997,7 +1010,8 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				o.name AS organization_name,
 				o.slug AS organization_slug,
 				o.created_at AS organization_created_at,
-				o.timezone AS organization_timezone
+				o.timezone AS organization_timezone,
+				o.default_currency_code AS organization_default_currency_code
 			 FROM ${this.schema}.invites i
 			 JOIN ${this.schema}.organizations o
 			   ON o.id = i.organization_id
@@ -1347,10 +1361,12 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		return rows[0] ? mapShopifyIntegration(rows[0]) : null;
 	}
 
-	async findOrganizationByShopDomain(shopDomain: string) {
+	async findOrganizationByShopDomain(
+		shopDomain: string,
+	): Promise<OrganizationRecord | null> {
 		await this.ensureReady();
 		const rows = (await sql.unsafe(
-			`SELECT o.id, o.name, o.slug, o.timezone, o.created_at
+			`SELECT o.id, o.name, o.slug, o.timezone, o.default_currency_code, o.created_at
 			 FROM ${this.schema}.organizations o
 			 JOIN ${this.schema}.shopify_integrations i ON i.organization_id = o.id
 			 WHERE i.verification_status = 'ok'

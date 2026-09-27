@@ -19,6 +19,7 @@ export interface OrganizationRecord {
 	name: string;
 	slug: string;
 	timezone: string;
+	defaultCurrencyCode: string;
 	createdAtIso: string;
 }
 
@@ -294,6 +295,7 @@ export interface OrganizationMembershipListResponse {
 export interface CreateOrganizationInput {
 	name: string;
 	shortName: string;
+	defaultCurrencyCode?: string;
 }
 
 export interface CreateOrganizationResponse {
