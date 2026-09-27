@@ -1470,6 +1470,36 @@ form.shopify-integration-card {
 	gap: 0.75rem;
 }
 
+.coverage-metrics {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	align-items: center;
+}
+
+.coverage-gaps-table .listing-table-header,
+.coverage-gaps-table .listing-table-row {
+	grid-template-columns: minmax(0, 1.2fr) 7rem 6rem minmax(0, 1.2fr);
+}
+
+.volunteer-schedule-table .listing-table-header,
+.volunteer-schedule-table .listing-table-row {
+	grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.2fr) 9rem;
+}
+
+.volunteer-available-table .listing-table-header,
+.volunteer-available-table .listing-table-row {
+	grid-template-columns: 3.5rem 10rem minmax(0, 1fr);
+}
+
+.volunteer-signup-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 1rem;
+	align-items: center;
+	margin-top: 1rem;
+}
+
 .trash-button::before {
 	content: "\1f5d1";
 	font-size: 1rem;

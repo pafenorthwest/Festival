@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { getVolunteerRoles } from "../src/lib/api.js";
+import {
+	bookVolunteerShifts,
+	cancelVolunteerAssignment,
+	enrollVolunteer,
+	getMyVolunteerSchedule,
+	getVolunteerCoverageGaps,
+	getVolunteerRoles,
+	listVolunteerShifts,
+} from "../src/lib/api.js";
 import { buildEmailLinkUrl } from "../src/lib/firebase-auth.js";
 
 const read = (path: string) => Bun.file(new URL(path, import.meta.url)).text();
@@ -149,5 +157,135 @@ describe("volunteer sign-in flow", () => {
 		expect(page).toContain('openSignInModal("volunteer")');
 		expect(app).toContain('app.route().kind === "festival-volunteers"');
 		expect(app).toContain("<FestivalVolunteersPage");
+	});
+
+	it("interacts with volunteer API endpoints with proper paths and options", async () => {
+		const originalFetch = globalThis.fetch;
+		const calls: Array<{
+			url: string;
+			method: string;
+			body?: unknown;
+			authorization?: string | null;
+		}> = [];
+
+		globalThis.fetch = (async (
+			input: RequestInfo | URL,
+			init?: RequestInit,
+		) => {
+			const url =
+				typeof input === "string"
+					? input
+					: input instanceof URL
+						? input.pathname + input.search
+						: input.url;
+			calls.push({
+				url,
+				method: init?.method ?? "GET",
+				body: init?.body ? JSON.parse(init.body as string) : undefined,
+				authorization: new Headers(init?.headers).get("Authorization"),
+			});
+			return new Response(JSON.stringify([]), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		}) as typeof fetch;
+
+		try {
+			await listVolunteerShifts("pafe", "spring", {
+				availableOnly: true,
+				idToken: "test-token",
+			});
+			expect(calls[0].url).toBe(
+				"/api/organizations/pafe/festivals/spring/volunteers/shifts?available=true",
+			);
+			expect(calls[0].method).toBe("GET");
+			expect(calls[0].authorization).toBe("Bearer test-token");
+
+			await bookVolunteerShifts(
+				"pafe",
+				"spring",
+				["shift-1", "shift-2"],
+				"test-token",
+			);
+			expect(calls[1].url).toBe(
+				"/api/organizations/pafe/festivals/spring/volunteers/book",
+			);
+			expect(calls[1].method).toBe("POST");
+			expect(calls[1].body).toEqual({ shiftIds: ["shift-1", "shift-2"] });
+
+			await getMyVolunteerSchedule("pafe", "spring", "test-token");
+			expect(calls[2].url).toBe(
+				"/api/organizations/pafe/festivals/spring/volunteers/my-schedule",
+			);
+			expect(calls[2].method).toBe("GET");
+
+			await cancelVolunteerAssignment(
+				"pafe",
+				"spring",
+				"assign-123",
+				"test-token",
+			);
+			expect(calls[3].url).toBe(
+				"/api/organizations/pafe/festivals/spring/volunteers/assignments/assign-123/cancel",
+			);
+			expect(calls[3].method).toBe("POST");
+
+			await getVolunteerCoverageGaps("pafe", "spring", "test-token");
+			expect(calls[4].url).toBe(
+				"/api/organizations/pafe/festivals/spring/volunteers/coverage-gaps",
+			);
+			expect(calls[4].method).toBe("GET");
+
+			await enrollVolunteer(
+				"pafe",
+				"spring",
+				{ name: "Jane Doe", phone: "555-9876" },
+				"test-token",
+			);
+			expect(calls[5].url).toBe(
+				"/api/organizations/pafe/festivals/spring/volunteers/enroll",
+			);
+			expect(calls[5].method).toBe("POST");
+			expect(calls[5].body).toEqual({ name: "Jane Doe", phone: "555-9876" });
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	it("supports full self-serve volunteer flow in source", async () => {
+		const page = await read("../src/pages/FestivalVolunteersPage.tsx");
+		const enrollment = await read(
+			"../src/components/VolunteerEnrollmentForm.tsx",
+		);
+		const myShifts = await read(
+			"../src/components/VolunteerMyShiftsSection.tsx",
+		);
+		const available = await read(
+			"../src/components/VolunteerAvailableShiftsSection.tsx",
+		);
+
+		// Enrollment form
+		expect(enrollment).toContain("Volunteer Enrollment");
+		expect(enrollment).toContain('type="email" disabled');
+		expect(enrollment).toContain('type="tel"');
+		expect(enrollment).toContain("props.onEnroll");
+		expect(page).toContain("enrollVolunteer");
+
+		// My Shifts
+		expect(myShifts).toContain("My Shifts");
+		expect(myShifts).toContain("Cancel Shift");
+		expect(myShifts).toContain("listing-table volunteer-schedule-table");
+		expect(page).toContain("cancelVolunteerAssignment");
+
+		// Available Shifts
+		expect(available).toContain("Available Shifts");
+		expect(available).toContain('type="checkbox"');
+		expect(available).toContain("Confirm Shifts");
+		expect(available).toContain("listing-table volunteer-available-table");
+		expect(page).toContain("bookVolunteerShifts");
+
+		// Conflict & error feedback
+		expect(page).toContain("Shift booking conflict");
+		expect(page).toContain("Volunteer enrollment not found");
 	});
 });

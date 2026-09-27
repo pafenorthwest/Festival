@@ -85,6 +85,11 @@ export interface CreateShiftInput {
 
 export interface VolunteerRepository {
 	upsertVolunteer(input: UpsertVolunteerInput): Promise<VolunteerRecord>;
+	findVolunteerByUid(
+		organizationId: string,
+		festivalId: string,
+		firebaseUid: string,
+	): Promise<VolunteerRecord | null>;
 
 	createRole(input: CreateRoleInput): Promise<VolunteerRoleRecord>;
 	createShift(input: CreateShiftInput): Promise<VolunteerShiftRecord>;
@@ -117,6 +122,18 @@ export interface VolunteerRepository {
 		assignmentId: string;
 		cancelledAtIso: string;
 	}): Promise<VolunteerAssignmentRecord | null>;
+
+	listAssignmentsForVolunteer(
+		organizationId: string,
+		festivalId: string,
+		volunteerId: string,
+	): Promise<
+		Array<{
+			assignment: VolunteerAssignmentRecord;
+			shift: VolunteerShiftRecord;
+			role: VolunteerRoleRecord;
+		}>
+	>;
 
 	listScheduleForOrganization(
 		organizationId: string,
@@ -157,6 +174,20 @@ export class InMemoryVolunteerRepository implements VolunteerRepository {
 		};
 		this.volunteers.set(record.id, record);
 		return { ...record };
+	}
+
+	async findVolunteerByUid(
+		organizationId: string,
+		festivalId: string,
+		firebaseUid: string,
+	): Promise<VolunteerRecord | null> {
+		const volunteer = [...this.volunteers.values()].find(
+			(record) =>
+				record.organizationId === organizationId &&
+				record.festivalId === festivalId &&
+				record.firebaseUid === firebaseUid,
+		);
+		return volunteer ? { ...volunteer } : null;
 	}
 
 	async createRole(input: CreateRoleInput) {
@@ -319,6 +350,61 @@ export class InMemoryVolunteerRepository implements VolunteerRepository {
 		assignment.status = "cancelled";
 		assignment.cancelledAtIso = input.cancelledAtIso;
 		return { ...assignment };
+	}
+
+	async listAssignmentsForVolunteer(
+		organizationId: string,
+		festivalId: string,
+		volunteerId: string,
+	): Promise<
+		Array<{
+			assignment: VolunteerAssignmentRecord;
+			shift: VolunteerShiftRecord;
+			role: VolunteerRoleRecord;
+		}>
+	> {
+		return [...this.assignments.values()]
+			.filter(
+				(assignment) =>
+					assignment.organizationId === organizationId &&
+					assignment.volunteerId === volunteerId &&
+					assignment.status === "active",
+			)
+			.map((assignment) => {
+				const shift = this.shifts.get(assignment.shiftId);
+				if (
+					!shift ||
+					shift.organizationId !== organizationId ||
+					shift.festivalId !== festivalId
+				) {
+					return null;
+				}
+				const role = this.roles.get(shift.roleId);
+				if (!role) {
+					throw new Error(
+						`Shift ${shift.id} references missing role ${shift.roleId}.`,
+					);
+				}
+				return {
+					assignment: { ...assignment },
+					shift: { ...shift },
+					role: { ...role },
+				};
+			})
+			.filter(
+				(
+					entry,
+				): entry is {
+					assignment: VolunteerAssignmentRecord;
+					shift: VolunteerShiftRecord;
+					role: VolunteerRoleRecord;
+				} => entry !== null,
+			)
+			.sort((a, b) => {
+				const dateCmp = a.shift.date.localeCompare(b.shift.date);
+				if (dateCmp !== 0) return dateCmp;
+				return a.shift.period.localeCompare(b.shift.period);
+			});
 	}
 
 	async listScheduleForOrganization(

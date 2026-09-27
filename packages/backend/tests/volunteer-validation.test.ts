@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { VolunteerRoleRecord } from "../src/volunteers/volunteer-repository.js";
 import {
+	validateBookShiftsRequest,
 	validateCreateRoleRequest,
 	validateCreateShiftRequest,
 } from "../src/volunteers/volunteer-validation.js";
@@ -133,6 +134,42 @@ describe("validateCreateShiftRequest", () => {
 		);
 		expect(result.errors).toContain(
 			"Shift period is required and must be AM or PM.",
+		);
+	});
+});
+
+describe("validateBookShiftsRequest", () => {
+	it("accepts valid shiftIds", () => {
+		const result = validateBookShiftsRequest({
+			shiftIds: ["shift-1", "shift-2"],
+		});
+		expect("request" in result).toBe(true);
+		if (!("request" in result)) throw new Error("Expected valid request.");
+		expect(result.request.shiftIds).toEqual(["shift-1", "shift-2"]);
+	});
+
+	it("rejects non-object bodies", () => {
+		const result = validateBookShiftsRequest(null);
+		expect("errors" in result).toBe(true);
+		if (!("errors" in result)) throw new Error("Expected errors.");
+		expect(result.errors).toContain("Request body must be an object.");
+	});
+
+	it("rejects empty or missing shiftIds", () => {
+		const result = validateBookShiftsRequest({ shiftIds: [] });
+		expect("errors" in result).toBe(true);
+		if (!("errors" in result)) throw new Error("Expected errors.");
+		expect(result.errors).toContain(
+			"shiftIds must be a non-empty array of shift IDs.",
+		);
+	});
+
+	it("rejects empty string in shiftIds", () => {
+		const result = validateBookShiftsRequest({ shiftIds: ["shift-1", "   "] });
+		expect("errors" in result).toBe(true);
+		if (!("errors" in result)) throw new Error("Expected errors.");
+		expect(result.errors).toContain(
+			"Each shift ID must be a non-empty string.",
 		);
 	});
 });

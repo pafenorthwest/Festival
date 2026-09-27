@@ -35,6 +35,11 @@ async function createTestApp() {
 				email: "division-chair@example.com",
 				displayName: "Dana Chair",
 			},
+			volunteer2: {
+				uid: "uid-volunteer2",
+				email: "volunteer2@example.com",
+				displayName: "Volunteer Two",
+			},
 		}),
 	});
 	return { ...app, repository };

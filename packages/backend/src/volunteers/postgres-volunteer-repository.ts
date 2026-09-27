@@ -19,6 +19,22 @@ function schemaName(value: string) {
 	return value;
 }
 
+function findPeriodConflicts(
+	requestedShifts: VolunteerShiftRecord[],
+	existingPeriods: Set<string>,
+): string[] {
+	const seenInBatch = new Set<string>();
+	const periodConflictIds: string[] = [];
+	for (const shift of requestedShifts) {
+		const key = `${shift.date}:${shift.period}`;
+		if (existingPeriods.has(key) || seenInBatch.has(key)) {
+			periodConflictIds.push(shift.id);
+		}
+		seenInBatch.add(key);
+	}
+	return periodConflictIds;
+}
+
 export class PostgresVolunteerRepository implements VolunteerRepository {
 	private readonly schema: string;
 
@@ -48,6 +64,20 @@ export class PostgresVolunteerRepository implements VolunteerRepository {
 			],
 		)) as Array<Record<string, unknown>>;
 		return this.volunteer(rows[0]);
+	}
+
+	async findVolunteerByUid(
+		organizationId: string,
+		festivalId: string,
+		firebaseUid: string,
+	): Promise<VolunteerRecord | null> {
+		const rows = (await sql.unsafe(
+			`SELECT id, organization_id, festival_id, firebase_uid, account_email, name, phone, created_at::text
+			 FROM ${this.schema}.volunteers
+			 WHERE organization_id = $1 AND festival_id = $2 AND firebase_uid = $3`,
+			[organizationId, festivalId, firebaseUid],
+		)) as Array<Record<string, unknown>>;
+		return rows[0] ? this.volunteer(rows[0]) : null;
 	}
 
 	async createRole(input: CreateRoleInput) {
@@ -127,16 +157,124 @@ export class PostgresVolunteerRepository implements VolunteerRepository {
 		return rows.map((row) => this.shift(row));
 	}
 
-	async bookShifts(_input: {
+	async bookShifts(input: {
 		organizationId: string;
 		festivalId: string;
 		volunteerId: string;
 		shiftIds: string[];
 	}): Promise<BookShiftsOutcome> {
-		throw new Error(
-			"PostgresVolunteerRepository.bookShifts is not implemented yet " +
-				"(atomic, concurrency-safe booking is Week 3 scope).",
-		);
+		const { organizationId, festivalId, volunteerId, shiftIds } = input;
+
+		return (await sql.begin(async (tx) => {
+			const volunteerRows = (await tx.unsafe(
+				`SELECT id FROM ${this.schema}.volunteers
+				 WHERE id = $1 AND organization_id = $2 AND festival_id = $3
+				 FOR UPDATE`,
+				[volunteerId, organizationId, festivalId],
+			)) as Array<Record<string, unknown>>;
+			if (!volunteerRows[0]) {
+				return { kind: "conflict", shiftIds };
+			}
+
+			if (shiftIds.length === 0) {
+				return { kind: "booked", assignments: [] };
+			}
+
+			const uniqueShiftIds = [...new Set(shiftIds)].sort();
+			const placeholders = uniqueShiftIds.map((_, i) => `$${i + 1}`).join(", ");
+			const lockedRows = (await tx.unsafe(
+				`SELECT id, organization_id, festival_id, role_id, date::text, period, time_text, division, adjudicator, created_at::text
+				 FROM ${this.schema}.volunteer_shifts
+				 WHERE id IN (${placeholders})
+				 ORDER BY id
+				 FOR UPDATE`,
+				uniqueShiftIds,
+			)) as Array<Record<string, unknown>>;
+
+			const shiftsById = new Map(
+				lockedRows.map((row) => [String(row.id), this.shift(row)]),
+			);
+			const missingIds = shiftIds.filter((id) => {
+				const shift = shiftsById.get(id);
+				return (
+					!shift ||
+					shift.organizationId !== organizationId ||
+					shift.festivalId !== festivalId
+				);
+			});
+			if (missingIds.length > 0) {
+				return { kind: "conflict", shiftIds: missingIds };
+			}
+
+			const takenRows = (await tx.unsafe(
+				`SELECT shift_id
+				 FROM ${this.schema}.volunteer_assignments
+				 WHERE shift_id IN (${placeholders}) AND status = 'active'`,
+				uniqueShiftIds,
+			)) as Array<Record<string, unknown>>;
+			const takenShiftIds = new Set(
+				takenRows.map((row) => String(row.shift_id)),
+			);
+			const takenIds = shiftIds.filter((id) => takenShiftIds.has(id));
+
+			const existingAssignmentRows = (await tx.unsafe(
+				`SELECT shift.id AS shift_id, shift.date::text AS date, shift.period
+				 FROM ${this.schema}.volunteer_assignments assignment
+				 JOIN ${this.schema}.volunteer_shifts shift ON shift.id = assignment.shift_id
+				 WHERE assignment.organization_id = $1
+					AND assignment.festival_id = $2
+					AND assignment.volunteer_id = $3
+					AND assignment.status = 'active'`,
+				[organizationId, festivalId, volunteerId],
+			)) as Array<Record<string, unknown>>;
+
+			const existingPeriods = new Set(
+				existingAssignmentRows.map(
+					(row) => `${String(row.date)}:${String(row.period)}`,
+				),
+			);
+
+			const requestedShifts: VolunteerShiftRecord[] = [];
+			for (const id of shiftIds) {
+				const shift = shiftsById.get(id);
+				if (shift) {
+					requestedShifts.push(shift);
+				}
+			}
+			const periodConflictIds = findPeriodConflicts(
+				requestedShifts,
+				existingPeriods,
+			);
+
+			const conflictIds = [...new Set([...takenIds, ...periodConflictIds])];
+			if (conflictIds.length > 0) {
+				return { kind: "conflict", shiftIds: conflictIds };
+			}
+
+			const nowIso = new Date().toISOString();
+			const assignments: VolunteerAssignmentRecord[] = [];
+			for (const shiftId of shiftIds) {
+				const rows = (await tx.unsafe(
+					`INSERT INTO ${this.schema}.volunteer_assignments (
+						id, organization_id, festival_id, shift_id, volunteer_id, status, created_at, cancelled_at
+					) VALUES (
+						$1, $2, $3, $4, $5, 'active', $6, NULL
+					)
+					RETURNING id, organization_id, shift_id, volunteer_id, status, created_at::text, cancelled_at::text`,
+					[
+						randomUUID(),
+						organizationId,
+						festivalId,
+						shiftId,
+						volunteerId,
+						nowIso,
+					],
+				)) as Array<Record<string, unknown>>;
+				assignments.push(this.assignment(rows[0]));
+			}
+
+			return { kind: "booked", assignments };
+		})) as BookShiftsOutcome;
 	}
 
 	async cancelAssignment(input: {
@@ -149,8 +287,12 @@ export class PostgresVolunteerRepository implements VolunteerRepository {
 			`UPDATE ${this.schema}.volunteer_assignments assignment
 			 SET status = 'cancelled', cancelled_at = $1
 			 FROM ${this.schema}.volunteer_shifts shift
-			 WHERE assignment.id = $2 AND assignment.organization_id = $3 AND assignment.status = 'active'
-				AND shift.id = assignment.shift_id AND shift.festival_id = $4
+			 WHERE assignment.id = $2
+				AND assignment.organization_id = $3
+				AND assignment.festival_id = $4
+				AND assignment.status = 'active'
+				AND shift.id = assignment.shift_id
+				AND shift.festival_id = $4
 			 RETURNING assignment.id, assignment.organization_id, assignment.shift_id, assignment.volunteer_id, assignment.status, assignment.created_at::text, assignment.cancelled_at::text`,
 			[
 				input.cancelledAtIso,
@@ -160,6 +302,81 @@ export class PostgresVolunteerRepository implements VolunteerRepository {
 			],
 		)) as Array<Record<string, unknown>>;
 		return rows[0] ? this.assignment(rows[0]) : null;
+	}
+
+	async listAssignmentsForVolunteer(
+		organizationId: string,
+		festivalId: string,
+		volunteerId: string,
+	): Promise<
+		Array<{
+			assignment: VolunteerAssignmentRecord;
+			shift: VolunteerShiftRecord;
+			role: VolunteerRoleRecord;
+		}>
+	> {
+		const rows = (await sql.unsafe(
+			`SELECT
+				assignment.id AS assignment_id, assignment.organization_id, assignment.shift_id,
+				assignment.volunteer_id, assignment.status, assignment.created_at::text AS assignment_created_at,
+				assignment.cancelled_at::text AS assignment_cancelled_at,
+				shift.id AS shift_id, shift.festival_id AS shift_festival_id, shift.role_id,
+				shift.date::text AS shift_date, shift.period AS shift_period,
+				shift.time_text AS shift_time_text, shift.division AS shift_division,
+				shift.adjudicator AS shift_adjudicator, shift.created_at::text AS shift_created_at,
+				role.slug, role.display_name, role.description, role.details_url,
+				role.is_room_proctor, role.created_at::text AS role_created_at
+			 FROM ${this.schema}.volunteer_assignments assignment
+			 JOIN ${this.schema}.volunteer_shifts shift
+				ON shift.id = assignment.shift_id
+				AND shift.organization_id = assignment.organization_id
+				AND shift.festival_id = assignment.festival_id
+			 JOIN ${this.schema}.volunteer_roles role
+				ON role.id = shift.role_id
+				AND role.organization_id = shift.organization_id
+				AND role.festival_id = shift.festival_id
+			 WHERE assignment.organization_id = $1
+				AND assignment.festival_id = $2
+				AND assignment.volunteer_id = $3
+				AND assignment.status = 'active'
+			 ORDER BY shift.date, shift.period`,
+			[organizationId, festivalId, volunteerId],
+		)) as Array<Record<string, unknown>>;
+
+		return rows.map((row) => ({
+			assignment: this.assignment({
+				id: row.assignment_id,
+				organization_id: row.organization_id,
+				shift_id: row.shift_id,
+				volunteer_id: row.volunteer_id,
+				status: row.status,
+				created_at: row.assignment_created_at,
+				cancelled_at: row.assignment_cancelled_at,
+			}),
+			shift: this.shift({
+				id: row.shift_id,
+				organization_id: row.organization_id,
+				festival_id: row.shift_festival_id,
+				role_id: row.role_id,
+				date: row.shift_date,
+				period: row.shift_period,
+				time_text: row.shift_time_text,
+				division: row.shift_division,
+				adjudicator: row.shift_adjudicator,
+				created_at: row.shift_created_at,
+			}),
+			role: this.role({
+				id: row.role_id,
+				organization_id: row.organization_id,
+				festival_id: row.shift_festival_id,
+				slug: row.slug,
+				display_name: row.display_name,
+				description: row.description,
+				details_url: row.details_url,
+				is_room_proctor: row.is_room_proctor,
+				created_at: row.role_created_at,
+			}),
+		}));
 	}
 
 	async listScheduleForOrganization(

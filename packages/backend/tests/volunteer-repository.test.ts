@@ -333,4 +333,125 @@ describe("volunteer repository", () => {
 			),
 		).toEqual([]);
 	});
+
+	it("finds a volunteer by firebase UID within festival scope", async () => {
+		const repository = new InMemoryVolunteerRepository();
+		const volunteer = await repository.upsertVolunteer({
+			organizationId: "org-a",
+			festivalId: "festival-a",
+			firebaseUid: "uid-ada",
+			accountEmail: "ada@example.com",
+			name: "Ada Lovelace",
+			phone: "555-0100",
+		});
+
+		const found = await repository.findVolunteerByUid(
+			"org-a",
+			"festival-a",
+			"uid-ada",
+		);
+		expect(found).toEqual(volunteer);
+
+		const wrongFest = await repository.findVolunteerByUid(
+			"org-a",
+			"festival-b",
+			"uid-ada",
+		);
+		expect(wrongFest).toBeNull();
+
+		const wrongOrg = await repository.findVolunteerByUid(
+			"org-b",
+			"festival-a",
+			"uid-ada",
+		);
+		expect(wrongOrg).toBeNull();
+
+		const wrongUid = await repository.findVolunteerByUid(
+			"org-a",
+			"festival-a",
+			"uid-other",
+		);
+		expect(wrongUid).toBeNull();
+	});
+
+	it("lists only active assignments for a volunteer within festival scope", async () => {
+		const repository = new InMemoryVolunteerRepository();
+		const volunteer = await repository.upsertVolunteer({
+			organizationId: "org-a",
+			festivalId: "festival-a",
+			firebaseUid: "uid-ada",
+			accountEmail: "ada@example.com",
+			name: "Ada Lovelace",
+			phone: "555-0100",
+		});
+		const roleA = await repository.createRole({
+			organizationId: "org-a",
+			festivalId: "festival-a",
+			slug: "role-a",
+			displayName: "Role A",
+			description: "First role",
+			detailsUrl: null,
+			isRoomProctor: false,
+		});
+		const shift1 = await repository.createShift({
+			organizationId: "org-a",
+			festivalId: "festival-a",
+			roleId: roleA.id,
+			date: "2027-04-02",
+			period: "AM",
+			timeText: null,
+			division: null,
+			adjudicator: null,
+		});
+		const shift2 = await repository.createShift({
+			organizationId: "org-a",
+			festivalId: "festival-a",
+			roleId: roleA.id,
+			date: "2027-04-01",
+			period: "PM",
+			timeText: null,
+			division: null,
+			adjudicator: null,
+		});
+
+		const booked = await repository.bookShifts({
+			organizationId: "org-a",
+			festivalId: "festival-a",
+			volunteerId: volunteer.id,
+			shiftIds: [shift1.id, shift2.id],
+		});
+		expect(booked.kind).toBe("booked");
+
+		const commitments = await repository.listAssignmentsForVolunteer(
+			"org-a",
+			"festival-a",
+			volunteer.id,
+		);
+		expect(commitments).toHaveLength(2);
+		expect(commitments[0].shift.id).toBe(shift2.id);
+		expect(commitments[0].role.id).toBe(roleA.id);
+		expect(commitments[0].assignment.status).toBe("active");
+		expect(commitments[1].shift.id).toBe(shift1.id);
+
+		if (booked.kind === "booked") {
+			const shift2Assignment = booked.assignments.find(
+				(a) => a.shiftId === shift2.id,
+			);
+			if (!shift2Assignment) throw new Error("Expected assignment");
+			await repository.cancelAssignment({
+				organizationId: "org-a",
+				festivalId: "festival-a",
+				assignmentId: shift2Assignment.id,
+				cancelledAtIso: new Date().toISOString(),
+			});
+		}
+
+		const afterCancel = await repository.listAssignmentsForVolunteer(
+			"org-a",
+			"festival-a",
+			volunteer.id,
+		);
+		expect(afterCancel).toHaveLength(1);
+		expect(afterCancel[0].shift.id).toBe(shift1.id);
+	});
 });

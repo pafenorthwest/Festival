@@ -9,3 +9,4 @@ export * from "./organization.js";
 export * from "./registration.js";
 export * from "./rules.js";
 export * from "./shopify.js";
+export * from "./volunteer.js";
