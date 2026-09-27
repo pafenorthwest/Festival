@@ -6,6 +6,8 @@ import type { ClassCheckoutService } from "../checkout/class-checkout-service.js
 import type { MembershipCheckoutService } from "../checkout/membership-checkout-service.js";
 import type { MembershipStatusService } from "../commerce/membership-status-service.js";
 import type { CustomerAccountService } from "../customer/customer-account-service.js";
+import type { DropTransferService } from "../registration/drop-transfer-service.js";
+import type { RegistrationChangeRepository } from "../registration/registration-change-repository.js";
 import type { RepertoireRepository } from "../repertoire/index.js";
 import type { AccompanistMembershipService } from "../services/accompanist-membership-service.js";
 import type { OrganizationService } from "../services/organization-service.js";
@@ -44,6 +46,8 @@ export interface ApiRouterOptions {
 	classCheckoutService?: ClassCheckoutService;
 	customClaimsWriter?: CustomClaimsWriter;
 	repertoireRepository?: RepertoireRepository;
+	dropTransferService?: DropTransferService;
+	registrationChangeRepository?: RegistrationChangeRepository;
 }
 
 export function buildApiRouter(
@@ -65,6 +69,8 @@ export function buildApiRouter(
 		classCheckoutService,
 		customClaimsWriter,
 		repertoireRepository,
+		dropTransferService,
+		registrationChangeRepository,
 	} = options;
 	const repository = organizationService.repository;
 
@@ -80,7 +86,12 @@ export function buildApiRouter(
 
 	router.route(
 		"/",
-		buildAdminRegistrationRoutes({ organizationService, authVerifier }),
+		buildAdminRegistrationRoutes({
+			organizationService,
+			authVerifier,
+			dropTransferService,
+			registrationChangeRepository,
+		}),
 	);
 	router.route(
 		"/",
@@ -127,6 +138,7 @@ export function buildApiRouter(
 		buildCustomerRegistrationRoutes({
 			customerAccountService,
 			classCheckoutService,
+			dropTransferService,
 		}),
 	);
 

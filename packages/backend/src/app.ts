@@ -24,6 +24,7 @@ import { ClassCheckoutService } from "./checkout/class-checkout-service.js";
 import { MembershipCheckoutService } from "./checkout/membership-checkout-service.js";
 import { PostgresCheckoutRepository } from "./checkout/postgres-checkout-repository.js";
 import { ShopifyMembershipCheckoutClient } from "./checkout/shopify-membership-checkout-client.js";
+import type { ClassEntitlementRepository } from "./commerce/class-entitlement-repository.js";
 import {
 	InMemoryMembershipCommerceRepository,
 	type MembershipCommerceRepository,
@@ -36,6 +37,8 @@ import { type AppEnv, LOCAL_API_ORIGINS, loadEnv } from "./config/env.js";
 import type { CustomerAccountRepository } from "./customer/customer-account-repository.js";
 import { CustomerAccountService } from "./customer/customer-account-service.js";
 import { PostgresCustomerAccountRepository } from "./customer/postgres-customer-account-repository.js";
+import type { DropTransferService } from "./registration/drop-transfer-service.js";
+import type { RegistrationChangeRepository } from "./registration/registration-change-repository.js";
 import {
 	InMemoryRepertoireRepository,
 	PostgresRepertoireRepository,
@@ -94,6 +97,9 @@ export interface CreateAppOptions {
 	repertoireRepository?: RepertoireRepository;
 	customClaimsWriter?: CustomClaimsWriter;
 	firebaseClaimsReconciliationService?: FirebaseClaimsReconciliationService;
+	dropTransferService?: DropTransferService;
+	registrationChangeRepository?: RegistrationChangeRepository;
+	classEntitlementRepository?: ClassEntitlementRepository;
 }
 
 function privateTokenMatches(
@@ -461,6 +467,8 @@ export async function createApp(options: CreateAppOptions = {}) {
 			classCheckoutService,
 			customClaimsWriter,
 			repertoireRepository,
+			dropTransferService: options.dropTransferService,
+			registrationChangeRepository: options.registrationChangeRepository,
 		}),
 	);
 	app.route(
