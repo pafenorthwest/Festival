@@ -1841,4 +1841,359 @@ form.shopify-integration-card {
 		grid-template-columns: 1fr;
 		gap: 0.2rem;
 	}
+
+	.music-review-table .listing-table-header,
+	.music-review-table .listing-table-row {
+		grid-template-columns: 1fr;
+	}
+
+	.music-review-modal-grid {
+		grid-template-columns: 1fr;
+	}
+}
+
+/* ==========================================================================
+   Music Review Queue & Modal
+   ========================================================================== */
+
+.music-review-page-shell {
+	max-width: 100%;
+}
+
+.music-review-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: flex-start;
+	gap: 1rem;
+	flex-wrap: wrap;
+}
+
+.music-review-metrics-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+	gap: 0.75rem;
+}
+
+.metric-card {
+	background: var(--bullet-panel);
+	border: 1px solid var(--bullet-panel-border);
+	border-radius: 12px;
+	padding: 0.75rem 1rem;
+	display: flex;
+	flex-direction: column;
+	gap: 0.25rem;
+}
+
+.metric-label {
+	font-size: 0.74rem;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	color: var(--bullet-soft-ink);
+	font-weight: 700;
+}
+
+.metric-value {
+	font-size: 1.55rem;
+	color: var(--bullet-ink);
+	line-height: 1.1;
+}
+
+.metric-pending .metric-value {
+	color: #735710;
+}
+
+.metric-claimed .metric-value {
+	color: var(--bullet-accent);
+}
+
+.metric-approved .metric-value {
+	color: var(--bullet-success);
+}
+
+.metric-flagged .metric-value {
+	color: var(--bullet-error);
+}
+
+.music-review-filter-bar {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: space-between;
+	align-items: center;
+	gap: 0.75rem;
+}
+
+.music-review-status-tabs {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.35rem;
+}
+
+.music-review-filter-options {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.85rem;
+}
+
+.filter-toggle-label {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4rem;
+	font-size: 0.88rem;
+	cursor: pointer;
+	user-select: none;
+	color: var(--bullet-ink);
+}
+
+.queue-search-field input {
+	padding: 0.45rem 0.75rem;
+	font-size: 0.88rem;
+	min-width: 220px;
+}
+
+.music-review-table .listing-table-header,
+.music-review-table .listing-table-row {
+	grid-template-columns: minmax(150px, 1.8fr) minmax(130px, 1.4fr) minmax(
+			80px,
+			1fr
+		) 4.5rem 8.5rem minmax(90px, 1fr) 5.5rem;
+}
+
+.cell-title {
+	font-weight: 600;
+	color: var(--bullet-ink);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.cell-composer,
+.cell-movement {
+	color: var(--bullet-soft-ink);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.cell-movement,
+.cell-duration {
+	font-size: 0.88rem;
+}
+
+.cell-duration {
+	font-variant-numeric: tabular-nums;
+	color: var(--bullet-soft-ink);
+}
+
+.cell-claimed {
+	font-size: 0.85rem;
+	color: var(--bullet-soft-ink);
+}
+
+.music-review-modal-card {
+	max-width: 860px;
+	width: 100%;
+	border-radius: 22px;
+	max-height: 90vh;
+	overflow-y: auto;
+}
+
+.music-review-modal-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: flex-start;
+	gap: 1rem;
+}
+
+.music-review-modal-grid {
+	display: grid;
+	grid-template-columns: 1fr 1.25fr;
+	gap: 1.25rem;
+	margin-top: 0.5rem;
+}
+
+.music-review-raw-card,
+.music-review-fields-card {
+	background: rgba(31, 36, 49, 0.03);
+	border: 1px solid var(--bullet-panel-border);
+	border-radius: 12px;
+	padding: 1rem;
+	display: flex;
+	flex-direction: column;
+	gap: 0.75rem;
+}
+
+.raw-field {
+	display: flex;
+	flex-direction: column;
+	gap: 0.15rem;
+	font-size: 0.92rem;
+}
+
+.raw-label {
+	font-size: 0.74rem;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--bullet-soft-ink);
+	font-weight: 700;
+}
+
+.raw-value {
+	color: var(--bullet-ink);
+	word-break: break-word;
+}
+
+.raw-status-row {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	flex-wrap: wrap;
+	margin-top: 0.2rem;
+}
+
+.claimed-label {
+	font-size: 0.82rem;
+	color: var(--bullet-soft-ink);
+}
+
+.music-review-flag-card {
+	background: rgba(185, 77, 54, 0.08);
+	border: 1px solid rgba(185, 77, 54, 0.3);
+	border-radius: 8px;
+	padding: 0.75rem;
+	color: var(--bullet-error);
+	margin-top: 0.25rem;
+	display: flex;
+	flex-direction: column;
+	gap: 0.25rem;
+}
+
+.music-review-flag-card p {
+	margin: 0;
+	font-size: 0.88rem;
+}
+
+.text-small {
+	font-size: 0.78rem;
+}
+
+.catalog-autocomplete-field {
+	position: relative;
+}
+
+.input-with-button {
+	display: flex;
+	gap: 0.4rem;
+}
+
+.compact-search-btn {
+	padding: 0.4rem 0.75rem;
+	white-space: nowrap;
+}
+
+.catalog-suggestions-dropdown {
+	position: absolute;
+	top: 100%;
+	left: 0;
+	right: 0;
+	z-index: 20;
+	background: #ffffff;
+	border: 1px solid var(--bullet-panel-border);
+	border-radius: 8px;
+	box-shadow: 0 8px 24px rgba(31, 36, 49, 0.15);
+	list-style: none;
+	margin: 0.25rem 0 0 0;
+	padding: 0.25rem 0;
+	max-height: 200px;
+	overflow-y: auto;
+}
+
+.catalog-suggestion-item {
+	border-bottom: 1px solid rgba(31, 36, 49, 0.06);
+}
+
+.catalog-suggestion-item:last-child {
+	border-bottom: none;
+}
+
+.catalog-suggestion-button {
+	width: 100%;
+	text-align: left;
+	padding: 0.5rem 0.75rem;
+	background: transparent;
+	border: none;
+	border-radius: 0;
+	box-shadow: none;
+	cursor: pointer;
+	display: flex;
+	flex-direction: column;
+	gap: 0.15rem;
+	font-size: 0.9rem;
+	color: var(--bullet-ink);
+	font-family: inherit;
+}
+
+.catalog-suggestion-button:hover,
+.catalog-suggestion-button:focus {
+	background: rgba(48, 50, 64, 0.06);
+}
+
+.suggestion-composer {
+	font-size: 0.8rem;
+	color: var(--bullet-soft-ink);
+}
+
+.imslp-preview-container {
+	margin-top: 0.25rem;
+	font-size: 0.85rem;
+}
+
+.imslp-preview-link {
+	color: var(--bullet-accent-strong);
+	font-weight: 600;
+	text-decoration: underline;
+}
+
+.music-review-subpanel {
+	background: rgba(31, 36, 49, 0.04);
+	border: 1px solid var(--bullet-panel-border);
+	border-radius: 12px;
+	padding: 1rem;
+	display: flex;
+	flex-direction: column;
+	gap: 0.65rem;
+	margin-top: 1rem;
+}
+
+.flag-subpanel {
+	border-left: 4px solid var(--bullet-error);
+}
+
+.resolve-subpanel {
+	border-left: 4px solid var(--bullet-success);
+}
+
+.subpanel-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 0.5rem;
+}
+
+.music-review-modal-actions {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 1rem;
+	margin-top: 1.25rem;
+	padding-top: 1rem;
+	border-top: 1px solid var(--bullet-panel-border);
+	flex-wrap: wrap;
+}
+
+.music-review-modal-actions .left-actions,
+.music-review-modal-actions .right-actions {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	flex-wrap: wrap;
 }

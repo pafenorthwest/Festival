@@ -2,7 +2,10 @@ import { createResource, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { AccessDeniedPanel } from "../components/AccessDeniedPanel.js";
 import { getAdminFestival } from "../lib/api.js";
-import { buildFestivalAdminClassesPath } from "../lib/routes.js";
+import {
+	buildFestivalAdminClassesPath,
+	buildOrgMusicReviewPath,
+} from "../lib/routes.js";
 
 export function FestivalAdminDashboardPage(props: {
 	app: FestivalAppController;
@@ -56,6 +59,16 @@ export function FestivalAdminDashboardPage(props: {
 						>
 							<strong>Classes</strong>
 							<span>Manage this Festival’s class catalog.</span>
+						</button>
+						<button
+							type="button"
+							class="admin-workflow-card"
+							onClick={() =>
+								props.app.navigate(buildOrgMusicReviewPath(props.slug))
+							}
+						>
+							<strong>Music Review</strong>
+							<span>Review and normalize submitted repertoire.</span>
 						</button>
 					</div>
 				</section>

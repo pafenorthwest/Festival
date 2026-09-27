@@ -6,6 +6,7 @@ import type { ClassCheckoutService } from "../checkout/class-checkout-service.js
 import type { MembershipCheckoutService } from "../checkout/membership-checkout-service.js";
 import type { MembershipStatusService } from "../commerce/membership-status-service.js";
 import type { CustomerAccountService } from "../customer/customer-account-service.js";
+import type { RepertoireRepository } from "../repertoire/index.js";
 import type { AccompanistMembershipService } from "../services/accompanist-membership-service.js";
 import type { OrganizationService } from "../services/organization-service.js";
 import type { PublicMembershipProductService } from "../shopify/public-membership-product-service.js";
@@ -24,6 +25,7 @@ import { buildCustomerRegistrationRoutes } from "./customer/customer-registratio
 import { buildCustomerAuthRoutes } from "./customer-auth/customer-auth.routes.js";
 import { buildIdentityRoutes } from "./identity/identity.routes.js";
 import { buildOrgInfoRoutes } from "./org-info/org-info.routes.js";
+import { buildRepertoireRoutes } from "./repertoire.routes.js";
 import { buildStaffRoutes } from "./staff/staff.routes.js";
 import { buildVolunteerRoutes } from "./volunteers.routes.js";
 
@@ -41,6 +43,7 @@ export interface ApiRouterOptions {
 	volunteerRepository?: VolunteerRepository;
 	classCheckoutService?: ClassCheckoutService;
 	customClaimsWriter?: CustomClaimsWriter;
+	repertoireRepository?: RepertoireRepository;
 }
 
 export function buildApiRouter(
@@ -61,6 +64,7 @@ export function buildApiRouter(
 		volunteerRepository,
 		classCheckoutService,
 		customClaimsWriter,
+		repertoireRepository,
 	} = options;
 	const repository = organizationService.repository;
 
@@ -152,6 +156,15 @@ export function buildApiRouter(
 			repository,
 			volunteerRepository,
 			customClaimsWriter,
+		}),
+	);
+
+	router.route(
+		"/organizations/:slug/repertoire",
+		buildRepertoireRoutes({
+			authVerifier,
+			repository,
+			repertoireRepository,
 		}),
 	);
 

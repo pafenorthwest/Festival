@@ -315,6 +315,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations(id) ON DELETE CASCADE,
 			display_title TEXT NOT NULL CHECK (btrim(display_title) <> ''),
 			normalized_title TEXT NOT NULL CHECK (btrim(normalized_title) <> ''),
+			imslp_url TEXT NULL,
 			is_active BOOLEAN NOT NULL DEFAULT TRUE,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -376,6 +377,22 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			UNIQUE (registration_repertoire_item_id, position),
 			FOREIGN KEY (registration_repertoire_item_id, organization_id) REFERENCES ${safeSchema}.registration_repertoire_items(id, organization_id) ON DELETE CASCADE,
 			FOREIGN KEY (repertoire_contributor_id, organization_id) REFERENCES ${safeSchema}.repertoire_contributors(id, organization_id) ON DELETE SET NULL (repertoire_contributor_id)
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.repertoire_review_items (
+			id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations(id) ON DELETE CASCADE,
+			registration_repertoire_item_id TEXT NOT NULL UNIQUE REFERENCES ${safeSchema}.registration_repertoire_items(id) ON DELETE CASCADE,
+			status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'claimed', 'approved', 'flagged')),
+			claimed_by_uid TEXT,
+			claimed_by_name TEXT,
+			claimed_at TIMESTAMPTZ,
+			flag_reason TEXT,
+			flag_notes TEXT,
+			reviewer_notes TEXT,
+			resolved_work_id TEXT REFERENCES ${safeSchema}.repertoire_works(id) ON DELETE SET NULL,
+			reviewed_at TIMESTAMPTZ,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.membership_entitlement_cohorts (
 			organization_id TEXT NOT NULL, customer_id TEXT NOT NULL,
@@ -572,6 +589,10 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		CREATE INDEX IF NOT EXISTS registration_repertoire_item_contributors_contributor_idx
 			ON ${safeSchema}.registration_repertoire_item_contributors(organization_id, repertoire_contributor_id)
 			WHERE repertoire_contributor_id IS NOT NULL;
+		CREATE INDEX IF NOT EXISTS idx_repertoire_review_items_org_status
+			ON ${safeSchema}.repertoire_review_items (organization_id, status);
+		CREATE INDEX IF NOT EXISTS idx_repertoire_review_items_org_claimed
+			ON ${safeSchema}.repertoire_review_items (organization_id, claimed_by_uid);
 	`;
 }
 
@@ -591,6 +612,9 @@ export async function initializePostgresSchema(schema: string): Promise<void> {
 		await transaction.unsafe(buildCanonicalPostgresSchemaSql(safeSchema));
 		await transaction.unsafe(
 			`ALTER TABLE IF EXISTS ${safeSchema}.organizations ADD COLUMN IF NOT EXISTS default_currency_code TEXT NOT NULL DEFAULT 'USD';`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.repertoire_works ADD COLUMN IF NOT EXISTS imslp_url TEXT;`,
 		);
 	});
 	initializations.set(safeSchema, initialization);
