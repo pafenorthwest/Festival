@@ -14,6 +14,7 @@ import {
 	type CreateVolunteerShiftInput,
 	createVolunteerRole,
 	createVolunteerShift,
+	getVolunteerCoverageGaps,
 	getVolunteerRoles,
 	getVolunteerShiftsForRole,
 } from "../lib/api.js";
@@ -93,6 +94,7 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 			);
 			setRoleDraft(emptyRoleDraft);
 			await refetchRoles();
+			await refetchCoverageGaps();
 		} catch (error) {
 			setRoleFormError(
 				error instanceof Error ? error.message : "Could not create role.",
@@ -101,6 +103,18 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 			setIsCreatingRole(false);
 		}
 	}
+
+	const [coverageGaps, { refetch: refetchCoverageGaps }] = createResource(
+		() => {
+			const token = idToken();
+			const festivalShortName = selectedFestival()?.shortName;
+			return token && festivalShortName
+				? ([token, festivalShortName] as const)
+				: undefined;
+		},
+		([token, festivalShortName]) =>
+			getVolunteerCoverageGaps(props.slug, festivalShortName, token),
+	);
 
 	const [selectedRoleId, setSelectedRoleId] = createSignal<string | null>(null);
 	const selectedRole = () =>
@@ -141,6 +155,7 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 			);
 			setShiftDraft(emptyShiftDraft);
 			await refetchShifts();
+			await refetchCoverageGaps();
 		} catch (error) {
 			setShiftFormError(
 				error instanceof Error ? error.message : "Could not create shift.",
@@ -442,6 +457,81 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 								Create role
 							</Button>
 						</form>
+					</Show>
+
+					<Show when={props.app.hasVolunteerAdminIntent()}>
+						<section class="flow-panel coverage-gaps-panel">
+							<h3>Coverage Gaps</h3>
+							<Show when={coverageGaps.loading}>
+								<p>Loading coverage gaps…</p>
+							</Show>
+							<Show when={coverageGaps.error}>
+								<section class="banner error-banner">
+									Could not load coverage gaps: {String(coverageGaps.error)}
+								</section>
+							</Show>
+							<Show when={coverageGaps()}>
+								{(gaps) => (
+									<>
+										<div class="coverage-metrics">
+											<span class="badge badge-neutral">
+												Total Shifts: {gaps().totalShifts}
+											</span>
+											<span class="badge badge-active">
+												Filled Shifts:{" "}
+												{gaps().filledShifts ?? gaps().coveredShifts}
+											</span>
+											<span class="badge badge-rejected">
+												Open Shifts:{" "}
+												{gaps().openShifts ?? gaps().unfilledShifts}
+											</span>
+											<span class="badge badge-processing">
+												Coverage Percentage: {gaps().coveragePercentage}%
+											</span>
+										</div>
+										<Show
+											when={(gaps().unfilled ?? gaps().gaps).length > 0}
+											fallback={
+												<p class="muted">All shifts are currently filled.</p>
+											}
+										>
+											<div class="listing-table coverage-gaps-table">
+												<div class="listing-table-header">
+													<span>Role</span>
+													<span>Date</span>
+													<span>Period</span>
+													<span>Location</span>
+												</div>
+												<For each={gaps().unfilled ?? gaps().gaps}>
+													{(gap) => (
+														<div class="listing-table-row">
+															<span>
+																<strong>
+																	{gap.roleDisplayName || gap.roleName}
+																</strong>
+															</span>
+															<span>{gap.date}</span>
+															<span>
+																{gap.period}
+																<Show when={gap.timeText}>
+																	<span class="muted"> ({gap.timeText})</span>
+																</Show>
+															</span>
+															<span>
+																{gap.division
+																	? `${gap.division}${gap.adjudicator ? ` (${gap.adjudicator})` : ""}`
+																	: ((gap as { location?: string }).location ??
+																		"—")}
+															</span>
+														</div>
+													)}
+												</For>
+											</div>
+										</Show>
+									</>
+								)}
+							</Show>
+						</section>
 					</Show>
 				</Show>
 			</section>

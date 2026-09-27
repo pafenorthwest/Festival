@@ -1,6 +1,9 @@
 import type {
 	AcceptInviteInput,
+	BookShiftsOutcome,
 	ClassRegistrationMetadata,
+	CoverageGapShift,
+	CoverageGapsSummary,
 	CreateFestivalClassInput,
 	CreateFestivalInput,
 	CreateFestivalResponse,
@@ -49,7 +52,10 @@ import type {
 	UpdateFestivalClassInput,
 	UpdateOrganizationDivisionInput,
 	UpdateOrganizationTimezoneInput,
+	VolunteerAssignment,
+	VolunteerRecord,
 } from "@festival/common";
+import { getFirebaseAuth } from "./firebase-auth.js";
 
 const API_BASE = import.meta.env.FRONT_API_BASE ?? "";
 
@@ -92,6 +98,31 @@ export interface CreateVolunteerShiftInput {
 	adjudicator?: string | null;
 }
 
+export type {
+	BookShiftsOutcome,
+	CoverageGapShift,
+	CoverageGapsSummary,
+	VolunteerAssignment,
+	VolunteerRecord,
+};
+
+export interface VolunteerShiftListing extends VolunteerShift {
+	available: boolean;
+	role: VolunteerRole;
+	shift: VolunteerShift;
+}
+
+export interface VolunteerScheduleEntry {
+	assignment: VolunteerAssignment;
+	shift: VolunteerShift;
+	role: VolunteerRole;
+}
+
+export interface VolunteerCoverageGapsResponse extends CoverageGapsSummary {
+	openShifts: number;
+	unfilled: CoverageGapShift[];
+}
+
 export class ApiError extends Error {
 	constructor(
 		message: string,
@@ -100,6 +131,21 @@ export class ApiError extends Error {
 	) {
 		super(message);
 	}
+}
+
+async function resolveAuthToken(
+	explicitToken?: string | null,
+): Promise<string | null> {
+	if (explicitToken) return explicitToken;
+	try {
+		const auth = getFirebaseAuth();
+		if (auth?.currentUser) {
+			return await auth.currentUser.getIdToken();
+		}
+	} catch {
+		// Ignore if auth is unavailable
+	}
+	return null;
 }
 
 async function requestJson<T>(
@@ -856,6 +902,96 @@ export function createVolunteerShift(
 			body: JSON.stringify(input),
 		},
 		idToken,
+	);
+}
+
+export async function listVolunteerShifts(
+	slug: string,
+	festivalShortName: string,
+	options?: { availableOnly?: boolean; idToken?: string },
+): Promise<VolunteerShiftListing[]> {
+	const token = await resolveAuthToken(options?.idToken);
+	const query = options?.availableOnly ? "?available=true" : "";
+	return requestJson<VolunteerShiftListing[]>(
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalShortName)}/volunteers/shifts${query}`,
+		undefined,
+		token,
+	);
+}
+
+export async function bookVolunteerShifts(
+	slug: string,
+	festivalShortName: string,
+	shiftIds: string[],
+	idToken?: string,
+): Promise<BookShiftsOutcome> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<BookShiftsOutcome>(
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalShortName)}/volunteers/book`,
+		{
+			method: "POST",
+			body: JSON.stringify({ shiftIds }),
+		},
+		token,
+	);
+}
+
+export async function getMyVolunteerSchedule(
+	slug: string,
+	festivalShortName: string,
+	idToken?: string,
+): Promise<VolunteerScheduleEntry[]> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<VolunteerScheduleEntry[]>(
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalShortName)}/volunteers/my-schedule`,
+		undefined,
+		token,
+	);
+}
+
+export async function cancelVolunteerAssignment(
+	slug: string,
+	festivalShortName: string,
+	assignmentId: string,
+	idToken?: string,
+): Promise<VolunteerAssignment> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<VolunteerAssignment>(
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalShortName)}/volunteers/assignments/${encodeURIComponent(assignmentId)}/cancel`,
+		{
+			method: "POST",
+		},
+		token,
+	);
+}
+
+export async function getVolunteerCoverageGaps(
+	slug: string,
+	festivalShortName: string,
+	idToken?: string,
+): Promise<VolunteerCoverageGapsResponse> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<VolunteerCoverageGapsResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalShortName)}/volunteers/coverage-gaps`,
+		undefined,
+		token,
+	);
+}
+
+export async function enrollVolunteer(
+	slug: string,
+	festivalShortName: string,
+	input: { name: string; phone: string },
+	idToken?: string,
+): Promise<VolunteerRecord> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<VolunteerRecord>(
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalShortName)}/volunteers/enroll`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+		token,
 	);
 }
 

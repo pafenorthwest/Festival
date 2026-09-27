@@ -63,4 +63,19 @@ describe("admin volunteer role and shift management", () => {
 
 		expect(lifecycle).toContain('"org-admin-volunteers"');
 	});
+
+	it("renders coverage gaps section with metric badges and unfilled shifts", async () => {
+		const page = await read("../src/pages/VolunteerRolesPage.tsx");
+		const styles = await read("../src/styles.css");
+
+		expect(page).toContain("Coverage Gaps");
+		expect(page).toContain("getVolunteerCoverageGaps");
+		expect(page).toContain("Total Shifts:");
+		expect(page).toContain("Filled Shifts:");
+		expect(page).toContain("Open Shifts:");
+		expect(page).toContain("Coverage Percentage:");
+		expect(page).toContain("listing-table coverage-gaps-table");
+		expect(styles).toContain(".coverage-gaps-table");
+		expect(styles).toContain(".coverage-metrics");
+	});
 });

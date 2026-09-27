@@ -106,3 +106,26 @@ export function requireAdminIntent(): MiddlewareHandler<{
 }> {
 	return requireTenantRole(VOLUNTEER_ADMIN_ROLES);
 }
+
+export async function isCallerVolunteerAdmin(
+	repository: OrganizationRepository,
+	scope: VolunteerScope,
+): Promise<boolean> {
+	try {
+		const user = await repository.upsertUser({
+			...scope.identity,
+			displayName: scope.identity.displayName || "",
+			email: scope.identity.email.toLowerCase(),
+		});
+		const membership = await repository.findMembershipByUserAndSlug(
+			user.id,
+			scope.organization.slug,
+		);
+		return (
+			membership !== null &&
+			VOLUNTEER_ADMIN_ROLES.includes(membership.membership.role)
+		);
+	} catch {
+		return false;
+	}
+}

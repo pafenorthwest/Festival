@@ -147,3 +147,35 @@ export function validateEnrollVolunteerRequest(
 	if (errors.length > 0) return { errors };
 	return { request: { name, phone } };
 }
+
+export interface BookShiftsRequest {
+	shiftIds: string[];
+}
+
+export function validateBookShiftsRequest(
+	payload: unknown,
+): { request: BookShiftsRequest } | { errors: string[] } {
+	if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+		return { errors: ["Request body must be an object."] };
+	}
+	const body = payload as Record<string, unknown>;
+	const errors: string[] = [];
+
+	if (!Array.isArray(body.shiftIds) || body.shiftIds.length === 0) {
+		errors.push("shiftIds must be a non-empty array of shift IDs.");
+	} else {
+		for (const id of body.shiftIds) {
+			if (typeof id !== "string" || id.trim().length === 0) {
+				errors.push("Each shift ID must be a non-empty string.");
+				break;
+			}
+		}
+	}
+
+	if (errors.length > 0) return { errors };
+	return {
+		request: {
+			shiftIds: (body.shiftIds as string[]).map((id) => id.trim()),
+		},
+	};
+}
