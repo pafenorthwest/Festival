@@ -26,6 +26,7 @@ async function resolveFestival(
 async function validateClassReferences(
 	repo: OrganizationRepository,
 	orgId: string,
+	festivalId: string,
 	divisionId?: string,
 	subtypeId?: string,
 ): Promise<void> {
@@ -36,10 +37,7 @@ async function validateClassReferences(
 		}
 	}
 	if (subtypeId !== undefined) {
-		const subs = await repo.listRegistrationCatalogValues(
-			orgId,
-			"class_subtype",
-		);
+		const subs = await repo.listFestivalClassSubtypes(orgId, festivalId);
 		if (!subs.some((s) => s.id === subtypeId)) {
 			throw new AppError("Class subtype not found.", 404);
 		}
@@ -121,6 +119,7 @@ export class AdminClassCatalogService {
 		await validateClassReferences(
 			this.repository,
 			org.id,
+			festival.id,
 			input.divisionId,
 			input.classSubtypeId,
 		);

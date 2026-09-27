@@ -214,6 +214,11 @@ async function setupFixture(live = false) {
 		displayName: "Solo",
 		normalizedName: "solo",
 	});
+	await repo.associateFestivalClassSubtype({
+		organizationId: org.id,
+		festivalId: festival.id,
+		classSubtypeId: sub.id,
+	});
 
 	const keyring = createKeyring();
 	const shopifyClient = new FakeShopifyProductClient();
@@ -505,6 +510,22 @@ describe("Validation & Invariants", () => {
 		});
 		await expect(
 			createValid({ classSubtypeId: "non-existent-sub" }),
+		).rejects.toMatchObject({
+			status: 404,
+			message: "Class subtype not found.",
+		});
+	});
+
+	it("rejects a subtype that is not associated with the festival", async () => {
+		const { createValid, org, repo } = await setupFixture();
+		const unassociatedSubtype = await repo.createRegistrationCatalogValue({
+			organizationId: org.id,
+			kind: "class_subtype",
+			displayName: "Concerto",
+			normalizedName: "concerto",
+		});
+		await expect(
+			createValid({ classSubtypeId: unassociatedSubtype.id }),
 		).rejects.toMatchObject({
 			status: 404,
 			message: "Class subtype not found.",

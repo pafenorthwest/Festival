@@ -204,6 +204,11 @@ describe("OrganizationService - Festival Class Configuration", () => {
 			displayName: "Solo",
 			normalizedName: "solo",
 		});
+		await repo.associateFestivalClassSubtype({
+			organizationId: org.id,
+			festivalId: festival.id,
+			classSubtypeId: subtype.id,
+		});
 
 		// 1. Errors on invalid org / festival
 		await expect(

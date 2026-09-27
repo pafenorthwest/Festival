@@ -1233,8 +1233,31 @@ form.shopify-integration-card {
 }
 
 .festival-row {
-	grid-template-columns: minmax(0, 1fr) auto auto;
+	grid-template-columns: minmax(0, 1fr) auto auto auto auto;
 	background: rgba(31, 122, 87, 0.08);
+}
+
+.festival-classes-button {
+	white-space: nowrap;
+}
+
+.festival-subtypes-card {
+	display: grid;
+	gap: 0.8rem;
+	margin-top: 1.25rem;
+	padding-top: 1.25rem;
+	border-top: 1px solid rgba(31, 36, 49, 0.12);
+}
+
+.festival-subtypes-card h3 {
+	margin: 0;
+}
+
+.festival-subtype-list {
+	display: grid;
+	gap: 0.35rem;
+	margin: 0;
+	padding-left: 1.25rem;
 }
 
 .status-dot {
