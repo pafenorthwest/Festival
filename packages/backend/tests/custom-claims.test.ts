@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import {
 	type CustomClaimsLock,
 	type FirebaseAuthLike,
@@ -218,13 +218,23 @@ describe("FirebaseCustomClaimsWriter", () => {
 			new ThrowingFirebaseAuth(),
 			new NoopCustomClaimsLock(),
 		);
+		const consoleError = spyOn(console, "error").mockImplementation(() => {});
 
-		await expect(
-			writer.setOrgRole("uid-1", "org-a", "Admin"),
-		).resolves.toBeUndefined();
-		await expect(
-			writer.addVolunteerFestival("uid-1", "org-a", "festival-spring"),
-		).resolves.toBeUndefined();
+		try {
+			await expect(
+				writer.setOrgRole("uid-1", "org-a", "Admin"),
+			).resolves.toBeUndefined();
+			await expect(
+				writer.addVolunteerFestival("uid-1", "org-a", "festival-spring"),
+			).resolves.toBeUndefined();
+			expect(consoleError).toHaveBeenCalledTimes(2);
+			expect(consoleError).toHaveBeenCalledWith(
+				"Failed to update Firebase custom claims",
+				expect.any(Error),
+			);
+		} finally {
+			consoleError.mockRestore();
+		}
 	});
 
 	it("retries failed writes with a fresh locked read", async () => {
