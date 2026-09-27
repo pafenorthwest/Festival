@@ -1,6 +1,10 @@
 import type {
 	AcceptInviteInput,
+	AddCatalogWorkInput,
 	BookShiftsOutcome,
+	CanonicalContributor,
+	CanonicalWork,
+	ClaimReviewInput,
 	ClassRegistrationMetadata,
 	CoverageGapShift,
 	CoverageGapsSummary,
@@ -22,9 +26,11 @@ import type {
 	DismissWelcomeResponse,
 	FestivalClassConfigurationDto,
 	FestivalSummary,
+	FlagReviewInput,
 	InviteSummary,
 	MembershipProductsListResponse,
 	MembershipPurchaseSelectionResponse,
+	NormalizeReviewInput,
 	OrganizationAdminUsersResponse,
 	OrganizationDivision,
 	OrganizationDivisionListResponse,
@@ -40,7 +46,13 @@ import type {
 	RegistrationEligibleClass,
 	RegistrationTeacherSummary,
 	ReorderOrganizationDivisionsInput,
+	RepertoireFlagReason,
 	RepertoirePiece,
+	RepertoireReviewItem,
+	RepertoireReviewQueueFilter,
+	RepertoireReviewQueueSummary,
+	RepertoireReviewStatus,
+	ResolveFlagInput,
 	SaveCustomerAccountSettingsInput,
 	SaveCustomerAccountSettingsResponse,
 	SaveShopifyIntegrationInput,
@@ -54,6 +66,11 @@ import type {
 	UpdateOrganizationTimezoneInput,
 	VolunteerAssignment,
 	VolunteerRecord,
+} from "@festival/common";
+import {
+	isRepertoireReviewStatus,
+	REPERTOIRE_FLAG_REASONS,
+	REPERTOIRE_REVIEW_STATUSES,
 } from "@festival/common";
 import { getFirebaseAuth } from "./firebase-auth.js";
 
@@ -99,11 +116,28 @@ export interface CreateVolunteerShiftInput {
 }
 
 export type {
+	AddCatalogWorkInput,
 	BookShiftsOutcome,
+	CanonicalContributor,
+	CanonicalWork,
+	ClaimReviewInput,
 	CoverageGapShift,
 	CoverageGapsSummary,
+	FlagReviewInput,
+	NormalizeReviewInput,
+	RepertoireFlagReason,
+	RepertoireReviewItem,
+	RepertoireReviewQueueFilter,
+	RepertoireReviewQueueSummary,
+	RepertoireReviewStatus,
+	ResolveFlagInput,
 	VolunteerAssignment,
 	VolunteerRecord,
+};
+export {
+	isRepertoireReviewStatus,
+	REPERTOIRE_FLAG_REASONS,
+	REPERTOIRE_REVIEW_STATUSES,
 };
 
 export interface VolunteerShiftListing extends VolunteerShift {
@@ -1297,5 +1331,211 @@ export function updateRegistrationMetadata(
 		},
 		undefined,
 		"",
+	);
+}
+
+export interface NormalizeRepertoireReviewInput {
+	normalizedTitle: string;
+	normalizedComposer: string;
+	imslpUrl?: string | null;
+	notes?: string | null;
+	status?: RepertoireReviewStatus;
+	canonicalWorkId?: string | null;
+	canonicalContributorId?: string | null;
+	reviewItemId?: string;
+}
+
+export interface FlagRepertoireReviewInput {
+	reason: RepertoireFlagReason | string;
+	notes?: string | null;
+	reviewItemId?: string;
+}
+
+export interface ResolveRepertoireFlagInput {
+	flagId?: string;
+	resolutionNotes?: string | null;
+	notes?: string | null;
+	status?: RepertoireReviewStatus;
+	reviewItemId?: string;
+}
+
+export interface AddRepertoireCatalogWorkInput {
+	title: string;
+	composer: string;
+	composerName?: string;
+	imslpUrl?: string | null;
+	organizationId?: string;
+}
+
+export async function listRepertoireReviewQueue(
+	slug: string,
+	filter?: RepertoireReviewQueueFilter & {
+		claimedByUid?: string | null;
+		flaggedOnly?: boolean;
+		offset?: number;
+		sync?: boolean;
+	},
+	idToken?: string,
+): Promise<{
+	items: RepertoireReviewItem[];
+	summary: RepertoireReviewQueueSummary;
+}> {
+	const token = await resolveAuthToken(idToken);
+	const params = new URLSearchParams();
+	if (filter) {
+		if (filter.status) {
+			const status = Array.isArray(filter.status)
+				? filter.status.join(",")
+				: filter.status;
+			if (status) params.set("status", status);
+		}
+		if (filter.claimedByUid) {
+			params.set("claimedByUid", filter.claimedByUid);
+		}
+		if (filter.flaggedOnly !== undefined) {
+			params.set("flaggedOnly", String(filter.flaggedOnly));
+		} else if (filter.isFlagged !== undefined) {
+			params.set("flaggedOnly", String(filter.isFlagged));
+		}
+		const search = filter.search ?? filter.searchQuery;
+		if (search) {
+			params.set("search", search);
+		}
+		if (typeof filter.limit === "number") {
+			params.set("limit", String(filter.limit));
+		}
+		if (typeof filter.offset === "number") {
+			params.set("offset", String(filter.offset));
+		}
+		if (filter.sync !== undefined) {
+			params.set("sync", String(filter.sync));
+		}
+	}
+	const queryString = params.toString();
+	const query = queryString ? `?${queryString}` : "";
+	return requestJson<{
+		items: RepertoireReviewItem[];
+		summary: RepertoireReviewQueueSummary;
+	}>(
+		`/api/organizations/${encodeURIComponent(slug)}/repertoire/queue${query}`,
+		undefined,
+		token,
+	);
+}
+
+export async function claimRepertoireReview(
+	slug: string,
+	reviewId: string,
+	options?: { reviewerName?: string; idToken?: string },
+): Promise<{ item: RepertoireReviewItem }> {
+	const token = await resolveAuthToken(options?.idToken);
+	return requestJson<{ item: RepertoireReviewItem }>(
+		`/api/organizations/${encodeURIComponent(slug)}/repertoire/queue/${encodeURIComponent(reviewId)}/claim`,
+		{
+			method: "POST",
+			body: JSON.stringify(
+				options?.reviewerName ? { reviewerName: options.reviewerName } : {},
+			),
+		},
+		token,
+	);
+}
+
+export async function unclaimRepertoireReview(
+	slug: string,
+	reviewId: string,
+	idToken?: string,
+): Promise<{ item: RepertoireReviewItem }> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<{ item: RepertoireReviewItem }>(
+		`/api/organizations/${encodeURIComponent(slug)}/repertoire/queue/${encodeURIComponent(reviewId)}/unclaim`,
+		{
+			method: "POST",
+		},
+		token,
+	);
+}
+
+export async function normalizeRepertoireReview(
+	slug: string,
+	reviewId: string,
+	input: NormalizeRepertoireReviewInput,
+	idToken?: string,
+): Promise<{ item: RepertoireReviewItem }> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<{ item: RepertoireReviewItem }>(
+		`/api/organizations/${encodeURIComponent(slug)}/repertoire/queue/${encodeURIComponent(reviewId)}/normalize`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+		token,
+	);
+}
+
+export async function flagRepertoireReview(
+	slug: string,
+	reviewId: string,
+	input: FlagRepertoireReviewInput,
+	idToken?: string,
+): Promise<{ item: RepertoireReviewItem }> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<{ item: RepertoireReviewItem }>(
+		`/api/organizations/${encodeURIComponent(slug)}/repertoire/queue/${encodeURIComponent(reviewId)}/flag`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+		token,
+	);
+}
+
+export async function resolveRepertoireFlag(
+	slug: string,
+	reviewId: string,
+	input?: ResolveRepertoireFlagInput,
+	idToken?: string,
+): Promise<{ item: RepertoireReviewItem }> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<{ item: RepertoireReviewItem }>(
+		`/api/organizations/${encodeURIComponent(slug)}/repertoire/queue/${encodeURIComponent(reviewId)}/resolve-flag`,
+		{
+			method: "POST",
+			body: JSON.stringify(input ?? {}),
+		},
+		token,
+	);
+}
+
+export async function searchRepertoireCatalog(
+	slug: string,
+	query: string,
+	options?: { limit?: number; idToken?: string },
+): Promise<{ works: CanonicalWork[] }> {
+	const token = await resolveAuthToken(options?.idToken);
+	const params = new URLSearchParams({ q: query });
+	if (typeof options?.limit === "number") {
+		params.set("limit", String(options.limit));
+	}
+	return requestJson<{ works: CanonicalWork[] }>(
+		`/api/organizations/${encodeURIComponent(slug)}/repertoire/catalog?${params.toString()}`,
+		undefined,
+		token,
+	);
+}
+
+export async function addRepertoireCatalogWork(
+	slug: string,
+	input: AddRepertoireCatalogWorkInput,
+	idToken?: string,
+): Promise<{ work: CanonicalWork }> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<{ work: CanonicalWork }>(
+		`/api/organizations/${encodeURIComponent(slug)}/repertoire/catalog`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+		token,
 	);
 }

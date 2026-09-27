@@ -493,6 +493,46 @@ export const CURRENT_ROUTE_SECURITY = [
 		path: "/api/organizations/:slug/admin/festivals/:festivalShortName/classes/:classId",
 		authenticationClass: "admin",
 	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/repertoire/queue",
+		authenticationClass: "tenant",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/repertoire/queue/:id/claim",
+		authenticationClass: "tenant",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/repertoire/queue/:id/unclaim",
+		authenticationClass: "tenant",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/repertoire/queue/:id/normalize",
+		authenticationClass: "tenant",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/repertoire/queue/:id/flag",
+		authenticationClass: "tenant",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/repertoire/queue/:id/resolve-flag",
+		authenticationClass: "tenant",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/repertoire/catalog",
+		authenticationClass: "tenant",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/repertoire/catalog",
+		authenticationClass: "tenant",
+	},
 ] as const satisfies readonly RouteSecurityDeclaration[];
 
 interface RegisteredRoute {

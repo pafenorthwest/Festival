@@ -25,7 +25,8 @@ export type AppRoute =
 	| { kind: "org-admin-settings"; slug: string }
 	| { kind: "org-admin-accompanists"; slug: string }
 	| { kind: "org-admin-roster"; slug: string }
-	| { kind: "org-admin-volunteers"; slug: string };
+	| { kind: "org-admin-volunteers"; slug: string }
+	| { kind: "org-music-review"; slug: string };
 
 export function buildOrgPath(slug: string): string {
 	return `/org/${slug}/admin`;
@@ -121,6 +122,10 @@ export function buildOrgAdminAccompanistsPath(slug: string): string {
 
 export function buildOrgAdminVolunteersPath(slug: string): string {
 	return `/org/${slug}/admin/volunteers`;
+}
+
+export function buildOrgMusicReviewPath(slug: string): string {
+	return `/organizations/${slug}/music-review`;
 }
 
 export function buildInvitePath(token: string): string {
@@ -351,6 +356,16 @@ export function parseRoute(pathname: string): AppRoute {
 		return {
 			kind: "org-admin-volunteers",
 			slug: orgAdminVolunteersMatch[1] ?? "",
+		};
+	}
+
+	const orgMusicReviewMatch = pathname.match(
+		/^\/(?:organizations|org)\/([^/]+)\/(?:admin\/)?music-review\/?$/,
+	);
+	if (orgMusicReviewMatch) {
+		return {
+			kind: "org-music-review",
+			slug: orgMusicReviewMatch[1] ?? "",
 		};
 	}
 

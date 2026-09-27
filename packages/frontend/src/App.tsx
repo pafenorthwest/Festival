@@ -29,6 +29,7 @@ import { HomePage } from "./pages/HomePage.js";
 import { InviteLandingPage } from "./pages/InviteLandingPage.js";
 import { LegacyCustomerAccountRedirect } from "./pages/LegacyCustomerAccountRedirect.js";
 import { MembershipPage } from "./pages/MembershipPage.js";
+import { MusicReviewPage } from "./pages/MusicReviewPage.js";
 import { OrganizationChooser } from "./pages/OrganizationChooser.js";
 import { OrganizationRootPage } from "./pages/OrganizationRootPage.js";
 import { PrivacyPolicyPage } from "./pages/PrivacyPolicyPage.js";
@@ -187,6 +188,12 @@ export default function App() {
 						</Match>
 						<Match when={app.route().kind === "org-admin-volunteers"}>
 							<VolunteerRolesPage
+								app={app}
+								slug={(app.route() as { slug: string }).slug}
+							/>
+						</Match>
+						<Match when={app.route().kind === "org-music-review"}>
+							<MusicReviewPage
 								app={app}
 								slug={(app.route() as { slug: string }).slug}
 							/>

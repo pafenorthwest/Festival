@@ -43,6 +43,7 @@ const ADMIN_ROUTE_KINDS = [
 	"festival-admin",
 	"festival-admin-classes",
 	"org-admin-volunteers",
+	"org-music-review",
 ] as const;
 
 export const INVITE_FEEDBACK_DURATION_MS = 2200;
@@ -259,7 +260,8 @@ export function createFestivalAppState() {
 			route().kind === "org-admin-roster" ||
 			route().kind === "festival-admin" ||
 			route().kind === "festival-admin-classes" ||
-			route().kind === "org-admin-volunteers",
+			route().kind === "org-admin-volunteers" ||
+			route().kind === "org-music-review",
 	);
 	const adminBreadcrumb = createMemo(() => {
 		switch (route().kind) {
@@ -284,6 +286,8 @@ export function createFestivalAppState() {
 				return "Admin > Festival > Classes";
 			case "org-admin-volunteers":
 				return "Admin > Volunteers";
+			case "org-music-review":
+				return "Admin > Music Review";
 			default:
 				return "Admin";
 		}

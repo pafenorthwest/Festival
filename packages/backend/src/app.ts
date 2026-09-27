@@ -36,6 +36,11 @@ import { type AppEnv, LOCAL_API_ORIGINS, loadEnv } from "./config/env.js";
 import type { CustomerAccountRepository } from "./customer/customer-account-repository.js";
 import { CustomerAccountService } from "./customer/customer-account-service.js";
 import { PostgresCustomerAccountRepository } from "./customer/postgres-customer-account-repository.js";
+import {
+	InMemoryRepertoireRepository,
+	PostgresRepertoireRepository,
+	type RepertoireRepository,
+} from "./repertoire/index.js";
 import type { AppUserRepository } from "./repo/app-user-repository.js";
 import { InMemoryAppUserRepository } from "./repo/in-memory-app-user-repository.js";
 import type { OrganizationRepository } from "./repo/organization-repository.js";
@@ -86,6 +91,7 @@ export interface CreateAppOptions {
 	shopifyWebhookService?: ShopifyWebhookService;
 	membershipStatusService?: MembershipStatusService;
 	volunteerRepository?: VolunteerRepository;
+	repertoireRepository?: RepertoireRepository;
 	customClaimsWriter?: CustomClaimsWriter;
 	firebaseClaimsReconciliationService?: FirebaseClaimsReconciliationService;
 }
@@ -338,6 +344,13 @@ export async function createApp(options: CreateAppOptions = {}) {
 			: new InMemoryVolunteerRepository());
 	if (volunteerRepository instanceof PostgresVolunteerRepository)
 		await volunteerRepository.ensureReady();
+	const repertoireRepository =
+		options.repertoireRepository ??
+		(env.databaseSchema
+			? new PostgresRepertoireRepository(env.databaseSchema)
+			: new InMemoryRepertoireRepository());
+	if (repertoireRepository instanceof PostgresRepertoireRepository)
+		await repertoireRepository.ensureReady();
 
 	const app = new Hono();
 	const allowedApiOrigins = new Set(env.allowedApiOrigins ?? LOCAL_API_ORIGINS);
@@ -447,6 +460,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 			volunteerRepository,
 			classCheckoutService,
 			customClaimsWriter,
+			repertoireRepository,
 		}),
 	);
 	app.route(
