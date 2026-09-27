@@ -52,6 +52,14 @@ export interface ClassEntitlementRepository {
 		id: string,
 		status: ClassEntitlementStatus,
 	): Promise<ClassEntitlement | null>;
+	updateClassEntitlement(
+		organizationId: string,
+		id: string,
+		updates: {
+			festivalClassId?: string;
+			status?: ClassEntitlementStatus;
+		},
+	): Promise<ClassEntitlement | null>;
 }
 
 export class InMemoryClassEntitlementRepository
@@ -162,12 +170,31 @@ export class InMemoryClassEntitlementRepository
 		id: string,
 		status: ClassEntitlementStatus,
 	): Promise<ClassEntitlement | null> {
-		if (!isClassEntitlementStatus(status)) {
+		return this.updateClassEntitlement(organizationId, id, { status });
+	}
+
+	async updateClassEntitlement(
+		organizationId: string,
+		id: string,
+		updates: {
+			festivalClassId?: string;
+			status?: ClassEntitlementStatus;
+		},
+	): Promise<ClassEntitlement | null> {
+		if (
+			updates.status !== undefined &&
+			!isClassEntitlementStatus(updates.status)
+		) {
 			throw new Error("Class entitlement status is invalid.");
 		}
 		const record = this.entitlements.get(id);
 		if (!record || record.organizationId !== organizationId) return null;
-		record.status = status;
+		if (updates.status !== undefined) {
+			record.status = updates.status;
+		}
+		if (updates.festivalClassId !== undefined) {
+			record.festivalClassId = updates.festivalClassId;
+		}
 		record.updatedAt = this.now().toISOString();
 		return { ...record };
 	}
@@ -328,16 +355,37 @@ export class PostgresClassEntitlementRepository
 		id: string,
 		status: ClassEntitlementStatus,
 	): Promise<ClassEntitlement | null> {
+		return this.updateClassEntitlement(organizationId, id, { status });
+	}
+
+	async updateClassEntitlement(
+		organizationId: string,
+		id: string,
+		updates: {
+			festivalClassId?: string;
+			status?: ClassEntitlementStatus;
+		},
+	): Promise<ClassEntitlement | null> {
 		await this.ensureReady();
-		if (!isClassEntitlementStatus(status)) {
-			throw new Error("Class entitlement status is invalid.");
+		const setClauses: string[] = ["updated_at = NOW()"];
+		const params: unknown[] = [organizationId, id];
+		if (updates.status !== undefined) {
+			if (!isClassEntitlementStatus(updates.status)) {
+				throw new Error("Class entitlement status is invalid.");
+			}
+			params.push(updates.status);
+			setClauses.push(`status = $${params.length}`);
+		}
+		if (updates.festivalClassId !== undefined) {
+			params.push(updates.festivalClassId);
+			setClauses.push(`festival_class_id = $${params.length}`);
 		}
 		const rows = (await sql.unsafe(
 			`UPDATE ${this.schema}.class_entitlements
-			SET status = $3, updated_at = NOW()
+			SET ${setClauses.join(", ")}
 			WHERE organization_id = $1 AND id = $2
 			RETURNING id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text`,
-			[organizationId, id, status],
+			params,
 		)) as Array<Record<string, unknown>>;
 		return rows[0] ? classEntitlementFromRow(rows[0]) : null;
 	}
