@@ -12,6 +12,7 @@ import { AdminFestivalsPage } from "./pages/AdminFestivalsPage.js";
 import { AdminHomePage } from "./pages/AdminHomePage.js";
 import { AdminIntegrationsPage } from "./pages/AdminIntegrationsPage.js";
 import { AdminMembershipProductsPage } from "./pages/AdminMembershipProductsPage.js";
+import { AdminRosterPage } from "./pages/AdminRosterPage.js";
 import { AdminSettingsPage } from "./pages/AdminSettingsPage.js";
 import { AdminUsersPage } from "./pages/AdminUsersPage.js";
 import { CreateOrganizationPage } from "./pages/CreateOrganizationPage.js";
@@ -170,6 +171,9 @@ export default function App() {
 						</Match>
 						<Match when={app.route().kind === "org-admin-accompanists"}>
 							<AdminAccompanistsPage app={app} />
+						</Match>
+						<Match when={app.route().kind === "org-admin-roster"}>
+							<AdminRosterPage app={app} />
 						</Match>
 						<Match when={app.route().kind === "org-admin-volunteers"}>
 							<VolunteerRolesPage

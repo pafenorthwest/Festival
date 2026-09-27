@@ -185,33 +185,129 @@ export class AccompanistMembershipService {
 		};
 	}
 
-	async listCurrentRoster(organizationId: string) {
+	async listCurrentRoster(
+		organizationId: string,
+	): Promise<StaffMembershipRosterResult> {
 		const timezone =
 			await this.organizations.getOrganizationTimezone(organizationId);
 		const today = calendarDateInTimezone(this.now().toISOString(), timezone);
+		const accompanists = await this.listActiveAccompanistEntries(
+			organizationId,
+			today,
+		);
+		const teachers = await this.listActiveTeacherEntries(organizationId, today);
+		const roster = [...accompanists, ...teachers].sort(sortRosterEntries);
+		return { roster, accompanists };
+	}
+
+	private async listActiveAccompanistEntries(
+		organizationId: string,
+		today: string,
+	): Promise<StaffMembershipRosterEntry[]> {
 		const grants = await this.organizations.listAccompanistMembershipGrants({
 			organizationId,
 			currentOnly: true,
 		});
-		return {
-			accompanists: grants
-				.map((grant) => ({
-					grant,
-					status: lifecycleForEntitlementRead(grant, today),
-				}))
-				.filter((candidate) => candidate.status === "active")
-				.map(({ grant, status }) => ({
-					offeringName: grant.offeringNameSnapshot,
-					source: grant.source,
-					status,
-					startsOn: grant.startsOn,
-					endsOn: grant.endsOn,
-					name: grant.contact.name,
-					email: grant.contact.email,
-					phone: grant.contact.phone,
-					city: grant.contact.city,
-					divisions: grant.divisions.map((division) => ({ ...division })),
-				})),
-		};
+		return grants
+			.map((grant) => ({
+				grant,
+				status: lifecycleForEntitlementRead(grant, today),
+			}))
+			.filter((candidate) => candidate.status === "active")
+			.map(({ grant }) => ({
+				membershipType: "Accompanist" as const,
+				offeringName: grant.offeringNameSnapshot,
+				source: grant.source,
+				status: "active" as const,
+				startsOn: grant.startsOn,
+				endsOn: grant.endsOn,
+				name: grant.contact.name,
+				email: grant.contact.email,
+				phone: grant.contact.phone,
+				city: grant.contact.city,
+				divisions: grant.divisions.map((division) => ({ ...division })),
+			}));
 	}
+
+	private async listActiveTeacherEntries(
+		organizationId: string,
+		today: string,
+	): Promise<StaffMembershipRosterEntry[]> {
+		const grants =
+			await this.organizations.listEntitlementGrantSnapshots(organizationId);
+		const active = grants
+			.filter((grant) => grant.entitlementClass === "teacher_membership")
+			.map((grant) => ({
+				grant,
+				status: lifecycleForEntitlementRead(grant, today),
+			}))
+			.filter((candidate) => candidate.status === "active");
+
+		if (active.length === 0) {
+			return [];
+		}
+
+		const customerIds = active.map(({ grant }) => grant.customerId);
+		const [contacts, products] = await Promise.all([
+			this.organizations.findMembershipCustomerContacts(
+				organizationId,
+				customerIds,
+			),
+			this.organizations.listMembershipProductRecords(organizationId),
+		]);
+		const productNames = new Map(
+			products.map((product) => [product.id, product.productNameSnapshot]),
+		);
+
+		return active.map(({ grant }) => {
+			const contact = contacts.get(grant.customerId);
+			return {
+				membershipType: "Teacher" as const,
+				offeringName:
+					productNames.get(grant.offeringId) ?? "Teacher Membership",
+				source: "teacher_checkout",
+				status: "active" as const,
+				startsOn: grant.startsOn,
+				endsOn: grant.endsOn,
+				name: contact?.name,
+				email: contact?.email,
+				phone: contact?.phone,
+				city: contact?.city,
+				divisions: [
+					{
+						divisionId: grant.divisionId,
+						divisionName: grant.divisionNameSnapshot,
+					},
+				],
+			};
+		});
+	}
+}
+
+export interface StaffMembershipRosterEntry {
+	membershipType: "Teacher" | "Accompanist";
+	offeringName: string;
+	source: string;
+	status: "active";
+	startsOn: string;
+	endsOn: string;
+	name?: string;
+	email?: string;
+	phone?: string;
+	city?: string;
+	divisions: Array<{ divisionId: string; divisionName: string }>;
+}
+
+export interface StaffMembershipRosterResult {
+	roster: StaffMembershipRosterEntry[];
+	accompanists: StaffMembershipRosterEntry[];
+}
+
+function sortRosterEntries(
+	a: StaffMembershipRosterEntry,
+	b: StaffMembershipRosterEntry,
+): number {
+	const nameCompare = (a.name ?? "").localeCompare(b.name ?? "");
+	if (nameCompare !== 0) return nameCompare;
+	return a.membershipType.localeCompare(b.membershipType);
 }

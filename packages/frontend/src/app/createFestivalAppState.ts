@@ -39,6 +39,7 @@ const ADMIN_ROUTE_KINDS = [
 	"org-admin-divisions",
 	"org-admin-settings",
 	"org-admin-accompanists",
+	"org-admin-roster",
 	"festival-admin",
 	"festival-admin-classes",
 	"org-admin-volunteers",
@@ -255,6 +256,7 @@ export function createFestivalAppState() {
 			route().kind === "org-admin-divisions" ||
 			route().kind === "org-admin-settings" ||
 			route().kind === "org-admin-accompanists" ||
+			route().kind === "org-admin-roster" ||
 			route().kind === "festival-admin" ||
 			route().kind === "festival-admin-classes" ||
 			route().kind === "org-admin-volunteers",
@@ -273,6 +275,9 @@ export function createFestivalAppState() {
 				return "Admin > Divisions";
 			case "org-admin-settings":
 				return "Admin > Settings";
+			case "org-admin-accompanists":
+			case "org-admin-roster":
+				return "Admin > Staff Roster";
 			case "festival-admin":
 				return "Admin > Festival";
 			case "festival-admin-classes":

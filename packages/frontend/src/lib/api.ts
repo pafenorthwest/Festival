@@ -524,20 +524,51 @@ export function saveAdminAccompanistPolicy(
 	);
 }
 
+export interface StaffMembershipRosterEntry {
+	membershipType: "Teacher" | "Accompanist";
+	offeringName: string;
+	source: string;
+	status: "active";
+	startsOn: string;
+	endsOn: string;
+	name?: string;
+	email?: string;
+	phone?: string;
+	city?: string;
+	divisions: Array<{ divisionId: string; divisionName: string }>;
+}
+
+export function listStaffRoster(
+	idToken: string,
+	slug: string,
+): Promise<StaffMembershipRosterEntry[]>;
+export function listStaffRoster(
+	slug: string,
+): Promise<StaffMembershipRosterEntry[]>;
+export async function listStaffRoster(
+	idTokenOrSlug: string,
+	maybeSlug?: string,
+): Promise<StaffMembershipRosterEntry[]> {
+	const [idToken, slug] = maybeSlug
+		? [idTokenOrSlug, maybeSlug]
+		: [undefined, idTokenOrSlug];
+	const response = await requestJson<{
+		roster: StaffMembershipRosterEntry[];
+		accompanists: StaffMembershipRosterEntry[];
+	}>(
+		`/api/organizations/${encodeURIComponent(slug)}/staff/accompanists`,
+		undefined,
+		idToken,
+	);
+	return response.roster ?? response.accompanists ?? [];
+}
+
+export const listAccompanists = listStaffRoster;
+
 export function getStaffAccompanists(idToken: string, slug: string) {
 	return requestJson<{
-		accompanists: Array<{
-			offeringName: string;
-			source: string;
-			status: string;
-			startsOn: string;
-			endsOn: string;
-			name: string;
-			email: string;
-			phone: string;
-			city: string;
-			divisions: Array<{ divisionId: string; divisionName: string }>;
-		}>;
+		accompanists: StaffMembershipRosterEntry[];
+		roster: StaffMembershipRosterEntry[];
 	}>(
 		`/api/organizations/${encodeURIComponent(slug)}/staff/accompanists`,
 		undefined,

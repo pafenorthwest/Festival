@@ -1592,6 +1592,70 @@ form.shopify-integration-card {
 	margin: 0;
 }
 
+.admin-membership-header-actions {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+}
+
+.roster-header {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: space-between;
+	align-items: center;
+	gap: 1rem;
+}
+
+.roster-filter-controls {
+	display: flex;
+	gap: 0.5rem;
+	align-items: center;
+}
+
+.roster-list {
+	display: grid;
+	gap: 0.75rem;
+}
+
+.roster-card {
+	display: grid;
+	gap: 0.35rem;
+	grid-template-columns: 1fr;
+}
+
+.roster-card-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 0.75rem;
+}
+
+.roster-member-title {
+	margin: 0;
+	font-size: 1.05rem;
+	font-weight: 700;
+	color: var(--bullet-ink);
+}
+
+.roster-contact-details {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem 0.75rem;
+	font-size: 0.9rem;
+	color: var(--bullet-soft-ink);
+}
+
+.roster-contact-item {
+	display: inline-flex;
+	align-items: center;
+}
+
+.roster-offering-details,
+.roster-divisions {
+	font-size: 0.88rem;
+	color: var(--bullet-soft-ink);
+}
+
 @media (max-width: 760px) {
 	.membership-admin-layout,
 	.membership-admin-controls,

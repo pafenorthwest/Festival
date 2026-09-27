@@ -7,7 +7,10 @@ import {
 	retireAdminMembershipProduct,
 	saveAdminAccompanistPolicy,
 } from "../lib/api.js";
-import { buildOrgAdminIntegrationsPath } from "../lib/routes.js";
+import {
+	buildOrgAdminIntegrationsPath,
+	buildOrgAdminRosterPath,
+} from "../lib/routes.js";
 
 interface AdminMembershipProductsPageProps {
 	app: FestivalAppController;
@@ -115,9 +118,24 @@ export function AdminMembershipProductsPage(
 								<h2 id="memberships-title">Memberships</h2>
 								<p>Review Shopify-backed membership products.</p>
 							</div>
-							<span class="shopify-status shopify-status-ok">
-								{membershipProducts().length}
-							</span>
+							<div class="admin-membership-header-actions">
+								<Button
+									type="button"
+									variant="secondary"
+									onClick={() => {
+										const route = props.app.route();
+										if (route.kind !== "org-admin-memberships") {
+											return;
+										}
+										props.app.navigate(buildOrgAdminRosterPath(route.slug));
+									}}
+								>
+									Staff Roster
+								</Button>
+								<span class="shopify-status shopify-status-ok">
+									{membershipProducts().length}
+								</span>
+							</div>
 						</div>
 
 						<Show when={props.app.isLoadingMembershipProducts()}>
@@ -322,6 +340,16 @@ export function AdminMembershipProductsPage(
 						<h2>Accompanist division policy</h2>
 						<p>Choose how many divisions an accompanist may select.</p>
 					</div>
+					<a
+						class="secondary-link"
+						href={buildOrgAdminRosterPath(
+							props.app.route().kind === "org-admin-memberships"
+								? (props.app.route() as { slug: string }).slug
+								: "",
+						)}
+					>
+						View Staff Roster
+					</a>
 				</div>
 				<Show when={policyError()}>
 					{(message) => <p class="shopify-error-text">{message()}</p>}
