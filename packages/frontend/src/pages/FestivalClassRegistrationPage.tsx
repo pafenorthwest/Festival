@@ -16,8 +16,8 @@ import { Button } from "../components/Button.js";
 import { FestivalRegistrationCartCard } from "../components/FestivalRegistrationCartCard.js";
 import { FestivalRepertoireModal } from "../components/FestivalRepertoireModal.js";
 import {
-	getCustomerChildren,
 	customerFestivalRegistrationSignInPath,
+	getCustomerChildren,
 	getPublicFestival,
 	listRegistrationAccompanists,
 	listRegistrationEligibleClasses,
@@ -160,9 +160,7 @@ export function FestivalClassRegistrationPage(
 		const childId = selectedChildId();
 		const birthday = birthdayDraft();
 		const customerSession = props.app.customerSession();
-		const csrf = customerSession.authenticated
-			? customerSession.csrfToken
-			: "";
+		const csrf = customerSession.authenticated ? customerSession.csrfToken : "";
 		if (!childId || !birthday) return;
 		setIsRefreshingSnapshot(true);
 		setSnapshotError(null);

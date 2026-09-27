@@ -1,8 +1,8 @@
 import type {
+	CustomerSessionResponse,
 	FestivalSummary,
 	InviteSummary,
 	MembershipProductSummary,
-	CustomerSessionResponse,
 	OrganizationAdminUserEntry,
 	OrganizationDivision,
 	OrganizationLandingResponse,

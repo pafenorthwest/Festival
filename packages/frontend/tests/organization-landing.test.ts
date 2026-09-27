@@ -58,7 +58,7 @@ describe("public organization landing page", () => {
 		expect(lifecycle).toContain("getCustomerSession");
 		expect(appHeader).toContain("logoutCustomer");
 		expect(appHeader).toContain("const route = props.app.route();");
-		expect(appHeader).toContain('? (route as { slug: string }).slug');
+		expect(appHeader).toContain("? (route as { slug: string }).slug");
 		expect(appHeader).toContain('class="org-landing-header"');
 		expect(page).not.toContain('class="org-landing-header"');
 		expect(page).not.toContain("handleLogout");
