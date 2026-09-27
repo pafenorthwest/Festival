@@ -18,6 +18,7 @@ import { FestivalRepertoireModal } from "../components/FestivalRepertoireModal.j
 import {
 	customerFestivalRegistrationSignInPath,
 	getCustomerChildren,
+	getPublicDivisions,
 	getPublicFestival,
 	listRegistrationAccompanists,
 	listRegistrationEligibleClasses,
@@ -38,6 +39,10 @@ export function FestivalClassRegistrationPage(
 	const [festival] = createResource(
 		() => [props.slug, props.festivalSlug] as const,
 		([slug, festivalSlug]) => getPublicFestival(slug, festivalSlug),
+	);
+	const [divisions] = createResource(
+		() => props.slug,
+		(slug) => getPublicDivisions(slug),
 	);
 
 	const [children, setChildren] = createSignal<CustomerChildDto[]>([]);
@@ -358,6 +363,7 @@ export function FestivalClassRegistrationPage(
 								<span>Division</span>
 								<select
 									value={selectedDivisionId()}
+									disabled={divisions.loading || Boolean(divisions.error)}
 									onChange={(e) => {
 										setSelectedDivisionId(e.currentTarget.value);
 										setSelectedTeacherId("");
@@ -365,10 +371,18 @@ export function FestivalClassRegistrationPage(
 									}}
 								>
 									<option value="">Select a division…</option>
-									<For each={props.app.divisions().filter((d) => d.isActive)}>
+									<For each={divisions()?.divisions ?? []}>
 										{(div) => <option value={div.id}>{div.displayName}</option>}
 									</For>
 								</select>
+								<Show when={divisions.loading}>
+									<p class="muted">Loading available divisions.</p>
+								</Show>
+								<Show when={divisions.error}>
+									<p class="field-error" role="alert">
+										Available divisions could not be loaded. Please try again.
+									</p>
+								</Show>
 							</label>
 
 							<Show when={selectedDivisionId()}>
@@ -428,10 +442,9 @@ export function FestivalClassRegistrationPage(
 								<FestivalRegistrationCartCard
 									childName={selectedChild()?.displayName ?? null}
 									divisionName={
-										props.app
-											.divisions()
-											.find((d) => d.id === selectedDivisionId())
-											?.displayName ?? null
+										divisions()?.divisions.find(
+											(d) => d.id === selectedDivisionId(),
+										)?.displayName ?? null
 									}
 									teacherName={selectedTeacher()?.name ?? null}
 									className={selectedClass()?.displayName ?? null}

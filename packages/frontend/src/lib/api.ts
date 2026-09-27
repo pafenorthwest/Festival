@@ -33,6 +33,7 @@ import type {
 	OrganizationMembershipListResponse,
 	OrganizationTimezoneResponse,
 	PublicMembershipProductsListResponse,
+	PublicOrganizationDivisionListResponse,
 	PublicOrganizationLandingResponse,
 	RegistrationAccompanistSummary,
 	RegistrationAgeConfiguration,
@@ -497,7 +498,7 @@ export function getAccompanistMembershipForm(slug: string) {
 }
 
 export function getPublicDivisions(slug: string) {
-	return requestJson<OrganizationDivisionListResponse>(
+	return requestJson<PublicOrganizationDivisionListResponse>(
 		`/api/organizations/${encodeURIComponent(slug)}/divisions`,
 		undefined,
 		undefined,

@@ -346,7 +346,7 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 					params.checkoutIntentId,
 					params.teacherMembershipId,
 					params.accompanistMembershipId ?? null,
-					JSON.stringify(params.repertoireJson),
+					params.repertoireJson,
 				],
 			)) as Array<Record<string, unknown>>;
 			await this.insertRepertoireSnapshot(tx, repertoireItems);
@@ -408,7 +408,7 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 			pieces: RepertoirePiece[];
 		},
 	) {
-		const json = JSON.stringify(input.pieces);
+		const json = input.pieces;
 		if (input.accompanistMembershipId !== undefined) {
 			return (await tx.unsafe(
 				`UPDATE ${this.schema}.registration_metadata SET accompanist_membership_id = $1, repertoire_json = $2 WHERE id = $3 AND organization_id = $4 RETURNING id, organization_id, festival_id, checkout_intent_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json, created_at`,
@@ -445,17 +445,15 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 				display_order SMALLINT
 			 )`,
 			[
-				JSON.stringify(
-					items.map((item) => ({
-						id: item.id,
-						organization_id: item.organizationId,
-						registration_metadata_id: item.registrationMetadataId,
-						title_snapshot: item.titleSnapshot,
-						performed_movement_text: item.performedMovementText,
-						duration_seconds: item.durationSeconds,
-						display_order: item.displayOrder,
-					})),
-				),
+				items.map((item) => ({
+					id: item.id,
+					organization_id: item.organizationId,
+					registration_metadata_id: item.registrationMetadataId,
+					title_snapshot: item.titleSnapshot,
+					performed_movement_text: item.performedMovementText,
+					duration_seconds: item.durationSeconds,
+					display_order: item.displayOrder,
+				})),
 			],
 		);
 	}
@@ -485,7 +483,7 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 				contributor_role TEXT,
 				position SMALLINT
 			 )`,
-			[JSON.stringify(contributors)],
+			[contributors],
 		);
 	}
 	async linkRegistrationMetadataToEntitlement(params: {

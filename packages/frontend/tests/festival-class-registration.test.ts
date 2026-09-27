@@ -133,6 +133,14 @@ describe("Festival Registration Cart Card & Checkout Gate", () => {
 });
 
 describe("Festival Class Registration Page workflow", () => {
+	it("loads active public divisions independently of admin controller state", () => {
+		expect(regPage).toContain("getPublicDivisions");
+		expect(regPage).toContain("(slug) => getPublicDivisions(slug)");
+		expect(regPage).toContain("divisions()?.divisions ?? []");
+		expect(regPage).not.toContain("props.app.divisions()");
+		expect(regPage).toContain("Available divisions could not be loaded");
+	});
+
 	it("requires customer authentication and handles sign in", () => {
 		expect(regPage).toContain("props.app.customerSession()");
 		expect(regPage).toContain("customerFestivalRegistrationSignInPath");
