@@ -439,6 +439,15 @@ export function customerLandingSignInPath(slug: string) {
 	return `/api/organizations/${encodeURIComponent(slug)}/customer-auth/start?returnTo=${encodeURIComponent(returnTo)}`;
 }
 
+export function customerFestivalRegistrationSignInPath(
+	slug: string,
+	festivalSlug: string,
+) {
+	const encodedSlug = encodeURIComponent(slug);
+	const returnTo = `/org/${encodedSlug}/festival/${encodeURIComponent(festivalSlug)}/register`;
+	return `/api/organizations/${encodedSlug}/customer-auth/start?returnTo=${encodeURIComponent(returnTo)}`;
+}
+
 export function getMembershipProducts(slug: string) {
 	return requestJson<PublicMembershipProductsListResponse>(
 		`/api/organizations/${slug}/membership-products`,

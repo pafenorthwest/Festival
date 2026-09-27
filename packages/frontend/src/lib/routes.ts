@@ -134,6 +134,7 @@ export function buildPrivacyPolicyPath(): string {
 export function isOrganizationPageRoute(route: AppRoute): boolean {
 	return (
 		route.kind === "festival-register" ||
+		route.kind === "festival-volunteers" ||
 		route.kind === "org-root" ||
 		route.kind === "festival-public" ||
 		route.kind === "org-membership" ||

@@ -1,6 +1,6 @@
 import type { User } from "firebase/auth";
 import { createEffect, onCleanup, onMount } from "solid-js";
-import { acceptInvite } from "../lib/api.js";
+import { acceptInvite, getCustomerSession } from "../lib/api.js";
 import {
 	clearPendingIntent,
 	completePasswordlessEmailLinkSignIn,
@@ -8,7 +8,11 @@ import {
 	readPendingIntent,
 	subscribeToAuthChanges,
 } from "../lib/firebase-auth.js";
-import { buildFestivalVolunteersPath, buildOrgPath } from "../lib/routes.js";
+import {
+	buildFestivalVolunteersPath,
+	buildOrgPath,
+	isOrganizationPageRoute,
+} from "../lib/routes.js";
 import type { FestivalAppState } from "./createFestivalAppState.js";
 import {
 	type FestivalDataLoaders,
@@ -107,6 +111,32 @@ export function useFestivalLifecycle(
 				state.setErrorMessage((error as Error).message);
 			});
 		})();
+	});
+
+	createEffect(() => {
+		const currentRoute = state.route();
+		if (!isOrganizationPageRoute(currentRoute)) {
+			state.setCustomerSession({ authenticated: false });
+			state.setIsCustomerSessionLoading(false);
+			return;
+		}
+
+		let active = true;
+		state.setCustomerSession({ authenticated: false });
+		state.setIsCustomerSessionLoading(true);
+		void getCustomerSession((currentRoute as { slug: string }).slug)
+			.then((response) => {
+				if (active) state.setCustomerSession(response.session);
+			})
+			.catch(() => {
+				if (active) state.setCustomerSession({ authenticated: false });
+			})
+			.finally(() => {
+				if (active) state.setIsCustomerSessionLoading(false);
+			});
+		onCleanup(() => {
+			active = false;
+		});
 	});
 
 	createEffect(() => {

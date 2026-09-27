@@ -8,6 +8,9 @@ const page = await Bun.file(
 const appHeader = await Bun.file(
 	new URL("../src/components/AppHeader.tsx", import.meta.url),
 ).text();
+const lifecycle = await Bun.file(
+	new URL("../src/app/useFestivalLifecycle.ts", import.meta.url),
+).text();
 const app = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
 const sideNavigation = await Bun.file(
 	new URL("../src/components/OrganizationSideNavigation.tsx", import.meta.url),
@@ -50,11 +53,12 @@ describe("public organization landing page", () => {
 			"/api/organizations/pafe/customer-auth/start?returnTo=%2Forg%2Fpafe",
 		);
 		expect(appHeader).toContain("isOrganizationPageRoute");
-		expect(appHeader).toContain("getCustomerSession");
+		expect(appHeader).not.toContain("getCustomerSession");
+		expect(appHeader).toContain("props.app.customerSession()");
+		expect(lifecycle).toContain("getCustomerSession");
 		expect(appHeader).toContain("logoutCustomer");
-		expect(appHeader).toContain(
-			"return isOrganizationPageRoute(route) ? route.slug : null;",
-		);
+		expect(appHeader).toContain("const route = props.app.route();");
+		expect(appHeader).toContain('? (route as { slug: string }).slug');
 		expect(appHeader).toContain('class="org-landing-header"');
 		expect(page).not.toContain('class="org-landing-header"');
 		expect(page).not.toContain("handleLogout");

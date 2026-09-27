@@ -1,8 +1,7 @@
-import { createEffect, createResource, createSignal, Show } from "solid-js";
+import { createResource, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import {
 	customerLandingSignInPath,
-	getCustomerSession,
 	getPublicOrganizationLanding,
 	logoutCustomer,
 } from "../lib/api.js";
@@ -16,30 +15,15 @@ interface AppHeaderProps {
 export function AppHeader(props: AppHeaderProps) {
 	const slug = () => {
 		const route = props.app.route();
-		return isOrganizationPageRoute(route) ? route.slug : null;
+		return isOrganizationPageRoute(route)
+			? (route as { slug: string }).slug
+			: null;
 	};
-	const [customerSession, setCustomerSession] = createSignal<{
-		authenticated: boolean;
-		csrfToken?: string;
-	}>({ authenticated: false });
-	const [sessionLoading, setSessionLoading] = createSignal(true);
 	const [landing] = createResource(slug, getPublicOrganizationLanding);
-
-	createEffect(() => {
-		const organizationSlug = slug();
-		if (!organizationSlug) {
-			setSessionLoading(false);
-			return;
-		}
-		setSessionLoading(true);
-		void getCustomerSession(organizationSlug)
-			.then((response) => setCustomerSession(response.session))
-			.finally(() => setSessionLoading(false));
-	});
 
 	function logout() {
 		const organizationSlug = slug();
-		const session = customerSession();
+		const session = props.app.customerSession();
 		if (organizationSlug && session.authenticated && session.csrfToken)
 			logoutCustomer(organizationSlug, session.csrfToken);
 	}
@@ -117,7 +101,9 @@ export function AppHeader(props: AppHeaderProps) {
 					</a>
 					<a
 						class="customer-account-link"
-						classList={{ "is-authenticated": customerSession().authenticated }}
+						classList={{
+							"is-authenticated": props.app.customerSession().authenticated,
+						}}
 						href={`/org/${slug() ?? ""}/account/memberships`}
 						aria-label="Customer account"
 					>
@@ -126,9 +112,9 @@ export function AppHeader(props: AppHeaderProps) {
 						</span>
 						<span class="sr-only">Customer account</span>
 					</a>
-					<Show when={!sessionLoading()}>
+					<Show when={!props.app.isCustomerSessionLoading()}>
 						<Show
-							when={customerSession().authenticated}
+							when={props.app.customerSession().authenticated}
 							fallback={
 								<Button
 									type="button"

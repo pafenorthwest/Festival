@@ -2,6 +2,7 @@ import type {
 	FestivalSummary,
 	InviteSummary,
 	MembershipProductSummary,
+	CustomerSessionResponse,
 	OrganizationAdminUserEntry,
 	OrganizationDivision,
 	OrganizationLandingResponse,
@@ -55,6 +56,11 @@ export function createFestivalAppState() {
 	const [session, setSession] = createSignal<SessionResponse["session"]>({
 		authenticated: false,
 	});
+	const [customerSession, setCustomerSession] = createSignal<
+		CustomerSessionResponse["session"]
+	>({ authenticated: false });
+	const [isCustomerSessionLoading, setIsCustomerSessionLoading] =
+		createSignal(false);
 	const [memberships, setMemberships] = createSignal<SessionMembership[]>([]);
 	const [organization, setOrganization] = createSignal<
 		OrganizationLandingResponse["organization"] | null
@@ -426,6 +432,7 @@ export function createFestivalAppState() {
 		clearMessages,
 		clearTimers,
 		closeSignInModal,
+		customerSession,
 		createdInvites,
 		createdOrganizationSlug,
 		createDivisionAttempted,
@@ -456,6 +463,7 @@ export function createFestivalAppState() {
 		isLoadingMembershipProducts,
 		isShopifyTesting,
 		isBusy,
+		isCustomerSessionLoading,
 		membershipProductDraft,
 		membershipProductValidation,
 		membershipProductValidationMessage,
@@ -512,6 +520,8 @@ export function createFestivalAppState() {
 		setOrganizationShortName,
 		setOrganizationShortNameTouched,
 		setSession,
+		setCustomerSession,
+		setIsCustomerSessionLoading,
 		setShopifyDraft,
 		setShopifySettings,
 		setSignInEmail,

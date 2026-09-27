@@ -17,6 +17,7 @@ import { FestivalRegistrationCartCard } from "../components/FestivalRegistration
 import { FestivalRepertoireModal } from "../components/FestivalRepertoireModal.js";
 import {
 	getCustomerChildren,
+	customerFestivalRegistrationSignInPath,
 	getPublicFestival,
 	listRegistrationAccompanists,
 	listRegistrationEligibleClasses,
@@ -104,7 +105,7 @@ export function FestivalClassRegistrationPage(
 	}
 
 	createEffect(() => {
-		if (props.app.customerSession()) {
+		if (props.app.customerSession().authenticated) {
 			void loadChildren();
 			void loadAccompanists();
 		}
@@ -158,7 +159,10 @@ export function FestivalClassRegistrationPage(
 		e.preventDefault();
 		const childId = selectedChildId();
 		const birthday = birthdayDraft();
-		const csrf = props.app.customerSession()?.csrfToken ?? "";
+		const customerSession = props.app.customerSession();
+		const csrf = customerSession.authenticated
+			? customerSession.csrfToken
+			: "";
 		if (!childId || !birthday) return;
 		setIsRefreshingSnapshot(true);
 		setSnapshotError(null);
@@ -204,7 +208,10 @@ export function FestivalClassRegistrationPage(
 		if (!cls || !child || !isReadyForCheckout()) return;
 		setIsSubmittingCheckout(true);
 		try {
-			const csrf = props.app.customerSession()?.csrfToken ?? "";
+			const customerSession = props.app.customerSession();
+			const csrf = customerSession.authenticated
+				? customerSession.csrfToken
+				: "";
 			const idempotencyKey = crypto.randomUUID();
 			const res = await startClassCheckout(
 				props.slug,
@@ -235,7 +242,7 @@ export function FestivalClassRegistrationPage(
 
 	return (
 		<Show
-			when={props.app.customerSession()}
+			when={props.app.customerSession().authenticated}
 			fallback={
 				<section class="panel flow-panel">
 					<header class="admin-page-header">
@@ -244,7 +251,17 @@ export function FestivalClassRegistrationPage(
 							<p>Sign in with your parent account to register your children.</p>
 						</div>
 					</header>
-					<Button type="button" onClick={() => props.app.openSignInModal()}>
+					<Button
+						type="button"
+						onClick={() =>
+							window.location.assign(
+								customerFestivalRegistrationSignInPath(
+									props.slug,
+									props.festivalSlug,
+								),
+							)
+						}
+					>
 						Sign in to Register
 					</Button>
 				</section>

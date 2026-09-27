@@ -152,6 +152,11 @@ describe("route helpers", () => {
 			),
 		).toBe(true);
 		expect(
+			isOrganizationPageRoute(
+				parseRoute("/org/festival-admins/festival/jun-27/volunteers"),
+			),
+		).toBe(true);
+		expect(
 			isOrganizationPageRoute(parseRoute("/org/festival-admins/account")),
 		).toBe(true);
 		expect(

@@ -135,7 +135,7 @@ describe("Festival Registration Cart Card & Checkout Gate", () => {
 describe("Festival Class Registration Page workflow", () => {
 	it("requires customer authentication and handles sign in", () => {
 		expect(regPage).toContain("props.app.customerSession()");
-		expect(regPage).toContain("openSignInModal");
+		expect(regPage).toContain("customerFestivalRegistrationSignInPath");
 		expect(regPage).toContain("Register for Festival Classes");
 	});
 
