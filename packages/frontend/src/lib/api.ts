@@ -24,6 +24,9 @@ import type {
 	CustomerProfileResponse,
 	CustomerSessionResponse,
 	DismissWelcomeResponse,
+	DropRegistrationInput,
+	DropRegistrationResult,
+	DropRegistrationValidationResult,
 	FestivalClassConfigurationDto,
 	FestivalSummary,
 	FlagReviewInput,
@@ -41,11 +44,17 @@ import type {
 	PublicMembershipProductsListResponse,
 	PublicOrganizationDivisionListResponse,
 	PublicOrganizationLandingResponse,
+	RefundEvent,
+	RefundEventStatus,
 	RegistrationAccompanistSummary,
+	RegistrationActorRole,
 	RegistrationAgeConfiguration,
 	RegistrationCatalogValue,
+	RegistrationChangeAction,
+	RegistrationChangeLog,
 	RegistrationEligibleClass,
 	RegistrationTeacherSummary,
+	RegistrationValidationResult,
 	ReorderOrganizationDivisionsInput,
 	RepertoireFlagReason,
 	RepertoirePiece,
@@ -61,17 +70,31 @@ import type {
 	SessionResponse,
 	ShopifyIntegrationDiagnosticsResponse,
 	ShopifyIntegrationSettingsResponse,
+	TransferRegistrationInput,
+	TransferRegistrationResult,
+	TransferRegistrationValidationResult,
 	UpdateCustomerProfileInput,
 	UpdateFestivalClassInput,
 	UpdateOrganizationDivisionInput,
 	UpdateOrganizationTimezoneInput,
 	VolunteerAssignment,
 	VolunteerRecord,
+	WaitlistPromotionResult,
 } from "@festival/common";
 import {
+	assertValidDropRegistrationInput,
+	assertValidTransferRegistrationInput,
+	isRefundEventStatus,
+	isRegistrationActorRole,
+	isRegistrationChangeAction,
 	isRepertoireReviewStatus,
+	REFUND_EVENT_STATUSES,
+	REGISTRATION_ACTOR_ROLES,
+	REGISTRATION_CHANGE_ACTIONS,
 	REPERTOIRE_FLAG_REASONS,
 	REPERTOIRE_REVIEW_STATUSES,
+	validateDropRegistrationInput,
+	validateTransferRegistrationInput,
 } from "@festival/common";
 import { getFirebaseAuth } from "./firebase-auth.js";
 
@@ -124,21 +147,44 @@ export type {
 	ClaimReviewInput,
 	CoverageGapShift,
 	CoverageGapsSummary,
+	DropRegistrationInput,
+	DropRegistrationResult,
+	DropRegistrationValidationResult,
 	FlagReviewInput,
 	NormalizeReviewInput,
+	RefundEvent,
+	RefundEventStatus,
+	RegistrationActorRole,
+	RegistrationChangeAction,
+	RegistrationChangeLog,
+	RegistrationValidationResult,
 	RepertoireFlagReason,
 	RepertoireReviewItem,
 	RepertoireReviewQueueFilter,
 	RepertoireReviewQueueSummary,
 	RepertoireReviewStatus,
 	ResolveFlagInput,
+	TransferRegistrationInput,
+	TransferRegistrationResult,
+	TransferRegistrationValidationResult,
 	VolunteerAssignment,
 	VolunteerRecord,
+	WaitlistPromotionResult,
 };
 export {
+	assertValidDropRegistrationInput,
+	assertValidTransferRegistrationInput,
+	isRefundEventStatus,
+	isRegistrationActorRole,
+	isRegistrationChangeAction,
 	isRepertoireReviewStatus,
+	REFUND_EVENT_STATUSES,
+	REGISTRATION_ACTOR_ROLES,
+	REGISTRATION_CHANGE_ACTIONS,
 	REPERTOIRE_FLAG_REASONS,
 	REPERTOIRE_REVIEW_STATUSES,
+	validateDropRegistrationInput,
+	validateTransferRegistrationInput,
 };
 
 export interface VolunteerShiftListing extends VolunteerShift {
@@ -1291,10 +1337,13 @@ export interface CustomerClassRegistrationsResponse {
 
 export function listCustomerClassRegistrations(
 	slug: string,
-	festivalSlug: string,
+	festivalSlug?: string,
 ): Promise<CustomerClassRegistrationsResponse> {
+	const path = festivalSlug
+		? `/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/registration/class-registrations`
+		: `/api/organizations/${encodeURIComponent(slug)}/customer/class-registrations`;
 	return requestJson<CustomerClassRegistrationsResponse>(
-		`/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/registration/class-registrations`,
+		path,
 		undefined,
 		undefined,
 		"",
@@ -1341,6 +1390,201 @@ export function updateRegistrationMetadata(
 		},
 		undefined,
 		"",
+	);
+}
+
+export function dropCustomerRegistration(
+	slug: string,
+	registrationId: string,
+	input?: Partial<DropRegistrationInput>,
+): Promise<DropRegistrationResult> {
+	return requestJson<DropRegistrationResult>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/class-registrations/${encodeURIComponent(registrationId)}/drop`,
+		{
+			method: "POST",
+			body: JSON.stringify(input ?? {}),
+		},
+		undefined,
+		"",
+	);
+}
+
+export function transferCustomerRegistration(
+	slug: string,
+	registrationId: string,
+	input:
+		| TransferRegistrationInput
+		| { targetFestivalClassId: string; reason?: string },
+): Promise<TransferRegistrationResult> {
+	return requestJson<TransferRegistrationResult>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/class-registrations/${encodeURIComponent(registrationId)}/transfer`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+		undefined,
+		"",
+	);
+}
+
+export async function dropAdminRegistration(
+	slugOrToken: string,
+	festivalOrSlug: string,
+	regIdOrFestival: string,
+	inputOrRegId?: Partial<DropRegistrationInput> | string,
+	tokenOrInput?: string | Partial<DropRegistrationInput>,
+): Promise<DropRegistrationResult> {
+	let slug = slugOrToken;
+	let festivalShortName = festivalOrSlug;
+	let registrationId = regIdOrFestival;
+	let input: Partial<DropRegistrationInput> = {};
+	let idToken: string | undefined;
+
+	if (typeof inputOrRegId === "string") {
+		idToken = slugOrToken;
+		slug = festivalOrSlug;
+		festivalShortName = regIdOrFestival;
+		registrationId = inputOrRegId;
+		input = (
+			typeof tokenOrInput === "object" && tokenOrInput !== null
+				? tokenOrInput
+				: {}
+		) as Partial<DropRegistrationInput>;
+	} else {
+		if (typeof inputOrRegId === "object" && inputOrRegId !== null) {
+			input = inputOrRegId;
+		}
+		if (typeof tokenOrInput === "string") {
+			idToken = tokenOrInput;
+		}
+	}
+
+	const token = await resolveAuthToken(idToken);
+	return requestJson<DropRegistrationResult>(
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalShortName)}/registrations/${encodeURIComponent(registrationId)}/drop`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+		token,
+	);
+}
+
+export async function transferAdminRegistration(
+	slugOrToken: string,
+	festivalOrSlug: string,
+	regIdOrFestival: string,
+	inputOrRegId:
+		| TransferRegistrationInput
+		| { targetFestivalClassId: string; reason?: string }
+		| string,
+	tokenOrInput?:
+		| string
+		| TransferRegistrationInput
+		| { targetFestivalClassId: string; reason?: string },
+): Promise<TransferRegistrationResult> {
+	let slug = slugOrToken;
+	let festivalShortName = festivalOrSlug;
+	let registrationId = regIdOrFestival;
+	let input = (
+		typeof inputOrRegId === "object" ? inputOrRegId : {}
+	) as TransferRegistrationInput;
+	let idToken: string | undefined;
+
+	if (typeof inputOrRegId === "string") {
+		idToken = slugOrToken;
+		slug = festivalOrSlug;
+		festivalShortName = regIdOrFestival;
+		registrationId = inputOrRegId;
+		input = (
+			typeof tokenOrInput === "object" && tokenOrInput !== null
+				? tokenOrInput
+				: {}
+		) as TransferRegistrationInput;
+	} else if (typeof tokenOrInput === "string") {
+		idToken = tokenOrInput;
+	}
+
+	const token = await resolveAuthToken(idToken);
+	return requestJson<TransferRegistrationResult>(
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalShortName)}/registrations/${encodeURIComponent(registrationId)}/transfer`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+		token,
+	);
+}
+
+export async function promoteAdminRegistration(
+	slugOrToken: string,
+	festivalOrSlug: string,
+	regIdOrFestival: string,
+	inputOrRegId?: { reason?: string } | string,
+	tokenOrInput?: string | { reason?: string },
+): Promise<WaitlistPromotionResult> {
+	let slug = slugOrToken;
+	let festivalShortName = festivalOrSlug;
+	let registrationId = regIdOrFestival;
+	let input: { reason?: string } = {};
+	let idToken: string | undefined;
+
+	if (typeof inputOrRegId === "string") {
+		idToken = slugOrToken;
+		slug = festivalOrSlug;
+		festivalShortName = regIdOrFestival;
+		registrationId = inputOrRegId;
+		input = (
+			typeof tokenOrInput === "object" && tokenOrInput !== null
+				? tokenOrInput
+				: {}
+		) as { reason?: string };
+	} else {
+		if (typeof inputOrRegId === "object" && inputOrRegId !== null) {
+			input = inputOrRegId;
+		}
+		if (typeof tokenOrInput === "string") {
+			idToken = tokenOrInput;
+		}
+	}
+
+	const token = await resolveAuthToken(idToken);
+	return requestJson<WaitlistPromotionResult>(
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalShortName)}/registrations/${encodeURIComponent(registrationId)}/promote`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+		token,
+	);
+}
+
+export async function getRegistrationChangeLog(
+	slugOrToken: string,
+	festivalOrSlug: string,
+	regIdOrFestival: string,
+	idToken?: string,
+): Promise<{ changeLogs: RegistrationChangeLog[] }> {
+	let slug = slugOrToken;
+	let festivalShortName = festivalOrSlug;
+	let registrationId = regIdOrFestival;
+	let tokenToResolve = idToken;
+
+	if (
+		slugOrToken.includes(".") ||
+		(idToken && regIdOrFestival.length > 0 && slugOrToken.length > 40)
+	) {
+		tokenToResolve = slugOrToken;
+		slug = festivalOrSlug;
+		festivalShortName = regIdOrFestival;
+		registrationId = idToken;
+	}
+
+	const token = await resolveAuthToken(tokenToResolve);
+	return requestJson<{ changeLogs: RegistrationChangeLog[] }>(
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalShortName)}/registrations/${encodeURIComponent(registrationId)}/change-log`,
+		undefined,
+		token,
 	);
 }
 

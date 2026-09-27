@@ -3,17 +3,35 @@ import { createSignal, For, Show } from "solid-js";
 import { Button } from "../components/Button.js";
 import { FestivalRepertoireModal } from "../components/FestivalRepertoireModal.js";
 import {
+	dropCustomerRegistration,
 	getCustomerOrders,
 	listCustomerClassRegistrations,
+	listRegistrationEligibleClasses,
+	transferCustomerRegistration,
 	updateRegistrationMetadata,
 } from "../lib/api.js";
 import { CustomerAccountPageLayout } from "./CustomerAccountPageLayout.js";
+import { CustomerDropRegistrationModal } from "./CustomerDropRegistrationModal.js";
+import {
+	type ClassOption,
+	CustomerTransferRegistrationModal,
+} from "./CustomerTransferRegistrationModal.js";
 
 interface RegistrationItemRecord {
-	entitlement: { id: string; festivalId: string };
-	festivalClass?: { id: string; displayName: string; price: string };
+	entitlement: {
+		id: string;
+		festivalId?: string;
+		status?: string;
+		festivalClassId?: string;
+	};
+	festivalClass?: { id: string; displayName: string; price?: string };
 	child?: { id: string; name: string };
 	metadata?: { id: string; repertoireJson: RepertoirePiece[] };
+}
+
+function isRegistrationActiveOrWaitlisted(status?: string): boolean {
+	const s = (status ?? "confirmed").toLowerCase();
+	return s === "confirmed" || s === "waitlisted" || s === "active";
 }
 
 export function CustomerAccountOrdersPage(props: { slug: string }) {
@@ -26,6 +44,18 @@ export function CustomerAccountOrdersPage(props: { slug: string }) {
 	const [editError, setEditError] = createSignal<string | null>(null);
 	const [activeRegistration, setActiveRegistration] =
 		createSignal<RegistrationItemRecord | null>(null);
+
+	const [dropTarget, setDropTarget] =
+		createSignal<RegistrationItemRecord | null>(null);
+	const [transferTarget, setTransferTarget] =
+		createSignal<RegistrationItemRecord | null>(null);
+	const [availableTransferClasses, setAvailableTransferClasses] = createSignal<
+		ClassOption[]
+	>([]);
+	const [isLoadingTransferClasses, setIsLoadingTransferClasses] =
+		createSignal(false);
+	const [isSubmittingAction, setIsSubmittingAction] = createSignal(false);
+	const [actionError, setActionError] = createSignal<string | null>(null);
 
 	async function loadOrders(after?: string) {
 		try {
@@ -64,7 +94,7 @@ export function CustomerAccountOrdersPage(props: { slug: string }) {
 		try {
 			await updateRegistrationMetadata(
 				props.slug,
-				target.entitlement.festivalId,
+				target.entitlement.festivalId ?? "",
 				target.metadata.id,
 				csrfToken,
 				{ pieces: savedPieces },
@@ -73,6 +103,68 @@ export function CustomerAccountOrdersPage(props: { slug: string }) {
 			setActiveRegistration(null);
 		} catch (err) {
 			setEditError((err as Error).message);
+		}
+	}
+
+	async function handleOpenTransfer(item: RegistrationItemRecord) {
+		setTransferTarget(item);
+		setActionError(null);
+		const festivalId = item.entitlement.festivalId;
+		if (!festivalId) return;
+		setIsLoadingTransferClasses(true);
+		try {
+			const res = await listRegistrationEligibleClasses(
+				props.slug,
+				festivalId,
+				item.child?.id ? { childId: item.child.id } : undefined,
+			);
+			setAvailableTransferClasses(res.classes || []);
+		} catch (err) {
+			setActionError((err as Error).message);
+		} finally {
+			setIsLoadingTransferClasses(false);
+		}
+	}
+
+	async function handleConfirmDrop(reason: string, requestRefund: boolean) {
+		const target = dropTarget();
+		if (!target) return;
+		setIsSubmittingAction(true);
+		setActionError(null);
+		try {
+			await dropCustomerRegistration(props.slug, target.entitlement.id, {
+				reason: reason || undefined,
+				requestRefund,
+				issueRefund: requestRefund,
+			});
+			setDropTarget(null);
+			await loadRegistrations();
+		} catch (err) {
+			setActionError((err as Error).message);
+		} finally {
+			setIsSubmittingAction(false);
+		}
+	}
+
+	async function handleConfirmTransfer(
+		targetFestivalClassId: string,
+		reason: string,
+	) {
+		const target = transferTarget();
+		if (!target) return;
+		setIsSubmittingAction(true);
+		setActionError(null);
+		try {
+			await transferCustomerRegistration(props.slug, target.entitlement.id, {
+				targetFestivalClassId,
+				reason: reason || undefined,
+			});
+			setTransferTarget(null);
+			await loadRegistrations();
+		} catch (err) {
+			setActionError((err as Error).message);
+		} finally {
+			setIsSubmittingAction(false);
 		}
 	}
 
@@ -107,19 +199,55 @@ export function CustomerAccountOrdersPage(props: { slug: string }) {
 									{(item) => (
 										<li class="panel flow-panel">
 											<div class="division-row-heading">
-												<h3>
-													{item.festivalClass?.displayName ?? "Festival Class"}
-												</h3>
-												<Button
-													type="button"
-													variant="secondary"
-													onClick={() => {
-														setEditError(null);
-														setActiveRegistration(item);
-													}}
-												>
-													Edit repertoire
-												</Button>
+												<div>
+													<h3>
+														{item.festivalClass?.displayName ??
+															"Festival Class"}
+													</h3>
+													<Show when={item.entitlement.status}>
+														<span
+															class="badge"
+															style="margin-top: 0.25rem; display: inline-block; text-transform: capitalize;"
+														>
+															{item.entitlement.status}
+														</span>
+													</Show>
+												</div>
+												<div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+													<Button
+														type="button"
+														variant="secondary"
+														onClick={() => {
+															setEditError(null);
+															setActiveRegistration(item);
+														}}
+													>
+														Edit repertoire
+													</Button>
+													<Show
+														when={isRegistrationActiveOrWaitlisted(
+															item.entitlement.status,
+														)}
+													>
+														<Button
+															type="button"
+															variant="secondary"
+															onClick={() => void handleOpenTransfer(item)}
+														>
+															Transfer
+														</Button>
+														<Button
+															type="button"
+															variant="secondary"
+															onClick={() => {
+																setActionError(null);
+																setDropTarget(item);
+															}}
+														>
+															Drop
+														</Button>
+													</Show>
+												</div>
 											</div>
 											<p>
 												Performer:{" "}
@@ -151,6 +279,11 @@ export function CustomerAccountOrdersPage(props: { slug: string }) {
 						<Show when={editError()}>
 							<p class="field-error" role="alert">
 								{editError()}
+							</p>
+						</Show>
+						<Show when={actionError()}>
+							<p class="field-error" role="alert">
+								{actionError()}
 							</p>
 						</Show>
 					</section>
@@ -233,6 +366,48 @@ export function CustomerAccountOrdersPage(props: { slug: string }) {
 								void handleSaveRepertoire(saved, session.csrfToken)
 							}
 							onClose={() => setActiveRegistration(null)}
+						/>
+					</Show>
+
+					<Show when={dropTarget()}>
+						<CustomerDropRegistrationModal
+							isOpen={Boolean(dropTarget())}
+							registrationTitle={
+								dropTarget()?.festivalClass?.displayName ?? "Festival Class"
+							}
+							performerName={dropTarget()?.child?.name}
+							isWaitlisted={
+								(dropTarget()?.entitlement.status ?? "").toLowerCase() ===
+								"waitlisted"
+							}
+							isSubmitting={isSubmittingAction()}
+							error={actionError()}
+							onConfirm={(reason, refund) =>
+								void handleConfirmDrop(reason, refund)
+							}
+							onClose={() => setDropTarget(null)}
+						/>
+					</Show>
+
+					<Show when={transferTarget()}>
+						<CustomerTransferRegistrationModal
+							isOpen={Boolean(transferTarget())}
+							registrationTitle={
+								transferTarget()?.festivalClass?.displayName ?? "Festival Class"
+							}
+							performerName={transferTarget()?.child?.name}
+							currentFestivalClassId={
+								transferTarget()?.entitlement.festivalClassId ??
+								transferTarget()?.festivalClass?.id
+							}
+							availableClasses={availableTransferClasses()}
+							isLoadingClasses={isLoadingTransferClasses()}
+							isSubmitting={isSubmittingAction()}
+							error={actionError()}
+							onConfirm={(targetClassId, reason) =>
+								void handleConfirmTransfer(targetClassId, reason)
+							}
+							onClose={() => setTransferTarget(null)}
 						/>
 					</Show>
 				</>
