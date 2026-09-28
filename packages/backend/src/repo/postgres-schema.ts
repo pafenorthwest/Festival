@@ -244,6 +244,18 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			status TEXT NOT NULL CHECK (status IN ('creating', 'ready', 'checkout_started', 'failed', 'expired', 'superseded', 'approved', 'rejected', 'needs_review')),
 			expires_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.checkout_recovery_requests (
+			id TEXT PRIMARY KEY,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			customer_id TEXT NOT NULL,
+			source_checkout_intent_id TEXT NOT NULL REFERENCES ${safeSchema}.checkout_intents (id) ON DELETE CASCADE,
+			token_hash TEXT NOT NULL,
+			status TEXT NOT NULL CHECK (status IN ('pending', 'consumed', 'expired', 'cancelled', 'invalidated')),
+			requested_by_actor_uid TEXT NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			expires_at TIMESTAMPTZ NOT NULL,
+			consumed_at TIMESTAMPTZ NULL
+		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.class_entitlements (
 			id TEXT PRIMARY KEY,
 			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
@@ -675,6 +687,8 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		CREATE INDEX IF NOT EXISTS idx_festival_customers_org_phone ON ${safeSchema}.festival_customers(organization_id,phone);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_festival_children_parent_name ON ${safeSchema}.festival_children(organization_id, parent_customer_id, LOWER(display_name));
 		CREATE UNIQUE INDEX IF NOT EXISTS checkout_intents_scope_key ON ${safeSchema}.checkout_intents(organization_id, customer_id, session_id, idempotency_key);
+		CREATE INDEX IF NOT EXISTS idx_recovery_requests_org_cust ON ${safeSchema}.checkout_recovery_requests (organization_id, customer_id);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_recovery_requests_token_hash ON ${safeSchema}.checkout_recovery_requests (token_hash);
 		CREATE INDEX IF NOT EXISTS membership_validation_customer_idx ON ${safeSchema}.membership_validation_decisions (organization_id, customer_id, created_at DESC);
 		CREATE UNIQUE INDEX IF NOT EXISTS membership_validation_checkout_intent_idx ON ${safeSchema}.membership_validation_decisions (organization_id, checkout_intent_id) WHERE checkout_intent_id IS NOT NULL;
 		CREATE INDEX IF NOT EXISTS shopify_webhook_reclaim_idx ON ${safeSchema}.shopify_webhook_deliveries (organization_id, status, received_at);

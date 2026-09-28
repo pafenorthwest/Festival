@@ -23,11 +23,17 @@ import {
 } from "./billing/billing-repository.js";
 import { PostgresBillingRepository } from "./billing/postgres-billing-repository.js";
 import {
+	type CheckoutRecoveryRepository,
+	InMemoryCheckoutRecoveryRepository,
+} from "./checkout/checkout-recovery-repository.js";
+import { CheckoutRecoveryService } from "./checkout/checkout-recovery-service.js";
+import {
 	type CheckoutRepository,
 	InMemoryCheckoutRepository,
 } from "./checkout/checkout-repository.js";
 import { ClassCheckoutService } from "./checkout/class-checkout-service.js";
 import { MembershipCheckoutService } from "./checkout/membership-checkout-service.js";
+import { PostgresCheckoutRecoveryRepository } from "./checkout/postgres-checkout-recovery-repository.js";
 import { PostgresCheckoutRepository } from "./checkout/postgres-checkout-repository.js";
 import { ShopifyMembershipCheckoutClient } from "./checkout/shopify-membership-checkout-client.js";
 import {
@@ -115,6 +121,8 @@ export interface CreateAppOptions {
 	membershipStatusService?: MembershipStatusService;
 	volunteerRepository?: VolunteerRepository;
 	repertoireRepository?: RepertoireRepository;
+	checkoutRecoveryRepository?: CheckoutRecoveryRepository;
+	checkoutRecoveryService?: CheckoutRecoveryService;
 	customClaimsWriter?: CustomClaimsWriter;
 	firebaseClaimsReconciliationService?: FirebaseClaimsReconciliationService;
 	dropTransferService?: DropTransferService;
@@ -426,6 +434,25 @@ export async function createApp(options: CreateAppOptions = {}) {
 		new CommunicationService({
 			repository: communicationRepository,
 		});
+	const checkoutRecoveryRepository =
+		options.checkoutRecoveryRepository ??
+		(env.databaseSchema
+			? new PostgresCheckoutRecoveryRepository(env.databaseSchema)
+			: new InMemoryCheckoutRecoveryRepository());
+	if (checkoutRecoveryRepository instanceof PostgresCheckoutRecoveryRepository)
+		await checkoutRecoveryRepository.ensureReady();
+	const checkoutRecoveryService =
+		options.checkoutRecoveryService ??
+		new CheckoutRecoveryService({
+			recoveryRepository: checkoutRecoveryRepository,
+			organizationRepository: repository,
+			commerceRepository,
+			checkoutRepository,
+			storefront: secretKeyring
+				? new ShopifyMembershipCheckoutClient(repository, secretKeyring)
+				: undefined,
+			listings: publicMembershipProductService,
+		});
 
 	const app = new Hono();
 	const allowedApiOrigins = new Set(env.allowedApiOrigins ?? LOCAL_API_ORIGINS);
@@ -540,6 +567,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 			registrationChangeRepository,
 			billingReconciliationService,
 			communicationService,
+			checkoutRecoveryService,
 		}),
 	);
 	app.route(

@@ -110,6 +110,16 @@ export const CURRENT_ROUTE_SECURITY = [
 		authenticationClass: "customer",
 	},
 	{
+		method: "GET",
+		path: "/api/organizations/:slug/customer/checkout-recovery/:token",
+		authenticationClass: "customer",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/customer/checkout-recovery/:token/checkout",
+		authenticationClass: "customer",
+	},
+	{
 		method: "POST",
 		path: "/api/organizations/:slug/customer/accompanist-membership",
 		authenticationClass: "customer",
@@ -197,6 +207,21 @@ export const CURRENT_ROUTE_SECURITY = [
 	{
 		method: "GET",
 		path: "/api/organizations/:slug/admin/customers/:customerId",
+		authenticationClass: "admin",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/admin/customers/:customerId/checkout-intents",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/checkout-intents/:intentId/invalidate",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/checkout-intents/:intentId/recover",
 		authenticationClass: "admin",
 	},
 	{
