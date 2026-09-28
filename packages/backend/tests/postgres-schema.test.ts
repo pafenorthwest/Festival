@@ -29,6 +29,11 @@ test("canonical PostgreSQL schema defines the final empty-database shape only", 
 		"volunteer_roles",
 		"volunteer_shifts",
 		"volunteer_assignments",
+		"credit_balances",
+		"billing_adjustments",
+		"billing_ledger",
+		"invoices",
+		"invoice_line_items",
 	]) {
 		expect(schema).toContain(`fresh_orgs.${table}`);
 	}

@@ -5,6 +5,7 @@ import { Button } from "../components/Button.js";
 import { getAdminFestival } from "../lib/api.js";
 import {
 	buildFestivalAdminClassesPath,
+	buildOrgBillingPath,
 	buildOrgMusicReviewPath,
 } from "../lib/routes.js";
 import { AdminRegistrationAuditModal } from "./AdminRegistrationAuditModal.js";
@@ -89,6 +90,18 @@ export function FestivalAdminDashboardPage(props: {
 						>
 							<strong>Music Review</strong>
 							<span>Review and normalize submitted repertoire.</span>
+						</button>
+						<button
+							type="button"
+							class="admin-workflow-card"
+							onClick={() =>
+								props.app.navigate(buildOrgBillingPath(props.slug))
+							}
+						>
+							<strong>Billing Reconciliation</strong>
+							<span>
+								Investigate billing mismatches and manage adjustments.
+							</span>
 						</button>
 					</div>
 

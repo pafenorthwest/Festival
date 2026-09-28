@@ -16,6 +16,12 @@ import {
 	PostgresFirebaseClaimsSource,
 } from "./auth/firebase-claims-reconciliation.js";
 import type { AuthVerifier } from "./auth/types.js";
+import { BillingReconciliationService } from "./billing/billing-reconciliation-service.js";
+import {
+	type BillingRepository,
+	InMemoryBillingRepository,
+} from "./billing/billing-repository.js";
+import { PostgresBillingRepository } from "./billing/postgres-billing-repository.js";
 import {
 	type CheckoutRepository,
 	InMemoryCheckoutRepository,
@@ -108,6 +114,8 @@ export interface CreateAppOptions {
 	dropTransferService?: DropTransferService;
 	registrationChangeRepository?: RegistrationChangeRepository;
 	classEntitlementRepository?: ClassEntitlementRepository;
+	billingRepository?: BillingRepository;
+	billingReconciliationService?: BillingReconciliationService;
 }
 
 function privateTokenMatches(
@@ -388,6 +396,16 @@ export async function createApp(options: CreateAppOptions = {}) {
 			changes: registrationChangeRepository,
 			classQuery: repository,
 		});
+	const billingRepository =
+		options.billingRepository ??
+		(env.databaseSchema
+			? new PostgresBillingRepository(env.databaseSchema)
+			: new InMemoryBillingRepository());
+	if (billingRepository instanceof PostgresBillingRepository)
+		await billingRepository.ensureReady();
+	const billingReconciliationService =
+		options.billingReconciliationService ??
+		new BillingReconciliationService(billingRepository);
 
 	const app = new Hono();
 	const allowedApiOrigins = new Set(env.allowedApiOrigins ?? LOCAL_API_ORIGINS);
@@ -500,6 +518,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 			repertoireRepository,
 			dropTransferService,
 			registrationChangeRepository,
+			billingReconciliationService,
 		}),
 	);
 	app.route(

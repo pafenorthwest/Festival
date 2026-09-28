@@ -15,6 +15,7 @@ import { AdminMembershipProductsPage } from "./pages/AdminMembershipProductsPage
 import { AdminRosterPage } from "./pages/AdminRosterPage.js";
 import { AdminSettingsPage } from "./pages/AdminSettingsPage.js";
 import { AdminUsersPage } from "./pages/AdminUsersPage.js";
+import { BillingReconciliationPage } from "./pages/BillingReconciliationPage.js";
 import { CreateOrganizationPage } from "./pages/CreateOrganizationPage.js";
 import { CustomerAccountContactPage } from "./pages/CustomerAccountContactPage.js";
 import { CustomerAccountMembershipsPage } from "./pages/CustomerAccountMembershipsPage.js";
@@ -194,6 +195,12 @@ export default function App() {
 						</Match>
 						<Match when={app.route().kind === "org-music-review"}>
 							<MusicReviewPage
+								app={app}
+								slug={(app.route() as { slug: string }).slug}
+							/>
+						</Match>
+						<Match when={app.route().kind === "org-billing"}>
+							<BillingReconciliationPage
 								app={app}
 								slug={(app.route() as { slug: string }).slug}
 							/>

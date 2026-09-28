@@ -13,6 +13,7 @@ import {
 	buildOrgAdminRosterPath,
 	buildOrgAdminSettingsPath,
 	buildOrgAdminUsersPath,
+	buildOrgBillingPath,
 	buildOrgCustomerAccountContactPath,
 	buildOrgCustomerAccountMembershipsPath,
 	buildOrgCustomerAccountOrdersPath,
@@ -282,5 +283,17 @@ describe("route helpers", () => {
 				festivalSlug: "spring",
 			},
 		);
+	});
+
+	it("routes the billing reconciliation admin page", () => {
+		expect(parseRoute("/organizations/pafe/billing")).toEqual({
+			kind: "org-billing",
+			slug: "pafe",
+		});
+		expect(parseRoute("/org/pafe/billing")).toEqual({
+			kind: "org-billing",
+			slug: "pafe",
+		});
+		expect(buildOrgBillingPath("pafe")).toBe("/organizations/pafe/billing");
 	});
 });
