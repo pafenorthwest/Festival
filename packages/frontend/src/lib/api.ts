@@ -14,6 +14,7 @@ import type {
 	CanonicalWork,
 	ClaimReviewInput,
 	ClassRegistrationMetadata,
+	CommunicationValidationResult,
 	CoverageGapShift,
 	CoverageGapsSummary,
 	CreateBillingAdjustmentInput,
@@ -24,6 +25,7 @@ import type {
 	CreateInviteResponse,
 	CreateMembershipProductInput,
 	CreateMembershipProductResponse,
+	CreateMessageTemplateInput,
 	CreateOrganizationDivisionInput,
 	CreateOrganizationInput,
 	CreateOrganizationResponse,
@@ -43,6 +45,12 @@ import type {
 	InviteSummary,
 	MembershipProductsListResponse,
 	MembershipPurchaseSelectionResponse,
+	MessageChannel,
+	MessageDeliveryStatus,
+	MessageEvent,
+	MessageLog,
+	MessageLogStatus,
+	MessageTemplate,
 	NormalizeReviewInput,
 	OrganizationAdminUsersResponse,
 	OrganizationDivision,
@@ -83,8 +91,10 @@ import type {
 	TransferRegistrationInput,
 	TransferRegistrationResult,
 	TransferRegistrationValidationResult,
+	TriggerMessageEventInput,
 	UpdateCustomerProfileInput,
 	UpdateFestivalClassInput,
+	UpdateMessageTemplateInput,
 	UpdateOrganizationDivisionInput,
 	UpdateOrganizationTimezoneInput,
 	VolunteerAssignment,
@@ -99,22 +109,33 @@ import {
 	BILLING_LEDGER_DIRECTIONS,
 	BILLING_LEDGER_ENTRY_TYPES,
 	BILLING_MISMATCH_TYPES,
+	extractTemplateVariables,
 	isBillingAdjustmentType,
 	isBillingLedgerDirection,
 	isBillingLedgerEntryType,
 	isBillingMismatchType,
+	isMessageChannel,
+	isMessageDeliveryStatus,
+	isMessageLogStatus,
 	isRefundEventStatus,
 	isRegistrationActorRole,
 	isRegistrationChangeAction,
 	isRepertoireReviewStatus,
+	MESSAGE_CHANNELS,
+	MESSAGE_DELIVERY_STATUSES,
+	MESSAGE_LOG_STATUSES,
 	REFUND_EVENT_STATUSES,
 	REGISTRATION_ACTOR_ROLES,
 	REGISTRATION_CHANGE_ACTIONS,
 	REPERTOIRE_FLAG_REASONS,
 	REPERTOIRE_REVIEW_STATUSES,
+	renderTemplate,
 	validateCreateBillingAdjustmentInput,
+	validateCreateMessageTemplateInput,
 	validateDropRegistrationInput,
 	validateTransferRegistrationInput,
+	validateTriggerMessageEventInput,
+	validateUpdateMessageTemplateInput,
 } from "@festival/common";
 import { getFirebaseAuth } from "./firebase-auth.js";
 
@@ -173,14 +194,22 @@ export type {
 	CanonicalContributor,
 	CanonicalWork,
 	ClaimReviewInput,
+	CommunicationValidationResult,
 	CoverageGapShift,
 	CoverageGapsSummary,
 	CreateBillingAdjustmentInput,
+	CreateMessageTemplateInput,
 	CreditBalance,
 	DropRegistrationInput,
 	DropRegistrationResult,
 	DropRegistrationValidationResult,
 	FlagReviewInput,
+	MessageChannel,
+	MessageDeliveryStatus,
+	MessageEvent,
+	MessageLog,
+	MessageLogStatus,
+	MessageTemplate,
 	NormalizeReviewInput,
 	RefundEvent,
 	RefundEventStatus,
@@ -197,6 +226,8 @@ export type {
 	TransferRegistrationInput,
 	TransferRegistrationResult,
 	TransferRegistrationValidationResult,
+	TriggerMessageEventInput,
+	UpdateMessageTemplateInput,
 	VolunteerAssignment,
 	VolunteerRecord,
 	WaitlistPromotionResult,
@@ -209,22 +240,33 @@ export {
 	BILLING_LEDGER_DIRECTIONS,
 	BILLING_LEDGER_ENTRY_TYPES,
 	BILLING_MISMATCH_TYPES,
+	extractTemplateVariables,
 	isBillingAdjustmentType,
 	isBillingLedgerDirection,
 	isBillingLedgerEntryType,
 	isBillingMismatchType,
+	isMessageChannel,
+	isMessageDeliveryStatus,
+	isMessageLogStatus,
 	isRefundEventStatus,
 	isRegistrationActorRole,
 	isRegistrationChangeAction,
 	isRepertoireReviewStatus,
+	MESSAGE_CHANNELS,
+	MESSAGE_DELIVERY_STATUSES,
+	MESSAGE_LOG_STATUSES,
 	REFUND_EVENT_STATUSES,
 	REGISTRATION_ACTOR_ROLES,
 	REGISTRATION_CHANGE_ACTIONS,
 	REPERTOIRE_FLAG_REASONS,
 	REPERTOIRE_REVIEW_STATUSES,
+	renderTemplate,
 	validateCreateBillingAdjustmentInput,
+	validateCreateMessageTemplateInput,
 	validateDropRegistrationInput,
 	validateTransferRegistrationInput,
+	validateTriggerMessageEventInput,
+	validateUpdateMessageTemplateInput,
 };
 
 export interface VolunteerShiftListing extends VolunteerShift {
@@ -1941,6 +1983,113 @@ export async function createBillingAdjustment(
 		alreadyExisted?: boolean;
 	}>(
 		`/api/organizations/${encodeURIComponent(slug)}/billing/adjustments`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+		token,
+	);
+}
+
+export interface TriggerEventResult {
+	status: MessageDeliveryStatus;
+	success: boolean;
+	event: MessageEvent;
+	log?: MessageLog;
+	error?: string;
+	duplicate?: boolean;
+}
+
+export async function listCommunicationTemplates(
+	slug: string,
+	filters?: { channel?: MessageChannel; isActive?: boolean },
+	idToken?: string,
+): Promise<MessageTemplate[]> {
+	const token = await resolveAuthToken(idToken);
+	const params = new URLSearchParams();
+	if (filters?.channel) params.set("channel", filters.channel);
+	if (typeof filters?.isActive === "boolean") {
+		params.set("isActive", String(filters.isActive));
+	}
+	const query = params.toString() ? `?${params.toString()}` : "";
+	return requestJson<MessageTemplate[]>(
+		`/api/organizations/${encodeURIComponent(slug)}/communication/templates${query}`,
+		undefined,
+		token,
+	);
+}
+
+export async function createCommunicationTemplate(
+	slug: string,
+	input: CreateMessageTemplateInput,
+	idToken?: string,
+): Promise<MessageTemplate> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<MessageTemplate>(
+		`/api/organizations/${encodeURIComponent(slug)}/communication/templates`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+		token,
+	);
+}
+
+export async function updateCommunicationTemplate(
+	slug: string,
+	templateId: string,
+	input: UpdateMessageTemplateInput,
+	idToken?: string,
+): Promise<MessageTemplate> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<MessageTemplate>(
+		`/api/organizations/${encodeURIComponent(slug)}/communication/templates/${encodeURIComponent(templateId)}`,
+		{
+			method: "PATCH",
+			body: JSON.stringify(input),
+		},
+		token,
+	);
+}
+
+export async function listCommunicationLogs(
+	slug: string,
+	filters?: {
+		channel?: MessageChannel;
+		status?: MessageLogStatus;
+		eventId?: string;
+		limit?: number;
+		offset?: number;
+	},
+	idToken?: string,
+): Promise<MessageLog[]> {
+	const token = await resolveAuthToken(idToken);
+	const params = new URLSearchParams();
+	if (filters?.channel) params.set("channel", filters.channel);
+	if (filters?.status) params.set("status", filters.status);
+	if (filters?.eventId) params.set("eventId", filters.eventId);
+	if (typeof filters?.limit === "number") {
+		params.set("limit", String(filters.limit));
+	}
+	if (typeof filters?.offset === "number") {
+		params.set("offset", String(filters.offset));
+	}
+	const query = params.toString() ? `?${params.toString()}` : "";
+	return requestJson<MessageLog[]>(
+		`/api/organizations/${encodeURIComponent(slug)}/communication/logs${query}`,
+		undefined,
+		token,
+	);
+}
+
+export async function triggerCommunicationEvent(
+	slug: string,
+	input: TriggerMessageEventInput,
+	idToken?: string,
+): Promise<TriggerEventResult> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<TriggerEventResult>(
+		`/api/organizations/${encodeURIComponent(slug)}/communication/events`,
 		{
 			method: "POST",
 			body: JSON.stringify(input),

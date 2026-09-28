@@ -1,6 +1,7 @@
 export * from "./accompanist.js";
 export * from "./billing.js";
 export * from "./catalog.js";
+export * from "./communication.js";
 export * from "./customer-account.js";
 export * from "./domain.js";
 export * from "./entitlements.js";

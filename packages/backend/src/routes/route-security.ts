@@ -588,6 +588,31 @@ export const CURRENT_ROUTE_SECURITY = [
 		path: "/api/organizations/:slug/festivals/:festivalShortName/registrations/:id/change-log",
 		authenticationClass: "admin",
 	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/communication/templates",
+		authenticationClass: "tenant",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/communication/templates",
+		authenticationClass: "tenant",
+	},
+	{
+		method: "PATCH",
+		path: "/api/organizations/:slug/communication/templates/:templateId",
+		authenticationClass: "tenant",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/communication/logs",
+		authenticationClass: "tenant",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/communication/events",
+		authenticationClass: "tenant",
+	},
 ] as const satisfies readonly RouteSecurityDeclaration[];
 
 interface RegisteredRoute {

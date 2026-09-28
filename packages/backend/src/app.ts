@@ -43,6 +43,12 @@ import { MembershipStatusService } from "./commerce/membership-status-service.js
 import { PostgresMembershipCommerceRepository } from "./commerce/postgres-membership-commerce-repository.js";
 import { ShopifyOrderProjectionService } from "./commerce/shopify-order-projection-service.js";
 import { ShopifyWebhookService } from "./commerce/shopify-webhook-service.js";
+import {
+	type CommunicationRepository,
+	InMemoryCommunicationRepository,
+} from "./communication/communication-repository.js";
+import { CommunicationService } from "./communication/communication-service.js";
+import { PostgresCommunicationRepository } from "./communication/postgres-communication-repository.js";
 import { type AppEnv, LOCAL_API_ORIGINS, loadEnv } from "./config/env.js";
 import type { CustomerAccountRepository } from "./customer/customer-account-repository.js";
 import { CustomerAccountService } from "./customer/customer-account-service.js";
@@ -116,6 +122,8 @@ export interface CreateAppOptions {
 	classEntitlementRepository?: ClassEntitlementRepository;
 	billingRepository?: BillingRepository;
 	billingReconciliationService?: BillingReconciliationService;
+	communicationRepository?: CommunicationRepository;
+	communicationService?: CommunicationService;
 }
 
 function privateTokenMatches(
@@ -406,6 +414,18 @@ export async function createApp(options: CreateAppOptions = {}) {
 	const billingReconciliationService =
 		options.billingReconciliationService ??
 		new BillingReconciliationService(billingRepository);
+	const communicationRepository =
+		options.communicationRepository ??
+		(env.databaseSchema
+			? new PostgresCommunicationRepository(env.databaseSchema)
+			: new InMemoryCommunicationRepository());
+	if (communicationRepository instanceof PostgresCommunicationRepository)
+		await communicationRepository.ensureReady();
+	const communicationService =
+		options.communicationService ??
+		new CommunicationService({
+			repository: communicationRepository,
+		});
 
 	const app = new Hono();
 	const allowedApiOrigins = new Set(env.allowedApiOrigins ?? LOCAL_API_ORIGINS);
@@ -519,6 +539,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 			dropTransferService,
 			registrationChangeRepository,
 			billingReconciliationService,
+			communicationService,
 		}),
 	);
 	app.route(

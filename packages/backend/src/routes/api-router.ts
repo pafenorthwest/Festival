@@ -7,6 +7,7 @@ import { InMemoryBillingRepository } from "../billing/billing-repository.js";
 import type { ClassCheckoutService } from "../checkout/class-checkout-service.js";
 import type { MembershipCheckoutService } from "../checkout/membership-checkout-service.js";
 import type { MembershipStatusService } from "../commerce/membership-status-service.js";
+import type { CommunicationService } from "../communication/communication-service.js";
 import type { CustomerAccountService } from "../customer/customer-account-service.js";
 import type { DropTransferService } from "../registration/drop-transfer-service.js";
 import type { RegistrationChangeRepository } from "../registration/registration-change-repository.js";
@@ -23,6 +24,7 @@ import { buildAdminOrgRoutes } from "./admin-org/admin-org.routes.js";
 import { buildAdminRegistrationRoutes } from "./admin-registration/admin-registration.routes.js";
 import { buildAdminShopifyRoutes } from "./admin-shopify/admin-shopify.routes.js";
 import { buildCatalogRoutes } from "./catalog/catalog.routes.js";
+import { buildCommunicationRoutes } from "./communication.routes.js";
 import { buildCustomerRoutes } from "./customer/customer.routes.js";
 import { buildCustomerChildrenRoutes } from "./customer/customer-children.routes.js";
 import { buildCustomerMembershipRoutes } from "./customer/customer-membership.routes.js";
@@ -52,6 +54,7 @@ export interface ApiRouterOptions {
 	dropTransferService?: DropTransferService;
 	registrationChangeRepository?: RegistrationChangeRepository;
 	billingReconciliationService?: BillingReconciliationService;
+	communicationService?: CommunicationService;
 }
 
 export function buildApiRouter(
@@ -76,6 +79,7 @@ export function buildApiRouter(
 		dropTransferService,
 		registrationChangeRepository,
 		billingReconciliationService,
+		communicationService,
 	} = options;
 	const repository = organizationService.repository;
 
@@ -194,6 +198,15 @@ export function buildApiRouter(
 			billingReconciliationService:
 				billingReconciliationService ??
 				new BillingReconciliationService(new InMemoryBillingRepository()),
+		}),
+	);
+
+	router.route(
+		"/organizations/:slug/communication",
+		buildCommunicationRoutes({
+			authVerifier,
+			repository,
+			communicationService,
 		}),
 	);
 

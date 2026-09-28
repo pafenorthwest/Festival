@@ -593,6 +593,45 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			reference_type TEXT,
 			reference_id TEXT
 		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.message_templates (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			template_key TEXT NOT NULL,
+			channel TEXT NOT NULL CHECK (channel IN ('email', 'sms')),
+			version INTEGER NOT NULL DEFAULT 1,
+			subject TEXT,
+			body TEXT NOT NULL,
+			variables JSONB NOT NULL DEFAULT '[]'::jsonb,
+			is_active BOOLEAN NOT NULL DEFAULT TRUE,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+			UNIQUE (organization_id, template_key, version)
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.message_events (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			event_type TEXT NOT NULL,
+			recipient_destination TEXT NOT NULL,
+			payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+			idempotency_key TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'delivered', 'failed', 'skipped')),
+			created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+			UNIQUE (organization_id, idempotency_key)
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.message_logs (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			event_id UUID REFERENCES ${safeSchema}.message_events (id) ON DELETE CASCADE,
+			template_id UUID REFERENCES ${safeSchema}.message_templates (id) ON DELETE SET NULL,
+			channel TEXT NOT NULL CHECK (channel IN ('email', 'sms')),
+			provider TEXT NOT NULL,
+			status TEXT NOT NULL CHECK (status IN ('delivered', 'failed', 'retry')),
+			provider_message_id TEXT,
+			attempts INTEGER NOT NULL DEFAULT 1,
+			error_message TEXT,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+		);
 
 		CREATE OR REPLACE FUNCTION ${safeSchema}.enforce_shopify_shop_ownership()
 		RETURNS TRIGGER AS $$
@@ -685,6 +724,8 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			ON ${safeSchema}.repertoire_review_items (organization_id, claimed_by_uid);
 		CREATE INDEX IF NOT EXISTS idx_billing_ledger_org_customer_created
 			ON ${safeSchema}.billing_ledger (organization_id, customer_id, created_at);
+		CREATE INDEX IF NOT EXISTS idx_message_logs_org_event
+			ON ${safeSchema}.message_logs (organization_id, event_id);
 	`;
 }
 
