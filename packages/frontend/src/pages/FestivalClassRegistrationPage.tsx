@@ -245,244 +245,266 @@ export function FestivalClassRegistrationPage(
 
 	return (
 		<Show
-			when={props.app.customerSession().authenticated}
+			when={!props.app.isCustomerSessionLoading()}
 			fallback={
-				<section class="panel flow-panel">
-					<header class="admin-page-header">
-						<div>
-							<h2>Register for Festival Classes</h2>
-							<p>Sign in with your parent account to register your children.</p>
-						</div>
-					</header>
-					<Button
-						type="button"
-						onClick={() =>
-							window.location.assign(
-								customerFestivalRegistrationSignInPath(
-									props.slug,
-									props.festivalSlug,
-								),
-							)
-						}
-					>
-						Sign in to Register
-					</Button>
+				<section class="panel flow-panel" aria-busy="true">
+					<p role="status">Checking your sign-in status…</p>
 				</section>
 			}
 		>
-			<section class="panel flow-panel">
-				<header class="admin-page-header">
-					<div>
-						<h2>
-							{festival()?.festival.name ?? "Festival"} Class Registration
-						</h2>
-						<p class="muted">
-							Select child, division, teacher, and class to register.
-						</p>
-					</div>
-				</header>
-
-				<Show when={children().length === 0}>
-					<div class="panel flow-panel" role="alert">
-						<p>
-							No children found in your family account. Please add a child in
-							your account first.
-						</p>
+			<Show
+				when={props.app.customerSession().authenticated}
+				fallback={
+					<section class="panel flow-panel">
+						<header class="admin-page-header">
+							<div>
+								<h2>Register for Festival Classes</h2>
+								<p>
+									Sign in with your parent account to register your children.
+								</p>
+							</div>
+						</header>
 						<Button
 							type="button"
 							onClick={() =>
-								props.app.navigate(`/org/${props.slug}/account/children`)
+								window.location.assign(
+									customerFestivalRegistrationSignInPath(
+										props.slug,
+										props.festivalSlug,
+									),
+								)
 							}
 						>
-							Manage Children
+							Sign in to Register
 						</Button>
-					</div>
-				</Show>
+					</section>
+				}
+			>
+				<section class="panel flow-panel">
+					<header class="admin-page-header">
+						<div>
+							<h2>
+								{festival()?.festival.name ?? "Festival"} Class Registration
+							</h2>
+							<p class="muted">
+								Select child, division, teacher, and class to register.
+							</p>
+						</div>
+					</header>
 
-				<Show when={children().length > 0}>
-					<div class="registration-form-grid" style="display: grid; gap: 1rem;">
-						<label class="field">
-							<span>Performer (Child)</span>
-							<select
-								id="registration-child"
-								name="registration-child"
-								value={selectedChildId()}
-								onChange={(e) => {
-									setSelectedChildId(e.currentTarget.value);
-									setSelectedClassId("");
-								}}
+					<Show when={children().length === 0}>
+						<div class="panel flow-panel" role="alert">
+							<p>
+								No children found in your family account. Please add a child in
+								your account first.
+							</p>
+							<Button
+								type="button"
+								onClick={() =>
+									props.app.navigate(`/org/${props.slug}/account/children`)
+								}
 							>
-								<option value="">Select a child…</option>
-								<For each={children()}>
-									{(child) => (
-										<option value={child.id}>{child.displayName}</option>
-									)}
-								</For>
-							</select>
-						</label>
+								Manage Children
+							</Button>
+						</div>
+					</Show>
 
-						<Show
-							when={
-								selectedChild() && !selectedChild()?.hasCurrentValidAgeSnapshot
-							}
+					<Show when={children().length > 0}>
+						<div
+							class="registration-form-grid"
+							style="display: grid; gap: 1rem;"
 						>
-							<div class="panel flow-panel division-history-note" role="alert">
-								<strong>Age Snapshot Required (90-day validity)</strong>
-								<p>
-									{selectedChild()?.displayName} requires an updated age
-									snapshot for class eligibility. Please provide birthdate to
-									confirm eligibility.
-								</p>
-								<form
-									onSubmit={handleRefreshSnapshot}
-									style="display: flex; gap: 0.5rem; align-items: flex-end;"
-								>
-									<label class="field" style="flex: 1;">
-										<span>Birthdate</span>
-										<input
-											id="registration-birthdate"
-											name="registration-birthdate"
-											type="date"
-											value={birthdayDraft()}
-											onInput={(e) => setBirthdayDraft(e.currentTarget.value)}
-											required
-										/>
-									</label>
-									<Button type="submit" disabled={isRefreshingSnapshot()}>
-										{isRefreshingSnapshot()
-											? "Verifying…"
-											: "Confirm Birthdate"}
-									</Button>
-								</form>
-								<Show when={snapshotError()}>
-									<p class="field-error" role="alert">
-										{snapshotError()}
-									</p>
-								</Show>
-							</div>
-						</Show>
-
-						<Show when={selectedChild()?.hasCurrentValidAgeSnapshot}>
 							<label class="field">
-								<span>Division</span>
+								<span>Performer (Child)</span>
 								<select
-									id="registration-division"
-									name="registration-division"
-									value={selectedDivisionId()}
-									disabled={divisions.loading || Boolean(divisions.error)}
+									id="registration-child"
+									name="registration-child"
+									value={selectedChildId()}
 									onChange={(e) => {
-										setSelectedDivisionId(e.currentTarget.value);
-										setSelectedTeacherId("");
+										setSelectedChildId(e.currentTarget.value);
 										setSelectedClassId("");
 									}}
 								>
-									<option value="">Select a division…</option>
-									<For each={divisions()?.divisions ?? []}>
-										{(div) => <option value={div.id}>{div.displayName}</option>}
+									<option value="">Select a child…</option>
+									<For each={children()}>
+										{(child) => (
+											<option value={child.id}>{child.displayName}</option>
+										)}
 									</For>
 								</select>
-								<Show when={divisions.loading}>
-									<p class="muted">Loading available divisions.</p>
-								</Show>
-								<Show when={divisions.error}>
-									<p class="field-error" role="alert">
-										Available divisions could not be loaded. Please try again.
-									</p>
-								</Show>
 							</label>
 
-							<Show when={selectedDivisionId()}>
+							<Show
+								when={
+									selectedChild() &&
+									!selectedChild()?.hasCurrentValidAgeSnapshot
+								}
+							>
+								<div
+									class="panel flow-panel division-history-note"
+									role="alert"
+								>
+									<strong>Age Snapshot Required (90-day validity)</strong>
+									<p>
+										{selectedChild()?.displayName} requires an updated age
+										snapshot for class eligibility. Please provide birthdate to
+										confirm eligibility.
+									</p>
+									<form
+										onSubmit={handleRefreshSnapshot}
+										style="display: flex; gap: 0.5rem; align-items: flex-end;"
+									>
+										<label class="field" style="flex: 1;">
+											<span>Birthdate</span>
+											<input
+												id="registration-birthdate"
+												name="registration-birthdate"
+												type="date"
+												value={birthdayDraft()}
+												onInput={(e) => setBirthdayDraft(e.currentTarget.value)}
+												required
+											/>
+										</label>
+										<Button type="submit" disabled={isRefreshingSnapshot()}>
+											{isRefreshingSnapshot()
+												? "Verifying…"
+												: "Confirm Birthdate"}
+										</Button>
+									</form>
+									<Show when={snapshotError()}>
+										<p class="field-error" role="alert">
+											{snapshotError()}
+										</p>
+									</Show>
+								</div>
+							</Show>
+
+							<Show when={selectedChild()?.hasCurrentValidAgeSnapshot}>
 								<label class="field">
-									<span>Teacher</span>
+									<span>Division</span>
 									<select
-										id="registration-teacher"
-										name="registration-teacher"
-										value={selectedTeacherId()}
+										id="registration-division"
+										name="registration-division"
+										value={selectedDivisionId()}
+										disabled={divisions.loading || Boolean(divisions.error)}
 										onChange={(e) => {
-											setSelectedTeacherId(e.currentTarget.value);
+											setSelectedDivisionId(e.currentTarget.value);
+											setSelectedTeacherId("");
 											setSelectedClassId("");
 										}}
 									>
-										<option value="">Select teacher…</option>
-										<For each={teachers()}>
-											{(t) => <option value={t.id}>{t.name}</option>}
-										</For>
-									</select>
-								</label>
-							</Show>
-
-							<Show when={selectedTeacherId()}>
-								<label class="field">
-									<span>Eligible Class</span>
-									<select
-										id="registration-class"
-										name="registration-class"
-										value={selectedClassId()}
-										onChange={(e) => setSelectedClassId(e.currentTarget.value)}
-									>
-										<option value="">Select an eligible class…</option>
-										<For each={eligibleClasses()}>
-											{(c) => (
-												<option value={c.id}>
-													{c.displayName} · ${c.price} ({c.minimumAge}–
-													{c.maximumAge} yrs)
-												</option>
+										<option value="">Select a division…</option>
+										<For each={divisions()?.divisions ?? []}>
+											{(div) => (
+												<option value={div.id}>{div.displayName}</option>
 											)}
 										</For>
 									</select>
+									<Show when={divisions.loading}>
+										<p class="muted">Loading available divisions.</p>
+									</Show>
+									<Show when={divisions.error}>
+										<p class="field-error" role="alert">
+											Available divisions could not be loaded. Please try again.
+										</p>
+									</Show>
 								</label>
-							</Show>
 
-							<Show when={selectedClass()}>
-								<label class="field">
-									<span>Accompanist</span>
-									<select
-										id="registration-accompanist"
-										name="registration-accompanist"
-										value={selectedAccompanistId()}
-										onChange={(e) =>
-											setSelectedAccompanistId(e.currentTarget.value)
+								<Show when={selectedDivisionId()}>
+									<label class="field">
+										<span>Teacher</span>
+										<select
+											id="registration-teacher"
+											name="registration-teacher"
+											value={selectedTeacherId()}
+											onChange={(e) => {
+												setSelectedTeacherId(e.currentTarget.value);
+												setSelectedClassId("");
+											}}
+										>
+											<option value="">Select teacher…</option>
+											<For each={teachers()}>
+												{(t) => <option value={t.id}>{t.name}</option>}
+											</For>
+										</select>
+									</label>
+								</Show>
+
+								<Show when={selectedTeacherId()}>
+									<label class="field">
+										<span>Eligible Class</span>
+										<select
+											id="registration-class"
+											name="registration-class"
+											value={selectedClassId()}
+											onChange={(e) =>
+												setSelectedClassId(e.currentTarget.value)
+											}
+										>
+											<option value="">Select an eligible class…</option>
+											<For each={eligibleClasses()}>
+												{(c) => (
+													<option value={c.id}>
+														{c.displayName} · ${c.price} ({c.minimumAge}–
+														{c.maximumAge} yrs)
+													</option>
+												)}
+											</For>
+										</select>
+									</label>
+								</Show>
+
+								<Show when={selectedClass()}>
+									<label class="field">
+										<span>Accompanist</span>
+										<select
+											id="registration-accompanist"
+											name="registration-accompanist"
+											value={selectedAccompanistId()}
+											onChange={(e) =>
+												setSelectedAccompanistId(e.currentTarget.value)
+											}
+										>
+											<option value="">None (No accompanist needed)</option>
+											<For each={accompanists()}>
+												{(acc) => <option value={acc.id}>{acc.name}</option>}
+											</For>
+										</select>
+									</label>
+
+									<FestivalRegistrationCartCard
+										childName={selectedChild()?.displayName ?? null}
+										divisionName={
+											divisions()?.divisions.find(
+												(d) => d.id === selectedDivisionId(),
+											)?.displayName ?? null
 										}
-									>
-										<option value="">None (No accompanist needed)</option>
-										<For each={accompanists()}>
-											{(acc) => <option value={acc.id}>{acc.name}</option>}
-										</For>
-									</select>
-								</label>
-
-								<FestivalRegistrationCartCard
-									childName={selectedChild()?.displayName ?? null}
-									divisionName={
-										divisions()?.divisions.find(
-											(d) => d.id === selectedDivisionId(),
-										)?.displayName ?? null
-									}
-									teacherName={selectedTeacher()?.name ?? null}
-									className={selectedClass()?.displayName ?? null}
-									classPrice={selectedClass()?.price ?? null}
-									pieces={pieces()}
-									accompanistName={selectedAccompanist()?.name ?? null}
-									isValid={isReadyForCheckout()}
-									isSubmitting={isSubmittingCheckout()}
-									error={checkoutError()}
-									onOpenRepertoireModal={() => setIsRepertoireModalOpen(true)}
-									onSubmitCheckout={handleCheckout}
-								/>
+										teacherName={selectedTeacher()?.name ?? null}
+										className={selectedClass()?.displayName ?? null}
+										classPrice={selectedClass()?.price ?? null}
+										pieces={pieces()}
+										accompanistName={selectedAccompanist()?.name ?? null}
+										isValid={isReadyForCheckout()}
+										isSubmitting={isSubmittingCheckout()}
+										error={checkoutError()}
+										onOpenRepertoireModal={() => setIsRepertoireModalOpen(true)}
+										onSubmitCheckout={handleCheckout}
+									/>
+								</Show>
 							</Show>
-						</Show>
-					</div>
-				</Show>
-			</section>
+						</div>
+					</Show>
+				</section>
 
-			<Show when={selectedClass()}>
-				<FestivalRepertoireModal
-					isOpen={isRepertoireModalOpen()}
-					maxPieces={selectedClass()?.maximumPerformancePieces ?? 1}
-					initialPieces={pieces()}
-					onSave={(saved) => setPieces(saved)}
-					onClose={() => setIsRepertoireModalOpen(false)}
-				/>
+				<Show when={selectedClass()}>
+					<FestivalRepertoireModal
+						isOpen={isRepertoireModalOpen()}
+						maxPieces={selectedClass()?.maximumPerformancePieces ?? 1}
+						initialPieces={pieces()}
+						onSave={(saved) => setPieces(saved)}
+						onClose={() => setIsRepertoireModalOpen(false)}
+					/>
+				</Show>
 			</Show>
 		</Show>
 	);

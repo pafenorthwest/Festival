@@ -165,6 +165,10 @@ describe("Festival Class Registration Page workflow", () => {
 	});
 
 	it("requires customer authentication and handles sign in", () => {
+		expect(regPage).toContain("props.app.isCustomerSessionLoading()");
+		expect(regPage).toContain(
+			'<p role="status">Checking your sign-in status…</p>',
+		);
 		expect(regPage).toContain("props.app.customerSession()");
 		expect(regPage).toContain("customerFestivalRegistrationSignInPath");
 		expect(regPage).toContain("Register for Festival Classes");
