@@ -2,6 +2,7 @@ import { Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { Button } from "../components/Button.js";
 import {
+	buildOrgAdminCheckoutRecoveryPath,
 	buildOrgAdminDivisionsPath,
 	buildOrgAdminFestivalsPath,
 	buildOrgAdminIntegrationsPath,
@@ -161,6 +162,20 @@ export function AdminHomePage(props: AdminHomePageProps) {
 				>
 					<strong>Volunteers</strong>
 					<span>Review volunteer roles and shift coverage.</span>
+				</button>
+				<button
+					type="button"
+					class="admin-workflow-card checkout-recovery-card"
+					disabled={!props.app.isAdminMember()}
+					onClick={() => {
+						if (!props.app.isAdminMember()) return;
+						props.app.navigate(
+							buildOrgAdminCheckoutRecoveryPath(props.app.slug),
+						);
+					}}
+				>
+					<strong>Checkout Recovery</strong>
+					<span>Recover and manage interrupted checkout sessions.</span>
 				</button>
 			</div>
 		</section>

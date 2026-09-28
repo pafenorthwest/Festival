@@ -165,7 +165,8 @@ export function useFestivalLifecycle(
 				currentRoute.kind === "org-admin-roster" ||
 				currentRoute.kind === "org-music-review" ||
 				currentRoute.kind === "org-billing" ||
-				currentRoute.kind === "org-communications") &&
+				currentRoute.kind === "org-communications" ||
+				currentRoute.kind === "org-admin-checkout-recovery") &&
 			currentRoute.slug &&
 			state.firebaseUser()
 		) {
