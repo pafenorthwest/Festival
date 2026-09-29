@@ -1500,9 +1500,23 @@ form.shopify-integration-card {
 	align-items: center;
 }
 
-.coverage-gaps-table .listing-table-header,
-.coverage-gaps-table .listing-table-row {
-	grid-template-columns: minmax(0, 1.2fr) 7rem 6rem minmax(0, 1.2fr);
+.coverage-metrics-filter {
+	border: none;
+	cursor: pointer;
+}
+
+.coverage-metrics-filter[aria-pressed="true"] {
+	outline: 2px solid var(--bullet-accent-strong);
+	outline-offset: 2px;
+}
+
+.coverage-slots-table .listing-table-header,
+.coverage-slots-table .listing-table-row {
+	grid-template-columns: minmax(0, 1.2fr) 6rem 5rem minmax(0, 1.2fr) 6rem;
+}
+
+.coverage-slots-table .listing-table-row .badge {
+	border-radius: 4px;
 }
 
 .volunteer-schedule-table .listing-table-header,

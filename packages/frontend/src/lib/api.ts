@@ -59,6 +59,8 @@ import type {
 	SaveShopifyIntegrationInput,
 	SaveShopifyIntegrationResponse,
 	SessionResponse,
+	ShiftCoverageEntry,
+	ShiftCoverageStatus,
 	ShopifyIntegrationDiagnosticsResponse,
 	ShopifyIntegrationSettingsResponse,
 	UpdateCustomerProfileInput,
@@ -132,6 +134,8 @@ export type {
 	RepertoireReviewQueueSummary,
 	RepertoireReviewStatus,
 	ResolveFlagInput,
+	ShiftCoverageEntry,
+	ShiftCoverageStatus,
 	VolunteerAssignment,
 	VolunteerRecord,
 };
