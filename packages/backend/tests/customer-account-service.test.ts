@@ -755,6 +755,26 @@ describe("CustomerAccountService", () => {
 		).rejects.toThrow("Return target");
 	});
 
+	it("preserves the exact checkout recovery return through OAuth and rejects invalid tokens", async () => {
+		const f = await fixture();
+		const recoveryReturn = "/org/festival/checkout-recovery/valid-token_123";
+		const authorization = await f.begin(recoveryReturn);
+		const result = await f.service.callback(
+			authorization.searchParams.get("state") ?? "",
+			"code",
+		);
+		expect(result.returnTo).toBe(recoveryReturn);
+		await expect(
+			f.service.start("festival", "/org/festival/checkout-recovery/bad token"),
+		).rejects.toThrow("Return target");
+		await expect(
+			f.service.start(
+				"festival",
+				"/org/festival/checkout-recovery/token?extra=1",
+			),
+		).rejects.toThrow("Return target");
+	});
+
 	it("preserves one bounded local offering in one-time tenant OAuth state", async () => {
 		const f = await fixture();
 		const authUrl = await f.begin(undefined, "offering_123");

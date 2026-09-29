@@ -1,6 +1,8 @@
 import type {
 	AcceptInviteInput,
 	AddCatalogWorkInput,
+	AdminCustomerSearchResponse,
+	AdminCustomerSearchResult,
 	BillingAdjustment,
 	BillingAdjustmentType,
 	BillingAdjustmentValidationResult,
@@ -138,6 +140,7 @@ import {
 	validateUpdateMessageTemplateInput,
 } from "@festival/common";
 import { getFirebaseAuth } from "./firebase-auth.js";
+import { buildOrgCheckoutRecoveryPath } from "./routes.js";
 
 const API_BASE = import.meta.env.FRONT_API_BASE ?? "";
 
@@ -182,6 +185,8 @@ export interface CreateVolunteerShiftInput {
 
 export type {
 	AddCatalogWorkInput,
+	AdminCustomerSearchResponse,
+	AdminCustomerSearchResult,
 	BillingAdjustment,
 	BillingAdjustmentType,
 	BillingAdjustmentValidationResult,
@@ -2096,4 +2101,182 @@ export async function triggerCommunicationEvent(
 		},
 		token,
 	);
+}
+
+export interface AdminCheckoutIntent {
+	id: string;
+	correlationId: string;
+	organizationId: string;
+	customerId: string;
+	sessionId: string;
+	idempotencyKey: string;
+	intentType: string;
+	offeringId: string | null;
+	entitlementClass: string | null;
+	durationDays: number | null;
+	festivalClassId: string | null;
+	childId: string | null;
+	shopifyProductGid: string;
+	shopifyVariantGid: string;
+	policyVersion: string | null;
+	divisionId: string | null;
+	divisionNameSnapshot: string | null;
+	staffAccessConsent: boolean;
+	amount: string;
+	currencyCode: string;
+	cartReference: string | null;
+	status: string;
+	expiresAtIso: string;
+	createdAtIso: string;
+}
+
+export interface AdminCheckoutIntentListResponse {
+	intents: AdminCheckoutIntent[];
+}
+
+export interface RecoveryReviewDto {
+	recoveryRequest: {
+		id: string;
+		status:
+			| "pending"
+			| "consumed"
+			| "expired"
+			| "cancelled"
+			| "invalidated"
+			| string;
+		expiresAtIso: string;
+		createdAtIso: string;
+	};
+	sourceIntent: AdminCheckoutIntent;
+	offering: {
+		id: string;
+		name: string;
+		available: boolean;
+		price: {
+			amount: string;
+			currencyCode: string;
+		};
+	} | null;
+	division: {
+		id: string;
+		displayName: string;
+	} | null;
+}
+
+export interface RecoveryCheckoutResult {
+	checkoutUrl: string;
+}
+
+export interface AdminCheckoutRecoveryResult {
+	recoveryUrl: string;
+	rawToken: string;
+	tokenHash: string;
+	recoveryRequest: unknown;
+}
+
+export async function searchAdminCustomers(
+	slug: string,
+	query: string,
+	idToken?: string,
+): Promise<AdminCustomerSearchResponse> {
+	const token = await resolveAuthToken(idToken);
+	const params = new URLSearchParams({ query });
+	return requestJson<AdminCustomerSearchResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/customers?${params.toString()}`,
+		undefined,
+		token,
+	);
+}
+
+export async function getAdminCustomerCheckoutIntents(
+	slug: string,
+	customerId: string,
+	idToken?: string,
+): Promise<AdminCheckoutIntentListResponse> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<AdminCheckoutIntentListResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/customers/${encodeURIComponent(customerId)}/checkout-intents`,
+		undefined,
+		token,
+	);
+}
+
+export async function invalidateAdminCheckoutIntent(
+	slug: string,
+	intentId: string,
+	idToken?: string,
+	reason?: string,
+): Promise<{ success: boolean; intentId: string }> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<{ success: boolean; intentId: string }>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/checkout-intents/${encodeURIComponent(intentId)}/invalidate`,
+		{
+			method: "POST",
+			headers: {
+				"X-CSRF-Token": token || "admin-csrf",
+			},
+			body: JSON.stringify(reason ? { reason } : {}),
+		},
+		token,
+	);
+}
+
+export async function recoverAdminCheckoutIntent(
+	slug: string,
+	intentId: string,
+	idToken?: string,
+	options?: { customerId?: string; expiresInHours?: number },
+): Promise<AdminCheckoutRecoveryResult> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<AdminCheckoutRecoveryResult>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/checkout-intents/${encodeURIComponent(intentId)}/recover`,
+		{
+			method: "POST",
+			headers: {
+				"X-CSRF-Token": token || "admin-csrf",
+			},
+			body: JSON.stringify(options ?? {}),
+		},
+		token,
+	);
+}
+
+export async function getCustomerCheckoutRecoveryReview(
+	slug: string,
+	token: string,
+): Promise<RecoveryReviewDto> {
+	return requestJson<RecoveryReviewDto>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/checkout-recovery/${encodeURIComponent(token)}`,
+		undefined,
+		undefined,
+		"",
+	);
+}
+
+export async function resumeCustomerCheckoutRecovery(
+	slug: string,
+	token: string,
+	csrfToken?: string,
+): Promise<RecoveryCheckoutResult> {
+	const headers: Record<string, string> = {};
+	if (csrfToken) {
+		headers["X-CSRF-Token"] = csrfToken;
+	}
+	return requestJson<RecoveryCheckoutResult>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/checkout-recovery/${encodeURIComponent(token)}/checkout`,
+		{
+			method: "POST",
+			headers,
+		},
+		undefined,
+		"",
+	);
+}
+
+export function customerCheckoutRecoverySignInPath(
+	slug: string,
+	token: string,
+): string {
+	const returnTo = buildOrgCheckoutRecoveryPath(slug, token);
+	return `/api/organizations/${encodeURIComponent(slug)}/customer-auth/start?returnTo=${encodeURIComponent(returnTo)}`;
 }

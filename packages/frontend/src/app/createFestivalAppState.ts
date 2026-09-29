@@ -47,6 +47,7 @@ const ADMIN_ROUTE_KINDS = [
 	"org-music-review",
 	"org-billing",
 	"org-communications",
+	"org-admin-checkout-recovery",
 ] as const;
 
 export const INVITE_FEEDBACK_DURATION_MS = 2200;
@@ -271,7 +272,8 @@ export function createFestivalAppState() {
 			route().kind === "org-admin-volunteers" ||
 			route().kind === "org-music-review" ||
 			route().kind === "org-billing" ||
-			route().kind === "org-communications",
+			route().kind === "org-communications" ||
+			route().kind === "org-admin-checkout-recovery",
 	);
 	const adminBreadcrumb = createMemo(() => {
 		switch (route().kind) {
@@ -302,6 +304,8 @@ export function createFestivalAppState() {
 				return "Admin > Billing Reconciliation";
 			case "org-communications":
 				return "Admin > Communications";
+			case "org-admin-checkout-recovery":
+				return "Admin > Checkout Recovery";
 			default:
 				return "Admin";
 		}
@@ -445,6 +449,11 @@ export function createFestivalAppState() {
 		clearTimers,
 		closeSignInModal,
 		customerSession,
+		get slug() {
+			const r = route();
+			if ("slug" in r && typeof r.slug === "string") return r.slug;
+			return sessionMembership()?.organizationSlug ?? "";
+		},
 		createdInvites,
 		createdOrganizationSlug,
 		createDivisionAttempted,

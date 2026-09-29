@@ -7,6 +7,7 @@ import { SignInModal } from "./components/SignInModal.js";
 import { isOrganizationPageRoute } from "./lib/routes.js";
 import { AccompanistMembershipPage } from "./pages/AccompanistMembershipPage.js";
 import { AdminAccompanistsPage } from "./pages/AdminAccompanistsPage.js";
+import { AdminCheckoutRecoveryPage } from "./pages/AdminCheckoutRecoveryPage.js";
 import { AdminDivisionsPage } from "./pages/AdminDivisionsPage.js";
 import { AdminFestivalsPage } from "./pages/AdminFestivalsPage.js";
 import { AdminHomePage } from "./pages/AdminHomePage.js";
@@ -21,6 +22,7 @@ import { CreateOrganizationPage } from "./pages/CreateOrganizationPage.js";
 import { CustomerAccountContactPage } from "./pages/CustomerAccountContactPage.js";
 import { CustomerAccountMembershipsPage } from "./pages/CustomerAccountMembershipsPage.js";
 import { CustomerAccountOrdersPage } from "./pages/CustomerAccountOrdersPage.js";
+import { CustomerCheckoutRecoveryPage } from "./pages/CustomerCheckoutRecoveryPage.js";
 import { CustomerChildrenPage } from "./pages/CustomerChildrenPage.js";
 import { FestivalAdminClassesPage } from "./pages/FestivalAdminClassesPage.js";
 import { FestivalAdminDashboardPage } from "./pages/FestivalAdminDashboardPage.js";
@@ -211,6 +213,12 @@ export default function App() {
 								app={app}
 								slug={(app.route() as { slug: string }).slug}
 							/>
+						</Match>
+						<Match when={app.route().kind === "org-admin-checkout-recovery"}>
+							<AdminCheckoutRecoveryPage app={app} />
+						</Match>
+						<Match when={app.route().kind === "org-checkout-recovery"}>
+							<CustomerCheckoutRecoveryPage app={app} />
 						</Match>
 					</Switch>
 				</div>

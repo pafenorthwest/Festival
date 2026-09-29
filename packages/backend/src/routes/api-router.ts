@@ -4,6 +4,8 @@ import type { ApiVariables } from "../auth/tenant-context.js";
 import type { AuthVerifier } from "../auth/types.js";
 import { BillingReconciliationService } from "../billing/billing-reconciliation-service.js";
 import { InMemoryBillingRepository } from "../billing/billing-repository.js";
+import { InMemoryCheckoutRecoveryRepository } from "../checkout/checkout-recovery-repository.js";
+import { CheckoutRecoveryService } from "../checkout/checkout-recovery-service.js";
 import type { ClassCheckoutService } from "../checkout/class-checkout-service.js";
 import type { MembershipCheckoutService } from "../checkout/membership-checkout-service.js";
 import type { MembershipStatusService } from "../commerce/membership-status-service.js";
@@ -20,6 +22,7 @@ import type { ShopifyIntegrationService } from "../shopify/shopify-integration-s
 import type { ShopifyMembershipProductService } from "../shopify/shopify-membership-product-service.js";
 import type { VolunteerRepository } from "../volunteers/volunteer-repository.js";
 import { buildAdminBillingRoutes } from "./admin-billing.routes.js";
+import { buildAdminCheckoutRecoveryRoutes } from "./admin-checkout-recovery.routes.js";
 import { buildAdminOrgRoutes } from "./admin-org/admin-org.routes.js";
 import { buildAdminRegistrationRoutes } from "./admin-registration/admin-registration.routes.js";
 import { buildAdminShopifyRoutes } from "./admin-shopify/admin-shopify.routes.js";
@@ -30,6 +33,7 @@ import { buildCustomerChildrenRoutes } from "./customer/customer-children.routes
 import { buildCustomerMembershipRoutes } from "./customer/customer-membership.routes.js";
 import { buildCustomerRegistrationRoutes } from "./customer/customer-registration.routes.js";
 import { buildCustomerAuthRoutes } from "./customer-auth/customer-auth.routes.js";
+import { buildCustomerCheckoutRecoveryRoutes } from "./customer-checkout-recovery.routes.js";
 import { buildIdentityRoutes } from "./identity/identity.routes.js";
 import { buildOrgInfoRoutes } from "./org-info/org-info.routes.js";
 import { buildRepertoireRoutes } from "./repertoire.routes.js";
@@ -55,6 +59,7 @@ export interface ApiRouterOptions {
 	registrationChangeRepository?: RegistrationChangeRepository;
 	billingReconciliationService?: BillingReconciliationService;
 	communicationService?: CommunicationService;
+	checkoutRecoveryService?: CheckoutRecoveryService;
 }
 
 export function buildApiRouter(
@@ -80,6 +85,7 @@ export function buildApiRouter(
 		registrationChangeRepository,
 		billingReconciliationService,
 		communicationService,
+		checkoutRecoveryService: providedRecoveryService,
 	} = options;
 	const repository = organizationService.repository;
 
@@ -111,6 +117,28 @@ export function buildApiRouter(
 			shopifyIntegrationDiagnosticService,
 			shopifyMembershipProductService,
 			customerAccountService,
+		}),
+	);
+	const recoveryService =
+		providedRecoveryService ??
+		new CheckoutRecoveryService(
+			new InMemoryCheckoutRecoveryRepository(),
+			repository,
+		);
+	router.route(
+		"/",
+		buildAdminCheckoutRecoveryRoutes({
+			authVerifier,
+			repository,
+			checkoutRecoveryService: recoveryService,
+		}),
+	);
+	router.route(
+		"/",
+		buildCustomerCheckoutRecoveryRoutes({
+			repository,
+			customerAccountService,
+			checkoutRecoveryService: recoveryService,
 		}),
 	);
 

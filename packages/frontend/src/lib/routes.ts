@@ -28,7 +28,20 @@ export type AppRoute =
 	| { kind: "org-admin-volunteers"; slug: string }
 	| { kind: "org-music-review"; slug: string }
 	| { kind: "org-billing"; slug: string }
-	| { kind: "org-communications"; slug: string };
+	| { kind: "org-communications"; slug: string }
+	| AdminCheckoutRecoveryRoute
+	| CustomerCheckoutRecoveryRoute;
+
+export type AdminCheckoutRecoveryRoute = {
+	kind: "org-admin-checkout-recovery";
+	slug: string;
+};
+
+export type CustomerCheckoutRecoveryRoute = {
+	kind: "org-checkout-recovery";
+	slug: string;
+	token: string;
+};
 
 export function buildOrgBillingPath(slug: string): string {
 	return `/organizations/${slug}/billing`;
@@ -138,6 +151,17 @@ export function buildOrgCommunicationsPath(slug: string): string {
 	return `/organizations/${slug}/communications`;
 }
 
+export function buildOrgAdminCheckoutRecoveryPath(slug: string): string {
+	return `/org/${slug}/admin/checkout-recovery`;
+}
+
+export function buildOrgCheckoutRecoveryPath(
+	slug: string,
+	token: string,
+): string {
+	return `/org/${slug}/checkout-recovery/${token}`;
+}
+
 export function buildInvitePath(token: string): string {
 	return `/invite/${token}`;
 }
@@ -158,7 +182,8 @@ export function isOrganizationPageRoute(route: AppRoute): boolean {
 		route.kind === "org-customer-account-memberships" ||
 		route.kind === "org-customer-account-contact" ||
 		route.kind === "org-customer-account-children" ||
-		route.kind === "org-customer-account-orders"
+		route.kind === "org-customer-account-orders" ||
+		route.kind === "org-checkout-recovery"
 	);
 }
 
@@ -397,6 +422,27 @@ export function parseRoute(pathname: string): AppRoute {
 		return {
 			kind: "org-communications",
 			slug: orgCommunicationsMatch[1] ?? "",
+		};
+	}
+
+	const orgAdminCheckoutRecoveryMatch = pathname.match(
+		/^\/org\/([^/]+)\/admin\/checkout-recovery\/?$/,
+	);
+	if (orgAdminCheckoutRecoveryMatch) {
+		return {
+			kind: "org-admin-checkout-recovery",
+			slug: orgAdminCheckoutRecoveryMatch[1] ?? "",
+		};
+	}
+
+	const orgCheckoutRecoveryMatch = pathname.match(
+		/^\/org\/([^/]+)\/checkout-recovery\/([^/]+)\/?$/,
+	);
+	if (orgCheckoutRecoveryMatch) {
+		return {
+			kind: "org-checkout-recovery",
+			slug: orgCheckoutRecoveryMatch[1] ?? "",
+			token: orgCheckoutRecoveryMatch[2] ?? "",
 		};
 	}
 
