@@ -25,6 +25,11 @@ import { MembershipCheckoutService } from "./checkout/membership-checkout-servic
 import { PostgresCheckoutRepository } from "./checkout/postgres-checkout-repository.js";
 import { ShopifyMembershipCheckoutClient } from "./checkout/shopify-membership-checkout-client.js";
 import {
+	type ClassEntitlementRepository,
+	InMemoryClassEntitlementRepository,
+	PostgresClassEntitlementRepository,
+} from "./commerce/class-entitlement-repository.js";
+import {
 	InMemoryMembershipCommerceRepository,
 	type MembershipCommerceRepository,
 } from "./commerce/membership-commerce-repository.js";
@@ -36,6 +41,12 @@ import { type AppEnv, LOCAL_API_ORIGINS, loadEnv } from "./config/env.js";
 import type { CustomerAccountRepository } from "./customer/customer-account-repository.js";
 import { CustomerAccountService } from "./customer/customer-account-service.js";
 import { PostgresCustomerAccountRepository } from "./customer/postgres-customer-account-repository.js";
+import { DropTransferService } from "./registration/drop-transfer-service.js";
+import {
+	InMemoryRegistrationChangeRepository,
+	PostgresRegistrationChangeRepository,
+	type RegistrationChangeRepository,
+} from "./registration/registration-change-repository.js";
 import {
 	InMemoryRepertoireRepository,
 	PostgresRepertoireRepository,
@@ -94,6 +105,9 @@ export interface CreateAppOptions {
 	repertoireRepository?: RepertoireRepository;
 	customClaimsWriter?: CustomClaimsWriter;
 	firebaseClaimsReconciliationService?: FirebaseClaimsReconciliationService;
+	dropTransferService?: DropTransferService;
+	registrationChangeRepository?: RegistrationChangeRepository;
+	classEntitlementRepository?: ClassEntitlementRepository;
 }
 
 function privateTokenMatches(
@@ -351,6 +365,29 @@ export async function createApp(options: CreateAppOptions = {}) {
 			: new InMemoryRepertoireRepository());
 	if (repertoireRepository instanceof PostgresRepertoireRepository)
 		await repertoireRepository.ensureReady();
+	const classEntitlementRepository =
+		options.classEntitlementRepository ??
+		(env.databaseSchema
+			? new PostgresClassEntitlementRepository(env.databaseSchema)
+			: new InMemoryClassEntitlementRepository());
+	if (classEntitlementRepository instanceof PostgresClassEntitlementRepository)
+		await classEntitlementRepository.ensureReady();
+	const registrationChangeRepository =
+		options.registrationChangeRepository ??
+		(env.databaseSchema
+			? new PostgresRegistrationChangeRepository(env.databaseSchema)
+			: new InMemoryRegistrationChangeRepository());
+	if (
+		registrationChangeRepository instanceof PostgresRegistrationChangeRepository
+	)
+		await registrationChangeRepository.ensureReady();
+	const dropTransferService =
+		options.dropTransferService ??
+		new DropTransferService({
+			entitlements: classEntitlementRepository,
+			changes: registrationChangeRepository,
+			classQuery: repository,
+		});
 
 	const app = new Hono();
 	const allowedApiOrigins = new Set(env.allowedApiOrigins ?? LOCAL_API_ORIGINS);
@@ -461,6 +498,8 @@ export async function createApp(options: CreateAppOptions = {}) {
 			classCheckoutService,
 			customClaimsWriter,
 			repertoireRepository,
+			dropTransferService,
+			registrationChangeRepository,
 		}),
 	);
 	app.route(

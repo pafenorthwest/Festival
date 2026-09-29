@@ -92,7 +92,7 @@ export function AdminMembershipProductsPage(
 				route.slug,
 				offeringId,
 			);
-			await props.app.reloadMembershipProducts();
+			await props.app.loadMembershipProducts(route.slug);
 		} catch {
 			setRetirementError("Membership offering could not be retired.");
 		} finally {

@@ -19,7 +19,7 @@ function schemaName(value: string) {
 }
 
 export interface ClassEntitlementFilter {
-	organizationId: string;
+	organizationId?: string;
 	festivalId?: string;
 	festivalClassId?: string;
 	parentCustomerId?: string;
@@ -51,6 +51,17 @@ export interface ClassEntitlementRepository {
 		organizationId: string,
 		id: string,
 		status: ClassEntitlementStatus,
+		expectedStatus?: ClassEntitlementStatus | ClassEntitlementStatus[],
+	): Promise<ClassEntitlement | null>;
+	updateClassEntitlement(
+		organizationId: string,
+		id: string,
+		updates: {
+			festivalClassId?: string;
+			status?: ClassEntitlementStatus;
+			expectedStatus?: ClassEntitlementStatus | ClassEntitlementStatus[];
+		},
+		expectedStatus?: ClassEntitlementStatus | ClassEntitlementStatus[],
 	): Promise<ClassEntitlement | null>;
 }
 
@@ -116,7 +127,11 @@ export class InMemoryClassEntitlementRepository
 	): Promise<ClassEntitlement[]> {
 		return [...this.entitlements.values()]
 			.filter((record) => {
-				if (record.organizationId !== filter.organizationId) return false;
+				if (
+					filter.organizationId &&
+					record.organizationId !== filter.organizationId
+				)
+					return false;
 				if (filter.festivalId && record.festivalId !== filter.festivalId)
 					return false;
 				if (
@@ -161,13 +176,49 @@ export class InMemoryClassEntitlementRepository
 		organizationId: string,
 		id: string,
 		status: ClassEntitlementStatus,
+		expectedStatus?: ClassEntitlementStatus | ClassEntitlementStatus[],
 	): Promise<ClassEntitlement | null> {
-		if (!isClassEntitlementStatus(status)) {
+		return this.updateClassEntitlement(
+			organizationId,
+			id,
+			{ status },
+			expectedStatus,
+		);
+	}
+
+	async updateClassEntitlement(
+		organizationId: string,
+		id: string,
+		updates: {
+			festivalClassId?: string;
+			status?: ClassEntitlementStatus;
+			expectedStatus?: ClassEntitlementStatus | ClassEntitlementStatus[];
+		},
+		expectedStatus?: ClassEntitlementStatus | ClassEntitlementStatus[],
+	): Promise<ClassEntitlement | null> {
+		if (
+			updates.status !== undefined &&
+			!isClassEntitlementStatus(updates.status)
+		) {
 			throw new Error("Class entitlement status is invalid.");
 		}
 		const record = this.entitlements.get(id);
 		if (!record || record.organizationId !== organizationId) return null;
-		record.status = status;
+		const expectedCondition = expectedStatus ?? updates.expectedStatus;
+		if (expectedCondition !== undefined) {
+			const expected = Array.isArray(expectedCondition)
+				? expectedCondition
+				: [expectedCondition];
+			if (!expected.includes(record.status)) {
+				return null;
+			}
+		}
+		if (updates.status !== undefined) {
+			record.status = updates.status;
+		}
+		if (updates.festivalClassId !== undefined) {
+			record.festivalClassId = updates.festivalClassId;
+		}
 		record.updatedAt = this.now().toISOString();
 		return { ...record };
 	}
@@ -263,8 +314,12 @@ export class PostgresClassEntitlementRepository
 		filter: ClassEntitlementFilter,
 	): Promise<ClassEntitlement[]> {
 		await this.ensureReady();
-		const conditions: string[] = ["organization_id = $1"];
-		const params: unknown[] = [filter.organizationId];
+		const conditions: string[] = [];
+		const params: unknown[] = [];
+		if (filter.organizationId) {
+			params.push(filter.organizationId);
+			conditions.push(`organization_id = $${params.length}`);
+		}
 		if (filter.festivalId) {
 			params.push(filter.festivalId);
 			conditions.push(`festival_id = $${params.length}`);
@@ -285,10 +340,12 @@ export class PostgresClassEntitlementRepository
 			params.push(filter.status);
 			conditions.push(`status = $${params.length}`);
 		}
+		const whereClause =
+			conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 		const rows = (await sql.unsafe(
 			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text
 			FROM ${this.schema}.class_entitlements
-			WHERE ${conditions.join(" AND ")}
+			${whereClause}
 			ORDER BY created_at DESC`,
 			params,
 		)) as Array<Record<string, unknown>>;
@@ -327,17 +384,55 @@ export class PostgresClassEntitlementRepository
 		organizationId: string,
 		id: string,
 		status: ClassEntitlementStatus,
+		expectedStatus?: ClassEntitlementStatus | ClassEntitlementStatus[],
+	): Promise<ClassEntitlement | null> {
+		return this.updateClassEntitlement(
+			organizationId,
+			id,
+			{ status },
+			expectedStatus,
+		);
+	}
+
+	async updateClassEntitlement(
+		organizationId: string,
+		id: string,
+		updates: {
+			festivalClassId?: string;
+			status?: ClassEntitlementStatus;
+			expectedStatus?: ClassEntitlementStatus | ClassEntitlementStatus[];
+		},
+		expectedStatus?: ClassEntitlementStatus | ClassEntitlementStatus[],
 	): Promise<ClassEntitlement | null> {
 		await this.ensureReady();
-		if (!isClassEntitlementStatus(status)) {
-			throw new Error("Class entitlement status is invalid.");
+		const setClauses: string[] = ["updated_at = NOW()"];
+		const params: unknown[] = [organizationId, id];
+		const whereClauses: string[] = ["organization_id = $1", "id = $2"];
+		if (updates.status !== undefined) {
+			if (!isClassEntitlementStatus(updates.status)) {
+				throw new Error("Class entitlement status is invalid.");
+			}
+			params.push(updates.status);
+			setClauses.push(`status = $${params.length}`);
+		}
+		if (updates.festivalClassId !== undefined) {
+			params.push(updates.festivalClassId);
+			setClauses.push(`festival_class_id = $${params.length}`);
+		}
+		const expectedCondition = expectedStatus ?? updates.expectedStatus;
+		if (expectedCondition !== undefined) {
+			const expected = Array.isArray(expectedCondition)
+				? expectedCondition
+				: [expectedCondition];
+			params.push(expected);
+			whereClauses.push(`status = ANY($${params.length})`);
 		}
 		const rows = (await sql.unsafe(
 			`UPDATE ${this.schema}.class_entitlements
-			SET status = $3, updated_at = NOW()
-			WHERE organization_id = $1 AND id = $2
+			SET ${setClauses.join(", ")}
+			WHERE ${whereClauses.join(" AND ")}
 			RETURNING id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text`,
-			[organizationId, id, status],
+			params,
 		)) as Array<Record<string, unknown>>;
 		return rows[0] ? classEntitlementFromRow(rows[0]) : null;
 	}

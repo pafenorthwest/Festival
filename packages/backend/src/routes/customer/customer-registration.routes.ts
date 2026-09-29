@@ -8,6 +8,7 @@ import {
 	type CustomerAccountService,
 } from "../../customer/customer-account-service.js";
 import { AppError } from "../../errors/app-error.js";
+import type { DropTransferService } from "../../registration/drop-transfer-service.js";
 import { assertNoBearerPrincipal } from "../customer-auth/customer-auth.routes.js";
 import { resolveRequestOrigin } from "../shared/csrf-guard.js";
 import { assertAllowedFields } from "../shared/payload-guard.js";
@@ -24,12 +25,21 @@ export interface BrowserClassCheckoutDto {
 export interface CustomerRegistrationRoutesOptions {
 	customerAccountService?: CustomerAccountService;
 	classCheckoutService?: ClassCheckoutService;
+	dropTransferService?: DropTransferService;
 }
 
 function requireCustomerAccountService(
 	service: CustomerAccountService | undefined,
 ): CustomerAccountService {
 	if (!service) throw new AppError("Customer Account is unavailable.", 503);
+	return service;
+}
+
+function requireDropTransferService(
+	service: DropTransferService | undefined,
+): DropTransferService {
+	if (!service)
+		throw new AppError("Drop/transfer service is unavailable.", 503);
 	return service;
 }
 
@@ -172,7 +182,11 @@ export function buildCustomerRegistrationRoutes(
 	options: CustomerRegistrationRoutesOptions,
 ): Hono<CustomerEnv> {
 	const router = new Hono<CustomerEnv>();
-	const { customerAccountService: cas, classCheckoutService: ccs } = options;
+	const {
+		customerAccountService: cas,
+		classCheckoutService: ccs,
+		dropTransferService: dts,
+	} = options;
 	const reg = "/festivals/:festivalShortName/registration";
 
 	router.get(`${reg}/teachers`, (c) =>
@@ -243,6 +257,118 @@ export function buildCustomerRegistrationRoutes(
 		`${reg}/class-registrations/:registrationId/metadata`,
 		updateMetadata,
 	);
+
+	router.post("/class-registrations/:registrationId/drop", async (c) => {
+		try {
+			assertNoBearerPrincipal(c.req.header("Authorization"));
+			const accountService = requireCustomerAccountService(cas);
+			const dropService = requireDropTransferService(dts);
+			const slug = requireSlug(c);
+			const registrationId = c.req.param("registrationId") ?? "";
+			const sessionToken = getCookie(c, CUSTOMER_SESSION_COOKIE) ?? "";
+			const session = await accountService.validateSession(slug, sessionToken);
+
+			const entitlement = await dropService.getEntitlement(
+				registrationId,
+				session.organizationId,
+			);
+			if (!entitlement || entitlement.parentCustomerId !== session.customerId) {
+				throw new AppError("Registration not found.", 404);
+			}
+
+			let body: Record<string, unknown> = {};
+			try {
+				const b = await c.req.json();
+				if (b && typeof b === "object" && !Array.isArray(b)) {
+					body = b as Record<string, unknown>;
+				}
+			} catch {
+				// body is optional for drop
+			}
+
+			const reason = typeof body.reason === "string" ? body.reason : null;
+			const requestRefund =
+				body.requestRefund === true || body.issueRefund === true;
+
+			const result = await dropService.dropRegistration({
+				classEntitlementId: registrationId,
+				organizationId: session.organizationId,
+				festivalId: entitlement.festivalId,
+				actorUid: session.customerId,
+				actorRole: "customer",
+				reason,
+				requestRefund,
+				issueRefund: requestRefund,
+			});
+
+			return c.json(result);
+		} catch (error) {
+			return toJsonError(c, error);
+		}
+	});
+
+	router.post("/class-registrations/:registrationId/transfer", async (c) => {
+		try {
+			assertNoBearerPrincipal(c.req.header("Authorization"));
+			const accountService = requireCustomerAccountService(cas);
+			const dropService = requireDropTransferService(dts);
+			const slug = requireSlug(c);
+			const registrationId = c.req.param("registrationId") ?? "";
+			const sessionToken = getCookie(c, CUSTOMER_SESSION_COOKIE) ?? "";
+			const session = await accountService.validateSession(slug, sessionToken);
+
+			const entitlement = await dropService.getEntitlement(
+				registrationId,
+				session.organizationId,
+			);
+			if (!entitlement || entitlement.parentCustomerId !== session.customerId) {
+				throw new AppError("Registration not found.", 404);
+			}
+
+			let body: Record<string, unknown> = {};
+			try {
+				const b = await c.req.json();
+				if (b && typeof b === "object" && !Array.isArray(b)) {
+					body = b as Record<string, unknown>;
+				} else {
+					throw new AppError("Transfer request is invalid.", 400);
+				}
+			} catch (err) {
+				if (err instanceof AppError) throw err;
+				throw new AppError("Transfer request is invalid.", 400);
+			}
+
+			const targetFestivalClassId =
+				typeof body.targetFestivalClassId === "string"
+					? body.targetFestivalClassId.trim()
+					: typeof body.targetClassId === "string"
+						? body.targetClassId.trim()
+						: typeof body.destinationFestivalClassId === "string"
+							? body.destinationFestivalClassId.trim()
+							: "";
+
+			if (!targetFestivalClassId) {
+				throw new AppError("Target festival class ID is required.", 400);
+			}
+
+			const reason = typeof body.reason === "string" ? body.reason : null;
+
+			const result = await dropService.transferRegistration({
+				classEntitlementId: registrationId,
+				targetFestivalClassId,
+				organizationId: session.organizationId,
+				festivalId: entitlement.festivalId,
+				sourceFestivalClassId: entitlement.festivalClassId,
+				actorUid: session.customerId,
+				actorRole: "customer",
+				reason,
+			});
+
+			return c.json(result);
+		} catch (error) {
+			return toJsonError(c, error);
+		}
+	});
 
 	return router;
 }

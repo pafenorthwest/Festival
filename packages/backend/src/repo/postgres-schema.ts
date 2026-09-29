@@ -261,6 +261,33 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			FOREIGN KEY (parent_customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers(id, organization_id) ON DELETE RESTRICT
 		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.registration_change_logs (
+			id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			festival_id TEXT REFERENCES ${safeSchema}.festivals (id) ON DELETE CASCADE,
+			class_entitlement_id TEXT NOT NULL REFERENCES ${safeSchema}.class_entitlements (id) ON DELETE CASCADE,
+			action TEXT NOT NULL CHECK (action IN ('drop', 'transfer', 'waitlist_promote', 'revert')),
+			actor_uid TEXT NOT NULL,
+			actor_role TEXT NOT NULL CHECK (actor_role IN ('customer', 'admin', 'system')),
+			previous_state JSONB NOT NULL,
+			new_state JSONB NOT NULL,
+			reason TEXT,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.refund_events (
+			id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			registration_change_log_id TEXT REFERENCES ${safeSchema}.registration_change_logs (id) ON DELETE SET NULL,
+			class_entitlement_id TEXT REFERENCES ${safeSchema}.class_entitlements (id) ON DELETE CASCADE,
+			shopify_order_id TEXT,
+			shopify_refund_id TEXT,
+			amount_cents INTEGER NOT NULL,
+			currency TEXT NOT NULL DEFAULT 'USD',
+			status TEXT NOT NULL CHECK (status IN ('pending', 'completed', 'failed')),
+			failure_reason TEXT,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.membership_entitlements (
 			id TEXT PRIMARY KEY,
 			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
@@ -570,6 +597,12 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		CREATE INDEX IF NOT EXISTS idx_class_entitlements_checkout_intent ON ${safeSchema}.class_entitlements (organization_id, checkout_intent_id);
 		CREATE INDEX IF NOT EXISTS idx_class_entitlements_shopify_order ON ${safeSchema}.class_entitlements (organization_id, shopify_order_gid);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_class_entitlements_order_line ON ${safeSchema}.class_entitlements (organization_id, shopify_order_line_gid);
+		CREATE INDEX IF NOT EXISTS idx_registration_change_logs_org_class_entitlement
+			ON ${safeSchema}.registration_change_logs (organization_id, class_entitlement_id);
+		CREATE INDEX IF NOT EXISTS idx_registration_change_logs_org_festival
+			ON ${safeSchema}.registration_change_logs (organization_id, festival_id);
+		CREATE INDEX IF NOT EXISTS idx_refund_events_org_class_entitlement
+			ON ${safeSchema}.refund_events (organization_id, class_entitlement_id);
 		CREATE INDEX IF NOT EXISTS idx_checkout_intents_org_class ON ${safeSchema}.checkout_intents (organization_id, festival_class_id) WHERE festival_class_id IS NOT NULL;
 		CREATE INDEX IF NOT EXISTS idx_checkout_intents_org_child ON ${safeSchema}.checkout_intents (organization_id, child_id) WHERE child_id IS NOT NULL;
 		CREATE UNIQUE INDEX IF NOT EXISTS registration_metadata_checkout_intent_id_unique
