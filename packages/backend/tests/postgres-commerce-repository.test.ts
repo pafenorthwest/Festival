@@ -113,6 +113,7 @@ integrationTest(
 					shopifyOrderGid: "gid://shopify/Order/1",
 					shopifyOrderLineGid: "gid://shopify/LineItem/1",
 					status: "approved",
+					updatedAtIso: new Date().toISOString(),
 				},
 				classEntitlement: {
 					id: entitlementId,

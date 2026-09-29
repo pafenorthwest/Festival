@@ -108,6 +108,12 @@ describe("Repertoire validation & transformation helpers", () => {
 });
 
 describe("Festival Repertoire Modal", () => {
+	it("uses index-stable rows so editing a draft preserves input focus", () => {
+		expect(repertoireModal).toContain("<Index each={pieces()}>");
+		expect(repertoireModal).not.toContain("<For each={pieces()}>");
+		expect(repertoireModal).toContain("value={piece().title}");
+	});
+
 	it("requires non-blank composer and title in modal UI", () => {
 		expect(repertoireModal).toContain("Title");
 		expect(repertoireModal).toContain("Composer");
@@ -119,6 +125,23 @@ describe("Festival Repertoire Modal", () => {
 		expect(repertoireModal).toContain("props.maxPieces");
 		expect(repertoireModal).toContain("+ Add another piece");
 		expect(repertoireModal).toContain("Remove piece");
+	});
+
+	it("gives every repertoire input a unique semantic id and name", () => {
+		for (const field of [
+			"title",
+			"composer",
+			"movement",
+			"minutes",
+			"seconds",
+		]) {
+			expect(repertoireModal).toContain(
+				`id={\`repertoire-piece-\${index}-${field}\`}`,
+			);
+			expect(repertoireModal).toContain(
+				`name={\`repertoire-piece-\${index}-${field}\`}`,
+			);
+		}
 	});
 });
 
@@ -133,9 +156,21 @@ describe("Festival Registration Cart Card & Checkout Gate", () => {
 });
 
 describe("Festival Class Registration Page workflow", () => {
+	it("loads active public divisions independently of admin controller state", () => {
+		expect(regPage).toContain("getPublicDivisions");
+		expect(regPage).toContain("(slug) => getPublicDivisions(slug)");
+		expect(regPage).toContain("divisions()?.divisions ?? []");
+		expect(regPage).not.toContain("props.app.divisions()");
+		expect(regPage).toContain("Available divisions could not be loaded");
+	});
+
 	it("requires customer authentication and handles sign in", () => {
+		expect(regPage).toContain("props.app.isCustomerSessionLoading()");
+		expect(regPage).toContain(
+			'<p role="status">Checking your sign-in status…</p>',
+		);
 		expect(regPage).toContain("props.app.customerSession()");
-		expect(regPage).toContain("openSignInModal");
+		expect(regPage).toContain("customerFestivalRegistrationSignInPath");
 		expect(regPage).toContain("Register for Festival Classes");
 	});
 
@@ -149,5 +184,19 @@ describe("Festival Class Registration Page workflow", () => {
 		expect(regPage).toContain("startClassCheckout");
 		expect(regPage).toContain("crypto.randomUUID()");
 		expect(regPage).toContain("window.location.assign");
+	});
+
+	it("gives registration controls unique semantic ids and names", () => {
+		for (const field of [
+			"child",
+			"birthdate",
+			"division",
+			"teacher",
+			"class",
+			"accompanist",
+		]) {
+			expect(regPage).toContain(`id="registration-${field}"`);
+			expect(regPage).toContain(`name="registration-${field}"`);
+		}
 	});
 });
