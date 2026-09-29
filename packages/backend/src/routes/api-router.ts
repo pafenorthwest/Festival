@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import type { CustomClaimsWriter } from "../auth/custom-claims.js";
 import type { ApiVariables } from "../auth/tenant-context.js";
 import type { AuthVerifier } from "../auth/types.js";
+import { BillingReconciliationService } from "../billing/billing-reconciliation-service.js";
+import { InMemoryBillingRepository } from "../billing/billing-repository.js";
 import type { ClassCheckoutService } from "../checkout/class-checkout-service.js";
 import type { MembershipCheckoutService } from "../checkout/membership-checkout-service.js";
 import type { MembershipStatusService } from "../commerce/membership-status-service.js";
@@ -16,6 +18,7 @@ import type { ShopifyIntegrationDiagnosticService } from "../shopify/shopify-int
 import type { ShopifyIntegrationService } from "../shopify/shopify-integration-service.js";
 import type { ShopifyMembershipProductService } from "../shopify/shopify-membership-product-service.js";
 import type { VolunteerRepository } from "../volunteers/volunteer-repository.js";
+import { buildAdminBillingRoutes } from "./admin-billing.routes.js";
 import { buildAdminOrgRoutes } from "./admin-org/admin-org.routes.js";
 import { buildAdminRegistrationRoutes } from "./admin-registration/admin-registration.routes.js";
 import { buildAdminShopifyRoutes } from "./admin-shopify/admin-shopify.routes.js";
@@ -48,6 +51,7 @@ export interface ApiRouterOptions {
 	repertoireRepository?: RepertoireRepository;
 	dropTransferService?: DropTransferService;
 	registrationChangeRepository?: RegistrationChangeRepository;
+	billingReconciliationService?: BillingReconciliationService;
 }
 
 export function buildApiRouter(
@@ -71,6 +75,7 @@ export function buildApiRouter(
 		repertoireRepository,
 		dropTransferService,
 		registrationChangeRepository,
+		billingReconciliationService,
 	} = options;
 	const repository = organizationService.repository;
 
@@ -177,6 +182,18 @@ export function buildApiRouter(
 			authVerifier,
 			repository,
 			repertoireRepository,
+		}),
+	);
+
+	router.route(
+		"/organizations/:slug/billing",
+		buildAdminBillingRoutes({
+			authVerifier,
+			organizationService,
+			repository,
+			billingReconciliationService:
+				billingReconciliationService ??
+				new BillingReconciliationService(new InMemoryBillingRepository()),
 		}),
 	);
 

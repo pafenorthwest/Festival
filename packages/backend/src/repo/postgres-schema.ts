@@ -536,6 +536,63 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			FOREIGN KEY (shift_id, festival_id, organization_id) REFERENCES ${safeSchema}.volunteer_shifts (id, festival_id, organization_id) ON DELETE CASCADE,
 			FOREIGN KEY (volunteer_id, festival_id, organization_id) REFERENCES ${safeSchema}.volunteers (id, festival_id, organization_id) ON DELETE CASCADE
 		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.credit_balances (
+			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			customer_id TEXT NOT NULL,
+			balance_cents INTEGER NOT NULL DEFAULT 0 CHECK (balance_cents >= 0),
+			currency_code TEXT NOT NULL DEFAULT 'USD',
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+			PRIMARY KEY (organization_id, customer_id)
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.billing_adjustments (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			customer_id TEXT NOT NULL,
+			admin_user_id TEXT NOT NULL,
+			adjustment_type TEXT NOT NULL CHECK (adjustment_type IN ('refund', 'credit_issue', 'credit_apply', 'manual_charge', 'write_off')),
+			amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+			currency_code TEXT NOT NULL DEFAULT 'USD',
+			reason TEXT NOT NULL,
+			reference_type TEXT,
+			reference_id TEXT,
+			approved_decision_id TEXT,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+			UNIQUE (organization_id, reference_type, reference_id, adjustment_type)
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.billing_ledger (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			customer_id TEXT NOT NULL,
+			entry_type TEXT NOT NULL CHECK (entry_type IN ('credit', 'debit', 'adjustment')),
+			amount_cents INTEGER NOT NULL,
+			direction TEXT NOT NULL CHECK (direction IN ('inflow', 'outflow')),
+			balance_after_cents INTEGER NOT NULL CHECK (balance_after_cents >= 0),
+			currency_code TEXT NOT NULL DEFAULT 'USD',
+			adjustment_id UUID REFERENCES ${safeSchema}.billing_adjustments (id) ON DELETE SET NULL,
+			notes TEXT,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.invoices (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			customer_id TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'issued', 'paid', 'cancelled', 'written_off')),
+			total_cents INTEGER NOT NULL DEFAULT 0,
+			currency_code TEXT NOT NULL DEFAULT 'USD',
+			due_date DATE,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.invoice_line_items (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			invoice_id UUID NOT NULL REFERENCES ${safeSchema}.invoices (id) ON DELETE CASCADE,
+			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			description TEXT NOT NULL,
+			amount_cents INTEGER NOT NULL,
+			quantity INTEGER NOT NULL DEFAULT 1,
+			reference_type TEXT,
+			reference_id TEXT
+		);
 
 		CREATE OR REPLACE FUNCTION ${safeSchema}.enforce_shopify_shop_ownership()
 		RETURNS TRIGGER AS $$
@@ -626,6 +683,8 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			ON ${safeSchema}.repertoire_review_items (organization_id, status);
 		CREATE INDEX IF NOT EXISTS idx_repertoire_review_items_org_claimed
 			ON ${safeSchema}.repertoire_review_items (organization_id, claimed_by_uid);
+		CREATE INDEX IF NOT EXISTS idx_billing_ledger_org_customer_created
+			ON ${safeSchema}.billing_ledger (organization_id, customer_id, created_at);
 	`;
 }
 

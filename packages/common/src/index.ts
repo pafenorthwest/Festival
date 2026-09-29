@@ -1,4 +1,5 @@
 export * from "./accompanist.js";
+export * from "./billing.js";
 export * from "./catalog.js";
 export * from "./customer-account.js";
 export * from "./domain.js";

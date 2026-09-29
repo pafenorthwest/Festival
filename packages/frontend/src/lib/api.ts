@@ -1,6 +1,14 @@
 import type {
 	AcceptInviteInput,
 	AddCatalogWorkInput,
+	BillingAdjustment,
+	BillingAdjustmentType,
+	BillingAdjustmentValidationResult,
+	BillingLedgerDirection,
+	BillingLedgerEntry,
+	BillingLedgerEntryType,
+	BillingMismatchRecord,
+	BillingMismatchType,
 	BookShiftsOutcome,
 	CanonicalContributor,
 	CanonicalWork,
@@ -8,6 +16,7 @@ import type {
 	ClassRegistrationMetadata,
 	CoverageGapShift,
 	CoverageGapsSummary,
+	CreateBillingAdjustmentInput,
 	CreateFestivalClassInput,
 	CreateFestivalInput,
 	CreateFestivalResponse,
@@ -18,6 +27,7 @@ import type {
 	CreateOrganizationDivisionInput,
 	CreateOrganizationInput,
 	CreateOrganizationResponse,
+	CreditBalance,
 	CustomerAccountSettingsResponse,
 	CustomerMembershipStatusResponse,
 	CustomerOrdersResponse,
@@ -82,8 +92,17 @@ import type {
 	WaitlistPromotionResult,
 } from "@festival/common";
 import {
+	assertValidCreateBillingAdjustmentInput,
 	assertValidDropRegistrationInput,
 	assertValidTransferRegistrationInput,
+	BILLING_ADJUSTMENT_TYPES,
+	BILLING_LEDGER_DIRECTIONS,
+	BILLING_LEDGER_ENTRY_TYPES,
+	BILLING_MISMATCH_TYPES,
+	isBillingAdjustmentType,
+	isBillingLedgerDirection,
+	isBillingLedgerEntryType,
+	isBillingMismatchType,
 	isRefundEventStatus,
 	isRegistrationActorRole,
 	isRegistrationChangeAction,
@@ -93,6 +112,7 @@ import {
 	REGISTRATION_CHANGE_ACTIONS,
 	REPERTOIRE_FLAG_REASONS,
 	REPERTOIRE_REVIEW_STATUSES,
+	validateCreateBillingAdjustmentInput,
 	validateDropRegistrationInput,
 	validateTransferRegistrationInput,
 } from "@festival/common";
@@ -141,12 +161,22 @@ export interface CreateVolunteerShiftInput {
 
 export type {
 	AddCatalogWorkInput,
+	BillingAdjustment,
+	BillingAdjustmentType,
+	BillingAdjustmentValidationResult,
+	BillingLedgerDirection,
+	BillingLedgerEntry,
+	BillingLedgerEntryType,
+	BillingMismatchRecord,
+	BillingMismatchType,
 	BookShiftsOutcome,
 	CanonicalContributor,
 	CanonicalWork,
 	ClaimReviewInput,
 	CoverageGapShift,
 	CoverageGapsSummary,
+	CreateBillingAdjustmentInput,
+	CreditBalance,
 	DropRegistrationInput,
 	DropRegistrationResult,
 	DropRegistrationValidationResult,
@@ -172,8 +202,17 @@ export type {
 	WaitlistPromotionResult,
 };
 export {
+	assertValidCreateBillingAdjustmentInput,
 	assertValidDropRegistrationInput,
 	assertValidTransferRegistrationInput,
+	BILLING_ADJUSTMENT_TYPES,
+	BILLING_LEDGER_DIRECTIONS,
+	BILLING_LEDGER_ENTRY_TYPES,
+	BILLING_MISMATCH_TYPES,
+	isBillingAdjustmentType,
+	isBillingLedgerDirection,
+	isBillingLedgerEntryType,
+	isBillingMismatchType,
 	isRefundEventStatus,
 	isRegistrationActorRole,
 	isRegistrationChangeAction,
@@ -183,6 +222,7 @@ export {
 	REGISTRATION_CHANGE_ACTIONS,
 	REPERTOIRE_FLAG_REASONS,
 	REPERTOIRE_REVIEW_STATUSES,
+	validateCreateBillingAdjustmentInput,
 	validateDropRegistrationInput,
 	validateTransferRegistrationInput,
 };
@@ -1799,6 +1839,108 @@ export async function addRepertoireCatalogWork(
 	const token = await resolveAuthToken(idToken);
 	return requestJson<{ work: CanonicalWork }>(
 		`/api/organizations/${encodeURIComponent(slug)}/repertoire/catalog`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+		token,
+	);
+}
+
+export interface CreateBillingAdjustmentPayload {
+	organizationId?: string;
+	customerId: string;
+	adminUserId?: string;
+	adjustmentType: BillingAdjustmentType;
+	amountCents: number;
+	currencyCode?: string;
+	reason: string;
+	referenceType?: string | null;
+	referenceId?: string | null;
+	approvedDecisionId?: string | null;
+	notes?: string | null;
+	entryType?: BillingLedgerEntryType;
+	direction?: BillingLedgerDirection;
+}
+
+export async function listBillingMismatches(
+	slug: string,
+	idToken?: string,
+): Promise<{ mismatches: BillingMismatchRecord[] }> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<{ mismatches: BillingMismatchRecord[] }>(
+		`/api/organizations/${encodeURIComponent(slug)}/billing/mismatches`,
+		undefined,
+		token,
+	);
+}
+
+export async function getCustomerCreditBalance(
+	slug: string,
+	customerId: string,
+	idToken?: string,
+): Promise<{ creditBalance: CreditBalance }> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<{ creditBalance: CreditBalance }>(
+		`/api/organizations/${encodeURIComponent(slug)}/billing/customers/${encodeURIComponent(customerId)}/credit-balance`,
+		undefined,
+		token,
+	);
+}
+
+export async function getCustomerBillingLedger(
+	slug: string,
+	customerId: string,
+	idToken?: string,
+): Promise<{
+	ledger: BillingLedgerEntry[];
+	ledgerEntries: BillingLedgerEntry[];
+}> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<{
+		ledger: BillingLedgerEntry[];
+		ledgerEntries: BillingLedgerEntry[];
+	}>(
+		`/api/organizations/${encodeURIComponent(slug)}/billing/customers/${encodeURIComponent(customerId)}/ledger`,
+		undefined,
+		token,
+	);
+}
+
+export async function listBillingAdjustments(
+	slug: string,
+	customerId?: string,
+	idToken?: string,
+): Promise<{ adjustments: BillingAdjustment[] }> {
+	const token = await resolveAuthToken(idToken);
+	const query = customerId
+		? `?customerId=${encodeURIComponent(customerId)}`
+		: "";
+	return requestJson<{ adjustments: BillingAdjustment[] }>(
+		`/api/organizations/${encodeURIComponent(slug)}/billing/adjustments${query}`,
+		undefined,
+		token,
+	);
+}
+
+export async function createBillingAdjustment(
+	slug: string,
+	input: CreateBillingAdjustmentPayload,
+	idToken?: string,
+): Promise<{
+	adjustment: BillingAdjustment;
+	ledgerEntry: BillingLedgerEntry;
+	creditBalance: CreditBalance;
+	alreadyExisted?: boolean;
+}> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<{
+		adjustment: BillingAdjustment;
+		ledgerEntry: BillingLedgerEntry;
+		creditBalance: CreditBalance;
+		alreadyExisted?: boolean;
+	}>(
+		`/api/organizations/${encodeURIComponent(slug)}/billing/adjustments`,
 		{
 			method: "POST",
 			body: JSON.stringify(input),

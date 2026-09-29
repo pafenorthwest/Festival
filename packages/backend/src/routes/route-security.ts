@@ -25,6 +25,31 @@ export const CURRENT_ROUTE_SECURITY = [
 	{ method: "GET", path: "/health", authenticationClass: "private-health" },
 	{ method: "GET", path: "/api/bootstrap", authenticationClass: "public" },
 	{
+		method: "GET",
+		path: "/api/organizations/:slug/billing/mismatches",
+		authenticationClass: "admin",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/billing/customers/:customerId/credit-balance",
+		authenticationClass: "admin",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/billing/customers/:customerId/ledger",
+		authenticationClass: "admin",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/billing/adjustments",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/billing/adjustments",
+		authenticationClass: "admin",
+	},
+	{
 		method: "POST",
 		path: "/api/organizations/:slug/admin/entitlements/:entitlementId/revoke",
 		authenticationClass: "admin",

@@ -26,7 +26,12 @@ export type AppRoute =
 	| { kind: "org-admin-accompanists"; slug: string }
 	| { kind: "org-admin-roster"; slug: string }
 	| { kind: "org-admin-volunteers"; slug: string }
-	| { kind: "org-music-review"; slug: string };
+	| { kind: "org-music-review"; slug: string }
+	| { kind: "org-billing"; slug: string };
+
+export function buildOrgBillingPath(slug: string): string {
+	return `/organizations/${slug}/billing`;
+}
 
 export function buildOrgPath(slug: string): string {
 	return `/org/${slug}/admin`;
@@ -367,6 +372,16 @@ export function parseRoute(pathname: string): AppRoute {
 		return {
 			kind: "org-music-review",
 			slug: orgMusicReviewMatch[1] ?? "",
+		};
+	}
+
+	const orgBillingMatch = pathname.match(
+		/^\/(?:organizations|org)\/([^/]+)\/billing\/?$/,
+	);
+	if (orgBillingMatch) {
+		return {
+			kind: "org-billing",
+			slug: orgBillingMatch[1] ?? "",
 		};
 	}
 
