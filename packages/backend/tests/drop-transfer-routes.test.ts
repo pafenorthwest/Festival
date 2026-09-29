@@ -273,7 +273,7 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 			expect(res.status).toBe(404);
 		});
 
-		it("POST drop returns 400 when registration is already cancelled", async () => {
+		it("POST drop returns 409 when registration is already cancelled", async () => {
 			const ctx = await setupTestContext();
 			const ent = await createEntitlement(ctx.entitlementsRepo, {
 				organizationId: ctx.organization.id,
@@ -286,7 +286,7 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 					headers: { Cookie: `${CUSTOMER_SESSION_COOKIE}=valid-token` },
 				},
 			);
-			expect(res.status).toBe(400);
+			expect(res.status).toBe(409);
 		});
 
 		it("POST drop successfully drops confirmed registration without body", async () => {
@@ -815,6 +815,44 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 			expect(custRes.status).toBe(200);
 
 			const adminLogRes = await ctx.fullApp.request(
+				`/api/organizations/${ctx.organization.slug}/festivals/${ctx.festival.shortName}/registrations/${ent.id}/change-log`,
+				{
+					method: "GET",
+					headers: { Authorization: "Bearer admin" },
+				},
+			);
+			expect(adminLogRes.status).toBe(200);
+			const body = await adminLogRes.json();
+			expect(body.changeLogs).toHaveLength(1);
+			expect(body.changeLogs[0].action).toBe("drop");
+		});
+
+		it("createApp wires dropTransferService and repositories by default without returning 503", async () => {
+			const ctx = await setupTestContext();
+			const ent = await createEntitlement(ctx.entitlementsRepo, {
+				organizationId: ctx.organization.id,
+				festivalId: ctx.festival.id,
+				festivalClassId: "class-small",
+				status: "confirmed",
+			});
+
+			const { app: defaultApp } = await createApp({
+				repository: ctx.orgRepo,
+				authVerifier: ctx.authVerifier,
+				customerAccountService: ctx.customerAccountService,
+				classEntitlementRepository: ctx.entitlementsRepo,
+			});
+
+			const custRes = await defaultApp.request(
+				`/api/organizations/${ctx.organization.slug}/customer/class-registrations/${ent.id}/drop`,
+				{
+					method: "POST",
+					headers: { Cookie: `${CUSTOMER_SESSION_COOKIE}=valid-token` },
+				},
+			);
+			expect(custRes.status).toBe(200);
+
+			const adminLogRes = await defaultApp.request(
 				`/api/organizations/${ctx.organization.slug}/festivals/${ctx.festival.shortName}/registrations/${ent.id}/change-log`,
 				{
 					method: "GET",

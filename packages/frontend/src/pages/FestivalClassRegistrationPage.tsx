@@ -1,6 +1,5 @@
 import type {
-	CustomerChildDto,
-	FestivalClassConfigurationDto,
+	RegistrationEligibleClass,
 	RepertoirePiece,
 } from "@festival/common";
 import {
@@ -16,6 +15,7 @@ import { Button } from "../components/Button.js";
 import { FestivalRegistrationCartCard } from "../components/FestivalRegistrationCartCard.js";
 import { FestivalRepertoireModal } from "../components/FestivalRepertoireModal.js";
 import {
+	type CustomerChildDto,
 	customerFestivalRegistrationSignInPath,
 	getCustomerChildren,
 	getPublicDivisions,
@@ -58,7 +58,7 @@ export function FestivalClassRegistrationPage(
 		Array<{ id: string; name: string }>
 	>([]);
 	const [eligibleClasses, setEligibleClasses] = createSignal<
-		FestivalClassConfigurationDto[]
+		RegistrationEligibleClass[]
 	>([]);
 	const [accompanists, setAccompanists] = createSignal<
 		Array<{ id: string; name: string }>
@@ -499,7 +499,13 @@ export function FestivalClassRegistrationPage(
 				<Show when={selectedClass()}>
 					<FestivalRepertoireModal
 						isOpen={isRepertoireModalOpen()}
-						maxPieces={selectedClass()?.maximumPerformancePieces ?? 1}
+						maxPieces={
+							selectedClass()?.maximumPerformancePieces === 2
+								? 2
+								: selectedClass()?.maximumPerformancePieces === 3
+									? 3
+									: 1
+						}
 						initialPieces={pieces()}
 						onSave={(saved) => setPieces(saved)}
 						onClose={() => setIsRepertoireModalOpen(false)}

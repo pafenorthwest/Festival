@@ -342,6 +342,28 @@ describe("admin drop, transfer, promote, and change log API methods", () => {
 		expect(res.changeLogs.length).toBe(1);
 		expect(res.changeLogs[0].action).toBe("drop");
 	});
+
+	it("handles getRegistrationChangeLog with optional or omitted token cleanly", async () => {
+		let capturedUrl = "";
+		globalThis.fetch = (async (input: RequestInfo | URL) => {
+			capturedUrl = String(input);
+			return new Response(JSON.stringify({ changeLogs: [] }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		}) as typeof fetch;
+
+		const res = await getRegistrationChangeLog(
+			"music-org",
+			"spring-2026",
+			"reg-999",
+		);
+
+		expect(capturedUrl).toContain(
+			"/api/organizations/music-org/festivals/spring-2026/registrations/reg-999/change-log",
+		);
+		expect(res.changeLogs).toEqual([]);
+	});
 });
 
 describe("audit modal helper utilities", () => {
@@ -385,6 +407,9 @@ describe("component integration verification", () => {
 		expect(content).toContain("handleConfirmDrop");
 		expect(content).toContain("handleConfirmTransfer");
 		expect(content).toContain("handleOpenTransfer");
+		expect(content).toContain("festivalSlug");
+		expect(content).toContain("divisionId");
+		expect(content).toContain("teacherId");
 		expect(content).toContain("isRegistrationActiveOrWaitlisted");
 		expect(content).toContain("dropCustomerRegistration");
 		expect(content).toContain("transferCustomerRegistration");

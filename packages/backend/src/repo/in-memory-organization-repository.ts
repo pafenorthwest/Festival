@@ -1271,11 +1271,28 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		return { ...updated };
 	}
 
-	async findFestivalClassConfigurationById(
+	findFestivalClassConfigurationById(
 		organizationId: string,
 		festivalId: string,
 		classId: string,
+	): Promise<FestivalClassConfiguration | null>;
+	findFestivalClassConfigurationById(
+		organizationId: string,
+		classId: string,
+	): Promise<FestivalClassConfiguration | null>;
+	async findFestivalClassConfigurationById(
+		organizationId: string,
+		festivalIdOrClassId: string,
+		classId?: string,
 	): Promise<FestivalClassConfiguration | null> {
+		if (classId === undefined) {
+			const record = this.festivalClassConfigurations.get(festivalIdOrClassId);
+			if (!record || record.organizationId !== organizationId) {
+				return null;
+			}
+			return { ...record };
+		}
+		const festivalId = festivalIdOrClassId;
 		const record = this.festivalClassConfigurations.get(classId);
 		if (
 			!record ||

@@ -15,6 +15,19 @@ export interface ShopifyOperationResult {
 	providerMode: "live" | "mock";
 }
 
+const REFUND_ORDER_MUTATION = `
+  mutation RefundOrder($input: RefundInput!) {
+    refundCreate(input: $input) {
+      refund {
+        id
+      }
+      userErrors {
+        message
+      }
+    }
+  }
+`;
+
 export class ShopifyAdminClient {
 	private readonly config: AdminClientConfig;
 
@@ -136,32 +149,36 @@ export class ShopifyAdminClient {
 	}
 
 	async createRefund(refund: RefundRequest): Promise<ShopifyOperationResult> {
+		if (!refund?.orderId?.trim()) {
+			throw new Error("Cannot create refund: missing Shopify order ID.");
+		}
+		if (
+			typeof refund?.amountCents !== "number" ||
+			!Number.isFinite(refund.amountCents) ||
+			refund.amountCents <= 0
+		) {
+			throw new Error(
+				"Cannot create refund: refund amount must be greater than zero.",
+			);
+		}
 		if (this.mode === "mock") {
 			return {
 				id: `gid://shopify/Refund/mock-${randomUUID()}`,
 				providerMode: "mock",
 			};
 		}
+		return this.executeLiveRefund(refund);
+	}
 
-		const mutation = `
-      mutation RefundOrder($input: RefundInput!) {
-        refundCreate(input: $input) {
-          refund {
-            id
-          }
-          userErrors {
-            message
-          }
-        }
-      }
-    `;
-
+	private async executeLiveRefund(
+		refund: RefundRequest,
+	): Promise<ShopifyOperationResult> {
 		const response = await this.graphqlRequest<{
 			refundCreate: {
 				refund: { id: string } | null;
 				userErrors: Array<{ message: string }>;
 			};
-		}>(mutation, {
+		}>(REFUND_ORDER_MUTATION, {
 			input: {
 				orderId: refund.orderId,
 				note: refund.reason,

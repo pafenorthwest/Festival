@@ -42,7 +42,7 @@ export function AccompanistMembershipPage(props: { slug: string }) {
 						getAccompanistMembershipForm(props.slug),
 					]),
 			);
-			if (!result.authenticated) {
+			if (!result.authenticated || !result.session.session.authenticated) {
 				setNeedsSignIn(true);
 				return;
 			}

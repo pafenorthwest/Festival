@@ -1320,15 +1320,28 @@ export interface CustomerClassRegistrationItem {
 		lineItemId?: string;
 		createdAt?: string;
 		updatedAt?: string;
+		festivalId?: string;
+		festivalSlug?: string;
+		festivalShortName?: string;
+		festivalClassId?: string;
+		divisionId?: string;
+		teacherId?: string;
+		childId?: string;
 		[key: string]: unknown;
 	};
 	festivalClass?: {
 		id: string;
 		displayName: string;
+		price?: string;
+		divisionId?: string;
+		festivalSlug?: string;
+		festivalShortName?: string;
 		[key: string]: unknown;
 	};
 	child?: { id: string; name: string };
 	metadata?: ClassRegistrationMetadata | null;
+	festivalSlug?: string;
+	festivalShortName?: string;
 }
 
 export interface CustomerClassRegistrationsResponse {
@@ -1577,7 +1590,7 @@ export async function getRegistrationChangeLog(
 		tokenToResolve = slugOrToken;
 		slug = festivalOrSlug;
 		festivalShortName = regIdOrFestival;
-		registrationId = idToken;
+		registrationId = idToken ?? "";
 	}
 
 	const token = await resolveAuthToken(tokenToResolve);

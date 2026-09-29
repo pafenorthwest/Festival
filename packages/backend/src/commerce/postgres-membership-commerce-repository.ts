@@ -809,8 +809,12 @@ export class PostgresMembershipCommerceRepository
 		filter: ClassEntitlementFilter,
 	): Promise<ClassEntitlement[]> {
 		await this.ensureReady();
-		const conditions: string[] = ["organization_id = $1"];
-		const params: unknown[] = [filter.organizationId];
+		const conditions: string[] = [];
+		const params: unknown[] = [];
+		if (filter.organizationId) {
+			params.push(filter.organizationId);
+			conditions.push(`organization_id = $${params.length}`);
+		}
 		if (filter.festivalId) {
 			params.push(filter.festivalId);
 			conditions.push(`festival_id = $${params.length}`);
@@ -831,10 +835,12 @@ export class PostgresMembershipCommerceRepository
 			params.push(filter.status);
 			conditions.push(`status = $${params.length}`);
 		}
+		const whereClause =
+			conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 		const rows = (await sql.unsafe(
 			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text
 			FROM ${this.schema}.class_entitlements
-			WHERE ${conditions.join(" AND ")}
+			${whereClause}
 			ORDER BY created_at DESC`,
 			params,
 		)) as Array<Record<string, unknown>>;

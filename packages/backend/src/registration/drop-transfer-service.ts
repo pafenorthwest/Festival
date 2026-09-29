@@ -12,19 +12,60 @@ import type {
 } from "@festival/common";
 import type { ClassEntitlementRepository } from "../commerce/class-entitlement-repository.js";
 import { AppError } from "../errors/app-error.js";
+import type { OrganizationRepository } from "../repo/organization-repository.js";
 import type { ShopifyAdminClient } from "../shopify/shopify-admin-client.js";
 import type { RegistrationChangeRepository } from "./registration-change-repository.js";
 
+export class AsyncLock {
+	private readonly queues = new Map<string, Promise<void>>();
+
+	async acquire<T>(
+		keyOrKeys: string | readonly string[],
+		fn: () => Promise<T>,
+	): Promise<T> {
+		const keys = Array.from(
+			new Set(Array.isArray(keyOrKeys) ? keyOrKeys : [keyOrKeys]),
+		).sort();
+
+		let release: () => void = () => {};
+		const lockPromise = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+
+		const currentTails = keys.map((key) =>
+			(this.queues.get(key) ?? Promise.resolve()).catch(() => {}),
+		);
+		for (const key of keys) {
+			this.queues.set(key, lockPromise);
+		}
+
+		await Promise.all(currentTails);
+
+		try {
+			return await fn();
+		} finally {
+			for (const key of keys) {
+				if (this.queues.get(key) === lockPromise) {
+					this.queues.delete(key);
+				}
+			}
+			release();
+		}
+	}
+}
+
 export interface FestivalClassQueryCapability {
-	findFestivalClassConfigurationById?(
-		organizationId: string,
-		festivalId: string,
-		classId: string,
-	): Promise<{ capacity: number; [key: string]: unknown } | null>;
-	findFestivalClassConfigurationById?(
-		organizationId: string,
-		classId: string,
-	): Promise<{ capacity: number; [key: string]: unknown } | null>;
+	findFestivalClassConfigurationById?: {
+		(
+			organizationId: string,
+			festivalId: string,
+			classId: string,
+		): Promise<{ capacity: number; [key: string]: unknown } | null>;
+		(
+			organizationId: string,
+			classId: string,
+		): Promise<{ capacity: number; [key: string]: unknown } | null>;
+	};
 	getClassCapacity?(
 		organizationId: string,
 		festivalClassId: string,
@@ -41,6 +82,7 @@ export interface FestivalClassQueryCapability {
 }
 
 export type ClassCapacityResolver =
+	| OrganizationRepository
 	| FestivalClassQueryCapability
 	| ((
 			festivalClassId: string,
@@ -92,6 +134,7 @@ export class DropTransferService {
 		| null;
 	private readonly classQuery?: ClassCapacityResolver | null;
 	private readonly now: () => Date;
+	private readonly lock = new AsyncLock();
 
 	constructor(
 		entitlementsOrOptions:
@@ -125,35 +168,25 @@ export class DropTransferService {
 		}
 	}
 
-	private async resolveClassCapacity(
+	private extractCapacity(val: unknown): number | null {
+		if (typeof val === "number") return val;
+		if (
+			val !== null &&
+			typeof val === "object" &&
+			"capacity" in val &&
+			typeof (val as { capacity: unknown }).capacity === "number"
+		) {
+			return (val as { capacity: number }).capacity;
+		}
+		return null;
+	}
+
+	private async queryCapacityFromObject(
+		query: Record<string, unknown>,
 		organizationId: string,
 		festivalId: string | undefined,
 		festivalClassId: string,
-	): Promise<number> {
-		if (!this.classQuery) {
-			return Number.POSITIVE_INFINITY;
-		}
-
-		if (typeof this.classQuery === "function") {
-			const res = await this.classQuery(
-				festivalClassId,
-				organizationId,
-				festivalId,
-			);
-			if (typeof res === "number") return res;
-			if (res && typeof res.capacity === "number") return res.capacity;
-			return Number.POSITIVE_INFINITY;
-		}
-
-		if (this.classQuery instanceof Map) {
-			const val = this.classQuery.get(festivalClassId);
-			if (typeof val === "number") return val;
-			if (val && typeof val.capacity === "number") return val.capacity;
-			return Number.POSITIVE_INFINITY;
-		}
-
-		const query = this.classQuery as Record<string, unknown>;
-
+	): Promise<number | null> {
 		if (typeof query.getClassCapacity === "function") {
 			const cap = await (
 				query.getClassCapacity as (
@@ -199,27 +232,41 @@ export class DropTransferService {
 		}
 
 		if (typeof query.get === "function") {
-			const val = (
-				query.get as (cls: string) => { capacity?: number } | number | null
-			)(festivalClassId);
-			if (typeof val === "number") return val;
-			if (val && typeof val.capacity === "number") return val.capacity;
+			const cap = this.extractCapacity(
+				(query.get as (cls: string) => unknown)(festivalClassId),
+			);
+			if (cap !== null) return cap;
 		}
 
-		if (query[festivalClassId] !== undefined) {
-			const val = query[festivalClassId];
-			if (typeof val === "number") return val;
-			if (
-				val !== null &&
-				typeof val === "object" &&
-				"capacity" in val &&
-				typeof (val as { capacity: unknown }).capacity === "number"
-			) {
-				return (val as { capacity: number }).capacity;
-			}
+		return this.extractCapacity(query[festivalClassId]);
+	}
+
+	private async resolveClassCapacity(
+		organizationId: string,
+		festivalId: string | undefined,
+		festivalClassId: string,
+	): Promise<number | null> {
+		if (!this.classQuery) return null;
+
+		if (typeof this.classQuery === "function") {
+			const res = await this.classQuery(
+				festivalClassId,
+				organizationId,
+				festivalId,
+			);
+			return this.extractCapacity(res);
 		}
 
-		return Number.POSITIVE_INFINITY;
+		if (this.classQuery instanceof Map) {
+			return this.extractCapacity(this.classQuery.get(festivalClassId));
+		}
+
+		return this.queryCapacityFromObject(
+			this.classQuery as Record<string, unknown>,
+			organizationId,
+			festivalId,
+			festivalClassId,
+		);
 	}
 
 	get changeRepository(): RegistrationChangeRepository {
@@ -253,7 +300,92 @@ export class DropTransferService {
 		return null;
 	}
 
-	async dropRegistration(
+	private async processDropRefund(input: {
+		organizationId: string;
+		changeLogId: string;
+		entitlement: ClassEntitlement;
+		refundAmountCents?: number | null;
+		refundReason?: string | null;
+		reason?: string | null;
+	}): Promise<RefundEvent> {
+		const { organizationId, changeLogId, entitlement } = input;
+		const amountCents =
+			input.refundAmountCents !== undefined && input.refundAmountCents !== null
+				? input.refundAmountCents
+				: entitlement.paidAmountCents;
+		const currency = entitlement.paidCurrencyCode || "USD";
+		const refundReason =
+			input.refundReason ?? input.reason ?? "Registration dropped";
+
+		const isValidAmount =
+			typeof amountCents === "number" &&
+			Number.isFinite(amountCents) &&
+			amountCents > 0;
+		const hasOrderIds = Boolean(
+			entitlement.shopifyOrderGid && entitlement.shopifyOrderLineGid,
+		);
+
+		if (!isValidAmount || !hasOrderIds) {
+			const failureReason = !isValidAmount
+				? "Cannot refund unpriced or zero-amount registration."
+				: !entitlement.shopifyOrderGid
+					? "Missing Shopify order ID for refund."
+					: "Missing Shopify order line ID for refund.";
+
+			return this.changes.createRefundEvent({
+				organizationId,
+				registrationChangeLogId: changeLogId,
+				classEntitlementId: entitlement.id,
+				shopifyOrderId: entitlement.shopifyOrderGid ?? null,
+				amountCents: isValidAmount ? amountCents : 0,
+				currency,
+				status: "failed",
+				failureReason,
+			});
+		}
+
+		let refundEvent = await this.changes.createRefundEvent({
+			organizationId,
+			registrationChangeLogId: changeLogId,
+			classEntitlementId: entitlement.id,
+			shopifyOrderId: entitlement.shopifyOrderGid,
+			amountCents,
+			currency,
+			status: "pending",
+		});
+
+		if (this.shopifyAdminClient) {
+			try {
+				const refundResult = await this.shopifyAdminClient.createRefund({
+					orderId: entitlement.shopifyOrderGid,
+					paymentIntentId: entitlement.checkoutIntentId,
+					amountCents,
+					reason: refundReason,
+				});
+				const updatedRefund = await this.changes.updateRefundEventStatus({
+					id: refundEvent.id,
+					organizationId,
+					status: "completed",
+					shopifyRefundId: refundResult.id,
+				});
+				if (updatedRefund) refundEvent = updatedRefund;
+			} catch (err: unknown) {
+				const failureReason =
+					err instanceof Error ? err.message : "Shopify refund failed";
+				const updatedRefund = await this.changes.updateRefundEventStatus({
+					id: refundEvent.id,
+					organizationId,
+					status: "failed",
+					failureReason,
+				});
+				if (updatedRefund) refundEvent = updatedRefund;
+			}
+		}
+
+		return refundEvent;
+	}
+
+	private async executeDrop(
 		input: DropRegistrationInput,
 	): Promise<DropRegistrationResult> {
 		const entitlement = await this.getEntitlement(
@@ -264,12 +396,12 @@ export class DropTransferService {
 			throw new AppError("Class entitlement not found.", 404);
 		}
 
-		const orgId = entitlement.organizationId;
-		const festId = entitlement.festivalId;
-		const actorUid = input.actorUid ?? "system";
-		const actorRole = input.actorRole ?? "customer";
-		const reason = input.reason ?? null;
-
+		if (entitlement.status === "cancelled") {
+			throw new AppError(
+				'Cannot drop registration with status "cancelled".',
+				409,
+			);
+		}
 		if (
 			entitlement.status !== "confirmed" &&
 			entitlement.status !== "waitlisted"
@@ -280,25 +412,24 @@ export class DropTransferService {
 			);
 		}
 
-		const previousState = {
-			status: entitlement.status,
-			festivalClassId: entitlement.festivalClassId,
-			festivalId: festId,
-			updatedAt: entitlement.updatedAt,
-		};
+		const orgId = entitlement.organizationId;
+		const festId = entitlement.festivalId;
+		const actorUid = input.actorUid ?? "system";
+		const actorRole = input.actorRole ?? "customer";
+		const reason = input.reason ?? null;
 
-		const updated = await this.entitlements.updateClassEntitlementStatus(
+		const updated = await this.entitlements.updateClassEntitlement(
 			orgId,
 			entitlement.id,
-			"cancelled",
+			{ status: "cancelled", expectedStatus: ["confirmed", "waitlisted"] },
+			["confirmed", "waitlisted"],
 		);
-
-		const newState = {
-			status: "cancelled",
-			festivalClassId: entitlement.festivalClassId,
-			festivalId: festId,
-			updatedAt: updated?.updatedAt ?? this.now().toISOString(),
-		};
+		if (!updated) {
+			throw new AppError(
+				'Cannot drop registration with status "cancelled".',
+				409,
+			);
+		}
 
 		const changeLog = await this.changes.createChangeLog({
 			organizationId: orgId,
@@ -307,16 +438,26 @@ export class DropTransferService {
 			action: "drop",
 			actorUid,
 			actorRole,
-			previousState,
-			newState,
+			previousState: {
+				status: entitlement.status,
+				festivalClassId: entitlement.festivalClassId,
+				festivalId: festId,
+				updatedAt: entitlement.updatedAt,
+			},
+			newState: {
+				status: "cancelled",
+				festivalClassId: entitlement.festivalClassId,
+				festivalId: festId,
+				updatedAt: updated.updatedAt,
+			},
 			reason,
 		});
 
-		if (previousState.status === "waitlisted") {
+		if (entitlement.status === "waitlisted") {
 			return {
 				success: true,
 				classEntitlementId: entitlement.id,
-				classEntitlement: updated ?? undefined,
+				classEntitlement: updated,
 				changeLog,
 				refundEvent: null,
 				promotedWaitlistEntitlements: [],
@@ -334,93 +475,98 @@ export class DropTransferService {
 			: [];
 
 		let refundEvent: RefundEvent | null = null;
-		const shouldRefund =
-			input.requestRefund === true || input.issueRefund === true;
-
-		if (shouldRefund) {
-			const amountCents =
-				input.refundAmountCents !== undefined &&
-				input.refundAmountCents !== null
-					? input.refundAmountCents
-					: entitlement.paidAmountCents;
-			const refundReason =
-				input.refundReason ?? input.reason ?? "Registration dropped";
-
-			refundEvent = await this.changes.createRefundEvent({
+		if (input.requestRefund === true || input.issueRefund === true) {
+			refundEvent = await this.processDropRefund({
 				organizationId: orgId,
-				registrationChangeLogId: changeLog.id,
-				classEntitlementId: entitlement.id,
-				shopifyOrderId: entitlement.shopifyOrderGid,
-				amountCents,
-				currency: entitlement.paidCurrencyCode || "USD",
-				status: "pending",
+				changeLogId: changeLog.id,
+				entitlement,
+				refundAmountCents: input.refundAmountCents,
+				refundReason: input.refundReason,
+				reason: input.reason,
 			});
-
-			if (this.shopifyAdminClient) {
-				try {
-					const refundResult = await this.shopifyAdminClient.createRefund({
-						orderId: entitlement.shopifyOrderGid,
-						paymentIntentId: entitlement.checkoutIntentId,
-						amountCents,
-						reason: refundReason,
-					});
-					const updatedRefund = await this.changes.updateRefundEventStatus({
-						id: refundEvent.id,
-						organizationId: orgId,
-						status: "completed",
-						shopifyRefundId: refundResult.id,
-					});
-					if (updatedRefund) refundEvent = updatedRefund;
-				} catch (err: unknown) {
-					const failureReason =
-						err instanceof Error ? err.message : "Shopify refund failed";
-					const updatedRefund = await this.changes.updateRefundEventStatus({
-						id: refundEvent.id,
-						organizationId: orgId,
-						status: "failed",
-						failureReason,
-					});
-					if (updatedRefund) refundEvent = updatedRefund;
-				}
-			}
 		}
 
 		return {
 			success: true,
 			classEntitlementId: entitlement.id,
-			classEntitlement: updated ?? undefined,
+			classEntitlement: updated,
 			changeLog,
 			refundEvent,
 			promotedWaitlistEntitlements,
 		};
 	}
 
-	async transferRegistration(
-		input: TransferRegistrationInput,
-	): Promise<TransferRegistrationResult> {
-		const entitlement = await this.getEntitlement(
-			input.classEntitlementId,
-			input.organizationId,
-		);
-		if (!entitlement) {
-			throw new AppError("Class entitlement not found.", 404);
+	async dropRegistration(
+		input: DropRegistrationInput,
+	): Promise<DropRegistrationResult> {
+		const lockKey = `entitlement:${input.organizationId ?? "default"}:${input.classEntitlementId}`;
+		return this.lock.acquire(lockKey, () => this.executeDrop(input));
+	}
+
+	private async assertTargetClassInFestival(
+		orgId: string,
+		festId: string | undefined,
+		targetFestivalClassId: string,
+	): Promise<number> {
+		if (
+			this.classQuery &&
+			typeof (this.classQuery as Record<string, unknown>)
+				.findFestivalClassConfigurationById === "function"
+		) {
+			const fn = (this.classQuery as Record<string, unknown>)
+				.findFestivalClassConfigurationById as (
+				org: string,
+				clsOrFest: string,
+				cls?: string,
+			) => Promise<{ festivalId?: unknown } | null>;
+			let targetConfig: { festivalId?: unknown } | null = null;
+			try {
+				targetConfig = await fn(orgId, targetFestivalClassId);
+			} catch {
+				// Fallback if 2 args not supported
+			}
+			if (
+				targetConfig &&
+				festId &&
+				typeof targetConfig.festivalId === "string" &&
+				targetConfig.festivalId !== festId
+			) {
+				throw new AppError(
+					"Target class does not belong to this festival.",
+					400,
+				);
+			}
 		}
 
-		const orgId = entitlement.organizationId;
-		const festId = entitlement.festivalId;
-		const sourceFestivalClassId = entitlement.festivalClassId;
+		const targetCapacity = await this.resolveClassCapacity(
+			orgId,
+			festId,
+			targetFestivalClassId,
+		);
+		if (targetCapacity === null || targetCapacity < 0) {
+			throw new AppError("Target class does not belong to this festival.", 400);
+		}
+
+		return targetCapacity;
+	}
+
+	private async executeTransfer(
+		initial: ClassEntitlement,
+		input: TransferRegistrationInput,
+		targetCapacity: number,
+	): Promise<TransferRegistrationResult> {
+		const orgId = initial.organizationId;
+		const festId = initial.festivalId;
+		const sourceFestivalClassId = initial.festivalClassId;
 		const targetFestivalClassId = input.targetFestivalClassId;
 		const actorUid = input.actorUid ?? "system";
 		const actorRole = input.actorRole ?? "customer";
 		const reason = input.reason ?? null;
 
-		if (sourceFestivalClassId === targetFestivalClassId) {
-			throw new AppError(
-				"Target festival class must be different from source festival class.",
-				400,
-			);
+		const entitlement = await this.getEntitlement(initial.id, orgId);
+		if (!entitlement) {
+			throw new AppError("Class entitlement not found.", 404);
 		}
-
 		if (
 			entitlement.status !== "confirmed" &&
 			entitlement.status !== "waitlisted"
@@ -431,22 +577,14 @@ export class DropTransferService {
 			);
 		}
 
-		const targetCapacity = await this.resolveClassCapacity(
-			orgId,
-			festId,
-			targetFestivalClassId,
-		);
-
 		const targetConfirmed = await this.entitlements.listClassEntitlements({
 			organizationId: orgId,
 			festivalClassId: targetFestivalClassId,
 			status: "confirmed",
 		});
 
-		const hasOpenCapacity = targetConfirmed.length < targetCapacity;
-		const newStatus: ClassEntitlementStatus = hasOpenCapacity
-			? "confirmed"
-			: "waitlisted";
+		const newStatus: ClassEntitlementStatus =
+			targetConfirmed.length < targetCapacity ? "confirmed" : "waitlisted";
 
 		const previousState = {
 			status: entitlement.status,
@@ -461,14 +599,22 @@ export class DropTransferService {
 			{
 				festivalClassId: targetFestivalClassId,
 				status: newStatus,
+				expectedStatus: ["confirmed", "waitlisted"],
 			},
+			["confirmed", "waitlisted"],
 		);
+		if (!updated) {
+			throw new AppError(
+				`Cannot transfer registration with status "${entitlement.status}".`,
+				409,
+			);
+		}
 
 		const newState = {
 			status: newStatus,
 			festivalClassId: targetFestivalClassId,
 			festivalId: festId,
-			updatedAt: updated?.updatedAt ?? this.now().toISOString(),
+			updatedAt: updated.updatedAt,
 		};
 
 		const changeLog = await this.changes.createChangeLog({
@@ -501,11 +647,51 @@ export class DropTransferService {
 			classEntitlementId: entitlement.id,
 			targetFestivalClassId,
 			previousFestivalClassId: sourceFestivalClassId,
-			classEntitlement: updated ?? undefined,
+			classEntitlement: updated,
 			changeLog,
 			refundEvent: null,
 			promotedWaitlistEntitlements,
 		};
+	}
+
+	async transferRegistration(
+		input: TransferRegistrationInput,
+	): Promise<TransferRegistrationResult> {
+		const initial = await this.getEntitlement(
+			input.classEntitlementId,
+			input.organizationId,
+		);
+		if (!initial) {
+			throw new AppError("Class entitlement not found.", 404);
+		}
+		if (initial.festivalClassId === input.targetFestivalClassId) {
+			throw new AppError(
+				"Target festival class must be different from source festival class.",
+				400,
+			);
+		}
+		if (initial.status !== "confirmed" && initial.status !== "waitlisted") {
+			throw new AppError(
+				`Cannot transfer registration with status "${initial.status}".`,
+				400,
+			);
+		}
+
+		const targetCapacity = await this.assertTargetClassInFestival(
+			initial.organizationId,
+			initial.festivalId,
+			input.targetFestivalClassId,
+		);
+
+		const lockKeys = [
+			`entitlement:${initial.organizationId}:${initial.id}`,
+			`capacity:${initial.organizationId}:${input.targetFestivalClassId}`,
+			`capacity:${initial.organizationId}:${initial.festivalClassId}`,
+		];
+
+		return this.lock.acquire(lockKeys, () =>
+			this.executeTransfer(initial, input, targetCapacity),
+		);
 	}
 
 	async promoteTopWaitlisted(

@@ -14,6 +14,8 @@ test("canonical PostgreSQL schema defines the final empty-database shape only", 
 		"festival_child_age_snapshots",
 		"checkout_intents",
 		"class_entitlements",
+		"registration_change_logs",
+		"refund_events",
 		"membership_entitlements",
 		"membership_entitlement_divisions",
 		"membership_entitlement_revocations",
@@ -30,6 +32,11 @@ test("canonical PostgreSQL schema defines the final empty-database shape only", 
 	]) {
 		expect(schema).toContain(`fresh_orgs.${table}`);
 	}
+	expect(schema).toContain(
+		"idx_registration_change_logs_org_class_entitlement",
+	);
+	expect(schema).toContain("idx_registration_change_logs_org_festival");
+	expect(schema).toContain("idx_refund_events_org_class_entitlement");
 	expect(schema).toContain("CREATE EXTENSION IF NOT EXISTS pgcrypto");
 	expect(schema).toContain("CREATE EXTENSION IF NOT EXISTS btree_gist");
 	expect(schema).toContain("EXCLUDE USING gist");

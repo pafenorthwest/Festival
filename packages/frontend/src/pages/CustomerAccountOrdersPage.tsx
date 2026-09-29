@@ -21,12 +21,38 @@ interface RegistrationItemRecord {
 	entitlement: {
 		id: string;
 		festivalId?: string;
+		festivalSlug?: string;
+		festivalShortName?: string;
 		status?: string;
 		festivalClassId?: string;
+		orderId?: string;
+		divisionId?: string;
+		teacherId?: string;
+		childId?: string;
+		[key: string]: unknown;
 	};
-	festivalClass?: { id: string; displayName: string; price?: string };
+	festivalClass?: {
+		id: string;
+		displayName: string;
+		price?: string;
+		divisionId?: string;
+		festivalSlug?: string;
+		festivalShortName?: string;
+		[key: string]: unknown;
+	};
 	child?: { id: string; name: string };
-	metadata?: { id: string; repertoireJson: RepertoirePiece[] };
+	metadata?: {
+		id: string;
+		repertoireJson: RepertoirePiece[];
+		teacherMembershipId?: string;
+		teacherId?: string;
+		[key: string]: unknown;
+	} | null;
+	festivalSlug?: string;
+	festivalShortName?: string;
+	divisionId?: string;
+	teacherId?: string;
+	[key: string]: unknown;
 }
 
 function isRegistrationActiveOrWaitlisted(status?: string): boolean {
@@ -91,10 +117,19 @@ export function CustomerAccountOrdersPage(props: { slug: string }) {
 		const target = activeRegistration();
 		if (!target?.metadata) return;
 		setEditError(null);
+		const targetFestivalSlug =
+			target.entitlement.festivalSlug ??
+			target.entitlement.festivalShortName ??
+			target.festivalClass?.festivalSlug ??
+			target.festivalClass?.festivalShortName ??
+			target.festivalSlug ??
+			target.festivalShortName ??
+			target.entitlement.festivalId ??
+			"";
 		try {
 			await updateRegistrationMetadata(
 				props.slug,
-				target.entitlement.festivalId ?? "",
+				targetFestivalSlug,
 				target.metadata.id,
 				csrfToken,
 				{ pieces: savedPieces },
@@ -109,14 +144,56 @@ export function CustomerAccountOrdersPage(props: { slug: string }) {
 	async function handleOpenTransfer(item: RegistrationItemRecord) {
 		setTransferTarget(item);
 		setActionError(null);
-		const festivalId = item.entitlement.festivalId;
-		if (!festivalId) return;
+		const orderForEntitlement = item.entitlement.orderId
+			? orders().find(
+					(o) =>
+						(o as { id?: string }).id === item.entitlement.orderId ||
+						o.orderNumber === item.entitlement.orderId,
+				)
+			: undefined;
+		const festivalSlugFromOrder =
+			(
+				orderForEntitlement as {
+					festivalSlug?: string;
+					festivalShortName?: string;
+				}
+			)?.festivalSlug ??
+			(
+				orderForEntitlement as {
+					festivalSlug?: string;
+					festivalShortName?: string;
+				}
+			)?.festivalShortName;
+		const festivalSlug =
+			item.entitlement.festivalSlug ??
+			item.entitlement.festivalShortName ??
+			festivalSlugFromOrder ??
+			item.festivalClass?.festivalSlug ??
+			item.festivalClass?.festivalShortName ??
+			item.festivalSlug ??
+			item.festivalShortName ??
+			item.entitlement.festivalId;
+		if (!festivalSlug) return;
 		setIsLoadingTransferClasses(true);
 		try {
+			const divisionId =
+				item.festivalClass?.divisionId ??
+				item.entitlement.divisionId ??
+				(item as { divisionId?: string }).divisionId;
+			const teacherId =
+				item.metadata?.teacherMembershipId ??
+				item.metadata?.teacherId ??
+				item.entitlement.teacherId ??
+				(item as { teacherId?: string }).teacherId;
+			const childId = item.child?.id ?? item.entitlement.childId;
 			const res = await listRegistrationEligibleClasses(
 				props.slug,
-				festivalId,
-				item.child?.id ? { childId: item.child.id } : undefined,
+				festivalSlug,
+				{
+					childId,
+					divisionId,
+					teacherId,
+				},
 			);
 			setAvailableTransferClasses(res.classes || []);
 		} catch (err) {
