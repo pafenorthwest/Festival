@@ -102,6 +102,7 @@ import {
 
 export interface CreateAppOptions {
 	env?: AppEnv;
+	enableDropTransfer?: boolean;
 	repository?: OrganizationRepository;
 	appUserRepository?: AppUserRepository;
 	authVerifier?: AuthVerifier;
@@ -154,6 +155,10 @@ export async function createApp(options: CreateAppOptions = {}) {
 			requireDatabase: !options.repository,
 			requireFirebaseAdmin: !options.authVerifier,
 		});
+
+	if (options.enableDropTransfer !== undefined) {
+		env.enableDropTransfer = options.enableDropTransfer;
+	}
 
 	if (env.databaseUrl) {
 		process.env.DATABASE_URL = env.databaseUrl;
@@ -224,6 +229,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 	const organizationService = new OrganizationService(
 		repository,
 		adminClassCatalogService,
+		{ enableDropTransfer: Boolean(env.enableDropTransfer) },
 	);
 	const shopifyWebhookSubscriptionService = secretKeyring
 		? new ShopifyWebhookSubscriptionService(
@@ -406,12 +412,15 @@ export async function createApp(options: CreateAppOptions = {}) {
 	)
 		await registrationChangeRepository.ensureReady();
 	const dropTransferService =
-		options.dropTransferService ??
-		new DropTransferService({
-			entitlements: classEntitlementRepository,
-			changes: registrationChangeRepository,
-			classQuery: repository,
-		});
+		options.dropTransferService !== undefined
+			? options.dropTransferService
+			: env.enableDropTransfer
+				? new DropTransferService({
+						entitlements: classEntitlementRepository,
+						changes: registrationChangeRepository,
+						classQuery: repository,
+					})
+				: undefined;
 	const billingRepository =
 		options.billingRepository ??
 		(env.databaseSchema
@@ -564,6 +573,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 			customClaimsWriter,
 			repertoireRepository,
 			dropTransferService,
+			enableDropTransfer: Boolean(env.enableDropTransfer),
 			registrationChangeRepository,
 			billingReconciliationService,
 			communicationService,

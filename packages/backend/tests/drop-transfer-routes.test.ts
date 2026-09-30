@@ -226,7 +226,7 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 			expect(res.status).toBe(400);
 		});
 
-		it("POST drop returns 503 if dropTransferService is not provided", async () => {
+		it("POST drop returns 404 if dropTransferService is not provided", async () => {
 			const ctx = await setupTestContext();
 			const testApp = new Hono();
 			testApp.route(
@@ -242,7 +242,9 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 					headers: { Cookie: `${CUSTOMER_SESSION_COOKIE}=valid-token` },
 				},
 			);
-			expect(res.status).toBe(503);
+			expect(res.status).toBe(404);
+			const body = await res.json();
+			expect(body.error).toBe("Feature 'drop_and_transfer' is not enabled.");
 		});
 
 		it("POST drop returns 404 when registration does not exist", async () => {
@@ -827,7 +829,7 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 			expect(body.changeLogs[0].action).toBe("drop");
 		});
 
-		it("createApp wires dropTransferService and repositories by default without returning 503", async () => {
+		it("createApp({ enableDropTransfer: true, ... }) wires dropTransferService and returns 200", async () => {
 			const ctx = await setupTestContext();
 			const ent = await createEntitlement(ctx.entitlementsRepo, {
 				organizationId: ctx.organization.id,
@@ -836,14 +838,15 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 				status: "confirmed",
 			});
 
-			const { app: defaultApp } = await createApp({
+			const { app: enabledApp } = await createApp({
+				enableDropTransfer: true,
 				repository: ctx.orgRepo,
 				authVerifier: ctx.authVerifier,
 				customerAccountService: ctx.customerAccountService,
 				classEntitlementRepository: ctx.entitlementsRepo,
 			});
 
-			const custRes = await defaultApp.request(
+			const custRes = await enabledApp.request(
 				`/api/organizations/${ctx.organization.slug}/customer/class-registrations/${ent.id}/drop`,
 				{
 					method: "POST",
@@ -852,7 +855,7 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 			);
 			expect(custRes.status).toBe(200);
 
-			const adminLogRes = await defaultApp.request(
+			const adminLogRes = await enabledApp.request(
 				`/api/organizations/${ctx.organization.slug}/festivals/${ctx.festival.shortName}/registrations/${ent.id}/change-log`,
 				{
 					method: "GET",
@@ -863,6 +866,50 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 			const body = await adminLogRes.json();
 			expect(body.changeLogs).toHaveLength(1);
 			expect(body.changeLogs[0].action).toBe("drop");
+		});
+
+		it("createApp({ enableDropTransfer: false, ... }) returns 404 for drop and change-log endpoints", async () => {
+			const ctx = await setupTestContext();
+			const ent = await createEntitlement(ctx.entitlementsRepo, {
+				organizationId: ctx.organization.id,
+				festivalId: ctx.festival.id,
+				festivalClassId: "class-small",
+				status: "confirmed",
+			});
+
+			const { app: disabledApp } = await createApp({
+				enableDropTransfer: false,
+				repository: ctx.orgRepo,
+				authVerifier: ctx.authVerifier,
+				customerAccountService: ctx.customerAccountService,
+				classEntitlementRepository: ctx.entitlementsRepo,
+			});
+
+			const custRes = await disabledApp.request(
+				`/api/organizations/${ctx.organization.slug}/customer/class-registrations/${ent.id}/drop`,
+				{
+					method: "POST",
+					headers: { Cookie: `${CUSTOMER_SESSION_COOKIE}=valid-token` },
+				},
+			);
+			expect(custRes.status).toBe(404);
+			const custBody = await custRes.json();
+			expect(custBody.error).toBe(
+				"Feature 'drop_and_transfer' is not enabled.",
+			);
+
+			const adminLogRes = await disabledApp.request(
+				`/api/organizations/${ctx.organization.slug}/festivals/${ctx.festival.shortName}/registrations/${ent.id}/change-log`,
+				{
+					method: "GET",
+					headers: { Authorization: "Bearer admin" },
+				},
+			);
+			expect(adminLogRes.status).toBe(404);
+			const adminBody = await adminLogRes.json();
+			expect(adminBody.error).toBe(
+				"Feature 'drop_and_transfer' is not enabled.",
+			);
 		});
 	});
 });

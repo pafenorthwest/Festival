@@ -14,12 +14,17 @@ export interface AuthenticatedUser {
 	displayName: string;
 }
 
+export interface OrganizationFeatures {
+	dropTransfer: boolean;
+}
+
 export interface OrganizationRecord {
 	id: string;
 	name: string;
 	slug: string;
 	timezone: string;
 	defaultCurrencyCode: string;
+	features?: OrganizationFeatures;
 	createdAtIso: string;
 }
 
@@ -341,6 +346,7 @@ export interface OrganizationFestivalListResponse {
 export interface PublicOrganizationLandingResponse {
 	organization: Pick<OrganizationRecord, "name" | "slug">;
 	festivals: FestivalSummary[];
+	features?: OrganizationFeatures;
 }
 
 export interface AcceptInviteInput {
@@ -355,6 +361,7 @@ export interface AcceptInviteResponse {
 export interface OrganizationLandingResponse {
 	organization: OrganizationRecord;
 	membership: SessionMembership;
+	features?: OrganizationFeatures;
 }
 
 export interface DismissWelcomeResponse {

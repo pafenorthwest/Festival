@@ -116,40 +116,44 @@ export function FestivalAdminDashboardPage(props: {
 						</button>
 					</div>
 
-					<section
-						aria-labelledby="admin-audit-section-heading"
-						class="panel flow-panel"
-						style="margin-top: 1.5rem;"
-					>
-						<h3 id="admin-audit-section-heading">
-							Registration Audit & Operations
-						</h3>
-						<p class="muted">
-							Inspect change logs, promote waitlisted performers, or drop
-							registrations.
-						</p>
-						<form
-							onSubmit={handleOpenAudit}
-							style="display: flex; gap: 0.5rem; align-items: flex-end; flex-wrap: wrap;"
+					<Show when={props.app.isDropTransferEnabled()}>
+						<section
+							aria-labelledby="admin-audit-section-heading"
+							class="panel flow-panel"
+							style="margin-top: 1.5rem;"
 						>
-							<label
-								class="field"
-								style="margin-bottom: 0; flex: 1; min-width: 250px;"
+							<h3 id="admin-audit-section-heading">
+								Registration Audit & Operations
+							</h3>
+							<p class="muted">
+								Inspect change logs, promote waitlisted performers, or drop
+								registrations.
+							</p>
+							<form
+								onSubmit={handleOpenAudit}
+								style="display: flex; gap: 0.5rem; align-items: flex-end; flex-wrap: wrap;"
 							>
-								<span>Registration ID</span>
-								<input
-									type="text"
-									placeholder="Enter registration or entitlement ID..."
-									value={auditRegistrationId()}
-									onInput={(e) => setAuditRegistrationId(e.currentTarget.value)}
-									required
-								/>
-							</label>
-							<Button type="submit" variant="secondary">
-								Inspect Audit History
-							</Button>
-						</form>
-					</section>
+								<label
+									class="field"
+									style="margin-bottom: 0; flex: 1; min-width: 250px;"
+								>
+									<span>Registration ID</span>
+									<input
+										type="text"
+										placeholder="Enter registration or entitlement ID..."
+										value={auditRegistrationId()}
+										onInput={(e) =>
+											setAuditRegistrationId(e.currentTarget.value)
+										}
+										required
+									/>
+								</label>
+								<Button type="submit" variant="secondary">
+									Inspect Audit History
+								</Button>
+							</form>
+						</section>
+					</Show>
 
 					<Show when={activeAuditId()}>
 						{(regId) => (
