@@ -160,6 +160,7 @@ export default function App() {
 						</Match>
 						<Match when={app.route().kind === "org-customer-account-orders"}>
 							<CustomerAccountOrdersPage
+								app={app}
 								slug={(app.route() as { slug: string }).slug}
 							/>
 						</Match>

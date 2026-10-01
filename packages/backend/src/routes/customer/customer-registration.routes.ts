@@ -39,7 +39,7 @@ function requireDropTransferService(
 	service: DropTransferService | undefined,
 ): DropTransferService {
 	if (!service)
-		throw new AppError("Drop/transfer service is unavailable.", 503);
+		throw new AppError("Feature 'drop_and_transfer' is not enabled.", 404);
 	return service;
 }
 

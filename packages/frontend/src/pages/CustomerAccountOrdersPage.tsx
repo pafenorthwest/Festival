@@ -1,5 +1,6 @@
 import type { CustomerOrderSummary, RepertoirePiece } from "@festival/common";
 import { createSignal, For, Show } from "solid-js";
+import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { Button } from "../components/Button.js";
 import { FestivalRepertoireModal } from "../components/FestivalRepertoireModal.js";
 import {
@@ -60,7 +61,10 @@ function isRegistrationActiveOrWaitlisted(status?: string): boolean {
 	return s === "confirmed" || s === "waitlisted" || s === "active";
 }
 
-export function CustomerAccountOrdersPage(props: { slug: string }) {
+export function CustomerAccountOrdersPage(props: {
+	app: FestivalAppController;
+	slug: string;
+}) {
 	const [orders, setOrders] = createSignal<CustomerOrderSummary[]>([]);
 	const [registrations, setRegistrations] = createSignal<
 		RegistrationItemRecord[]
@@ -302,9 +306,12 @@ export function CustomerAccountOrdersPage(props: { slug: string }) {
 														Edit repertoire
 													</Button>
 													<Show
-														when={isRegistrationActiveOrWaitlisted(
-															item.entitlement.status,
-														)}
+														when={
+															props.app.isDropTransferEnabled() &&
+															isRegistrationActiveOrWaitlisted(
+																item.entitlement.status,
+															)
+														}
 													>
 														<Button
 															type="button"

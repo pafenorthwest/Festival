@@ -44,7 +44,7 @@ function requireDropTransferService(
 	service: DropTransferService | undefined,
 ): DropTransferService {
 	if (!service)
-		throw new AppError("Drop/transfer service is unavailable.", 503);
+		throw new AppError("Feature 'drop_and_transfer' is not enabled.", 404);
 	return service;
 }
 
@@ -52,7 +52,7 @@ function requireChangeRepository(
 	repo: RegistrationChangeRepository | undefined,
 ): RegistrationChangeRepository {
 	if (!repo) {
-		throw new AppError("Registration change repository is unavailable.", 503);
+		throw new AppError("Feature 'drop_and_transfer' is not enabled.", 404);
 	}
 	return repo;
 }

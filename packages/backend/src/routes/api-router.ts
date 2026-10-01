@@ -56,6 +56,7 @@ export interface ApiRouterOptions {
 	customClaimsWriter?: CustomClaimsWriter;
 	repertoireRepository?: RepertoireRepository;
 	dropTransferService?: DropTransferService;
+	enableDropTransfer?: boolean;
 	registrationChangeRepository?: RegistrationChangeRepository;
 	billingReconciliationService?: BillingReconciliationService;
 	communicationService?: CommunicationService;
@@ -82,6 +83,7 @@ export function buildApiRouter(
 		customClaimsWriter,
 		repertoireRepository,
 		dropTransferService,
+		enableDropTransfer,
 		registrationChangeRepository,
 		billingReconciliationService,
 		communicationService,
@@ -105,7 +107,10 @@ export function buildApiRouter(
 			organizationService,
 			authVerifier,
 			dropTransferService,
-			registrationChangeRepository,
+			registrationChangeRepository:
+				(enableDropTransfer ?? Boolean(dropTransferService))
+					? registrationChangeRepository
+					: undefined,
 		}),
 	);
 	router.route(

@@ -21,6 +21,7 @@ export interface AppEnv {
 	customerCacheMaxEntryBytes?: number;
 	customerCacheMaxTotalBytes?: number;
 	reconciliationToken?: string;
+	enableDropTransfer?: boolean;
 }
 
 const LOCAL_API_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
@@ -161,5 +162,6 @@ export function loadEnv(options?: {
 			16 * 1_024 * 1_024,
 		),
 		reconciliationToken: process.env.FESTIVAL_RECONCILIATION_TOKEN?.trim(),
+		enableDropTransfer: process.env.ENABLE_DROP_TRANSFER === "true",
 	};
 }

@@ -254,6 +254,15 @@ export function createFestivalAppState() {
 			settings.capabilities.write_inventory === "granted"
 		);
 	});
+	const isDropTransferEnabled = createMemo(() => {
+		const fromOrg = organization()?.features?.dropTransfer;
+		if (typeof fromOrg === "boolean") return fromOrg;
+		return (
+			typeof import.meta !== "undefined" &&
+			(import.meta as unknown as { env?: Record<string, string> }).env
+				?.FRONT_ENABLE_DROP_TRANSFER === "true"
+		);
+	});
 	const isAdminRoute = createMemo(() =>
 		ADMIN_ROUTE_KINDS.some((kind) => kind === route().kind),
 	);
@@ -480,6 +489,7 @@ export function createFestivalAppState() {
 		isAdminSubRoute,
 		isCreatingMembershipProduct,
 		isDivisionMutationPending,
+		isDropTransferEnabled,
 		isLoadingDivisionConfiguration,
 		isLoadingMembershipProducts,
 		isShopifyTesting,
