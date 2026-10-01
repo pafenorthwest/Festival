@@ -1,9 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type {
 	ClassRegistrationMetadata,
-	RegistrationRepertoireItem,
 	RepertoirePiece,
 } from "@festival/common";
+import {
+	buildIntentLineRecords,
+	repertoireItemsFromLegacyPieces,
+} from "./checkout-line-helpers.js";
+
+export { buildIntentLineRecords, repertoireItemsFromLegacyPieces };
 
 export type CheckoutCartStatus =
 	| "ready"
@@ -36,6 +41,23 @@ export interface CheckoutCartRecord {
 
 export type CheckoutIntentType = "membership" | "class_entry";
 
+export interface CheckoutIntentLineItemRecord {
+	id: string;
+	checkoutIntentId: string;
+	lineIndex: number;
+	lineType: string;
+	festivalClassId: string | null;
+	childId: string | null;
+	offeringId: string | null;
+	shopifyProductGid: string;
+	shopifyVariantGid: string;
+	amount: string;
+	currencyCode: string;
+	divisionId: string | null;
+	divisionNameSnapshot: string | null;
+	createdAtIso: string;
+}
+
 export interface CheckoutIntentRecord {
 	id: string;
 	correlationId: string;
@@ -61,6 +83,7 @@ export interface CheckoutIntentRecord {
 	status: CheckoutIntentStatus;
 	expiresAtIso: string;
 	createdAtIso: string;
+	lines?: CheckoutIntentLineItemRecord[];
 }
 
 export type CheckoutIntentOutcome =
@@ -112,13 +135,15 @@ export interface CheckoutRepository {
 		organizationId: string;
 		festivalId: string;
 		checkoutIntentId: string;
+		checkoutIntentLineId?: string | null;
 		teacherMembershipId: string;
 		accompanistMembershipId: string | null;
 		repertoireJson: RepertoirePiece[];
 		repertoireSnapshotPieces?: RepertoirePiece[];
 	}): Promise<ClassRegistrationMetadata>;
 	linkRegistrationMetadataToEntitlement(params: {
-		checkoutIntentId: string;
+		checkoutIntentId?: string;
+		checkoutIntentLineId?: string;
 		classEntitlementId: string;
 		tx?: { unsafe(sql: string, params?: unknown[]): Promise<unknown> };
 	}): Promise<void>;
@@ -134,6 +159,21 @@ export interface CheckoutRepository {
 			pieces: RepertoirePiece[];
 		},
 	): Promise<ClassRegistrationMetadata>;
+}
+
+export interface CreateCheckoutIntentLineInput {
+	id?: string;
+	lineIndex?: number;
+	lineType?: string;
+	festivalClassId?: string | null;
+	childId?: string | null;
+	offeringId?: string | null;
+	shopifyProductGid: string;
+	shopifyVariantGid: string;
+	amount: string;
+	currencyCode: string;
+	divisionId?: string | null;
+	divisionNameSnapshot?: string | null;
 }
 
 export type CreateCheckoutIntentInput = Omit<
@@ -153,6 +193,7 @@ export type CreateCheckoutIntentInput = Omit<
 	| "divisionId"
 	| "divisionNameSnapshot"
 	| "staffAccessConsent"
+	| "lines"
 > & {
 	intentType?: CheckoutIntentType;
 	offeringId?: string | null;
@@ -164,6 +205,7 @@ export type CreateCheckoutIntentInput = Omit<
 	divisionId?: string | null;
 	divisionNameSnapshot?: string | null;
 	staffAccessConsent?: boolean;
+	lines?: CreateCheckoutIntentLineInput[];
 };
 
 export class InMemoryCheckoutRepository implements CheckoutRepository {
@@ -211,8 +253,9 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 				return { kind: "in_progress" as const };
 			}
 		}
+		const { lines: _lines, ...recordWithoutLines } = record;
 		const value: CheckoutIntentRecord = {
-			...record,
+			...recordWithoutLines,
 			intentType: record.intentType ?? "membership",
 			offeringId: record.offeringId ?? null,
 			entitlementClass: record.entitlementClass ?? null,
@@ -229,6 +272,7 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 			status: "creating",
 			createdAtIso: new Date().toISOString(),
 		};
+		value.lines = buildIntentLineRecords(value, record.lines);
 		this.intents.set(value.id, value);
 		return { kind: "created" as const, intent: { ...value } };
 	}
@@ -334,6 +378,7 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		organizationId: string;
 		festivalId: string;
 		checkoutIntentId: string;
+		checkoutIntentLineId?: string | null;
 		teacherMembershipId: string;
 		accompanistMembershipId: string | null;
 		repertoireJson: RepertoirePiece[];
@@ -349,6 +394,7 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 			organizationId: params.organizationId,
 			festivalId: params.festivalId,
 			checkoutIntentId: params.checkoutIntentId,
+			checkoutIntentLineId: params.checkoutIntentLineId ?? null,
 			classEntitlementId: null,
 			teacherMembershipId: params.teacherMembershipId,
 			accompanistMembershipId: params.accompanistMembershipId,
@@ -356,16 +402,26 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 			repertoireItems,
 			createdAt: new Date(),
 		};
+		this.registrationMetadata.set(params.id, record);
 		this.registrationMetadata.set(params.checkoutIntentId, record);
+		if (params.checkoutIntentLineId) {
+			this.registrationMetadata.set(params.checkoutIntentLineId, record);
+		}
 		return { ...record };
 	}
 
 	async linkRegistrationMetadataToEntitlement(params: {
-		checkoutIntentId: string;
+		checkoutIntentId?: string;
+		checkoutIntentLineId?: string;
 		classEntitlementId: string;
 		tx?: { unsafe(sql: string, params?: unknown[]): Promise<unknown> };
 	}): Promise<void> {
-		const record = this.registrationMetadata.get(params.checkoutIntentId);
+		const record = [...this.registrationMetadata.values()].find((meta) => {
+			if (params.checkoutIntentLineId) {
+				return meta.checkoutIntentLineId === params.checkoutIntentLineId;
+			}
+			return meta.checkoutIntentId === params.checkoutIntentId;
+		});
 		if (record) {
 			record.classEntitlementId = params.classEntitlementId;
 		}
@@ -429,35 +485,4 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 			return { kind: "ready", intent: { ...intent }, cart: { ...cart } };
 		return { kind: "failed" };
 	}
-}
-
-/**
- * Compatibility mapping while callers still submit the MVP title/composer JSON
- * shape. The relational snapshot is the durable source for new reads.
- */
-export function repertoireItemsFromLegacyPieces(
-	registrationMetadataId: string,
-	organizationId: string,
-	pieces: RepertoirePiece[],
-): RegistrationRepertoireItem[] {
-	return pieces.map((piece, index) => ({
-		id: randomUUID(),
-		registrationMetadataId,
-		organizationId,
-		displayOrder: index + 1,
-		catalogWorkId: null,
-		titleSnapshot: piece.title,
-		performedMovementText:
-			typeof piece.movement === "string" ? piece.movement.trim() || null : null,
-		durationSeconds: piece.durationSeconds,
-		contributors: [
-			{
-				id: randomUUID(),
-				displayOrder: 1,
-				role: "Composer",
-				displayNameSnapshot: piece.composer,
-				catalogContributorId: null,
-			},
-		],
-	}));
 }

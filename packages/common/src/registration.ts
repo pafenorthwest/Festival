@@ -65,6 +65,7 @@ export interface ClassRegistrationMetadata {
 	organizationId: string;
 	festivalId: string;
 	checkoutIntentId: string;
+	checkoutIntentLineId?: string | null;
 	classEntitlementId: string | null;
 	teacherMembershipId: string;
 	accompanistMembershipId: string | null;

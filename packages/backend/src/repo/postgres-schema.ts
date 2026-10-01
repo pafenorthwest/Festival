@@ -246,6 +246,22 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			status TEXT NOT NULL CHECK (status IN ('creating', 'ready', 'checkout_started', 'failed', 'expired', 'superseded', 'approved', 'rejected', 'needs_review')),
 			expires_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.checkout_intent_lines (
+			id TEXT PRIMARY KEY,
+			checkout_intent_id TEXT NOT NULL REFERENCES ${safeSchema}.checkout_intents (id) ON DELETE CASCADE,
+			line_index INTEGER NOT NULL,
+			line_type TEXT NOT NULL DEFAULT 'class_entry',
+			festival_class_id TEXT NULL REFERENCES ${safeSchema}.festival_class_configurations (id),
+			child_id TEXT NULL REFERENCES ${safeSchema}.festival_children (id),
+			offering_id TEXT NULL REFERENCES ${safeSchema}.products (id),
+			shopify_product_gid TEXT NOT NULL,
+			shopify_variant_gid TEXT NOT NULL,
+			amount TEXT NOT NULL,
+			currency_code TEXT NOT NULL,
+			division_id TEXT NULL,
+			division_name_snapshot TEXT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.checkout_recovery_requests (
 			id TEXT PRIMARY KEY,
 			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
@@ -266,6 +282,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			parent_customer_id TEXT NOT NULL,
 			child_id TEXT NOT NULL REFERENCES ${safeSchema}.festival_children (id) ON DELETE RESTRICT,
 			checkout_intent_id TEXT NOT NULL REFERENCES ${safeSchema}.checkout_intents (id) ON DELETE RESTRICT,
+			checkout_intent_line_id TEXT NULL REFERENCES ${safeSchema}.checkout_intent_lines (id) ON DELETE SET NULL,
 			shopify_order_gid TEXT NOT NULL,
 			shopify_order_line_gid TEXT NOT NULL,
 			paid_amount_cents INTEGER NOT NULL CHECK (paid_amount_cents >= 0),
@@ -320,6 +337,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			organization_id TEXT NOT NULL,
 			festival_id TEXT NOT NULL,
 			checkout_intent_id TEXT NOT NULL,
+			checkout_intent_line_id TEXT,
 			class_entitlement_id TEXT,
 			teacher_membership_id TEXT NOT NULL,
 			accompanist_membership_id TEXT,
@@ -333,6 +351,8 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 				FOREIGN KEY (festival_id) REFERENCES ${safeSchema}.festivals(id) ON DELETE RESTRICT,
 			CONSTRAINT registration_metadata_checkout_intent_id_fkey
 				FOREIGN KEY (checkout_intent_id) REFERENCES ${safeSchema}.checkout_intents(id) ON DELETE RESTRICT,
+			CONSTRAINT registration_metadata_checkout_intent_line_id_fkey
+				FOREIGN KEY (checkout_intent_line_id) REFERENCES ${safeSchema}.checkout_intent_lines(id) ON DELETE CASCADE,
 			CONSTRAINT registration_metadata_class_entitlement_id_fkey
 				FOREIGN KEY (class_entitlement_id) REFERENCES ${safeSchema}.class_entitlements(id) ON DELETE SET NULL,
 			CONSTRAINT registration_metadata_teacher_membership_id_fkey
@@ -717,8 +737,14 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			ON ${safeSchema}.refund_events (organization_id, class_entitlement_id);
 		CREATE INDEX IF NOT EXISTS idx_checkout_intents_org_class ON ${safeSchema}.checkout_intents (organization_id, festival_class_id) WHERE festival_class_id IS NOT NULL;
 		CREATE INDEX IF NOT EXISTS idx_checkout_intents_org_child ON ${safeSchema}.checkout_intents (organization_id, child_id) WHERE child_id IS NOT NULL;
-		CREATE UNIQUE INDEX IF NOT EXISTS registration_metadata_checkout_intent_id_unique
+		CREATE INDEX IF NOT EXISTS idx_checkout_intent_lines_intent_id ON ${safeSchema}.checkout_intent_lines (checkout_intent_id);
+		CREATE INDEX IF NOT EXISTS idx_checkout_intent_lines_child_id ON ${safeSchema}.checkout_intent_lines (child_id);
+		CREATE INDEX IF NOT EXISTS idx_checkout_intent_lines_festival_class_id ON ${safeSchema}.checkout_intent_lines (festival_class_id);
+		CREATE INDEX IF NOT EXISTS registration_metadata_checkout_intent_id_idx
 			ON ${safeSchema}.registration_metadata(checkout_intent_id);
+		CREATE UNIQUE INDEX IF NOT EXISTS registration_metadata_checkout_intent_line_id_unique
+			ON ${safeSchema}.registration_metadata(checkout_intent_line_id)
+			WHERE checkout_intent_line_id IS NOT NULL;
 		CREATE INDEX IF NOT EXISTS registration_metadata_organization_class_entitlement_idx
 			ON ${safeSchema}.registration_metadata(organization_id, class_entitlement_id)
 			WHERE class_entitlement_id IS NOT NULL;
@@ -765,6 +791,12 @@ export async function initializePostgresSchema(schema: string): Promise<void> {
 		);
 		await transaction.unsafe(
 			`ALTER TABLE IF EXISTS ${safeSchema}.repertoire_works ADD COLUMN IF NOT EXISTS imslp_url TEXT;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.registration_metadata ADD COLUMN IF NOT EXISTS checkout_intent_line_id TEXT;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.class_entitlements ADD COLUMN IF NOT EXISTS checkout_intent_line_id TEXT;`,
 		);
 	});
 	initializations.set(safeSchema, initialization);

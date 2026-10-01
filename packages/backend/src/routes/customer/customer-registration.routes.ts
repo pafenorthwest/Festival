@@ -1,4 +1,8 @@
-import type { RepertoirePiece } from "@festival/common";
+import type {
+	ClassCheckoutLineItemInput,
+	ProposedPurchaseLineItem,
+	RepertoirePiece,
+} from "@festival/common";
 import { type Context, Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import { type ApiVariables, toJsonError } from "../../auth/tenant-context.js";
@@ -76,11 +80,14 @@ function parseCheckoutPayload(raw: unknown): Record<string, unknown> {
 	return raw as Record<string, unknown>;
 }
 
-async function readJsonBody(c: Context): Promise<unknown> {
+async function readJsonBody(
+	c: Context,
+	errorMessage = "Checkout request is invalid.",
+): Promise<unknown> {
 	try {
 		return await c.req.json();
 	} catch {
-		throw new AppError("Checkout request is invalid.", 400);
+		throw new AppError(errorMessage, 400);
 	}
 }
 
@@ -105,21 +112,30 @@ function buildCheckoutInput(
 ) {
 	const opt = (key: string) =>
 		payload[key] !== undefined ? { [key]: payload[key] } : {};
-	return {
+	const base = {
 		organizationId: access.organizationId,
 		customerId: access.customerId,
 		sessionId: access.sessionId,
 		integrationVersion: access.integrationVersion,
 		buyerAccessToken: access.shopifyCustomerAccessToken,
 		idempotencyKey,
+		...opt("festivalId"),
+		...(festivalShortName !== undefined ? { festivalShortName } : {}),
+	};
+	if (Array.isArray(payload.lineItems)) {
+		return {
+			...base,
+			lineItems: payload.lineItems as ClassCheckoutLineItemInput[],
+		};
+	}
+	return {
+		...base,
 		festivalClassId: payload.festivalClassId as string,
 		childId: payload.childId as string,
 		teacherId: payload.teacherId as string,
 		pieces: payload.pieces as RepertoirePiece[],
 		...opt("divisionId"),
 		...opt("accompanistId"),
-		...opt("festivalId"),
-		...(festivalShortName !== undefined ? { festivalShortName } : {}),
 	};
 }
 
@@ -156,6 +172,7 @@ export async function handleClassCheckout(
 				"festivalId",
 				"festivalShortName",
 				"organizationSlug",
+				"lineItems",
 			],
 			"Class checkout request",
 		);
@@ -173,6 +190,63 @@ export async function handleClassCheckout(
 			correlationId: result.correlationId,
 		};
 		return c.json(responseDto);
+	} catch (error) {
+		return toJsonError(c, error);
+	}
+}
+
+function parseEligibilityPayload(raw: unknown): {
+	items: ProposedPurchaseLineItem[];
+} {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+		throw new AppError("Eligibility request is invalid.", 400);
+	}
+	const { items } = raw as { items?: unknown };
+	if (!Array.isArray(items) || items.length === 0) {
+		throw new AppError("Eligibility request is invalid.", 400);
+	}
+	for (const item of items) {
+		if (
+			!item ||
+			typeof item !== "object" ||
+			Array.isArray(item) ||
+			typeof item.childId !== "string" ||
+			!item.childId.trim() ||
+			typeof item.festivalClassId !== "string" ||
+			!item.festivalClassId.trim()
+		) {
+			throw new AppError("Eligibility request is invalid.", 400);
+		}
+	}
+	return { items: items as ProposedPurchaseLineItem[] };
+}
+
+export async function handleEvaluateEligibility(
+	c: Context<CustomerEnv>,
+	accountService?: CustomerAccountService,
+	checkoutService?: ClassCheckoutService,
+): Promise<Response> {
+	try {
+		assertNoBearerPrincipal(c.req.header("Authorization"));
+		if (!accountService || !checkoutService) {
+			throw new AppError("Class checkout is unavailable.", 503);
+		}
+		const origin = resolveRequestOrigin(c);
+		const session = await accountService.customerSession(
+			requireSlug(c),
+			getCookie(c, CUSTOMER_SESSION_COOKIE),
+			c.req.header("X-CSRF-Token"),
+			origin,
+		);
+		const body = parseEligibilityPayload(
+			await readJsonBody(c, "Eligibility request is invalid."),
+		);
+		const result = await checkoutService.evaluateEligibility({
+			organizationId: session.organizationId,
+			festivalShortName: c.req.param("festivalShortName"),
+			items: body.items,
+		});
+		return c.json({ results: result.results });
 	} catch (error) {
 		return toJsonError(c, error);
 	}
@@ -223,6 +297,9 @@ export function buildCustomerRegistrationRoutes(
 	);
 	router.post("/class-checkout", (c) => handleClassCheckout(c, cas, ccs));
 	router.post(`${reg}/checkout`, (c) => handleClassCheckout(c, cas, ccs));
+	router.post(`${reg}/eligibility`, (c) =>
+		handleEvaluateEligibility(c, cas, ccs),
+	);
 	const listRegs = (c: Context<CustomerEnv>) =>
 		withCustomerAccount(c, cas, (s) =>
 			s.listClassRegistrations(

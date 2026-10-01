@@ -407,7 +407,7 @@ export class InMemoryMembershipCommerceRepository
 		grant?: CreateEntitlementGrantSnapshotInput;
 		classEntitlement?: CreateClassEntitlementInput;
 	}) {
-		const finalizationKey = `${input.decision.organizationId}\u0000${input.decision.checkoutIntentId ? `intent:${input.decision.checkoutIntentId}` : `order:${input.decision.shopifyOrderGid}`}`;
+		const finalizationKey = `${input.decision.organizationId}\u0000${input.decision.checkoutIntentId ? `intent:${input.decision.checkoutIntentId}` : `order:${input.decision.shopifyOrderGid}`}${input.decision.shopifyOrderLineGid ? `:line:${input.decision.shopifyOrderLineGid}` : ""}`;
 		const pending = this.finalizations.get(finalizationKey);
 		if (pending) {
 			const result = await pending;
@@ -439,19 +439,21 @@ export class InMemoryMembershipCommerceRepository
 		const orderKey = `${input.decision.organizationId}\u0000${input.decision.shopifyOrderGid}`;
 		const existing = this.decisions.get(orderKey);
 		if (existing && existing.status !== "pending_validation") {
-			await this.resolveTerminalIntent(existing);
-			await this.markDeliveryProcessed(input.deliveryId);
 			const existingClass = input.decision.shopifyOrderLineGid
 				? await this.findClassEntitlementByOrderLine(
 						input.decision.organizationId,
 						input.decision.shopifyOrderLineGid,
 					)
 				: null;
-			return {
-				decision: { ...existing },
-				classEntitlement: existingClass ?? undefined,
-				existing: true,
-			};
+			if (!input.classEntitlement || existingClass) {
+				await this.resolveTerminalIntent(existing);
+				await this.markDeliveryProcessed(input.deliveryId);
+				return {
+					decision: { ...existing },
+					classEntitlement: existingClass ?? undefined,
+					existing: true,
+				};
+			}
 		}
 		if (input.decision.checkoutIntentId) {
 			const checkoutKey = `${input.decision.organizationId}\u0000${input.decision.checkoutIntentId}`;
@@ -541,6 +543,8 @@ export class InMemoryMembershipCommerceRepository
 				if (this.checkout && input.classEntitlement.checkoutIntentId) {
 					await this.checkout.linkRegistrationMetadataToEntitlement({
 						checkoutIntentId: input.classEntitlement.checkoutIntentId,
+						checkoutIntentLineId:
+							input.classEntitlement.checkoutIntentLineId ?? undefined,
 						classEntitlementId: classEntitlement.id,
 					});
 				}
@@ -663,6 +667,7 @@ export class InMemoryMembershipCommerceRepository
 			parentCustomerId: input.parentCustomerId,
 			childId: input.childId,
 			checkoutIntentId: input.checkoutIntentId,
+			checkoutIntentLineId: input.checkoutIntentLineId ?? null,
 			shopifyOrderGid: input.shopifyOrderGid,
 			shopifyOrderLineGid: input.shopifyOrderLineGid,
 			paidAmountCents: input.paidAmountCents,

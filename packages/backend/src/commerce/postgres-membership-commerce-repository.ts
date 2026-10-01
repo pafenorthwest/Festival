@@ -126,6 +126,11 @@ function classEntitlementFromRow(
 		parentCustomerId: String(row.parent_customer_id),
 		childId: String(row.child_id),
 		checkoutIntentId: String(row.checkout_intent_id),
+		checkoutIntentLineId:
+			row.checkout_intent_line_id !== null &&
+			row.checkout_intent_line_id !== undefined
+				? String(row.checkout_intent_line_id)
+				: null,
 		shopifyOrderGid: String(row.shopify_order_gid),
 		shopifyOrderLineGid: String(row.shopify_order_line_gid),
 		paidAmountCents: Number(row.paid_amount_cents),
@@ -399,21 +404,23 @@ export class PostgresMembershipCommerceRepository
 				[input.decision.organizationId, input.decision.shopifyOrderGid],
 			)) as Array<Record<string, unknown>>;
 			if (existingRows[0] && existingRows[0].status !== "pending_validation") {
-				await tx.unsafe(
-					`UPDATE ${this.schema}.shopify_webhook_deliveries SET status = 'processed', failure_category = NULL, processed_at = NOW() WHERE id = $1`,
-					[input.deliveryId],
-				);
 				const existingClass = input.decision.shopifyOrderLineGid
 					? await this.findClassEntitlementByOrderLine(
 							input.decision.organizationId,
 							input.decision.shopifyOrderLineGid,
 						)
 					: null;
-				return {
-					decision: decision(existingRows[0]),
-					classEntitlement: existingClass ?? undefined,
-					existing: true,
-				};
+				if (!input.classEntitlement || existingClass) {
+					await tx.unsafe(
+						`UPDATE ${this.schema}.shopify_webhook_deliveries SET status = 'processed', failure_category = NULL, processed_at = NOW() WHERE id = $1`,
+						[input.deliveryId],
+					);
+					return {
+						decision: decision(existingRows[0]),
+						classEntitlement: existingClass ?? undefined,
+						existing: true,
+					};
+				}
 			}
 			if (input.decision.checkoutIntentId) {
 				const correlatedRows = (await tx.unsafe(
@@ -629,10 +636,10 @@ export class PostgresMembershipCommerceRepository
 				const entitlementId = classEntitlementInput.id ?? randomUUID();
 				const entitlementRows = (await tx.unsafe(
 					`INSERT INTO ${this.schema}.class_entitlements (
-						id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at, updated_at
-					) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW(),NOW())
+						id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at, updated_at
+					) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW(),NOW())
 					ON CONFLICT (organization_id, shopify_order_line_gid) DO UPDATE SET updated_at = ${this.schema}.class_entitlements.updated_at
-					RETURNING id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text`,
+					RETURNING id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text`,
 					[
 						entitlementId,
 						classEntitlementInput.organizationId,
@@ -641,6 +648,7 @@ export class PostgresMembershipCommerceRepository
 						classEntitlementInput.parentCustomerId,
 						classEntitlementInput.childId,
 						classEntitlementInput.checkoutIntentId,
+						classEntitlementInput.checkoutIntentLineId ?? null,
 						classEntitlementInput.shopifyOrderGid,
 						classEntitlementInput.shopifyOrderLineGid,
 						classEntitlementInput.paidAmountCents,
@@ -650,13 +658,23 @@ export class PostgresMembershipCommerceRepository
 				)) as Array<Record<string, unknown>>;
 				if (entitlementRows[0]) {
 					createdClassEntitlement = classEntitlementFromRow(entitlementRows[0]);
-					await tx.unsafe(
-						`UPDATE ${this.schema}.registration_metadata SET class_entitlement_id = $1 WHERE checkout_intent_id = $2`,
-						[
-							createdClassEntitlement.id,
-							classEntitlementInput.checkoutIntentId,
-						],
-					);
+					if (classEntitlementInput.checkoutIntentLineId) {
+						await tx.unsafe(
+							`UPDATE ${this.schema}.registration_metadata SET class_entitlement_id = $1 WHERE checkout_intent_line_id = $2`,
+							[
+								createdClassEntitlement.id,
+								classEntitlementInput.checkoutIntentLineId,
+							],
+						);
+					} else {
+						await tx.unsafe(
+							`UPDATE ${this.schema}.registration_metadata SET class_entitlement_id = $1 WHERE checkout_intent_id = $2`,
+							[
+								createdClassEntitlement.id,
+								classEntitlementInput.checkoutIntentId,
+							],
+						);
+					}
 				}
 			}
 			const now = finalDecision.updatedAtIso;
@@ -761,10 +779,10 @@ export class PostgresMembershipCommerceRepository
 		const id = input.id ?? randomUUID();
 		const rows = (await sql.unsafe(
 			`INSERT INTO ${this.schema}.class_entitlements (
-				id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at, updated_at
-			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW(),NOW())
+				id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at, updated_at
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW(),NOW())
 			ON CONFLICT (organization_id, shopify_order_line_gid) DO NOTHING
-			RETURNING id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text`,
+			RETURNING id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text`,
 			[
 				id,
 				input.organizationId,
@@ -773,6 +791,7 @@ export class PostgresMembershipCommerceRepository
 				input.parentCustomerId,
 				input.childId,
 				input.checkoutIntentId,
+				input.checkoutIntentLineId ?? null,
 				input.shopifyOrderGid,
 				input.shopifyOrderLineGid,
 				input.paidAmountCents,
@@ -797,7 +816,7 @@ export class PostgresMembershipCommerceRepository
 	): Promise<ClassEntitlement | null> {
 		await this.ensureReady();
 		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text
+			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text
 			FROM ${this.schema}.class_entitlements
 			WHERE organization_id = $1 AND id = $2`,
 			[organizationId, id],
@@ -838,7 +857,7 @@ export class PostgresMembershipCommerceRepository
 		const whereClause =
 			conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text
+			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text
 			FROM ${this.schema}.class_entitlements
 			${whereClause}
 			ORDER BY created_at DESC`,
@@ -853,7 +872,7 @@ export class PostgresMembershipCommerceRepository
 	): Promise<ClassEntitlement | null> {
 		await this.ensureReady();
 		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text
+			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text
 			FROM ${this.schema}.class_entitlements
 			WHERE organization_id = $1 AND shopify_order_line_gid = $2`,
 			[organizationId, shopifyOrderLineGid],
@@ -867,7 +886,7 @@ export class PostgresMembershipCommerceRepository
 	): Promise<ClassEntitlement | null> {
 		await this.ensureReady();
 		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text
+			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text
 			FROM ${this.schema}.class_entitlements
 			WHERE organization_id = $1 AND checkout_intent_id = $2`,
 			[organizationId, checkoutIntentId],
@@ -888,7 +907,7 @@ export class PostgresMembershipCommerceRepository
 			`UPDATE ${this.schema}.class_entitlements
 			SET status = $3, updated_at = NOW()
 			WHERE organization_id = $1 AND id = $2
-			RETURNING id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text`,
+			RETURNING id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text`,
 			[organizationId, id, status],
 		)) as Array<Record<string, unknown>>;
 		return rows[0] ? classEntitlementFromRow(rows[0]) : null;
