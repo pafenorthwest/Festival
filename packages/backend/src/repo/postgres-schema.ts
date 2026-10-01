@@ -150,8 +150,10 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			display_name TEXT NOT NULL, normalized_name TEXT NOT NULL,
 			is_active BOOLEAN NOT NULL DEFAULT TRUE,
 			display_order INTEGER NOT NULL CHECK (display_order >= 0),
+			required_subtype_id TEXT NULL REFERENCES ${safeSchema}.registration_catalog_values (id) ON DELETE SET NULL,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			UNIQUE (organization_id, kind, normalized_name), UNIQUE (organization_id, kind, display_order)
+			UNIQUE (organization_id, kind, normalized_name), UNIQUE (organization_id, kind, display_order),
+			CHECK (required_subtype_id IS NULL OR required_subtype_id <> id)
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.festival_class_configurations (
 			id TEXT PRIMARY KEY,
@@ -740,6 +742,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			ON ${safeSchema}.billing_ledger (organization_id, customer_id, created_at);
 		CREATE INDEX IF NOT EXISTS idx_message_logs_org_event
 			ON ${safeSchema}.message_logs (organization_id, event_id);
+		CREATE INDEX IF NOT EXISTS registration_catalog_values_required_subtype_idx ON ${safeSchema}.registration_catalog_values (organization_id, required_subtype_id);
 	`;
 }
 

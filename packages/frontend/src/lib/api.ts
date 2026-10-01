@@ -1003,10 +1003,39 @@ export function createFestivalClassSubtype(
 	slug: string,
 	festivalSlug: string,
 	displayName: string,
+	requiredSubtypeId?: string | null,
 ) {
 	return requestJson<{ value: RegistrationCatalogValue }>(
 		`/api/organizations/${encodeURIComponent(slug)}/admin/festivals/${encodeURIComponent(festivalSlug)}/class-subtypes`,
-		{ method: "POST", body: JSON.stringify({ displayName }) },
+		{
+			method: "POST",
+			body: JSON.stringify({
+				displayName,
+				...(requiredSubtypeId !== undefined
+					? { requiredSubtypeId: requiredSubtypeId || null }
+					: {}),
+			}),
+		},
+		idToken,
+	);
+}
+
+export function updateAdminClassSubtype(
+	idToken: string,
+	slug: string,
+	id: string,
+	input: {
+		displayName?: string;
+		isActive?: boolean;
+		requiredSubtypeId?: string | null;
+	},
+) {
+	return requestJson<{ value: RegistrationCatalogValue }>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/class-subtypes/${encodeURIComponent(id)}`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
 		idToken,
 	);
 }

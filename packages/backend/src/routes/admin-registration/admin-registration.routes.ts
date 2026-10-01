@@ -173,7 +173,9 @@ export function buildAdminRegistrationRoutes(
 					const payload = await c.req.json();
 					assertAllowedFields(
 						payload,
-						["displayName"],
+						kind === "class_subtype"
+							? ["displayName", "requiredSubtypeId"]
+							: ["displayName"],
 						"Registration catalog request",
 					);
 					c.status(201);
@@ -182,6 +184,7 @@ export function buildAdminRegistrationRoutes(
 							getRequiredTenant(c),
 							kind,
 							(payload as { displayName?: unknown })?.displayName,
+							(payload as { requiredSubtypeId?: unknown })?.requiredSubtypeId,
 						),
 					);
 				} catch (error) {
@@ -230,7 +233,9 @@ export function buildAdminRegistrationRoutes(
 					const payload = await c.req.json();
 					assertAllowedFields(
 						payload,
-						["displayName", "isActive"],
+						kind === "class_subtype"
+							? ["displayName", "isActive", "requiredSubtypeId"]
+							: ["displayName", "isActive"],
 						"Registration catalog update request",
 					);
 					return c.json(
@@ -238,7 +243,11 @@ export function buildAdminRegistrationRoutes(
 							getRequiredTenant(c),
 							kind,
 							c.req.param("id"),
-							payload as { displayName?: unknown; isActive?: unknown },
+							payload as {
+								displayName?: unknown;
+								isActive?: unknown;
+								requiredSubtypeId?: unknown;
+							},
 						),
 					);
 				} catch (error) {

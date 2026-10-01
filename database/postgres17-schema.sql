@@ -532,8 +532,10 @@ CREATE TABLE orgs.registration_catalog_values (
     normalized_name text NOT NULL,
     is_active boolean DEFAULT true NOT NULL,
     display_order integer NOT NULL,
+    required_subtype_id text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT registration_catalog_values_check CHECK (((required_subtype_id IS NULL) OR (required_subtype_id <> id))),
     CONSTRAINT registration_catalog_values_display_order_check CHECK ((display_order >= 0)),
     CONSTRAINT registration_catalog_values_kind_check CHECK ((kind = ANY (ARRAY['class_subtype'::text, 'instrument'::text])))
 );
@@ -1786,6 +1788,13 @@ CREATE INDEX membership_validation_customer_idx ON orgs.membership_validation_de
 
 
 --
+-- Name: registration_catalog_values_required_subtype_idx; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX registration_catalog_values_required_subtype_idx ON orgs.registration_catalog_values USING btree (organization_id, required_subtype_id);
+
+
+--
 -- Name: registration_metadata_checkout_intent_id_unique; Type: INDEX; Schema: orgs; Owner: -
 --
 
@@ -2130,6 +2139,14 @@ ALTER TABLE ONLY orgs.registration_age_configurations
 
 ALTER TABLE ONLY orgs.registration_catalog_values
     ADD CONSTRAINT registration_catalog_values_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: registration_catalog_values registration_catalog_values_required_subtype_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.registration_catalog_values
+    ADD CONSTRAINT registration_catalog_values_required_subtype_id_fkey FOREIGN KEY (required_subtype_id) REFERENCES orgs.registration_catalog_values(id) ON DELETE SET NULL;
 
 
 --

@@ -99,6 +99,31 @@ function deriveFestivalCode(id: string): string {
 	return id.replaceAll("-", "").slice(0, 6);
 }
 
+function parseRequiredSubtypeId(value: unknown): string | null | undefined {
+	if (value === undefined) return undefined;
+	if (value === null || typeof value === "string") return value;
+	throw new AppError("Required class subtype must be a string or null.", 400);
+}
+
+function handleCatalogRepositoryError(error: unknown): never {
+	if (error instanceof AppError) {
+		throw error;
+	}
+	if (error instanceof Error) {
+		if (error.message === "Registration catalog value already exists.") {
+			throw new AppError(error.message, 409);
+		}
+		if (
+			error.message === "Class subtype cannot depend on itself." ||
+			error.message === "Class subtype dependency cycle detected." ||
+			error.message === "Required class subtype was not found."
+		) {
+			throw new AppError(error.message, 400);
+		}
+	}
+	throw error;
+}
+
 export class OrganizationService {
 	constructor(
 		readonly repository: OrganizationRepository,
@@ -289,8 +314,10 @@ export class OrganizationService {
 		tenant: TenantContext,
 		kind: "class_subtype" | "instrument",
 		value: unknown,
+		requiredSubtypeId?: unknown,
 	) {
 		const displayName = this.requireDivisionName(value);
+		const parsedRequiredSubtypeId = parseRequiredSubtypeId(requiredSubtypeId);
 		try {
 			return {
 				value: await this.repository.createRegistrationCatalogValue({
@@ -298,15 +325,11 @@ export class OrganizationService {
 					kind,
 					displayName,
 					normalizedName: divisionNameUniquenessKey(displayName),
+					requiredSubtypeId: parsedRequiredSubtypeId,
 				}),
 			};
 		} catch (error) {
-			if (
-				error instanceof Error &&
-				error.message === "Registration catalog value already exists."
-			)
-				throw new AppError(error.message, 409);
-			throw error;
+			handleCatalogRepositoryError(error);
 		}
 	}
 
@@ -314,11 +337,17 @@ export class OrganizationService {
 		tenant: TenantContext,
 		kind: "class_subtype" | "instrument",
 		id: string,
-		input: { displayName?: unknown; isActive?: unknown },
+		input: {
+			displayName?: unknown;
+			isActive?: unknown;
+			requiredSubtypeId?: unknown;
+		},
 	) {
 		if (
 			!input ||
-			(input.displayName === undefined && input.isActive === undefined)
+			(input.displayName === undefined &&
+				input.isActive === undefined &&
+				input.requiredSubtypeId === undefined)
 		)
 			throw new AppError("Registration catalog update is required.", 400);
 		if (input.isActive !== undefined && typeof input.isActive !== "boolean")
@@ -326,6 +355,7 @@ export class OrganizationService {
 				"Registration catalog active state must be a boolean.",
 				400,
 			);
+		const requiredSubtypeId = parseRequiredSubtypeId(input.requiredSubtypeId);
 		const displayName =
 			input.displayName === undefined
 				? undefined
@@ -341,17 +371,13 @@ export class OrganizationService {
 						? undefined
 						: divisionNameUniquenessKey(displayName),
 				isActive: input.isActive as boolean | undefined,
+				requiredSubtypeId,
 			});
 			if (!value)
 				throw new AppError("Registration catalog value not found.", 404);
 			return { value };
 		} catch (error) {
-			if (
-				error instanceof Error &&
-				error.message === "Registration catalog value already exists."
-			)
-				throw new AppError(error.message, 409);
-			throw error;
+			handleCatalogRepositoryError(error);
 		}
 	}
 
@@ -876,6 +902,7 @@ export class OrganizationService {
 		tenant: TenantContext,
 		festivalShortName: string,
 		value: unknown,
+		requiredSubtypeId?: unknown,
 	) {
 		const festival = await this.repository.findFestivalByShortName(
 			tenant.organization.id,
@@ -884,6 +911,7 @@ export class OrganizationService {
 		if (!festival) throw new AppError("Festival not found.", 404);
 		const displayName = this.requireDivisionName(value);
 		const normalizedName = divisionNameUniquenessKey(displayName);
+		const parsedRequiredSubtypeId = parseRequiredSubtypeId(requiredSubtypeId);
 		const existing = (
 			await this.repository.listRegistrationCatalogValues(
 				tenant.organization.id,
@@ -893,20 +921,25 @@ export class OrganizationService {
 			(candidate) =>
 				divisionNameUniquenessKey(candidate.displayName) === normalizedName,
 		);
-		const created =
-			existing ??
-			(await this.repository.createRegistrationCatalogValue({
+		try {
+			const created =
+				existing ??
+				(await this.repository.createRegistrationCatalogValue({
+					organizationId: tenant.organization.id,
+					kind: "class_subtype",
+					displayName,
+					normalizedName,
+					requiredSubtypeId: parsedRequiredSubtypeId,
+				}));
+			await this.repository.associateFestivalClassSubtype({
 				organizationId: tenant.organization.id,
-				kind: "class_subtype",
-				displayName,
-				normalizedName,
-			}));
-		await this.repository.associateFestivalClassSubtype({
-			organizationId: tenant.organization.id,
-			festivalId: festival.id,
-			classSubtypeId: created.id,
-		});
-		return { value: created };
+				festivalId: festival.id,
+				classSubtypeId: created.id,
+			});
+			return { value: created };
+		} catch (error) {
+			handleCatalogRepositoryError(error);
+		}
 	}
 
 	async createFestivalClass(

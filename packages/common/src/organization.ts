@@ -62,6 +62,7 @@ export interface RegistrationCatalogValue {
 	displayName: string;
 	isActive: boolean;
 	displayOrder: number;
+	requiredSubtypeId?: string | null;
 	createdAtIso: string;
 	updatedAtIso: string;
 }
