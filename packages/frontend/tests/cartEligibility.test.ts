@@ -19,6 +19,10 @@ const cartViewSource = await Bun.file(
 	),
 ).text();
 
+const flushTicks = async (delayMs = 20) => {
+	await new Promise((resolve) => setTimeout(resolve, delayMs));
+};
+
 describe("useCartEligibility hook", () => {
 	it("initializes with empty state and does not evaluate when cart is empty", async () => {
 		await new Promise<void>((resolve) => {
@@ -90,8 +94,7 @@ describe("useCartEligibility hook", () => {
 				});
 
 				// Wait for reactive microtask
-				await Promise.resolve();
-				await Promise.resolve();
+				await flushTicks();
 
 				expect(receivedItems).toEqual([
 					{
@@ -156,8 +159,7 @@ describe("useCartEligibility hook", () => {
 					pieces: [],
 				});
 
-				await Promise.resolve();
-				await Promise.resolve();
+				await flushTicks();
 
 				expect(eligibility.isItemEligible("child-1", "cls-adv")).toBe(false);
 				expect(eligibility.hasIneligibleItems()).toBe(true);
@@ -235,8 +237,7 @@ describe("useCartEligibility hook", () => {
 					pieces: [],
 				});
 
-				await Promise.resolve();
-				await Promise.resolve();
+				await flushTicks();
 
 				expect(eligibility.hasIneligibleItems()).toBe(true);
 				expect(eligibility.ineligibleCount()).toBe(1);
@@ -245,8 +246,7 @@ describe("useCartEligibility hook", () => {
 				// Remove the bad item
 				cart.removeItem(badItem.lineId);
 
-				await Promise.resolve();
-				await Promise.resolve();
+				await flushTicks();
 
 				expect(eligibility.hasIneligibleItems()).toBe(false);
 				expect(eligibility.ineligibleCount()).toBe(0);
@@ -255,8 +255,7 @@ describe("useCartEligibility hook", () => {
 
 				// Clear cart
 				cart.clearCart();
-				await Promise.resolve();
-				await Promise.resolve();
+				await flushTicks();
 
 				expect(eligibility.results().size).toBe(0);
 				expect(eligibility.hasIneligibleItems()).toBe(false);
@@ -294,8 +293,7 @@ describe("useCartEligibility hook", () => {
 					pieces: [],
 				});
 
-				await Promise.resolve();
-				await Promise.resolve();
+				await flushTicks();
 
 				expect(eligibility.isEvaluating()).toBe(false);
 				expect(eligibility.error()).toBe(
@@ -355,7 +353,7 @@ describe("useCartEligibility hook", () => {
 					pieces: [],
 				});
 
-				await Promise.resolve();
+				await flushTicks();
 				expect(eligibility.isEvaluating()).toBe(true);
 
 				// Add second item before first call resolves
@@ -373,8 +371,7 @@ describe("useCartEligibility hook", () => {
 					pieces: [],
 				});
 
-				await Promise.resolve();
-				await Promise.resolve();
+				await flushTicks();
 
 				// Second call has resolved
 				expect(eligibility.results().has("c-2:cls-fast")).toBe(true);
@@ -394,8 +391,7 @@ describe("useCartEligibility hook", () => {
 					});
 				}
 
-				await Promise.resolve();
-				await Promise.resolve();
+				await flushTicks();
 
 				// Stale response must NOT overwrite results
 				expect(eligibility.results().has("c-1:cls-stale")).toBe(false);
