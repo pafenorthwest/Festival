@@ -427,4 +427,70 @@ describe("evaluatePurchaseEligibility", () => {
 		expect(isEligibilityReasonCode("SOLD_OUT")).toBe(true);
 		expect(isEligibilityReasonCode("INVALID_CODE")).toBe(false);
 	});
+
+	it("populates satisfiedPrerequisites with proposed_item when prerequisite satisfied by proposed item", () => {
+		const res = evaluatePurchaseEligibility({
+			organizationId: ORG_ID,
+			festivalId: FESTIVAL_ID,
+			items: [
+				{ childId: "child-1", festivalClassId: "class-solo", id: "item-solo" },
+				{
+					childId: "child-1",
+					festivalClassId: "class-masterclass",
+					id: "item-mc",
+				},
+			],
+			classes: defaultClasses,
+			subtypes: defaultSubtypes,
+			activeEntitlements: [],
+		});
+
+		expect(res.isEligible).toBe(true);
+		expect(res.results[1].reasonCode).toBe("AVAILABLE");
+		expect(res.results[1].dependencyDescriptor?.requiredSubtypeId).toBe(
+			SUBTYPE_SOLO,
+		);
+		expect(res.results[1].satisfiedPrerequisites).toHaveLength(1);
+		expect(res.results[1].satisfiedPrerequisites?.[0].satisfiedBy).toBe(
+			"proposed_item",
+		);
+		expect(
+			res.results[1].satisfiedPrerequisites?.[0].sourceFestivalClassId,
+		).toBe("class-solo");
+		expect(res.results[1].satisfiedPrerequisites?.[0].sourceLineItemId).toBe(
+			"item-solo",
+		);
+	});
+
+	it("populates satisfiedPrerequisites with entitlement when satisfied by confirmed entitlement", () => {
+		const confirmedEntitlement = createEntitlement(
+			"class-solo",
+			"child-1",
+			"confirmed",
+		);
+		const res = evaluatePurchaseEligibility({
+			organizationId: ORG_ID,
+			festivalId: FESTIVAL_ID,
+			items: [
+				{
+					childId: "child-1",
+					festivalClassId: "class-masterclass",
+					id: "item-mc",
+				},
+			],
+			classes: defaultClasses,
+			subtypes: defaultSubtypes,
+			activeEntitlements: [confirmedEntitlement],
+		});
+
+		expect(res.isEligible).toBe(true);
+		expect(res.results[0].reasonCode).toBe("AVAILABLE");
+		expect(res.results[0].dependencyDescriptor?.requiredSubtypeId).toBe(
+			SUBTYPE_SOLO,
+		);
+		expect(res.results[0].satisfiedPrerequisites).toHaveLength(1);
+		expect(res.results[0].satisfiedPrerequisites?.[0].satisfiedBy).toBe(
+			"entitlement",
+		);
+	});
 });

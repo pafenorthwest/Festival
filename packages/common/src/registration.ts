@@ -9,6 +9,7 @@ export interface RepertoirePiece {
 	movement?: string | null;
 	/** Positive whole seconds. */
 	durationSeconds: number;
+	durationMinutes?: number;
 }
 
 /** Roles supported by an organization-owned repertoire catalog. */

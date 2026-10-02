@@ -36,6 +36,9 @@ export interface SubtypeDependencyDescriptor {
 	maximumAge?: number;
 	classSubtypeId?: string;
 	festivalClassId?: string;
+	satisfiedBy?: "entitlement" | "proposed_item";
+	sourceFestivalClassId?: string;
+	sourceLineItemId?: string;
 }
 
 export interface ProposedPurchaseLineItem {
@@ -56,6 +59,7 @@ export interface ClassEligibilityResult {
 	message?: string;
 	dependencyDescriptor?: SubtypeDependencyDescriptor;
 	missingPrerequisite?: SubtypeDependencyDescriptor;
+	satisfiedPrerequisites?: SubtypeDependencyDescriptor[];
 	lineItemId?: string;
 }
 
@@ -81,6 +85,7 @@ export interface EvaluatePurchaseEligibilityResponse {
 export interface ClassCheckoutLineItemInput extends ProposedPurchaseLineItem {
 	id?: string;
 	festivalClassId: string;
+	classId?: string;
 	childId: string;
 	teacherId: string;
 	accompanistId?: string | null;
@@ -333,7 +338,15 @@ function evaluateItemEligibility(
 
 	const subtype = ctx.subtypesMap.get(targetClass.classSubtypeId);
 	const requiredSubtypeId = subtype?.requiredSubtypeId?.trim();
+	let dependencyDescriptor: SubtypeDependencyDescriptor | undefined;
+	let satisfiedPrerequisites: SubtypeDependencyDescriptor[] | undefined;
+
 	if (requiredSubtypeId) {
+		const descriptor = buildDependencyDescriptor(
+			targetClass,
+			requiredSubtypeId,
+			ctx,
+		);
 		const satisfiedByEntitlement = hasEntitlementPrerequisite(
 			targetClass,
 			requiredSubtypeId,
@@ -348,11 +361,6 @@ function evaluateItemEligibility(
 			ctx,
 		);
 		if (!satisfiedByEntitlement && !satisfiedByProposed) {
-			const descriptor = buildDependencyDescriptor(
-				targetClass,
-				requiredSubtypeId,
-				ctx,
-			);
 			return {
 				childId: item.childId,
 				festivalClassId: item.festivalClassId,
@@ -365,6 +373,42 @@ function evaluateItemEligibility(
 				...(item.id ? { lineItemId: item.id } : {}),
 			};
 		}
+
+		dependencyDescriptor = descriptor;
+		const satisfiedList: SubtypeDependencyDescriptor[] = [];
+		if (satisfiedByEntitlement) {
+			satisfiedList.push({
+				...descriptor,
+				satisfiedBy: "entitlement",
+			});
+		}
+		if (satisfiedByProposed) {
+			for (let otherIdx = 0; otherIdx < ctx.items.length; otherIdx++) {
+				if (otherIdx === itemIndex) continue;
+				const otherItem = ctx.items[otherIdx];
+				if (otherItem.childId !== item.childId) continue;
+				const otherClass = ctx.classesMap.get(otherItem.festivalClassId);
+				if (!otherClass?.isActive) continue;
+				if (
+					otherClass.organizationId !== ctx.organizationId ||
+					otherClass.festivalId !== ctx.festivalId
+				) {
+					continue;
+				}
+				if (
+					otherClass.classSubtypeId === requiredSubtypeId &&
+					matchesDivisionAndAge(otherClass, targetClass)
+				) {
+					satisfiedList.push({
+						...descriptor,
+						satisfiedBy: "proposed_item",
+						sourceFestivalClassId: otherItem.festivalClassId,
+						sourceLineItemId: otherItem.id,
+					});
+				}
+			}
+		}
+		satisfiedPrerequisites = satisfiedList;
 	}
 
 	const soldOutResult = checkCapacitySoldOut(targetClass, item, itemIndex, ctx);
@@ -377,6 +421,10 @@ function evaluateItemEligibility(
 		isEligible: true,
 		reasonCode: "AVAILABLE",
 		message: "Class is available for registration.",
+		...(dependencyDescriptor ? { dependencyDescriptor } : {}),
+		...(satisfiedPrerequisites && satisfiedPrerequisites.length > 0
+			? { satisfiedPrerequisites }
+			: {}),
 		...(item.id ? { lineItemId: item.id } : {}),
 	};
 }

@@ -1,4 +1,8 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
+import {
+	evaluateRegistrationEligibility,
+	startClassCheckout,
+} from "../src/lib/api.js";
 import {
 	arePiecesValid,
 	formatTotalDuration,
@@ -198,5 +202,255 @@ describe("Festival Class Registration Page workflow", () => {
 			expect(regPage).toContain(`id="registration-${field}"`);
 			expect(regPage).toContain(`name="registration-${field}"`);
 		}
+	});
+});
+
+describe("Registration eligibility & multi-line checkout API", () => {
+	const originalFetch = globalThis.fetch;
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+	});
+
+	it("evaluateRegistrationEligibility sends items payload and CSRF header", async () => {
+		const calls: {
+			url: string;
+			method: string;
+			headers: Record<string, string>;
+			body: unknown;
+		}[] = [];
+
+		globalThis.fetch = (async (
+			input: RequestInfo | URL,
+			init?: RequestInit,
+		) => {
+			const url = typeof input === "string" ? input : input.toString();
+			const headers: Record<string, string> = {};
+			new Headers(init?.headers).forEach((v, k) => {
+				headers[k] = v;
+			});
+			calls.push({
+				url,
+				method: init?.method ?? "GET",
+				headers,
+				body: init?.body ? JSON.parse(init.body as string) : undefined,
+			});
+			return new Response(
+				JSON.stringify({
+					results: [
+						{
+							childId: "child-1",
+							festivalClassId: "class-1",
+							eligible: true,
+							isEligible: true,
+							reasonCode: "AVAILABLE",
+						},
+					],
+				}),
+				{
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				},
+			);
+		}) as unknown as typeof fetch;
+
+		const response = await evaluateRegistrationEligibility(
+			"org-slug",
+			"spring-2026",
+			[{ childId: "child-1", festivalClassId: "class-1" }],
+			"test-csrf-token",
+		);
+
+		expect(calls.length).toBe(1);
+		expect(calls[0].url).toBe(
+			"/api/organizations/org-slug/customer/festivals/spring-2026/registration/eligibility",
+		);
+		expect(calls[0].method).toBe("POST");
+		expect(calls[0].headers["x-csrf-token"]).toBe("test-csrf-token");
+		expect(calls[0].body).toEqual({
+			items: [{ childId: "child-1", festivalClassId: "class-1" }],
+		});
+		expect(response.results.length).toBe(1);
+		expect(response.results[0].isEligible).toBe(true);
+	});
+
+	it("evaluateRegistrationEligibility supports object parameter input", async () => {
+		const calls: { url: string; body: unknown }[] = [];
+		globalThis.fetch = (async (
+			input: RequestInfo | URL,
+			init?: RequestInit,
+		) => {
+			const url = typeof input === "string" ? input : input.toString();
+			calls.push({
+				url,
+				body: init?.body ? JSON.parse(init.body as string) : undefined,
+			});
+			return new Response(JSON.stringify({ results: [] }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		}) as unknown as typeof fetch;
+
+		await evaluateRegistrationEligibility("org-slug", "spring-2026", {
+			items: [{ childId: "c1", festivalClassId: "cls1" }],
+			csrfToken: "csrf-val",
+		});
+
+		expect(calls.length).toBe(1);
+		expect(calls[0].body).toEqual({
+			items: [{ childId: "c1", festivalClassId: "cls1" }],
+		});
+	});
+
+	it("startClassCheckout supports multi-line payload ({ lineItems })", async () => {
+		const calls: {
+			url: string;
+			method: string;
+			headers: Record<string, string>;
+			body: unknown;
+		}[] = [];
+
+		globalThis.fetch = (async (
+			input: RequestInfo | URL,
+			init?: RequestInit,
+		) => {
+			const url = typeof input === "string" ? input : input.toString();
+			const headers: Record<string, string> = {};
+			new Headers(init?.headers).forEach((v, k) => {
+				headers[k] = v;
+			});
+			calls.push({
+				url,
+				method: init?.method ?? "GET",
+				headers,
+				body: init?.body ? JSON.parse(init.body as string) : undefined,
+			});
+			return new Response(
+				JSON.stringify({
+					checkoutUrl: "https://checkout.example.com/cart/123",
+					correlationId: "corr-1",
+				}),
+				{
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				},
+			);
+		}) as unknown as typeof fetch;
+
+		const lineItems = [
+			{
+				childId: "child-1",
+				festivalClassId: "class-1",
+				teacherId: "teacher-1",
+				pieces: [
+					{
+						title: "Piece 1",
+						composer: "Bach",
+						durationSeconds: 120,
+					},
+				],
+			},
+			{
+				childId: "child-2",
+				festivalClassId: "class-2",
+				teacherId: "teacher-2",
+				pieces: [
+					{
+						title: "Piece 2",
+						composer: "Mozart",
+						durationSeconds: 180,
+					},
+				],
+			},
+		];
+
+		const res = await startClassCheckout(
+			"org-slug",
+			"spring-2026",
+			"csrf-token-123",
+			"idempotency-key-456",
+			{ lineItems },
+		);
+
+		expect(calls.length).toBe(1);
+		expect(calls[0].url).toBe(
+			"/api/organizations/org-slug/customer/festivals/spring-2026/registration/checkout",
+		);
+		expect(calls[0].method).toBe("POST");
+		expect(calls[0].headers["x-csrf-token"]).toBe("csrf-token-123");
+		expect(calls[0].headers["idempotency-key"]).toBe("idempotency-key-456");
+		expect(calls[0].body).toEqual({ lineItems });
+		expect(res.checkoutUrl).toBe("https://checkout.example.com/cart/123");
+		expect(res.correlationId).toBe("corr-1");
+	});
+
+	it("startClassCheckout maintains backward compatibility with single-line payload", async () => {
+		const calls: { body: unknown; headers: Record<string, string> }[] = [];
+		globalThis.fetch = (async (
+			_input: RequestInfo | URL,
+			init?: RequestInit,
+		) => {
+			const headers: Record<string, string> = {};
+			new Headers(init?.headers).forEach((v, k) => {
+				headers[k] = v;
+			});
+			calls.push({
+				headers,
+				body: init?.body ? JSON.parse(init.body as string) : undefined,
+			});
+			return new Response(
+				JSON.stringify({
+					checkoutUrl: "https://checkout.example.com/cart/456",
+					correlationId: "corr-2",
+				}),
+				{
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				},
+			);
+		}) as unknown as typeof fetch;
+
+		const singleLineInput = {
+			festivalClassId: "cls-1",
+			childId: "ch-1",
+			divisionId: "div-1",
+			teacherId: "t-1",
+			accompanistId: "acc-1",
+			pieces: [{ title: "Song", composer: "Chopin", durationSeconds: 90 }],
+		};
+
+		const res = await startClassCheckout(
+			"org-slug",
+			"spring-2026",
+			"csrf-abc",
+			"idem-xyz",
+			singleLineInput,
+		);
+
+		expect(calls.length).toBe(1);
+		expect(calls[0].headers["x-csrf-token"]).toBe("csrf-abc");
+		expect(calls[0].headers["idempotency-key"]).toBe("idem-xyz");
+		expect(calls[0].body).toEqual(singleLineInput);
+		expect(res.checkoutUrl).toBe("https://checkout.example.com/cart/456");
+	});
+
+	describe("Multi-line Cart UI and flow integration", () => {
+		it("FestivalRegistrationCartCard exposes Add to Cart action and handles duplicate state", () => {
+			expect(cartCard).toContain("Add to Cart");
+			expect(cartCard).toContain("Already in Cart");
+			expect(cartCard).toContain("onAddToCart");
+			expect(cartCard).toContain("isAlreadyInCart");
+		});
+
+		it("FestivalClassRegistrationPage mounts cart state and multi-cart view with reactive eligibility", () => {
+			expect(regPage).toContain("createRegistrationCart");
+			expect(regPage).toContain("useCartEligibility");
+			expect(regPage).toContain("FestivalRegistrationCartView");
+			expect(regPage).toContain("eligibility={eligibility}");
+			expect(regPage).toContain("handleAddToCart");
+			expect(regPage).toContain("handleCartCheckout");
+			expect(regPage).toContain("eligibility.isEvaluating()");
+			expect(regPage).toContain("eligibility.hasIneligibleItems()");
+			expect(regPage).toContain("Cart:");
+		});
 	});
 });
