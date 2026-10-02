@@ -772,6 +772,20 @@ button.compact-header-button {
 	gap: 0.4rem;
 }
 
+.field-checkbox {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+.field-checkbox input[type="checkbox"] {
+	width: 1.15rem;
+	height: 1.15rem;
+	flex-shrink: 0;
+	margin: 0;
+}
+
 .customer-child-status {
 	margin-top: 0;
 	padding-top: 0;
