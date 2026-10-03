@@ -427,6 +427,43 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		}
 	}
 
+	snapshotRegistrationMetadataEntitlementLinks(input: {
+		checkoutIntentIds: string[];
+		checkoutIntentLineIds: string[];
+	}): Map<string, string | null> {
+		const checkoutIntentIds = new Set(input.checkoutIntentIds);
+		const checkoutIntentLineIds = new Set(input.checkoutIntentLineIds);
+		const records = new Map<string, ClassRegistrationMetadata>();
+		for (const record of this.registrationMetadata.values()) {
+			if (
+				checkoutIntentIds.has(record.checkoutIntentId) ||
+				(typeof record.checkoutIntentLineId === "string" &&
+					checkoutIntentLineIds.has(record.checkoutIntentLineId))
+			) {
+				records.set(record.id, record);
+			}
+		}
+		return new Map(
+			[...records.values()].map((record) => [
+				record.id,
+				record.classEntitlementId,
+			]),
+		);
+	}
+
+	restoreRegistrationMetadataEntitlementLinks(
+		snapshot: Map<string, string | null>,
+	): void {
+		const records = new Map<string, ClassRegistrationMetadata>();
+		for (const record of this.registrationMetadata.values()) {
+			if (snapshot.has(record.id)) records.set(record.id, record);
+		}
+		for (const [id, classEntitlementId] of snapshot) {
+			const record = records.get(id);
+			if (record) record.classEntitlementId = classEntitlementId;
+		}
+	}
+
 	async getRegistrationMetadataByEntitlementId(
 		organizationId: string,
 		classEntitlementId: string,

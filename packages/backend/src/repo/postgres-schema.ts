@@ -785,15 +785,22 @@ export async function initializePostgresSchema(schema: string): Promise<void> {
 			"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
 			[safeSchema],
 		);
+		await transaction.unsafe(`CREATE SCHEMA IF NOT EXISTS ${safeSchema};`);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.registration_metadata ADD COLUMN IF NOT EXISTS checkout_intent_line_id TEXT;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.registration_catalog_values ADD COLUMN IF NOT EXISTS required_subtype_id TEXT;`,
+		);
+		await transaction.unsafe(
+			`DROP INDEX IF EXISTS ${safeSchema}.registration_metadata_checkout_intent_id_unique;`,
+		);
 		await transaction.unsafe(buildCanonicalPostgresSchemaSql(safeSchema));
 		await transaction.unsafe(
 			`ALTER TABLE IF EXISTS ${safeSchema}.organizations ADD COLUMN IF NOT EXISTS default_currency_code TEXT NOT NULL DEFAULT 'USD';`,
 		);
 		await transaction.unsafe(
 			`ALTER TABLE IF EXISTS ${safeSchema}.repertoire_works ADD COLUMN IF NOT EXISTS imslp_url TEXT;`,
-		);
-		await transaction.unsafe(
-			`ALTER TABLE IF EXISTS ${safeSchema}.registration_metadata ADD COLUMN IF NOT EXISTS checkout_intent_line_id TEXT;`,
 		);
 		await transaction.unsafe(
 			`ALTER TABLE IF EXISTS ${safeSchema}.class_entitlements ADD COLUMN IF NOT EXISTS checkout_intent_line_id TEXT;`,

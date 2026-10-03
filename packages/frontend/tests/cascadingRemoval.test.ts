@@ -40,6 +40,8 @@ function item(
 		childName: "Alice",
 		divisionId: "div-1",
 		divisionName: "Junior",
+		minimumAge: 8,
+		maximumAge: 12,
 		teacherId: "teacher-1",
 		teacherName: "Mozart",
 		className: "Class",
@@ -405,6 +407,103 @@ describe("findDependentCartItems detection algorithm", () => {
 			(ch, cl) => resultsMap[`${ch}:${cl}`],
 		);
 		expect(dependents).toHaveLength(0);
+	});
+
+	it("does not cascade from a same-subtype provider in a different division or age band", () => {
+		const provider = item({
+			lineId: "line-solo-senior",
+			classId: "cls-solo-senior",
+			childId: "child-1",
+			classSubtypeId: "subtype-solo",
+			divisionId: "div-senior",
+			minimumAge: 13,
+			maximumAge: 18,
+		});
+		const dependent = item({
+			lineId: "line-master-junior",
+			classId: "cls-master-junior",
+			childId: "child-1",
+			classSubtypeId: "subtype-master",
+			divisionId: "div-junior",
+			minimumAge: 8,
+			maximumAge: 12,
+		});
+		const resultsMap: Record<string, ClassEligibilityResult> = {
+			"child-1:cls-master-junior": {
+				childId: "child-1",
+				festivalClassId: "cls-master-junior",
+				eligible: true,
+				isEligible: true,
+				reasonCode: "AVAILABLE",
+				dependencyDescriptor: {
+					requiredSubtypeId: "subtype-solo",
+					divisionId: "div-junior",
+					minimumAge: 8,
+					maximumAge: 12,
+				},
+			},
+		};
+
+		expect(
+			findDependentCartItems(
+				"line-solo-senior",
+				[provider, dependent],
+				(ch, cl) => resultsMap[`${ch}:${cl}`],
+			),
+		).toEqual([]);
+	});
+
+	it("cascades when the only remaining same-subtype provider is in a different cohort", () => {
+		const provider = item({
+			lineId: "line-solo-junior",
+			classId: "cls-solo-junior",
+			childId: "child-1",
+			classSubtypeId: "subtype-solo",
+			divisionId: "div-junior",
+			minimumAge: 8,
+			maximumAge: 12,
+		});
+		const invalidRemainingProvider = item({
+			lineId: "line-solo-senior",
+			classId: "cls-solo-senior",
+			childId: "child-1",
+			classSubtypeId: "subtype-solo",
+			divisionId: "div-senior",
+			minimumAge: 13,
+			maximumAge: 18,
+		});
+		const dependent = item({
+			lineId: "line-master-junior",
+			classId: "cls-master-junior",
+			childId: "child-1",
+			classSubtypeId: "subtype-master",
+			divisionId: "div-junior",
+			minimumAge: 8,
+			maximumAge: 12,
+		});
+		const resultsMap: Record<string, ClassEligibilityResult> = {
+			"child-1:cls-master-junior": {
+				childId: "child-1",
+				festivalClassId: "cls-master-junior",
+				eligible: true,
+				isEligible: true,
+				reasonCode: "AVAILABLE",
+				dependencyDescriptor: {
+					requiredSubtypeId: "subtype-solo",
+					divisionId: "div-junior",
+					minimumAge: 8,
+					maximumAge: 12,
+				},
+			},
+		};
+
+		expect(
+			findDependentCartItems(
+				"line-solo-junior",
+				[provider, invalidRemainingProvider, dependent],
+				(ch, cl) => resultsMap[`${ch}:${cl}`],
+			),
+		).toEqual([dependent]);
 	});
 });
 

@@ -666,19 +666,16 @@ export class ShopifyOrderProjectionService {
 		const sortedLines = [...(intent.lines ?? [])].sort(
 			(a, b) => a.lineIndex - b.lineIndex,
 		);
-		for (let i = 0; i < sortedLines.length; i++) {
-			const intentLine = sortedLines[i];
-			const line = order.lineItems[i];
-			const paidMinor = moneyInMinorUnits(line.paidAmount);
-			const paidAmountCents = Number(paidMinor ?? 0n);
-			await this.finalize(
-				delivery,
-				{
-					customerId: intent.customerId,
-					checkoutIntentId: intent.id,
-					shopifyOrderLineGid: line.id,
-					status: "approved",
-					classEntitlement: {
+		await this.finalize(
+			delivery,
+			{
+				customerId: intent.customerId,
+				checkoutIntentId: intent.id,
+				status: "approved",
+				classEntitlements: sortedLines.map((intentLine, index) => {
+					const line = order.lineItems[index];
+					const paidMinor = moneyInMinorUnits(line.paidAmount);
+					return {
 						organizationId: delivery.organizationId,
 						festivalId,
 						festivalClassId: intentLine.festivalClassId ?? classConfig.id,
@@ -688,14 +685,14 @@ export class ShopifyOrderProjectionService {
 						checkoutIntentLineId: intentLine.id,
 						shopifyOrderGid: order.id,
 						shopifyOrderLineGid: line.id,
-						paidAmountCents,
+						paidAmountCents: Number(paidMinor ?? 0n),
 						paidCurrencyCode: line.paidCurrencyCode,
-						status: "confirmed",
-					},
-				},
-				i === 0 ? projection : undefined,
-			);
-		}
+						status: "confirmed" as const,
+					};
+				}),
+			},
+			projection,
+		);
 	}
 
 	private async finalizeSingleLineClassPurchase(
@@ -937,6 +934,9 @@ export class ShopifyOrderProjectionService {
 			classEntitlement?: Parameters<
 				MembershipCommerceRepository["finalizeDecision"]
 			>[0]["classEntitlement"];
+			classEntitlements?: Parameters<
+				MembershipCommerceRepository["finalizeDecision"]
+			>[0]["classEntitlements"];
 		},
 		projection?: ShopifyOrderProjectionInput,
 	) {
@@ -955,6 +955,7 @@ export class ShopifyOrderProjectionService {
 			...(projection ? { projection } : {}),
 			grant: input.grant,
 			classEntitlement: input.classEntitlement,
+			classEntitlements: input.classEntitlements,
 		});
 		return result;
 	}

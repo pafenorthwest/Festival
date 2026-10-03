@@ -312,8 +312,17 @@ describe("ShopifyOrderProjectionService - Multi-line Class Orders", () => {
 			"webhook-multi-line-success",
 			multiOrder.id,
 		);
+		const originalFinalize = f.commerce.finalizeDecision.bind(f.commerce);
+		const finalizations: Parameters<typeof f.commerce.finalizeDecision>[0][] =
+			[];
+		f.commerce.finalizeDecision = async (input) => {
+			finalizations.push(input);
+			return originalFinalize(input);
+		};
 
 		expect(await f.service.processDelivery(received.id)).toBe("processed");
+		expect(finalizations).toHaveLength(1);
+		expect(finalizations[0]?.classEntitlements).toHaveLength(2);
 
 		const entitlements = await f.commerce.listClassEntitlements({
 			organizationId: f.organization.id,

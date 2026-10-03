@@ -16,6 +16,8 @@ export interface RegistrationCartItem {
 	className: string;
 	classSubtypeId?: string | null;
 	classSubtypeName?: string | null;
+	minimumAge?: number;
+	maximumAge?: number;
 	priceCents: number;
 	accompanistId?: string | null;
 	accompanistName?: string | null;
@@ -60,6 +62,8 @@ export function buildCartItemInput(
 		id: string;
 		displayName: string;
 		classSubtypeId?: string | null;
+		minimumAge?: number;
+		maximumAge?: number;
 		price: string;
 	},
 	accompanist: { id: string; name: string } | null,
@@ -75,6 +79,8 @@ export function buildCartItemInput(
 		classId: cls.id,
 		className: cls.displayName,
 		classSubtypeId: cls.classSubtypeId ?? null,
+		minimumAge: cls.minimumAge,
+		maximumAge: cls.maximumAge,
 		priceCents: parsePriceToCents(cls.price),
 		accompanistId: accompanist?.id || null,
 		accompanistName: accompanist?.name ?? null,

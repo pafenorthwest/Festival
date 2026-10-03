@@ -324,15 +324,24 @@ export class PostgresMembershipCommerceRepository
 		projection?: ShopifyOrderProjectionInput;
 		grant?: CreateEntitlementGrantSnapshotInput;
 		classEntitlement?: CreateClassEntitlementInput;
+		classEntitlements?: CreateClassEntitlementInput[];
 	}) {
 		await this.ensureReady();
+		if (input.classEntitlement && input.classEntitlements !== undefined) {
+			throw new Error(
+				"Approved decision cannot specify both a class entitlement and class entitlements.",
+			);
+		}
+		const classEntitlementInputs =
+			input.classEntitlements ??
+			(input.classEntitlement ? [input.classEntitlement] : []);
 		if (input.decision.status === "approved") {
-			if (input.grant && input.classEntitlement) {
+			if (input.grant && classEntitlementInputs.length > 0) {
 				throw new Error(
 					"Approved decision cannot specify both a membership grant and class entitlement.",
 				);
 			}
-			if (!input.grant && !input.classEntitlement) {
+			if (!input.grant && classEntitlementInputs.length === 0) {
 				throw new Error(
 					"Approved decision requires a grant or class entitlement.",
 				);
@@ -348,26 +357,27 @@ export class PostgresMembershipCommerceRepository
 				)
 					throw new Error("Approved decision and grant do not match.");
 			}
-			if (input.classEntitlement) {
-				assertValidClassEntitlementInput(input.classEntitlement);
+			for (const classEntitlementInput of classEntitlementInputs) {
+				assertValidClassEntitlementInput(classEntitlementInput);
 				if (
-					input.classEntitlement.organizationId !==
+					classEntitlementInput.organizationId !==
 						input.decision.organizationId ||
-					input.classEntitlement.parentCustomerId !==
+					classEntitlementInput.parentCustomerId !==
 						input.decision.customerId ||
-					input.classEntitlement.checkoutIntentId !==
+					classEntitlementInput.checkoutIntentId !==
 						input.decision.checkoutIntentId ||
-					input.classEntitlement.shopifyOrderGid !==
+					classEntitlementInput.shopifyOrderGid !==
 						input.decision.shopifyOrderGid ||
-					input.classEntitlement.shopifyOrderLineGid !==
-						input.decision.shopifyOrderLineGid
+					(input.classEntitlement &&
+						classEntitlementInput.shopifyOrderLineGid !==
+							input.decision.shopifyOrderLineGid)
 				) {
 					throw new Error(
 						"Approved decision and class entitlement do not match.",
 					);
 				}
 			}
-		} else if (input.grant || input.classEntitlement) {
+		} else if (input.grant || classEntitlementInputs.length > 0) {
 			throw new Error(
 				"Non-approved decision cannot create a grant or class entitlement.",
 			);
@@ -404,20 +414,29 @@ export class PostgresMembershipCommerceRepository
 				[input.decision.organizationId, input.decision.shopifyOrderGid],
 			)) as Array<Record<string, unknown>>;
 			if (existingRows[0] && existingRows[0].status !== "pending_validation") {
-				const existingClass = input.decision.shopifyOrderLineGid
-					? await this.findClassEntitlementByOrderLine(
+				const existingClasses = await Promise.all(
+					classEntitlementInputs.map((classEntitlement) =>
+						this.findClassEntitlementByOrderLine(
 							input.decision.organizationId,
-							input.decision.shopifyOrderLineGid,
-						)
-					: null;
-				if (!input.classEntitlement || existingClass) {
+							classEntitlement.shopifyOrderLineGid,
+						),
+					),
+				);
+				if (
+					classEntitlementInputs.length === 0 ||
+					existingClasses.every(Boolean)
+				) {
 					await tx.unsafe(
 						`UPDATE ${this.schema}.shopify_webhook_deliveries SET status = 'processed', failure_category = NULL, processed_at = NOW() WHERE id = $1`,
 						[input.deliveryId],
 					);
 					return {
 						decision: decision(existingRows[0]),
-						classEntitlement: existingClass ?? undefined,
+						classEntitlement: existingClasses[0] ?? undefined,
+						classEntitlements: existingClasses.filter(
+							(classEntitlement): classEntitlement is ClassEntitlement =>
+								Boolean(classEntitlement),
+						),
 						existing: true,
 					};
 				}
@@ -450,7 +469,6 @@ export class PostgresMembershipCommerceRepository
 			}
 			let finalDecision = input.decision;
 			let grantInput = input.grant;
-			const classEntitlementInput = input.classEntitlement;
 			if (grantInput && finalDecision.customerId) {
 				if (!grantInput.verifiedIdentityEmail) {
 					finalDecision = {
@@ -631,8 +649,8 @@ export class PostgresMembershipCommerceRepository
 					createdAtIso: new Date().toISOString(),
 				};
 			}
-			let createdClassEntitlement: ClassEntitlement | undefined;
-			if (classEntitlementInput) {
+			const createdClassEntitlements: ClassEntitlement[] = [];
+			for (const classEntitlementInput of classEntitlementInputs) {
 				const entitlementId = classEntitlementInput.id ?? randomUUID();
 				const entitlementRows = (await tx.unsafe(
 					`INSERT INTO ${this.schema}.class_entitlements (
@@ -657,7 +675,10 @@ export class PostgresMembershipCommerceRepository
 					],
 				)) as Array<Record<string, unknown>>;
 				if (entitlementRows[0]) {
-					createdClassEntitlement = classEntitlementFromRow(entitlementRows[0]);
+					const createdClassEntitlement = classEntitlementFromRow(
+						entitlementRows[0],
+					);
+					createdClassEntitlements.push(createdClassEntitlement);
 					if (classEntitlementInput.checkoutIntentLineId) {
 						await tx.unsafe(
 							`UPDATE ${this.schema}.registration_metadata SET class_entitlement_id = $1 WHERE checkout_intent_line_id = $2`,
@@ -723,7 +744,11 @@ export class PostgresMembershipCommerceRepository
 			return {
 				decision: decision(decisionRows[0]),
 				grant: createdGrant,
-				classEntitlement: createdClassEntitlement,
+				classEntitlement: createdClassEntitlements[0],
+				classEntitlements:
+					createdClassEntitlements.length > 0
+						? createdClassEntitlements
+						: undefined,
 				existing: false,
 			};
 		});

@@ -14,6 +14,12 @@ export interface DirectDependencyContext {
 	remainingItems: RegistrationCartItem[];
 }
 
+interface PrerequisiteCohort {
+	divisionId: string;
+	minimumAge: number;
+	maximumAge: number;
+}
+
 export function isSatisfiedByEntitlement(
 	result: ClassEligibilityResult | undefined,
 	requiredSubtypeId: string,
@@ -48,9 +54,43 @@ export function hasRemainingProvider(
 	remainingItems: RegistrationCartItem[],
 	childId: string,
 	subtypeId: string,
+	cohort?: PrerequisiteCohort,
 ): boolean {
 	return remainingItems.some(
-		(item) => item.childId === childId && item.classSubtypeId === subtypeId,
+		(item) =>
+			item.childId === childId &&
+			item.classSubtypeId === subtypeId &&
+			(!cohort || matchesCohort(item, cohort)),
+	);
+}
+
+function prerequisiteCohort(
+	candidate: RegistrationCartItem,
+	result: ClassEligibilityResult | undefined,
+): PrerequisiteCohort | undefined {
+	const descriptor =
+		result?.dependencyDescriptor ?? result?.missingPrerequisite;
+	const divisionId = descriptor?.divisionId ?? candidate.divisionId;
+	const minimumAge = descriptor?.minimumAge ?? candidate.minimumAge;
+	const maximumAge = descriptor?.maximumAge ?? candidate.maximumAge;
+	if (
+		!divisionId ||
+		typeof minimumAge !== "number" ||
+		typeof maximumAge !== "number"
+	) {
+		return undefined;
+	}
+	return { divisionId, minimumAge, maximumAge };
+}
+
+function matchesCohort(
+	provider: RegistrationCartItem,
+	cohort: PrerequisiteCohort,
+): boolean {
+	return (
+		provider.divisionId === cohort.divisionId &&
+		provider.minimumAge === cohort.minimumAge &&
+		provider.maximumAge === cohort.maximumAge
 	);
 }
 
@@ -66,6 +106,10 @@ export function isItemDirectlyDependent(
 	if (!reqSubtypeId || reqSubtypeId !== provider.classSubtypeId) {
 		return false;
 	}
+	const cohort = prerequisiteCohort(candidate, context.result);
+	if (!cohort || !matchesCohort(provider, cohort)) {
+		return false;
+	}
 	if (isSatisfiedByEntitlement(context.result, reqSubtypeId)) {
 		return false;
 	}
@@ -73,6 +117,7 @@ export function isItemDirectlyDependent(
 		context.remainingItems,
 		candidate.childId,
 		reqSubtypeId,
+		cohort,
 	);
 }
 
