@@ -6,6 +6,7 @@ import {
 	onCleanup,
 	Show,
 } from "solid-js";
+import { formatScheduleDate } from "../app/appFormatting.js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { AccessDeniedPanel } from "../components/AccessDeniedPanel.js";
 import { Button } from "../components/Button.js";
@@ -285,7 +286,7 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 												<div class="listing-table-row">
 													<span>
 														<strong>
-															{shift.date} {shift.period}
+															{formatScheduleDate(shift.date)} {shift.period}
 														</strong>
 													</span>
 													<span>
@@ -541,7 +542,7 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 															<span>
 																<strong>{slot.roleDisplayName}</strong>
 															</span>
-															<span>{slot.date}</span>
+															<span>{formatScheduleDate(slot.date)}</span>
 															<span>
 																{slot.period}
 																<Show when={slot.timeText}>
