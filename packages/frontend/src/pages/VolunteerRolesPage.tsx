@@ -116,6 +116,19 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 			getVolunteerCoverageGaps(props.slug, festivalShortName, token),
 	);
 
+	// "all" | "Filled" | "Open": which of the three summary counts is the
+	// active filter for the slot list below them. See #232.
+	const [slotStatusFilter, setSlotStatusFilter] = createSignal<
+		"all" | "Filled" | "Open"
+	>("all");
+	const filteredSlots = createMemo(() => {
+		const slots = coverageGaps()?.slots ?? [];
+		const filter = slotStatusFilter();
+		return filter === "all"
+			? slots
+			: slots.filter((slot) => slot.status === filter);
+	});
+
 	const [selectedRoleId, setSelectedRoleId] = createSignal<string | null>(null);
 	const selectedRole = () =>
 		roles()?.find((role) => role.id === selectedRoleId()) ?? null;
@@ -461,67 +474,91 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 
 					<Show when={props.app.hasVolunteerAdminIntent()}>
 						<section class="flow-panel coverage-gaps-panel">
-							<h3>Coverage Gaps</h3>
+							<h3>Volunteer Shift Coverage</h3>
 							<Show when={coverageGaps.loading}>
-								<p>Loading coverage gaps…</p>
+								<p>Loading shift coverage…</p>
 							</Show>
 							<Show when={coverageGaps.error}>
 								<section class="banner error-banner">
-									Could not load coverage gaps: {String(coverageGaps.error)}
+									Could not load shift coverage: {String(coverageGaps.error)}
 								</section>
 							</Show>
 							<Show when={coverageGaps()}>
 								{(gaps) => (
 									<>
 										<div class="coverage-metrics">
-											<span class="badge badge-neutral">
+											<button
+												type="button"
+												class="badge badge-neutral coverage-metrics-filter"
+												aria-pressed={slotStatusFilter() === "all"}
+												onClick={() => setSlotStatusFilter("all")}
+											>
 												Total Shifts: {gaps().totalShifts}
-											</span>
-											<span class="badge badge-active">
+											</button>
+											<button
+												type="button"
+												class="badge badge-active coverage-metrics-filter"
+												aria-pressed={slotStatusFilter() === "Filled"}
+												onClick={() => setSlotStatusFilter("Filled")}
+											>
 												Filled Shifts:{" "}
 												{gaps().filledShifts ?? gaps().coveredShifts}
-											</span>
-											<span class="badge badge-rejected">
+											</button>
+											<button
+												type="button"
+												class="badge badge-rejected coverage-metrics-filter"
+												aria-pressed={slotStatusFilter() === "Open"}
+												onClick={() => setSlotStatusFilter("Open")}
+											>
 												Open Shifts:{" "}
 												{gaps().openShifts ?? gaps().unfilledShifts}
-											</span>
+											</button>
 											<span class="badge badge-processing">
 												Coverage Percentage: {gaps().coveragePercentage}%
 											</span>
 										</div>
 										<Show
-											when={(gaps().unfilled ?? gaps().gaps).length > 0}
+											when={filteredSlots().length > 0}
 											fallback={
-												<p class="muted">All shifts are currently filled.</p>
+												<p class="muted">
+													{slotStatusFilter() === "all"
+														? "No shifts have been created for this festival yet."
+														: `No ${slotStatusFilter().toLowerCase()} shifts match this filter.`}
+												</p>
 											}
 										>
-											<div class="listing-table coverage-gaps-table">
+											<div class="listing-table coverage-slots-table">
 												<div class="listing-table-header">
 													<span>Role</span>
 													<span>Date</span>
 													<span>Period</span>
 													<span>Location</span>
+													<span>Status</span>
 												</div>
-												<For each={gaps().unfilled ?? gaps().gaps}>
-													{(gap) => (
+												<For each={filteredSlots()}>
+													{(slot) => (
 														<div class="listing-table-row">
 															<span>
-																<strong>
-																	{gap.roleDisplayName || gap.roleName}
-																</strong>
+																<strong>{slot.roleDisplayName}</strong>
 															</span>
-															<span>{gap.date}</span>
+															<span>{slot.date}</span>
 															<span>
-																{gap.period}
-																<Show when={gap.timeText}>
-																	<span class="muted"> ({gap.timeText})</span>
+																{slot.period}
+																<Show when={slot.timeText}>
+																	<span class="muted"> ({slot.timeText})</span>
 																</Show>
 															</span>
 															<span>
-																{gap.division
-																	? `${gap.division}${gap.adjudicator ? ` (${gap.adjudicator})` : ""}`
-																	: ((gap as { location?: string }).location ??
-																		"—")}
+																{slot.division
+																	? `${slot.division}${slot.adjudicator ? ` (${slot.adjudicator})` : ""}`
+																	: "—"}
+															</span>
+															<span>
+																<span
+																	class={`badge ${slot.status === "Filled" ? "badge-active" : "badge-rejected"}`}
+																>
+																	{slot.status}
+																</span>
 															</span>
 														</div>
 													)}
