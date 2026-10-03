@@ -571,7 +571,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			FOREIGN KEY (volunteer_id, festival_id, organization_id) REFERENCES ${safeSchema}.volunteers (id, festival_id, organization_id) ON DELETE CASCADE
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.credit_balances (
-			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
 			customer_id TEXT NOT NULL,
 			balance_cents INTEGER NOT NULL DEFAULT 0 CHECK (balance_cents >= 0),
 			currency_code TEXT NOT NULL DEFAULT 'USD',
@@ -580,7 +580,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.billing_adjustments (
 			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
 			customer_id TEXT NOT NULL,
 			admin_user_id TEXT NOT NULL,
 			adjustment_type TEXT NOT NULL CHECK (adjustment_type IN ('refund', 'credit_issue', 'credit_apply', 'manual_charge', 'write_off')),
@@ -595,7 +595,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.billing_ledger (
 			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
 			customer_id TEXT NOT NULL,
 			entry_type TEXT NOT NULL CHECK (entry_type IN ('credit', 'debit', 'adjustment')),
 			amount_cents INTEGER NOT NULL,
@@ -608,7 +608,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.invoices (
 			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
 			customer_id TEXT NOT NULL,
 			status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'issued', 'paid', 'cancelled', 'written_off')),
 			total_cents INTEGER NOT NULL DEFAULT 0,
@@ -620,7 +620,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.invoice_line_items (
 			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 			invoice_id UUID NOT NULL REFERENCES ${safeSchema}.invoices (id) ON DELETE CASCADE,
-			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
 			description TEXT NOT NULL,
 			amount_cents INTEGER NOT NULL,
 			quantity INTEGER NOT NULL DEFAULT 1,
@@ -629,7 +629,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.message_templates (
 			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
 			template_key TEXT NOT NULL,
 			channel TEXT NOT NULL CHECK (channel IN ('email', 'sms')),
 			version INTEGER NOT NULL DEFAULT 1,
@@ -643,7 +643,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.message_events (
 			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
 			event_type TEXT NOT NULL,
 			recipient_destination TEXT NOT NULL,
 			payload JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -655,7 +655,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.message_logs (
 			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
 			event_id UUID REFERENCES ${safeSchema}.message_events (id) ON DELETE CASCADE,
 			template_id UUID REFERENCES ${safeSchema}.message_templates (id) ON DELETE SET NULL,
 			channel TEXT NOT NULL CHECK (channel IN ('email', 'sms')),
