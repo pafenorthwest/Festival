@@ -78,4 +78,41 @@ describe("admin volunteer role and shift management", () => {
 		expect(styles).toContain(".coverage-gaps-table");
 		expect(styles).toContain(".coverage-metrics");
 	});
+
+	it("exposes API helpers for updating and deleting roles and shifts", async () => {
+		const api = await read("../src/lib/api.ts");
+
+		expect(api).toContain("export function updateVolunteerRole");
+		expect(api).toContain("export function deleteVolunteerRole");
+		expect(api).toContain("export function updateVolunteerShift");
+		expect(api).toContain("export function deleteVolunteerShift");
+		expect(api).toContain('method: "PATCH"');
+		expect(api).toContain('method: "DELETE"');
+	});
+
+	it("lets an admin edit or delete a role, per the volunteer admin build screen", async () => {
+		const page = await read("../src/pages/VolunteerRolesPage.tsx");
+
+		expect(page).toContain("startEditRole");
+		expect(page).toContain("handleDeleteRole");
+		expect(page).toContain("handleRoleFormSubmit");
+		expect(page).toContain('Delete the "');
+		expect(page).toContain('" role? This also deletes all of its shifts.');
+		expect(page).toContain('{editingRoleId() ? "Edit role" : "Create a role"}');
+		expect(page).toContain(
+			'{editingRoleId() ? "Save changes" : "Create role"}',
+		);
+		expect(page).toContain("cancelEditRole");
+	});
+
+	it("lets an admin edit or delete a shift, per the volunteer admin build screen", async () => {
+		const page = await read("../src/pages/VolunteerRolesPage.tsx");
+
+		expect(page).toContain("startEditShift");
+		expect(page).toContain("handleDeleteShift");
+		expect(page).toContain("handleShiftFormSubmit");
+		expect(page).toContain('{editingShiftId() ? "Edit shift" : "Add a shift"}');
+		expect(page).toContain('{editingShiftId() ? "Save changes" : "Add shift"}');
+		expect(page).toContain("cancelEditShift");
+	});
 });

@@ -187,6 +187,21 @@ export interface CreateVolunteerShiftInput {
 	adjudicator?: string | null;
 }
 
+export interface UpdateVolunteerRoleInput {
+	displayName: string;
+	description: string;
+	detailsUrl?: string | null;
+	isRoomProctor: boolean;
+}
+
+export interface UpdateVolunteerShiftInput {
+	date: string;
+	period: "AM" | "PM";
+	timeText?: string | null;
+	division?: string | null;
+	adjudicator?: string | null;
+}
+
 export type {
 	AddCatalogWorkInput,
 	AdminCustomerSearchResponse,
@@ -1139,6 +1154,72 @@ export function createVolunteerShift(
 		{
 			method: "POST",
 			body: JSON.stringify(input),
+		},
+		idToken,
+	);
+}
+
+export function updateVolunteerRole(
+	idToken: string,
+	slug: string,
+	festivalShortName: string,
+	roleId: string,
+	input: UpdateVolunteerRoleInput,
+) {
+	return requestJson<VolunteerRole>(
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalShortName)}/volunteers/roles/${encodeURIComponent(roleId)}`,
+		{
+			method: "PATCH",
+			body: JSON.stringify(input),
+		},
+		idToken,
+	);
+}
+
+export function deleteVolunteerRole(
+	idToken: string,
+	slug: string,
+	festivalShortName: string,
+	roleId: string,
+) {
+	return requestJson<{ status: string }>(
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalShortName)}/volunteers/roles/${encodeURIComponent(roleId)}`,
+		{
+			method: "DELETE",
+		},
+		idToken,
+	);
+}
+
+export function updateVolunteerShift(
+	idToken: string,
+	slug: string,
+	festivalShortName: string,
+	roleId: string,
+	shiftId: string,
+	input: UpdateVolunteerShiftInput,
+) {
+	return requestJson<VolunteerShift>(
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalShortName)}/volunteers/roles/${encodeURIComponent(roleId)}/shifts/${encodeURIComponent(shiftId)}`,
+		{
+			method: "PATCH",
+			body: JSON.stringify(input),
+		},
+		idToken,
+	);
+}
+
+export function deleteVolunteerShift(
+	idToken: string,
+	slug: string,
+	festivalShortName: string,
+	roleId: string,
+	shiftId: string,
+) {
+	return requestJson<{ status: string }>(
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalShortName)}/volunteers/roles/${encodeURIComponent(roleId)}/shifts/${encodeURIComponent(shiftId)}`,
+		{
+			method: "DELETE",
 		},
 		idToken,
 	);

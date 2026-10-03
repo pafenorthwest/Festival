@@ -71,6 +71,13 @@ export interface CreateVolunteerRoleInput {
 
 export type CreateRoleInput = CreateVolunteerRoleInput;
 
+export interface UpdateVolunteerRoleInput {
+	displayName: string;
+	description: string;
+	detailsUrl?: string | null;
+	isRoomProctor: boolean;
+}
+
 export interface CreateVolunteerShiftInput {
 	date: string;
 	period: ShiftPeriod;
@@ -80,6 +87,14 @@ export interface CreateVolunteerShiftInput {
 	organizationId?: string;
 	festivalId?: string;
 	roleId?: string;
+}
+
+export interface UpdateVolunteerShiftInput {
+	date: string;
+	period: ShiftPeriod;
+	timeText?: string | null;
+	division?: string | null;
+	adjudicator?: string | null;
 }
 
 export type CreateShiftInput = CreateVolunteerShiftInput;
@@ -233,6 +248,50 @@ export function validateCreateVolunteerRoleInput(
 	return { valid: true, errors: [], data, request: data };
 }
 
+export function validateUpdateVolunteerRoleInput(
+	payload: unknown,
+): VolunteerValidationResult<UpdateVolunteerRoleInput> {
+	if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+		return { valid: false, errors: ["Role input must be an object."] };
+	}
+	const body = payload as Record<string, unknown>;
+	const errors: string[] = [];
+
+	const displayName =
+		typeof body.displayName === "string" ? body.displayName.trim() : "";
+	if (displayName.length === 0) {
+		errors.push("Role display name is required.");
+	} else if (displayName.length > 100) {
+		errors.push("Role display name must be 100 characters or less.");
+	}
+
+	const description =
+		typeof body.description === "string" ? body.description.trim() : "";
+	if (description.length === 0) {
+		errors.push("Role description is required.");
+	}
+
+	const detailsUrlRaw =
+		typeof body.detailsUrl === "string" ? body.detailsUrl.trim() : "";
+	const detailsUrl = detailsUrlRaw.length === 0 ? null : detailsUrlRaw;
+	if (detailsUrl !== null && !/^https?:\/\//.test(detailsUrl)) {
+		errors.push("Role details link must be an http(s) URL.");
+	}
+
+	const isRoomProctor = body.isRoomProctor === true;
+	if (errors.length > 0) {
+		return { valid: false, errors };
+	}
+
+	const data: UpdateVolunteerRoleInput = {
+		displayName,
+		description,
+		detailsUrl,
+		isRoomProctor,
+	};
+	return { valid: true, errors: [], data, request: data };
+}
+
 export function validateCreateVolunteerShiftInput(
 	payload: unknown,
 	roleOrIsRoomProctor?: { isRoomProctor: boolean } | boolean,
@@ -290,6 +349,27 @@ export function validateCreateVolunteerShiftInput(
 		timeText,
 		division,
 		adjudicator,
+	};
+	return { valid: true, errors: [], data, request: data };
+}
+
+export function validateUpdateVolunteerShiftInput(
+	payload: unknown,
+	roleOrIsRoomProctor?: { isRoomProctor: boolean } | boolean,
+): VolunteerValidationResult<UpdateVolunteerShiftInput> {
+	const result = validateCreateVolunteerShiftInput(
+		payload,
+		roleOrIsRoomProctor,
+	);
+	if (!result.valid || !result.data) {
+		return { valid: false, errors: result.errors };
+	}
+	const data: UpdateVolunteerShiftInput = {
+		date: result.data.date,
+		period: result.data.period,
+		timeText: result.data.timeText,
+		division: result.data.division,
+		adjudicator: result.data.adjudicator,
 	};
 	return { valid: true, errors: [], data, request: data };
 }

@@ -13,6 +13,13 @@ export interface CreateRoleRequest {
 	isRoomProctor: boolean;
 }
 
+export interface UpdateRoleRequest {
+	displayName: string;
+	description: string;
+	detailsUrl: string | null;
+	isRoomProctor: boolean;
+}
+
 export interface CreateShiftRequest {
 	date: string;
 	period: ShiftPeriod;
@@ -73,6 +80,38 @@ export function validateCreateRoleRequest(
 	};
 }
 
+export function validateUpdateRoleRequest(
+	payload: unknown,
+): { request: UpdateRoleRequest } | { errors: string[] } {
+	const body = (payload ?? {}) as Record<string, unknown>;
+	const errors: string[] = [];
+
+	const displayName = asString(body.displayName);
+	if (displayName.length === 0) {
+		errors.push("Role display name is required.");
+	} else if (displayName.length > 100) {
+		errors.push("Role display name must be 100 characters or less.");
+	}
+
+	const description = asString(body.description);
+	if (description.length === 0) {
+		errors.push("Role description is required.");
+	}
+
+	const detailsUrlRaw = asString(body.detailsUrl);
+	const detailsUrl = detailsUrlRaw.length === 0 ? null : detailsUrlRaw;
+	if (detailsUrl !== null && !/^https?:\/\//.test(detailsUrl)) {
+		errors.push("Role details link must be an http(s) URL.");
+	}
+
+	const isRoomProctor = body.isRoomProctor === true;
+
+	if (errors.length > 0) return { errors };
+	return {
+		request: { displayName, description, detailsUrl, isRoomProctor },
+	};
+}
+
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 export function validateCreateShiftRequest(
@@ -123,6 +162,8 @@ export function validateCreateShiftRequest(
 		},
 	};
 }
+
+export const validateUpdateShiftRequest = validateCreateShiftRequest;
 
 export function validateEnrollVolunteerRequest(
 	payload: unknown,
