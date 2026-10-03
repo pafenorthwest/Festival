@@ -1,7 +1,7 @@
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS orgs.credit_balances (
-    organization_id uuid NOT NULL REFERENCES orgs.organizations(id) ON DELETE CASCADE,
+    organization_id text NOT NULL REFERENCES orgs.organizations(id) ON DELETE CASCADE,
     customer_id text NOT NULL,
     balance_cents integer NOT NULL DEFAULT 0 CHECK (balance_cents >= 0),
     currency_code text NOT NULL DEFAULT 'USD',
@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS orgs.credit_balances (
 
 CREATE TABLE IF NOT EXISTS orgs.billing_adjustments (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    organization_id uuid NOT NULL REFERENCES orgs.organizations(id) ON DELETE CASCADE,
+    organization_id text NOT NULL REFERENCES orgs.organizations(id) ON DELETE CASCADE,
     customer_id text NOT NULL,
     admin_user_id text NOT NULL,
     adjustment_type text NOT NULL CHECK (adjustment_type IN ('refund', 'credit_issue', 'credit_apply', 'manual_charge', 'write_off')),
@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS orgs.billing_adjustments (
 
 CREATE TABLE IF NOT EXISTS orgs.billing_ledger (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    organization_id uuid NOT NULL REFERENCES orgs.organizations(id) ON DELETE CASCADE,
+    organization_id text NOT NULL REFERENCES orgs.organizations(id) ON DELETE CASCADE,
     customer_id text NOT NULL,
     entry_type text NOT NULL CHECK (entry_type IN ('credit', 'debit', 'adjustment')),
     amount_cents integer NOT NULL,
@@ -44,7 +44,7 @@ CREATE INDEX IF NOT EXISTS idx_billing_ledger_org_customer_created
 
 CREATE TABLE IF NOT EXISTS orgs.invoices (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    organization_id uuid NOT NULL REFERENCES orgs.organizations(id) ON DELETE CASCADE,
+    organization_id text NOT NULL REFERENCES orgs.organizations(id) ON DELETE CASCADE,
     customer_id text NOT NULL,
     status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'issued', 'paid', 'cancelled', 'written_off')),
     total_cents integer NOT NULL DEFAULT 0,
@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS orgs.invoices (
 CREATE TABLE IF NOT EXISTS orgs.invoice_line_items (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     invoice_id uuid NOT NULL REFERENCES orgs.invoices(id) ON DELETE CASCADE,
-    organization_id uuid NOT NULL REFERENCES orgs.organizations(id) ON DELETE CASCADE,
+    organization_id text NOT NULL REFERENCES orgs.organizations(id) ON DELETE CASCADE,
     description text NOT NULL,
     amount_cents integer NOT NULL,
     quantity integer NOT NULL DEFAULT 1,
