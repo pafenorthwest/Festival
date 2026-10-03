@@ -1405,8 +1405,11 @@ form.shopify-integration-card {
 .volunteer-roles-table .listing-table-row {
 	/* Fixed widths, not auto: each row is its own grid, so auto-sized
 	   columns can size independently per row and drift out of
-	   alignment with the header and with each other. */
-	grid-template-columns: minmax(0, 1fr) 7rem 9rem;
+	   alignment with the header and with each other. The actions
+	   column is wide enough for all three row buttons (Manage
+	   shifts/Hide shifts, Edit, Delete/Deleting…) on one line; it wraps
+	   if a narrower viewport can't fit that. */
+	grid-template-columns: minmax(0, 1fr) 7rem 21rem;
 }
 
 .volunteer-roles-table .listing-table-header span:last-child {
@@ -1419,6 +1422,7 @@ form.shopify-integration-card {
 
 .volunteer-roles-table .listing-table-actions {
 	justify-content: flex-end;
+	flex-wrap: wrap;
 }
 
 .volunteer-roles-table .badge {
@@ -1440,7 +1444,22 @@ form.shopify-integration-card {
 
 .volunteer-shifts-table .listing-table-header,
 .volunteer-shifts-table .listing-table-row {
-	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 12rem;
+}
+
+.volunteer-shifts-table .listing-table-header span:last-child {
+	text-align: right;
+}
+
+.volunteer-shifts-table .listing-table-actions {
+	justify-content: flex-end;
+	flex-wrap: wrap;
+}
+
+.volunteer-shifts-table .listing-table-actions .secondary-button {
+	padding: 0.55rem 0.9rem;
+	font-size: 0.86rem;
+	white-space: nowrap;
 }
 
 .festival-classes-table .listing-table-header,
