@@ -1,13 +1,25 @@
 import type {
 	AcceptInviteInput,
 	AddCatalogWorkInput,
+	AdminCustomerSearchResponse,
+	AdminCustomerSearchResult,
+	BillingAdjustment,
+	BillingAdjustmentType,
+	BillingAdjustmentValidationResult,
+	BillingLedgerDirection,
+	BillingLedgerEntry,
+	BillingLedgerEntryType,
+	BillingMismatchRecord,
+	BillingMismatchType,
 	BookShiftsOutcome,
 	CanonicalContributor,
 	CanonicalWork,
 	ClaimReviewInput,
 	ClassRegistrationMetadata,
+	CommunicationValidationResult,
 	CoverageGapShift,
 	CoverageGapsSummary,
+	CreateBillingAdjustmentInput,
 	CreateFestivalClassInput,
 	CreateFestivalInput,
 	CreateFestivalResponse,
@@ -15,21 +27,32 @@ import type {
 	CreateInviteResponse,
 	CreateMembershipProductInput,
 	CreateMembershipProductResponse,
+	CreateMessageTemplateInput,
 	CreateOrganizationDivisionInput,
 	CreateOrganizationInput,
 	CreateOrganizationResponse,
+	CreditBalance,
 	CustomerAccountSettingsResponse,
 	CustomerMembershipStatusResponse,
 	CustomerOrdersResponse,
 	CustomerProfileResponse,
 	CustomerSessionResponse,
 	DismissWelcomeResponse,
+	DropRegistrationInput,
+	DropRegistrationResult,
+	DropRegistrationValidationResult,
 	FestivalClassConfigurationDto,
 	FestivalSummary,
 	FlagReviewInput,
 	InviteSummary,
 	MembershipProductsListResponse,
 	MembershipPurchaseSelectionResponse,
+	MessageChannel,
+	MessageDeliveryStatus,
+	MessageEvent,
+	MessageLog,
+	MessageLogStatus,
+	MessageTemplate,
 	NormalizeReviewInput,
 	OrganizationAdminUsersResponse,
 	OrganizationDivision,
@@ -41,11 +64,17 @@ import type {
 	PublicMembershipProductsListResponse,
 	PublicOrganizationDivisionListResponse,
 	PublicOrganizationLandingResponse,
+	RefundEvent,
+	RefundEventStatus,
 	RegistrationAccompanistSummary,
+	RegistrationActorRole,
 	RegistrationAgeConfiguration,
 	RegistrationCatalogValue,
+	RegistrationChangeAction,
+	RegistrationChangeLog,
 	RegistrationEligibleClass,
 	RegistrationTeacherSummary,
+	RegistrationValidationResult,
 	ReorderOrganizationDivisionsInput,
 	RepertoireFlagReason,
 	RepertoirePiece,
@@ -63,19 +92,57 @@ import type {
 	ShiftCoverageStatus,
 	ShopifyIntegrationDiagnosticsResponse,
 	ShopifyIntegrationSettingsResponse,
+	TransferRegistrationInput,
+	TransferRegistrationResult,
+	TransferRegistrationValidationResult,
+	TriggerMessageEventInput,
 	UpdateCustomerProfileInput,
 	UpdateFestivalClassInput,
+	UpdateMessageTemplateInput,
 	UpdateOrganizationDivisionInput,
 	UpdateOrganizationTimezoneInput,
 	VolunteerAssignment,
 	VolunteerRecord,
+	WaitlistPromotionResult,
 } from "@festival/common";
 import {
+	assertValidCreateBillingAdjustmentInput,
+	assertValidDropRegistrationInput,
+	assertValidTransferRegistrationInput,
+	BILLING_ADJUSTMENT_TYPES,
+	BILLING_LEDGER_DIRECTIONS,
+	BILLING_LEDGER_ENTRY_TYPES,
+	BILLING_MISMATCH_TYPES,
+	extractTemplateVariables,
+	isBillingAdjustmentType,
+	isBillingLedgerDirection,
+	isBillingLedgerEntryType,
+	isBillingMismatchType,
+	isMessageChannel,
+	isMessageDeliveryStatus,
+	isMessageLogStatus,
+	isRefundEventStatus,
+	isRegistrationActorRole,
+	isRegistrationChangeAction,
 	isRepertoireReviewStatus,
+	MESSAGE_CHANNELS,
+	MESSAGE_DELIVERY_STATUSES,
+	MESSAGE_LOG_STATUSES,
+	REFUND_EVENT_STATUSES,
+	REGISTRATION_ACTOR_ROLES,
+	REGISTRATION_CHANGE_ACTIONS,
 	REPERTOIRE_FLAG_REASONS,
 	REPERTOIRE_REVIEW_STATUSES,
+	renderTemplate,
+	validateCreateBillingAdjustmentInput,
+	validateCreateMessageTemplateInput,
+	validateDropRegistrationInput,
+	validateTransferRegistrationInput,
+	validateTriggerMessageEventInput,
+	validateUpdateMessageTemplateInput,
 } from "@festival/common";
 import { getFirebaseAuth } from "./firebase-auth.js";
+import { buildOrgCheckoutRecoveryPath } from "./routes.js";
 
 const API_BASE = import.meta.env.FRONT_API_BASE ?? "";
 
@@ -120,14 +187,43 @@ export interface CreateVolunteerShiftInput {
 
 export type {
 	AddCatalogWorkInput,
+	AdminCustomerSearchResponse,
+	AdminCustomerSearchResult,
+	BillingAdjustment,
+	BillingAdjustmentType,
+	BillingAdjustmentValidationResult,
+	BillingLedgerDirection,
+	BillingLedgerEntry,
+	BillingLedgerEntryType,
+	BillingMismatchRecord,
+	BillingMismatchType,
 	BookShiftsOutcome,
 	CanonicalContributor,
 	CanonicalWork,
 	ClaimReviewInput,
+	CommunicationValidationResult,
 	CoverageGapShift,
 	CoverageGapsSummary,
+	CreateBillingAdjustmentInput,
+	CreateMessageTemplateInput,
+	CreditBalance,
+	DropRegistrationInput,
+	DropRegistrationResult,
+	DropRegistrationValidationResult,
 	FlagReviewInput,
+	MessageChannel,
+	MessageDeliveryStatus,
+	MessageEvent,
+	MessageLog,
+	MessageLogStatus,
+	MessageTemplate,
 	NormalizeReviewInput,
+	RefundEvent,
+	RefundEventStatus,
+	RegistrationActorRole,
+	RegistrationChangeAction,
+	RegistrationChangeLog,
+	RegistrationValidationResult,
 	RepertoireFlagReason,
 	RepertoireReviewItem,
 	RepertoireReviewQueueFilter,
@@ -136,13 +232,50 @@ export type {
 	ResolveFlagInput,
 	ShiftCoverageEntry,
 	ShiftCoverageStatus,
+	TransferRegistrationInput,
+	TransferRegistrationResult,
+	TransferRegistrationValidationResult,
+	TriggerMessageEventInput,
+	UpdateMessageTemplateInput,
 	VolunteerAssignment,
 	VolunteerRecord,
+	WaitlistPromotionResult,
 };
 export {
+	assertValidCreateBillingAdjustmentInput,
+	assertValidDropRegistrationInput,
+	assertValidTransferRegistrationInput,
+	BILLING_ADJUSTMENT_TYPES,
+	BILLING_LEDGER_DIRECTIONS,
+	BILLING_LEDGER_ENTRY_TYPES,
+	BILLING_MISMATCH_TYPES,
+	extractTemplateVariables,
+	isBillingAdjustmentType,
+	isBillingLedgerDirection,
+	isBillingLedgerEntryType,
+	isBillingMismatchType,
+	isMessageChannel,
+	isMessageDeliveryStatus,
+	isMessageLogStatus,
+	isRefundEventStatus,
+	isRegistrationActorRole,
+	isRegistrationChangeAction,
 	isRepertoireReviewStatus,
+	MESSAGE_CHANNELS,
+	MESSAGE_DELIVERY_STATUSES,
+	MESSAGE_LOG_STATUSES,
+	REFUND_EVENT_STATUSES,
+	REGISTRATION_ACTOR_ROLES,
+	REGISTRATION_CHANGE_ACTIONS,
 	REPERTOIRE_FLAG_REASONS,
 	REPERTOIRE_REVIEW_STATUSES,
+	renderTemplate,
+	validateCreateBillingAdjustmentInput,
+	validateCreateMessageTemplateInput,
+	validateDropRegistrationInput,
+	validateTransferRegistrationInput,
+	validateTriggerMessageEventInput,
+	validateUpdateMessageTemplateInput,
 };
 
 export interface VolunteerShiftListing extends VolunteerShift {
@@ -1278,15 +1411,28 @@ export interface CustomerClassRegistrationItem {
 		lineItemId?: string;
 		createdAt?: string;
 		updatedAt?: string;
+		festivalId?: string;
+		festivalSlug?: string;
+		festivalShortName?: string;
+		festivalClassId?: string;
+		divisionId?: string;
+		teacherId?: string;
+		childId?: string;
 		[key: string]: unknown;
 	};
 	festivalClass?: {
 		id: string;
 		displayName: string;
+		price?: string;
+		divisionId?: string;
+		festivalSlug?: string;
+		festivalShortName?: string;
 		[key: string]: unknown;
 	};
 	child?: { id: string; name: string };
 	metadata?: ClassRegistrationMetadata | null;
+	festivalSlug?: string;
+	festivalShortName?: string;
 }
 
 export interface CustomerClassRegistrationsResponse {
@@ -1295,10 +1441,13 @@ export interface CustomerClassRegistrationsResponse {
 
 export function listCustomerClassRegistrations(
 	slug: string,
-	festivalSlug: string,
+	festivalSlug?: string,
 ): Promise<CustomerClassRegistrationsResponse> {
+	const path = festivalSlug
+		? `/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/registration/class-registrations`
+		: `/api/organizations/${encodeURIComponent(slug)}/customer/class-registrations`;
 	return requestJson<CustomerClassRegistrationsResponse>(
-		`/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/registration/class-registrations`,
+		path,
 		undefined,
 		undefined,
 		"",
@@ -1345,6 +1494,201 @@ export function updateRegistrationMetadata(
 		},
 		undefined,
 		"",
+	);
+}
+
+export function dropCustomerRegistration(
+	slug: string,
+	registrationId: string,
+	input?: Partial<DropRegistrationInput>,
+): Promise<DropRegistrationResult> {
+	return requestJson<DropRegistrationResult>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/class-registrations/${encodeURIComponent(registrationId)}/drop`,
+		{
+			method: "POST",
+			body: JSON.stringify(input ?? {}),
+		},
+		undefined,
+		"",
+	);
+}
+
+export function transferCustomerRegistration(
+	slug: string,
+	registrationId: string,
+	input:
+		| TransferRegistrationInput
+		| { targetFestivalClassId: string; reason?: string },
+): Promise<TransferRegistrationResult> {
+	return requestJson<TransferRegistrationResult>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/class-registrations/${encodeURIComponent(registrationId)}/transfer`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+		undefined,
+		"",
+	);
+}
+
+export async function dropAdminRegistration(
+	slugOrToken: string,
+	festivalOrSlug: string,
+	regIdOrFestival: string,
+	inputOrRegId?: Partial<DropRegistrationInput> | string,
+	tokenOrInput?: string | Partial<DropRegistrationInput>,
+): Promise<DropRegistrationResult> {
+	let slug = slugOrToken;
+	let festivalShortName = festivalOrSlug;
+	let registrationId = regIdOrFestival;
+	let input: Partial<DropRegistrationInput> = {};
+	let idToken: string | undefined;
+
+	if (typeof inputOrRegId === "string") {
+		idToken = slugOrToken;
+		slug = festivalOrSlug;
+		festivalShortName = regIdOrFestival;
+		registrationId = inputOrRegId;
+		input = (
+			typeof tokenOrInput === "object" && tokenOrInput !== null
+				? tokenOrInput
+				: {}
+		) as Partial<DropRegistrationInput>;
+	} else {
+		if (typeof inputOrRegId === "object" && inputOrRegId !== null) {
+			input = inputOrRegId;
+		}
+		if (typeof tokenOrInput === "string") {
+			idToken = tokenOrInput;
+		}
+	}
+
+	const token = await resolveAuthToken(idToken);
+	return requestJson<DropRegistrationResult>(
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalShortName)}/registrations/${encodeURIComponent(registrationId)}/drop`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+		token,
+	);
+}
+
+export async function transferAdminRegistration(
+	slugOrToken: string,
+	festivalOrSlug: string,
+	regIdOrFestival: string,
+	inputOrRegId:
+		| TransferRegistrationInput
+		| { targetFestivalClassId: string; reason?: string }
+		| string,
+	tokenOrInput?:
+		| string
+		| TransferRegistrationInput
+		| { targetFestivalClassId: string; reason?: string },
+): Promise<TransferRegistrationResult> {
+	let slug = slugOrToken;
+	let festivalShortName = festivalOrSlug;
+	let registrationId = regIdOrFestival;
+	let input = (
+		typeof inputOrRegId === "object" ? inputOrRegId : {}
+	) as TransferRegistrationInput;
+	let idToken: string | undefined;
+
+	if (typeof inputOrRegId === "string") {
+		idToken = slugOrToken;
+		slug = festivalOrSlug;
+		festivalShortName = regIdOrFestival;
+		registrationId = inputOrRegId;
+		input = (
+			typeof tokenOrInput === "object" && tokenOrInput !== null
+				? tokenOrInput
+				: {}
+		) as TransferRegistrationInput;
+	} else if (typeof tokenOrInput === "string") {
+		idToken = tokenOrInput;
+	}
+
+	const token = await resolveAuthToken(idToken);
+	return requestJson<TransferRegistrationResult>(
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalShortName)}/registrations/${encodeURIComponent(registrationId)}/transfer`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+		token,
+	);
+}
+
+export async function promoteAdminRegistration(
+	slugOrToken: string,
+	festivalOrSlug: string,
+	regIdOrFestival: string,
+	inputOrRegId?: { reason?: string } | string,
+	tokenOrInput?: string | { reason?: string },
+): Promise<WaitlistPromotionResult> {
+	let slug = slugOrToken;
+	let festivalShortName = festivalOrSlug;
+	let registrationId = regIdOrFestival;
+	let input: { reason?: string } = {};
+	let idToken: string | undefined;
+
+	if (typeof inputOrRegId === "string") {
+		idToken = slugOrToken;
+		slug = festivalOrSlug;
+		festivalShortName = regIdOrFestival;
+		registrationId = inputOrRegId;
+		input = (
+			typeof tokenOrInput === "object" && tokenOrInput !== null
+				? tokenOrInput
+				: {}
+		) as { reason?: string };
+	} else {
+		if (typeof inputOrRegId === "object" && inputOrRegId !== null) {
+			input = inputOrRegId;
+		}
+		if (typeof tokenOrInput === "string") {
+			idToken = tokenOrInput;
+		}
+	}
+
+	const token = await resolveAuthToken(idToken);
+	return requestJson<WaitlistPromotionResult>(
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalShortName)}/registrations/${encodeURIComponent(registrationId)}/promote`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+		token,
+	);
+}
+
+export async function getRegistrationChangeLog(
+	slugOrToken: string,
+	festivalOrSlug: string,
+	regIdOrFestival: string,
+	idToken?: string,
+): Promise<{ changeLogs: RegistrationChangeLog[] }> {
+	let slug = slugOrToken;
+	let festivalShortName = festivalOrSlug;
+	let registrationId = regIdOrFestival;
+	let tokenToResolve = idToken;
+
+	if (
+		slugOrToken.includes(".") ||
+		(idToken && regIdOrFestival.length > 0 && slugOrToken.length > 40)
+	) {
+		tokenToResolve = slugOrToken;
+		slug = festivalOrSlug;
+		festivalShortName = regIdOrFestival;
+		registrationId = idToken ?? "";
+	}
+
+	const token = await resolveAuthToken(tokenToResolve);
+	return requestJson<{ changeLogs: RegistrationChangeLog[] }>(
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalShortName)}/registrations/${encodeURIComponent(registrationId)}/change-log`,
+		undefined,
+		token,
 	);
 }
 
@@ -1552,4 +1896,391 @@ export async function addRepertoireCatalogWork(
 		},
 		token,
 	);
+}
+
+export interface CreateBillingAdjustmentPayload {
+	organizationId?: string;
+	customerId: string;
+	adminUserId?: string;
+	adjustmentType: BillingAdjustmentType;
+	amountCents: number;
+	currencyCode?: string;
+	reason: string;
+	referenceType?: string | null;
+	referenceId?: string | null;
+	approvedDecisionId?: string | null;
+	notes?: string | null;
+	entryType?: BillingLedgerEntryType;
+	direction?: BillingLedgerDirection;
+}
+
+export async function listBillingMismatches(
+	slug: string,
+	idToken?: string,
+): Promise<{ mismatches: BillingMismatchRecord[] }> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<{ mismatches: BillingMismatchRecord[] }>(
+		`/api/organizations/${encodeURIComponent(slug)}/billing/mismatches`,
+		undefined,
+		token,
+	);
+}
+
+export async function getCustomerCreditBalance(
+	slug: string,
+	customerId: string,
+	idToken?: string,
+): Promise<{ creditBalance: CreditBalance }> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<{ creditBalance: CreditBalance }>(
+		`/api/organizations/${encodeURIComponent(slug)}/billing/customers/${encodeURIComponent(customerId)}/credit-balance`,
+		undefined,
+		token,
+	);
+}
+
+export async function getCustomerBillingLedger(
+	slug: string,
+	customerId: string,
+	idToken?: string,
+): Promise<{
+	ledger: BillingLedgerEntry[];
+	ledgerEntries: BillingLedgerEntry[];
+}> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<{
+		ledger: BillingLedgerEntry[];
+		ledgerEntries: BillingLedgerEntry[];
+	}>(
+		`/api/organizations/${encodeURIComponent(slug)}/billing/customers/${encodeURIComponent(customerId)}/ledger`,
+		undefined,
+		token,
+	);
+}
+
+export async function listBillingAdjustments(
+	slug: string,
+	customerId?: string,
+	idToken?: string,
+): Promise<{ adjustments: BillingAdjustment[] }> {
+	const token = await resolveAuthToken(idToken);
+	const query = customerId
+		? `?customerId=${encodeURIComponent(customerId)}`
+		: "";
+	return requestJson<{ adjustments: BillingAdjustment[] }>(
+		`/api/organizations/${encodeURIComponent(slug)}/billing/adjustments${query}`,
+		undefined,
+		token,
+	);
+}
+
+export async function createBillingAdjustment(
+	slug: string,
+	input: CreateBillingAdjustmentPayload,
+	idToken?: string,
+): Promise<{
+	adjustment: BillingAdjustment;
+	ledgerEntry: BillingLedgerEntry;
+	creditBalance: CreditBalance;
+	alreadyExisted?: boolean;
+}> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<{
+		adjustment: BillingAdjustment;
+		ledgerEntry: BillingLedgerEntry;
+		creditBalance: CreditBalance;
+		alreadyExisted?: boolean;
+	}>(
+		`/api/organizations/${encodeURIComponent(slug)}/billing/adjustments`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+		token,
+	);
+}
+
+export interface TriggerEventResult {
+	status: MessageDeliveryStatus;
+	success: boolean;
+	event: MessageEvent;
+	log?: MessageLog;
+	error?: string;
+	duplicate?: boolean;
+}
+
+export async function listCommunicationTemplates(
+	slug: string,
+	filters?: { channel?: MessageChannel; isActive?: boolean },
+	idToken?: string,
+): Promise<MessageTemplate[]> {
+	const token = await resolveAuthToken(idToken);
+	const params = new URLSearchParams();
+	if (filters?.channel) params.set("channel", filters.channel);
+	if (typeof filters?.isActive === "boolean") {
+		params.set("isActive", String(filters.isActive));
+	}
+	const query = params.toString() ? `?${params.toString()}` : "";
+	return requestJson<MessageTemplate[]>(
+		`/api/organizations/${encodeURIComponent(slug)}/communication/templates${query}`,
+		undefined,
+		token,
+	);
+}
+
+export async function createCommunicationTemplate(
+	slug: string,
+	input: CreateMessageTemplateInput,
+	idToken?: string,
+): Promise<MessageTemplate> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<MessageTemplate>(
+		`/api/organizations/${encodeURIComponent(slug)}/communication/templates`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+		token,
+	);
+}
+
+export async function updateCommunicationTemplate(
+	slug: string,
+	templateId: string,
+	input: UpdateMessageTemplateInput,
+	idToken?: string,
+): Promise<MessageTemplate> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<MessageTemplate>(
+		`/api/organizations/${encodeURIComponent(slug)}/communication/templates/${encodeURIComponent(templateId)}`,
+		{
+			method: "PATCH",
+			body: JSON.stringify(input),
+		},
+		token,
+	);
+}
+
+export async function listCommunicationLogs(
+	slug: string,
+	filters?: {
+		channel?: MessageChannel;
+		status?: MessageLogStatus;
+		eventId?: string;
+		limit?: number;
+		offset?: number;
+	},
+	idToken?: string,
+): Promise<MessageLog[]> {
+	const token = await resolveAuthToken(idToken);
+	const params = new URLSearchParams();
+	if (filters?.channel) params.set("channel", filters.channel);
+	if (filters?.status) params.set("status", filters.status);
+	if (filters?.eventId) params.set("eventId", filters.eventId);
+	if (typeof filters?.limit === "number") {
+		params.set("limit", String(filters.limit));
+	}
+	if (typeof filters?.offset === "number") {
+		params.set("offset", String(filters.offset));
+	}
+	const query = params.toString() ? `?${params.toString()}` : "";
+	return requestJson<MessageLog[]>(
+		`/api/organizations/${encodeURIComponent(slug)}/communication/logs${query}`,
+		undefined,
+		token,
+	);
+}
+
+export async function triggerCommunicationEvent(
+	slug: string,
+	input: TriggerMessageEventInput,
+	idToken?: string,
+): Promise<TriggerEventResult> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<TriggerEventResult>(
+		`/api/organizations/${encodeURIComponent(slug)}/communication/events`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+		token,
+	);
+}
+
+export interface AdminCheckoutIntent {
+	id: string;
+	correlationId: string;
+	organizationId: string;
+	customerId: string;
+	sessionId: string;
+	idempotencyKey: string;
+	intentType: string;
+	offeringId: string | null;
+	entitlementClass: string | null;
+	durationDays: number | null;
+	festivalClassId: string | null;
+	childId: string | null;
+	shopifyProductGid: string;
+	shopifyVariantGid: string;
+	policyVersion: string | null;
+	divisionId: string | null;
+	divisionNameSnapshot: string | null;
+	staffAccessConsent: boolean;
+	amount: string;
+	currencyCode: string;
+	cartReference: string | null;
+	status: string;
+	expiresAtIso: string;
+	createdAtIso: string;
+}
+
+export interface AdminCheckoutIntentListResponse {
+	intents: AdminCheckoutIntent[];
+}
+
+export interface RecoveryReviewDto {
+	recoveryRequest: {
+		id: string;
+		status:
+			| "pending"
+			| "consumed"
+			| "expired"
+			| "cancelled"
+			| "invalidated"
+			| string;
+		expiresAtIso: string;
+		createdAtIso: string;
+	};
+	sourceIntent: AdminCheckoutIntent;
+	offering: {
+		id: string;
+		name: string;
+		available: boolean;
+		price: {
+			amount: string;
+			currencyCode: string;
+		};
+	} | null;
+	division: {
+		id: string;
+		displayName: string;
+	} | null;
+}
+
+export interface RecoveryCheckoutResult {
+	checkoutUrl: string;
+}
+
+export interface AdminCheckoutRecoveryResult {
+	recoveryUrl: string;
+	rawToken: string;
+	tokenHash: string;
+	recoveryRequest: unknown;
+}
+
+export async function searchAdminCustomers(
+	slug: string,
+	query: string,
+	idToken?: string,
+): Promise<AdminCustomerSearchResponse> {
+	const token = await resolveAuthToken(idToken);
+	const params = new URLSearchParams({ query });
+	return requestJson<AdminCustomerSearchResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/customers?${params.toString()}`,
+		undefined,
+		token,
+	);
+}
+
+export async function getAdminCustomerCheckoutIntents(
+	slug: string,
+	customerId: string,
+	idToken?: string,
+): Promise<AdminCheckoutIntentListResponse> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<AdminCheckoutIntentListResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/customers/${encodeURIComponent(customerId)}/checkout-intents`,
+		undefined,
+		token,
+	);
+}
+
+export async function invalidateAdminCheckoutIntent(
+	slug: string,
+	intentId: string,
+	idToken?: string,
+	reason?: string,
+): Promise<{ success: boolean; intentId: string }> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<{ success: boolean; intentId: string }>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/checkout-intents/${encodeURIComponent(intentId)}/invalidate`,
+		{
+			method: "POST",
+			headers: {
+				"X-CSRF-Token": token || "admin-csrf",
+			},
+			body: JSON.stringify(reason ? { reason } : {}),
+		},
+		token,
+	);
+}
+
+export async function recoverAdminCheckoutIntent(
+	slug: string,
+	intentId: string,
+	idToken?: string,
+	options?: { customerId?: string; expiresInHours?: number },
+): Promise<AdminCheckoutRecoveryResult> {
+	const token = await resolveAuthToken(idToken);
+	return requestJson<AdminCheckoutRecoveryResult>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/checkout-intents/${encodeURIComponent(intentId)}/recover`,
+		{
+			method: "POST",
+			headers: {
+				"X-CSRF-Token": token || "admin-csrf",
+			},
+			body: JSON.stringify(options ?? {}),
+		},
+		token,
+	);
+}
+
+export async function getCustomerCheckoutRecoveryReview(
+	slug: string,
+	token: string,
+): Promise<RecoveryReviewDto> {
+	return requestJson<RecoveryReviewDto>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/checkout-recovery/${encodeURIComponent(token)}`,
+		undefined,
+		undefined,
+		"",
+	);
+}
+
+export async function resumeCustomerCheckoutRecovery(
+	slug: string,
+	token: string,
+	csrfToken?: string,
+): Promise<RecoveryCheckoutResult> {
+	const headers: Record<string, string> = {};
+	if (csrfToken) {
+		headers["X-CSRF-Token"] = csrfToken;
+	}
+	return requestJson<RecoveryCheckoutResult>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/checkout-recovery/${encodeURIComponent(token)}/checkout`,
+		{
+			method: "POST",
+			headers,
+		},
+		undefined,
+		"",
+	);
+}
+
+export function customerCheckoutRecoverySignInPath(
+	slug: string,
+	token: string,
+): string {
+	const returnTo = buildOrgCheckoutRecoveryPath(slug, token);
+	return `/api/organizations/${encodeURIComponent(slug)}/customer-auth/start?returnTo=${encodeURIComponent(returnTo)}`;
 }

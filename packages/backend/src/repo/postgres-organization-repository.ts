@@ -2253,15 +2253,31 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		}
 	}
 
-	async findFestivalClassConfigurationById(
+	findFestivalClassConfigurationById(
 		organizationId: string,
 		festivalId: string,
 		classId: string,
+	): Promise<FestivalClassConfiguration | null>;
+	findFestivalClassConfigurationById(
+		organizationId: string,
+		classId: string,
+	): Promise<FestivalClassConfiguration | null>;
+	async findFestivalClassConfigurationById(
+		organizationId: string,
+		festivalIdOrClassId: string,
+		classId?: string,
 	): Promise<FestivalClassConfiguration | null> {
 		await this.ensureReady();
+		if (classId === undefined) {
+			const rows = (await sql.unsafe(
+				`SELECT * FROM ${this.schema}.festival_class_configurations WHERE organization_id = $1 AND id = $2 LIMIT 1`,
+				[organizationId, festivalIdOrClassId],
+			)) as FestivalClassConfigurationRow[];
+			return rows[0] ? mapFestivalClassConfiguration(rows[0]) : null;
+		}
 		const rows = (await sql.unsafe(
 			`SELECT * FROM ${this.schema}.festival_class_configurations WHERE organization_id = $1 AND festival_id = $2 AND id = $3 LIMIT 1`,
-			[organizationId, festivalId, classId],
+			[organizationId, festivalIdOrClassId, classId],
 		)) as FestivalClassConfigurationRow[];
 		return rows[0] ? mapFestivalClassConfiguration(rows[0]) : null;
 	}

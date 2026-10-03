@@ -694,7 +694,11 @@ export class InMemoryMembershipCommerceRepository
 	): Promise<ClassEntitlement[]> {
 		return [...this.classEntitlements.values()]
 			.filter((record) => {
-				if (record.organizationId !== filter.organizationId) return false;
+				if (
+					filter.organizationId &&
+					record.organizationId !== filter.organizationId
+				)
+					return false;
 				if (filter.festivalId && record.festivalId !== filter.festivalId)
 					return false;
 				if (

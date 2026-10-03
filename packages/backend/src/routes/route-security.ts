@@ -25,6 +25,31 @@ export const CURRENT_ROUTE_SECURITY = [
 	{ method: "GET", path: "/health", authenticationClass: "private-health" },
 	{ method: "GET", path: "/api/bootstrap", authenticationClass: "public" },
 	{
+		method: "GET",
+		path: "/api/organizations/:slug/billing/mismatches",
+		authenticationClass: "admin",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/billing/customers/:customerId/credit-balance",
+		authenticationClass: "admin",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/billing/customers/:customerId/ledger",
+		authenticationClass: "admin",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/billing/adjustments",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/billing/adjustments",
+		authenticationClass: "admin",
+	},
+	{
 		method: "POST",
 		path: "/api/organizations/:slug/admin/entitlements/:entitlementId/revoke",
 		authenticationClass: "admin",
@@ -82,6 +107,16 @@ export const CURRENT_ROUTE_SECURITY = [
 	{
 		method: "POST",
 		path: "/api/organizations/:slug/customer/checkout",
+		authenticationClass: "customer",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/customer/checkout-recovery/:token",
+		authenticationClass: "customer",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/customer/checkout-recovery/:token/checkout",
 		authenticationClass: "customer",
 	},
 	{
@@ -172,6 +207,21 @@ export const CURRENT_ROUTE_SECURITY = [
 	{
 		method: "GET",
 		path: "/api/organizations/:slug/admin/customers/:customerId",
+		authenticationClass: "admin",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/admin/customers/:customerId/checkout-intents",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/checkout-intents/:intentId/invalidate",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/checkout-intents/:intentId/recover",
 		authenticationClass: "admin",
 	},
 	{
@@ -531,6 +581,61 @@ export const CURRENT_ROUTE_SECURITY = [
 	{
 		method: "POST",
 		path: "/api/organizations/:slug/repertoire/catalog",
+		authenticationClass: "tenant",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/customer/class-registrations/:registrationId/drop",
+		authenticationClass: "customer",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/customer/class-registrations/:registrationId/transfer",
+		authenticationClass: "customer",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/festivals/:festivalShortName/registrations/:id/drop",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/festivals/:festivalShortName/registrations/:id/transfer",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/festivals/:festivalShortName/registrations/:id/promote",
+		authenticationClass: "admin",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/festivals/:festivalShortName/registrations/:id/change-log",
+		authenticationClass: "admin",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/communication/templates",
+		authenticationClass: "tenant",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/communication/templates",
+		authenticationClass: "tenant",
+	},
+	{
+		method: "PATCH",
+		path: "/api/organizations/:slug/communication/templates/:templateId",
+		authenticationClass: "tenant",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/communication/logs",
+		authenticationClass: "tenant",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/communication/events",
 		authenticationClass: "tenant",
 	},
 ] as const satisfies readonly RouteSecurityDeclaration[];

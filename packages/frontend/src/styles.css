@@ -2211,3 +2211,19 @@ form.shopify-integration-card {
 	gap: 0.5rem;
 	flex-wrap: wrap;
 }
+
+.communication-templates-table .listing-table-header,
+.communication-templates-table .listing-table-row {
+	grid-template-columns: minmax(140px, 1.5fr) 5rem minmax(130px, 1.5fr) minmax(
+			120px,
+			1.2fr
+		) 5.5rem 5rem;
+}
+
+.communication-logs-table .listing-table-header,
+.communication-logs-table .listing-table-row {
+	grid-template-columns: 5rem minmax(90px, 1fr) 6.5rem 4.5rem minmax(140px, 2fr) minmax(
+			100px,
+			1.2fr
+		);
+}

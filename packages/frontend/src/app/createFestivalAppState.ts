@@ -45,6 +45,9 @@ const ADMIN_ROUTE_KINDS = [
 	"festival-admin-classes",
 	"org-admin-volunteers",
 	"org-music-review",
+	"org-billing",
+	"org-communications",
+	"org-admin-checkout-recovery",
 ] as const;
 
 export const INVITE_FEEDBACK_DURATION_MS = 2200;
@@ -251,6 +254,15 @@ export function createFestivalAppState() {
 			settings.capabilities.write_inventory === "granted"
 		);
 	});
+	const isDropTransferEnabled = createMemo(() => {
+		const fromOrg = organization()?.features?.dropTransfer;
+		if (typeof fromOrg === "boolean") return fromOrg;
+		return (
+			typeof import.meta !== "undefined" &&
+			(import.meta as unknown as { env?: Record<string, string> }).env
+				?.FRONT_ENABLE_DROP_TRANSFER === "true"
+		);
+	});
 	const isAdminRoute = createMemo(() =>
 		ADMIN_ROUTE_KINDS.some((kind) => kind === route().kind),
 	);
@@ -267,7 +279,10 @@ export function createFestivalAppState() {
 			route().kind === "festival-admin" ||
 			route().kind === "festival-admin-classes" ||
 			route().kind === "org-admin-volunteers" ||
-			route().kind === "org-music-review",
+			route().kind === "org-music-review" ||
+			route().kind === "org-billing" ||
+			route().kind === "org-communications" ||
+			route().kind === "org-admin-checkout-recovery",
 	);
 	const adminBreadcrumb = createMemo(() => {
 		switch (route().kind) {
@@ -294,6 +309,12 @@ export function createFestivalAppState() {
 				return "Admin > Volunteers";
 			case "org-music-review":
 				return "Admin > Music Review";
+			case "org-billing":
+				return "Admin > Billing Reconciliation";
+			case "org-communications":
+				return "Admin > Communications";
+			case "org-admin-checkout-recovery":
+				return "Admin > Checkout Recovery";
 			default:
 				return "Admin";
 		}
@@ -437,6 +458,11 @@ export function createFestivalAppState() {
 		clearTimers,
 		closeSignInModal,
 		customerSession,
+		get slug() {
+			const r = route();
+			if ("slug" in r && typeof r.slug === "string") return r.slug;
+			return sessionMembership()?.organizationSlug ?? "";
+		},
 		createdInvites,
 		createdOrganizationSlug,
 		createDivisionAttempted,
@@ -463,6 +489,7 @@ export function createFestivalAppState() {
 		isAdminSubRoute,
 		isCreatingMembershipProduct,
 		isDivisionMutationPending,
+		isDropTransferEnabled,
 		isLoadingDivisionConfiguration,
 		isLoadingMembershipProducts,
 		isShopifyTesting,

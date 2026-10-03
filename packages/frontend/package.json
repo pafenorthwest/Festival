@@ -6,6 +6,7 @@
 	"scripts": {
 		"dev": "vite",
 		"lint": "tsc -p tsconfig.json --noEmit",
+		"check:types": "bun x tsc -p tsconfig.json --noEmit",
 		"build": "vite build",
 		"test": "bun test"
 	},

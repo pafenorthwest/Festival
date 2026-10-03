@@ -1,22 +1,70 @@
 import type { CustomerOrderSummary, RepertoirePiece } from "@festival/common";
 import { createSignal, For, Show } from "solid-js";
+import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { Button } from "../components/Button.js";
 import { FestivalRepertoireModal } from "../components/FestivalRepertoireModal.js";
 import {
+	dropCustomerRegistration,
 	getCustomerOrders,
 	listCustomerClassRegistrations,
+	listRegistrationEligibleClasses,
+	transferCustomerRegistration,
 	updateRegistrationMetadata,
 } from "../lib/api.js";
 import { CustomerAccountPageLayout } from "./CustomerAccountPageLayout.js";
+import { CustomerDropRegistrationModal } from "./CustomerDropRegistrationModal.js";
+import {
+	type ClassOption,
+	CustomerTransferRegistrationModal,
+} from "./CustomerTransferRegistrationModal.js";
 
 interface RegistrationItemRecord {
-	entitlement: { id: string; festivalId: string };
-	festivalClass?: { id: string; displayName: string; price: string };
+	entitlement: {
+		id: string;
+		festivalId?: string;
+		festivalSlug?: string;
+		festivalShortName?: string;
+		status?: string;
+		festivalClassId?: string;
+		orderId?: string;
+		divisionId?: string;
+		teacherId?: string;
+		childId?: string;
+		[key: string]: unknown;
+	};
+	festivalClass?: {
+		id: string;
+		displayName: string;
+		price?: string;
+		divisionId?: string;
+		festivalSlug?: string;
+		festivalShortName?: string;
+		[key: string]: unknown;
+	};
 	child?: { id: string; name: string };
-	metadata?: { id: string; repertoireJson: RepertoirePiece[] };
+	metadata?: {
+		id: string;
+		repertoireJson: RepertoirePiece[];
+		teacherMembershipId?: string;
+		teacherId?: string;
+		[key: string]: unknown;
+	} | null;
+	festivalSlug?: string;
+	festivalShortName?: string;
+	divisionId?: string;
+	teacherId?: string;
+	[key: string]: unknown;
 }
 
-export function CustomerAccountOrdersPage(props: { slug: string }) {
+function isRegistrationActiveOrWaitlisted(status?: string): boolean {
+	const s = (status ?? "confirmed").toLowerCase();
+	return s === "confirmed" || s === "waitlisted" || s === "active";
+}
+
+export function CustomerAccountOrdersPage(props: {
+	app: FestivalAppController;
+	slug: string;
+}) {
 	const [orders, setOrders] = createSignal<CustomerOrderSummary[]>([]);
 	const [registrations, setRegistrations] = createSignal<
 		RegistrationItemRecord[]
@@ -26,6 +74,18 @@ export function CustomerAccountOrdersPage(props: { slug: string }) {
 	const [editError, setEditError] = createSignal<string | null>(null);
 	const [activeRegistration, setActiveRegistration] =
 		createSignal<RegistrationItemRecord | null>(null);
+
+	const [dropTarget, setDropTarget] =
+		createSignal<RegistrationItemRecord | null>(null);
+	const [transferTarget, setTransferTarget] =
+		createSignal<RegistrationItemRecord | null>(null);
+	const [availableTransferClasses, setAvailableTransferClasses] = createSignal<
+		ClassOption[]
+	>([]);
+	const [isLoadingTransferClasses, setIsLoadingTransferClasses] =
+		createSignal(false);
+	const [isSubmittingAction, setIsSubmittingAction] = createSignal(false);
+	const [actionError, setActionError] = createSignal<string | null>(null);
 
 	async function loadOrders(after?: string) {
 		try {
@@ -61,10 +121,19 @@ export function CustomerAccountOrdersPage(props: { slug: string }) {
 		const target = activeRegistration();
 		if (!target?.metadata) return;
 		setEditError(null);
+		const targetFestivalSlug =
+			target.entitlement.festivalSlug ??
+			target.entitlement.festivalShortName ??
+			target.festivalClass?.festivalSlug ??
+			target.festivalClass?.festivalShortName ??
+			target.festivalSlug ??
+			target.festivalShortName ??
+			target.entitlement.festivalId ??
+			"";
 		try {
 			await updateRegistrationMetadata(
 				props.slug,
-				target.entitlement.festivalId,
+				targetFestivalSlug,
 				target.metadata.id,
 				csrfToken,
 				{ pieces: savedPieces },
@@ -73,6 +142,110 @@ export function CustomerAccountOrdersPage(props: { slug: string }) {
 			setActiveRegistration(null);
 		} catch (err) {
 			setEditError((err as Error).message);
+		}
+	}
+
+	async function handleOpenTransfer(item: RegistrationItemRecord) {
+		setTransferTarget(item);
+		setActionError(null);
+		const orderForEntitlement = item.entitlement.orderId
+			? orders().find(
+					(o) =>
+						(o as { id?: string }).id === item.entitlement.orderId ||
+						o.orderNumber === item.entitlement.orderId,
+				)
+			: undefined;
+		const festivalSlugFromOrder =
+			(
+				orderForEntitlement as {
+					festivalSlug?: string;
+					festivalShortName?: string;
+				}
+			)?.festivalSlug ??
+			(
+				orderForEntitlement as {
+					festivalSlug?: string;
+					festivalShortName?: string;
+				}
+			)?.festivalShortName;
+		const festivalSlug =
+			item.entitlement.festivalSlug ??
+			item.entitlement.festivalShortName ??
+			festivalSlugFromOrder ??
+			item.festivalClass?.festivalSlug ??
+			item.festivalClass?.festivalShortName ??
+			item.festivalSlug ??
+			item.festivalShortName ??
+			item.entitlement.festivalId;
+		if (!festivalSlug) return;
+		setIsLoadingTransferClasses(true);
+		try {
+			const divisionId =
+				item.festivalClass?.divisionId ??
+				item.entitlement.divisionId ??
+				(item as { divisionId?: string }).divisionId;
+			const teacherId =
+				item.metadata?.teacherMembershipId ??
+				item.metadata?.teacherId ??
+				item.entitlement.teacherId ??
+				(item as { teacherId?: string }).teacherId;
+			const childId = item.child?.id ?? item.entitlement.childId;
+			const res = await listRegistrationEligibleClasses(
+				props.slug,
+				festivalSlug,
+				{
+					childId,
+					divisionId,
+					teacherId,
+				},
+			);
+			setAvailableTransferClasses(res.classes || []);
+		} catch (err) {
+			setActionError((err as Error).message);
+		} finally {
+			setIsLoadingTransferClasses(false);
+		}
+	}
+
+	async function handleConfirmDrop(reason: string, requestRefund: boolean) {
+		const target = dropTarget();
+		if (!target) return;
+		setIsSubmittingAction(true);
+		setActionError(null);
+		try {
+			await dropCustomerRegistration(props.slug, target.entitlement.id, {
+				reason: reason || undefined,
+				requestRefund,
+				issueRefund: requestRefund,
+			});
+			setDropTarget(null);
+			await loadRegistrations();
+		} catch (err) {
+			setActionError((err as Error).message);
+		} finally {
+			setIsSubmittingAction(false);
+		}
+	}
+
+	async function handleConfirmTransfer(
+		targetFestivalClassId: string,
+		reason: string,
+	) {
+		const target = transferTarget();
+		if (!target) return;
+		setIsSubmittingAction(true);
+		setActionError(null);
+		try {
+			await transferCustomerRegistration(props.slug, target.entitlement.id, {
+				targetFestivalClassId,
+				reason: reason || undefined,
+			});
+			setTransferTarget(null);
+			await loadRegistrations();
+		} catch (err) {
+			setActionError((err as Error).message);
+		} finally {
+			setIsSubmittingAction(false);
 		}
 	}
 
@@ -107,19 +280,58 @@ export function CustomerAccountOrdersPage(props: { slug: string }) {
 									{(item) => (
 										<li class="panel flow-panel">
 											<div class="division-row-heading">
-												<h3>
-													{item.festivalClass?.displayName ?? "Festival Class"}
-												</h3>
-												<Button
-													type="button"
-													variant="secondary"
-													onClick={() => {
-														setEditError(null);
-														setActiveRegistration(item);
-													}}
-												>
-													Edit repertoire
-												</Button>
+												<div>
+													<h3>
+														{item.festivalClass?.displayName ??
+															"Festival Class"}
+													</h3>
+													<Show when={item.entitlement.status}>
+														<span
+															class="badge"
+															style="margin-top: 0.25rem; display: inline-block; text-transform: capitalize;"
+														>
+															{item.entitlement.status}
+														</span>
+													</Show>
+												</div>
+												<div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+													<Button
+														type="button"
+														variant="secondary"
+														onClick={() => {
+															setEditError(null);
+															setActiveRegistration(item);
+														}}
+													>
+														Edit repertoire
+													</Button>
+													<Show
+														when={
+															props.app.isDropTransferEnabled() &&
+															isRegistrationActiveOrWaitlisted(
+																item.entitlement.status,
+															)
+														}
+													>
+														<Button
+															type="button"
+															variant="secondary"
+															onClick={() => void handleOpenTransfer(item)}
+														>
+															Transfer
+														</Button>
+														<Button
+															type="button"
+															variant="secondary"
+															onClick={() => {
+																setActionError(null);
+																setDropTarget(item);
+															}}
+														>
+															Drop
+														</Button>
+													</Show>
+												</div>
 											</div>
 											<p>
 												Performer:{" "}
@@ -151,6 +363,11 @@ export function CustomerAccountOrdersPage(props: { slug: string }) {
 						<Show when={editError()}>
 							<p class="field-error" role="alert">
 								{editError()}
+							</p>
+						</Show>
+						<Show when={actionError()}>
+							<p class="field-error" role="alert">
+								{actionError()}
 							</p>
 						</Show>
 					</section>
@@ -233,6 +450,48 @@ export function CustomerAccountOrdersPage(props: { slug: string }) {
 								void handleSaveRepertoire(saved, session.csrfToken)
 							}
 							onClose={() => setActiveRegistration(null)}
+						/>
+					</Show>
+
+					<Show when={dropTarget()}>
+						<CustomerDropRegistrationModal
+							isOpen={Boolean(dropTarget())}
+							registrationTitle={
+								dropTarget()?.festivalClass?.displayName ?? "Festival Class"
+							}
+							performerName={dropTarget()?.child?.name}
+							isWaitlisted={
+								(dropTarget()?.entitlement.status ?? "").toLowerCase() ===
+								"waitlisted"
+							}
+							isSubmitting={isSubmittingAction()}
+							error={actionError()}
+							onConfirm={(reason, refund) =>
+								void handleConfirmDrop(reason, refund)
+							}
+							onClose={() => setDropTarget(null)}
+						/>
+					</Show>
+
+					<Show when={transferTarget()}>
+						<CustomerTransferRegistrationModal
+							isOpen={Boolean(transferTarget())}
+							registrationTitle={
+								transferTarget()?.festivalClass?.displayName ?? "Festival Class"
+							}
+							performerName={transferTarget()?.child?.name}
+							currentFestivalClassId={
+								transferTarget()?.entitlement.festivalClassId ??
+								transferTarget()?.festivalClass?.id
+							}
+							availableClasses={availableTransferClasses()}
+							isLoadingClasses={isLoadingTransferClasses()}
+							isSubmitting={isSubmittingAction()}
+							error={actionError()}
+							onConfirm={(targetClassId, reason) =>
+								void handleConfirmTransfer(targetClassId, reason)
+							}
+							onClose={() => setTransferTarget(null)}
 						/>
 					</Show>
 				</>

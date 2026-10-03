@@ -7,6 +7,7 @@ import { SignInModal } from "./components/SignInModal.js";
 import { isOrganizationPageRoute } from "./lib/routes.js";
 import { AccompanistMembershipPage } from "./pages/AccompanistMembershipPage.js";
 import { AdminAccompanistsPage } from "./pages/AdminAccompanistsPage.js";
+import { AdminCheckoutRecoveryPage } from "./pages/AdminCheckoutRecoveryPage.js";
 import { AdminDivisionsPage } from "./pages/AdminDivisionsPage.js";
 import { AdminFestivalsPage } from "./pages/AdminFestivalsPage.js";
 import { AdminHomePage } from "./pages/AdminHomePage.js";
@@ -15,10 +16,13 @@ import { AdminMembershipProductsPage } from "./pages/AdminMembershipProductsPage
 import { AdminRosterPage } from "./pages/AdminRosterPage.js";
 import { AdminSettingsPage } from "./pages/AdminSettingsPage.js";
 import { AdminUsersPage } from "./pages/AdminUsersPage.js";
+import { BillingReconciliationPage } from "./pages/BillingReconciliationPage.js";
+import { CommunicationTemplatesPage } from "./pages/CommunicationTemplatesPage.js";
 import { CreateOrganizationPage } from "./pages/CreateOrganizationPage.js";
 import { CustomerAccountContactPage } from "./pages/CustomerAccountContactPage.js";
 import { CustomerAccountMembershipsPage } from "./pages/CustomerAccountMembershipsPage.js";
 import { CustomerAccountOrdersPage } from "./pages/CustomerAccountOrdersPage.js";
+import { CustomerCheckoutRecoveryPage } from "./pages/CustomerCheckoutRecoveryPage.js";
 import { CustomerChildrenPage } from "./pages/CustomerChildrenPage.js";
 import { FestivalAdminClassesPage } from "./pages/FestivalAdminClassesPage.js";
 import { FestivalAdminDashboardPage } from "./pages/FestivalAdminDashboardPage.js";
@@ -156,6 +160,7 @@ export default function App() {
 						</Match>
 						<Match when={app.route().kind === "org-customer-account-orders"}>
 							<CustomerAccountOrdersPage
+								app={app}
 								slug={(app.route() as { slug: string }).slug}
 							/>
 						</Match>
@@ -197,6 +202,24 @@ export default function App() {
 								app={app}
 								slug={(app.route() as { slug: string }).slug}
 							/>
+						</Match>
+						<Match when={app.route().kind === "org-billing"}>
+							<BillingReconciliationPage
+								app={app}
+								slug={(app.route() as { slug: string }).slug}
+							/>
+						</Match>
+						<Match when={app.route().kind === "org-communications"}>
+							<CommunicationTemplatesPage
+								app={app}
+								slug={(app.route() as { slug: string }).slug}
+							/>
+						</Match>
+						<Match when={app.route().kind === "org-admin-checkout-recovery"}>
+							<AdminCheckoutRecoveryPage app={app} />
+						</Match>
+						<Match when={app.route().kind === "org-checkout-recovery"}>
+							<CustomerCheckoutRecoveryPage app={app} />
 						</Match>
 					</Switch>
 				</div>

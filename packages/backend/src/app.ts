@@ -16,14 +16,31 @@ import {
 	PostgresFirebaseClaimsSource,
 } from "./auth/firebase-claims-reconciliation.js";
 import type { AuthVerifier } from "./auth/types.js";
+import { BillingReconciliationService } from "./billing/billing-reconciliation-service.js";
+import {
+	type BillingRepository,
+	InMemoryBillingRepository,
+} from "./billing/billing-repository.js";
+import { PostgresBillingRepository } from "./billing/postgres-billing-repository.js";
+import {
+	type CheckoutRecoveryRepository,
+	InMemoryCheckoutRecoveryRepository,
+} from "./checkout/checkout-recovery-repository.js";
+import { CheckoutRecoveryService } from "./checkout/checkout-recovery-service.js";
 import {
 	type CheckoutRepository,
 	InMemoryCheckoutRepository,
 } from "./checkout/checkout-repository.js";
 import { ClassCheckoutService } from "./checkout/class-checkout-service.js";
 import { MembershipCheckoutService } from "./checkout/membership-checkout-service.js";
+import { PostgresCheckoutRecoveryRepository } from "./checkout/postgres-checkout-recovery-repository.js";
 import { PostgresCheckoutRepository } from "./checkout/postgres-checkout-repository.js";
 import { ShopifyMembershipCheckoutClient } from "./checkout/shopify-membership-checkout-client.js";
+import {
+	type ClassEntitlementRepository,
+	InMemoryClassEntitlementRepository,
+	PostgresClassEntitlementRepository,
+} from "./commerce/class-entitlement-repository.js";
 import {
 	InMemoryMembershipCommerceRepository,
 	type MembershipCommerceRepository,
@@ -32,10 +49,22 @@ import { MembershipStatusService } from "./commerce/membership-status-service.js
 import { PostgresMembershipCommerceRepository } from "./commerce/postgres-membership-commerce-repository.js";
 import { ShopifyOrderProjectionService } from "./commerce/shopify-order-projection-service.js";
 import { ShopifyWebhookService } from "./commerce/shopify-webhook-service.js";
+import {
+	type CommunicationRepository,
+	InMemoryCommunicationRepository,
+} from "./communication/communication-repository.js";
+import { CommunicationService } from "./communication/communication-service.js";
+import { PostgresCommunicationRepository } from "./communication/postgres-communication-repository.js";
 import { type AppEnv, LOCAL_API_ORIGINS, loadEnv } from "./config/env.js";
 import type { CustomerAccountRepository } from "./customer/customer-account-repository.js";
 import { CustomerAccountService } from "./customer/customer-account-service.js";
 import { PostgresCustomerAccountRepository } from "./customer/postgres-customer-account-repository.js";
+import { DropTransferService } from "./registration/drop-transfer-service.js";
+import {
+	InMemoryRegistrationChangeRepository,
+	PostgresRegistrationChangeRepository,
+	type RegistrationChangeRepository,
+} from "./registration/registration-change-repository.js";
 import {
 	InMemoryRepertoireRepository,
 	PostgresRepertoireRepository,
@@ -73,6 +102,7 @@ import {
 
 export interface CreateAppOptions {
 	env?: AppEnv;
+	enableDropTransfer?: boolean;
 	repository?: OrganizationRepository;
 	appUserRepository?: AppUserRepository;
 	authVerifier?: AuthVerifier;
@@ -92,8 +122,17 @@ export interface CreateAppOptions {
 	membershipStatusService?: MembershipStatusService;
 	volunteerRepository?: VolunteerRepository;
 	repertoireRepository?: RepertoireRepository;
+	checkoutRecoveryRepository?: CheckoutRecoveryRepository;
+	checkoutRecoveryService?: CheckoutRecoveryService;
 	customClaimsWriter?: CustomClaimsWriter;
 	firebaseClaimsReconciliationService?: FirebaseClaimsReconciliationService;
+	dropTransferService?: DropTransferService;
+	registrationChangeRepository?: RegistrationChangeRepository;
+	classEntitlementRepository?: ClassEntitlementRepository;
+	billingRepository?: BillingRepository;
+	billingReconciliationService?: BillingReconciliationService;
+	communicationRepository?: CommunicationRepository;
+	communicationService?: CommunicationService;
 }
 
 function privateTokenMatches(
@@ -116,6 +155,10 @@ export async function createApp(options: CreateAppOptions = {}) {
 			requireDatabase: !options.repository,
 			requireFirebaseAdmin: !options.authVerifier,
 		});
+
+	if (options.enableDropTransfer !== undefined) {
+		env.enableDropTransfer = options.enableDropTransfer;
+	}
 
 	if (env.databaseUrl) {
 		process.env.DATABASE_URL = env.databaseUrl;
@@ -186,6 +229,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 	const organizationService = new OrganizationService(
 		repository,
 		adminClassCatalogService,
+		{ enableDropTransfer: Boolean(env.enableDropTransfer) },
 	);
 	const shopifyWebhookSubscriptionService = secretKeyring
 		? new ShopifyWebhookSubscriptionService(
@@ -351,6 +395,73 @@ export async function createApp(options: CreateAppOptions = {}) {
 			: new InMemoryRepertoireRepository());
 	if (repertoireRepository instanceof PostgresRepertoireRepository)
 		await repertoireRepository.ensureReady();
+	const classEntitlementRepository =
+		options.classEntitlementRepository ??
+		(env.databaseSchema
+			? new PostgresClassEntitlementRepository(env.databaseSchema)
+			: new InMemoryClassEntitlementRepository());
+	if (classEntitlementRepository instanceof PostgresClassEntitlementRepository)
+		await classEntitlementRepository.ensureReady();
+	const registrationChangeRepository =
+		options.registrationChangeRepository ??
+		(env.databaseSchema
+			? new PostgresRegistrationChangeRepository(env.databaseSchema)
+			: new InMemoryRegistrationChangeRepository());
+	if (
+		registrationChangeRepository instanceof PostgresRegistrationChangeRepository
+	)
+		await registrationChangeRepository.ensureReady();
+	const dropTransferService =
+		options.dropTransferService !== undefined
+			? options.dropTransferService
+			: env.enableDropTransfer
+				? new DropTransferService({
+						entitlements: classEntitlementRepository,
+						changes: registrationChangeRepository,
+						classQuery: repository,
+					})
+				: undefined;
+	const billingRepository =
+		options.billingRepository ??
+		(env.databaseSchema
+			? new PostgresBillingRepository(env.databaseSchema)
+			: new InMemoryBillingRepository());
+	if (billingRepository instanceof PostgresBillingRepository)
+		await billingRepository.ensureReady();
+	const billingReconciliationService =
+		options.billingReconciliationService ??
+		new BillingReconciliationService(billingRepository);
+	const communicationRepository =
+		options.communicationRepository ??
+		(env.databaseSchema
+			? new PostgresCommunicationRepository(env.databaseSchema)
+			: new InMemoryCommunicationRepository());
+	if (communicationRepository instanceof PostgresCommunicationRepository)
+		await communicationRepository.ensureReady();
+	const communicationService =
+		options.communicationService ??
+		new CommunicationService({
+			repository: communicationRepository,
+		});
+	const checkoutRecoveryRepository =
+		options.checkoutRecoveryRepository ??
+		(env.databaseSchema
+			? new PostgresCheckoutRecoveryRepository(env.databaseSchema)
+			: new InMemoryCheckoutRecoveryRepository());
+	if (checkoutRecoveryRepository instanceof PostgresCheckoutRecoveryRepository)
+		await checkoutRecoveryRepository.ensureReady();
+	const checkoutRecoveryService =
+		options.checkoutRecoveryService ??
+		new CheckoutRecoveryService({
+			recoveryRepository: checkoutRecoveryRepository,
+			organizationRepository: repository,
+			commerceRepository,
+			checkoutRepository,
+			storefront: secretKeyring
+				? new ShopifyMembershipCheckoutClient(repository, secretKeyring)
+				: undefined,
+			listings: publicMembershipProductService,
+		});
 
 	const app = new Hono();
 	const allowedApiOrigins = new Set(env.allowedApiOrigins ?? LOCAL_API_ORIGINS);
@@ -461,6 +572,12 @@ export async function createApp(options: CreateAppOptions = {}) {
 			classCheckoutService,
 			customClaimsWriter,
 			repertoireRepository,
+			dropTransferService,
+			enableDropTransfer: Boolean(env.enableDropTransfer),
+			registrationChangeRepository,
+			billingReconciliationService,
+			communicationService,
+			checkoutRecoveryService,
 		}),
 	);
 	app.route(

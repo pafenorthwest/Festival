@@ -244,6 +244,18 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			status TEXT NOT NULL CHECK (status IN ('creating', 'ready', 'checkout_started', 'failed', 'expired', 'superseded', 'approved', 'rejected', 'needs_review')),
 			expires_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.checkout_recovery_requests (
+			id TEXT PRIMARY KEY,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			customer_id TEXT NOT NULL,
+			source_checkout_intent_id TEXT NOT NULL REFERENCES ${safeSchema}.checkout_intents (id) ON DELETE CASCADE,
+			token_hash TEXT NOT NULL,
+			status TEXT NOT NULL CHECK (status IN ('pending', 'consumed', 'expired', 'cancelled', 'invalidated')),
+			requested_by_actor_uid TEXT NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			expires_at TIMESTAMPTZ NOT NULL,
+			consumed_at TIMESTAMPTZ NULL
+		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.class_entitlements (
 			id TEXT PRIMARY KEY,
 			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
@@ -260,6 +272,33 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			FOREIGN KEY (parent_customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers(id, organization_id) ON DELETE RESTRICT
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.registration_change_logs (
+			id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			festival_id TEXT REFERENCES ${safeSchema}.festivals (id) ON DELETE CASCADE,
+			class_entitlement_id TEXT NOT NULL REFERENCES ${safeSchema}.class_entitlements (id) ON DELETE CASCADE,
+			action TEXT NOT NULL CHECK (action IN ('drop', 'transfer', 'waitlist_promote', 'revert')),
+			actor_uid TEXT NOT NULL,
+			actor_role TEXT NOT NULL CHECK (actor_role IN ('customer', 'admin', 'system')),
+			previous_state JSONB NOT NULL,
+			new_state JSONB NOT NULL,
+			reason TEXT,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.refund_events (
+			id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			registration_change_log_id TEXT REFERENCES ${safeSchema}.registration_change_logs (id) ON DELETE SET NULL,
+			class_entitlement_id TEXT REFERENCES ${safeSchema}.class_entitlements (id) ON DELETE CASCADE,
+			shopify_order_id TEXT,
+			shopify_refund_id TEXT,
+			amount_cents INTEGER NOT NULL,
+			currency TEXT NOT NULL DEFAULT 'USD',
+			status TEXT NOT NULL CHECK (status IN ('pending', 'completed', 'failed')),
+			failure_reason TEXT,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.membership_entitlements (
 			id TEXT PRIMARY KEY,
@@ -509,6 +548,102 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			FOREIGN KEY (shift_id, festival_id, organization_id) REFERENCES ${safeSchema}.volunteer_shifts (id, festival_id, organization_id) ON DELETE CASCADE,
 			FOREIGN KEY (volunteer_id, festival_id, organization_id) REFERENCES ${safeSchema}.volunteers (id, festival_id, organization_id) ON DELETE CASCADE
 		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.credit_balances (
+			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			customer_id TEXT NOT NULL,
+			balance_cents INTEGER NOT NULL DEFAULT 0 CHECK (balance_cents >= 0),
+			currency_code TEXT NOT NULL DEFAULT 'USD',
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+			PRIMARY KEY (organization_id, customer_id)
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.billing_adjustments (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			customer_id TEXT NOT NULL,
+			admin_user_id TEXT NOT NULL,
+			adjustment_type TEXT NOT NULL CHECK (adjustment_type IN ('refund', 'credit_issue', 'credit_apply', 'manual_charge', 'write_off')),
+			amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+			currency_code TEXT NOT NULL DEFAULT 'USD',
+			reason TEXT NOT NULL,
+			reference_type TEXT,
+			reference_id TEXT,
+			approved_decision_id TEXT,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+			UNIQUE (organization_id, reference_type, reference_id, adjustment_type)
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.billing_ledger (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			customer_id TEXT NOT NULL,
+			entry_type TEXT NOT NULL CHECK (entry_type IN ('credit', 'debit', 'adjustment')),
+			amount_cents INTEGER NOT NULL,
+			direction TEXT NOT NULL CHECK (direction IN ('inflow', 'outflow')),
+			balance_after_cents INTEGER NOT NULL CHECK (balance_after_cents >= 0),
+			currency_code TEXT NOT NULL DEFAULT 'USD',
+			adjustment_id UUID REFERENCES ${safeSchema}.billing_adjustments (id) ON DELETE SET NULL,
+			notes TEXT,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.invoices (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			customer_id TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'issued', 'paid', 'cancelled', 'written_off')),
+			total_cents INTEGER NOT NULL DEFAULT 0,
+			currency_code TEXT NOT NULL DEFAULT 'USD',
+			due_date DATE,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.invoice_line_items (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			invoice_id UUID NOT NULL REFERENCES ${safeSchema}.invoices (id) ON DELETE CASCADE,
+			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			description TEXT NOT NULL,
+			amount_cents INTEGER NOT NULL,
+			quantity INTEGER NOT NULL DEFAULT 1,
+			reference_type TEXT,
+			reference_id TEXT
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.message_templates (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			template_key TEXT NOT NULL,
+			channel TEXT NOT NULL CHECK (channel IN ('email', 'sms')),
+			version INTEGER NOT NULL DEFAULT 1,
+			subject TEXT,
+			body TEXT NOT NULL,
+			variables JSONB NOT NULL DEFAULT '[]'::jsonb,
+			is_active BOOLEAN NOT NULL DEFAULT TRUE,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+			UNIQUE (organization_id, template_key, version)
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.message_events (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			event_type TEXT NOT NULL,
+			recipient_destination TEXT NOT NULL,
+			payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+			idempotency_key TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'delivered', 'failed', 'skipped')),
+			created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+			UNIQUE (organization_id, idempotency_key)
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.message_logs (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			event_id UUID REFERENCES ${safeSchema}.message_events (id) ON DELETE CASCADE,
+			template_id UUID REFERENCES ${safeSchema}.message_templates (id) ON DELETE SET NULL,
+			channel TEXT NOT NULL CHECK (channel IN ('email', 'sms')),
+			provider TEXT NOT NULL,
+			status TEXT NOT NULL CHECK (status IN ('delivered', 'failed', 'retry')),
+			provider_message_id TEXT,
+			attempts INTEGER NOT NULL DEFAULT 1,
+			error_message TEXT,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+		);
 
 		CREATE OR REPLACE FUNCTION ${safeSchema}.enforce_shopify_shop_ownership()
 		RETURNS TRIGGER AS $$
@@ -552,6 +687,8 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		CREATE INDEX IF NOT EXISTS idx_festival_customers_org_phone ON ${safeSchema}.festival_customers(organization_id,phone);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_festival_children_parent_name ON ${safeSchema}.festival_children(organization_id, parent_customer_id, LOWER(display_name));
 		CREATE UNIQUE INDEX IF NOT EXISTS checkout_intents_scope_key ON ${safeSchema}.checkout_intents(organization_id, customer_id, session_id, idempotency_key);
+		CREATE INDEX IF NOT EXISTS idx_recovery_requests_org_cust ON ${safeSchema}.checkout_recovery_requests (organization_id, customer_id);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_recovery_requests_token_hash ON ${safeSchema}.checkout_recovery_requests (token_hash);
 		CREATE INDEX IF NOT EXISTS membership_validation_customer_idx ON ${safeSchema}.membership_validation_decisions (organization_id, customer_id, created_at DESC);
 		CREATE UNIQUE INDEX IF NOT EXISTS membership_validation_checkout_intent_idx ON ${safeSchema}.membership_validation_decisions (organization_id, checkout_intent_id) WHERE checkout_intent_id IS NOT NULL;
 		CREATE INDEX IF NOT EXISTS shopify_webhook_reclaim_idx ON ${safeSchema}.shopify_webhook_deliveries (organization_id, status, received_at);
@@ -570,6 +707,12 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		CREATE INDEX IF NOT EXISTS idx_class_entitlements_checkout_intent ON ${safeSchema}.class_entitlements (organization_id, checkout_intent_id);
 		CREATE INDEX IF NOT EXISTS idx_class_entitlements_shopify_order ON ${safeSchema}.class_entitlements (organization_id, shopify_order_gid);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_class_entitlements_order_line ON ${safeSchema}.class_entitlements (organization_id, shopify_order_line_gid);
+		CREATE INDEX IF NOT EXISTS idx_registration_change_logs_org_class_entitlement
+			ON ${safeSchema}.registration_change_logs (organization_id, class_entitlement_id);
+		CREATE INDEX IF NOT EXISTS idx_registration_change_logs_org_festival
+			ON ${safeSchema}.registration_change_logs (organization_id, festival_id);
+		CREATE INDEX IF NOT EXISTS idx_refund_events_org_class_entitlement
+			ON ${safeSchema}.refund_events (organization_id, class_entitlement_id);
 		CREATE INDEX IF NOT EXISTS idx_checkout_intents_org_class ON ${safeSchema}.checkout_intents (organization_id, festival_class_id) WHERE festival_class_id IS NOT NULL;
 		CREATE INDEX IF NOT EXISTS idx_checkout_intents_org_child ON ${safeSchema}.checkout_intents (organization_id, child_id) WHERE child_id IS NOT NULL;
 		CREATE UNIQUE INDEX IF NOT EXISTS registration_metadata_checkout_intent_id_unique
@@ -593,6 +736,10 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			ON ${safeSchema}.repertoire_review_items (organization_id, status);
 		CREATE INDEX IF NOT EXISTS idx_repertoire_review_items_org_claimed
 			ON ${safeSchema}.repertoire_review_items (organization_id, claimed_by_uid);
+		CREATE INDEX IF NOT EXISTS idx_billing_ledger_org_customer_created
+			ON ${safeSchema}.billing_ledger (organization_id, customer_id, created_at);
+		CREATE INDEX IF NOT EXISTS idx_message_logs_org_event
+			ON ${safeSchema}.message_logs (organization_id, event_id);
 	`;
 }
 

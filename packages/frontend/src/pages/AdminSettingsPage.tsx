@@ -124,7 +124,7 @@ export function AdminSettingsPage(props: { app: FestivalAppController }) {
 			</Show>
 			<Show when={error()}>
 				<section class="panel flow-panel">
-					{(message) => <p role="alert">{message()}</p>}
+					<p role="alert">{error()}</p>
 				</section>
 			</Show>
 

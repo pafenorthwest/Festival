@@ -457,6 +457,13 @@ export class CustomerAccountService {
 		if (!offeringId && returnTo === `${expected}?checkout=processing`) {
 			expected = returnTo;
 		}
+		const recoveryPrefix = `/org/${slug}/checkout-recovery/`;
+		if (!offeringId && returnTo && returnTo.startsWith(recoveryPrefix)) {
+			const recoveryToken = returnTo.slice(recoveryPrefix.length);
+			if (/^[A-Za-z0-9_-]{1,128}$/.test(recoveryToken)) {
+				expected = returnTo;
+			}
+		}
 		if (returnTo && returnTo !== expected)
 			throw new AppError("Return target is invalid.", 400);
 		const state = randomOpaque(),
@@ -1035,6 +1042,30 @@ export class CustomerAccountService {
 		);
 		if (!touched) throw new AppError("Customer session is invalid.", 401);
 		return { organizationId: org.id, customerId: valid.customer.id };
+	}
+
+	/** Internal ownership and token boundary for customer checkout recovery. */
+	async customerCheckoutSession(slug: string, sessionId: string | undefined) {
+		const org = await this.organizations.findOrganizationBySlug(slug);
+		if (!org || !sessionId)
+			throw new AppError("Customer session is invalid.", 401);
+		const valid = await this.validSession(sessionId, org.id);
+		const { session, bundle } = await this.access(
+			valid.session,
+			valid.integration,
+		);
+		const touched = await this.repository.touchSession(
+			this.sessionTouch(session, this.now()),
+		);
+		if (!touched) throw new AppError("Customer session is invalid.", 401);
+		return {
+			organizationId: org.id,
+			organizationSlug: org.slug,
+			customerId: valid.customer.id,
+			sessionId: touched.sessionId,
+			integrationVersion: touched.integrationVersion,
+			buyerAccessToken: bundle.accessToken,
+		};
 	}
 	async listChildren(slug: string, sessionId: string | undefined) {
 		const access = await this.customerReadAccess(slug, sessionId);

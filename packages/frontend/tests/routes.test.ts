@@ -6,6 +6,7 @@ import {
 	buildFestivalVolunteersPath,
 	buildInvitePath,
 	buildOrgAdminAccompanistsPath,
+	buildOrgAdminCheckoutRecoveryPath,
 	buildOrgAdminDivisionsPath,
 	buildOrgAdminFestivalsPath,
 	buildOrgAdminIntegrationsPath,
@@ -13,6 +14,8 @@ import {
 	buildOrgAdminRosterPath,
 	buildOrgAdminSettingsPath,
 	buildOrgAdminUsersPath,
+	buildOrgBillingPath,
+	buildOrgCheckoutRecoveryPath,
 	buildOrgCustomerAccountContactPath,
 	buildOrgCustomerAccountMembershipsPath,
 	buildOrgCustomerAccountOrdersPath,
@@ -137,6 +140,30 @@ describe("route helpers", () => {
 				festivalSlug: "jun-27",
 			},
 		);
+		expect(parseRoute("/org/festival-admins/admin/checkout-recovery")).toEqual({
+			kind: "org-admin-checkout-recovery",
+			slug: "festival-admins",
+		});
+		expect(parseRoute("/org/festival-admins/admin/checkout-recovery/")).toEqual(
+			{
+				kind: "org-admin-checkout-recovery",
+				slug: "festival-admins",
+			},
+		);
+		expect(
+			parseRoute("/org/festival-admins/checkout-recovery/tok-abc"),
+		).toEqual({
+			kind: "org-checkout-recovery",
+			slug: "festival-admins",
+			token: "tok-abc",
+		});
+		expect(
+			parseRoute("/org/festival-admins/checkout-recovery/tok-abc/"),
+		).toEqual({
+			kind: "org-checkout-recovery",
+			slug: "festival-admins",
+			token: "tok-abc",
+		});
 	});
 
 	it("identifies public organization pages without treating Festival Admin routes as public", () => {
@@ -164,6 +191,16 @@ describe("route helpers", () => {
 				parseRoute("/org/festival-admins/account/children"),
 			),
 		).toBe(true);
+		expect(
+			isOrganizationPageRoute(
+				parseRoute("/org/festival-admins/checkout-recovery/tok-abc"),
+			),
+		).toBe(true);
+		expect(
+			isOrganizationPageRoute(
+				parseRoute("/org/festival-admins/admin/checkout-recovery"),
+			),
+		).toBe(false);
 		expect(
 			isOrganizationPageRoute(
 				parseRoute("/org/festival-admins/festival/jun-27/admin/classes"),
@@ -242,6 +279,12 @@ describe("route helpers", () => {
 		expect(buildOrgAdminSettingsPath("festival-admins")).toBe(
 			"/org/festival-admins/admin/settings",
 		);
+		expect(buildOrgAdminCheckoutRecoveryPath("festival-admins")).toBe(
+			"/org/festival-admins/admin/checkout-recovery",
+		);
+		expect(buildOrgCheckoutRecoveryPath("festival-admins", "tok-abc")).toBe(
+			"/org/festival-admins/checkout-recovery/tok-abc",
+		);
 		expect(buildOrgPath("second-festival")).toBe("/org/second-festival/admin");
 		expect(buildInvitePath("abc123")).toBe("/invite/abc123");
 		expect(buildPrivacyPolicyPath()).toBe("/privacy-policy");
@@ -282,5 +325,17 @@ describe("route helpers", () => {
 				festivalSlug: "spring",
 			},
 		);
+	});
+
+	it("routes the billing reconciliation admin page", () => {
+		expect(parseRoute("/organizations/pafe/billing")).toEqual({
+			kind: "org-billing",
+			slug: "pafe",
+		});
+		expect(parseRoute("/org/pafe/billing")).toEqual({
+			kind: "org-billing",
+			slug: "pafe",
+		});
+		expect(buildOrgBillingPath("pafe")).toBe("/organizations/pafe/billing");
 	});
 });

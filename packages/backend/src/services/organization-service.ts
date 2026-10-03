@@ -103,6 +103,7 @@ export class OrganizationService {
 	constructor(
 		readonly repository: OrganizationRepository,
 		private readonly adminClassCatalogService?: AdminClassCatalogService,
+		private readonly options?: { enableDropTransfer?: boolean },
 	) {}
 
 	async getSession(identity?: AuthenticatedUser): Promise<SessionResponse> {
@@ -711,6 +712,7 @@ export class OrganizationService {
 		return {
 			organization: { name: organization.name, slug: organization.slug },
 			festivals,
+			features: { dropTransfer: Boolean(this.options?.enableDropTransfer) },
 		};
 	}
 
@@ -1107,6 +1109,7 @@ export class OrganizationService {
 		return {
 			organization: membership.organization,
 			membership: toSessionMembership(membership),
+			features: { dropTransfer: Boolean(this.options?.enableDropTransfer) },
 		};
 	}
 
@@ -1119,6 +1122,7 @@ export class OrganizationService {
 				membership: tenant.membership,
 				organization: tenant.organization,
 			}),
+			features: { dropTransfer: Boolean(this.options?.enableDropTransfer) },
 		};
 	}
 
