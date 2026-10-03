@@ -126,6 +126,28 @@ CREATE TABLE orgs.checkout_intents (
 
 
 --
+-- Name: checkout_intent_lines; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.checkout_intent_lines (
+    id text NOT NULL,
+    checkout_intent_id text NOT NULL,
+    line_index integer NOT NULL,
+    line_type text DEFAULT 'class_entry'::text NOT NULL,
+    festival_class_id text,
+    child_id text,
+    offering_id text,
+    shopify_product_gid text NOT NULL,
+    shopify_variant_gid text NOT NULL,
+    amount text NOT NULL,
+    currency_code text NOT NULL,
+    division_id text,
+    division_name_snapshot text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
 -- Name: festival_child_age_snapshots; Type: TABLE; Schema: orgs; Owner: -
 --
 
@@ -532,8 +554,10 @@ CREATE TABLE orgs.registration_catalog_values (
     normalized_name text NOT NULL,
     is_active boolean DEFAULT true NOT NULL,
     display_order integer NOT NULL,
+    required_subtype_id text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT registration_catalog_values_check CHECK (((required_subtype_id IS NULL) OR (required_subtype_id <> id))),
     CONSTRAINT registration_catalog_values_display_order_check CHECK ((display_order >= 0)),
     CONSTRAINT registration_catalog_values_kind_check CHECK ((kind = ANY (ARRAY['class_subtype'::text, 'instrument'::text])))
 );
@@ -587,6 +611,7 @@ CREATE TABLE orgs.registration_metadata (
     organization_id text NOT NULL,
     festival_id text NOT NULL,
     checkout_intent_id text NOT NULL,
+    checkout_intent_line_id text,
     class_entitlement_id text,
     teacher_membership_id text NOT NULL,
     accompanist_membership_id text,
@@ -971,6 +996,14 @@ ALTER TABLE ONLY orgs.checkout_intents
 
 ALTER TABLE ONLY orgs.checkout_intents
     ADD CONSTRAINT checkout_intents_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: checkout_intent_lines checkout_intent_lines_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.checkout_intent_lines
+    ADD CONSTRAINT checkout_intent_lines_pkey PRIMARY KEY (id);
 
 
 --
@@ -1786,10 +1819,45 @@ CREATE INDEX membership_validation_customer_idx ON orgs.membership_validation_de
 
 
 --
--- Name: registration_metadata_checkout_intent_id_unique; Type: INDEX; Schema: orgs; Owner: -
+-- Name: registration_catalog_values_required_subtype_idx; Type: INDEX; Schema: orgs; Owner: -
 --
 
-CREATE UNIQUE INDEX registration_metadata_checkout_intent_id_unique ON orgs.registration_metadata USING btree (checkout_intent_id);
+CREATE INDEX registration_catalog_values_required_subtype_idx ON orgs.registration_catalog_values USING btree (organization_id, required_subtype_id);
+
+
+--
+-- Name: idx_checkout_intent_lines_child_id; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_checkout_intent_lines_child_id ON orgs.checkout_intent_lines USING btree (child_id);
+
+
+--
+-- Name: idx_checkout_intent_lines_festival_class_id; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_checkout_intent_lines_festival_class_id ON orgs.checkout_intent_lines USING btree (festival_class_id);
+
+
+--
+-- Name: idx_checkout_intent_lines_intent_id; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_checkout_intent_lines_intent_id ON orgs.checkout_intent_lines USING btree (checkout_intent_id);
+
+
+--
+-- Name: registration_metadata_checkout_intent_id_idx; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX registration_metadata_checkout_intent_id_idx ON orgs.registration_metadata USING btree (checkout_intent_id);
+
+
+--
+-- Name: registration_metadata_checkout_intent_line_id_unique; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE UNIQUE INDEX registration_metadata_checkout_intent_line_id_unique ON orgs.registration_metadata USING btree (checkout_intent_line_id) WHERE (checkout_intent_line_id IS NOT NULL);
 
 
 --
@@ -2133,6 +2201,14 @@ ALTER TABLE ONLY orgs.registration_catalog_values
 
 
 --
+-- Name: registration_catalog_values registration_catalog_values_required_subtype_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.registration_catalog_values
+    ADD CONSTRAINT registration_catalog_values_required_subtype_id_fkey FOREIGN KEY (required_subtype_id) REFERENCES orgs.registration_catalog_values(id) ON DELETE SET NULL;
+
+
+--
 -- Name: registration_metadata registration_metadata_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
 --
 
@@ -2154,6 +2230,46 @@ ALTER TABLE ONLY orgs.registration_metadata
 
 ALTER TABLE ONLY orgs.registration_metadata
     ADD CONSTRAINT registration_metadata_checkout_intent_id_fkey FOREIGN KEY (checkout_intent_id) REFERENCES orgs.checkout_intents(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: checkout_intent_lines checkout_intent_lines_checkout_intent_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.checkout_intent_lines
+    ADD CONSTRAINT checkout_intent_lines_checkout_intent_id_fkey FOREIGN KEY (checkout_intent_id) REFERENCES orgs.checkout_intents(id) ON DELETE CASCADE;
+
+
+--
+-- Name: checkout_intent_lines checkout_intent_lines_festival_class_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.checkout_intent_lines
+    ADD CONSTRAINT checkout_intent_lines_festival_class_id_fkey FOREIGN KEY (festival_class_id) REFERENCES orgs.festival_class_configurations(id);
+
+
+--
+-- Name: checkout_intent_lines checkout_intent_lines_child_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.checkout_intent_lines
+    ADD CONSTRAINT checkout_intent_lines_child_id_fkey FOREIGN KEY (child_id) REFERENCES orgs.festival_children(id);
+
+
+--
+-- Name: checkout_intent_lines checkout_intent_lines_offering_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.checkout_intent_lines
+    ADD CONSTRAINT checkout_intent_lines_offering_id_fkey FOREIGN KEY (offering_id) REFERENCES orgs.products(id);
+
+
+--
+-- Name: registration_metadata registration_metadata_checkout_intent_line_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.registration_metadata
+    ADD CONSTRAINT registration_metadata_checkout_intent_line_id_fkey FOREIGN KEY (checkout_intent_line_id) REFERENCES orgs.checkout_intent_lines(id) ON DELETE CASCADE;
 
 
 --

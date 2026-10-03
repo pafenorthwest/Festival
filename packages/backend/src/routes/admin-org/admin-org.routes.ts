@@ -201,7 +201,7 @@ export function buildAdminOrgRoutes(options: {
 				const payload = await c.req.json();
 				assertAllowedFields(
 					payload,
-					["displayName"],
+					["displayName", "requiredSubtypeId"],
 					"Festival class subtype request",
 				);
 				c.status(201);
@@ -210,6 +210,7 @@ export function buildAdminOrgRoutes(options: {
 						getRequiredTenant(c),
 						c.req.param("festivalShortName"),
 						(payload as { displayName?: unknown })?.displayName,
+						(payload as { requiredSubtypeId?: unknown })?.requiredSubtypeId,
 					),
 				);
 			} catch (error) {

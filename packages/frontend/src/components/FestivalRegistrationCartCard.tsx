@@ -16,6 +16,8 @@ interface FestivalRegistrationCartCardProps {
 	error: string | null;
 	onOpenRepertoireModal: () => void;
 	onSubmitCheckout: () => void;
+	onAddToCart?: () => void;
+	isAlreadyInCart?: boolean;
 }
 
 export function FestivalRegistrationCartCard(
@@ -110,10 +112,28 @@ export function FestivalRegistrationCartCard(
 				</p>
 			</Show>
 
+			<Show when={props.isAlreadyInCart}>
+				<p class="field-error" role="alert" style="margin: 0.5rem 0 0 0;">
+					This class is already in your registration cart for this performer.
+				</p>
+			</Show>
+
 			<div
 				class="division-actions"
-				style="justify-content: flex-end; margin-top: 1rem;"
+				style="justify-content: flex-end; margin-top: 1rem; gap: 0.5rem;"
 			>
+				<Show when={props.onAddToCart}>
+					<Button
+						type="button"
+						variant="secondary"
+						disabled={
+							!props.isValid || props.isAlreadyInCart || props.isSubmitting
+						}
+						onClick={props.onAddToCart}
+					>
+						{props.isAlreadyInCart ? "Already in Cart" : "Add to Cart"}
+					</Button>
+				</Show>
 				<Button
 					type="button"
 					disabled={!props.isValid || props.isSubmitting}

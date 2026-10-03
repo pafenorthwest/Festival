@@ -16,6 +16,30 @@ import type { CheckoutRepository } from "../checkout/checkout-repository.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
 import type { ClassEntitlementFilter } from "./class-entitlement-repository.js";
 
+interface RegistrationMetadataEntitlementLinkRollback {
+	snapshotRegistrationMetadataEntitlementLinks(input: {
+		checkoutIntentIds: string[];
+		checkoutIntentLineIds: string[];
+	}): Map<string, string | null>;
+	restoreRegistrationMetadataEntitlementLinks(
+		snapshot: Map<string, string | null>,
+	): void;
+}
+
+function supportsRegistrationMetadataEntitlementLinkRollback(
+	checkout: CheckoutRepository | undefined,
+): checkout is CheckoutRepository &
+	RegistrationMetadataEntitlementLinkRollback {
+	const candidate = checkout as
+		| Partial<RegistrationMetadataEntitlementLinkRollback>
+		| undefined;
+	return (
+		typeof candidate?.snapshotRegistrationMetadataEntitlementLinks ===
+			"function" &&
+		typeof candidate.restoreRegistrationMetadataEntitlementLinks === "function"
+	);
+}
+
 export const MEMBERSHIP_DECISION_STATUSES = [
 	"pending_validation",
 	"approved",
@@ -167,10 +191,12 @@ export interface MembershipCommerceRepository {
 		projection?: ShopifyOrderProjectionInput;
 		grant?: CreateEntitlementGrantSnapshotInput;
 		classEntitlement?: CreateClassEntitlementInput;
+		classEntitlements?: CreateClassEntitlementInput[];
 	}): Promise<{
 		decision: MembershipValidationDecision;
 		grant?: EntitlementGrantSnapshot;
 		classEntitlement?: ClassEntitlement;
+		classEntitlements?: ClassEntitlement[];
 		existing: boolean;
 	}>;
 	hasScheduledEntitlement(
@@ -229,6 +255,7 @@ export class InMemoryMembershipCommerceRepository
 			decision: MembershipValidationDecision;
 			grant?: EntitlementGrantSnapshot;
 			classEntitlement?: ClassEntitlement;
+			classEntitlements?: ClassEntitlement[];
 			existing: boolean;
 		}>
 	>();
@@ -406,21 +433,170 @@ export class InMemoryMembershipCommerceRepository
 		projection?: ShopifyOrderProjectionInput;
 		grant?: CreateEntitlementGrantSnapshotInput;
 		classEntitlement?: CreateClassEntitlementInput;
+		classEntitlements?: CreateClassEntitlementInput[];
 	}) {
-		const finalizationKey = `${input.decision.organizationId}\u0000${input.decision.checkoutIntentId ? `intent:${input.decision.checkoutIntentId}` : `order:${input.decision.shopifyOrderGid}`}`;
+		const finalizationKey = `${input.decision.organizationId}\u0000${input.decision.checkoutIntentId ? `intent:${input.decision.checkoutIntentId}` : `order:${input.decision.shopifyOrderGid}`}${input.decision.shopifyOrderLineGid ? `:line:${input.decision.shopifyOrderLineGid}` : ""}`;
 		const pending = this.finalizations.get(finalizationKey);
 		if (pending) {
 			const result = await pending;
 			await this.markDeliveryProcessed(input.deliveryId);
 			return { ...result, existing: true };
 		}
-		const work = this.finalizeDecisionInternal(input);
+		const work = this.finalizeDecisionAtomically(input);
 		this.finalizations.set(finalizationKey, work);
 		try {
 			return await work;
 		} finally {
 			if (this.finalizations.get(finalizationKey) === work)
 				this.finalizations.delete(finalizationKey);
+		}
+	}
+
+	private async finalizeDecisionAtomically(
+		input: Parameters<MembershipCommerceRepository["finalizeDecision"]>[0],
+	) {
+		const classEntitlementInputs =
+			input.classEntitlements ??
+			(input.classEntitlement ? [input.classEntitlement] : []);
+		const orderKey = `${input.decision.organizationId}\u0000${input.decision.shopifyOrderGid}`;
+		const checkoutKey = input.decision.checkoutIntentId
+			? `${input.decision.organizationId}\u0000${input.decision.checkoutIntentId}`
+			: undefined;
+		const decisionLineKey = input.decision.shopifyOrderLineGid
+			? `${input.decision.organizationId}\u0000${input.decision.shopifyOrderLineGid}`
+			: undefined;
+		const classLineSnapshots = classEntitlementInputs.map(
+			(classEntitlement) => {
+				const key = `${classEntitlement.organizationId}\u0000${classEntitlement.shopifyOrderLineGid}`;
+				return {
+					key,
+					hadValue: this.classEntitlementsByLine.has(key),
+					value: this.classEntitlementsByLine.get(key),
+				};
+			},
+		);
+		const classIntentSnapshots = [
+			...new Set(
+				classEntitlementInputs.map(
+					(classEntitlement) =>
+						`${classEntitlement.organizationId}\u0000${classEntitlement.checkoutIntentId}`,
+				),
+			),
+		].map((key) => ({
+			key,
+			hadValue: this.classEntitlementsByIntent.has(key),
+			value: this.classEntitlementsByIntent.get(key),
+		}));
+		const checkoutWithLinkRollback =
+			supportsRegistrationMetadataEntitlementLinkRollback(this.checkout)
+				? this.checkout
+				: undefined;
+		const registrationMetadataLinkSnapshot =
+			checkoutWithLinkRollback?.snapshotRegistrationMetadataEntitlementLinks({
+				checkoutIntentIds: classEntitlementInputs.map(
+					(classEntitlement) => classEntitlement.checkoutIntentId,
+				),
+				checkoutIntentLineIds: classEntitlementInputs.flatMap(
+					(classEntitlement) =>
+						classEntitlement.checkoutIntentLineId
+							? [classEntitlement.checkoutIntentLineId]
+							: [],
+				),
+			});
+		const delivery = this.deliveries.get(input.deliveryId);
+		const snapshot = {
+			projection: {
+				key: orderKey,
+				hadValue: this.projections.has(orderKey),
+				value: this.projections.get(orderKey),
+			},
+			decision: {
+				key: orderKey,
+				hadValue: this.decisions.has(orderKey),
+				value: this.decisions.get(orderKey),
+			},
+			checkoutDecision: checkoutKey
+				? {
+						key: checkoutKey,
+						hadValue: this.decisionsByCheckoutIntent.has(checkoutKey),
+						value: this.decisionsByCheckoutIntent.get(checkoutKey),
+					}
+				: undefined,
+			lineDecision: decisionLineKey
+				? {
+						key: decisionLineKey,
+						hadValue: this.decisionsByLine.has(decisionLineKey),
+						value: this.decisionsByLine.get(decisionLineKey),
+					}
+				: undefined,
+			delivery: delivery ? { ...delivery } : undefined,
+		};
+		try {
+			return await this.finalizeDecisionInternal(input);
+		} catch (error) {
+			for (const line of classLineSnapshots) {
+				if (!line.hadValue) {
+					const createdId = this.classEntitlementsByLine.get(line.key);
+					if (createdId) this.classEntitlements.delete(createdId);
+				}
+				if (line.hadValue && line.value) {
+					this.classEntitlementsByLine.set(line.key, line.value);
+				} else {
+					this.classEntitlementsByLine.delete(line.key);
+				}
+			}
+			for (const intent of classIntentSnapshots) {
+				if (intent.hadValue && intent.value) {
+					this.classEntitlementsByIntent.set(intent.key, intent.value);
+				} else {
+					this.classEntitlementsByIntent.delete(intent.key);
+				}
+			}
+			if (registrationMetadataLinkSnapshot) {
+				checkoutWithLinkRollback?.restoreRegistrationMetadataEntitlementLinks(
+					registrationMetadataLinkSnapshot,
+				);
+			}
+			if (snapshot.projection.hadValue && snapshot.projection.value) {
+				this.projections.set(
+					snapshot.projection.key,
+					snapshot.projection.value,
+				);
+			} else {
+				this.projections.delete(snapshot.projection.key);
+			}
+			if (snapshot.decision.hadValue && snapshot.decision.value) {
+				this.decisions.set(snapshot.decision.key, snapshot.decision.value);
+			} else {
+				this.decisions.delete(snapshot.decision.key);
+			}
+			if (snapshot.checkoutDecision) {
+				if (
+					snapshot.checkoutDecision.hadValue &&
+					snapshot.checkoutDecision.value
+				) {
+					this.decisionsByCheckoutIntent.set(
+						snapshot.checkoutDecision.key,
+						snapshot.checkoutDecision.value,
+					);
+				} else {
+					this.decisionsByCheckoutIntent.delete(snapshot.checkoutDecision.key);
+				}
+			}
+			if (snapshot.lineDecision) {
+				if (snapshot.lineDecision.hadValue && snapshot.lineDecision.value) {
+					this.decisionsByLine.set(
+						snapshot.lineDecision.key,
+						snapshot.lineDecision.value,
+					);
+				} else {
+					this.decisionsByLine.delete(snapshot.lineDecision.key);
+				}
+			}
+			if (snapshot.delivery) {
+				this.deliveries.set(input.deliveryId, snapshot.delivery);
+			}
+			throw error;
 		}
 	}
 
@@ -435,23 +611,46 @@ export class InMemoryMembershipCommerceRepository
 		projection?: ShopifyOrderProjectionInput;
 		grant?: CreateEntitlementGrantSnapshotInput;
 		classEntitlement?: CreateClassEntitlementInput;
+		classEntitlements?: CreateClassEntitlementInput[];
 	}) {
+		if (input.classEntitlement && input.classEntitlements !== undefined) {
+			throw new Error(
+				"Approved decision cannot specify both a class entitlement and class entitlements.",
+			);
+		}
+		const classEntitlementInputs =
+			input.classEntitlements ??
+			(input.classEntitlement ? [input.classEntitlement] : []);
+		for (const classEntitlementInput of classEntitlementInputs) {
+			assertValidClassEntitlementInput(classEntitlementInput);
+		}
 		const orderKey = `${input.decision.organizationId}\u0000${input.decision.shopifyOrderGid}`;
 		const existing = this.decisions.get(orderKey);
 		if (existing && existing.status !== "pending_validation") {
-			await this.resolveTerminalIntent(existing);
-			await this.markDeliveryProcessed(input.deliveryId);
-			const existingClass = input.decision.shopifyOrderLineGid
-				? await this.findClassEntitlementByOrderLine(
+			const existingClasses = await Promise.all(
+				classEntitlementInputs.map((classEntitlement) =>
+					this.findClassEntitlementByOrderLine(
 						input.decision.organizationId,
-						input.decision.shopifyOrderLineGid,
-					)
-				: null;
-			return {
-				decision: { ...existing },
-				classEntitlement: existingClass ?? undefined,
-				existing: true,
-			};
+						classEntitlement.shopifyOrderLineGid,
+					),
+				),
+			);
+			if (
+				classEntitlementInputs.length === 0 ||
+				existingClasses.every(Boolean)
+			) {
+				await this.resolveTerminalIntent(existing);
+				await this.markDeliveryProcessed(input.deliveryId);
+				return {
+					decision: { ...existing },
+					classEntitlement: existingClasses[0] ?? undefined,
+					classEntitlements: existingClasses.filter(
+						(classEntitlement): classEntitlement is ClassEntitlement =>
+							Boolean(classEntitlement),
+					),
+					existing: true,
+				};
+			}
 		}
 		if (input.decision.checkoutIntentId) {
 			const checkoutKey = `${input.decision.organizationId}\u0000${input.decision.checkoutIntentId}`;
@@ -515,14 +714,14 @@ export class InMemoryMembershipCommerceRepository
 		}
 		if (input.projection) await this.upsertOrderProjection(input.projection);
 		let grant: EntitlementGrantSnapshot | undefined;
-		let classEntitlement: ClassEntitlement | undefined;
+		let classEntitlements: ClassEntitlement[] | undefined;
 		if (input.decision.status === "approved") {
-			if (input.grant && input.classEntitlement) {
+			if (input.grant && classEntitlementInputs.length > 0) {
 				throw new Error(
 					"Approved decision cannot specify both a membership grant and class entitlement.",
 				);
 			}
-			if (!input.grant && !input.classEntitlement) {
+			if (!input.grant && classEntitlementInputs.length === 0) {
 				throw new Error(
 					"Approved decision requires a grant or class entitlement.",
 				);
@@ -533,19 +732,25 @@ export class InMemoryMembershipCommerceRepository
 					input.grant,
 				);
 			}
-			if (input.classEntitlement) {
-				assertValidClassEntitlementInput(input.classEntitlement);
-				classEntitlement = await this.createClassEntitlement(
-					input.classEntitlement,
-				);
-				if (this.checkout && input.classEntitlement.checkoutIntentId) {
+			if (classEntitlementInputs.length > 0) {
+				classEntitlements = [];
+				for (const classEntitlementInput of classEntitlementInputs) {
+					assertValidClassEntitlementInput(classEntitlementInput);
+					const classEntitlement = await this.createClassEntitlement(
+						classEntitlementInput,
+					);
+					classEntitlements.push(classEntitlement);
+					if (!this.checkout || !classEntitlementInput.checkoutIntentId)
+						continue;
 					await this.checkout.linkRegistrationMetadataToEntitlement({
-						checkoutIntentId: input.classEntitlement.checkoutIntentId,
+						checkoutIntentId: classEntitlementInput.checkoutIntentId,
+						checkoutIntentLineId:
+							classEntitlementInput.checkoutIntentLineId ?? undefined,
 						classEntitlementId: classEntitlement.id,
 					});
 				}
 			}
-		} else if (input.grant || input.classEntitlement) {
+		} else if (input.grant || classEntitlementInputs.length > 0) {
 			throw new Error(
 				"Non-approved decision cannot create a grant or class entitlement.",
 			);
@@ -573,7 +778,8 @@ export class InMemoryMembershipCommerceRepository
 		return {
 			decision: { ...decision },
 			grant,
-			classEntitlement,
+			classEntitlement: classEntitlements?.[0],
+			classEntitlements,
 			existing: false,
 		};
 	}
@@ -663,6 +869,7 @@ export class InMemoryMembershipCommerceRepository
 			parentCustomerId: input.parentCustomerId,
 			childId: input.childId,
 			checkoutIntentId: input.checkoutIntentId,
+			checkoutIntentLineId: input.checkoutIntentLineId ?? null,
 			shopifyOrderGid: input.shopifyOrderGid,
 			shopifyOrderLineGid: input.shopifyOrderLineGid,
 			paidAmountCents: input.paidAmountCents,

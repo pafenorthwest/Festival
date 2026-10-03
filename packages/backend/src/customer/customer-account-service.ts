@@ -984,6 +984,16 @@ export class CustomerAccountService {
 		};
 	}
 
+	/** Customer-session and CSRF boundary for customer operations. */
+	async customerSession(
+		slug: string,
+		sessionId: string | undefined,
+		csrf: string | undefined,
+		origin: string | undefined,
+	) {
+		return this.formAccess(slug, sessionId, csrf, origin);
+	}
+
 	/** Customer-session and CSRF boundary for Festival-owned, non-payment forms. */
 	async formAccess(
 		slug: string,

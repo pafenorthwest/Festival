@@ -621,4 +621,275 @@ describe("Class Order Projection and Entitlements", () => {
 			{ status: "rejected", reasonCode: "customer_mismatch" },
 		]);
 	});
+
+	it("projects multi-line class order creating 2 ClassEntitlements linked to checkoutIntentLineIds", async () => {
+		const f = await fixture();
+		const classConfig2 = await f.organizations.createFestivalClassConfiguration(
+			{
+				organizationId: f.organization.id,
+				festivalId: f.festival.id,
+				displayName: "Violin Solo - Intermediate",
+				classSubtypeId: f.classConfig.classSubtypeId,
+				divisionId: f.division.id,
+				minimumAge: 8,
+				maximumAge: 18,
+				price: "40.00",
+				maximumPerformancePieces: 2,
+				performanceMinutes: 10,
+				capacity: 25,
+				isActive: true,
+				shopifyProductGid: "gid://shopify/Product/101",
+				shopifyVariantGid: "gid://shopify/ProductVariant/201",
+			},
+		);
+		const child2 = await f.customers.createChild({
+			organizationId: f.organization.id,
+			parentCustomerId: f.customer.id,
+			displayName: "Bob Violinist",
+			createdAtIso: NOW.toISOString(),
+		});
+
+		const { customer: multiCustomer } = await f.customers.createCustomerSession(
+			{
+				sessionId: "multi-session",
+				organizationId: f.organization.id,
+				shopifyCustomerGid: "gid://shopify/Customer/501",
+				encryptedTokens: "opaque",
+				csrfToken: "csrf",
+				integrationVersion: 1,
+				createdAtIso: NOW.toISOString(),
+				lastSeenAtIso: NOW.toISOString(),
+				expiresAtIso: "2030-01-01T00:00:00.000Z",
+			},
+		);
+
+		const multiIntent = await f.checkout.createIntent({
+			organizationId: f.organization.id,
+			customerId: multiCustomer.id,
+			sessionId: "multi-session",
+			idempotencyKey: "multi-class-intent",
+			intentType: "class_entry",
+			festivalClassId: f.classConfig.id,
+			childId: f.child.id,
+			shopifyProductGid: f.classConfig.shopifyProductGid,
+			shopifyVariantGid: f.classConfig.shopifyVariantGid,
+			amount: "90.00",
+			currencyCode: "USD",
+			expiresAtIso: "2030-01-01T00:00:00.000Z",
+			lines: [
+				{
+					lineType: "class_registration",
+					lineIndex: 0,
+					festivalClassId: f.classConfig.id,
+					childId: f.child.id,
+					shopifyProductGid: f.classConfig.shopifyProductGid,
+					shopifyVariantGid: f.classConfig.shopifyVariantGid,
+					amount: "50.00",
+					currencyCode: "USD",
+				},
+				{
+					lineType: "class_registration",
+					lineIndex: 1,
+					festivalClassId: classConfig2.id,
+					childId: child2.id,
+					shopifyProductGid: classConfig2.shopifyProductGid,
+					shopifyVariantGid: classConfig2.shopifyVariantGid,
+					amount: "40.00",
+					currencyCode: "USD",
+				},
+			],
+		});
+		if (multiIntent.kind !== "created") {
+			throw new Error("Expected multi-line intent to be created");
+		}
+
+		const multiOrder: ShopifyPaidOrder = {
+			id: "gid://shopify/Order/2000",
+			customerGid: "gid://shopify/Customer/501",
+			customerEmail: "parent@example.test",
+			fullyPaid: true,
+			fullyPaidAtIso: "2026-09-21T17:30:00.000Z",
+			currencyCode: "USD",
+			customAttributes: [
+				{
+					key: "festival_checkout_intent_id",
+					value: multiIntent.intent.correlationId,
+				},
+			],
+			lineItems: [
+				{
+					id: "gid://shopify/LineItem/2001",
+					productGid: f.classConfig.shopifyProductGid,
+					variantGid: f.classConfig.shopifyVariantGid,
+					quantity: 1,
+					paidAmount: "50.00",
+					paidCurrencyCode: "USD",
+				},
+				{
+					id: "gid://shopify/LineItem/2002",
+					productGid: classConfig2.shopifyProductGid,
+					variantGid: classConfig2.shopifyVariantGid,
+					quantity: 1,
+					paidAmount: "40.00",
+					paidCurrencyCode: "USD",
+				},
+			],
+		};
+		f.orders.values.set(multiOrder.id, multiOrder);
+
+		const received = await delivery(
+			f.commerce,
+			f.organization.id,
+			"webhook-multi-line-success",
+			multiOrder.id,
+		);
+
+		expect(await f.service.processDelivery(received.id)).toBe("processed");
+
+		const entitlements = await f.commerce.listClassEntitlements({
+			organizationId: f.organization.id,
+		});
+		expect(entitlements).toHaveLength(2);
+
+		const line0Id = multiIntent.intent.lines?.[0]?.id;
+		const line1Id = multiIntent.intent.lines?.[1]?.id;
+		expect(line0Id).toBeDefined();
+		expect(line1Id).toBeDefined();
+
+		expect(entitlements).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					organizationId: f.organization.id,
+					festivalId: f.festival.id,
+					festivalClassId: f.classConfig.id,
+					childId: f.child.id,
+					shopifyOrderGid: multiOrder.id,
+					shopifyOrderLineGid: "gid://shopify/LineItem/2001",
+					checkoutIntentLineId: line0Id,
+					paidAmountCents: 5000,
+					paidCurrencyCode: "USD",
+					status: "confirmed",
+				}),
+				expect.objectContaining({
+					organizationId: f.organization.id,
+					festivalId: f.festival.id,
+					festivalClassId: classConfig2.id,
+					childId: child2.id,
+					shopifyOrderGid: multiOrder.id,
+					shopifyOrderLineGid: "gid://shopify/LineItem/2002",
+					checkoutIntentLineId: line1Id,
+					paidAmountCents: 4000,
+					paidCurrencyCode: "USD",
+					status: "confirmed",
+				}),
+			]),
+		);
+	});
+
+	it("rejects multi-line order on line count mismatch", async () => {
+		const f = await fixture();
+
+		const { customer: multiCustomer } = await f.customers.createCustomerSession(
+			{
+				sessionId: "multi-session-2",
+				organizationId: f.organization.id,
+				shopifyCustomerGid: "gid://shopify/Customer/502",
+				encryptedTokens: "opaque",
+				csrfToken: "csrf",
+				integrationVersion: 1,
+				createdAtIso: NOW.toISOString(),
+				lastSeenAtIso: NOW.toISOString(),
+				expiresAtIso: "2030-01-01T00:00:00.000Z",
+			},
+		);
+
+		const multiIntent = await f.checkout.createIntent({
+			organizationId: f.organization.id,
+			customerId: multiCustomer.id,
+			sessionId: "multi-session-2",
+			idempotencyKey: "multi-class-line-mismatch",
+			intentType: "class_entry",
+			festivalClassId: f.classConfig.id,
+			childId: f.child.id,
+			shopifyProductGid: f.classConfig.shopifyProductGid,
+			shopifyVariantGid: f.classConfig.shopifyVariantGid,
+			amount: "90.00",
+			currencyCode: "USD",
+			expiresAtIso: "2030-01-01T00:00:00.000Z",
+			lines: [
+				{
+					lineType: "class_registration",
+					lineIndex: 0,
+					festivalClassId: f.classConfig.id,
+					childId: f.child.id,
+					shopifyProductGid: f.classConfig.shopifyProductGid,
+					shopifyVariantGid: f.classConfig.shopifyVariantGid,
+					amount: "50.00",
+					currencyCode: "USD",
+				},
+				{
+					lineType: "class_registration",
+					lineIndex: 1,
+					festivalClassId: f.classConfig.id,
+					childId: f.child.id,
+					shopifyProductGid: f.classConfig.shopifyProductGid,
+					shopifyVariantGid: f.classConfig.shopifyVariantGid,
+					amount: "40.00",
+					currencyCode: "USD",
+				},
+			],
+		});
+		if (multiIntent.kind !== "created") {
+			throw new Error("Expected multi-line intent to be created");
+		}
+
+		// Order with missing line
+		const orderWithMissingLine: ShopifyPaidOrder = {
+			id: "gid://shopify/Order/2003",
+			customerGid: "gid://shopify/Customer/502",
+			customerEmail: "parent@example.test",
+			fullyPaid: true,
+			fullyPaidAtIso: "2026-09-21T17:30:00.000Z",
+			currencyCode: "USD",
+			customAttributes: [
+				{
+					key: "festival_checkout_intent_id",
+					value: multiIntent.intent.correlationId,
+				},
+			],
+			lineItems: [
+				{
+					id: "gid://shopify/LineItem/2004",
+					productGid: f.classConfig.shopifyProductGid,
+					variantGid: f.classConfig.shopifyVariantGid,
+					quantity: 1,
+					paidAmount: "50.00",
+					paidCurrencyCode: "USD",
+				},
+			],
+		};
+		f.orders.values.set(orderWithMissingLine.id, orderWithMissingLine);
+
+		const received = await delivery(
+			f.commerce,
+			f.organization.id,
+			"webhook-multi-line-mismatch",
+			orderWithMissingLine.id,
+		);
+
+		expect(await f.service.processDelivery(received.id)).toBe("processed");
+
+		const entitlements = await f.commerce.listClassEntitlements({
+			organizationId: f.organization.id,
+		});
+		expect(entitlements).toHaveLength(0);
+
+		const decisions = await f.commerce.listCustomerDecisions(
+			f.organization.id,
+			multiCustomer.id,
+		);
+		expect(decisions).toMatchObject([
+			{ status: "rejected", reasonCode: "offering_mismatch" },
+		]);
+	});
 });

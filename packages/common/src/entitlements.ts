@@ -315,6 +315,7 @@ export interface ClassEntitlement {
 	parentCustomerId: string;
 	childId: string;
 	checkoutIntentId: string;
+	checkoutIntentLineId?: string | null;
 	shopifyOrderGid: string;
 	shopifyOrderLineGid: string;
 	paidAmountCents: number;
@@ -332,6 +333,7 @@ export type CreateClassEntitlementInput = Omit<
 	status?: ClassEntitlementStatus;
 	createdAt?: string;
 	updatedAt?: string;
+	checkoutIntentLineId?: string | null;
 };
 
 export function assertValidClassEntitlementInput(

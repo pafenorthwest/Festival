@@ -54,6 +54,7 @@ import type {
 } from "./organization-repository.js";
 import {
 	AccompanistMembershipConflictError,
+	assertValidSubtypeDependency,
 	ShopifyShopOwnershipError,
 } from "./organization-repository.js";
 import {
@@ -251,6 +252,7 @@ interface RegistrationCatalogValueRow {
 	display_name: string;
 	is_active: boolean;
 	display_order: number;
+	required_subtype_id: string | null;
 	created_at: string;
 	updated_at: string;
 }
@@ -299,6 +301,19 @@ function mapDivision(row: DivisionRow): OrganizationDivision {
 		displayName: row.display_name,
 		isActive: row.is_active,
 		displayOrder: row.display_order,
+		createdAtIso: row.created_at,
+		updatedAtIso: row.updated_at,
+	};
+}
+
+function mapRow(row: RegistrationCatalogValueRow): RegistrationCatalogValue {
+	return {
+		id: row.id,
+		organizationId: row.organization_id,
+		displayName: row.display_name,
+		isActive: row.is_active,
+		displayOrder: row.display_order,
+		requiredSubtypeId: row.required_subtype_id ?? null,
 		createdAtIso: row.created_at,
 		updatedAtIso: row.updated_at,
 	};
@@ -2004,18 +2019,10 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 	): Promise<RegistrationCatalogValue[]> {
 		await this.ensureReady();
 		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, kind, display_name, is_active, display_order, created_at, updated_at FROM ${this.schema}.registration_catalog_values WHERE organization_id = $1 AND kind = $2 AND ($3::boolean = FALSE OR is_active) ORDER BY display_order, id`,
+			`SELECT id, organization_id, kind, display_name, is_active, display_order, required_subtype_id, created_at, updated_at FROM ${this.schema}.registration_catalog_values WHERE organization_id = $1 AND kind = $2 AND ($3::boolean = FALSE OR is_active) ORDER BY display_order, id`,
 			[organizationId, kind, activeOnly],
 		)) as RegistrationCatalogValueRow[];
-		return rows.map((row) => ({
-			id: row.id,
-			organizationId: row.organization_id,
-			displayName: row.display_name,
-			isActive: row.is_active,
-			displayOrder: row.display_order,
-			createdAtIso: row.created_at,
-			updatedAtIso: row.updated_at,
-		}));
+		return rows.map((row) => mapRow(row));
 	}
 
 	async createRegistrationCatalogValue(input: {
@@ -2023,29 +2030,36 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		kind: RegistrationCatalogKind;
 		displayName: string;
 		normalizedName: string;
+		requiredSubtypeId?: string | null;
 	}): Promise<RegistrationCatalogValue> {
 		await this.ensureReady();
+		const id = randomUUID();
+		if (input.kind === "class_subtype" && input.requiredSubtypeId) {
+			const existingRows = (await sql.unsafe(
+				`SELECT id, required_subtype_id FROM ${this.schema}.registration_catalog_values WHERE organization_id = $1 AND kind = 'class_subtype'`,
+				[input.organizationId],
+			)) as { id: string; required_subtype_id: string | null }[];
+			const subtypesMap = new Map<string, string | null>(
+				existingRows.map((r) => [r.id, r.required_subtype_id]),
+			);
+			assertValidSubtypeDependency(id, input.requiredSubtypeId, subtypesMap);
+		}
+		const requiredSubtypeId =
+			input.kind === "class_subtype" ? input.requiredSubtypeId || null : null;
 		const rows = (await sql.unsafe(
-			`INSERT INTO ${this.schema}.registration_catalog_values (id, organization_id, kind, display_name, normalized_name, display_order) SELECT $1, $2, $3, $4, $5, COUNT(*)::integer FROM ${this.schema}.registration_catalog_values WHERE organization_id = $2 AND kind = $3 RETURNING id, organization_id, kind, display_name, is_active, display_order, created_at, updated_at`,
+			`INSERT INTO ${this.schema}.registration_catalog_values (id, organization_id, kind, display_name, normalized_name, display_order, required_subtype_id) SELECT $1, $2, $3, $4, $5, COUNT(*)::integer, $6 FROM ${this.schema}.registration_catalog_values WHERE organization_id = $2 AND kind = $3 RETURNING id, organization_id, kind, display_name, is_active, display_order, required_subtype_id, created_at, updated_at`,
 			[
-				randomUUID(),
+				id,
 				input.organizationId,
 				input.kind,
 				input.displayName,
 				input.normalizedName,
+				requiredSubtypeId,
 			],
 		)) as RegistrationCatalogValueRow[];
 		const row = rows[0];
 		if (!row) throw new Error("Unable to create registration catalog value.");
-		return {
-			id: row.id,
-			organizationId: row.organization_id,
-			displayName: row.display_name,
-			isActive: row.is_active,
-			displayOrder: row.display_order,
-			createdAtIso: row.created_at,
-			updatedAtIso: row.updated_at,
-		};
+		return mapRow(row);
 	}
 
 	async listFestivalClassSubtypes(
@@ -2055,18 +2069,10 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 	): Promise<RegistrationCatalogValue[]> {
 		await this.ensureReady();
 		const rows = (await sql.unsafe(
-			`SELECT v.id, v.organization_id, v.kind, v.display_name, v.is_active, v.display_order, v.created_at, v.updated_at FROM ${this.schema}.registration_catalog_values v INNER JOIN ${this.schema}.festival_class_subtypes scoped ON scoped.class_subtype_id = v.id AND scoped.organization_id = $1 AND scoped.festival_id = $2 WHERE v.organization_id = $1 AND v.kind = 'class_subtype' AND ($3::boolean = FALSE OR v.is_active) ORDER BY v.display_order, v.id`,
+			`SELECT v.id, v.organization_id, v.kind, v.display_name, v.is_active, v.display_order, v.required_subtype_id, v.created_at, v.updated_at FROM ${this.schema}.registration_catalog_values v INNER JOIN ${this.schema}.festival_class_subtypes scoped ON scoped.class_subtype_id = v.id AND scoped.organization_id = $1 AND scoped.festival_id = $2 WHERE v.organization_id = $1 AND v.kind = 'class_subtype' AND ($3::boolean = FALSE OR v.is_active) ORDER BY v.display_order, v.id`,
 			[organizationId, festivalId, activeOnly],
 		)) as RegistrationCatalogValueRow[];
-		return rows.map((row) => ({
-			id: row.id,
-			organizationId: row.organization_id,
-			displayName: row.display_name,
-			isActive: row.is_active,
-			displayOrder: row.display_order,
-			createdAtIso: row.created_at,
-			updatedAtIso: row.updated_at,
-		}));
+		return rows.map((row) => mapRow(row));
 	}
 
 	async associateFestivalClassSubtype(input: {
@@ -2096,10 +2102,31 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		displayName?: string;
 		normalizedName?: string;
 		isActive?: boolean;
+		requiredSubtypeId?: string | null;
 	}): Promise<RegistrationCatalogValue | null> {
 		await this.ensureReady();
+		if (input.kind === "class_subtype" && input.requiredSubtypeId) {
+			const existingRows = (await sql.unsafe(
+				`SELECT id, required_subtype_id FROM ${this.schema}.registration_catalog_values WHERE organization_id = $1 AND kind = 'class_subtype'`,
+				[input.organizationId],
+			)) as { id: string; required_subtype_id: string | null }[];
+			if (!existingRows.some((row) => row.id === input.id)) {
+				return null;
+			}
+			const subtypesMap = new Map<string, string | null>(
+				existingRows.map((r) => [r.id, r.required_subtype_id]),
+			);
+			assertValidSubtypeDependency(
+				input.id,
+				input.requiredSubtypeId,
+				subtypesMap,
+			);
+		}
+		const shouldUpdateRequiredSubtype =
+			input.kind === "class_subtype" && input.requiredSubtypeId !== undefined;
+		const requiredSubtypeId = input.requiredSubtypeId || null;
 		const rows = (await sql.unsafe(
-			`UPDATE ${this.schema}.registration_catalog_values SET display_name = COALESCE($4, display_name), normalized_name = COALESCE($5, normalized_name), is_active = COALESCE($6, is_active), updated_at = NOW() WHERE organization_id = $1 AND kind = $2 AND id = $3 RETURNING id, organization_id, kind, display_name, is_active, display_order, created_at, updated_at`,
+			`UPDATE ${this.schema}.registration_catalog_values SET display_name = COALESCE($4, display_name), normalized_name = COALESCE($5, normalized_name), is_active = COALESCE($6, is_active), required_subtype_id = CASE WHEN $7::boolean THEN $8 ELSE required_subtype_id END, updated_at = NOW() WHERE organization_id = $1 AND kind = $2 AND id = $3 RETURNING id, organization_id, kind, display_name, is_active, display_order, required_subtype_id, created_at, updated_at`,
 			[
 				input.organizationId,
 				input.kind,
@@ -2107,20 +2134,12 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				input.displayName ?? null,
 				input.normalizedName ?? null,
 				input.isActive ?? null,
+				shouldUpdateRequiredSubtype,
+				requiredSubtypeId,
 			],
 		)) as RegistrationCatalogValueRow[];
 		const row = rows[0];
-		return row
-			? {
-					id: row.id,
-					organizationId: row.organization_id,
-					displayName: row.display_name,
-					isActive: row.is_active,
-					displayOrder: row.display_order,
-					createdAtIso: row.created_at,
-					updatedAtIso: row.updated_at,
-				}
-			: null;
+		return row ? mapRow(row) : null;
 	}
 
 	async reorderRegistrationCatalogValues(

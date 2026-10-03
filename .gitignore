@@ -6,6 +6,9 @@ yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
 
+# Shopify UI Config
+shopify.app.toml
+
 # token files
 tok~ns
 

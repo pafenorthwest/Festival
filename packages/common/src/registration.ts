@@ -9,6 +9,7 @@ export interface RepertoirePiece {
 	movement?: string | null;
 	/** Positive whole seconds. */
 	durationSeconds: number;
+	durationMinutes?: number;
 }
 
 /** Roles supported by an organization-owned repertoire catalog. */
@@ -65,6 +66,7 @@ export interface ClassRegistrationMetadata {
 	organizationId: string;
 	festivalId: string;
 	checkoutIntentId: string;
+	checkoutIntentLineId?: string | null;
 	classEntitlementId: string | null;
 	teacherMembershipId: string;
 	accompanistMembershipId: string | null;
