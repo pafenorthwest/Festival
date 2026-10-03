@@ -130,7 +130,7 @@ describe("volunteer enrollment (requireVolunteerScope)", () => {
 			detailsUrl: null,
 			isRoomProctor: false,
 		});
-		await volunteerRepository.createRole({
+		const fallRole = await volunteerRepository.createRole({
 			organizationId: organization.id,
 			festivalId: fall.id,
 			slug: "fall-role",
@@ -148,9 +148,40 @@ describe("volunteer enrollment (requireVolunteerScope)", () => {
 		);
 
 		expect(response.status).toBe(200);
-		expect(
-			((await response.json()) as Array<{ id: string }>).map((role) => role.id),
-		).toEqual([springRole.id]);
+		// Festivals are seeded with default Room Proctor/General roles (see
+		// OrganizationService.createFestivalForTenant), so spring has those
+		// two plus springRole; what matters here is that fall's role never
+		// leaks across the festival boundary.
+		const springRoleIds = (
+			(await response.json()) as Array<{ id: string }>
+		).map((role) => role.id);
+		expect(springRoleIds).toContain(springRole.id);
+		expect(springRoleIds).not.toContain(fallRole.id);
+	});
+
+	it("seeds every new festival with default Room Proctor and General volunteer roles", async () => {
+		const { app } = await createTestApp();
+		await createOrgAndFestival(app);
+
+		const response = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/festivals/spring/volunteers/roles",
+				withAuth("volunteer"),
+			),
+		);
+		const roles = (await response.json()) as Array<{
+			slug: string;
+			displayName: string;
+			isRoomProctor: boolean;
+		}>;
+
+		expect(response.status).toBe(200);
+		const roomProctor = roles.find((role) => role.slug === "room-proctor");
+		const general = roles.find((role) => role.slug === "general");
+		expect(roomProctor?.displayName).toBe("Room Proctor");
+		expect(roomProctor?.isRoomProctor).toBe(true);
+		expect(general?.displayName).toBe("General");
+		expect(general?.isRoomProctor).toBe(false);
 	});
 
 	it("lets a non-member enroll as a volunteer for a festival", async () => {

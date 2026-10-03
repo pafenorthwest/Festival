@@ -226,10 +226,18 @@ export async function createApp(options: CreateAppOptions = {}) {
 	const adminClassCatalogService =
 		options.adminClassCatalogService ??
 		new AdminClassCatalogService(repository, adminClassShopifySync);
+	const volunteerRepository =
+		options.volunteerRepository ??
+		(env.databaseSchema
+			? new PostgresVolunteerRepository(env.databaseSchema)
+			: new InMemoryVolunteerRepository());
+	if (volunteerRepository instanceof PostgresVolunteerRepository)
+		await volunteerRepository.ensureReady();
 	const organizationService = new OrganizationService(
 		repository,
 		adminClassCatalogService,
 		{ enableDropTransfer: Boolean(env.enableDropTransfer) },
+		volunteerRepository,
 	);
 	const shopifyWebhookSubscriptionService = secretKeyring
 		? new ShopifyWebhookSubscriptionService(
@@ -381,13 +389,6 @@ export async function createApp(options: CreateAppOptions = {}) {
 	const accompanistMembershipService = new AccompanistMembershipService(
 		repository,
 	);
-	const volunteerRepository =
-		options.volunteerRepository ??
-		(env.databaseSchema
-			? new PostgresVolunteerRepository(env.databaseSchema)
-			: new InMemoryVolunteerRepository());
-	if (volunteerRepository instanceof PostgresVolunteerRepository)
-		await volunteerRepository.ensureReady();
 	const repertoireRepository =
 		options.repertoireRepository ??
 		(env.databaseSchema

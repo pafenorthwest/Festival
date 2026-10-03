@@ -48,7 +48,23 @@ import type {
 	OrganizationRepository,
 	UpdateFestivalClassConfigurationInput,
 } from "../repo/organization-repository.js";
+import type { VolunteerRepository } from "../volunteers/volunteer-repository.js";
 import type { AdminClassCatalogService } from "./admin-class-catalog.service.js";
+
+const DEFAULT_FESTIVAL_VOLUNTEER_ROLES = [
+	{
+		slug: "room-proctor",
+		displayName: "Room Proctor",
+		description: "Monitors an exam room for a division and adjudicator.",
+		isRoomProctor: true,
+	},
+	{
+		slug: "general",
+		displayName: "General",
+		description: "General volunteer duties for the festival.",
+		isRoomProctor: false,
+	},
+] as const;
 
 function toSessionMembership(
 	record: MembershipWithOrganization,
@@ -104,6 +120,7 @@ export class OrganizationService {
 		readonly repository: OrganizationRepository,
 		private readonly adminClassCatalogService?: AdminClassCatalogService,
 		private readonly options?: { enableDropTransfer?: boolean },
+		private readonly volunteerRepository?: VolunteerRepository,
 	) {}
 
 	async getSession(identity?: AuthenticatedUser): Promise<SessionResponse> {
@@ -758,6 +775,17 @@ export class OrganizationService {
 			startDate: dateValidation.startDate,
 			endDate: dateValidation.endDate,
 		});
+
+		if (this.volunteerRepository) {
+			for (const role of DEFAULT_FESTIVAL_VOLUNTEER_ROLES) {
+				await this.volunteerRepository.createRole({
+					...role,
+					detailsUrl: null,
+					organizationId: tenant.organization.id,
+					festivalId: festival.id,
+				});
+			}
+		}
 
 		return {
 			festival: toFestivalSummary(festival),
