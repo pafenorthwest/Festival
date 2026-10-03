@@ -454,6 +454,16 @@ export const CURRENT_ROUTE_SECURITY = [
 		authenticationClass: "volunteer-admin",
 	},
 	{
+		method: "PATCH",
+		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/roles/:roleId",
+		authenticationClass: "volunteer-admin",
+	},
+	{
+		method: "DELETE",
+		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/roles/:roleId",
+		authenticationClass: "volunteer-admin",
+	},
+	{
 		method: "GET",
 		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/roles/:roleId/shifts",
 		authenticationClass: "volunteer-admin",
@@ -461,6 +471,16 @@ export const CURRENT_ROUTE_SECURITY = [
 	{
 		method: "POST",
 		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/roles/:roleId/shifts",
+		authenticationClass: "volunteer-admin",
+	},
+	{
+		method: "PATCH",
+		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/roles/:roleId/shifts/:shiftId",
+		authenticationClass: "volunteer-admin",
+	},
+	{
+		method: "DELETE",
+		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/roles/:roleId/shifts/:shiftId",
 		authenticationClass: "volunteer-admin",
 	},
 	{

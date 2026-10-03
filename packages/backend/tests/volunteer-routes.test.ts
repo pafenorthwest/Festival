@@ -249,6 +249,242 @@ describe("volunteer role and shift routes", () => {
 		expect(response.status).toBe(404);
 	});
 
+	it("lets an admin edit a role and rejects a non-admin or unknown role", async () => {
+		const { app } = await createTestApp();
+		await createOrgAndFestivalAsAdmin(app);
+
+		const roleResponse = await app.fetch(
+			new Request(
+				`${VOLUNTEERS_BASE}/roles`,
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify(createRolePayload()),
+				}),
+			),
+		);
+		const role = (await roleResponse.json()) as { id: string };
+
+		const nonAdminResponse = await app.fetch(
+			new Request(
+				`${VOLUNTEERS_BASE}/roles/${role.id}`,
+				withAuth("member", {
+					method: "PATCH",
+					body: JSON.stringify({
+						displayName: "Updated",
+						description: "Updated description.",
+						isRoomProctor: true,
+					}),
+				}),
+			),
+		);
+		expect(nonAdminResponse.status).toBe(403);
+
+		const updateResponse = await app.fetch(
+			new Request(
+				`${VOLUNTEERS_BASE}/roles/${role.id}`,
+				withAuth("admin", {
+					method: "PATCH",
+					body: JSON.stringify({
+						displayName: "Lead Room Proctor",
+						description: "Updated description.",
+						isRoomProctor: true,
+					}),
+				}),
+			),
+		);
+		expect(updateResponse.status).toBe(200);
+		const updated = (await updateResponse.json()) as { displayName: string };
+		expect(updated.displayName).toBe("Lead Room Proctor");
+
+		const missingResponse = await app.fetch(
+			new Request(
+				`${VOLUNTEERS_BASE}/roles/missing-role`,
+				withAuth("admin", {
+					method: "PATCH",
+					body: JSON.stringify({
+						displayName: "Lead Room Proctor",
+						description: "Updated description.",
+						isRoomProctor: true,
+					}),
+				}),
+			),
+		);
+		expect(missingResponse.status).toBe(404);
+
+		const invalidResponse = await app.fetch(
+			new Request(
+				`${VOLUNTEERS_BASE}/roles/${role.id}`,
+				withAuth("admin", {
+					method: "PATCH",
+					body: JSON.stringify({
+						displayName: "",
+						description: "",
+						isRoomProctor: false,
+					}),
+				}),
+			),
+		);
+		expect(invalidResponse.status).toBe(400);
+	});
+
+	it("lets an admin delete a role, cascading to its shifts, and rejects a non-admin", async () => {
+		const { app } = await createTestApp();
+		await createOrgAndFestivalAsAdmin(app);
+
+		const roleResponse = await app.fetch(
+			new Request(
+				`${VOLUNTEERS_BASE}/roles`,
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify(createRolePayload()),
+				}),
+			),
+		);
+		const role = (await roleResponse.json()) as { id: string };
+		await app.fetch(
+			new Request(
+				`${VOLUNTEERS_BASE}/roles/${role.id}/shifts`,
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						date: "2027-03-31",
+						period: "AM",
+						division: "Piano",
+						adjudicator: "Dr Brown",
+					}),
+				}),
+			),
+		);
+
+		const nonAdminResponse = await app.fetch(
+			new Request(
+				`${VOLUNTEERS_BASE}/roles/${role.id}`,
+				withAuth("member", { method: "DELETE" }),
+			),
+		);
+		expect(nonAdminResponse.status).toBe(403);
+
+		const deleteResponse = await app.fetch(
+			new Request(
+				`${VOLUNTEERS_BASE}/roles/${role.id}`,
+				withAuth("admin", { method: "DELETE" }),
+			),
+		);
+		expect(deleteResponse.status).toBe(200);
+
+		const missingResponse = await app.fetch(
+			new Request(
+				`${VOLUNTEERS_BASE}/roles/${role.id}`,
+				withAuth("admin", { method: "DELETE" }),
+			),
+		);
+		expect(missingResponse.status).toBe(404);
+
+		const shiftsResponse = await app.fetch(
+			new Request(
+				`${VOLUNTEERS_BASE}/roles/${role.id}/shifts`,
+				withAuth("admin"),
+			),
+		);
+		expect(shiftsResponse.status).toBe(404);
+	});
+
+	it("lets an admin edit and delete a shift, enforcing Room Proctor fields and rejecting a non-admin", async () => {
+		const { app } = await createTestApp();
+		await createOrgAndFestivalAsAdmin(app);
+
+		const roleResponse = await app.fetch(
+			new Request(
+				`${VOLUNTEERS_BASE}/roles`,
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify(createRolePayload()),
+				}),
+			),
+		);
+		const role = (await roleResponse.json()) as { id: string };
+		const shiftResponse = await app.fetch(
+			new Request(
+				`${VOLUNTEERS_BASE}/roles/${role.id}/shifts`,
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						date: "2027-03-31",
+						period: "AM",
+						division: "Piano",
+						adjudicator: "Dr Brown",
+					}),
+				}),
+			),
+		);
+		const shift = (await shiftResponse.json()) as { id: string };
+
+		const nonAdminResponse = await app.fetch(
+			new Request(
+				`${VOLUNTEERS_BASE}/roles/${role.id}/shifts/${shift.id}`,
+				withAuth("member", {
+					method: "PATCH",
+					body: JSON.stringify({
+						date: "2027-04-01",
+						period: "PM",
+						division: "Piano",
+						adjudicator: "Dr Brown",
+					}),
+				}),
+			),
+		);
+		expect(nonAdminResponse.status).toBe(403);
+
+		const missingFieldsResponse = await app.fetch(
+			new Request(
+				`${VOLUNTEERS_BASE}/roles/${role.id}/shifts/${shift.id}`,
+				withAuth("admin", {
+					method: "PATCH",
+					body: JSON.stringify({ date: "2027-04-01", period: "PM" }),
+				}),
+			),
+		);
+		expect(missingFieldsResponse.status).toBe(400);
+
+		const updateResponse = await app.fetch(
+			new Request(
+				`${VOLUNTEERS_BASE}/roles/${role.id}/shifts/${shift.id}`,
+				withAuth("admin", {
+					method: "PATCH",
+					body: JSON.stringify({
+						date: "2027-04-01",
+						period: "PM",
+						division: "Voice",
+						adjudicator: "Dr Green",
+					}),
+				}),
+			),
+		);
+		expect(updateResponse.status).toBe(200);
+		const updated = (await updateResponse.json()) as {
+			division: string | null;
+		};
+		expect(updated.division).toBe("Voice");
+
+		const deleteResponse = await app.fetch(
+			new Request(
+				`${VOLUNTEERS_BASE}/roles/${role.id}/shifts/${shift.id}`,
+				withAuth("admin", { method: "DELETE" }),
+			),
+		);
+		expect(deleteResponse.status).toBe(200);
+
+		const missingResponse = await app.fetch(
+			new Request(
+				`${VOLUNTEERS_BASE}/roles/${role.id}/shifts/${shift.id}`,
+				withAuth("admin", {
+					method: "DELETE",
+				}),
+			),
+		);
+		expect(missingResponse.status).toBe(404);
+	});
+
 	it("does not expose a role from another festival through shift routes", async () => {
 		const { app } = await createTestApp();
 		await createOrgAndFestivalAsAdmin(app);
