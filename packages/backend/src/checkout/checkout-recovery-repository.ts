@@ -222,6 +222,9 @@ export class InMemoryCheckoutRecoveryRepository
 			if (intent.status === "approved" || intent.status === "superseded") {
 				continue;
 			}
+			if (intent.intentType === "class_entry") {
+				continue;
+			}
 			if (this.checkCompletedOrderOrEntitlement(orgId, intent)) {
 				continue;
 			}
