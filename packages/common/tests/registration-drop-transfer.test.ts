@@ -4,6 +4,7 @@ import {
 	assertValidTransferRegistrationInput,
 	type DropRegistrationInput,
 	type DropRegistrationResult,
+	type RefundRequest,
 	isRefundEventStatus,
 	isRegistrationActorRole,
 	isRegistrationChangeAction,
@@ -66,6 +67,19 @@ describe("registration drop, transfer, and change log domain", () => {
 	});
 
 	describe("RefundEvent and RefundEventStatus", () => {
+		it("allows a line-targeted refund request to carry historical currency", () => {
+			const request: RefundRequest = {
+				orderId: "gid://shopify/Order/1",
+				paymentIntentId: "intent-1",
+				shopifyOrderLineId: "gid://shopify/LineItem/1",
+				amountCents: 4500,
+				currency: "CAD",
+				reason: "Registration dropped",
+			};
+			expect(request.shopifyOrderLineId).toBe("gid://shopify/LineItem/1");
+			expect(request.currency).toBe("CAD");
+		});
+
 		it("includes expected refund event statuses", () => {
 			expect(REFUND_EVENT_STATUSES).toContain("pending");
 			expect(REFUND_EVENT_STATUSES).toContain("completed");
@@ -87,6 +101,7 @@ describe("registration drop, transfer, and change log domain", () => {
 				registrationChangeLogId: "log-1",
 				classEntitlementId: "ent-1",
 				shopifyOrderId: "gid://shopify/Order/1",
+				shopifyOrderLineId: "gid://shopify/LineItem/1",
 				shopifyRefundId: "gid://shopify/Refund/1",
 				amountCents: 4500,
 				currency: "USD",
@@ -97,6 +112,7 @@ describe("registration drop, transfer, and change log domain", () => {
 			};
 			expect(event.amountCents).toBe(4500);
 			expect(event.status).toBe("completed");
+			expect(event.shopifyOrderLineId).toBe("gid://shopify/LineItem/1");
 		});
 	});
 

@@ -126,8 +126,12 @@ describe("DropTransferService", () => {
 			});
 
 			const mockShopifyRefund: ShopifyRefundProvider = {
+				supportsLineTargetedRefund: true,
 				createRefund: async (params) => {
 					expect(params.orderId).toBe("gid://shopify/Order/100");
+					expect(params.shopifyOrderLineId).toBe("gid://shopify/LineItem/100");
+					expect(params.amountCents).toBe(6500);
+					expect(params.currency).toBe("USD");
 					return { id: "gid://shopify/Refund/999", providerMode: "mock" };
 				},
 			};
@@ -154,6 +158,157 @@ describe("DropTransferService", () => {
 			expect(result.refundEvent?.shopifyRefundId).toBe(
 				"gid://shopify/Refund/999",
 			);
+			expect(result.refundEvent?.shopifyOrderLineId).toBe(
+				"gid://shopify/LineItem/100",
+			);
+		});
+
+		it("records a pending manual refund without calling an unsupported provider", async () => {
+			const ent = await entitlementsRepo.createClassEntitlement({
+				id: "ent-refund-manual",
+				organizationId: "org-1",
+				festivalId: "fest-1",
+				festivalClassId: "class-violin-1",
+				parentCustomerId: "parent-1",
+				childId: "child-1",
+				checkoutIntentId: "intent-manual",
+				shopifyOrderGid: "gid://shopify/Order/manual",
+				shopifyOrderLineGid: "gid://shopify/LineItem/manual",
+				paidAmountCents: 7300,
+				paidCurrencyCode: "CAD",
+				status: "confirmed",
+			});
+
+			const unsupportedProvider = new ShopifyAdminClient({});
+			let externalCalls = 0;
+			unsupportedProvider.createRefund = async () => {
+				externalCalls++;
+				return {
+					id: "gid://shopify/Refund/should-not-be-called",
+					providerMode: "mock",
+				};
+			};
+
+			const service = new DropTransferService({
+				entitlements: entitlementsRepo,
+				changes: changeRepo,
+				shopifyAdminClient: unsupportedProvider,
+			});
+
+			const result = await service.dropRegistration({
+				classEntitlementId: ent.id,
+				organizationId: "org-1",
+				issueRefund: true,
+			});
+
+			expect(externalCalls).toBe(0);
+			expect(result.refundEvent).toMatchObject({
+				status: "pending",
+				shopifyOrderId: "gid://shopify/Order/manual",
+				shopifyOrderLineId: "gid://shopify/LineItem/manual",
+				amountCents: 7300,
+				currency: "CAD",
+			});
+			expect(result.refundEvent?.failureReason).toContain(
+				"Manual refund required",
+			);
+		});
+
+		it("records a valid partial refund as manual without calling a capable provider", async () => {
+			const ent = await entitlementsRepo.createClassEntitlement({
+				id: "ent-refund-partial",
+				organizationId: "org-1",
+				festivalId: "fest-1",
+				festivalClassId: "class-violin-1",
+				parentCustomerId: "parent-1",
+				childId: "child-1",
+				checkoutIntentId: "intent-partial",
+				shopifyOrderGid: "gid://shopify/Order/partial",
+				shopifyOrderLineGid: "gid://shopify/LineItem/partial",
+				paidAmountCents: 5000,
+				paidCurrencyCode: "USD",
+				status: "confirmed",
+			});
+
+			let externalCalls = 0;
+			const capableProvider: ShopifyRefundProvider = {
+				supportsLineTargetedRefund: true,
+				createRefund: async () => {
+					externalCalls++;
+					return { id: "gid://shopify/Refund/should-not-be-called" };
+				},
+			};
+			const service = new DropTransferService({
+				entitlements: entitlementsRepo,
+				changes: changeRepo,
+				shopifyAdminClient: capableProvider,
+			});
+
+			const result = await service.dropRegistration({
+				classEntitlementId: ent.id,
+				organizationId: "org-1",
+				requestRefund: true,
+				refundAmountCents: 4500,
+			});
+
+			expect(externalCalls).toBe(0);
+			expect(result.refundEvent).toMatchObject({
+				status: "pending",
+				amountCents: 4500,
+				currency: "USD",
+				shopifyOrderLineId: "gid://shopify/LineItem/partial",
+			});
+			expect(result.refundEvent?.failureReason).toContain(
+				"partial class-registration refunds are not supported",
+			);
+		});
+
+		it("rejects non-positive or over-limit requested refunds before cancelling", async () => {
+			const service = new DropTransferService({
+				entitlements: entitlementsRepo,
+				changes: changeRepo,
+			});
+
+			for (const scenario of [
+				{
+					amountCents: 0,
+					message: "Refund amount must be a positive integer.",
+				},
+				{
+					amountCents: 5001,
+					message: "Refund amount cannot exceed the paid registration amount.",
+				},
+			]) {
+				const ent = await entitlementsRepo.createClassEntitlement({
+					id: `ent-refund-invalid-${scenario.amountCents}`,
+					organizationId: "org-1",
+					festivalId: "fest-1",
+					festivalClassId: "class-violin-1",
+					parentCustomerId: "parent-1",
+					childId: `child-invalid-${scenario.amountCents}`,
+					checkoutIntentId: `intent-invalid-${scenario.amountCents}`,
+					shopifyOrderGid: `gid://shopify/Order/invalid-${scenario.amountCents}`,
+					shopifyOrderLineGid: `gid://shopify/LineItem/invalid-${scenario.amountCents}`,
+					paidAmountCents: 5000,
+					paidCurrencyCode: "USD",
+					status: "confirmed",
+				});
+
+				await expect(
+					service.dropRegistration({
+						classEntitlementId: ent.id,
+						organizationId: "org-1",
+						requestRefund: true,
+						refundAmountCents: scenario.amountCents,
+					}),
+				).rejects.toMatchObject({ status: 400, message: scenario.message });
+				expect(
+					await entitlementsRepo.getClassEntitlement("org-1", ent.id),
+				).toMatchObject({ status: "confirmed" });
+				expect(
+					await changeRepo.listChangeLogsForEntitlement("org-1", ent.id),
+				).toHaveLength(0);
+			}
 		});
 
 		it("handles Shopify refund failure by marking refund event as failed", async () => {
@@ -173,6 +328,7 @@ describe("DropTransferService", () => {
 			});
 
 			const mockShopifyRefund: ShopifyRefundProvider = {
+				supportsLineTargetedRefund: true,
 				createRefund: async () => {
 					throw new Error("Shopify gateway error");
 				},
@@ -284,6 +440,7 @@ describe("DropTransferService", () => {
 
 			let shopifyCalled = false;
 			const mockShopifyRefund: ShopifyRefundProvider = {
+				supportsLineTargetedRefund: true,
 				createRefund: async () => {
 					shopifyCalled = true;
 					return { id: "gid://shopify/Refund/500" };
@@ -335,6 +492,7 @@ describe("DropTransferService", () => {
 
 			let shopifyCalled = false;
 			const mockShopifyRefund: ShopifyRefundProvider = {
+				supportsLineTargetedRefund: true,
 				createRefund: async () => {
 					shopifyCalled = true;
 					return { id: "gid://shopify/Refund/501" };
@@ -427,6 +585,7 @@ describe("DropTransferService", () => {
 
 			let shopifyRefundCalls = 0;
 			const mockShopifyRefund: ShopifyRefundProvider = {
+				supportsLineTargetedRefund: true,
 				createRefund: async (params) => {
 					shopifyRefundCalls++;
 					expect(params.orderId).toBe("gid://shopify/Order/777");

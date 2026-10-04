@@ -77,7 +77,11 @@ export interface CheckoutResult {
 export interface RefundRequest {
 	orderId: string;
 	paymentIntentId: string;
+	/** Required by line-targeted refund providers; legacy order-level callers omit it. */
+	shopifyOrderLineId?: string;
 	amountCents: number;
+	/** The historical paid currency for a line-targeted refund. */
+	currency?: string;
 	reason: string;
 }
 

@@ -97,17 +97,21 @@ export type ClassCapacityResolver =
 	| Record<string, number | { capacity: number }>;
 
 export interface ShopifyRefundProvider {
-	createRefund(
-		refund:
-			| RefundRequest
-			| {
-					orderId: string;
-					paymentIntentId?: string;
-					amountCents?: number;
-					reason?: string;
-					[key: string]: unknown;
-			  },
-	): Promise<{ id: string; providerMode?: string }>;
+	/**
+	 * Explicit opt-in: the provider can refund exactly one Shopify order line.
+	 * Order-level providers, including the legacy ShopifyAdminClient, must not
+	 * be called from the class-registration drop flow.
+	 */
+	supportsLineTargetedRefund: true;
+	createRefund(refund: ShopifyLineTargetedRefundRequest): Promise<{
+		id: string;
+		providerMode?: string;
+	}>;
+}
+
+export interface ShopifyLineTargetedRefundRequest extends RefundRequest {
+	shopifyOrderLineId: string;
+	currency: string;
 }
 
 export interface DropTransferServiceOptions {
@@ -277,6 +281,18 @@ export class DropTransferService {
 		return this.entitlements;
 	}
 
+	private supportsLineTargetedRefund(
+		provider: ShopifyAdminClient | ShopifyRefundProvider | null | undefined,
+	): provider is ShopifyRefundProvider {
+		return (
+			provider !== null &&
+			provider !== undefined &&
+			"supportsLineTargetedRefund" in provider &&
+			provider.supportsLineTargetedRefund === true &&
+			typeof provider.createRefund === "function"
+		);
+	}
+
 	async getEntitlement(
 		classEntitlementId: string,
 		organizationId?: string,
@@ -300,6 +316,32 @@ export class DropTransferService {
 		return null;
 	}
 
+	private resolveRequestedRefundAmountCents(
+		entitlement: ClassEntitlement,
+		requestedAmountCents: number | null | undefined,
+	): number {
+		if (requestedAmountCents === undefined || requestedAmountCents === null) {
+			return entitlement.paidAmountCents;
+		}
+		if (
+			!Number.isSafeInteger(requestedAmountCents) ||
+			requestedAmountCents <= 0
+		) {
+			throw new AppError("Refund amount must be a positive integer.", 400);
+		}
+		if (
+			!Number.isSafeInteger(entitlement.paidAmountCents) ||
+			entitlement.paidAmountCents <= 0 ||
+			requestedAmountCents > entitlement.paidAmountCents
+		) {
+			throw new AppError(
+				"Refund amount cannot exceed the paid registration amount.",
+				400,
+			);
+		}
+		return requestedAmountCents;
+	}
+
 	private async processDropRefund(input: {
 		organizationId: string;
 		changeLogId: string;
@@ -309,13 +351,14 @@ export class DropTransferService {
 		reason?: string | null;
 	}): Promise<RefundEvent> {
 		const { organizationId, changeLogId, entitlement } = input;
-		const amountCents =
-			input.refundAmountCents !== undefined && input.refundAmountCents !== null
-				? input.refundAmountCents
-				: entitlement.paidAmountCents;
+		const amountCents = this.resolveRequestedRefundAmountCents(
+			entitlement,
+			input.refundAmountCents,
+		);
 		const currency = entitlement.paidCurrencyCode || "USD";
 		const refundReason =
 			input.refundReason ?? input.reason ?? "Registration dropped";
+		const hasPartialAmountRequest = amountCents !== entitlement.paidAmountCents;
 
 		const isValidAmount =
 			typeof amountCents === "number" &&
@@ -337,6 +380,7 @@ export class DropTransferService {
 				registrationChangeLogId: changeLogId,
 				classEntitlementId: entitlement.id,
 				shopifyOrderId: entitlement.shopifyOrderGid ?? null,
+				shopifyOrderLineId: entitlement.shopifyOrderLineGid ?? null,
 				amountCents: isValidAmount ? amountCents : 0,
 				currency,
 				status: "failed",
@@ -344,22 +388,38 @@ export class DropTransferService {
 			});
 		}
 
+		const configuredProvider = this.shopifyAdminClient;
+		const lineTargetedProvider = this.supportsLineTargetedRefund(
+			configuredProvider,
+		)
+			? configuredProvider
+			: null;
+		const manualReason = hasPartialAmountRequest
+			? "Manual refund required: partial class-registration refunds are not supported."
+			: !lineTargetedProvider
+				? "Manual refund required: no deterministic Shopify order-line refund provider is configured."
+				: null;
+
 		let refundEvent = await this.changes.createRefundEvent({
 			organizationId,
 			registrationChangeLogId: changeLogId,
 			classEntitlementId: entitlement.id,
 			shopifyOrderId: entitlement.shopifyOrderGid,
+			shopifyOrderLineId: entitlement.shopifyOrderLineGid,
 			amountCents,
 			currency,
 			status: "pending",
+			failureReason: manualReason,
 		});
 
-		if (this.shopifyAdminClient) {
+		if (lineTargetedProvider && !hasPartialAmountRequest) {
 			try {
-				const refundResult = await this.shopifyAdminClient.createRefund({
+				const refundResult = await lineTargetedProvider.createRefund({
 					orderId: entitlement.shopifyOrderGid,
 					paymentIntentId: entitlement.checkoutIntentId,
+					shopifyOrderLineId: entitlement.shopifyOrderLineGid,
 					amountCents,
+					currency,
 					reason: refundReason,
 				});
 				const updatedRefund = await this.changes.updateRefundEventStatus({
@@ -417,6 +477,14 @@ export class DropTransferService {
 		const actorUid = input.actorUid ?? "system";
 		const actorRole = input.actorRole ?? "customer";
 		const reason = input.reason ?? null;
+		const requestsRefund =
+			input.requestRefund === true || input.issueRefund === true;
+		if (requestsRefund) {
+			this.resolveRequestedRefundAmountCents(
+				entitlement,
+				input.refundAmountCents,
+			);
+		}
 
 		const updated = await this.entitlements.updateClassEntitlement(
 			orgId,
@@ -475,7 +543,7 @@ export class DropTransferService {
 			: [];
 
 		let refundEvent: RefundEvent | null = null;
-		if (input.requestRefund === true || input.issueRefund === true) {
+		if (requestsRefund) {
 			refundEvent = await this.processDropRefund({
 				organizationId: orgId,
 				changeLogId: changeLog.id,

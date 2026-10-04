@@ -107,6 +107,7 @@ interface ShopifyOrderLineNode {
 	variant?: { id?: string } | null;
 	quantity?: number;
 	discountedTotalSet?: ShopifyOrderMoneyNode;
+	customAttributes?: ShopifyOrderAttributeNode[];
 }
 
 interface ShopifyOrderTransactionNode {
@@ -402,6 +403,11 @@ function mapPaidOrderNode(node: ShopifyOrderNode): ShopifyPaidOrder {
 				"Shopify order line response did not include a valid quantity.",
 			);
 		}
+		if (!Array.isArray(lineItem.customAttributes)) {
+			throw new ShopifyAdminApiError(
+				"Shopify order line response was incomplete.",
+			);
+		}
 		return {
 			id: requiredOrderString(
 				lineItem.id,
@@ -423,6 +429,16 @@ function mapPaidOrderNode(node: ShopifyOrderNode): ShopifyPaidOrder {
 				lineItem.discountedTotalSet?.presentmentMoney?.currencyCode,
 				"Shopify order line response did not include a valid paid currency.",
 			),
+			customAttributes: lineItem.customAttributes.map((attribute) => ({
+				key: requiredOrderString(
+					attribute?.key,
+					"Shopify order line response included an invalid custom attribute.",
+				),
+				value: requiredOrderString(
+					attribute?.value,
+					"Shopify order line response included an invalid custom attribute.",
+				),
+			})),
 		};
 	});
 	const fullyPaidAtIso = node.fullyPaid
@@ -1189,6 +1205,10 @@ export class ShopifyAdminApiClient
 								id
 							}
 							quantity
+							customAttributes {
+								key
+								value
+							}
 							discountedTotalSet {
 								presentmentMoney {
 									amount
@@ -1337,6 +1357,10 @@ export class ShopifyAdminApiClient
 									id
 								}
 								quantity
+								customAttributes {
+									key
+									value
+								}
 								discountedTotalSet {
 									presentmentMoney {
 										amount

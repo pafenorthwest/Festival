@@ -6,9 +6,14 @@ import {
 	TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
 } from "@festival/common";
 import type {
+	CheckoutIntentLineItemRecord,
 	CheckoutIntentRecord,
 	CheckoutRepository,
 } from "../checkout/checkout-repository.js";
+import {
+	CHECKOUT_INTENT_LINE_ID_ATTRIBUTE_KEY,
+	isCanonicalUuid,
+} from "../checkout/checkout-line-helpers.js";
 import type { CustomerAccountRepository } from "../customer/customer-account-repository.js";
 import type {
 	OrganizationRepository,
@@ -176,6 +181,84 @@ function validateMultiLinePayment(
 	const expectedTotalMinor = moneyInMinorUnits(intent.amount);
 	return (
 		expectedTotalMinor !== undefined && totalPaidMinor === expectedTotalMinor
+	);
+}
+
+type CorrelatedClassOrderLine = {
+	intentLine: CheckoutIntentLineItemRecord;
+	orderLine: ShopifyPaidOrder["lineItems"][number];
+};
+
+/**
+ * Correlate class-entitlement records to Shopify paid lines by the opaque UUID
+ * written onto each checkout cart line. This deliberately treats a malformed
+ * or ambiguous identity as invalid rather than falling back to line position,
+ * product, or variant identity.
+ */
+function correlateClassOrderLines(
+	intent: CheckoutIntentRecord,
+	order: ShopifyPaidOrder,
+): CorrelatedClassOrderLine[] | undefined {
+	const intentLines = intent.lines;
+	if (
+		!intentLines ||
+		intentLines.length === 0 ||
+		order.lineItems.length !== intentLines.length
+	) {
+		return undefined;
+	}
+
+	const intentLinesById = new Map<string, CheckoutIntentLineItemRecord>();
+	for (const intentLine of intentLines) {
+		if (
+			!isCanonicalUuid(intentLine.id) ||
+			intentLinesById.has(intentLine.id)
+		) {
+			return undefined;
+		}
+		intentLinesById.set(intentLine.id, intentLine);
+	}
+
+	const correlatedLines: CorrelatedClassOrderLine[] = [];
+	const usedIntentLineIds = new Set<string>();
+	for (const orderLine of order.lineItems) {
+		const identityAttributes = orderLine.customAttributes.filter(
+			(attribute) => attribute.key === CHECKOUT_INTENT_LINE_ID_ATTRIBUTE_KEY,
+		);
+		if (identityAttributes.length !== 1) return undefined;
+
+		const intentLineId = identityAttributes[0]?.value;
+		if (!isCanonicalUuid(intentLineId)) return undefined;
+		const intentLine = intentLinesById.get(intentLineId);
+		if (!intentLine || usedIntentLineIds.has(intentLineId)) return undefined;
+
+		usedIntentLineIds.add(intentLineId);
+		correlatedLines.push({ intentLine, orderLine });
+	}
+
+	return usedIntentLineIds.size === intentLinesById.size
+		? correlatedLines
+		: undefined;
+}
+
+/**
+ * Only explicitly unmarked, pre-protocol checkout intents without persisted
+ * lines can use the historical single-line validation. An identity attribute
+ * on such an order is evidence that it belongs to the current correlation
+ * protocol, so do not silently bypass a failed mapping.
+ */
+function isLegacySingleLineClassOrder(
+	intent: CheckoutIntentRecord,
+	order: ShopifyPaidOrder,
+): boolean {
+	return (
+		intent.lineIdentityProtocol === null &&
+		Array.isArray(intent.lines) &&
+		intent.lines.length === 0 &&
+		order.lineItems.length === 1 &&
+		!order.lineItems[0]?.customAttributes.some(
+			(attribute) => attribute.key === CHECKOUT_INTENT_LINE_ID_ATTRIBUTE_KEY,
+		)
 	);
 }
 
@@ -607,9 +690,20 @@ export class ShopifyOrderProjectionService {
 		order: ShopifyPaidOrder,
 		projection: ShopifyOrderProjectionInput,
 	): Promise<ProcessingResult> {
-		const { reason, classConfig, festivalId } =
+		const {
+			reason,
+			classConfig,
+			festivalId,
+			correlatedLines,
+			legacySingleLine,
+		} =
 			await this.validateClassPurchase(delivery.organizationId, intent, order);
-		if (reason || !classConfig || !festivalId) {
+		if (
+			reason ||
+			!classConfig ||
+			!festivalId ||
+			(!correlatedLines && !legacySingleLine)
+		) {
 			const isReview =
 				reason === "intent_expired" ||
 				reason === "correlation_invalid" ||
@@ -628,6 +722,9 @@ export class ShopifyOrderProjectionService {
 			return "processed";
 		}
 		if (intent.lines && intent.lines.length > 1) {
+			if (!correlatedLines) {
+				throw new Error("Multi-line class purchase correlation is missing.");
+			}
 			await this.finalizeMultiLineClassPurchase(
 				delivery,
 				intent,
@@ -635,6 +732,7 @@ export class ShopifyOrderProjectionService {
 				projection,
 				festivalId,
 				classConfig,
+				correlatedLines,
 			);
 		} else {
 			const singleResult = await this.finalizeSingleLineClassPurchase(
@@ -644,6 +742,8 @@ export class ShopifyOrderProjectionService {
 				projection,
 				festivalId,
 				classConfig,
+				correlatedLines,
+				legacySingleLine,
 			);
 			if (singleResult) return singleResult;
 		}
@@ -662,34 +762,33 @@ export class ShopifyOrderProjectionService {
 		projection: ShopifyOrderProjectionInput,
 		festivalId: string,
 		classConfig: FestivalClassConfiguration,
+		correlatedLines: readonly CorrelatedClassOrderLine[],
 	): Promise<void> {
-		const sortedLines = [...(intent.lines ?? [])].sort(
-			(a, b) => a.lineIndex - b.lineIndex,
-		);
 		await this.finalize(
 			delivery,
 			{
 				customerId: intent.customerId,
 				checkoutIntentId: intent.id,
 				status: "approved",
-				classEntitlements: sortedLines.map((intentLine, index) => {
-					const line = order.lineItems[index];
-					const paidMinor = moneyInMinorUnits(line.paidAmount);
-					return {
-						organizationId: delivery.organizationId,
-						festivalId,
-						festivalClassId: intentLine.festivalClassId ?? classConfig.id,
-						parentCustomerId: intent.customerId,
-						childId: intentLine.childId ?? intent.childId ?? "",
-						checkoutIntentId: intent.id,
-						checkoutIntentLineId: intentLine.id,
-						shopifyOrderGid: order.id,
-						shopifyOrderLineGid: line.id,
-						paidAmountCents: Number(paidMinor ?? 0n),
-						paidCurrencyCode: line.paidCurrencyCode,
-						status: "confirmed" as const,
-					};
-				}),
+				classEntitlements: correlatedLines.map(
+					({ intentLine, orderLine }) => {
+						const paidMinor = moneyInMinorUnits(orderLine.paidAmount);
+						return {
+							organizationId: delivery.organizationId,
+							festivalId,
+							festivalClassId: intentLine.festivalClassId ?? classConfig.id,
+							parentCustomerId: intent.customerId,
+							childId: intentLine.childId ?? intent.childId ?? "",
+							checkoutIntentId: intent.id,
+							checkoutIntentLineId: intentLine.id,
+							shopifyOrderGid: order.id,
+							shopifyOrderLineGid: orderLine.id,
+							paidAmountCents: Number(paidMinor ?? 0n),
+							paidCurrencyCode: orderLine.paidCurrencyCode,
+							status: "confirmed" as const,
+						};
+					},
+				),
 			},
 			projection,
 		);
@@ -702,9 +801,14 @@ export class ShopifyOrderProjectionService {
 		projection: ShopifyOrderProjectionInput,
 		festivalId: string,
 		classConfig: FestivalClassConfiguration,
+		correlatedLines: readonly CorrelatedClassOrderLine[] | undefined,
+		legacySingleLine: boolean | undefined,
 	): Promise<ProcessingResult | undefined> {
-		const line = order.lineItems[0];
-		if (!line || !order.fullyPaidAtIso || !intent.childId) {
+		const correlatedLine = correlatedLines?.[0];
+		const orderLine =
+			correlatedLine?.orderLine ??
+			(legacySingleLine ? order.lineItems[0] : undefined);
+		if (!orderLine || !order.fullyPaidAtIso || !intent.childId) {
 			await this.finalize(
 				delivery,
 				{
@@ -717,14 +821,15 @@ export class ShopifyOrderProjectionService {
 			);
 			return "processed";
 		}
-		const paidMinor = moneyInMinorUnits(line.paidAmount);
+		const intentLine = correlatedLine?.intentLine;
+		const paidMinor = moneyInMinorUnits(orderLine.paidAmount);
 		const paidAmountCents = Number(paidMinor ?? 0n);
 		await this.finalize(
 			delivery,
 			{
 				customerId: intent.customerId,
 				checkoutIntentId: intent.id,
-				shopifyOrderLineGid: line.id,
+				shopifyOrderLineGid: orderLine.id,
 				status: "approved",
 				classEntitlement: {
 					organizationId: delivery.organizationId,
@@ -733,11 +838,11 @@ export class ShopifyOrderProjectionService {
 					parentCustomerId: intent.customerId,
 					childId: intent.childId,
 					checkoutIntentId: intent.id,
-					checkoutIntentLineId: intent.lines?.[0]?.id ?? null,
+					checkoutIntentLineId: intentLine?.id ?? null,
 					shopifyOrderGid: order.id,
-					shopifyOrderLineGid: line.id,
+					shopifyOrderLineGid: orderLine.id,
 					paidAmountCents,
-					paidCurrencyCode: line.paidCurrencyCode,
+					paidCurrencyCode: orderLine.paidCurrencyCode,
 					status: "confirmed",
 				},
 			},
@@ -754,7 +859,14 @@ export class ShopifyOrderProjectionService {
 		reason?: MembershipReasonCode;
 		classConfig?: FestivalClassConfiguration;
 		festivalId?: string;
+		correlatedLines?: CorrelatedClassOrderLine[];
+		legacySingleLine?: boolean;
 	}> {
+		const correlatedLines = correlateClassOrderLines(intent, order);
+		const legacySingleLine = isLegacySingleLineClassOrder(intent, order);
+		if (!correlatedLines && !legacySingleLine) {
+			return { reason: "correlation_invalid" };
+		}
 		if (!order.fullyPaid) return { reason: "order_not_paid" };
 		if (!order.fullyPaidAtIso) return { reason: "payment_incomplete" };
 		if (
@@ -771,9 +883,21 @@ export class ShopifyOrderProjectionService {
 			return { reason: "customer_mismatch" };
 		}
 		if (intent.lines && intent.lines.length > 1) {
-			return this.validateMultiLineClassPurchase(organizationId, intent, order);
+			if (!correlatedLines) return { reason: "correlation_invalid" };
+			return this.validateMultiLineClassPurchase(
+				organizationId,
+				intent,
+				order,
+				correlatedLines,
+			);
 		}
-		return this.validateSingleLineClassPurchase(organizationId, intent, order);
+		return this.validateSingleLineClassPurchase(
+			organizationId,
+			intent,
+			order,
+			correlatedLines,
+			legacySingleLine,
+		);
 	}
 
 	private async findActiveClassConfig(
@@ -802,10 +926,14 @@ export class ShopifyOrderProjectionService {
 		organizationId: string,
 		intent: CheckoutIntentRecord,
 		order: ShopifyPaidOrder,
+		correlatedLines: readonly CorrelatedClassOrderLine[] | undefined,
+		legacySingleLine: boolean,
 	): Promise<{
 		reason?: MembershipReasonCode;
 		classConfig?: FestivalClassConfiguration;
 		festivalId?: string;
+		correlatedLines?: CorrelatedClassOrderLine[];
+		legacySingleLine?: boolean;
 	}> {
 		if (!intent.festivalClassId || !intent.childId) {
 			return { reason: "upstream_invalid" };
@@ -823,50 +951,52 @@ export class ShopifyOrderProjectionService {
 		) {
 			return { reason: "offering_mismatch" };
 		}
+		const correlatedLine = correlatedLines?.[0];
+		const orderLine =
+			correlatedLine?.orderLine ??
+			(legacySingleLine ? order.lineItems[0] : undefined);
 		if (
-			order.lineItems.length !== 1 ||
-			order.lineItems[0]?.productGid !== intent.shopifyProductGid ||
-			order.lineItems[0]?.variantGid !== intent.shopifyVariantGid ||
-			order.lineItems[0]?.quantity !== 1
+			(!legacySingleLine &&
+				(correlatedLines?.length !== 1 || !correlatedLine)) ||
+			!orderLine ||
+			orderLine.productGid !== intent.shopifyProductGid ||
+			orderLine.variantGid !== intent.shopifyVariantGid ||
+			orderLine.quantity !== 1
 		) {
 			return { reason: "offering_mismatch" };
 		}
-		const line = order.lineItems[0];
 		if (
-			!line ||
 			order.currencyCode !== intent.currencyCode ||
 			!hasMatchingPaidMoney(
 				intent.amount,
 				intent.currencyCode,
-				line.paidAmount,
-				line.paidCurrencyCode,
+				orderLine.paidAmount,
+				orderLine.paidCurrencyCode,
 			)
 		) {
 			return { reason: "payment_mismatch" };
 		}
-		return { classConfig, festivalId };
+		return {
+			classConfig,
+			festivalId,
+			...(correlatedLines ? { correlatedLines: [...correlatedLines] } : {}),
+			...(legacySingleLine ? { legacySingleLine: true } : {}),
+		};
 	}
 
 	private async validateMultiLineClassPurchase(
 		organizationId: string,
 		intent: CheckoutIntentRecord,
 		order: ShopifyPaidOrder,
+		correlatedLines: readonly CorrelatedClassOrderLine[],
 	): Promise<{
 		reason?: MembershipReasonCode;
 		classConfig?: FestivalClassConfiguration;
 		festivalId?: string;
+		correlatedLines?: CorrelatedClassOrderLine[];
 	}> {
-		const sortedLines = [...(intent.lines ?? [])].sort(
-			(a, b) => a.lineIndex - b.lineIndex,
-		);
-		if (order.lineItems.length !== sortedLines.length) {
-			return { reason: "offering_mismatch" };
-		}
-		for (let i = 0; i < sortedLines.length; i++) {
-			const intentLine = sortedLines[i];
-			const orderLine = order.lineItems[i];
+		for (const { intentLine, orderLine } of correlatedLines) {
 			if (
-				!orderLine ||
 				orderLine.quantity !== 1 ||
 				orderLine.productGid !== intentLine.shopifyProductGid ||
 				orderLine.variantGid !== intentLine.shopifyVariantGid
@@ -878,7 +1008,7 @@ export class ShopifyOrderProjectionService {
 			return { reason: "payment_mismatch" };
 		}
 		const targetClassId =
-			intent.festivalClassId ?? sortedLines[0]?.festivalClassId;
+			intent.festivalClassId ?? correlatedLines[0]?.intentLine.festivalClassId;
 		if (!targetClassId) return { reason: "upstream_invalid" };
 		const { classConfig, festivalId } = await this.findActiveClassConfig(
 			organizationId,
@@ -887,7 +1017,7 @@ export class ShopifyOrderProjectionService {
 		if (!classConfig || !festivalId) {
 			return { reason: "offering_mismatch" };
 		}
-		return { classConfig, festivalId };
+		return { classConfig, festivalId, correlatedLines: [...correlatedLines] };
 	}
 
 	private async projectConsentedCustomerProfile(

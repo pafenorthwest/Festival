@@ -603,6 +603,41 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 			expect(logs[0].reason).toBe("Medical exception");
 		});
 
+		it("POST admin drop rejects an over-limit refund without cancelling the registration", async () => {
+			const ctx = await setupTestContext();
+			const ent = await createEntitlement(ctx.entitlementsRepo, {
+				organizationId: ctx.organization.id,
+				festivalId: ctx.festival.id,
+				paidAmountCents: 5000,
+			});
+
+			const res = await ctx.adminApp.request(
+				base(ctx.festival.shortName, ent.id, "drop"),
+				{
+					method: "POST",
+					headers: {
+						Authorization: "Bearer admin",
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify({
+						refund: true,
+						refundAmountCents: 5001,
+					}),
+				},
+			);
+
+			expect(res.status).toBe(400);
+			expect((await res.json()).error).toBe(
+				"Refund amount cannot exceed the paid registration amount.",
+			);
+			expect(
+				await ctx.entitlementsRepo.getClassEntitlement(
+					ctx.organization.id,
+					ent.id,
+				),
+			).toMatchObject({ status: "confirmed" });
+		});
+
 		it("POST admin transfer transfers entitlement with reason", async () => {
 			const ctx = await setupTestContext();
 			const ent = await createEntitlement(ctx.entitlementsRepo, {

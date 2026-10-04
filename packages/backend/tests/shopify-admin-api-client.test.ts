@@ -846,6 +846,12 @@ describe("ShopifyAdminApiClient", () => {
 											product: { id: "gid://shopify/Product/1" },
 											variant: { id: "gid://shopify/ProductVariant/1" },
 											quantity: 1,
+											customAttributes: [
+												{
+													key: "festival_checkout_intent_line_id",
+													value: "line-correlation-1",
+												},
+											],
 											discountedTotalSet: {
 												presentmentMoney: {
 													amount: "125.00",
@@ -902,6 +908,12 @@ describe("ShopifyAdminApiClient", () => {
 						quantity: 1,
 						paidAmount: "125.00",
 						paidCurrencyCode: "USD",
+						customAttributes: [
+							{
+								key: "festival_checkout_intent_line_id",
+								value: "line-correlation-1",
+							},
+						],
 					},
 				],
 			},
@@ -912,12 +924,204 @@ describe("ShopifyAdminApiClient", () => {
 		});
 		expect(graphqlBody?.query).toContain("fullyPaid");
 		expect(graphqlBody?.query).toContain("discountedTotalSet");
+		expect(graphqlBody?.query.match(/customAttributes/g)?.length).toBe(2);
 		expect(graphqlBody?.query).toContain("transactions(first: 250)");
 		expect(graphqlBody?.query).toContain(
 			"customer {\n\t\t\t\t\t\tid\n\t\t\t\t\t\temail",
 		);
 		expect(graphqlBody?.query).not.toContain("phone");
 		expect(graphqlBody?.query).not.toContain("shippingAddress");
+	});
+
+	it("reads paid-order list line correlation attributes with the same strict projection", async () => {
+		let graphqlBody: {
+			query: string;
+			variables: { first: number; query: string };
+		} | null = null;
+		const client = new ShopifyAdminApiClient({
+			now: () => Date.parse("2026-08-30T00:00:00.000Z"),
+			fetch: async (input, init) => {
+				if (input.toString().endsWith("/admin/oauth/access_token")) {
+					return Response.json({
+						access_token: "read-orders-token",
+						expires_in: 3600,
+						scope: "read_orders",
+					});
+				}
+				graphqlBody = JSON.parse(String(init?.body)) as typeof graphqlBody;
+				return Response.json({
+					data: {
+						orders: {
+							nodes: [
+								{
+									id: "gid://shopify/Order/2",
+									fullyPaid: true,
+									currencyCode: "USD",
+									customer: { id: "gid://shopify/Customer/2" },
+									customAttributes: [],
+									lineItems: {
+										nodes: [
+											{
+												id: "gid://shopify/LineItem/2",
+												product: { id: "gid://shopify/Product/2" },
+												variant: { id: "gid://shopify/ProductVariant/2" },
+												quantity: 1,
+												customAttributes: [
+													{
+														key: "festival_checkout_intent_line_id",
+														value: "line-correlation-2",
+													},
+												],
+												discountedTotalSet: {
+													presentmentMoney: {
+														amount: "75.00",
+														currencyCode: "USD",
+													},
+												},
+											},
+										],
+										pageInfo: { hasNextPage: false },
+									},
+									transactions: [
+										{
+											kind: "SALE",
+											status: "SUCCESS",
+											processedAt: "2026-08-29T18:00:00.000Z",
+										},
+									],
+								},
+							],
+							pageInfo: { hasNextPage: false },
+						},
+					},
+				});
+			},
+		});
+
+		await expect(
+			client.listPaidOrdersSince(
+				{ ...operationContext, capability: "read_orders" },
+				"2026-08-28T00:00:00.000Z",
+				1,
+			),
+		).resolves.toMatchObject({
+			value: [
+				{
+					id: "gid://shopify/Order/2",
+					lineItems: [
+						{
+							id: "gid://shopify/LineItem/2",
+							customAttributes: [
+								{
+									key: "festival_checkout_intent_line_id",
+									value: "line-correlation-2",
+								},
+							],
+						},
+					],
+				},
+			],
+		});
+		expect(graphqlBody?.variables).toEqual({
+			first: 1,
+			query: "financial_status:paid processed_at:>='2026-08-28T00:00:00.000Z'",
+		});
+		expect(graphqlBody?.query).toContain("query ListPaidOrdersSince");
+		expect(graphqlBody?.query.match(/customAttributes/g)?.length).toBe(2);
+	});
+
+	it("retains the bounded paid-order list pagination guard", async () => {
+		let call = 0;
+		const client = new ShopifyAdminApiClient({
+			now: () => Date.parse("2026-08-30T00:00:00.000Z"),
+			fetch: async () => {
+				call += 1;
+				return call === 1
+					? Response.json({
+							access_token: "read-orders-token",
+							expires_in: 3600,
+							scope: "read_orders",
+						})
+					: Response.json({
+							data: {
+								orders: {
+									nodes: [],
+									pageInfo: { hasNextPage: true },
+								},
+							},
+						});
+			},
+		});
+
+		await expect(
+			client.listPaidOrdersSince(
+				{ ...operationContext, capability: "read_orders" },
+				"2026-08-28T00:00:00.000Z",
+			),
+		).rejects.toThrow("exceeded the supported limit");
+	});
+
+	it("fails closed for incomplete or malformed paid line custom attributes", async () => {
+		for (const customAttributes of [
+			undefined,
+			null,
+			[null],
+			[{ key: "", value: "line-correlation-3" }],
+			[{ key: "festival_checkout_intent_line_id", value: "" }],
+		]) {
+			let call = 0;
+			const client = new ShopifyAdminApiClient({
+				fetch: async () => {
+					call += 1;
+					if (call === 1) {
+						return Response.json({
+							access_token: "read-orders-token",
+							expires_in: 3600,
+							scope: "read_orders",
+						});
+					}
+					return Response.json({
+						data: {
+							order: {
+								id: "gid://shopify/Order/3",
+								fullyPaid: false,
+								currencyCode: "USD",
+								customer: { id: "gid://shopify/Customer/3" },
+								customAttributes: [],
+								lineItems: {
+									nodes: [
+										{
+											id: "gid://shopify/LineItem/3",
+											product: { id: "gid://shopify/Product/3" },
+											variant: { id: "gid://shopify/ProductVariant/3" },
+											quantity: 1,
+											...(customAttributes === undefined
+												? {}
+												: { customAttributes }),
+											discountedTotalSet: {
+												presentmentMoney: {
+													amount: "0",
+													currencyCode: "USD",
+												},
+											},
+										},
+									],
+									pageInfo: { hasNextPage: false },
+								},
+								transactions: [],
+							},
+						},
+					});
+				},
+			});
+
+			await expect(
+				client.readPaidOrderByGid(
+					{ ...operationContext, capability: "read_orders" },
+					"gid://shopify/Order/3",
+				),
+			).rejects.toThrow(/line response (was incomplete|included an invalid custom attribute)/);
+		}
 	});
 
 	it("prefers the paid order shipping address for contact projection", async () => {

@@ -144,6 +144,8 @@ export interface ShopifyPaidOrderLine {
 	readonly quantity: number;
 	readonly paidAmount: string;
 	readonly paidCurrencyCode: string;
+	/** Server-only line identity attributes used to correlate paid purchases. */
+	readonly customAttributes: ShopifyOrderCustomAttribute[];
 }
 
 export interface ShopifyPaidOrder {

@@ -194,6 +194,8 @@ export interface RefundEvent {
 	registrationChangeLogId?: string | null;
 	classEntitlementId?: string | null;
 	shopifyOrderId?: string | null;
+	/** Shopify order-line GID whose historical allocation this event refunds. */
+	shopifyOrderLineId?: string | null;
 	shopifyRefundId?: string | null;
 	amountCents: number;
 	currency: string;
