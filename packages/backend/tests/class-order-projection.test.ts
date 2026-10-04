@@ -3,7 +3,10 @@ import {
 	CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL,
 	InMemoryCheckoutRepository,
 } from "../src/checkout/checkout-repository.js";
-import { InMemoryMembershipCommerceRepository } from "../src/commerce/membership-commerce-repository.js";
+import {
+	InMemoryMembershipCommerceRepository,
+	PaidLineConflictError,
+} from "../src/commerce/membership-commerce-repository.js";
 import { ShopifyOrderProjectionService } from "../src/commerce/shopify-order-projection-service.js";
 import { InMemoryCustomerAccountRepository } from "../src/customer/in-memory-customer-account-repository.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
@@ -273,14 +276,12 @@ function paidClassOrder(
 				quantity: 1,
 				paidAmount: options.paidAmount ?? "50.00",
 				paidCurrencyCode: options.paidCurrencyCode ?? "USD",
-				customAttributes:
-					options.lineCustomAttributes ??
-					[
-						{
-							key: "festival_checkout_intent_line_id",
-							value: options.intentLineId ?? SINGLE_INTENT_LINE_ID,
-						},
-					],
+				customAttributes: options.lineCustomAttributes ?? [
+					{
+						key: "festival_checkout_intent_line_id",
+						value: options.intentLineId ?? SINGLE_INTENT_LINE_ID,
+					},
+				],
 			},
 		],
 	};
@@ -386,6 +387,72 @@ describe("Class Order Projection and Entitlements", () => {
 			entitlements[0].id,
 		);
 		expect(finalCheck?.status).toBe("waitlisted");
+	});
+
+	it("records paid-line conflicts as retryable, diagnosable persistence failures", async () => {
+		const f = await fixture();
+		const order = paidClassOrder(f.intent.correlationId);
+		f.orders.values.set(order.id, order);
+		const received = await delivery(
+			f.commerce,
+			f.organization.id,
+			"webhook-paid-line-conflict",
+		);
+		f.commerce.finalizeDecision = async () => {
+			throw new PaidLineConflictError();
+		};
+
+		expect(await f.service.processDelivery(received.id)).toBe("failed");
+		const replay = await f.commerce.recordDelivery({
+			organizationId: f.organization.id,
+			shopDomain: "seattle-fest.myshopify.com",
+			webhookId: "webhook-paid-line-conflict",
+			topic: "orders/paid",
+			apiVersion: "2026-07",
+			shopifyOrderGid: order.id,
+			payloadSha256: "b".repeat(64),
+			receivedAtIso: NOW.toISOString(),
+		});
+		expect(replay).toMatchObject({
+			kind: "duplicate",
+			delivery: {
+				status: "failed",
+				failureCategory: "persistence",
+				failureStage: "projection",
+				failureCode: "paid_line_conflict",
+			},
+		});
+		expect(await f.commerce.claimDelivery(received.id)).not.toBeNull();
+	});
+
+	it("reconciles a missed paid class order through the same correlation path", async () => {
+		const f = await fixture();
+		const order = paidClassOrder(f.intent.correlationId, {
+			orderGid: "gid://shopify/Order/1001",
+			orderLineGid: "gid://shopify/LineItem/2001",
+		});
+		f.orders.values.set(order.id, order);
+		f.orders.listed.push(order);
+
+		expect(await f.service.reconcile(f.organization.id)).toEqual({
+			discoveredCount: 1,
+			processedCount: 1,
+		});
+		expect(
+			await f.commerce.listClassEntitlements({
+				organizationId: f.organization.id,
+				checkoutIntentId: f.intent.id,
+			}),
+		).toEqual([
+			expect.objectContaining({
+				checkoutIntentLineId: SINGLE_INTENT_LINE_ID,
+				shopifyOrderGid: order.id,
+				shopifyOrderLineGid: "gid://shopify/LineItem/2001",
+			}),
+		]);
+		expect(f.commerce.reconciliationRuns).toMatchObject([
+			{ status: "completed", discoveredCount: 1, processedCount: 1 },
+		]);
 	});
 
 	it("idempotently processes duplicate webhook deliveries without duplicate entitlements", async () => {
@@ -655,9 +722,7 @@ describe("Class Order Projection and Entitlements", () => {
 			{ name: "missing", attributes: [] },
 			{
 				name: "blank",
-				attributes: [
-					{ key: "festival_checkout_intent_line_id", value: "" },
-				],
+				attributes: [{ key: "festival_checkout_intent_line_id", value: "" }],
 			},
 			{
 				name: "malformed",
@@ -750,10 +815,7 @@ describe("Class Order Projection and Entitlements", () => {
 
 		expect(await f.service.processDelivery(received.id)).toBe("processed");
 		expect(
-			await f.commerce.listCustomerDecisions(
-				f.organization.id,
-				f.customer.id,
-			),
+			await f.commerce.listCustomerDecisions(f.organization.id, f.customer.id),
 		).toMatchObject([{ status: "approved" }]);
 		const entitlements = await f.commerce.listClassEntitlements({
 			organizationId: f.organization.id,
@@ -801,16 +863,13 @@ describe("Class Order Projection and Entitlements", () => {
 			}),
 		).toHaveLength(0);
 		expect(
-			await f.commerce.listCustomerDecisions(
-				f.organization.id,
-				f.customer.id,
-			),
+			await f.commerce.listCustomerDecisions(f.organization.id, f.customer.id),
 		).toMatchObject([
 			{ status: "needs_review", reasonCode: "correlation_invalid" },
 		]);
 	});
 
-	it("correlates reordered multi-line paid orders into their matching class entitlements", async () => {
+	it("correlates reordered multi-line paid orders with shifted discounts into their matching class entitlements", async () => {
 		const f = await fixture();
 		const classConfig2 = await f.organizations.createFestivalClassConfiguration(
 			{
@@ -914,7 +973,7 @@ describe("Class Order Projection and Entitlements", () => {
 					productGid: classConfig2.shopifyProductGid,
 					variantGid: classConfig2.shopifyVariantGid,
 					quantity: 1,
-					paidAmount: "40.00",
+					paidAmount: "45.00",
 					paidCurrencyCode: "USD",
 					customAttributes: [
 						{
@@ -928,7 +987,7 @@ describe("Class Order Projection and Entitlements", () => {
 					productGid: f.classConfig.shopifyProductGid,
 					variantGid: f.classConfig.shopifyVariantGid,
 					quantity: 1,
-					paidAmount: "50.00",
+					paidAmount: "45.00",
 					paidCurrencyCode: "USD",
 					customAttributes: [
 						{
@@ -965,7 +1024,7 @@ describe("Class Order Projection and Entitlements", () => {
 					shopifyOrderGid: multiOrder.id,
 					shopifyOrderLineGid: "gid://shopify/LineItem/2001",
 					checkoutIntentLineId: intentLine0.id,
-					paidAmountCents: 5000,
+					paidAmountCents: 4500,
 					paidCurrencyCode: "USD",
 					status: "confirmed",
 				}),
@@ -977,9 +1036,154 @@ describe("Class Order Projection and Entitlements", () => {
 					shopifyOrderGid: multiOrder.id,
 					shopifyOrderLineGid: "gid://shopify/LineItem/2002",
 					checkoutIntentLineId: intentLine1.id,
-					paidAmountCents: 4000,
+					paidAmountCents: 4500,
 					paidCurrencyCode: "USD",
 					status: "confirmed",
+				}),
+			]),
+		);
+	});
+
+	it("correlates duplicate product and variant lines to their distinct children by durable line ID", async () => {
+		const f = await fixture();
+		const { customer: multiCustomer } = await f.customers.createCustomerSession(
+			{
+				sessionId: "duplicate-variant-session",
+				organizationId: f.organization.id,
+				shopifyCustomerGid: "gid://shopify/Customer/503",
+				encryptedTokens: "opaque",
+				csrfToken: "csrf",
+				integrationVersion: 1,
+				createdAtIso: NOW.toISOString(),
+				lastSeenAtIso: NOW.toISOString(),
+				expiresAtIso: "2030-01-01T00:00:00.000Z",
+			},
+		);
+		const child = await f.customers.createChild({
+			organizationId: f.organization.id,
+			parentCustomerId: multiCustomer.id,
+			displayName: "Alice Violinist",
+			createdAtIso: NOW.toISOString(),
+		});
+		const child2 = await f.customers.createChild({
+			organizationId: f.organization.id,
+			parentCustomerId: multiCustomer.id,
+			displayName: "Bob Violinist",
+			createdAtIso: NOW.toISOString(),
+		});
+		const duplicateIntent = await f.checkout.createIntent({
+			organizationId: f.organization.id,
+			customerId: multiCustomer.id,
+			sessionId: "duplicate-variant-session",
+			idempotencyKey: "duplicate-variant-class-intent",
+			intentType: "class_entry",
+			festivalClassId: f.classConfig.id,
+			childId: child.id,
+			shopifyProductGid: f.classConfig.shopifyProductGid,
+			shopifyVariantGid: f.classConfig.shopifyVariantGid,
+			amount: "100.00",
+			currencyCode: "USD",
+			expiresAtIso: "2030-01-01T00:00:00.000Z",
+			lines: [
+				{
+					lineType: "class_entry",
+					lineIndex: 0,
+					festivalClassId: f.classConfig.id,
+					childId: child.id,
+					shopifyProductGid: f.classConfig.shopifyProductGid,
+					shopifyVariantGid: f.classConfig.shopifyVariantGid,
+					amount: "50.00",
+					currencyCode: "USD",
+				},
+				{
+					lineType: "class_entry",
+					lineIndex: 1,
+					festivalClassId: f.classConfig.id,
+					childId: child2.id,
+					shopifyProductGid: f.classConfig.shopifyProductGid,
+					shopifyVariantGid: f.classConfig.shopifyVariantGid,
+					amount: "50.00",
+					currencyCode: "USD",
+				},
+			],
+		});
+		if (duplicateIntent.kind !== "created") {
+			throw new Error("Expected duplicate-variant intent to be created");
+		}
+		const [intentLine0, intentLine1] = duplicateIntent.intent.lines ?? [];
+		if (!intentLine0 || !intentLine1) {
+			throw new Error("Expected two duplicate-variant intent lines");
+		}
+
+		const order: ShopifyPaidOrder = {
+			id: "gid://shopify/Order/2005",
+			customerGid: "gid://shopify/Customer/503",
+			customerEmail: "parent@example.test",
+			fullyPaid: true,
+			fullyPaidAtIso: "2026-09-21T17:30:00.000Z",
+			currencyCode: "USD",
+			customAttributes: [
+				{
+					key: "festival_checkout_intent_id",
+					value: duplicateIntent.intent.correlationId,
+				},
+			],
+			lineItems: [
+				{
+					id: "gid://shopify/LineItem/2006",
+					productGid: f.classConfig.shopifyProductGid,
+					variantGid: f.classConfig.shopifyVariantGid,
+					quantity: 1,
+					paidAmount: "50.00",
+					paidCurrencyCode: "USD",
+					customAttributes: [
+						{
+							key: "festival_checkout_intent_line_id",
+							value: intentLine1.id,
+						},
+					],
+				},
+				{
+					id: "gid://shopify/LineItem/2007",
+					productGid: f.classConfig.shopifyProductGid,
+					variantGid: f.classConfig.shopifyVariantGid,
+					quantity: 1,
+					paidAmount: "50.00",
+					paidCurrencyCode: "USD",
+					customAttributes: [
+						{
+							key: "festival_checkout_intent_line_id",
+							value: intentLine0.id,
+						},
+					],
+				},
+			],
+		};
+		f.orders.values.set(order.id, order);
+		const received = await delivery(
+			f.commerce,
+			f.organization.id,
+			"webhook-duplicate-variant-lines",
+			order.id,
+		);
+
+		expect(await f.service.processDelivery(received.id)).toBe("processed");
+		expect(
+			await f.commerce.listClassEntitlements({
+				organizationId: f.organization.id,
+				checkoutIntentId: duplicateIntent.intent.id,
+			}),
+		).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					childId: child.id,
+					checkoutIntentLineId: intentLine0.id,
+					shopifyOrderLineGid: "gid://shopify/LineItem/2007",
+				}),
+				expect.objectContaining({
+					childId: child2.id,
+					checkoutIntentLineId: intentLine1.id,
+					shopifyOrderLineGid: "gid://shopify/LineItem/2006",
 				}),
 			]),
 		);

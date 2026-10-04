@@ -4,26 +4,58 @@ BEGIN;
 -- constraints ambiguous. This migration never relinks, removes, or infers
 -- paid-line identities.
 DO $$
+DECLARE
+    duplicate_intent_line_conflicts text;
+    duplicate_entitlement_line_conflicts text;
 BEGIN
-    IF EXISTS (
-        SELECT 1
+    SELECT string_agg(
+        format(
+            'checkout_intent_id=%s, line_index=%s, count=%s',
+            checkout_intent_id,
+            line_index,
+            row_count
+        ),
+        E'\n'
+        ORDER BY checkout_intent_id, line_index
+    )
+    INTO duplicate_intent_line_conflicts
+    FROM (
+        SELECT checkout_intent_id, line_index, COUNT(*) AS row_count
         FROM orgs.checkout_intent_lines
         GROUP BY checkout_intent_id, line_index
         HAVING COUNT(*) > 1
-    ) THEN
+    ) AS conflicts;
+
+    IF duplicate_intent_line_conflicts IS NOT NULL THEN
         RAISE EXCEPTION
-            'Cannot enforce checkout_intent_lines (checkout_intent_id, line_index) uniqueness: duplicate rows exist.';
+            'Cannot enforce checkout_intent_lines (checkout_intent_id, line_index) uniqueness: duplicate rows exist.'
+            USING DETAIL = duplicate_intent_line_conflicts,
+                  HINT = 'Resolve the listed duplicate intent-line rows before retrying this migration.';
     END IF;
 
-    IF EXISTS (
-        SELECT 1
+    SELECT string_agg(
+        format(
+            'checkout_intent_line_id=%s, count=%s',
+            checkout_intent_line_id,
+            row_count
+        ),
+        E'\n'
+        ORDER BY checkout_intent_line_id
+    )
+    INTO duplicate_entitlement_line_conflicts
+    FROM (
+        SELECT checkout_intent_line_id, COUNT(*) AS row_count
         FROM orgs.class_entitlements
         WHERE checkout_intent_line_id IS NOT NULL
         GROUP BY checkout_intent_line_id
         HAVING COUNT(*) > 1
-    ) THEN
+    ) AS conflicts;
+
+    IF duplicate_entitlement_line_conflicts IS NOT NULL THEN
         RAISE EXCEPTION
-            'Cannot enforce class_entitlements checkout_intent_line_id uniqueness: duplicate rows exist.';
+            'Cannot enforce class_entitlements checkout_intent_line_id uniqueness: duplicate rows exist.'
+            USING DETAIL = duplicate_entitlement_line_conflicts,
+                  HINT = 'Resolve the listed duplicate entitlement-line rows before retrying this migration.';
     END IF;
 END
 $$;

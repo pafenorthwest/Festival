@@ -148,6 +148,36 @@ describe("membership commerce repository", () => {
 		).toBe(false);
 	});
 
+	it("rejects a conflicting paid-order-line replay without replacing its association", async () => {
+		const organizations = new InMemoryOrganizationRepository();
+		const commerce = new InMemoryMembershipCommerceRepository(organizations);
+		const input = {
+			organizationId: "organization",
+			festivalId: "festival",
+			festivalClassId: "class-1",
+			parentCustomerId: "customer",
+			childId: "child-1",
+			checkoutIntentId: "checkout-intent",
+			checkoutIntentLineId: "intent-line-1",
+			shopifyOrderGid: "gid://shopify/Order/500",
+			shopifyOrderLineGid: "gid://shopify/LineItem/500-1",
+			paidAmountCents: 5000,
+			paidCurrencyCode: "USD",
+			status: "confirmed" as const,
+		};
+
+		const created = await commerce.createClassEntitlement(input);
+		await expect(
+			commerce.createClassEntitlement({ ...input, childId: "child-2" }),
+		).rejects.toThrow("paid-line conflict");
+		expect(
+			await commerce.findClassEntitlementByOrderLine(
+				input.organizationId,
+				input.shopifyOrderLineGid,
+			),
+		).toMatchObject({ id: created.id, childId: "child-1" });
+	});
+
 	it("rolls back every class entitlement when a later multi-line link fails", async () => {
 		let now = new Date("2026-09-21T18:00:00.000Z");
 		const organizations = new InMemoryOrganizationRepository();

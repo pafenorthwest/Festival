@@ -40,6 +40,45 @@ function supportsRegistrationMetadataEntitlementLinkRollback(
 	);
 }
 
+function classEntitlementMatchesInput(
+	existing: ClassEntitlement,
+	input: CreateClassEntitlementInput,
+) {
+	return (
+		existing.organizationId === input.organizationId &&
+		existing.festivalId === input.festivalId &&
+		existing.festivalClassId === input.festivalClassId &&
+		existing.parentCustomerId === input.parentCustomerId &&
+		existing.childId === input.childId &&
+		existing.checkoutIntentId === input.checkoutIntentId &&
+		existing.checkoutIntentLineId === (input.checkoutIntentLineId ?? null) &&
+		existing.shopifyOrderGid === input.shopifyOrderGid &&
+		existing.shopifyOrderLineGid === input.shopifyOrderLineGid &&
+		existing.paidAmountCents === input.paidAmountCents &&
+		existing.paidCurrencyCode === input.paidCurrencyCode &&
+		existing.status === (input.status ?? "confirmed")
+	);
+}
+
+/** A replay attempted to associate a paid Shopify line with different facts. */
+export class PaidLineConflictError extends Error {
+	constructor() {
+		super(
+			"Class entitlement paid-line conflict does not match the existing association.",
+		);
+		this.name = "PaidLineConflictError";
+	}
+}
+
+function assertMatchingClassEntitlementReplay(
+	existing: ClassEntitlement,
+	input: CreateClassEntitlementInput,
+) {
+	if (!classEntitlementMatchesInput(existing, input)) {
+		throw new PaidLineConflictError();
+	}
+}
+
 export const MEMBERSHIP_DECISION_STATUSES = [
 	"pending_validation",
 	"approved",
@@ -83,6 +122,7 @@ export interface ShopifyWebhookDelivery {
 		| "shopify_upstream"
 		| "shopify_transport"
 		| "invalid_data"
+		| "paid_line_conflict"
 		| "persistence"
 		| "unexpected";
 	shopifyRequestId?: string;
@@ -160,6 +200,7 @@ export interface MembershipCommerceRepository {
 				| "shopify_upstream"
 				| "shopify_transport"
 				| "invalid_data"
+				| "paid_line_conflict"
 				| "persistence"
 				| "unexpected";
 			requestId?: string;
@@ -326,6 +367,7 @@ export class InMemoryMembershipCommerceRepository
 				| "shopify_upstream"
 				| "shopify_transport"
 				| "invalid_data"
+				| "paid_line_conflict"
 				| "persistence"
 				| "unexpected";
 			requestId?: string;
@@ -628,12 +670,19 @@ export class InMemoryMembershipCommerceRepository
 		const existing = this.decisions.get(orderKey);
 		if (existing && existing.status !== "pending_validation") {
 			const existingClasses = await Promise.all(
-				classEntitlementInputs.map((classEntitlement) =>
-					this.findClassEntitlementByOrderLine(
+				classEntitlementInputs.map(async (classEntitlement) => {
+					const existingClass = await this.findClassEntitlementByOrderLine(
 						input.decision.organizationId,
 						classEntitlement.shopifyOrderLineGid,
-					),
-				),
+					);
+					if (existingClass) {
+						assertMatchingClassEntitlementReplay(
+							existingClass,
+							classEntitlement,
+						);
+					}
+					return existingClass;
+				}),
 			);
 			if (
 				classEntitlementInputs.length === 0 ||
@@ -857,7 +906,10 @@ export class InMemoryMembershipCommerceRepository
 		const existingLineId = this.classEntitlementsByLine.get(lineKey);
 		if (existingLineId) {
 			const existing = this.classEntitlements.get(existingLineId);
-			if (existing) return { ...existing };
+			if (existing) {
+				assertMatchingClassEntitlementReplay(existing, input);
+				return { ...existing };
+			}
 		}
 		const id = input.id ?? randomUUID();
 		const nowIso = this.now().toISOString();

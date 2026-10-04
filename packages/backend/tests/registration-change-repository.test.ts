@@ -151,9 +151,7 @@ describe("RegistrationChangeRepository", () => {
 			const retrieved = await repo.getRefundEvent("org-1", refund.id);
 			expect(retrieved).not.toBeNull();
 			expect(retrieved?.id).toBe(refund.id);
-			expect(retrieved?.shopifyOrderLineId).toBe(
-				"gid://shopify/LineItem/1",
-			);
+			expect(retrieved?.shopifyOrderLineId).toBe("gid://shopify/LineItem/1");
 
 			const retrievedWithoutOrg = await repo.getRefundEvent(refund.id);
 			expect(retrievedWithoutOrg?.id).toBe(refund.id);

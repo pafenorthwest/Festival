@@ -26,6 +26,7 @@ import type {
 	ShopifyOrderProjectionInput,
 	ShopifyWebhookDelivery,
 } from "./membership-commerce-repository.js";
+import { PaidLineConflictError } from "./membership-commerce-repository.js";
 
 function schemaName(value: string) {
 	if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(value))
@@ -141,6 +142,35 @@ function classEntitlementFromRow(
 	};
 }
 
+function classEntitlementMatchesInput(
+	existing: ClassEntitlement,
+	input: CreateClassEntitlementInput,
+) {
+	return (
+		existing.organizationId === input.organizationId &&
+		existing.festivalId === input.festivalId &&
+		existing.festivalClassId === input.festivalClassId &&
+		existing.parentCustomerId === input.parentCustomerId &&
+		existing.childId === input.childId &&
+		existing.checkoutIntentId === input.checkoutIntentId &&
+		existing.checkoutIntentLineId === (input.checkoutIntentLineId ?? null) &&
+		existing.shopifyOrderGid === input.shopifyOrderGid &&
+		existing.shopifyOrderLineGid === input.shopifyOrderLineGid &&
+		existing.paidAmountCents === input.paidAmountCents &&
+		existing.paidCurrencyCode === input.paidCurrencyCode &&
+		existing.status === (input.status ?? "confirmed")
+	);
+}
+
+function assertMatchingClassEntitlementReplay(
+	existing: ClassEntitlement,
+	input: CreateClassEntitlementInput,
+) {
+	if (!classEntitlementMatchesInput(existing, input)) {
+		throw new PaidLineConflictError();
+	}
+}
+
 export class PostgresMembershipCommerceRepository
 	implements MembershipCommerceRepository
 {
@@ -213,6 +243,7 @@ export class PostgresMembershipCommerceRepository
 				| "shopify_upstream"
 				| "shopify_transport"
 				| "invalid_data"
+				| "paid_line_conflict"
 				| "persistence"
 				| "unexpected";
 			requestId?: string;
@@ -415,12 +446,25 @@ export class PostgresMembershipCommerceRepository
 			)) as Array<Record<string, unknown>>;
 			if (existingRows[0] && existingRows[0].status !== "pending_validation") {
 				const existingClasses = await Promise.all(
-					classEntitlementInputs.map((classEntitlement) =>
-						this.findClassEntitlementByOrderLine(
-							input.decision.organizationId,
-							classEntitlement.shopifyOrderLineGid,
-						),
-					),
+					classEntitlementInputs.map(async (classEntitlement) => {
+						const rows = (await tx.unsafe(
+							`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text
+							FROM ${this.schema}.class_entitlements
+							WHERE organization_id = $1 AND shopify_order_line_gid = $2
+							FOR UPDATE`,
+							[
+								input.decision.organizationId,
+								classEntitlement.shopifyOrderLineGid,
+							],
+						)) as Array<Record<string, unknown>>;
+						if (!rows[0]) return null;
+						const existingClass = classEntitlementFromRow(rows[0]);
+						assertMatchingClassEntitlementReplay(
+							existingClass,
+							classEntitlement,
+						);
+						return existingClass;
+					}),
 				);
 				if (
 					classEntitlementInputs.length === 0 ||
@@ -652,11 +696,11 @@ export class PostgresMembershipCommerceRepository
 			const createdClassEntitlements: ClassEntitlement[] = [];
 			for (const classEntitlementInput of classEntitlementInputs) {
 				const entitlementId = classEntitlementInput.id ?? randomUUID();
-				const entitlementRows = (await tx.unsafe(
+				const insertedEntitlementRows = (await tx.unsafe(
 					`INSERT INTO ${this.schema}.class_entitlements (
 						id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at, updated_at
 					) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW(),NOW())
-					ON CONFLICT (organization_id, shopify_order_line_gid) DO UPDATE SET updated_at = ${this.schema}.class_entitlements.updated_at
+					ON CONFLICT (organization_id, shopify_order_line_gid) DO NOTHING
 					RETURNING id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text`,
 					[
 						entitlementId,
@@ -674,28 +718,50 @@ export class PostgresMembershipCommerceRepository
 						classEntitlementInput.status ?? "confirmed",
 					],
 				)) as Array<Record<string, unknown>>;
-				if (entitlementRows[0]) {
-					const createdClassEntitlement = classEntitlementFromRow(
-						entitlementRows[0],
-					);
-					createdClassEntitlements.push(createdClassEntitlement);
-					if (classEntitlementInput.checkoutIntentLineId) {
-						await tx.unsafe(
-							`UPDATE ${this.schema}.registration_metadata SET class_entitlement_id = $1 WHERE checkout_intent_line_id = $2`,
-							[
-								createdClassEntitlement.id,
-								classEntitlementInput.checkoutIntentLineId,
-							],
-						);
-					} else {
-						await tx.unsafe(
-							`UPDATE ${this.schema}.registration_metadata SET class_entitlement_id = $1 WHERE checkout_intent_id = $2`,
-							[
-								createdClassEntitlement.id,
-								classEntitlementInput.checkoutIntentId,
-							],
+				let createdClassEntitlement = insertedEntitlementRows[0]
+					? classEntitlementFromRow(insertedEntitlementRows[0])
+					: undefined;
+				if (!createdClassEntitlement) {
+					const existingEntitlementRows = (await tx.unsafe(
+						`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text
+						FROM ${this.schema}.class_entitlements
+						WHERE organization_id = $1 AND shopify_order_line_gid = $2
+						FOR UPDATE`,
+						[
+							classEntitlementInput.organizationId,
+							classEntitlementInput.shopifyOrderLineGid,
+						],
+					)) as Array<Record<string, unknown>>;
+					if (!existingEntitlementRows[0]) {
+						throw new Error(
+							"Class entitlement paid-line conflict could not be read.",
 						);
 					}
+					createdClassEntitlement = classEntitlementFromRow(
+						existingEntitlementRows[0],
+					);
+					assertMatchingClassEntitlementReplay(
+						createdClassEntitlement,
+						classEntitlementInput,
+					);
+				}
+				createdClassEntitlements.push(createdClassEntitlement);
+				if (classEntitlementInput.checkoutIntentLineId) {
+					await tx.unsafe(
+						`UPDATE ${this.schema}.registration_metadata SET class_entitlement_id = $1 WHERE checkout_intent_line_id = $2`,
+						[
+							createdClassEntitlement.id,
+							classEntitlementInput.checkoutIntentLineId,
+						],
+					);
+				} else {
+					await tx.unsafe(
+						`UPDATE ${this.schema}.registration_metadata SET class_entitlement_id = $1 WHERE checkout_intent_id = $2`,
+						[
+							createdClassEntitlement.id,
+							classEntitlementInput.checkoutIntentId,
+						],
+					);
 				}
 			}
 			const now = finalDecision.updatedAtIso;

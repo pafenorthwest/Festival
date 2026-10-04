@@ -5,15 +5,15 @@ import {
 	type FestivalClassConfiguration,
 	TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
 } from "@festival/common";
+import {
+	CHECKOUT_INTENT_LINE_ID_ATTRIBUTE_KEY,
+	isCanonicalUuid,
+} from "../checkout/checkout-line-helpers.js";
 import type {
 	CheckoutIntentLineItemRecord,
 	CheckoutIntentRecord,
 	CheckoutRepository,
 } from "../checkout/checkout-repository.js";
-import {
-	CHECKOUT_INTENT_LINE_ID_ATTRIBUTE_KEY,
-	isCanonicalUuid,
-} from "../checkout/checkout-line-helpers.js";
 import type { CustomerAccountRepository } from "../customer/customer-account-repository.js";
 import type {
 	OrganizationRepository,
@@ -38,6 +38,7 @@ import type {
 	ShopifyOrderProjectionInput,
 	ShopifyWebhookDelivery,
 } from "./membership-commerce-repository.js";
+import { PaidLineConflictError } from "./membership-commerce-repository.js";
 
 const CHECKOUT_INTENT_ATTRIBUTE = "festival_checkout_intent_id";
 const RECONCILIATION_OVERLAP_MS = 48 * 60 * 60 * 1_000;
@@ -111,6 +112,14 @@ function failureDiagnostic(
 			/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(error.requestId)
 				? { requestId: error.requestId }
 				: {}),
+			failedAtIso,
+		};
+	}
+	if (error instanceof PaidLineConflictError) {
+		return {
+			category: "persistence" as const,
+			stage,
+			code: "paid_line_conflict" as const,
 			failedAtIso,
 		};
 	}
@@ -210,10 +219,7 @@ function correlateClassOrderLines(
 
 	const intentLinesById = new Map<string, CheckoutIntentLineItemRecord>();
 	for (const intentLine of intentLines) {
-		if (
-			!isCanonicalUuid(intentLine.id) ||
-			intentLinesById.has(intentLine.id)
-		) {
+		if (!isCanonicalUuid(intentLine.id) || intentLinesById.has(intentLine.id)) {
 			return undefined;
 		}
 		intentLinesById.set(intentLine.id, intentLine);
@@ -365,7 +371,12 @@ export class ShopifyOrderProjectionService {
 				intent.intentType === "class_entry" || Boolean(intent.festivalClassId);
 
 			if (isClassPurchase) {
-				return this.processClassDelivery(delivery, intent, order, projection);
+				return await this.processClassDelivery(
+					delivery,
+					intent,
+					order,
+					projection,
+				);
 			}
 
 			const reason = await this.validate(
@@ -696,8 +707,11 @@ export class ShopifyOrderProjectionService {
 			festivalId,
 			correlatedLines,
 			legacySingleLine,
-		} =
-			await this.validateClassPurchase(delivery.organizationId, intent, order);
+		} = await this.validateClassPurchase(
+			delivery.organizationId,
+			intent,
+			order,
+		);
 		if (
 			reason ||
 			!classConfig ||
@@ -770,25 +784,23 @@ export class ShopifyOrderProjectionService {
 				customerId: intent.customerId,
 				checkoutIntentId: intent.id,
 				status: "approved",
-				classEntitlements: correlatedLines.map(
-					({ intentLine, orderLine }) => {
-						const paidMinor = moneyInMinorUnits(orderLine.paidAmount);
-						return {
-							organizationId: delivery.organizationId,
-							festivalId,
-							festivalClassId: intentLine.festivalClassId ?? classConfig.id,
-							parentCustomerId: intent.customerId,
-							childId: intentLine.childId ?? intent.childId ?? "",
-							checkoutIntentId: intent.id,
-							checkoutIntentLineId: intentLine.id,
-							shopifyOrderGid: order.id,
-							shopifyOrderLineGid: orderLine.id,
-							paidAmountCents: Number(paidMinor ?? 0n),
-							paidCurrencyCode: orderLine.paidCurrencyCode,
-							status: "confirmed" as const,
-						};
-					},
-				),
+				classEntitlements: correlatedLines.map(({ intentLine, orderLine }) => {
+					const paidMinor = moneyInMinorUnits(orderLine.paidAmount);
+					return {
+						organizationId: delivery.organizationId,
+						festivalId,
+						festivalClassId: intentLine.festivalClassId ?? classConfig.id,
+						parentCustomerId: intent.customerId,
+						childId: intentLine.childId ?? intent.childId ?? "",
+						checkoutIntentId: intent.id,
+						checkoutIntentLineId: intentLine.id,
+						shopifyOrderGid: order.id,
+						shopifyOrderLineGid: orderLine.id,
+						paidAmountCents: Number(paidMinor ?? 0n),
+						paidCurrencyCode: orderLine.paidCurrencyCode,
+						status: "confirmed" as const,
+					};
+				}),
 			},
 			projection,
 		);

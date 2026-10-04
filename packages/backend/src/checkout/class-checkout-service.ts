@@ -13,19 +13,20 @@ import type { MembershipCommerceRepository } from "../commerce/membership-commer
 import type { CustomerAccountRepository } from "../customer/customer-account-repository.js";
 import { AppError } from "../errors/app-error.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
+import {
+	CHECKOUT_INTENT_LINE_ID_ATTRIBUTE_KEY,
+	type ExpectedClassCheckoutIntentLine,
+	requireClassCheckoutIntentLineMapping,
+} from "./checkout-line-helpers.js";
 import type {
 	CheckoutCartRecord,
-	CheckoutIntentOutcome,
 	CheckoutIntentLineItemRecord,
+	CheckoutIntentOutcome,
 	CheckoutIntentRecord,
 	CheckoutRepository,
 	CreateCheckoutIntentLineInput,
 } from "./checkout-repository.js";
 import { CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL } from "./checkout-repository.js";
-import {
-	CHECKOUT_INTENT_LINE_ID_ATTRIBUTE_KEY,
-	requireClassCheckoutIntentLineMapping,
-} from "./checkout-line-helpers.js";
 import {
 	calculateTotalAmount,
 	resolveFestivalClassConfiguration,
@@ -537,8 +538,7 @@ export class ClassCheckoutService {
 			intentLines,
 			currencyCode,
 			expiresAtIso,
-		} =
-			params;
+		} = params;
 		const storefrontIntegration =
 			await this.organizations.getShopifyIntegration(input.organizationId);
 		if (!storefrontIntegration) {
@@ -620,9 +620,18 @@ export class ClassCheckoutService {
 		defaultIntegrationVersion: number,
 	): Promise<ClassCheckoutResult> {
 		try {
+			const expectedIntentLines: ExpectedClassCheckoutIntentLine[] =
+				validatedLines.map((line) => ({
+					festivalClassId: line.classConfig.id,
+					childId: line.child.id,
+					shopifyProductGid: line.classConfig.shopifyProductGid,
+					shopifyVariantGid: line.classConfig.shopifyVariantGid,
+					amount: line.classConfig.price,
+					currencyCode,
+				}));
 			const intentLines = requireClassCheckoutIntentLineMapping(
 				intent,
-				validatedLines.length,
+				expectedIntentLines,
 			);
 			await this.insertAllRegistrationMetadata(
 				input.organizationId,

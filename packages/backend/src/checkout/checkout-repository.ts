@@ -42,8 +42,7 @@ export interface CheckoutCartRecord {
 export type CheckoutIntentType = "membership" | "class_entry";
 
 /** Durable protocol marker for class checkout cart-line identity attributes. */
-export const CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL =
-	"class_line_identity_v1";
+export const CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL = "class_line_identity_v1";
 
 export interface CheckoutIntentLineItemRecord {
 	id: string;

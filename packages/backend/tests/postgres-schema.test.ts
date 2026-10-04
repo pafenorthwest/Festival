@@ -1,6 +1,6 @@
+import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { expect, test } from "bun:test";
 import {
 	buildCanonicalPostgresSchemaSql,
 	postgresSchemaName,
@@ -49,9 +49,7 @@ test("canonical PostgreSQL schema defines the final empty-database shape only", 
 	expect(schema).toContain(
 		"checkout_intent_lines_checkout_intent_id_line_index_key",
 	);
-	expect(schema).toContain(
-		"class_entitlements_checkout_intent_line_id_key",
-	);
+	expect(schema).toContain("class_entitlements_checkout_intent_line_id_key");
 	expect(schema).toContain("CREATE EXTENSION IF NOT EXISTS pgcrypto");
 	expect(schema).toContain("CREATE EXTENSION IF NOT EXISTS btree_gist");
 	expect(schema).toContain("EXCLUDE USING gist");
@@ -77,6 +75,10 @@ test("paid-line identity migration preflights duplicates before adding constrain
 	expect(migration).toContain("GROUP BY checkout_intent_id, line_index");
 	expect(migration).toContain("GROUP BY checkout_intent_line_id");
 	expect(migration).toContain("RAISE EXCEPTION");
+	expect(migration).toContain("checkout_intent_id=%s, line_index=%s, count=%s");
+	expect(migration).toContain("checkout_intent_line_id=%s, count=%s");
+	expect(migration).toContain("USING DETAIL");
+	expect(migration).toContain("HINT = 'Resolve the listed duplicate");
 	expect(migration).toContain("ADD COLUMN IF NOT EXISTS shopify_order_line_id");
 	expect(migration).toContain(
 		"ADD COLUMN IF NOT EXISTS line_identity_protocol",
@@ -84,9 +86,7 @@ test("paid-line identity migration preflights duplicates before adding constrain
 	expect(migration).toContain(
 		"checkout_intent_lines_checkout_intent_id_line_index_key",
 	);
-	expect(migration).toContain(
-		"class_entitlements_checkout_intent_line_id_key",
-	);
+	expect(migration).toContain("class_entitlements_checkout_intent_line_id_key");
 	expect(migration).not.toMatch(/\b(?:DELETE|UPDATE|INSERT)\b/);
 });
 

@@ -7,7 +7,6 @@ import type {
 import { sql } from "bun";
 import { initializePostgresSchema } from "../repo/postgres-schema.js";
 import { buildIntentLineRecords } from "./checkout-line-helpers.js";
-import { CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL } from "./checkout-repository.js";
 import type {
 	CheckoutCartRecord,
 	CheckoutIntentLineItemRecord,
@@ -16,7 +15,10 @@ import type {
 	CheckoutRepository,
 	CreateCheckoutIntentInput,
 } from "./checkout-repository.js";
-import { repertoireItemsFromLegacyPieces } from "./checkout-repository.js";
+import {
+	CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL,
+	repertoireItemsFromLegacyPieces,
+} from "./checkout-repository.js";
 import {
 	cartFromRow,
 	insertRepertoireSnapshot,

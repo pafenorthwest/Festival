@@ -20,6 +20,7 @@ integrationTest(
 			const festivalClassId = randomUUID();
 			const customerId = randomUUID();
 			const childId = randomUUID();
+			const child2Id = randomUUID();
 			const checkoutIntentId = randomUUID();
 			const webhookId = randomUUID();
 			const membershipId = randomUUID();
@@ -36,6 +37,8 @@ integrationTest(
 			await insertCustomer;
 			const insertChild = sql`INSERT INTO ${sql(`${schema}.festival_children`)} (id, organization_id, parent_customer_id, display_name, created_at) VALUES (${childId}, ${orgId}, ${customerId}, 'Child One', NOW())`;
 			await insertChild;
+			const insertChild2 = sql`INSERT INTO ${sql(`${schema}.festival_children`)} (id, organization_id, parent_customer_id, display_name, created_at) VALUES (${child2Id}, ${orgId}, ${customerId}, 'Child Two', NOW())`;
+			await insertChild2;
 			const insertClassSubtype = sql`INSERT INTO ${sql(`${schema}.registration_catalog_values`)} (id, organization_id, kind, display_name, normalized_name, display_order) VALUES (${subtypeId}, ${orgId}, 'class_subtype', 'Classical', 'classical', 0)`;
 			await insertClassSubtype;
 			const insertFestivalClassConfiguration = sql`INSERT INTO ${sql(`${schema}.festival_class_configurations`)} (id, organization_id, festival_id, display_name, class_subtype_id, division_id, minimum_age, maximum_age, price, maximum_performance_pieces, performance_minutes, capacity, shopify_product_gid, shopify_variant_gid) VALUES (${festivalClassId}, ${orgId}, ${festivalId}, 'Class A', ${subtypeId}, ${divisionId}, 5, 18, '50.00', 2, 10, 20, 'gid://shopify/Product/class', 'gid://shopify/ProductVariant/class')`;
@@ -141,6 +144,57 @@ integrationTest(
 			)) as Array<{ class_entitlement_id: string | null }>;
 			expect(rows).toHaveLength(1);
 			expect(rows[0]?.class_entitlement_id).toBe(entitlementId);
+
+			const replayDeliveryResult = await commerceRepo.recordDelivery({
+				organizationId: orgId,
+				shopDomain: "example.myshopify.com",
+				webhookId: randomUUID(),
+				topic: "orders/paid",
+				apiVersion: "2026-07",
+				shopifyOrderGid: "gid://shopify/Order/1",
+				payloadSha256: "b".repeat(64),
+				receivedAtIso: new Date().toISOString(),
+			});
+			if (replayDeliveryResult.kind !== "accepted") {
+				throw new Error("Expected accepted replay delivery");
+			}
+			const replayClaimed = await commerceRepo.claimDelivery(
+				replayDeliveryResult.delivery.id,
+			);
+			if (!replayClaimed) throw new Error("Expected claimed replay delivery");
+
+			await expect(
+				commerceRepo.finalizeDecision({
+					deliveryId: replayClaimed.id,
+					decision: {
+						organizationId: orgId,
+						customerId,
+						checkoutIntentId,
+						shopifyOrderGid: "gid://shopify/Order/1",
+						shopifyOrderLineGid: "gid://shopify/LineItem/1",
+						status: "approved",
+						updatedAtIso: new Date().toISOString(),
+					},
+					classEntitlement: {
+						organizationId: orgId,
+						festivalId,
+						festivalClassId,
+						parentCustomerId: customerId,
+						childId: child2Id,
+						checkoutIntentId,
+						shopifyOrderGid: "gid://shopify/Order/1",
+						shopifyOrderLineGid: "gid://shopify/LineItem/1",
+						paidAmountCents: 5000,
+						paidCurrencyCode: "USD",
+						status: "confirmed",
+					},
+				}),
+			).rejects.toThrow("paid-line conflict");
+			const replayRows = (await sql.unsafe(
+				`SELECT class_entitlement_id FROM ${schema}.registration_metadata WHERE id = $1`,
+				[metadataId],
+			)) as Array<{ class_entitlement_id: string | null }>;
+			expect(replayRows[0]?.class_entitlement_id).toBe(entitlementId);
 		} finally {
 			await sql.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
 		}

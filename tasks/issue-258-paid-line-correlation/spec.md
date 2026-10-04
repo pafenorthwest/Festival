@@ -34,10 +34,20 @@
 ## Delivery
 
 - Delivered: issue #258 paid-line correlation.
-- Exceptions: `database/postgres17-schema.sql` is a known pre-Phase-2
-  rebaseline artifact and was not updated; runtime canonical initializer and
-  forward migration are authoritative for this change; rebaseline plan governs
-  the dump.
+- Corrective pass: reviewed gaps are closed. The checkout writer now verifies
+  every durable class-line association before constructing cart attributes;
+  paid-order-line replays are accepted only when every immutable association
+  matches; conflicting associations roll back before metadata linking.
+- Paid-line conflict diagnostics: conflicting replays now fail with a typed
+  error and persist the bounded `persistence` / `paid_line_conflict` delivery
+  diagnostic. Class processing awaits the projection path so the shared retry
+  handler records that failure before returning.
+- Canonical schema: `database/postgres17-schema.sql` now includes the
+  paid-line protocol column, checkout-line/cardinality indexes, class
+  entitlements, registration change logs, and refund-event line identity.
+- Migration diagnostics: duplicate preflight errors now list each conflicting
+  identifier and count in PostgreSQL `DETAIL`, with an explicit remediation
+  `HINT`; the migration remains non-destructive.
 - Deferred work: Live Shopify rollout verification remains governed by the
   approved rollout plan.
 - Dirty-worktree decision: continue. Preflight found only this task's approved
@@ -48,10 +58,16 @@
 
 - Lint: passed — common and backend.
 - Build: passed — common and backend.
-- Tests: passed after corrective rerun — common (211 passed, 0 failed) and
-  backend (1,012 passed, 5 PostgreSQL integration skips, 0 failures). The first
-  full backend run found one partial-refund regression, which was corrected
-  before this rerun; `POSTGRES_INTEGRATION_URL` is not configured.
-- Code review: final PASS — no actionable P0–P3 findings.
+- Tests: full common (211 passed, 0 failed) and backend suites pass. Focused
+  corrective coverage includes duplicate same-variant lines, shifted discounts,
+  reconciliation parity, persistence mapping validation, migration/schema
+  parity, and conflicting paid-line replay. PostgreSQL transaction coverage is
+  present but skipped locally because `POSTGRES_INTEGRATION_URL` is not
+  configured.
+- Code review: the final fresh review identified the corrective gaps above;
+  this pass addresses each source, schema, migration, and test finding.
+- Latest targeted validation: paid-line projection/repository suites passed
+  (23 passed, 1 PostgreSQL integration skip); backend lint/build, format, and
+  diff checks passed.
 - Diff check: passed — `git diff --check`.
 - Clean merge: pending.

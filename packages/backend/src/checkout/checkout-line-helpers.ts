@@ -20,14 +20,25 @@ export function isCanonicalUuid(value: unknown): value is string {
 	return typeof value === "string" && CANONICAL_UUID_REGEX.test(value);
 }
 
+/** The server-validated values a durable class intent line must retain. */
+export interface ExpectedClassCheckoutIntentLine {
+	readonly festivalClassId: string;
+	readonly childId: string;
+	readonly shopifyProductGid: string;
+	readonly shopifyVariantGid: string;
+	readonly amount: string;
+	readonly currencyCode: string;
+}
+
 /**
  * Returns the durable checkout lines in validated-request order, or throws
  * before a cart can be emitted when persistence has violated that mapping.
  */
 export function requireClassCheckoutIntentLineMapping(
 	intent: Pick<CheckoutIntentRecord, "id" | "lines">,
-	expectedLineCount: number,
+	expectedLines: readonly ExpectedClassCheckoutIntentLine[],
 ): CheckoutIntentLineItemRecord[] {
+	const expectedLineCount = expectedLines.length;
 	const persistedLines = intent.lines;
 	if (
 		!Array.isArray(persistedLines) ||
@@ -49,6 +60,21 @@ export function requireClassCheckoutIntentLineMapping(
 			lineIds.has(line.id)
 		) {
 			throw new Error("Checkout intent line persistence is invalid.");
+		}
+		const expectedLine = expectedLines[line.lineIndex];
+		if (
+			!expectedLine ||
+			line.lineType !== "class_entry" ||
+			line.festivalClassId !== expectedLine.festivalClassId ||
+			line.childId !== expectedLine.childId ||
+			line.shopifyProductGid !== expectedLine.shopifyProductGid ||
+			line.shopifyVariantGid !== expectedLine.shopifyVariantGid ||
+			line.amount !== expectedLine.amount ||
+			line.currencyCode !== expectedLine.currencyCode
+		) {
+			throw new Error(
+				"Checkout intent line persistence does not match request.",
+			);
 		}
 		linesByIndex.set(line.lineIndex, line);
 		lineIds.add(line.id);

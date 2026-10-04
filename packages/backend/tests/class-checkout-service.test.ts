@@ -6,19 +6,20 @@ import type {
 	RepertoirePiece,
 } from "@festival/common";
 import {
+	CHECKOUT_INTENT_LINE_ID_ATTRIBUTE_KEY,
+	type ExpectedClassCheckoutIntentLine,
+	requireClassCheckoutIntentLineMapping,
+} from "../src/checkout/checkout-line-helpers.js";
+import {
+	type CheckoutIntentLineItemRecord,
 	CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL,
 	InMemoryCheckoutRepository,
-	type CheckoutIntentLineItemRecord,
 } from "../src/checkout/checkout-repository.js";
 import {
 	ClassCheckoutService,
 	type ClassCheckoutStorefront,
 	type StartClassCheckoutInput,
 } from "../src/checkout/class-checkout-service.js";
-import {
-	CHECKOUT_INTENT_LINE_ID_ATTRIBUTE_KEY,
-	requireClassCheckoutIntentLineMapping,
-} from "../src/checkout/checkout-line-helpers.js";
 import { InMemoryMembershipCommerceRepository } from "../src/commerce/membership-commerce-repository.js";
 import { InMemoryCustomerAccountRepository } from "../src/customer/in-memory-customer-account-repository.js";
 import { AppError } from "../src/errors/app-error.js";
@@ -1134,14 +1135,18 @@ describe("ClassCheckoutService", () => {
 					index === 0 ? { ...line, id: line.id.toUpperCase() } : line,
 				),
 		},
+		{
+			name: "does not match the validated child mapping",
+			corrupt: (lines: readonly CheckoutIntentLineItemRecord[]) =>
+				lines.map((line, index) =>
+					index === 0 ? { ...line, childId: "wrong-child" } : line,
+				),
+		},
 	] as const) {
 		it(`fails safely before metadata or cart creation when the durable intent ${scenario.name}`, async () => {
 			const f = await createFixture();
 			const createCartSpy = spyOn(f.storefront, "createCart");
-			const insertMetadataSpy = spyOn(
-				f.checkout,
-				"insertRegistrationMetadata",
-			);
+			const insertMetadataSpy = spyOn(f.checkout, "insertRegistrationMetadata");
 			const markFailedSpy = spyOn(f.checkout, "markFailed");
 			const originalCreateIntent = f.checkout.createIntent.bind(f.checkout);
 
@@ -1188,13 +1193,31 @@ describe("ClassCheckoutService", () => {
 				lineIndex: 1,
 			},
 		] as CheckoutIntentLineItemRecord[];
+		const expectedLines: ExpectedClassCheckoutIntentLine[] = [
+			{
+				festivalClassId: "class-1",
+				childId: "child-1",
+				shopifyProductGid: "gid://shopify/Product/1",
+				shopifyVariantGid: "gid://shopify/ProductVariant/1",
+				amount: "50.00",
+				currencyCode: "USD",
+			},
+			{
+				festivalClassId: "class-2",
+				childId: "child-2",
+				shopifyProductGid: "gid://shopify/Product/2",
+				shopifyVariantGid: "gid://shopify/ProductVariant/2",
+				amount: "50.00",
+				currencyCode: "USD",
+			},
+		];
 
 		expect(() =>
 			requireClassCheckoutIntentLineMapping(
 				{ id: checkoutIntentId, lines },
-				2,
+				expectedLines,
 			),
-		).toThrow("Checkout intent line persistence is invalid.");
+		).toThrow("Checkout intent line persistence");
 	});
 
 	it("compensates class-registration metadata write failures, marking intent failed and allowing retry", async () => {

@@ -1120,7 +1120,9 @@ describe("ShopifyAdminApiClient", () => {
 					{ ...operationContext, capability: "read_orders" },
 					"gid://shopify/Order/3",
 				),
-			).rejects.toThrow(/line response (was incomplete|included an invalid custom attribute)/);
+			).rejects.toThrow(
+				/line response (was incomplete|included an invalid custom attribute)/,
+			);
 		}
 	});
 
