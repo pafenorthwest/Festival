@@ -139,3 +139,19 @@ export function createSelectHandler(
 		for (const clear of clearSetters) clear("");
 	};
 }
+
+export function createRegistrationSelectHandlers(
+	setChild: (id: string) => void,
+	setDivision: (id: string) => void,
+	setTeacher: (id: string) => void,
+	setClass: (id: string) => void,
+	setAccompanist: (id: string) => void,
+) {
+	return {
+		onChildChange: createSelectHandler(setChild, [setClass]),
+		onDivisionChange: createSelectHandler(setDivision, [setTeacher, setClass]),
+		onTeacherChange: createSelectHandler(setTeacher, [setClass]),
+		onClassChange: createSelectHandler(setClass),
+		onAccompanistChange: createSelectHandler(setAccompanist),
+	};
+}

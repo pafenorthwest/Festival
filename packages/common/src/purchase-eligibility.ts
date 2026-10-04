@@ -48,6 +48,7 @@ export interface ProposedPurchaseLineItem {
 	teacherId?: string;
 	accompanistId?: string | null;
 	pieces?: RepertoirePiece[];
+	isCandidate?: boolean;
 }
 
 export interface ClassEligibilityResult {
@@ -429,10 +430,20 @@ function evaluateItemEligibility(
 	};
 }
 
+export function isCandidateLineItem(item: ProposedPurchaseLineItem): boolean {
+	return Boolean(
+		item.isCandidate ||
+			(typeof item.id === "string" &&
+				(item.id.startsWith("candidate:") ||
+					item.id.startsWith("candidate_") ||
+					item.id.startsWith("candidate-"))),
+	);
+}
+
 export function evaluatePurchaseEligibility(
 	input: EvaluatePurchaseEligibilityInput,
 ): EvaluatePurchaseEligibilityResponse {
-	const ctx: EvaluationContext = {
+	const baseCtx: EvaluationContext = {
 		organizationId: input.organizationId,
 		festivalId: input.festivalId,
 		isRegistrationOpen: input.isRegistrationOpen !== false,
@@ -442,17 +453,38 @@ export function evaluatePurchaseEligibility(
 		items: input.items,
 	};
 
-	const results = input.items.map((item, index) =>
-		evaluateItemEligibility(item, index, ctx),
+	if (!input.items.some(isCandidateLineItem)) {
+		const results = input.items.map((item, index) =>
+			evaluateItemEligibility(item, index, baseCtx),
+		);
+		const isEligible =
+			baseCtx.isRegistrationOpen &&
+			results.every((r) => r.reasonCode === "AVAILABLE");
+		return { isEligible, eligible: isEligible, results, items: results };
+	}
+
+	const cartItems = input.items.filter((item) => !isCandidateLineItem(item));
+	const cartCtx: EvaluationContext = { ...baseCtx, items: cartItems };
+
+	const results = input.items.map((item) => {
+		if (isCandidateLineItem(item)) {
+			const candidateCtx: EvaluationContext = {
+				...baseCtx,
+				items: [...cartItems, item],
+			};
+			return evaluateItemEligibility(item, cartItems.length, candidateCtx);
+		}
+		return evaluateItemEligibility(item, cartItems.indexOf(item), cartCtx);
+	});
+
+	const nonCandidates = results.filter(
+		(_, i) => !isCandidateLineItem(input.items[i]),
 	);
 	const isEligible =
-		ctx.isRegistrationOpen &&
-		results.every((r) => r.reasonCode === "AVAILABLE");
+		baseCtx.isRegistrationOpen &&
+		(nonCandidates.length > 0
+			? nonCandidates.every((r) => r.reasonCode === "AVAILABLE")
+			: results.every((r) => r.reasonCode === "AVAILABLE"));
 
-	return {
-		isEligible,
-		eligible: isEligible,
-		results,
-		items: results,
-	};
+	return { isEligible, eligible: isEligible, results, items: results };
 }
