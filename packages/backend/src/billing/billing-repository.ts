@@ -109,10 +109,18 @@ export interface SeedClassEntitlement {
 	organizationId: string;
 	parentCustomerId: string;
 	checkoutIntentId: string;
+	checkoutIntentLineId?: string | null;
 	shopifyOrderGid: string;
 	paidAmountCents: number;
 	paidCurrencyCode: string;
 	status: "confirmed" | "waitlisted" | "cancelled" | "revoked";
+}
+
+export interface SeedCheckoutIntentLine {
+	id: string;
+	checkoutIntentId: string;
+	amount: string;
+	currencyCode: string;
 }
 
 export interface SeedCheckoutIntent {
@@ -138,6 +146,7 @@ export class InMemoryBillingRepository implements BillingRepository {
 	private readonly orderProjections: SeedOrderProjection[] = [];
 	private readonly classEntitlements: SeedClassEntitlement[] = [];
 	private readonly checkoutIntents: SeedCheckoutIntent[] = [];
+	private readonly checkoutIntentLines: SeedCheckoutIntentLine[] = [];
 	private readonly checkoutCarts: SeedCheckoutCart[] = [];
 	private readonly seededMismatches: BillingMismatchRecord[] = [];
 
@@ -151,6 +160,10 @@ export class InMemoryBillingRepository implements BillingRepository {
 
 	seedCheckoutIntents(items: SeedCheckoutIntent[]) {
 		this.checkoutIntents.push(...items);
+	}
+
+	seedCheckoutIntentLines(items: SeedCheckoutIntentLine[]) {
+		this.checkoutIntentLines.push(...items);
 	}
 
 	seedCheckoutCarts(items: SeedCheckoutCart[]) {
@@ -383,7 +396,7 @@ export class InMemoryBillingRepository implements BillingRepository {
 			}
 		}
 
-		// 3. partial_payment: Confirmed entitlement where paidAmountCents < expected from checkout intent
+		// 3. partial_payment: Confirmed entitlement where paidAmountCents < expected from line or intent
 		for (const entitlement of this.classEntitlements) {
 			if (
 				entitlement.organizationId !== organizationId ||
@@ -396,11 +409,35 @@ export class InMemoryBillingRepository implements BillingRepository {
 					ci.organizationId === organizationId &&
 					ci.id === entitlement.checkoutIntentId,
 			);
-			if (intent?.amount) {
-				const expectedCents = Math.round(
-					Number.parseFloat(intent.amount) * 100,
+			if (!intent) continue;
+
+			let expectedAmount: string | null = null;
+			let expectedCurrency: string = intent.currencyCode ?? "USD";
+
+			if (entitlement.checkoutIntentLineId) {
+				const line = this.checkoutIntentLines.find(
+					(cil) =>
+						cil.id === entitlement.checkoutIntentLineId &&
+						cil.checkoutIntentId === entitlement.checkoutIntentId,
 				);
-				if (entitlement.paidAmountCents < expectedCents) {
+				if (line) {
+					expectedAmount = line.amount;
+					expectedCurrency = line.currencyCode ?? expectedCurrency;
+				}
+			}
+
+			if (expectedAmount === null && intent.amount) {
+				expectedAmount = intent.amount;
+			}
+
+			if (expectedAmount) {
+				const expectedCents = Math.round(
+					Number.parseFloat(expectedAmount) * 100,
+				);
+				if (
+					entitlement.paidAmountCents < expectedCents ||
+					entitlement.paidCurrencyCode !== expectedCurrency
+				) {
 					results.push({
 						id: randomUUID(),
 						organizationId,

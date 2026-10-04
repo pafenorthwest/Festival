@@ -47,6 +47,10 @@ export interface ClassEntitlementRepository {
 		organizationId: string,
 		checkoutIntentId: string,
 	): Promise<ClassEntitlement | null>;
+	findClassEntitlementByIntentLineId(
+		organizationId: string,
+		checkoutIntentLineId: string,
+	): Promise<ClassEntitlement | null>;
 	updateClassEntitlementStatus(
 		organizationId: string,
 		id: string,
@@ -71,6 +75,7 @@ export class InMemoryClassEntitlementRepository
 	private readonly entitlements = new Map<string, ClassEntitlement>();
 	private readonly byOrderLine = new Map<string, string>();
 	private readonly byIntent = new Map<string, string>();
+	private readonly byIntentLine = new Map<string, string>();
 
 	constructor(private readonly now: () => Date = () => new Date()) {}
 
@@ -80,6 +85,22 @@ export class InMemoryClassEntitlementRepository
 		input: CreateClassEntitlementInput,
 	): Promise<ClassEntitlement> {
 		assertValidClassEntitlementInput(input);
+		if (input.checkoutIntentLineId) {
+			const intentLineKey = `${input.organizationId}\u0000${input.checkoutIntentLineId}`;
+			const existingIntentLineId = this.byIntentLine.get(intentLineKey);
+			if (existingIntentLineId) {
+				const existing = this.entitlements.get(existingIntentLineId);
+				if (existing) {
+					if (existing.shopifyOrderLineGid === input.shopifyOrderLineGid) {
+						return { ...existing };
+					}
+					throw new Error(
+						"Class entitlement conflict: checkout intent line already fulfilled by a different order line.",
+					);
+				}
+			}
+		}
+
 		const lineKey = `${input.organizationId}\u0000${input.shopifyOrderLineGid}`;
 		const existingLineId = this.byOrderLine.get(lineKey);
 		if (existingLineId) {
@@ -111,6 +132,12 @@ export class InMemoryClassEntitlementRepository
 			`${input.organizationId}\u0000${input.checkoutIntentId}`,
 			id,
 		);
+		if (input.checkoutIntentLineId) {
+			this.byIntentLine.set(
+				`${input.organizationId}\u0000${input.checkoutIntentLineId}`,
+				id,
+			);
+		}
 		return { ...record };
 	}
 
@@ -169,6 +196,17 @@ export class InMemoryClassEntitlementRepository
 		checkoutIntentId: string,
 	): Promise<ClassEntitlement | null> {
 		const id = this.byIntent.get(`${organizationId}\u0000${checkoutIntentId}`);
+		if (!id) return null;
+		return this.getClassEntitlement(organizationId, id);
+	}
+
+	async findClassEntitlementByIntentLineId(
+		organizationId: string,
+		checkoutIntentLineId: string,
+	): Promise<ClassEntitlement | null> {
+		const id = this.byIntentLine.get(
+			`${organizationId}\u0000${checkoutIntentLineId}`,
+		);
 		if (!id) return null;
 		return this.getClassEntitlement(organizationId, id);
 	}
@@ -274,7 +312,7 @@ export class PostgresClassEntitlementRepository
 			`INSERT INTO ${this.schema}.class_entitlements (
 				id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at, updated_at
 			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW(),NOW())
-			ON CONFLICT (organization_id, shopify_order_line_gid) DO NOTHING
+			ON CONFLICT DO NOTHING
 			RETURNING id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text`,
 			[
 				id,
@@ -293,6 +331,22 @@ export class PostgresClassEntitlementRepository
 			],
 		)) as Array<Record<string, unknown>>;
 		if (rows[0]) return classEntitlementFromRow(rows[0]);
+
+		if (input.checkoutIntentLineId) {
+			const existingByLine = await this.findClassEntitlementByIntentLineId(
+				input.organizationId,
+				input.checkoutIntentLineId,
+			);
+			if (existingByLine) {
+				if (existingByLine.shopifyOrderLineGid === input.shopifyOrderLineGid) {
+					return existingByLine;
+				}
+				throw new Error(
+					"Class entitlement conflict: checkout intent line already fulfilled by a different order line.",
+				);
+			}
+		}
+
 		const existing = await this.findClassEntitlementByOrderLine(
 			input.organizationId,
 			input.shopifyOrderLineGid,
@@ -383,6 +437,20 @@ export class PostgresClassEntitlementRepository
 			FROM ${this.schema}.class_entitlements
 			WHERE organization_id = $1 AND checkout_intent_id = $2`,
 			[organizationId, checkoutIntentId],
+		)) as Array<Record<string, unknown>>;
+		return rows[0] ? classEntitlementFromRow(rows[0]) : null;
+	}
+
+	async findClassEntitlementByIntentLineId(
+		organizationId: string,
+		checkoutIntentLineId: string,
+	): Promise<ClassEntitlement | null> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text
+			FROM ${this.schema}.class_entitlements
+			WHERE organization_id = $1 AND checkout_intent_line_id = $2`,
+			[organizationId, checkoutIntentLineId],
 		)) as Array<Record<string, unknown>>;
 		return rows[0] ? classEntitlementFromRow(rows[0]) : null;
 	}

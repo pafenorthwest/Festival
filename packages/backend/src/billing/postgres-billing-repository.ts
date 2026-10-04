@@ -374,7 +374,7 @@ export class PostgresBillingRepository implements BillingRepository {
 			});
 		}
 
-		// 3. partial_payment: confirmed class entitlement where paid amount < checkout intent price
+		// 3. partial_payment: confirmed class entitlement where paid amount < expected price (or currency mismatch)
 		const partialPaymentRows = (await sql.unsafe(
 			`SELECT
 				ce.id as entitlement_id,
@@ -382,16 +382,23 @@ export class PostgresBillingRepository implements BillingRepository {
 				ce.shopify_order_gid,
 				ce.paid_amount_cents,
 				ce.paid_currency_code,
-				ci.amount as intent_amount
+				COALESCE(cil.amount, ci.amount) as expected_amount,
+				COALESCE(cil.currency_code, ci.currency_code) as expected_currency
 			 FROM ${this.schema}.class_entitlements ce
 			 JOIN ${this.schema}.checkout_intents ci
 				ON ci.organization_id = ce.organization_id
 				AND ci.id = ce.checkout_intent_id
+			 LEFT JOIN ${this.schema}.checkout_intent_lines cil
+				ON cil.checkout_intent_id = ce.checkout_intent_id
+				AND cil.id = ce.checkout_intent_line_id
 			 WHERE ce.organization_id = $1
 			   AND ce.status = 'confirmed'
-			   AND ci.amount IS NOT NULL
+			   AND COALESCE(cil.amount, ci.amount) IS NOT NULL
 			   AND ce.paid_amount_cents > 0
-			   AND ce.paid_amount_cents < ROUND(ci.amount::numeric * 100)`,
+			   AND (
+			       ce.paid_amount_cents < ROUND(COALESCE(cil.amount, ci.amount)::numeric * 100)
+			       OR ce.paid_currency_code <> COALESCE(cil.currency_code, ci.currency_code)
+			   )`,
 			[organizationId],
 		)) as Array<Record<string, unknown>>;
 
