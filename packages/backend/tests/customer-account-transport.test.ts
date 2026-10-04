@@ -275,6 +275,33 @@ describe("CustomerAccountTransport", () => {
 			),
 		).rejects.toThrow("too large");
 	});
+
+	it("falls back to the next DNS answer when initial address connection fails (ECONNREFUSED)", async () => {
+		const attemptedAddresses: string[] = [];
+		const transport = new CustomerAccountTransport({
+			resolver: async () => [
+				{ address: "1.1.1.1", family: 4, ttlSeconds: 60 },
+				{ address: "8.8.8.8", family: 4, ttlSeconds: 60 },
+			],
+			requester: async (_url, answer) => {
+				attemptedAddresses.push(answer.address);
+				if (answer.address === "1.1.1.1") {
+					const error = new Error("connect ECONNREFUSED 1.1.1.1:443");
+					Object.assign(error, { code: "ECONNREFUSED" });
+					throw error;
+				}
+				return raw({ success: true, connectedTo: answer.address });
+			},
+		});
+
+		const response = await transport.json(
+			new URL("https://store.example.com/api"),
+			"store.example.com",
+		);
+
+		expect(response).toEqual({ success: true, connectedTo: "8.8.8.8" });
+		expect(attemptedAddresses).toEqual(["1.1.1.1", "8.8.8.8"]);
+	});
 });
 
 describe("BoundedAsyncCache", () => {

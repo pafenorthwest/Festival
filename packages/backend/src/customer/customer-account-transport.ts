@@ -285,6 +285,28 @@ export class CustomerAccountTransport {
 		});
 	}
 
+	private async requestWithFallback(
+		url: URL,
+		lease: DnsLease,
+		init?: RequestInit,
+	): Promise<CustomerAccountRawResponse> {
+		const totalAnswers = lease.answers.length;
+		let lastError: unknown;
+		for (let attempt = 0; attempt < totalAnswers; attempt++) {
+			const index = (lease.next + attempt) % totalAnswers;
+			const answer = lease.answers[index];
+			if (!answer) continue;
+			try {
+				const response = await this.requester(url, answer, lease.agent, init);
+				lease.next = (lease.next + attempt + 1) % totalAnswers;
+				return response;
+			} catch (error) {
+				lastError = error;
+			}
+		}
+		throw lastError ?? new Error("Customer Account upstream request failed.");
+	}
+
 	async json(url: URL, configuredDomain: string, init?: RequestInit) {
 		this.assertDestination(url, configuredDomain);
 		const lease = await this.lease(url.hostname.toLowerCase());
@@ -296,9 +318,7 @@ export class CustomerAccountTransport {
 			 * body is streaming, so releasing at headers would reintroduce the rollover
 			 * race this lifecycle is designed to prevent.
 			 */
-			const answer = lease.answers[lease.next++ % lease.answers.length];
-			if (!answer) throw new Error("Unsafe Customer Account DNS response.");
-			const response = await this.requester(url, answer, lease.agent, init);
+			const response = await this.requestWithFallback(url, lease, init);
 			if (response.status < 200 || response.status >= 300) {
 				response.cancel?.();
 				throw new Error("Customer Account upstream request failed.");
