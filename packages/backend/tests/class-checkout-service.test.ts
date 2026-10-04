@@ -1484,6 +1484,7 @@ describe("ClassCheckoutService", () => {
 		const f = await createFixture();
 		const response = await f.service.evaluateEligibility({
 			organizationId: f.organization.id,
+			customerId: f.customer.id,
 			festivalId: f.festival?.id ?? "",
 			items: [
 				{
@@ -1536,6 +1537,7 @@ describe("ClassCheckoutService", () => {
 
 		const response = await f.service.evaluateEligibility({
 			organizationId: f.organization.id,
+			customerId: f.customer.id,
 			festivalId,
 			items: [
 				{
@@ -1607,6 +1609,7 @@ describe("ClassCheckoutService", () => {
 
 		const response = await f.service.evaluateEligibility({
 			organizationId: f.organization.id,
+			customerId: f.customer.id,
 			festivalId,
 			items: [
 				{
@@ -1629,6 +1632,7 @@ describe("ClassCheckoutService", () => {
 		const f = await createFixture();
 		const response = await f.service.evaluateEligibility({
 			organizationId: f.organization.id,
+			customerId: f.customer.id,
 			festivalId: f.festival?.id ?? "",
 			items: [
 				{
@@ -1644,6 +1648,172 @@ describe("ClassCheckoutService", () => {
 
 		expect(response.isEligible).toBe(false);
 		expect(response.results[1].reasonCode).toBe("ALREADY_REGISTERED");
+	});
+
+	it("evaluateEligibility successfully evaluates when all children belong to authenticated customer", async () => {
+		const f = await createFixture();
+		const secondChild = await f.customers.createChild({
+			organizationId: f.organization.id,
+			parentCustomerId: f.customer.id,
+			displayName: "Bob Smith",
+		});
+		const response = await f.service.evaluateEligibility({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			festivalId: f.festival?.id ?? "",
+			items: [
+				{
+					childId: f.child.id,
+					festivalClassId: f.classConfig.id,
+				},
+				{
+					childId: secondChild.id,
+					festivalClassId: f.classConfig.id,
+				},
+			],
+		});
+
+		expect(response.isEligible).toBe(true);
+		expect(response.results).toHaveLength(2);
+		expect(response.results[0].reasonCode).toBe("AVAILABLE");
+		expect(response.results[1].reasonCode).toBe("AVAILABLE");
+	});
+
+	it("evaluateEligibility rejects with HTTP 404 Child not found when child belongs to another customer (IDOR prevention)", async () => {
+		const f = await createFixture();
+		const { customer: otherCustomer } = await f.customers.createCustomerSession(
+			{
+				sessionId: "session-other-parent",
+				organizationId: f.organization.id,
+				shopifyCustomerGid: "gid://shopify/Customer/888",
+				encryptedTokens: "encrypted-tokens",
+				csrfToken: "csrf-token-other",
+				integrationVersion: 1,
+				createdAtIso: new Date().toISOString(),
+				lastSeenAtIso: new Date().toISOString(),
+				expiresAtIso: new Date(Date.now() + 3600_000).toISOString(),
+			},
+		);
+		const otherChild = await f.customers.createChild({
+			organizationId: f.organization.id,
+			parentCustomerId: otherCustomer.id,
+			displayName: "Charlie Other",
+		});
+
+		let entitlementsQueried = false;
+		if (f.commerce) {
+			const originalList = f.commerce.listClassEntitlements.bind(f.commerce);
+			f.commerce.listClassEntitlements = async (...args) => {
+				entitlementsQueried = true;
+				return originalList(...args);
+			};
+		}
+
+		let caughtError: unknown;
+		try {
+			await f.service.evaluateEligibility({
+				organizationId: f.organization.id,
+				customerId: f.customer.id,
+				festivalId: f.festival?.id ?? "",
+				items: [
+					{
+						childId: otherChild.id,
+						festivalClassId: f.classConfig.id,
+					},
+				],
+			});
+		} catch (err) {
+			caughtError = err;
+		}
+
+		expect(caughtError).toBeInstanceOf(AppError);
+		const appErr = caughtError as AppError;
+		expect(appErr.status).toBe(404);
+		expect(appErr.message).toBe("Child not found.");
+		expect(entitlementsQueried).toBe(false);
+	});
+
+	it("evaluateEligibility rejects with HTTP 404 Child not found when child does not exist", async () => {
+		const f = await createFixture();
+		let caughtError: unknown;
+		try {
+			await f.service.evaluateEligibility({
+				organizationId: f.organization.id,
+				customerId: f.customer.id,
+				festivalId: f.festival?.id ?? "",
+				items: [
+					{
+						childId: "nonexistent-child-id",
+						festivalClassId: f.classConfig.id,
+					},
+				],
+			});
+		} catch (err) {
+			caughtError = err;
+		}
+
+		expect(caughtError).toBeInstanceOf(AppError);
+		const appErr = caughtError as AppError;
+		expect(appErr.status).toBe(404);
+		expect(appErr.message).toBe("Child not found.");
+	});
+
+	it("evaluateEligibility fails closed with 404 and does not evaluate when 1 child is owned and 1 is unowned in multi-line request", async () => {
+		const f = await createFixture();
+		const { customer: otherCustomer } = await f.customers.createCustomerSession(
+			{
+				sessionId: "session-other-parent-2",
+				organizationId: f.organization.id,
+				shopifyCustomerGid: "gid://shopify/Customer/777",
+				encryptedTokens: "encrypted-tokens",
+				csrfToken: "csrf-token-other-2",
+				integrationVersion: 1,
+				createdAtIso: new Date().toISOString(),
+				lastSeenAtIso: new Date().toISOString(),
+				expiresAtIso: new Date(Date.now() + 3600_000).toISOString(),
+			},
+		);
+		const otherChild = await f.customers.createChild({
+			organizationId: f.organization.id,
+			parentCustomerId: otherCustomer.id,
+			displayName: "Daisy Other",
+		});
+
+		let entitlementsQueried = false;
+		if (f.commerce) {
+			const originalList = f.commerce.listClassEntitlements.bind(f.commerce);
+			f.commerce.listClassEntitlements = async (...args) => {
+				entitlementsQueried = true;
+				return originalList(...args);
+			};
+		}
+
+		let caughtError: unknown;
+		try {
+			await f.service.evaluateEligibility({
+				organizationId: f.organization.id,
+				customerId: f.customer.id,
+				festivalId: f.festival?.id ?? "",
+				items: [
+					{
+						childId: f.child.id,
+						festivalClassId: f.classConfig.id,
+					},
+					{
+						childId: otherChild.id,
+						festivalClassId: f.classConfig.id,
+					},
+				],
+			});
+		} catch (err) {
+			caughtError = err;
+		}
+
+		expect(caughtError).toBeInstanceOf(AppError);
+		const appErr = caughtError as AppError;
+		expect(appErr.status).toBe(404);
+		expect(appErr.message).toBe("Child not found.");
+		expect(entitlementsQueried).toBe(false);
 	});
 
 	it("start(...) rejects with 400 and missing_prerequisite when eligibility check fails", async () => {

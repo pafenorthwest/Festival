@@ -66,6 +66,14 @@ export interface StartClassCheckoutInput {
 	lineItems?: ClassCheckoutLineItemInput[];
 }
 
+export interface EvaluatePurchaseEligibilityInput {
+	organizationId: string;
+	customerId: string;
+	festivalId?: string;
+	festivalShortName?: string;
+	items: ProposedPurchaseLineItem[];
+}
+
 export interface ClassCheckoutResult {
 	checkoutUrl: string;
 	intentId: string;
@@ -91,12 +99,23 @@ export class ClassCheckoutService {
 		private readonly now: () => Date = () => new Date(),
 	) {}
 
-	async evaluateEligibility(input: {
-		organizationId: string;
-		festivalId?: string;
-		festivalShortName?: string;
-		items: ProposedPurchaseLineItem[];
-	}): Promise<EvaluatePurchaseEligibilityResponse> {
+	async evaluateEligibility(
+		input: EvaluatePurchaseEligibilityInput,
+	): Promise<EvaluatePurchaseEligibilityResponse> {
+		if (!input.customerId?.trim()) {
+			throw new AppError("Customer ID is required.", 400);
+		}
+		const children = await this.customers.listChildren(
+			input.organizationId,
+			input.customerId,
+		);
+		const ownedChildIds = new Set(children.map((c) => c.id));
+		for (const item of input.items) {
+			if (!ownedChildIds.has(item.childId)) {
+				throw new AppError("Child not found.", 404);
+			}
+		}
+
 		const festivals = await this.organizations.listFestivals(
 			input.organizationId,
 		);
@@ -170,6 +189,7 @@ export class ClassCheckoutService {
 		}
 		await this.checkEligibility(
 			input.organizationId,
+			input.customerId,
 			targetFestival.id,
 			lineItems,
 		);
@@ -405,11 +425,13 @@ export class ClassCheckoutService {
 
 	private async checkEligibility(
 		organizationId: string,
+		customerId: string,
 		festivalId: string,
 		lineItems: ClassCheckoutLineItemInput[],
 	): Promise<void> {
 		const eligibility = await this.evaluateEligibility({
 			organizationId,
+			customerId,
 			festivalId,
 			items: lineItems,
 		});

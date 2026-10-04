@@ -243,6 +243,7 @@ export async function handleEvaluateEligibility(
 		);
 		const result = await checkoutService.evaluateEligibility({
 			organizationId: session.organizationId,
+			customerId: session.customerId,
 			festivalShortName: c.req.param("festivalShortName"),
 			items: body.items,
 		});

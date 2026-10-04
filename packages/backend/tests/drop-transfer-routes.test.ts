@@ -844,6 +844,7 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 				authVerifier: ctx.authVerifier,
 				customerAccountService: ctx.customerAccountService,
 				classEntitlementRepository: ctx.entitlementsRepo,
+				registrationChangeRepository: ctx.changesRepo,
 			});
 
 			const custRes = await enabledApp.request(
@@ -883,6 +884,7 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 				authVerifier: ctx.authVerifier,
 				customerAccountService: ctx.customerAccountService,
 				classEntitlementRepository: ctx.entitlementsRepo,
+				registrationChangeRepository: ctx.changesRepo,
 			});
 
 			const custRes = await disabledApp.request(
