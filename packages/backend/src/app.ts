@@ -209,7 +209,9 @@ export async function createApp(options: CreateAppOptions = {}) {
 			: new InMemoryAppUserRepository());
 	await appUserRepository.ensureReady();
 	const shopifyAdminApiClient = new ShopifyAdminApiClient();
-	const shopifyMutationAuditWriter = new FileShopifyMutationAuditWriter();
+	const shopifyMutationAuditWriter = new FileShopifyMutationAuditWriter(
+		env.shopifyAdminAuditPath,
+	);
 	const shopifyLifecycleService = new ShopifyProductLifecycleService(
 		shopifyAdminApiClient,
 		shopifyMutationAuditWriter,
