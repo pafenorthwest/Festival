@@ -11,12 +11,16 @@
 - Exact server-only UUID correlation between checkout intent lines and paid
   Shopify order lines; Admin paid-order parsing; order-independent projection;
   database cardinality constraints/migration; refund-event line audit; focused
-  backend, common, schema, and migration tests.
+  backend, common, schema, and migration tests. The approved corrective scope
+  also defines the opt-in line-targeted refund provider contract: a durable
+  refund-event ID, an event-derived idempotency key, and a verified single-line
+  allocation response.
 
 ### Out of scope
 
 - No checkout UI/API redesign or new checkout POST error; no positional
-  fallback; no Shopify `write_orders` or automatic refunds; no selection,
+  fallback; no Shopify `write_orders`, live refund-provider implementation, or
+  automatic refunds without the explicit opt-in provider; no selection,
   capacity, prerequisite, or catalog changes.
 
 ## Approach
@@ -29,7 +33,7 @@
 
 - Lint: `bun run lint:common && bun run lint:backend`
 - Build: `bun run build:common && bun run build:backend`
-- Tests: `bun test packages/common/tests/entitlements.test.ts packages/backend/tests/class-checkout-service.test.ts packages/backend/tests/class-order-projection.test.ts packages/backend/tests/shopify-admin-api-client.test.ts packages/backend/tests/postgres-schema.test.ts packages/backend/tests/drop-transfer-service.test.ts packages/backend/tests/postgres-commerce-repository.test.ts`
+- Tests: `bun test packages/common/tests/entitlements.test.ts packages/common/tests/registration-drop-transfer.test.ts packages/backend/tests/class-checkout-service.test.ts packages/backend/tests/class-order-projection.test.ts packages/backend/tests/shopify-admin-api-client.test.ts packages/backend/tests/postgres-schema.test.ts packages/backend/tests/drop-transfer-service.test.ts packages/backend/tests/drop-transfer-routes.test.ts packages/backend/tests/registration-change-repository.test.ts packages/backend/tests/postgres-commerce-repository.test.ts`
 
 ## Delivery
 
@@ -42,6 +46,10 @@
   error and persist the bounded `persistence` / `paid_line_conflict` delivery
   diagnostic. Class processing awaits the projection path so the shared retry
   handler records that failure before returning.
+- Refund-provider safeguards: an opt-in provider receives the persisted refund
+  event UUID and `refund-event:<uuid>` idempotency key. Its response must echo
+  the requested order and exactly one allocation matching the order line,
+  amount, and currency; an invalid response leaves the refund event failed.
 - Canonical schema: `database/postgres17-schema.sql` now includes the
   paid-line protocol column, checkout-line/cardinality indexes, class
   entitlements, registration change logs, and refund-event line identity.
@@ -56,8 +64,8 @@
 
 ## Quality gate results
 
-- Lint: passed — common and backend.
-- Build: passed — common and backend.
+- Lint: passed — `bun run lint:common` and `bun run lint:backend`.
+- Build: passed — `bun run build:common` and `bun run build:backend`.
 - Tests: full common (211 passed, 0 failed) and backend suites pass. Focused
   corrective coverage includes duplicate same-variant lines, shifted discounts,
   reconciliation parity, persistence mapping validation, migration/schema
@@ -65,10 +73,10 @@
   second-line FK failure, verifies a full rollback and persisted delivery
   diagnostic, retries successfully, and races two replays; it passed against
   the configured local PostgreSQL instance.
-- Code review: the final fresh review identified the corrective gaps above;
-  this pass addresses each source, schema, migration, and test finding.
-- Latest targeted validation: paid-line projection/repository suites passed
-  (23 passed, 1 PostgreSQL integration skip); backend lint/build, format, and
-  diff checks passed.
+- Code review: fresh review passes with no findings after the refund-provider
+  contract correction.
+- Latest pinned validation: 222 tests across the ten specified common/backend
+  suites passed, including the PostgreSQL multi-line rollback/retry/race
+  integration test against the configured local instance. Format checks passed.
 - Diff check: passed — `git diff --check`.
 - Clean merge: pending.

@@ -103,13 +103,29 @@ export interface ShopifyRefundProvider {
 	 * be called from the class-registration drop flow.
 	 */
 	supportsLineTargetedRefund: true;
-	createRefund(refund: ShopifyLineTargetedRefundRequest): Promise<{
-		id: string;
-		providerMode?: string;
-	}>;
+	createRefund(
+		refund: ShopifyLineTargetedRefundRequest,
+	): Promise<ShopifyLineTargetedRefundResult>;
+}
+
+export interface ShopifyLineTargetedRefundResult {
+	id: string;
+	orderId: string;
+	allocations: [ShopifyLineTargetedRefundAllocation];
+	providerMode?: string;
+}
+
+export interface ShopifyLineTargetedRefundAllocation {
+	shopifyOrderLineId: string;
+	amountCents: number;
+	currency: string;
 }
 
 export interface ShopifyLineTargetedRefundRequest extends RefundRequest {
+	/** The durable refund-event UUID that owns this external operation. */
+	refundEventId: string;
+	/** Stable provider idempotency key derived only from refundEventId. */
+	idempotencyKey: string;
 	shopifyOrderLineId: string;
 	currency: string;
 }
@@ -342,6 +358,34 @@ export class DropTransferService {
 		return requestedAmountCents;
 	}
 
+	private assertVerifiedLineTargetedRefund(
+		request: ShopifyLineTargetedRefundRequest,
+		result: ShopifyLineTargetedRefundResult,
+	): void {
+		if (!result || typeof result.id !== "string" || result.id.length === 0) {
+			throw new Error("Refund provider did not return a refund ID.");
+		}
+		if (result.orderId !== request.orderId) {
+			throw new Error("Refund provider returned a different order.");
+		}
+		if (!Array.isArray(result.allocations) || result.allocations.length !== 1) {
+			throw new Error(
+				"Refund provider must return exactly one line allocation.",
+			);
+		}
+		const [allocation] = result.allocations;
+		if (
+			!allocation ||
+			allocation.shopifyOrderLineId !== request.shopifyOrderLineId ||
+			allocation.amountCents !== request.amountCents ||
+			allocation.currency !== request.currency
+		) {
+			throw new Error(
+				"Refund provider allocation does not match the requested order line.",
+			);
+		}
+	}
+
 	private async processDropRefund(input: {
 		organizationId: string;
 		changeLogId: string;
@@ -414,14 +458,19 @@ export class DropTransferService {
 
 		if (lineTargetedProvider && !hasPartialAmountRequest) {
 			try {
-				const refundResult = await lineTargetedProvider.createRefund({
+				const refundRequest: ShopifyLineTargetedRefundRequest = {
 					orderId: entitlement.shopifyOrderGid,
 					paymentIntentId: entitlement.checkoutIntentId,
+					refundEventId: refundEvent.id,
+					idempotencyKey: `refund-event:${refundEvent.id}`,
 					shopifyOrderLineId: entitlement.shopifyOrderLineGid,
 					amountCents,
 					currency,
 					reason: refundReason,
-				});
+				};
+				const refundResult =
+					await lineTargetedProvider.createRefund(refundRequest);
+				this.assertVerifiedLineTargetedRefund(refundRequest, refundResult);
 				const updatedRefund = await this.changes.updateRefundEventStatus({
 					id: refundEvent.id,
 					organizationId,

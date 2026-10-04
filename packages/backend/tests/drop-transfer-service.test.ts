@@ -125,6 +125,7 @@ describe("DropTransferService", () => {
 				status: "confirmed",
 			});
 
+			let providerRefundEventId: string | undefined;
 			const mockShopifyRefund: ShopifyRefundProvider = {
 				supportsLineTargetedRefund: true,
 				createRefund: async (params) => {
@@ -132,7 +133,23 @@ describe("DropTransferService", () => {
 					expect(params.shopifyOrderLineId).toBe("gid://shopify/LineItem/100");
 					expect(params.amountCents).toBe(6500);
 					expect(params.currency).toBe("USD");
-					return { id: "gid://shopify/Refund/999", providerMode: "mock" };
+					expect(params.refundEventId).toMatch(/^[0-9a-f-]{36}$/);
+					providerRefundEventId = params.refundEventId;
+					expect(params.idempotencyKey).toBe(
+						`refund-event:${params.refundEventId}`,
+					);
+					return {
+						id: "gid://shopify/Refund/999",
+						orderId: params.orderId,
+						allocations: [
+							{
+								shopifyOrderLineId: params.shopifyOrderLineId,
+								amountCents: params.amountCents,
+								currency: params.currency,
+							},
+						],
+						providerMode: "mock",
+					};
 				},
 			};
 
@@ -154,12 +171,63 @@ describe("DropTransferService", () => {
 			expect(result.success).toBe(true);
 			expect(result.refundEvent).toBeDefined();
 			expect(result.refundEvent?.amountCents).toBe(6500);
+			expect(result.refundEvent?.id).toBe(providerRefundEventId);
 			expect(result.refundEvent?.status).toBe("completed");
 			expect(result.refundEvent?.shopifyRefundId).toBe(
 				"gid://shopify/Refund/999",
 			);
 			expect(result.refundEvent?.shopifyOrderLineId).toBe(
 				"gid://shopify/LineItem/100",
+			);
+		});
+
+		it("marks the event failed when the provider allocation targets another line", async () => {
+			const ent = await entitlementsRepo.createClassEntitlement({
+				id: "ent-refund-mismatched-allocation",
+				organizationId: "org-1",
+				festivalId: "fest-1",
+				festivalClassId: "class-violin-1",
+				parentCustomerId: "parent-1",
+				childId: "child-1",
+				checkoutIntentId: "intent-mismatched-allocation",
+				shopifyOrderGid: "gid://shopify/Order/mismatched-allocation",
+				shopifyOrderLineGid: "gid://shopify/LineItem/mismatched-allocation",
+				paidAmountCents: 6500,
+				paidCurrencyCode: "USD",
+				status: "confirmed",
+			});
+			const provider: ShopifyRefundProvider = {
+				supportsLineTargetedRefund: true,
+				createRefund: async (params) => ({
+					id: "gid://shopify/Refund/mismatched-allocation",
+					orderId: params.orderId,
+					allocations: [
+						{
+							shopifyOrderLineId: "gid://shopify/LineItem/other",
+							amountCents: params.amountCents,
+							currency: params.currency,
+						},
+					],
+				}),
+			};
+			const service = new DropTransferService({
+				entitlements: entitlementsRepo,
+				changes: changeRepo,
+				shopifyAdminClient: provider,
+			});
+
+			const result = await service.dropRegistration({
+				classEntitlementId: ent.id,
+				organizationId: "org-1",
+				issueRefund: true,
+			});
+
+			expect(result.refundEvent).toMatchObject({
+				status: "failed",
+				shopifyRefundId: null,
+			});
+			expect(result.refundEvent?.failureReason).toContain(
+				"allocation does not match",
 			);
 		});
 
@@ -233,9 +301,19 @@ describe("DropTransferService", () => {
 			let externalCalls = 0;
 			const capableProvider: ShopifyRefundProvider = {
 				supportsLineTargetedRefund: true,
-				createRefund: async () => {
+				createRefund: async (params) => {
 					externalCalls++;
-					return { id: "gid://shopify/Refund/should-not-be-called" };
+					return {
+						id: "gid://shopify/Refund/should-not-be-called",
+						orderId: params.orderId,
+						allocations: [
+							{
+								shopifyOrderLineId: params.shopifyOrderLineId,
+								amountCents: params.amountCents,
+								currency: params.currency,
+							},
+						],
+					};
 				},
 			};
 			const service = new DropTransferService({
@@ -441,9 +519,19 @@ describe("DropTransferService", () => {
 			let shopifyCalled = false;
 			const mockShopifyRefund: ShopifyRefundProvider = {
 				supportsLineTargetedRefund: true,
-				createRefund: async () => {
+				createRefund: async (params) => {
 					shopifyCalled = true;
-					return { id: "gid://shopify/Refund/500" };
+					return {
+						id: "gid://shopify/Refund/500",
+						orderId: params.orderId,
+						allocations: [
+							{
+								shopifyOrderLineId: params.shopifyOrderLineId,
+								amountCents: params.amountCents,
+								currency: params.currency,
+							},
+						],
+					};
 				},
 			};
 
@@ -493,9 +581,19 @@ describe("DropTransferService", () => {
 			let shopifyCalled = false;
 			const mockShopifyRefund: ShopifyRefundProvider = {
 				supportsLineTargetedRefund: true,
-				createRefund: async () => {
+				createRefund: async (params) => {
 					shopifyCalled = true;
-					return { id: "gid://shopify/Refund/501" };
+					return {
+						id: "gid://shopify/Refund/501",
+						orderId: params.orderId,
+						allocations: [
+							{
+								shopifyOrderLineId: params.shopifyOrderLineId,
+								amountCents: params.amountCents,
+								currency: params.currency,
+							},
+						],
+					};
 				},
 			};
 
@@ -589,7 +687,18 @@ describe("DropTransferService", () => {
 				createRefund: async (params) => {
 					shopifyRefundCalls++;
 					expect(params.orderId).toBe("gid://shopify/Order/777");
-					return { id: "gid://shopify/Refund/777", providerMode: "mock" };
+					return {
+						id: "gid://shopify/Refund/777",
+						orderId: params.orderId,
+						allocations: [
+							{
+								shopifyOrderLineId: params.shopifyOrderLineId,
+								amountCents: params.amountCents,
+								currency: params.currency,
+							},
+						],
+						providerMode: "mock",
+					};
 				},
 			};
 
