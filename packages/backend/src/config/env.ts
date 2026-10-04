@@ -1,3 +1,6 @@
+import { isAbsolute } from "node:path";
+import { SHOPIFY_ADMIN_AUDIT_PATH as DEFAULT_SHOPIFY_ADMIN_AUDIT_PATH } from "../shopify/admin-mutation-audit.js";
+
 export interface AppEnv {
 	port: number;
 	databaseUrl?: string;
@@ -22,6 +25,7 @@ export interface AppEnv {
 	customerCacheMaxTotalBytes?: number;
 	reconciliationToken?: string;
 	enableDropTransfer?: boolean;
+	shopifyAdminAuditPath?: string;
 }
 
 const LOCAL_API_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
@@ -74,6 +78,17 @@ function parseDatabaseSsl(value: string | undefined): string {
 	}
 
 	return "require";
+}
+
+function parseShopifyAdminAuditPath(value: string | undefined): string {
+	const auditPath = value?.trim();
+	if (!auditPath) return DEFAULT_SHOPIFY_ADMIN_AUDIT_PATH;
+	if (auditPath.includes("\0") || !isAbsolute(auditPath)) {
+		throw new Error(
+			"Invalid SHOPIFY_ADMIN_AUDIT_PATH: expected an absolute file path.",
+		);
+	}
+	return auditPath;
 }
 
 export function buildDatabaseUrl(): string {
@@ -163,5 +178,8 @@ export function loadEnv(options?: {
 		),
 		reconciliationToken: process.env.FESTIVAL_RECONCILIATION_TOKEN?.trim(),
 		enableDropTransfer: process.env.ENABLE_DROP_TRANSFER === "true",
+		shopifyAdminAuditPath: parseShopifyAdminAuditPath(
+			process.env.SHOPIFY_ADMIN_AUDIT_PATH,
+		),
 	};
 }
