@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "organizationSlug": "pafe",
+  "expectedCounts": {
+    "contributors": 70,
+    "works": 127,
+    "classifications": 3,
+    "workContributors": 127,
+    "workClassifications": 104,
+    "imslpUrls": 82
+  },
+  "files": {
+    "contributors": "contributors.jsonl",
+    "works": "works.jsonl",
+    "classifications": "classifications.jsonl",
+    "workContributors": "work-contributors.jsonl",
+    "workClassifications": "work-classifications.jsonl"
+  },
+  "provenance": {
+    "sourceDatabase": "pafe",
+    "exportDatabase": "festival_sepv2_db",
+    "exportOrganizationSlug": "pafe",
+    "exportedAt": "2026-10-04",
+    "canonicalization": "A work is unique by trimmed, case-folded title and primary contributor; the lowest source work ID is the retained representative. Registration-time movement text and division tags are not catalog data."
+  },
+  "sourceAudit": {
+    "excludedSourceWorks": [
+      {
+        "sourceWorkId": 185,
+        "title": "Duplicate Sonata",
+        "contributor": "Ludwig van Beethoven",
+        "reason": "flag_for_discussion: TEST ENTRY"
+      },
+      {
+        "sourceWorkId": 190,
+        "title": "Missing Rank Sonata",
+        "contributor": "Ludwig van Beethoven",
+        "reason": "flag_for_discussion: TEST ENTRY"
+      },
+      {
+        "sourceWorkId": 203,
+        "title": "Program Piece PT.72.A",
+        "contributor": "Test Composer",
+        "reason": "flag_for_discussion: TEST ENTRY"
+      },
+      {
+        "sourceWorkId": 204,
+        "title": "Program Piece PT.73.A",
+        "contributor": "Test Composer",
+        "reason": "flag_for_discussion: TEST ENTRY"
+      },
+      {
+        "sourceWorkId": 205,
+        "title": "Program Piece PT.74.A",
+        "contributor": "Test Composer",
+        "reason": "flag_for_discussion: TEST ENTRY"
+      },
+      {
+        "sourceWorkId": 206,
+        "title": "Program Piece PT.75.A",
+        "contributor": "Test Composer",
+        "reason": "flag_for_discussion: TEST ENTRY"
+      },
+      {
+        "sourceWorkId": 207,
+        "title": "Program Piece PT.76.A",
+        "contributor": "Test Composer",
+        "reason": "flag_for_discussion: TEST ENTRY"
+      }
+    ],
+    "canonicalAliases": [
+      {
+        "canonicalSourceWorkId": 21,
+        "aliasSourceWorkId": 22,
+        "work": "Violin Concerto No. 2 in D minor, Op. 22",
+        "contributor": "Henryk Wieniawski",
+        "sourceDifference": "II. Romance / III. Allegro"
+      },
+      {
+        "canonicalSourceWorkId": 48,
+        "aliasSourceWorkId": 119,
+        "work": "Fun Song",
+        "contributor": "Carl Philipp Stamitz",
+        "sourceDifference": "Exact duplicate"
+      },
+      {
+        "canonicalSourceWorkId": 215,
+        "aliasSourceWorkId": 216,
+        "work": "Violin Sonata No. 1 in G minor, BWV 1001",
+        "contributor": "J. S. Bach",
+        "sourceDifference": "I. Adagio / II. Fuga"
+      },
+      {
+        "canonicalSourceWorkId": 262,
+        "aliasSourceWorkId": 268,
+        "work": "Nocturne in C minor, Op. 48 No. 1 (Lento)",
+        "contributor": "Frédéric Chopin",
+        "sourceDifference": "Exact duplicate"
+      },
+      {
+        "canonicalSourceWorkId": 265,
+        "aliasSourceWorkId": 284,
+        "work": "Histoires",
+        "contributor": "Jacques Ibert",
+        "sourceDifference": "Distinct performed movements"
+      }
+    ]
+  }
+}

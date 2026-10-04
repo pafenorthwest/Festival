@@ -224,6 +224,8 @@ processes.
 - `bun run prod`
 - `bun run format:check`
 - `bun run check:sql` — standalone SQL parameter validation for backend SQL, schema, and PostgreSQL fixture changes; it is not run by `bun run test`.
+- `bun run load-music-rep` — atomically load the checked-in PAFE repertoire seed into the local Festival database. The seed files live in `database/seeds/musical-repertoire/pafe/`; this command never accesses the source `pafe` database.
+- `bun run nuke-music-rep` — destructively remove only loader-owned repertoire catalog rows from the local Festival database. It refuses to clear registration or review references, and aborts when loader data is mixed with manual catalog data.
 - `bun run build`
 - `bun run test`
 - `bun run benchmark:customer-account-cache`
