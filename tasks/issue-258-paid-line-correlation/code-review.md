@@ -116,12 +116,6 @@
     "line_range": "99-115",
     "severity": "medium",
     "explanation": "The newly introduced automatic-provider contract has no refund-event identifier or idempotency-key field, and its result has only an opaque ID. A future line-targeted provider using this contract cannot derive the required event-based idempotency key or have its order line/allocation response verified by this caller. Either keep automatic providers out of this interface until separately authorized, or extend the request/result contract and test the required idempotency and response validation."
-  },
-  {
-    "file": "packages/backend/tests/postgres-commerce-repository.test.ts",
-    "line_range": "108-197",
-    "severity": "medium",
-    "explanation": "The sole PostgreSQL finalization coverage creates one entitlement and then checks a conflicting one-line replay. It does not create N entitlements, induce a failure at line N, retry, or race deliveries, so it cannot prove the required atomic multi-line finalization behavior. Add PostgreSQL integration coverage for line-N rollback/retry and concurrent/replayed multi-line deliveries; it should be run where POSTGRES_INTEGRATION_URL is configured."
   }
 ]
 ```
@@ -129,4 +123,4 @@
 ## Verdict
 - Verdict: patch is incorrect
 - Confidence: 0.96
-- Justification: The exact UUID writer, Admin reads, order-independent bijection, historical gate, per-line allocation, schema constraints, and processing-only browser path are implemented and the focused tests pass. Paid-line conflicts now record the bounded `persistence` / `paid_line_conflict` diagnostic and remain reclaimable. The new automatic-provider interface still cannot enforce the specified future-provider safeguards, and the required PostgreSQL multi-line atomicity proof is absent. The production migration is also only statically inspected by the local suite; its clean and duplicate-data behavior still needs execution against PostgreSQL before rollout.
+- Justification: The exact UUID writer, Admin reads, order-independent bijection, historical gate, per-line allocation, schema constraints, and processing-only browser path are implemented and the focused tests pass. Paid-line conflicts now record the bounded `persistence` / `paid_line_conflict` diagnostic and remain reclaimable. PostgreSQL coverage now injects a second-line failure, verifies the complete rollback and persisted delivery diagnostic, retries, and races two replays against the configured local PostgreSQL instance. The new automatic-provider interface still cannot enforce the specified future-provider safeguards, and the production migration is only statically inspected locally.

@@ -1,14 +1,13 @@
 import { expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { sql } from "bun";
-import { PostgresCheckoutRepository } from "../src/checkout/postgres-checkout-repository.js";
 import { PostgresMembershipCommerceRepository } from "../src/commerce/postgres-membership-commerce-repository.js";
 import { initializePostgresSchema } from "../src/repo/postgres-schema.js";
 
 const integrationTest = process.env.POSTGRES_INTEGRATION_URL ? test : test.skip;
 
 integrationTest(
-	"links registration_metadata.class_entitlement_id when finalizeDecision creates a class entitlement",
+	"rolls back a failed multi-line finalization and safely retries concurrent replays",
 	async () => {
 		const schema = `commerce_${randomUUID().replaceAll("-", "")}`;
 		try {
@@ -50,9 +49,9 @@ integrationTest(
 			const insertMembershipEntitlement = sql`INSERT INTO ${sql(`${schema}.membership_entitlements`)} (id, organization_id, customer_id, entitlement_class, source, offering_id, starts_on, ends_on) VALUES (${membershipId}, ${orgId}, ${customerId}, 'teacher_membership', 'teacher_checkout', 'product-teacher', '2026-01-01', '2027-01-01')`;
 			await insertMembershipEntitlement;
 
-			// Insert a checkout_intent of type class_entry
+			// Insert a checkout_intent of type class_entry.
 			await sql.unsafe(
-				`INSERT INTO ${schema}.checkout_intents (id, correlation_id, organization_id, customer_id, session_id, idempotency_key, intent_type, festival_class_id, child_id, shopify_product_gid, shopify_variant_gid, amount, currency_code, status, expires_at) VALUES ($1, $2, $3, $4, 'sess-1', 'idem-1', 'class_entry', $5, $6, 'gid://shopify/Product/class', 'gid://shopify/ProductVariant/class', '50.00', 'USD', 'checkout_started', NOW() + INTERVAL '1 hour')`,
+				`INSERT INTO ${schema}.checkout_intents (id, correlation_id, organization_id, customer_id, session_id, idempotency_key, intent_type, festival_class_id, child_id, shopify_product_gid, shopify_variant_gid, amount, currency_code, status, expires_at) VALUES ($1, $2, $3, $4, 'sess-1', 'idem-1', 'class_entry', $5, $6, 'gid://shopify/Product/class', 'gid://shopify/ProductVariant/class', '100.00', 'USD', 'checkout_started', NOW() + INTERVAL '1 hour')`,
 				[
 					checkoutIntentId,
 					randomUUID(),
@@ -63,38 +62,81 @@ integrationTest(
 				],
 			);
 
-			const checkoutRepo = new PostgresCheckoutRepository(schema);
 			const commerceRepo = new PostgresMembershipCommerceRepository(schema);
-
-			// Insert registration_metadata via CheckoutRepository
-			const metadataId = randomUUID();
-			const metadata = await checkoutRepo.insertRegistrationMetadata({
-				id: metadataId,
-				organizationId: orgId,
-				festivalId: festivalId,
-				checkoutIntentId: checkoutIntentId,
-				teacherMembershipId: membershipId,
-				accompanistMembershipId: null,
-				repertoireJson: [
-					{
-						title: "Sonata in C",
-						composer: "Mozart",
-						durationSeconds: 240,
-					},
+			const firstIntentLineId = randomUUID();
+			const secondIntentLineId = randomUUID();
+			await sql.unsafe(
+				`INSERT INTO ${schema}.checkout_intent_lines (id, checkout_intent_id, line_index, line_type, festival_class_id, child_id, shopify_product_gid, shopify_variant_gid, amount, currency_code) VALUES ($1,$2,0,'class_entry',$3,$4,'gid://shopify/Product/class','gid://shopify/ProductVariant/class','50.00','USD'), ($5,$2,1,'class_entry',$3,$6,'gid://shopify/Product/class','gid://shopify/ProductVariant/class','50.00','USD')`,
+				[
+					firstIntentLineId,
+					checkoutIntentId,
+					festivalClassId,
+					childId,
+					secondIntentLineId,
+					child2Id,
 				],
-			});
+			);
 
-			expect(metadata.id).toBe(metadataId);
-			expect(metadata.classEntitlementId).toBeNull();
+			await sql.unsafe(
+				`INSERT INTO ${schema}.registration_metadata (id, organization_id, festival_id, checkout_intent_id, checkout_intent_line_id, teacher_membership_id, accompanist_membership_id, repertoire_json) VALUES ($1,$2,$3,$4,$5,$6,NULL,'[]'::jsonb), ($7,$2,$3,$4,$8,$6,NULL,'[]'::jsonb)`,
+				[
+					randomUUID(),
+					orgId,
+					festivalId,
+					checkoutIntentId,
+					firstIntentLineId,
+					membershipId,
+					randomUUID(),
+					secondIntentLineId,
+				],
+			);
 
-			// Record a webhook delivery
+			const decision = {
+				organizationId: orgId,
+				customerId,
+				checkoutIntentId: checkoutIntentId,
+				shopifyOrderGid: "gid://shopify/Order/1",
+				status: "approved" as const,
+				updatedAtIso: new Date().toISOString(),
+			};
+			const entitlementInputs = (secondLineId: string) => [
+				{
+					organizationId: orgId,
+					festivalId,
+					festivalClassId,
+					parentCustomerId: customerId,
+					childId,
+					checkoutIntentId,
+					checkoutIntentLineId: firstIntentLineId,
+					shopifyOrderGid: decision.shopifyOrderGid,
+					shopifyOrderLineGid: "gid://shopify/LineItem/1",
+					paidAmountCents: 5000,
+					paidCurrencyCode: "USD",
+					status: "confirmed" as const,
+				},
+				{
+					organizationId: orgId,
+					festivalId,
+					festivalClassId,
+					parentCustomerId: customerId,
+					childId: child2Id,
+					checkoutIntentId,
+					checkoutIntentLineId: secondLineId,
+					shopifyOrderGid: decision.shopifyOrderGid,
+					shopifyOrderLineGid: "gid://shopify/LineItem/2",
+					paidAmountCents: 5000,
+					paidCurrencyCode: "USD",
+					status: "confirmed" as const,
+				},
+			];
+
 			const deliveryResult = await commerceRepo.recordDelivery({
 				organizationId: orgId,
 				shopDomain: "example.myshopify.com",
 				webhookId: webhookId,
 				topic: "orders/paid",
 				apiVersion: "2026-07",
-				shopifyOrderGid: "gid://shopify/Order/1",
+				shopifyOrderGid: decision.shopifyOrderGid,
 				payloadSha256: "a".repeat(64),
 				receivedAtIso: new Date().toISOString(),
 			});
@@ -105,96 +147,146 @@ integrationTest(
 			);
 			if (!claimed) throw new Error("Expected claimed delivery");
 
-			// finalizeDecision with an approved class_entry
-			const entitlementId = randomUUID();
-			const result = await commerceRepo.finalizeDecision({
-				deliveryId: claimed.id,
-				decision: {
-					organizationId: orgId,
-					customerId: customerId,
-					checkoutIntentId: checkoutIntentId,
-					shopifyOrderGid: "gid://shopify/Order/1",
-					shopifyOrderLineGid: "gid://shopify/LineItem/1",
-					status: "approved",
-					updatedAtIso: new Date().toISOString(),
-				},
-				classEntitlement: {
-					id: entitlementId,
-					organizationId: orgId,
-					festivalId: festivalId,
-					festivalClassId: festivalClassId,
-					parentCustomerId: customerId,
-					childId: childId,
-					checkoutIntentId: checkoutIntentId,
-					shopifyOrderGid: "gid://shopify/Order/1",
-					shopifyOrderLineGid: "gid://shopify/LineItem/1",
-					paidAmountCents: 5000,
-					paidCurrencyCode: "USD",
-					status: "confirmed",
-				},
-			});
-
-			expect(result.existing).toBe(false);
-			expect(result.classEntitlement?.id).toBe(entitlementId);
-
-			// Assert that registration_metadata.class_entitlement_id is now populated
-			const rows = (await sql.unsafe(
-				`SELECT class_entitlement_id FROM ${schema}.registration_metadata WHERE id = $1`,
-				[metadataId],
-			)) as Array<{ class_entitlement_id: string | null }>;
-			expect(rows).toHaveLength(1);
-			expect(rows[0]?.class_entitlement_id).toBe(entitlementId);
-
-			const replayDeliveryResult = await commerceRepo.recordDelivery({
-				organizationId: orgId,
-				shopDomain: "example.myshopify.com",
-				webhookId: randomUUID(),
-				topic: "orders/paid",
-				apiVersion: "2026-07",
-				shopifyOrderGid: "gid://shopify/Order/1",
-				payloadSha256: "b".repeat(64),
-				receivedAtIso: new Date().toISOString(),
-			});
-			if (replayDeliveryResult.kind !== "accepted") {
-				throw new Error("Expected accepted replay delivery");
-			}
-			const replayClaimed = await commerceRepo.claimDelivery(
-				replayDeliveryResult.delivery.id,
-			);
-			if (!replayClaimed) throw new Error("Expected claimed replay delivery");
-
+			const nonexistentIntentLineId = randomUUID();
 			await expect(
 				commerceRepo.finalizeDecision({
-					deliveryId: replayClaimed.id,
-					decision: {
-						organizationId: orgId,
-						customerId,
-						checkoutIntentId,
-						shopifyOrderGid: "gid://shopify/Order/1",
-						shopifyOrderLineGid: "gid://shopify/LineItem/1",
-						status: "approved",
-						updatedAtIso: new Date().toISOString(),
-					},
-					classEntitlement: {
-						organizationId: orgId,
-						festivalId,
-						festivalClassId,
-						parentCustomerId: customerId,
-						childId: child2Id,
-						checkoutIntentId,
-						shopifyOrderGid: "gid://shopify/Order/1",
-						shopifyOrderLineGid: "gid://shopify/LineItem/1",
-						paidAmountCents: 5000,
-						paidCurrencyCode: "USD",
-						status: "confirmed",
-					},
+					deliveryId: claimed.id,
+					decision,
+					classEntitlements: entitlementInputs(nonexistentIntentLineId),
 				}),
-			).rejects.toThrow("paid-line conflict");
-			const replayRows = (await sql.unsafe(
-				`SELECT class_entitlement_id FROM ${schema}.registration_metadata WHERE id = $1`,
-				[metadataId],
-			)) as Array<{ class_entitlement_id: string | null }>;
-			expect(replayRows[0]?.class_entitlement_id).toBe(entitlementId);
+			).rejects.toThrow();
+			const [
+				afterFailedFinalization,
+				metadataAfterFailure,
+				decisionAfterFailure,
+			] = await Promise.all([
+				sql.unsafe(
+					`SELECT COUNT(*)::int AS count FROM ${schema}.class_entitlements WHERE checkout_intent_id = $1`,
+					[checkoutIntentId],
+				) as Promise<Array<{ count: number }>>,
+				sql.unsafe(
+					`SELECT class_entitlement_id FROM ${schema}.registration_metadata WHERE checkout_intent_line_id IN ($1, $2)`,
+					[firstIntentLineId, secondIntentLineId],
+				) as Promise<Array<{ class_entitlement_id: string | null }>>,
+				sql.unsafe(
+					`SELECT COUNT(*)::int AS count FROM ${schema}.membership_validation_decisions WHERE organization_id = $1 AND shopify_order_gid = $2`,
+					[orgId, decision.shopifyOrderGid],
+				) as Promise<Array<{ count: number }>>,
+			]);
+			expect(afterFailedFinalization[0]?.count).toBe(0);
+			expect(metadataAfterFailure).toEqual([
+				{ class_entitlement_id: null },
+				{ class_entitlement_id: null },
+			]);
+			expect(decisionAfterFailure[0]?.count).toBe(0);
+
+			await commerceRepo.markDeliveryFailed(claimed.id, {
+				category: "persistence",
+				stage: "projection",
+				code: "persistence",
+				failedAtIso: new Date().toISOString(),
+			});
+			const failedDelivery = await commerceRepo.recordDelivery({
+				organizationId: orgId,
+				shopDomain: "example.myshopify.com",
+				webhookId,
+				topic: "orders/paid",
+				apiVersion: "2026-07",
+				shopifyOrderGid: decision.shopifyOrderGid,
+				payloadSha256: "a".repeat(64),
+				receivedAtIso: new Date().toISOString(),
+			});
+			if (failedDelivery.kind !== "duplicate") {
+				throw new Error("Expected failed delivery duplicate");
+			}
+			expect(failedDelivery.delivery).toMatchObject({
+				status: "failed",
+				failureCategory: "persistence",
+				failureStage: "projection",
+				failureCode: "persistence",
+			});
+			const retryClaimed = await commerceRepo.claimDelivery(claimed.id);
+			if (!retryClaimed) throw new Error("Expected retryable delivery");
+			const retry = await commerceRepo.finalizeDecision({
+				deliveryId: retryClaimed.id,
+				decision,
+				classEntitlements: entitlementInputs(secondIntentLineId),
+			});
+			expect(retry.existing).toBe(false);
+
+			const replayDeliveries = await Promise.all(
+				["webhook-replay-1", "webhook-replay-2"].map(async (webhookId) => {
+					const replay = await commerceRepo.recordDelivery({
+						organizationId: orgId,
+						shopDomain: "example.myshopify.com",
+						webhookId,
+						topic: "orders/paid",
+						apiVersion: "2026-07",
+						shopifyOrderGid: decision.shopifyOrderGid,
+						payloadSha256: "b".repeat(64),
+						receivedAtIso: new Date().toISOString(),
+					});
+					if (replay.kind !== "accepted") {
+						throw new Error("Expected accepted replay delivery");
+					}
+					const replayClaimed = await commerceRepo.claimDelivery(
+						replay.delivery.id,
+					);
+					if (!replayClaimed)
+						throw new Error("Expected claimed replay delivery");
+					return replayClaimed;
+				}),
+			);
+			const replays = await Promise.all(
+				replayDeliveries.map((replayDelivery) =>
+					commerceRepo.finalizeDecision({
+						deliveryId: replayDelivery.id,
+						decision,
+						classEntitlements: entitlementInputs(secondIntentLineId),
+					}),
+				),
+			);
+			expect(replays.every((replay) => replay.existing)).toBe(true);
+
+			const [createdEntitlements, linkedMetadata, processedDeliveries] =
+				await Promise.all([
+					sql.unsafe(
+						`SELECT entitlement.checkout_intent_line_id, entitlement.shopify_order_line_gid FROM ${schema}.class_entitlements AS entitlement JOIN ${schema}.checkout_intent_lines AS intent_line ON intent_line.id = entitlement.checkout_intent_line_id WHERE entitlement.checkout_intent_id = $1 ORDER BY intent_line.line_index`,
+						[checkoutIntentId],
+					) as Promise<
+						Array<{
+							checkout_intent_line_id: string;
+							shopify_order_line_gid: string;
+						}>
+					>,
+					sql.unsafe(
+						`SELECT class_entitlement_id FROM ${schema}.registration_metadata WHERE checkout_intent_line_id IN ($1, $2)`,
+						[firstIntentLineId, secondIntentLineId],
+					) as Promise<Array<{ class_entitlement_id: string | null }>>,
+					sql.unsafe(
+						`SELECT COUNT(*)::int AS count FROM ${schema}.shopify_webhook_deliveries WHERE id IN ($1, $2) AND status = 'processed'`,
+						[replayDeliveries[0]?.id, replayDeliveries[1]?.id],
+					) as Promise<Array<{ count: number }>>,
+				]);
+			expect(createdEntitlements).toEqual([
+				{
+					checkout_intent_line_id: firstIntentLineId,
+					shopify_order_line_gid: "gid://shopify/LineItem/1",
+				},
+				{
+					checkout_intent_line_id: secondIntentLineId,
+					shopify_order_line_gid: "gid://shopify/LineItem/2",
+				},
+			]);
+			expect(linkedMetadata).toEqual([
+				expect.objectContaining({
+					class_entitlement_id: expect.any(String),
+				}),
+				expect.objectContaining({
+					class_entitlement_id: expect.any(String),
+				}),
+			]);
+			expect(processedDeliveries[0]?.count).toBe(2);
 		} finally {
 			await sql.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
 		}

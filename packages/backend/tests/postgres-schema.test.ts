@@ -46,6 +46,10 @@ test("canonical PostgreSQL schema defines the final empty-database shape only", 
 	expect(schema).toContain("idx_refund_events_org_class_entitlement");
 	expect(schema).toContain("shopify_order_line_id TEXT");
 	expect(schema).toContain("line_identity_protocol TEXT NULL");
+	expect(schema).toContain("failure_stage TEXT NULL");
+	expect(schema).toContain("failure_code TEXT NULL");
+	expect(schema).toContain("shopify_request_id TEXT NULL");
+	expect(schema).toContain("failed_at TIMESTAMPTZ NULL");
 	expect(schema).toContain(
 		"checkout_intent_lines_checkout_intent_id_line_index_key",
 	);

@@ -14,6 +14,10 @@ test("commits a normalized PostgreSQL 17 schema-only snapshot", async () => {
 	expect(snapshot).toContain("CREATE TABLE orgs.registration_change_logs");
 	expect(snapshot).toContain("CREATE TABLE orgs.refund_events");
 	expect(snapshot).toContain("shopify_order_line_id text");
+	expect(snapshot).toContain("failure_stage text");
+	expect(snapshot).toContain("failure_code text");
+	expect(snapshot).toContain("shopify_request_id text");
+	expect(snapshot).toContain("failed_at timestamp with time zone");
 	expect(snapshot).toContain(
 		"checkout_intent_lines_checkout_intent_id_line_index_key",
 	);

@@ -498,6 +498,9 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			status TEXT NOT NULL CHECK (status IN ('received', 'processing', 'processed', 'failed')),
 			attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
 			failure_category TEXT NULL CHECK (failure_category IN ('upstream', 'persistence', 'invalid')),
+			failure_stage TEXT NULL CHECK (failure_stage IN ('order_read', 'projection')),
+			failure_code TEXT NULL CHECK (failure_code IS NULL OR failure_code IN ('shopify_upstream', 'shopify_transport', 'invalid_data', 'paid_line_conflict', 'persistence', 'unexpected')),
+			shopify_request_id TEXT NULL, failed_at TIMESTAMPTZ NULL,
 			received_at TIMESTAMPTZ NOT NULL, processing_started_at TIMESTAMPTZ NULL, processed_at TIMESTAMPTZ NULL,
 			UNIQUE (organization_id, webhook_id)
 		);
@@ -804,6 +807,18 @@ export async function initializePostgresSchema(schema: string): Promise<void> {
 		);
 		await transaction.unsafe(
 			`ALTER TABLE IF EXISTS ${safeSchema}.refund_events ADD COLUMN IF NOT EXISTS shopify_order_line_id TEXT;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.shopify_webhook_deliveries ADD COLUMN IF NOT EXISTS failure_stage TEXT;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.shopify_webhook_deliveries ADD COLUMN IF NOT EXISTS failure_code TEXT;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.shopify_webhook_deliveries ADD COLUMN IF NOT EXISTS shopify_request_id TEXT;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.shopify_webhook_deliveries ADD COLUMN IF NOT EXISTS failed_at TIMESTAMPTZ;`,
 		);
 		await transaction.unsafe(
 			`ALTER TABLE IF EXISTS ${safeSchema}.registration_catalog_values ADD COLUMN IF NOT EXISTS required_subtype_id TEXT;`,

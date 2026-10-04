@@ -196,7 +196,7 @@ export class PostgresMembershipCommerceRepository
 		await this.ensureReady();
 		return sql.begin(async (tx) => {
 			const inserted = (await tx.unsafe(
-				`INSERT INTO ${this.schema}.shopify_webhook_deliveries (id, organization_id, shop_domain, webhook_id, topic, api_version, shopify_order_gid, payload_sha256, status, received_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'received',$9) ON CONFLICT (organization_id, webhook_id) DO NOTHING RETURNING id, organization_id, shop_domain, webhook_id, topic, api_version, shopify_order_gid, payload_sha256, status, attempt_count, failure_category, received_at::text, processed_at::text`,
+				`INSERT INTO ${this.schema}.shopify_webhook_deliveries (id, organization_id, shop_domain, webhook_id, topic, api_version, shopify_order_gid, payload_sha256, status, received_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'received',$9) ON CONFLICT (organization_id, webhook_id) DO NOTHING RETURNING id, organization_id, shop_domain, webhook_id, topic, api_version, shopify_order_gid, payload_sha256, status, attempt_count, failure_category, failure_stage, failure_code, shopify_request_id, failed_at::text, received_at::text, processed_at::text`,
 				[
 					randomUUID(),
 					input.organizationId,
@@ -213,7 +213,7 @@ export class PostgresMembershipCommerceRepository
 				return { kind: "accepted" as const, delivery: delivery(inserted[0]) };
 
 			const rows = (await tx.unsafe(
-				`SELECT id, organization_id, shop_domain, webhook_id, topic, api_version, shopify_order_gid, payload_sha256, status, attempt_count, failure_category, received_at::text, processed_at::text FROM ${this.schema}.shopify_webhook_deliveries WHERE organization_id = $1 AND webhook_id = $2 FOR UPDATE`,
+				`SELECT id, organization_id, shop_domain, webhook_id, topic, api_version, shopify_order_gid, payload_sha256, status, attempt_count, failure_category, failure_stage, failure_code, shopify_request_id, failed_at::text, received_at::text, processed_at::text FROM ${this.schema}.shopify_webhook_deliveries WHERE organization_id = $1 AND webhook_id = $2 FOR UPDATE`,
 				[input.organizationId, input.webhookId],
 			)) as Array<Record<string, unknown>>;
 			if (!rows[0])
@@ -228,7 +228,7 @@ export class PostgresMembershipCommerceRepository
 	async claimDelivery(deliveryId: string) {
 		await this.ensureReady();
 		const rows = (await sql.unsafe(
-			`UPDATE ${this.schema}.shopify_webhook_deliveries SET status = 'processing', attempt_count = attempt_count + 1, failure_category = NULL, processing_started_at = NOW() WHERE id = $1 AND status IN ('received', 'failed') RETURNING id, organization_id, shop_domain, webhook_id, topic, api_version, shopify_order_gid, payload_sha256, status, attempt_count, failure_category, received_at::text, processing_started_at::text, processed_at::text`,
+			`UPDATE ${this.schema}.shopify_webhook_deliveries SET status = 'processing', attempt_count = attempt_count + 1, failure_category = NULL, failure_stage = NULL, failure_code = NULL, shopify_request_id = NULL, failed_at = NULL, processing_started_at = NOW() WHERE id = $1 AND status IN ('received', 'failed') RETURNING id, organization_id, shop_domain, webhook_id, topic, api_version, shopify_order_gid, payload_sha256, status, attempt_count, failure_category, failure_stage, failure_code, shopify_request_id, failed_at::text, received_at::text, processing_started_at::text, processed_at::text`,
 			[deliveryId],
 		)) as Array<Record<string, unknown>>;
 		return rows[0] ? delivery(rows[0]) : null;
@@ -265,7 +265,7 @@ export class PostgresMembershipCommerceRepository
 
 	async markDeliveryProcessed(deliveryId: string) {
 		await sql.unsafe(
-			`UPDATE ${this.schema}.shopify_webhook_deliveries SET status = 'processed', failure_category = NULL, processing_started_at = NULL, processed_at = NOW() WHERE id = $1`,
+			`UPDATE ${this.schema}.shopify_webhook_deliveries SET status = 'processed', failure_category = NULL, failure_stage = NULL, failure_code = NULL, shopify_request_id = NULL, failed_at = NULL, processing_started_at = NULL, processed_at = NOW() WHERE id = $1`,
 			[deliveryId],
 		);
 	}
@@ -277,11 +277,11 @@ export class PostgresMembershipCommerceRepository
 	) {
 		return sql.begin(async (tx) => {
 			await tx.unsafe(
-				`UPDATE ${this.schema}.shopify_webhook_deliveries SET status = 'failed', failure_category = 'upstream', processing_started_at = NULL WHERE organization_id = $1 AND status = 'processing' AND (processing_started_at IS NULL OR processing_started_at <= $2::timestamptz)`,
+				`UPDATE ${this.schema}.shopify_webhook_deliveries SET status = 'failed', failure_category = 'upstream', failure_stage = 'projection', failure_code = 'unexpected', shopify_request_id = NULL, failed_at = NOW(), processing_started_at = NULL WHERE organization_id = $1 AND status = 'processing' AND (processing_started_at IS NULL OR processing_started_at <= $2::timestamptz)`,
 				[organizationId, staleBeforeIso],
 			);
 			const rows = (await tx.unsafe(
-				`SELECT id, organization_id, shop_domain, webhook_id, topic, api_version, shopify_order_gid, payload_sha256, status, attempt_count, failure_category, received_at::text, processing_started_at::text, processed_at::text FROM ${this.schema}.shopify_webhook_deliveries WHERE organization_id = $1 AND status IN ('received', 'failed') ORDER BY received_at ASC LIMIT $2`,
+				`SELECT id, organization_id, shop_domain, webhook_id, topic, api_version, shopify_order_gid, payload_sha256, status, attempt_count, failure_category, failure_stage, failure_code, shopify_request_id, failed_at::text, received_at::text, processing_started_at::text, processed_at::text FROM ${this.schema}.shopify_webhook_deliveries WHERE organization_id = $1 AND status IN ('received', 'failed') ORDER BY received_at ASC LIMIT $2`,
 				[organizationId, limit],
 			)) as Array<Record<string, unknown>>;
 			return rows.map(delivery);
@@ -471,7 +471,7 @@ export class PostgresMembershipCommerceRepository
 					existingClasses.every(Boolean)
 				) {
 					await tx.unsafe(
-						`UPDATE ${this.schema}.shopify_webhook_deliveries SET status = 'processed', failure_category = NULL, processed_at = NOW() WHERE id = $1`,
+						`UPDATE ${this.schema}.shopify_webhook_deliveries SET status = 'processed', failure_category = NULL, failure_stage = NULL, failure_code = NULL, shopify_request_id = NULL, failed_at = NULL, processed_at = NOW() WHERE id = $1`,
 						[input.deliveryId],
 					);
 					return {
@@ -495,7 +495,7 @@ export class PostgresMembershipCommerceRepository
 					correlatedRows[0].shopify_order_gid !== input.decision.shopifyOrderGid
 				) {
 					await tx.unsafe(
-						`UPDATE ${this.schema}.shopify_webhook_deliveries SET status = 'processed', failure_category = NULL, processing_started_at = NULL, processed_at = NOW() WHERE id = $1`,
+						`UPDATE ${this.schema}.shopify_webhook_deliveries SET status = 'processed', failure_category = NULL, failure_stage = NULL, failure_code = NULL, shopify_request_id = NULL, failed_at = NULL, processing_started_at = NULL, processed_at = NOW() WHERE id = $1`,
 						[input.deliveryId],
 					);
 					const existingClass = input.decision.shopifyOrderLineGid
@@ -804,7 +804,7 @@ export class PostgresMembershipCommerceRepository
 				if (!resolved[0]) throw new Error("Checkout intent was not found.");
 			}
 			await tx.unsafe(
-				`UPDATE ${this.schema}.shopify_webhook_deliveries SET status = 'processed', failure_category = NULL, processing_started_at = NULL, processed_at = NOW() WHERE id = $1`,
+				`UPDATE ${this.schema}.shopify_webhook_deliveries SET status = 'processed', failure_category = NULL, failure_stage = NULL, failure_code = NULL, shopify_request_id = NULL, failed_at = NULL, processing_started_at = NULL, processed_at = NOW() WHERE id = $1`,
 				[input.deliveryId],
 			);
 			return {

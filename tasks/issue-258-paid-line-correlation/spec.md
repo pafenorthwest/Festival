@@ -61,9 +61,10 @@
 - Tests: full common (211 passed, 0 failed) and backend suites pass. Focused
   corrective coverage includes duplicate same-variant lines, shifted discounts,
   reconciliation parity, persistence mapping validation, migration/schema
-  parity, and conflicting paid-line replay. PostgreSQL transaction coverage is
-  present but skipped locally because `POSTGRES_INTEGRATION_URL` is not
-  configured.
+  parity, and conflicting paid-line replay. PostgreSQL coverage injects a
+  second-line FK failure, verifies a full rollback and persisted delivery
+  diagnostic, retries successfully, and races two replays; it passed against
+  the configured local PostgreSQL instance.
 - Code review: the final fresh review identified the corrective gaps above;
   this pass addresses each source, schema, migration, and test finding.
 - Latest targeted validation: paid-line projection/repository suites passed
