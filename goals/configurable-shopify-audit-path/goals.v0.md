@@ -24,4 +24,3 @@
 - [G1] A non-empty absolute override is used by the application; an empty value uses the default and a relative or malformed value fails startup validation.
 - [G2] Focused backend coverage verifies the configuration contract and audit writer selection.
 - [G3] `develop.env` and `SETUP.md` explain how to choose a user-writable development path without changing the production audit requirement.
-
