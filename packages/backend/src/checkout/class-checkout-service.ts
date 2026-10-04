@@ -132,8 +132,7 @@ export class ClassCheckoutService {
 		private readonly storefront: ClassCheckoutStorefront,
 		private readonly commerce?: MembershipCommerceRepository,
 		private readonly now: () => Date = () => new Date(),
-		private readonly failureLogger: ClassCheckoutFailureLogger =
-			silentClassCheckoutFailureLogger,
+		private readonly failureLogger: ClassCheckoutFailureLogger = silentClassCheckoutFailureLogger,
 	) {}
 
 	async evaluateEligibility(input: {
@@ -862,12 +861,17 @@ function isPostgresError(error: unknown): error is object {
 	);
 }
 
-function readStringProperty(value: object, property: string): string | undefined {
+function readStringProperty(
+	value: object,
+	property: string,
+): string | undefined {
 	const candidate = (value as Record<string, unknown>)[property];
 	return typeof candidate === "string" ? candidate : undefined;
 }
 
-function safeSqlState(value: string | undefined): { databaseSqlState?: string } {
+function safeSqlState(value: string | undefined): {
+	databaseSqlState?: string;
+} {
 	return value && /^[0-9A-Z]{5}$/.test(value)
 		? { databaseSqlState: value }
 		: {};

@@ -53,9 +53,9 @@ describe("insertRepertoireSnapshot", () => {
 		await insertRepertoireSnapshot(tx, "org_organization_1", items);
 
 		expect(calls).toHaveLength(4);
-		expect(calls.every((call) => !call.sql.includes("jsonb_to_recordset"))).toBe(
-			true,
-		);
+		expect(
+			calls.every((call) => !call.sql.includes("jsonb_to_recordset")),
+		).toBe(true);
 		expect(calls[0]).toMatchObject({
 			params: [
 				"item-1",

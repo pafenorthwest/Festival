@@ -433,7 +433,9 @@ describe("Customer Registration Routes", () => {
 			expect(json).not.toHaveProperty("databaseTable");
 			expect(json).not.toHaveProperty("databaseColumn");
 			expect(json).not.toHaveProperty("stage");
-			expect(JSON.stringify(json)).not.toContain("synthetic database diagnostic");
+			expect(JSON.stringify(json)).not.toContain(
+				"synthetic database diagnostic",
+			);
 		});
 
 		it("handles multi-line checkout with lineItems payload", async () => {

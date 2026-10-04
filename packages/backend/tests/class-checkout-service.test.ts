@@ -7,8 +7,8 @@ import type {
 } from "@festival/common";
 import { InMemoryCheckoutRepository } from "../src/checkout/checkout-repository.js";
 import {
-	ClassCheckoutService,
 	type ClassCheckoutFailureLogger,
+	ClassCheckoutService,
 	type ClassCheckoutStorefront,
 	type StartClassCheckoutInput,
 } from "../src/checkout/class-checkout-service.js";
