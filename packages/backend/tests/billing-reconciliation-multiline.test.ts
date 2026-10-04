@@ -217,6 +217,145 @@ describe("Issue #261: Multi-line Commerce Billing Reconciliation", () => {
 			expect(partialPayments[0].entitlementId).toBe("ent-legacy-underpaid");
 			expect(partialPayments[0].amountCents).toBe(4500);
 		});
+
+		it("flags mismatch when entitlement references non-existent checkout intent line", async () => {
+			const repo = new InMemoryBillingRepository();
+
+			repo.seedCheckoutIntents([
+				{
+					id: "intent-missing",
+					correlationId: "corr-missing",
+					organizationId: "org-1",
+					customerId: "cust-5",
+					amount: "50.00",
+					currencyCode: "USD",
+				},
+			]);
+			repo.seedClassEntitlements([
+				{
+					id: "ent-missing-line",
+					organizationId: "org-1",
+					parentCustomerId: "cust-5",
+					checkoutIntentId: "intent-missing",
+					checkoutIntentLineId: "missing-line",
+					shopifyOrderGid: "gid://shopify/Order/104",
+					paidAmountCents: 5000,
+					paidCurrencyCode: "USD",
+					status: "confirmed",
+				},
+			]);
+
+			const mismatches = await repo.listMismatches("org-1");
+			const partialPayments = mismatches.filter(
+				(m) => m.mismatchType === "partial_payment",
+			);
+			expect(partialPayments).toHaveLength(1);
+			expect(partialPayments[0].entitlementId).toBe("ent-missing-line");
+			expect(partialPayments[0].description).toBe(
+				"Missing or invalid checkout intent line for confirmed class entitlement.",
+			);
+		});
+
+		it("flags mismatch when line belongs to a different checkout intent (cross-intent)", async () => {
+			const repo = new InMemoryBillingRepository();
+
+			repo.seedCheckoutIntents([
+				{
+					id: "intent-target",
+					correlationId: "corr-target",
+					organizationId: "org-1",
+					customerId: "cust-6",
+					amount: "50.00",
+					currencyCode: "USD",
+				},
+				{
+					id: "intent-other",
+					correlationId: "corr-other",
+					organizationId: "org-1",
+					customerId: "cust-6",
+					amount: "50.00",
+					currencyCode: "USD",
+				},
+			]);
+			repo.seedCheckoutIntentLines([
+				{
+					id: "line-other-intent",
+					checkoutIntentId: "intent-other",
+					amount: "50.00",
+					currencyCode: "USD",
+				},
+			]);
+			repo.seedClassEntitlements([
+				{
+					id: "ent-cross-intent",
+					organizationId: "org-1",
+					parentCustomerId: "cust-6",
+					checkoutIntentId: "intent-target",
+					checkoutIntentLineId: "line-other-intent",
+					shopifyOrderGid: "gid://shopify/Order/105",
+					paidAmountCents: 5000,
+					paidCurrencyCode: "USD",
+					status: "confirmed",
+				},
+			]);
+
+			const mismatches = await repo.listMismatches("org-1");
+			const partialPayments = mismatches.filter(
+				(m) => m.mismatchType === "partial_payment",
+			);
+			expect(partialPayments).toHaveLength(1);
+			expect(partialPayments[0].entitlementId).toBe("ent-cross-intent");
+			expect(partialPayments[0].description).toBe(
+				"Missing or invalid checkout intent line for confirmed class entitlement.",
+			);
+		});
+
+		it("flags mismatch when line belongs to a different organization (cross-tenant)", async () => {
+			const repo = new InMemoryBillingRepository();
+
+			repo.seedCheckoutIntents([
+				{
+					id: "intent-org-1",
+					correlationId: "corr-org-1",
+					organizationId: "org-1",
+					customerId: "cust-7",
+					amount: "50.00",
+					currencyCode: "USD",
+				},
+			]);
+			repo.seedCheckoutIntentLines([
+				{
+					id: "line-cross-tenant",
+					checkoutIntentId: "intent-org-1",
+					organizationId: "other-org",
+					amount: "50.00",
+					currencyCode: "USD",
+				},
+			]);
+			repo.seedClassEntitlements([
+				{
+					id: "ent-cross-tenant",
+					organizationId: "org-1",
+					parentCustomerId: "cust-7",
+					checkoutIntentId: "intent-org-1",
+					checkoutIntentLineId: "line-cross-tenant",
+					shopifyOrderGid: "gid://shopify/Order/106",
+					paidAmountCents: 5000,
+					paidCurrencyCode: "USD",
+					status: "confirmed",
+				},
+			]);
+
+			const mismatches = await repo.listMismatches("org-1");
+			const partialPayments = mismatches.filter(
+				(m) => m.mismatchType === "partial_payment",
+			);
+			expect(partialPayments).toHaveLength(1);
+			expect(partialPayments[0].entitlementId).toBe("ent-cross-tenant");
+			expect(partialPayments[0].description).toBe(
+				"Missing or invalid checkout intent line for confirmed class entitlement.",
+			);
+		});
 	});
 
 	describe("PostgresBillingRepository", () => {
@@ -239,6 +378,7 @@ describe("Issue #261: Multi-line Commerce Billing Reconciliation", () => {
 							shopify_order_gid: "gid://shopify/Order/pg-1",
 							paid_amount_cents: 3000,
 							paid_currency_code: "USD",
+							is_invalid_line: false,
 							expected_amount: "50.00",
 							expected_currency: "USD",
 						},
@@ -247,6 +387,9 @@ describe("Issue #261: Multi-line Commerce Billing Reconciliation", () => {
 				const mismatches = await repo.listMismatches("org-1");
 				expect(mismatches).toHaveLength(1);
 				expect(mismatches[0].mismatchType).toBe("partial_payment");
+				expect(mismatches[0].description).toBe(
+					"Partial payment received for class entitlement.",
+				);
 				expect(mismatches[0].entitlementId).toBe("ent-pg-underpaid");
 				expect(mismatches[0].amountCents).toBe(3000);
 
@@ -257,7 +400,42 @@ describe("Issue #261: Multi-line Commerce Billing Reconciliation", () => {
 					"cil.checkout_intent_id = ce.checkout_intent_id",
 				);
 				expect(thirdCallQuery).toContain("cil.id = ce.checkout_intent_line_id");
-				expect(thirdCallQuery).toContain("COALESCE(cil.amount, ci.amount)");
+				expect(thirdCallQuery).toContain(
+					"CASE WHEN ce.checkout_intent_line_id IS NOT NULL THEN cil.amount ELSE ci.amount END",
+				);
+			} finally {
+				unsafeSpy.mockRestore();
+			}
+		});
+
+		it("flags missing or invalid checkout intent line when is_invalid_line is true", async () => {
+			const repo = new PostgresBillingRepository("test_schema");
+			const unsafeSpy = spyOn(sql, "unsafe");
+
+			try {
+				unsafeSpy
+					.mockResolvedValueOnce([])
+					.mockResolvedValueOnce([])
+					.mockResolvedValueOnce([
+						{
+							entitlement_id: "ent-pg-invalid-line",
+							customer_id: "cust-pg-2",
+							shopify_order_gid: "gid://shopify/Order/pg-2",
+							paid_amount_cents: 5000,
+							paid_currency_code: "USD",
+							is_invalid_line: true,
+							expected_amount: null,
+							expected_currency: "USD",
+						},
+					]);
+
+				const mismatches = await repo.listMismatches("org-1");
+				expect(mismatches).toHaveLength(1);
+				expect(mismatches[0].mismatchType).toBe("partial_payment");
+				expect(mismatches[0].description).toBe(
+					"Missing or invalid checkout intent line for confirmed class entitlement.",
+				);
+				expect(mismatches[0].entitlementId).toBe("ent-pg-invalid-line");
 			} finally {
 				unsafeSpy.mockRestore();
 			}

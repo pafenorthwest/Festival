@@ -119,8 +119,9 @@ export interface SeedClassEntitlement {
 export interface SeedCheckoutIntentLine {
 	id: string;
 	checkoutIntentId: string;
+	organizationId?: string;
 	amount: string;
-	currencyCode: string;
+	currencyCode?: string;
 }
 
 export interface SeedCheckoutIntent {
@@ -404,35 +405,75 @@ export class InMemoryBillingRepository implements BillingRepository {
 				entitlement.paidAmountCents <= 0
 			)
 				continue;
+
 			const intent = this.checkoutIntents.find(
 				(ci) =>
 					ci.organizationId === organizationId &&
 					ci.id === entitlement.checkoutIntentId,
 			);
-			if (!intent) continue;
-
-			let expectedAmount: string | null = null;
-			let expectedCurrency: string = intent.currencyCode ?? "USD";
 
 			if (entitlement.checkoutIntentLineId) {
-				const line = this.checkoutIntentLines.find(
-					(cil) =>
-						cil.id === entitlement.checkoutIntentLineId &&
-						cil.checkoutIntentId === entitlement.checkoutIntentId,
-				);
-				if (line) {
-					expectedAmount = line.amount;
-					expectedCurrency = line.currencyCode ?? expectedCurrency;
+				const line = intent
+					? this.checkoutIntentLines.find(
+							(cil) =>
+								cil.id === entitlement.checkoutIntentLineId &&
+								cil.checkoutIntentId === entitlement.checkoutIntentId &&
+								(cil.organizationId === undefined ||
+									cil.organizationId === organizationId),
+						)
+					: undefined;
+
+				if (!line) {
+					results.push({
+						id: randomUUID(),
+						organizationId,
+						customerId: entitlement.parentCustomerId,
+						mismatchType: "partial_payment",
+						description:
+							"Missing or invalid checkout intent line for confirmed class entitlement.",
+						entitlementId: entitlement.id,
+						shopifyOrderId: entitlement.shopifyOrderGid,
+						amountCents: entitlement.paidAmountCents,
+						currencyCode: entitlement.paidCurrencyCode,
+						createdAtIso: new Date().toISOString(),
+					});
+					continue;
 				}
-			}
 
-			if (expectedAmount === null && intent.amount) {
-				expectedAmount = intent.amount;
-			}
-
-			if (expectedAmount) {
+				const expectedAmount = line.amount;
+				const expectedCurrency =
+					line.currencyCode ?? intent?.currencyCode ?? "USD";
 				const expectedCents = Math.round(
 					Number.parseFloat(expectedAmount) * 100,
+				);
+
+				if (
+					entitlement.paidAmountCents < expectedCents ||
+					entitlement.paidCurrencyCode !== expectedCurrency
+				) {
+					results.push({
+						id: randomUUID(),
+						organizationId,
+						customerId: entitlement.parentCustomerId,
+						mismatchType: "partial_payment",
+						description: "Partial payment received for class entitlement.",
+						entitlementId: entitlement.id,
+						shopifyOrderId: entitlement.shopifyOrderGid,
+						amountCents: entitlement.paidAmountCents,
+						currencyCode: entitlement.paidCurrencyCode,
+						createdAtIso: new Date().toISOString(),
+					});
+				}
+				continue;
+			}
+
+			// Legacy / singleton without checkoutIntentLineId: fallback to intent.amount
+			if (!intent) continue;
+
+			if (intent.amount) {
+				const expectedCurrency = intent.currencyCode ?? "USD";
+				const expectedCents = Math.round(
+					Number.parseFloat(intent.amount) * 100,
 				);
 				if (
 					entitlement.paidAmountCents < expectedCents ||
