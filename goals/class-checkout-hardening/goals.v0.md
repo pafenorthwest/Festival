@@ -43,4 +43,3 @@
 - [G4] Diagnostics and public error payloads omit raw error text and all
   sensitive/request/customer fields; no secret-canary/debug-only code remains.
 - [G5] Focused backend lint, build, and affected checkout/route tests pass.
-
