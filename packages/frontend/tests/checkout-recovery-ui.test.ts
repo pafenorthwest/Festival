@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import {
+	ApiError,
 	customerCheckoutRecoverySignInPath,
 	getAdminCustomerCheckoutIntents,
 	getCustomerCheckoutRecoveryReview,
@@ -14,6 +15,13 @@ import {
 	isOrganizationPageRoute,
 	parseRoute,
 } from "../src/lib/routes.js";
+import {
+	CLASS_CHECKOUT_RECOVERY_UNSUPPORTED_CODE,
+	CLASS_CHECKOUT_RECOVERY_UNSUPPORTED_MESSAGE,
+	isClassCheckoutRecoveryUnsupported,
+	resolveErrorMessage,
+	shouldHideResumeAction,
+} from "../src/pages/CustomerCheckoutRecoveryPage.js";
 
 const read = (path: string) => Bun.file(new URL(path, import.meta.url)).text();
 
@@ -337,5 +345,150 @@ describe("checkout recovery UI components wiring", () => {
 		expect(app).toContain('app.route().kind === "org-admin-checkout-recovery"');
 		expect(app).toContain("<CustomerCheckoutRecoveryPage");
 		expect(app).toContain('app.route().kind === "org-checkout-recovery"');
+	});
+});
+
+describe("customer checkout recovery error handling and unsupported class recovery", () => {
+	it("resolveErrorMessage returns restart guidance for class_checkout_recovery_unsupported code or message", () => {
+		const apiErrWithCode = new ApiError(
+			"Conflict",
+			409,
+			CLASS_CHECKOUT_RECOVERY_UNSUPPORTED_CODE,
+		);
+		expect(resolveErrorMessage(apiErrWithCode)).toBe(
+			CLASS_CHECKOUT_RECOVERY_UNSUPPORTED_MESSAGE,
+		);
+
+		expect(
+			resolveErrorMessage({
+				code: "class_checkout_recovery_unsupported",
+			}),
+		).toBe(CLASS_CHECKOUT_RECOVERY_UNSUPPORTED_MESSAGE);
+
+		expect(
+			resolveErrorMessage(new Error("class_checkout_recovery_unsupported")),
+		).toBe(CLASS_CHECKOUT_RECOVERY_UNSUPPORTED_MESSAGE);
+
+		expect(
+			resolveErrorMessage(
+				new Error("Failed: class_checkout_recovery_unsupported error occurred"),
+			),
+		).toBe(CLASS_CHECKOUT_RECOVERY_UNSUPPORTED_MESSAGE);
+
+		expect(
+			isClassCheckoutRecoveryUnsupported(
+				CLASS_CHECKOUT_RECOVERY_UNSUPPORTED_MESSAGE,
+			),
+		).toBe(true);
+		expect(isClassCheckoutRecoveryUnsupported(apiErrWithCode)).toBe(true);
+	});
+
+	it("general 409 with arbitrary message does NOT return link already used message, but passes message through", () => {
+		const arbitrary409 = new ApiError(
+			"Membership division is unavailable.",
+			409,
+		);
+		expect(resolveErrorMessage(arbitrary409)).toBe(
+			"Membership division is unavailable.",
+		);
+
+		expect(
+			resolveErrorMessage({
+				status: 409,
+				message: "Some arbitrary conflict message",
+			}),
+		).toBe("Some arbitrary conflict message");
+
+		const consumedMsgErr = new ApiError(
+			"Recovery request has already been used.",
+			409,
+		);
+		expect(resolveErrorMessage(consumedMsgErr)).toBe(
+			"This recovery link has already been used to resume checkout.",
+		);
+
+		const consumedCodeErr = new ApiError("Request consumed", 409, "consumed");
+		expect(resolveErrorMessage(consumedCodeErr)).toBe(
+			"This recovery link has already been used to resume checkout.",
+		);
+	});
+
+	it("hides Resume Purchase action when error is class_checkout_recovery_unsupported for both loadError and resumeError", async () => {
+		expect(shouldHideResumeAction(null, null)).toBe(false);
+
+		// loadError triggers hiding
+		const loadErr = resolveErrorMessage(
+			new ApiError(
+				"Unsupported",
+				409,
+				CLASS_CHECKOUT_RECOVERY_UNSUPPORTED_CODE,
+			),
+		);
+		expect(shouldHideResumeAction(loadErr, null)).toBe(true);
+
+		// resumeError triggers hiding
+		const resumeErr = resolveErrorMessage(
+			new Error("class_checkout_recovery_unsupported"),
+		);
+		expect(shouldHideResumeAction(null, resumeErr)).toBe(true);
+
+		// general non-class error does NOT hide action
+		const otherErr = resolveErrorMessage(
+			new ApiError("Membership division unavailable", 409),
+		);
+		expect(shouldHideResumeAction(null, otherErr)).toBe(false);
+		expect(shouldHideResumeAction(otherErr, null)).toBe(false);
+
+		// verify CustomerCheckoutRecoveryPage source wiring
+		const customerPage = await read(
+			"../src/pages/CustomerCheckoutRecoveryPage.tsx",
+		);
+		expect(customerPage).toContain("isClassRecoveryUnsupported");
+		expect(customerPage).toMatch(
+			/<Show[\s\S]*?when=\{!isClassRecoveryUnsupported\(\)\}>[\s\S]*?<div class="recovery-actions">/,
+		);
+		expect(customerPage).toContain(
+			"CLASS_CHECKOUT_RECOVERY_UNSUPPORTED_MESSAGE",
+		);
+	});
+
+	it("reactively updates action visibility in Solid root for loadError and resumeError transitions", async () => {
+		const solidClient = await import("solid-js/dist/solid.js");
+		const { createSignal, createRoot } = solidClient;
+
+		createRoot((dispose) => {
+			const [loadError, setLoadError] = createSignal<string | null>(null);
+			const [resumeError, setResumeError] = createSignal<string | null>(null);
+			const isResumeActionVisible = () =>
+				!shouldHideResumeAction(loadError(), resumeError());
+
+			expect(isResumeActionVisible()).toBe(true);
+
+			// loadError with class_checkout_recovery_unsupported hides action
+			setLoadError(
+				resolveErrorMessage(
+					new ApiError("err", 409, CLASS_CHECKOUT_RECOVERY_UNSUPPORTED_CODE),
+				),
+			);
+			expect(isResumeActionVisible()).toBe(false);
+
+			// clearing loadError restores action
+			setLoadError(null);
+			expect(isResumeActionVisible()).toBe(true);
+
+			// resumeError with class_checkout_recovery_unsupported hides action
+			setResumeError(
+				resolveErrorMessage(new Error("class_checkout_recovery_unsupported")),
+			);
+			expect(isResumeActionVisible()).toBe(false);
+
+			// arbitrary error keeps action visible
+			setResumeError(
+				resolveErrorMessage(new ApiError("Generic network error", 500)),
+			);
+			expect(isResumeActionVisible()).toBe(true);
+
+			dispose();
+		});
 	});
 });
