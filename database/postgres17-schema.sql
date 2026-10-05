@@ -106,21 +106,26 @@ CREATE TABLE orgs.checkout_intents (
     customer_id text NOT NULL,
     session_id text NOT NULL,
     idempotency_key text NOT NULL,
+    intent_type text DEFAULT 'membership'::text NOT NULL,
     offering_id text,
-    entitlement_class text NOT NULL,
-    duration_days integer NOT NULL,
+    entitlement_class text,
+    duration_days integer,
+    festival_class_id text,
+    child_id text,
     shopify_product_gid text NOT NULL,
     shopify_variant_gid text NOT NULL,
-    policy_version text NOT NULL,
+    policy_version text,
     division_id text,
     division_name_snapshot text,
     staff_access_consent boolean DEFAULT false NOT NULL,
     amount text NOT NULL,
     currency_code text NOT NULL,
+    line_identity_protocol text,
     cart_reference text,
     status text NOT NULL,
     expires_at timestamp with time zone NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT checkout_intents_intent_type_check CHECK ((intent_type = ANY (ARRAY['membership'::text, 'class_entry'::text]))),
     CONSTRAINT checkout_intents_status_check CHECK ((status = ANY (ARRAY['creating'::text, 'ready'::text, 'checkout_started'::text, 'failed'::text, 'expired'::text, 'superseded'::text, 'approved'::text, 'rejected'::text, 'needs_review'::text])))
 );
 
@@ -144,6 +149,75 @@ CREATE TABLE orgs.checkout_intent_lines (
     division_id text,
     division_name_snapshot text,
     created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: class_entitlements; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.class_entitlements (
+    id text NOT NULL,
+    organization_id text NOT NULL,
+    festival_id text NOT NULL,
+    festival_class_id text NOT NULL,
+    parent_customer_id text NOT NULL,
+    child_id text NOT NULL,
+    checkout_intent_id text NOT NULL,
+    checkout_intent_line_id text,
+    shopify_order_gid text NOT NULL,
+    shopify_order_line_gid text NOT NULL,
+    paid_amount_cents integer NOT NULL,
+    paid_currency_code text NOT NULL,
+    status text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT class_entitlements_paid_amount_cents_check CHECK ((paid_amount_cents >= 0)),
+    CONSTRAINT class_entitlements_paid_currency_code_check CHECK ((paid_currency_code ~ '^[A-Z]{3}$'::text)),
+    CONSTRAINT class_entitlements_status_check CHECK ((status = ANY (ARRAY['confirmed'::text, 'waitlisted'::text, 'cancelled'::text, 'revoked'::text])))
+);
+
+
+--
+-- Name: registration_change_logs; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.registration_change_logs (
+    id text DEFAULT (gen_random_uuid())::text NOT NULL,
+    organization_id text NOT NULL,
+    festival_id text,
+    class_entitlement_id text NOT NULL,
+    action text NOT NULL,
+    actor_uid text NOT NULL,
+    actor_role text NOT NULL,
+    previous_state jsonb NOT NULL,
+    new_state jsonb NOT NULL,
+    reason text,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT registration_change_logs_action_check CHECK ((action = ANY (ARRAY['drop'::text, 'transfer'::text, 'waitlist_promote'::text, 'revert'::text]))),
+    CONSTRAINT registration_change_logs_actor_role_check CHECK ((actor_role = ANY (ARRAY['customer'::text, 'admin'::text, 'system'::text])))
+);
+
+
+--
+-- Name: refund_events; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.refund_events (
+    id text DEFAULT (gen_random_uuid())::text NOT NULL,
+    organization_id text NOT NULL,
+    registration_change_log_id text,
+    class_entitlement_id text,
+    shopify_order_id text,
+    shopify_order_line_id text,
+    shopify_refund_id text,
+    amount_cents integer NOT NULL,
+    currency text DEFAULT 'USD'::text NOT NULL,
+    status text NOT NULL,
+    failure_reason text,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    updated_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT refund_events_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'completed'::text, 'failed'::text])))
 );
 
 
@@ -823,12 +897,18 @@ CREATE TABLE orgs.shopify_webhook_deliveries (
     status text NOT NULL,
     attempt_count integer DEFAULT 0 NOT NULL,
     failure_category text,
+    failure_stage text,
+    failure_code text,
+    shopify_request_id text,
+    failed_at timestamp with time zone,
     received_at timestamp with time zone NOT NULL,
     processing_started_at timestamp with time zone,
     processed_at timestamp with time zone,
     CONSTRAINT shopify_webhook_deliveries_api_version_check CHECK ((api_version = '2026-07'::text)),
     CONSTRAINT shopify_webhook_deliveries_attempt_count_check CHECK ((attempt_count >= 0)),
     CONSTRAINT shopify_webhook_deliveries_failure_category_check CHECK ((failure_category = ANY (ARRAY['upstream'::text, 'persistence'::text, 'invalid'::text]))),
+    CONSTRAINT shopify_webhook_deliveries_failure_code_check CHECK (((failure_code IS NULL) OR (failure_code = ANY (ARRAY['shopify_upstream'::text, 'shopify_transport'::text, 'invalid_data'::text, 'paid_line_conflict'::text, 'persistence'::text, 'unexpected'::text])))),
+    CONSTRAINT shopify_webhook_deliveries_failure_stage_check CHECK ((failure_stage = ANY (ARRAY['order_read'::text, 'projection'::text]))),
     CONSTRAINT shopify_webhook_deliveries_payload_sha256_check CHECK ((payload_sha256 ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT shopify_webhook_deliveries_status_check CHECK ((status = ANY (ARRAY['received'::text, 'processing'::text, 'processed'::text, 'failed'::text]))),
     CONSTRAINT shopify_webhook_deliveries_topic_check CHECK ((topic = 'orders/paid'::text))
@@ -1004,6 +1084,30 @@ ALTER TABLE ONLY orgs.checkout_intents
 
 ALTER TABLE ONLY orgs.checkout_intent_lines
     ADD CONSTRAINT checkout_intent_lines_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: class_entitlements class_entitlements_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.class_entitlements
+    ADD CONSTRAINT class_entitlements_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: refund_events refund_events_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.refund_events
+    ADD CONSTRAINT refund_events_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: registration_change_logs registration_change_logs_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.registration_change_logs
+    ADD CONSTRAINT registration_change_logs_pkey PRIMARY KEY (id);
 
 
 --
@@ -1627,6 +1731,125 @@ ALTER TABLE ONLY orgs.volunteers
 --
 
 CREATE UNIQUE INDEX checkout_intents_scope_key ON orgs.checkout_intents USING btree (organization_id, customer_id, session_id, idempotency_key);
+
+
+--
+-- Name: checkout_intent_lines_checkout_intent_id_line_index_key; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE UNIQUE INDEX checkout_intent_lines_checkout_intent_id_line_index_key ON orgs.checkout_intent_lines USING btree (checkout_intent_id, line_index);
+
+
+--
+-- Name: class_entitlements_checkout_intent_line_id_key; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE UNIQUE INDEX class_entitlements_checkout_intent_line_id_key ON orgs.class_entitlements USING btree (checkout_intent_line_id) WHERE (checkout_intent_line_id IS NOT NULL);
+
+
+--
+-- Name: idx_class_entitlements_order_line; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_class_entitlements_order_line ON orgs.class_entitlements USING btree (organization_id, shopify_order_line_gid);
+
+
+--
+-- Name: idx_class_entitlements_checkout_intent; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_class_entitlements_checkout_intent ON orgs.class_entitlements USING btree (organization_id, checkout_intent_id);
+
+
+--
+-- Name: idx_class_entitlements_org_child; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_class_entitlements_org_child ON orgs.class_entitlements USING btree (organization_id, child_id);
+
+
+--
+-- Name: idx_class_entitlements_org_class; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_class_entitlements_org_class ON orgs.class_entitlements USING btree (organization_id, festival_class_id);
+
+
+--
+-- Name: idx_class_entitlements_org_festival; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_class_entitlements_org_festival ON orgs.class_entitlements USING btree (organization_id, festival_id);
+
+
+--
+-- Name: idx_class_entitlements_org_parent; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_class_entitlements_org_parent ON orgs.class_entitlements USING btree (organization_id, parent_customer_id);
+
+
+--
+-- Name: idx_class_entitlements_shopify_order; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_class_entitlements_shopify_order ON orgs.class_entitlements USING btree (organization_id, shopify_order_gid);
+
+
+--
+-- Name: idx_checkout_intent_lines_child_id; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_checkout_intent_lines_child_id ON orgs.checkout_intent_lines USING btree (child_id);
+
+
+--
+-- Name: idx_checkout_intent_lines_festival_class_id; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_checkout_intent_lines_festival_class_id ON orgs.checkout_intent_lines USING btree (festival_class_id);
+
+
+--
+-- Name: idx_checkout_intent_lines_intent_id; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_checkout_intent_lines_intent_id ON orgs.checkout_intent_lines USING btree (checkout_intent_id);
+
+
+--
+-- Name: idx_checkout_intents_org_child; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_checkout_intents_org_child ON orgs.checkout_intents USING btree (organization_id, child_id) WHERE (child_id IS NOT NULL);
+
+
+--
+-- Name: idx_checkout_intents_org_class; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_checkout_intents_org_class ON orgs.checkout_intents USING btree (organization_id, festival_class_id) WHERE (festival_class_id IS NOT NULL);
+
+
+--
+-- Name: idx_refund_events_org_class_entitlement; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_refund_events_org_class_entitlement ON orgs.refund_events USING btree (organization_id, class_entitlement_id);
+
+
+--
+-- Name: idx_registration_change_logs_org_class_entitlement; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_registration_change_logs_org_class_entitlement ON orgs.registration_change_logs USING btree (organization_id, class_entitlement_id);
+
+
+--
+-- Name: idx_registration_change_logs_org_festival; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_registration_change_logs_org_festival ON orgs.registration_change_logs USING btree (organization_id, festival_id);
 
 
 --
@@ -2262,6 +2485,126 @@ ALTER TABLE ONLY orgs.checkout_intent_lines
 
 ALTER TABLE ONLY orgs.checkout_intent_lines
     ADD CONSTRAINT checkout_intent_lines_offering_id_fkey FOREIGN KEY (offering_id) REFERENCES orgs.products(id);
+
+
+--
+-- Name: checkout_intents checkout_intents_child_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.checkout_intents
+    ADD CONSTRAINT checkout_intents_child_id_fkey FOREIGN KEY (child_id) REFERENCES orgs.festival_children(id);
+
+
+--
+-- Name: checkout_intents checkout_intents_festival_class_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.checkout_intents
+    ADD CONSTRAINT checkout_intents_festival_class_id_fkey FOREIGN KEY (festival_class_id) REFERENCES orgs.festival_class_configurations(id);
+
+
+--
+-- Name: class_entitlements class_entitlements_checkout_intent_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.class_entitlements
+    ADD CONSTRAINT class_entitlements_checkout_intent_id_fkey FOREIGN KEY (checkout_intent_id) REFERENCES orgs.checkout_intents(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: class_entitlements class_entitlements_checkout_intent_line_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.class_entitlements
+    ADD CONSTRAINT class_entitlements_checkout_intent_line_id_fkey FOREIGN KEY (checkout_intent_line_id) REFERENCES orgs.checkout_intent_lines(id) ON DELETE SET NULL;
+
+
+--
+-- Name: class_entitlements class_entitlements_child_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.class_entitlements
+    ADD CONSTRAINT class_entitlements_child_id_fkey FOREIGN KEY (child_id) REFERENCES orgs.festival_children(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: class_entitlements class_entitlements_festival_class_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.class_entitlements
+    ADD CONSTRAINT class_entitlements_festival_class_id_fkey FOREIGN KEY (festival_class_id) REFERENCES orgs.festival_class_configurations(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: class_entitlements class_entitlements_festival_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.class_entitlements
+    ADD CONSTRAINT class_entitlements_festival_id_fkey FOREIGN KEY (festival_id) REFERENCES orgs.festivals(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: class_entitlements class_entitlements_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.class_entitlements
+    ADD CONSTRAINT class_entitlements_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: class_entitlements class_entitlements_parent_customer_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.class_entitlements
+    ADD CONSTRAINT class_entitlements_parent_customer_id_organization_id_fkey FOREIGN KEY (parent_customer_id, organization_id) REFERENCES orgs.festival_customers(id, organization_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: registration_change_logs registration_change_logs_class_entitlement_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.registration_change_logs
+    ADD CONSTRAINT registration_change_logs_class_entitlement_id_fkey FOREIGN KEY (class_entitlement_id) REFERENCES orgs.class_entitlements(id) ON DELETE CASCADE;
+
+
+--
+-- Name: registration_change_logs registration_change_logs_festival_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.registration_change_logs
+    ADD CONSTRAINT registration_change_logs_festival_id_fkey FOREIGN KEY (festival_id) REFERENCES orgs.festivals(id) ON DELETE CASCADE;
+
+
+--
+-- Name: registration_change_logs registration_change_logs_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.registration_change_logs
+    ADD CONSTRAINT registration_change_logs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: refund_events refund_events_class_entitlement_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.refund_events
+    ADD CONSTRAINT refund_events_class_entitlement_id_fkey FOREIGN KEY (class_entitlement_id) REFERENCES orgs.class_entitlements(id) ON DELETE CASCADE;
+
+
+--
+-- Name: refund_events refund_events_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.refund_events
+    ADD CONSTRAINT refund_events_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: refund_events refund_events_registration_change_log_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.refund_events
+    ADD CONSTRAINT refund_events_registration_change_log_id_fkey FOREIGN KEY (registration_change_log_id) REFERENCES orgs.registration_change_logs(id) ON DELETE SET NULL;
 
 
 --

@@ -7,6 +7,21 @@ test("commits a normalized PostgreSQL 17 schema-only snapshot", async () => {
 	expect(snapshot).toContain("CREATE SCHEMA orgs;");
 	expect(snapshot).toContain("CREATE TABLE orgs.festival_children");
 	expect(snapshot).toContain("CREATE TABLE orgs.festival_child_age_snapshots");
+	expect(snapshot).toContain("CREATE TABLE orgs.checkout_intent_lines");
+	expect(snapshot).toContain("checkout_intents_intent_type_check");
+	expect(snapshot).toContain("line_identity_protocol text");
+	expect(snapshot).toContain("CREATE TABLE orgs.class_entitlements");
+	expect(snapshot).toContain("CREATE TABLE orgs.registration_change_logs");
+	expect(snapshot).toContain("CREATE TABLE orgs.refund_events");
+	expect(snapshot).toContain("shopify_order_line_id text");
+	expect(snapshot).toContain("failure_stage text");
+	expect(snapshot).toContain("failure_code text");
+	expect(snapshot).toContain("shopify_request_id text");
+	expect(snapshot).toContain("failed_at timestamp with time zone");
+	expect(snapshot).toContain(
+		"checkout_intent_lines_checkout_intent_id_line_index_key",
+	);
+	expect(snapshot).toContain("class_entitlements_checkout_intent_line_id_key");
 	expect(snapshot).toContain("CREATE TABLE orgs.membership_entitlements");
 	expect(snapshot).toContain(
 		"CREATE TABLE orgs.membership_entitlement_divisions",

@@ -293,6 +293,12 @@ describe("ShopifyOrderProjectionService - Multi-line Class Orders", () => {
 					quantity: 1,
 					paidAmount: "50.00",
 					paidCurrencyCode: "USD",
+					customAttributes: [
+						{
+							key: "festival_checkout_intent_line_id",
+							value: multiIntent.intent.lines?.[0]?.id ?? "",
+						},
+					],
 				},
 				{
 					id: "gid://shopify/LineItem/2002",
@@ -301,6 +307,12 @@ describe("ShopifyOrderProjectionService - Multi-line Class Orders", () => {
 					quantity: 1,
 					paidAmount: "40.00",
 					paidCurrencyCode: "USD",
+					customAttributes: [
+						{
+							key: "festival_checkout_intent_line_id",
+							value: multiIntent.intent.lines?.[1]?.id ?? "",
+						},
+					],
 				},
 			],
 		};
@@ -429,6 +441,12 @@ describe("ShopifyOrderProjectionService - Multi-line Class Orders", () => {
 					quantity: 1,
 					paidAmount: "50.00",
 					paidCurrencyCode: "USD",
+					customAttributes: [
+						{
+							key: "festival_checkout_intent_line_id",
+							value: multiIntent.intent.lines?.[0]?.id ?? "",
+						},
+					],
 				},
 			],
 		};
@@ -453,7 +471,7 @@ describe("ShopifyOrderProjectionService - Multi-line Class Orders", () => {
 			f.customer.id,
 		);
 		expect(decisions).toMatchObject([
-			{ status: "rejected", reasonCode: "offering_mismatch" },
+			{ status: "needs_review", reasonCode: "correlation_invalid" },
 		]);
 	});
 });

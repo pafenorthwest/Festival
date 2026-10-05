@@ -41,6 +41,7 @@ export interface CreateRefundEventInput {
 	registrationChangeLogId?: string | null;
 	classEntitlementId?: string | null;
 	shopifyOrderId?: string | null;
+	shopifyOrderLineId?: string | null;
 	shopifyRefundId?: string | null;
 	amountCents: number;
 	currency?: string;
@@ -202,6 +203,7 @@ export class InMemoryRegistrationChangeRepository
 			registrationChangeLogId: input.registrationChangeLogId ?? null,
 			classEntitlementId: input.classEntitlementId ?? null,
 			shopifyOrderId: input.shopifyOrderId ?? null,
+			shopifyOrderLineId: input.shopifyOrderLineId ?? null,
 			shopifyRefundId: input.shopifyRefundId ?? null,
 			amountCents: input.amountCents,
 			currency: input.currency ?? "USD",
@@ -296,6 +298,9 @@ function refundEventFromRow(row: Record<string, unknown>): RefundEvent {
 			? String(row.class_entitlement_id)
 			: null,
 		shopifyOrderId: row.shopify_order_id ? String(row.shopify_order_id) : null,
+		shopifyOrderLineId: row.shopify_order_line_id
+			? String(row.shopify_order_line_id)
+			: null,
 		shopifyRefundId: row.shopify_refund_id
 			? String(row.shopify_refund_id)
 			: null,
@@ -391,15 +396,16 @@ export class PostgresRegistrationChangeRepository
 		const currency = input.currency ?? "USD";
 		const rows = (await sql.unsafe(
 			`INSERT INTO ${this.schema}.refund_events (
-				id, organization_id, registration_change_log_id, class_entitlement_id, shopify_order_id, shopify_refund_id, amount_cents, currency, status, failure_reason, created_at, updated_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11::timestamptz, clock_timestamp()), COALESCE($12::timestamptz, clock_timestamp()))
-			RETURNING id, organization_id, registration_change_log_id, class_entitlement_id, shopify_order_id, shopify_refund_id, amount_cents, currency, status, failure_reason, created_at::text, updated_at::text`,
+				id, organization_id, registration_change_log_id, class_entitlement_id, shopify_order_id, shopify_order_line_id, shopify_refund_id, amount_cents, currency, status, failure_reason, created_at, updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE($12::timestamptz, clock_timestamp()), COALESCE($13::timestamptz, clock_timestamp()))
+			RETURNING id, organization_id, registration_change_log_id, class_entitlement_id, shopify_order_id, shopify_order_line_id, shopify_refund_id, amount_cents, currency, status, failure_reason, created_at::text, updated_at::text`,
 			[
 				id,
 				input.organizationId,
 				input.registrationChangeLogId ?? null,
 				input.classEntitlementId ?? null,
 				input.shopifyOrderId ?? null,
+				input.shopifyOrderLineId ?? null,
 				input.shopifyRefundId ?? null,
 				input.amountCents,
 				currency,
@@ -430,7 +436,7 @@ export class PostgresRegistrationChangeRepository
 			params = [organizationIdOrId];
 		}
 		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, registration_change_log_id, class_entitlement_id, shopify_order_id, shopify_refund_id, amount_cents, currency, status, failure_reason, created_at::text, updated_at::text
+			`SELECT id, organization_id, registration_change_log_id, class_entitlement_id, shopify_order_id, shopify_order_line_id, shopify_refund_id, amount_cents, currency, status, failure_reason, created_at::text, updated_at::text
 			FROM ${this.schema}.refund_events
 			WHERE ${conditions}`,
 			params,
@@ -477,7 +483,7 @@ export class PostgresRegistrationChangeRepository
 			`UPDATE ${this.schema}.refund_events
 			SET ${setClauses.join(", ")}
 			WHERE ${whereClause}
-			RETURNING id, organization_id, registration_change_log_id, class_entitlement_id, shopify_order_id, shopify_refund_id, amount_cents, currency, status, failure_reason, created_at::text, updated_at::text`,
+			RETURNING id, organization_id, registration_change_log_id, class_entitlement_id, shopify_order_id, shopify_order_line_id, shopify_refund_id, amount_cents, currency, status, failure_reason, created_at::text, updated_at::text`,
 			params,
 		)) as Array<Record<string, unknown>>;
 		return rows[0] ? refundEventFromRow(rows[0]) : null;

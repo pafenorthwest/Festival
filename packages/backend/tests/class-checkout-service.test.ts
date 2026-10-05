@@ -5,7 +5,16 @@ import type {
 	FestivalRecord,
 	RepertoirePiece,
 } from "@festival/common";
-import { InMemoryCheckoutRepository } from "../src/checkout/checkout-repository.js";
+import {
+	CHECKOUT_INTENT_LINE_ID_ATTRIBUTE_KEY,
+	type ExpectedClassCheckoutIntentLine,
+	requireClassCheckoutIntentLineMapping,
+} from "../src/checkout/checkout-line-helpers.js";
+import {
+	type CheckoutIntentLineItemRecord,
+	CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL,
+	InMemoryCheckoutRepository,
+} from "../src/checkout/checkout-repository.js";
 import {
 	ClassCheckoutService,
 	type ClassCheckoutStorefront,
@@ -289,6 +298,9 @@ describe("ClassCheckoutService", () => {
 		expect(stored).toBeDefined();
 		expect(stored?.id).toBe(result.intentId);
 		expect(stored?.intentType).toBe("class_entry");
+		expect(stored?.lineIdentityProtocol).toBe(
+			CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL,
+		);
 		expect(stored?.festivalClassId).toBe(f.classConfig.id);
 		expect(stored?.childId).toBe(f.child.id);
 		expect(stored?.shopifyProductGid).toBe("gid://shopify/Product/100");
@@ -1111,6 +1123,103 @@ describe("ClassCheckoutService", () => {
 		expect(createdIntent?.status).toBe("failed");
 	});
 
+	for (const scenario of [
+		{
+			name: "has no persisted lines",
+			corrupt: () => [],
+		},
+		{
+			name: "has a noncanonical persisted line ID",
+			corrupt: (lines: readonly CheckoutIntentLineItemRecord[]) =>
+				lines.map((line, index) =>
+					index === 0 ? { ...line, id: line.id.toUpperCase() } : line,
+				),
+		},
+		{
+			name: "does not match the validated child mapping",
+			corrupt: (lines: readonly CheckoutIntentLineItemRecord[]) =>
+				lines.map((line, index) =>
+					index === 0 ? { ...line, childId: "wrong-child" } : line,
+				),
+		},
+	] as const) {
+		it(`fails safely before metadata or cart creation when the durable intent ${scenario.name}`, async () => {
+			const f = await createFixture();
+			const createCartSpy = spyOn(f.storefront, "createCart");
+			const insertMetadataSpy = spyOn(f.checkout, "insertRegistrationMetadata");
+			const markFailedSpy = spyOn(f.checkout, "markFailed");
+			const originalCreateIntent = f.checkout.createIntent.bind(f.checkout);
+
+			f.checkout.createIntent = async (input) => {
+				const outcome = await originalCreateIntent(input);
+				if (outcome.kind !== "created") return outcome;
+				const corruptedLines = scenario.corrupt(outcome.intent.lines ?? []);
+				return {
+					...outcome,
+					intent: { ...outcome.intent, lines: corruptedLines },
+				};
+			};
+
+			await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+				status: 503,
+				code: "checkout_retryable_upstream",
+			});
+
+			expect(createCartSpy).not.toHaveBeenCalled();
+			expect(insertMetadataSpy).not.toHaveBeenCalled();
+			const intents = (
+				f.checkout as unknown as {
+					intents: Map<string, { id: string; status: string }>;
+				}
+			).intents;
+			const createdIntent = [...intents.values()][0];
+			expect(markFailedSpy).toHaveBeenCalledWith(createdIntent.id);
+			expect(createdIntent.status).toBe("failed");
+		});
+	}
+
+	it("rejects duplicate durable intent-line IDs rather than mapping by position", () => {
+		const checkoutIntentId = "12345678-1234-4234-8234-123456789abc";
+		const duplicateLineId = "87654321-1234-4234-8234-123456789abc";
+		const lines = [
+			{
+				id: duplicateLineId,
+				checkoutIntentId,
+				lineIndex: 0,
+			},
+			{
+				id: duplicateLineId,
+				checkoutIntentId,
+				lineIndex: 1,
+			},
+		] as CheckoutIntentLineItemRecord[];
+		const expectedLines: ExpectedClassCheckoutIntentLine[] = [
+			{
+				festivalClassId: "class-1",
+				childId: "child-1",
+				shopifyProductGid: "gid://shopify/Product/1",
+				shopifyVariantGid: "gid://shopify/ProductVariant/1",
+				amount: "50.00",
+				currencyCode: "USD",
+			},
+			{
+				festivalClassId: "class-2",
+				childId: "child-2",
+				shopifyProductGid: "gid://shopify/Product/2",
+				shopifyVariantGid: "gid://shopify/ProductVariant/2",
+				amount: "50.00",
+				currencyCode: "USD",
+			},
+		];
+
+		expect(() =>
+			requireClassCheckoutIntentLineMapping(
+				{ id: checkoutIntentId, lines },
+				expectedLines,
+			),
+		).toThrow("Checkout intent line persistence");
+	});
+
 	it("compensates class-registration metadata write failures, marking intent failed and allowing retry", async () => {
 		const f = await createFixture();
 		const markFailedSpy = spyOn(f.checkout, "markFailed");
@@ -1350,9 +1459,15 @@ describe("ClassCheckoutService", () => {
 		expect(cartInput.lines[0].merchandiseId).toBe(
 			"gid://shopify/ProductVariant/200",
 		);
+		expect(cartInput.lines[0].attributes?.[0].key).toBe(
+			CHECKOUT_INTENT_LINE_ID_ATTRIBUTE_KEY,
+		);
 		expect(cartInput.lines[0].attributes?.[0].value).toBe(line1.id);
 		expect(cartInput.lines[1].merchandiseId).toBe(
 			"gid://shopify/ProductVariant/201",
+		);
+		expect(cartInput.lines[1].attributes?.[0].key).toBe(
+			CHECKOUT_INTENT_LINE_ID_ATTRIBUTE_KEY,
 		);
 		expect(cartInput.lines[1].attributes?.[0].value).toBe(line2.id);
 	});
