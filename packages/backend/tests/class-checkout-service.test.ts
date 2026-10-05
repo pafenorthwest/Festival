@@ -1892,4 +1892,174 @@ describe("ClassCheckoutService", () => {
 			code: "already_registered",
 		});
 	});
+
+	it("start(...) rejects with 400 and blocks checkout when candidate-marked checkout line is missing prerequisite", async () => {
+		const f = await createFixture();
+		const festivalId = f.festival?.id ?? "";
+		const prerequisiteSubtype =
+			await f.organizations.createRegistrationCatalogValue({
+				organizationId: f.organization.id,
+				kind: "class_subtype",
+				displayName: "Prerequisite Solo Subtype",
+				normalizedName: "prerequisite solo subtype",
+			});
+		const masterclassSubtype =
+			await f.organizations.createRegistrationCatalogValue({
+				organizationId: f.organization.id,
+				kind: "class_subtype",
+				displayName: "Dependent Masterclass Subtype",
+				normalizedName: "dependent masterclass subtype",
+				requiredSubtypeId: prerequisiteSubtype.id,
+			});
+		const masterclassClass =
+			await f.organizations.createFestivalClassConfiguration({
+				organizationId: f.organization.id,
+				festivalId,
+				displayName: "Dependent Masterclass Class",
+				classSubtypeId: masterclassSubtype.id,
+				divisionId: f.division.id,
+				minimumAge: 8,
+				maximumAge: 12,
+				price: "75.00",
+				maximumPerformancePieces: 1,
+				performanceMinutes: 15,
+				capacity: 10,
+				isActive: true,
+				shopifyProductGid: "gid://shopify/Product/108",
+				shopifyVariantGid: "gid://shopify/ProductVariant/208",
+			});
+
+		const secondChild = await f.customers.createChild({
+			organizationId: f.organization.id,
+			parentCustomerId: f.customer.id,
+			displayName: "Second Performer",
+		});
+		await f.customers.createChildAgeSnapshot({
+			organizationId: f.organization.id,
+			childId: secondChild.id,
+			asOfDate: "2026-03-01",
+			age: 10,
+		});
+
+		const idempotencyKey = "77777777-8888-9999-aaaa-bbbbbbbbbbbb";
+		await expect(
+			f.service.start({
+				organizationId: f.organization.id,
+				customerId: f.customer.id,
+				sessionId: f.session.sessionId,
+				idempotencyKey,
+				buyerAccessToken: "buyer-token-test",
+				lineItems: [
+					{
+						festivalClassId: f.classConfig.id,
+						childId: f.child.id,
+						teacherId: f.teacherId,
+						pieces: f.defaultPieces,
+					},
+					{
+						id: "candidate:masterclass",
+						festivalClassId: masterclassClass.id,
+						childId: secondChild.id,
+						teacherId: f.teacherId,
+						pieces: f.defaultPieces,
+						isCandidate: true,
+					} as unknown as ClassCheckoutLineItemInput,
+				],
+			}),
+		).rejects.toMatchObject({
+			status: 400,
+			code: "missing_prerequisite",
+		});
+
+		const outcome = await f.checkout.getOutcome({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			sessionId: f.session.sessionId,
+			idempotencyKey,
+		});
+		expect(outcome).toBeNull();
+	});
+
+	it("start(...) strips candidate markers and evaluates complete cart normally", async () => {
+		const f = await createFixture();
+		const festivalId = f.festival?.id ?? "";
+		const prerequisiteSubtype =
+			await f.organizations.createRegistrationCatalogValue({
+				organizationId: f.organization.id,
+				kind: "class_subtype",
+				displayName: "Solo Subtype",
+				normalizedName: "solo subtype",
+			});
+		const dependentSubtype =
+			await f.organizations.createRegistrationCatalogValue({
+				organizationId: f.organization.id,
+				kind: "class_subtype",
+				displayName: "Concerto Subtype",
+				normalizedName: "concerto subtype",
+				requiredSubtypeId: prerequisiteSubtype.id,
+			});
+		const soloClass = await f.organizations.createFestivalClassConfiguration({
+			organizationId: f.organization.id,
+			festivalId,
+			displayName: "Solo Piano Class",
+			classSubtypeId: prerequisiteSubtype.id,
+			divisionId: f.division.id,
+			minimumAge: 8,
+			maximumAge: 12,
+			price: "50.00",
+			maximumPerformancePieces: 1,
+			performanceMinutes: 10,
+			capacity: 10,
+			isActive: true,
+			shopifyProductGid: "gid://shopify/Product/109",
+			shopifyVariantGid: "gid://shopify/ProductVariant/209",
+		});
+		const concertoClass =
+			await f.organizations.createFestivalClassConfiguration({
+				organizationId: f.organization.id,
+				festivalId,
+				displayName: "Concerto Piano Class",
+				classSubtypeId: dependentSubtype.id,
+				divisionId: f.division.id,
+				minimumAge: 8,
+				maximumAge: 12,
+				price: "75.00",
+				maximumPerformancePieces: 1,
+				performanceMinutes: 15,
+				capacity: 10,
+				isActive: true,
+				shopifyProductGid: "gid://shopify/Product/110",
+				shopifyVariantGid: "gid://shopify/ProductVariant/210",
+			});
+
+		const idempotencyKey = "88888888-9999-aaaa-bbbb-cccccccccccc";
+		const result = await f.service.start({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			sessionId: f.session.sessionId,
+			idempotencyKey,
+			buyerAccessToken: "buyer-token-test",
+			lineItems: [
+				{
+					festivalClassId: soloClass.id,
+					childId: f.child.id,
+					teacherId: f.teacherId,
+					pieces: f.defaultPieces,
+				},
+				{
+					id: "candidate:concerto",
+					festivalClassId: concertoClass.id,
+					childId: f.child.id,
+					teacherId: f.teacherId,
+					pieces: f.defaultPieces,
+					isCandidate: true,
+				} as unknown as ClassCheckoutLineItemInput,
+			],
+		});
+
+		expect(result.checkoutUrl).toBeDefined();
+		expect(result.intent?.lines).toHaveLength(2);
+		expect(result.intent?.lines?.[0].festivalClassId).toBe(soloClass.id);
+		expect(result.intent?.lines?.[1].festivalClassId).toBe(concertoClass.id);
+	});
 });

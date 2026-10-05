@@ -455,6 +455,50 @@ describe("Customer Registration Routes", () => {
 			});
 		});
 
+		it("strips candidate markers from lineItems payload before calling checkoutService.start", async () => {
+			const { customerAccountService, classCheckoutService, calls } =
+				createFakeServices();
+			const app = createTestApp({
+				customerAccountService,
+				classCheckoutService,
+			});
+			const payload = {
+				lineItems: [
+					{
+						id: "candidate:class_1",
+						festivalClassId: "class_1",
+						childId: "child_1",
+						teacherId: "teacher_1",
+						pieces: [
+							{ title: "Piece 1", composer: "Bach", durationSeconds: 120 },
+						],
+						isCandidate: true,
+					},
+				],
+			};
+			const headers = {
+				...AUTH,
+				...JSON_HDR,
+				"Idempotency-Key": VALID_UUID,
+				"X-CSRF-Token": "csrf_1",
+				Origin: "https://fest.example.com",
+			};
+			const res = await req(
+				app,
+				"POST",
+				"/festivals/spring-2026/registration/checkout",
+				headers,
+				JSON.stringify(payload),
+			);
+			expect(res.status).toBe(200);
+			expect(calls.startCheckout.length).toBe(1);
+			const receivedLines = (
+				calls.startCheckout[0] as { lineItems: Array<Record<string, unknown>> }
+			).lineItems;
+			expect(receivedLines[0].isCandidate).toBeUndefined();
+			expect(receivedLines[0].id).toBe("class_1");
+		});
+
 		it("handles /class-checkout without festivalShortName in route", async () => {
 			const { customerAccountService, classCheckoutService, calls } =
 				createFakeServices();
@@ -912,6 +956,7 @@ describe("Customer Registration Routes", () => {
 				customerId: "cust_1",
 				festivalShortName: "spring-2026",
 				items: payload.items,
+				mode: "advisory",
 			});
 		});
 

@@ -64,6 +64,8 @@ export interface ClassEligibilityResult {
 	lineItemId?: string;
 }
 
+export type PurchaseEligibilityMode = "cart" | "advisory";
+
 export interface EvaluatePurchaseEligibilityInput {
 	organizationId: string;
 	festivalId: string;
@@ -74,6 +76,7 @@ export interface EvaluatePurchaseEligibilityInput {
 	subtypes: Map<string, RegistrationCatalogValue> | RegistrationCatalogValue[];
 	activeEntitlements: ClassEntitlement[];
 	isRegistrationOpen?: boolean;
+	mode?: PurchaseEligibilityMode;
 }
 
 export interface EvaluatePurchaseEligibilityResponse {
@@ -83,7 +86,8 @@ export interface EvaluatePurchaseEligibilityResponse {
 	items: ClassEligibilityResult[];
 }
 
-export interface ClassCheckoutLineItemInput extends ProposedPurchaseLineItem {
+export interface ClassCheckoutLineItemInput
+	extends Omit<ProposedPurchaseLineItem, "isCandidate"> {
 	id?: string;
 	festivalClassId: string;
 	classId?: string;
@@ -91,6 +95,7 @@ export interface ClassCheckoutLineItemInput extends ProposedPurchaseLineItem {
 	teacherId: string;
 	accompanistId?: string | null;
 	pieces: RepertoirePiece[];
+	isCandidate?: never;
 }
 
 export interface StartMultiLineClassCheckoutInput {
@@ -440,7 +445,51 @@ export function isCandidateLineItem(item: ProposedPurchaseLineItem): boolean {
 	);
 }
 
-export function evaluatePurchaseEligibility(
+export function stripCandidateMarker<T extends ProposedPurchaseLineItem>(
+	item: T,
+): T {
+	const { isCandidate: _candidate, id, ...rest } = item;
+	let cleanedId: string | undefined = id;
+	if (
+		typeof cleanedId === "string" &&
+		(cleanedId.startsWith("candidate:") ||
+			cleanedId.startsWith("candidate_") ||
+			cleanedId.startsWith("candidate-"))
+	) {
+		cleanedId = cleanedId.replace(/^candidate[:_-]/, "");
+		if (!cleanedId) {
+			cleanedId = undefined;
+		}
+	}
+	return {
+		...rest,
+		...(cleanedId !== undefined ? { id: cleanedId } : {}),
+	} as T;
+}
+
+function evaluateCartPurchaseEligibility(
+	input: EvaluatePurchaseEligibilityInput,
+): EvaluatePurchaseEligibilityResponse {
+	const cartItems = input.items.map(stripCandidateMarker);
+	const baseCtx: EvaluationContext = {
+		organizationId: input.organizationId,
+		festivalId: input.festivalId,
+		isRegistrationOpen: input.isRegistrationOpen !== false,
+		classesMap: normalizeClasses(input.classes),
+		subtypesMap: normalizeSubtypes(input.subtypes),
+		activeEntitlements: input.activeEntitlements,
+		items: cartItems,
+	};
+	const results = cartItems.map((item, index) =>
+		evaluateItemEligibility(item, index, baseCtx),
+	);
+	const isEligible =
+		baseCtx.isRegistrationOpen &&
+		results.every((r) => r.reasonCode === "AVAILABLE" && r.isEligible);
+	return { isEligible, eligible: isEligible, results, items: results };
+}
+
+function evaluateAdvisoryCandidateEligibility(
 	input: EvaluatePurchaseEligibilityInput,
 ): EvaluatePurchaseEligibilityResponse {
 	const baseCtx: EvaluationContext = {
@@ -487,4 +536,13 @@ export function evaluatePurchaseEligibility(
 			: results.every((r) => r.reasonCode === "AVAILABLE"));
 
 	return { isEligible, eligible: isEligible, results, items: results };
+}
+
+export function evaluatePurchaseEligibility(
+	input: EvaluatePurchaseEligibilityInput,
+): EvaluatePurchaseEligibilityResponse {
+	if (input.mode === "advisory") {
+		return evaluateAdvisoryCandidateEligibility(input);
+	}
+	return evaluateCartPurchaseEligibility(input);
 }

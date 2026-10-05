@@ -1,7 +1,8 @@
-import type {
-	ClassCheckoutLineItemInput,
-	ProposedPurchaseLineItem,
-	RepertoirePiece,
+import {
+	type ClassCheckoutLineItemInput,
+	type ProposedPurchaseLineItem,
+	type RepertoirePiece,
+	stripCandidateMarker,
 } from "@festival/common";
 import { type Context, Hono } from "hono";
 import { getCookie } from "hono/cookie";
@@ -125,7 +126,9 @@ function buildCheckoutInput(
 	if (Array.isArray(payload.lineItems)) {
 		return {
 			...base,
-			lineItems: payload.lineItems as ClassCheckoutLineItemInput[],
+			lineItems: (payload.lineItems as ClassCheckoutLineItemInput[]).map(
+				(item) => stripCandidateMarker(item) as ClassCheckoutLineItemInput,
+			),
 		};
 	}
 	return {
@@ -246,6 +249,7 @@ export async function handleEvaluateEligibility(
 			customerId: session.customerId,
 			festivalShortName: c.req.param("festivalShortName"),
 			items: body.items,
+			mode: "advisory",
 		});
 		return c.json({ results: result.results });
 	} catch (error) {

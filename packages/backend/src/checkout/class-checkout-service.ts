@@ -6,9 +6,13 @@ import type {
 	FestivalClassConfiguration,
 	FestivalRecord,
 	ProposedPurchaseLineItem,
+	PurchaseEligibilityMode,
 	RepertoirePiece,
 } from "@festival/common";
-import { evaluatePurchaseEligibility } from "@festival/common";
+import {
+	evaluatePurchaseEligibility,
+	stripCandidateMarker,
+} from "@festival/common";
 import type { MembershipCommerceRepository } from "../commerce/membership-commerce-repository.js";
 import type { CustomerAccountRepository } from "../customer/customer-account-repository.js";
 import { AppError } from "../errors/app-error.js";
@@ -72,6 +76,7 @@ export interface EvaluatePurchaseEligibilityInput {
 	festivalId?: string;
 	festivalShortName?: string;
 	items: ProposedPurchaseLineItem[];
+	mode?: PurchaseEligibilityMode;
 }
 
 export interface ClassCheckoutResult {
@@ -145,6 +150,7 @@ export class ClassCheckoutService {
 			classes,
 			subtypes,
 			activeEntitlements,
+			mode: input.mode ?? "cart",
 		});
 	}
 
@@ -283,7 +289,9 @@ export class ClassCheckoutService {
 					400,
 				);
 			}
-			return input.lineItems;
+			return input.lineItems.map(
+				(item) => stripCandidateMarker(item) as ClassCheckoutLineItemInput,
+			);
 		}
 		if (!input.festivalClassId?.trim()) {
 			throw new AppError("Festival class ID is required.", 400);
@@ -295,13 +303,13 @@ export class ClassCheckoutService {
 			throw new AppError("Teacher ID is required.", 400);
 		}
 		return [
-			{
+			stripCandidateMarker({
 				festivalClassId: input.festivalClassId,
 				childId: input.childId,
 				teacherId: input.teacherId,
 				accompanistId: input.accompanistId,
 				pieces: input.pieces ?? [],
-			},
+			}) as ClassCheckoutLineItemInput,
 		];
 	}
 
@@ -433,9 +441,15 @@ export class ClassCheckoutService {
 			organizationId,
 			customerId,
 			festivalId,
-			items: lineItems,
+			items: lineItems.map(
+				(item) => stripCandidateMarker(item) as ClassCheckoutLineItemInput,
+			),
+			mode: "cart",
 		});
-		if (!eligibility.isEligible) {
+		if (
+			!eligibility.isEligible ||
+			eligibility.results.some((r) => !r.isEligible)
+		) {
 			const failure = eligibility.results.find((r) => !r.isEligible);
 			throw new AppError(
 				failure?.message ?? "Class registration is not eligible.",

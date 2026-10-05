@@ -7,6 +7,7 @@ import type {
 import {
 	evaluatePurchaseEligibility,
 	isCandidateLineItem,
+	stripCandidateMarker,
 } from "../src/purchase-eligibility.js";
 
 const ORG_ID = "org-1";
@@ -116,6 +117,7 @@ describe("candidate class eligibility isolation", () => {
 		const res = evaluatePurchaseEligibility({
 			organizationId: ORG_ID,
 			festivalId: FESTIVAL_ID,
+			mode: "advisory",
 			items: [
 				{
 					id: "candidate:class-solo",
@@ -154,6 +156,7 @@ describe("candidate class eligibility isolation", () => {
 		const res = evaluatePurchaseEligibility({
 			organizationId: ORG_ID,
 			festivalId: FESTIVAL_ID,
+			mode: "advisory",
 			items: [
 				{
 					id: "cart-item-1",
@@ -187,6 +190,7 @@ describe("candidate class eligibility isolation", () => {
 		const res = evaluatePurchaseEligibility({
 			organizationId: ORG_ID,
 			festivalId: FESTIVAL_ID,
+			mode: "advisory",
 			items: [
 				{
 					id: "cart-item-solo",
@@ -214,6 +218,7 @@ describe("candidate class eligibility isolation", () => {
 		const res = evaluatePurchaseEligibility({
 			organizationId: ORG_ID,
 			festivalId: FESTIVAL_ID,
+			mode: "advisory",
 			items: [
 				{
 					id: "candidate:class-solo",
@@ -238,6 +243,7 @@ describe("candidate class eligibility isolation", () => {
 		const res = evaluatePurchaseEligibility({
 			organizationId: ORG_ID,
 			festivalId: FESTIVAL_ID,
+			mode: "advisory",
 			items: [
 				{
 					id: "candidate:user-a",
@@ -260,5 +266,157 @@ describe("candidate class eligibility isolation", () => {
 		// Both are candidates and evaluated in isolation, so both see capacity as available
 		expect(res.results[0].reasonCode).toBe("AVAILABLE");
 		expect(res.results[1].reasonCode).toBe("AVAILABLE");
+	});
+
+	it("stripCandidateMarker removes isCandidate and strips candidate ID prefix", () => {
+		expect(
+			stripCandidateMarker({
+				id: "candidate:cls1",
+				childId: "c1",
+				festivalClassId: "cls1",
+				isCandidate: true,
+			}),
+		).toEqual({
+			id: "cls1",
+			childId: "c1",
+			festivalClassId: "cls1",
+		});
+
+		expect(
+			stripCandidateMarker({
+				id: "candidate-cls2",
+				childId: "c1",
+				festivalClassId: "cls2",
+				isCandidate: true,
+			}),
+		).toEqual({
+			id: "cls2",
+			childId: "c1",
+			festivalClassId: "cls2",
+		});
+
+		expect(
+			stripCandidateMarker({
+				id: "candidate_cls3",
+				childId: "c1",
+				festivalClassId: "cls3",
+				isCandidate: true,
+			}),
+		).toEqual({
+			id: "cls3",
+			childId: "c1",
+			festivalClassId: "cls3",
+		});
+	});
+});
+
+describe("checkout cart eligibility isolation from candidate markers", () => {
+	const soloSubtype = createSubtype(SUBTYPE_SOLO, "Piano Solo");
+	const masterclassSubtype = createSubtype(
+		SUBTYPE_MASTERCLASS,
+		"Piano Concerto",
+		SUBTYPE_SOLO,
+	);
+	const soloClass = createClass("class-solo", SUBTYPE_SOLO);
+	const concertoClass = createClass("class-concerto", SUBTYPE_MASTERCLASS);
+	const subtypes = [soloSubtype, masterclassSubtype];
+	const classes = [soloClass, concertoClass];
+
+	it("candidate markers on checkout payload do not bypass prerequisites or ignore failures in cart mode", () => {
+		// Payload with 1 eligible line (solo) and 1 ineligible candidate-marked line (concerto for different child without solo prerequisite)
+		const res = evaluatePurchaseEligibility({
+			organizationId: ORG_ID,
+			festivalId: FESTIVAL_ID,
+			mode: "cart",
+			items: [
+				{
+					id: "line-1",
+					childId: "child-1",
+					festivalClassId: "class-solo",
+				},
+				{
+					id: "candidate:class-concerto",
+					childId: "child-2",
+					festivalClassId: "class-concerto",
+					isCandidate: true,
+				},
+			],
+			classes,
+			subtypes,
+			activeEntitlements: [],
+		});
+
+		expect(res.results).toHaveLength(2);
+		expect(res.results[0].festivalClassId).toBe("class-solo");
+		expect(res.results[0].reasonCode).toBe("AVAILABLE");
+		expect(res.results[0].isEligible).toBe(true);
+
+		// Concerto line was marked as candidate, but cart mode evaluates all lines together
+		expect(res.results[1].festivalClassId).toBe("class-concerto");
+		expect(res.results[1].reasonCode).toBe("MISSING_PREREQUISITE");
+		expect(res.results[1].isEligible).toBe(false);
+
+		// Top-level isEligible MUST be false (candidate failure is not ignored!)
+		expect(res.isEligible).toBe(false);
+		expect(res.eligible).toBe(false);
+	});
+
+	it("defaults to cart evaluation mode and blocks checkout when candidate line fails prerequisite", () => {
+		// When mode is omitted (default), cart evaluation mode applies
+		const res = evaluatePurchaseEligibility({
+			organizationId: ORG_ID,
+			festivalId: FESTIVAL_ID,
+			items: [
+				{
+					id: "line-1",
+					childId: "child-1",
+					festivalClassId: "class-solo",
+				},
+				{
+					id: "candidate:class-concerto",
+					childId: "child-2",
+					festivalClassId: "class-concerto",
+					isCandidate: true,
+				},
+			],
+			classes,
+			subtypes,
+			activeEntitlements: [],
+		});
+
+		expect(res.isEligible).toBe(false);
+		expect(res.results[1].reasonCode).toBe("MISSING_PREREQUISITE");
+	});
+
+	it("evaluates complete checkout cart normally and succeeds when all prerequisites are met", () => {
+		// Both solo and concerto in cart for child-1: solo satisfies concerto prerequisite in same cart
+		const res = evaluatePurchaseEligibility({
+			organizationId: ORG_ID,
+			festivalId: FESTIVAL_ID,
+			mode: "cart",
+			items: [
+				{
+					id: "line-1",
+					childId: "child-1",
+					festivalClassId: "class-solo",
+				},
+				{
+					id: "candidate:class-concerto",
+					childId: "child-1",
+					festivalClassId: "class-concerto",
+					isCandidate: true,
+				},
+			],
+			classes,
+			subtypes,
+			activeEntitlements: [],
+		});
+
+		expect(res.isEligible).toBe(true);
+		expect(res.results[0].reasonCode).toBe("AVAILABLE");
+		expect(res.results[1].reasonCode).toBe("AVAILABLE");
+		expect(res.results[1].satisfiedPrerequisites?.[0].satisfiedBy).toBe(
+			"proposed_item",
+		);
 	});
 });
