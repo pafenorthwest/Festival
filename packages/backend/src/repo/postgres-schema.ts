@@ -242,7 +242,8 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			child_id TEXT NULL REFERENCES ${safeSchema}.festival_children (id),
 			shopify_product_gid TEXT NOT NULL, shopify_variant_gid TEXT NOT NULL, policy_version TEXT NULL,
 			division_id TEXT NULL, division_name_snapshot TEXT NULL, staff_access_consent BOOLEAN NOT NULL DEFAULT FALSE,
-			amount TEXT NOT NULL, currency_code TEXT NOT NULL, cart_reference TEXT NULL REFERENCES ${safeSchema}.checkout_carts (reference),
+			amount TEXT NOT NULL, currency_code TEXT NOT NULL, line_identity_protocol TEXT NULL,
+			cart_reference TEXT NULL REFERENCES ${safeSchema}.checkout_carts (reference),
 			status TEXT NOT NULL CHECK (status IN ('creating', 'ready', 'checkout_started', 'failed', 'expired', 'superseded', 'approved', 'rejected', 'needs_review')),
 			expires_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
@@ -311,6 +312,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			registration_change_log_id TEXT REFERENCES ${safeSchema}.registration_change_logs (id) ON DELETE SET NULL,
 			class_entitlement_id TEXT REFERENCES ${safeSchema}.class_entitlements (id) ON DELETE CASCADE,
 			shopify_order_id TEXT,
+			shopify_order_line_id TEXT,
 			shopify_refund_id TEXT,
 			amount_cents INTEGER NOT NULL,
 			currency TEXT NOT NULL DEFAULT 'USD',
@@ -496,6 +498,9 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			status TEXT NOT NULL CHECK (status IN ('received', 'processing', 'processed', 'failed')),
 			attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
 			failure_category TEXT NULL CHECK (failure_category IN ('upstream', 'persistence', 'invalid')),
+			failure_stage TEXT NULL CHECK (failure_stage IN ('order_read', 'projection')),
+			failure_code TEXT NULL CHECK (failure_code IS NULL OR failure_code IN ('shopify_upstream', 'shopify_transport', 'invalid_data', 'paid_line_conflict', 'persistence', 'unexpected')),
+			shopify_request_id TEXT NULL, failed_at TIMESTAMPTZ NULL,
 			received_at TIMESTAMPTZ NOT NULL, processing_started_at TIMESTAMPTZ NULL, processed_at TIMESTAMPTZ NULL,
 			UNIQUE (organization_id, webhook_id)
 		);
@@ -729,6 +734,9 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		CREATE INDEX IF NOT EXISTS idx_class_entitlements_checkout_intent ON ${safeSchema}.class_entitlements (organization_id, checkout_intent_id);
 		CREATE INDEX IF NOT EXISTS idx_class_entitlements_shopify_order ON ${safeSchema}.class_entitlements (organization_id, shopify_order_gid);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_class_entitlements_order_line ON ${safeSchema}.class_entitlements (organization_id, shopify_order_line_gid);
+		CREATE UNIQUE INDEX IF NOT EXISTS class_entitlements_checkout_intent_line_id_key
+			ON ${safeSchema}.class_entitlements (checkout_intent_line_id)
+			WHERE checkout_intent_line_id IS NOT NULL;
 		CREATE INDEX IF NOT EXISTS idx_registration_change_logs_org_class_entitlement
 			ON ${safeSchema}.registration_change_logs (organization_id, class_entitlement_id);
 		CREATE INDEX IF NOT EXISTS idx_registration_change_logs_org_festival
@@ -738,6 +746,8 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		CREATE INDEX IF NOT EXISTS idx_checkout_intents_org_class ON ${safeSchema}.checkout_intents (organization_id, festival_class_id) WHERE festival_class_id IS NOT NULL;
 		CREATE INDEX IF NOT EXISTS idx_checkout_intents_org_child ON ${safeSchema}.checkout_intents (organization_id, child_id) WHERE child_id IS NOT NULL;
 		CREATE INDEX IF NOT EXISTS idx_checkout_intent_lines_intent_id ON ${safeSchema}.checkout_intent_lines (checkout_intent_id);
+		CREATE UNIQUE INDEX IF NOT EXISTS checkout_intent_lines_checkout_intent_id_line_index_key
+			ON ${safeSchema}.checkout_intent_lines (checkout_intent_id, line_index);
 		CREATE INDEX IF NOT EXISTS idx_checkout_intent_lines_child_id ON ${safeSchema}.checkout_intent_lines (child_id);
 		CREATE INDEX IF NOT EXISTS idx_checkout_intent_lines_festival_class_id ON ${safeSchema}.checkout_intent_lines (festival_class_id);
 		CREATE INDEX IF NOT EXISTS registration_metadata_checkout_intent_id_idx
@@ -790,6 +800,27 @@ export async function initializePostgresSchema(schema: string): Promise<void> {
 			`ALTER TABLE IF EXISTS ${safeSchema}.registration_metadata ADD COLUMN IF NOT EXISTS checkout_intent_line_id TEXT;`,
 		);
 		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.class_entitlements ADD COLUMN IF NOT EXISTS checkout_intent_line_id TEXT;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.checkout_intents ADD COLUMN IF NOT EXISTS line_identity_protocol TEXT;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.refund_events ADD COLUMN IF NOT EXISTS shopify_order_line_id TEXT;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.shopify_webhook_deliveries ADD COLUMN IF NOT EXISTS failure_stage TEXT;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.shopify_webhook_deliveries ADD COLUMN IF NOT EXISTS failure_code TEXT;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.shopify_webhook_deliveries ADD COLUMN IF NOT EXISTS shopify_request_id TEXT;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.shopify_webhook_deliveries ADD COLUMN IF NOT EXISTS failed_at TIMESTAMPTZ;`,
+		);
+		await transaction.unsafe(
 			`ALTER TABLE IF EXISTS ${safeSchema}.registration_catalog_values ADD COLUMN IF NOT EXISTS required_subtype_id TEXT;`,
 		);
 		await transaction.unsafe(
@@ -801,9 +832,6 @@ export async function initializePostgresSchema(schema: string): Promise<void> {
 		);
 		await transaction.unsafe(
 			`ALTER TABLE IF EXISTS ${safeSchema}.repertoire_works ADD COLUMN IF NOT EXISTS imslp_url TEXT;`,
-		);
-		await transaction.unsafe(
-			`ALTER TABLE IF EXISTS ${safeSchema}.class_entitlements ADD COLUMN IF NOT EXISTS checkout_intent_line_id TEXT;`,
 		);
 	});
 	initializations.set(safeSchema, initialization);

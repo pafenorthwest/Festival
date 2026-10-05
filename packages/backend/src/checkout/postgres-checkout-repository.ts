@@ -15,7 +15,10 @@ import type {
 	CheckoutRepository,
 	CreateCheckoutIntentInput,
 } from "./checkout-repository.js";
-import { repertoireItemsFromLegacyPieces } from "./checkout-repository.js";
+import {
+	CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL,
+	repertoireItemsFromLegacyPieces,
+} from "./checkout-repository.js";
 import {
 	cartFromRow,
 	insertRepertoireSnapshot,
@@ -40,7 +43,7 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 		idempotencyKey: string;
 	}) {
 		const rows = (await sql.unsafe(
-			`SELECT id, correlation_id, organization_id, customer_id, session_id, idempotency_key, intent_type, offering_id, entitlement_class, duration_days, festival_class_id, child_id, shopify_product_gid, shopify_variant_gid, policy_version, division_id, division_name_snapshot, staff_access_consent, amount, currency_code, cart_reference, status, expires_at::text, created_at::text FROM ${this.schema}.checkout_intents WHERE organization_id = $1 AND customer_id = $2 AND session_id = $3 AND idempotency_key = $4`,
+			`SELECT id, correlation_id, organization_id, customer_id, session_id, idempotency_key, intent_type, offering_id, entitlement_class, duration_days, festival_class_id, child_id, shopify_product_gid, shopify_variant_gid, policy_version, division_id, division_name_snapshot, staff_access_consent, amount, currency_code, line_identity_protocol, cart_reference, status, expires_at::text, created_at::text FROM ${this.schema}.checkout_intents WHERE organization_id = $1 AND customer_id = $2 AND session_id = $3 AND idempotency_key = $4`,
 			[
 				input.organizationId,
 				input.customerId,
@@ -67,7 +70,7 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 				if (activeGrant[0]) return { kind: "active" as const };
 			}
 			const existingRows = (await tx.unsafe(
-				`SELECT id, correlation_id, organization_id, customer_id, session_id, idempotency_key, intent_type, offering_id, entitlement_class, duration_days, festival_class_id, child_id, shopify_product_gid, shopify_variant_gid, policy_version, division_id, division_name_snapshot, staff_access_consent, amount, currency_code, cart_reference, status, expires_at::text, created_at::text FROM ${this.schema}.checkout_intents WHERE organization_id = $1 AND customer_id = $2 AND session_id = $3 AND idempotency_key = $4 FOR UPDATE`,
+				`SELECT id, correlation_id, organization_id, customer_id, session_id, idempotency_key, intent_type, offering_id, entitlement_class, duration_days, festival_class_id, child_id, shopify_product_gid, shopify_variant_gid, policy_version, division_id, division_name_snapshot, staff_access_consent, amount, currency_code, line_identity_protocol, cart_reference, status, expires_at::text, created_at::text FROM ${this.schema}.checkout_intents WHERE organization_id = $1 AND customer_id = $2 AND session_id = $3 AND idempotency_key = $4 FOR UPDATE`,
 				[
 					record.organizationId,
 					record.customerId,
@@ -106,7 +109,7 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 			const id = randomUUID(),
 				correlationId = randomUUID();
 			const rows = (await tx.unsafe(
-				`INSERT INTO ${this.schema}.checkout_intents (id, correlation_id, organization_id, customer_id, session_id, idempotency_key, intent_type, offering_id, entitlement_class, duration_days, festival_class_id, child_id, shopify_product_gid, shopify_variant_gid, policy_version, division_id, division_name_snapshot, staff_access_consent, amount, currency_code, status, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,'creating',$21) RETURNING id, correlation_id, organization_id, customer_id, session_id, idempotency_key, intent_type, offering_id, entitlement_class, duration_days, festival_class_id, child_id, shopify_product_gid, shopify_variant_gid, policy_version, division_id, division_name_snapshot, staff_access_consent, amount, currency_code, cart_reference, status, expires_at::text, created_at::text`,
+				`INSERT INTO ${this.schema}.checkout_intents (id, correlation_id, organization_id, customer_id, session_id, idempotency_key, intent_type, offering_id, entitlement_class, duration_days, festival_class_id, child_id, shopify_product_gid, shopify_variant_gid, policy_version, division_id, division_name_snapshot, staff_access_consent, amount, currency_code, line_identity_protocol, status, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,'creating',$22) RETURNING id, correlation_id, organization_id, customer_id, session_id, idempotency_key, intent_type, offering_id, entitlement_class, duration_days, festival_class_id, child_id, shopify_product_gid, shopify_variant_gid, policy_version, division_id, division_name_snapshot, staff_access_consent, amount, currency_code, line_identity_protocol, cart_reference, status, expires_at::text, created_at::text`,
 				[
 					id,
 					correlationId,
@@ -128,6 +131,9 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 					record.staffAccessConsent ?? false,
 					record.amount,
 					record.currencyCode,
+					record.intentType === "class_entry"
+						? CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL
+						: null,
 					record.expiresAtIso,
 				],
 			)) as Array<Record<string, unknown>>;
@@ -247,7 +253,7 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 	}
 	async findIntentByCorrelation(organizationId: string, correlationId: string) {
 		const rows = (await sql.unsafe(
-			`SELECT id, correlation_id, organization_id, customer_id, session_id, idempotency_key, intent_type, offering_id, entitlement_class, duration_days, festival_class_id, child_id, shopify_product_gid, shopify_variant_gid, policy_version, division_id, division_name_snapshot, staff_access_consent, amount, currency_code, cart_reference, status, expires_at::text, created_at::text FROM ${this.schema}.checkout_intents WHERE organization_id = $1 AND correlation_id = $2`,
+			`SELECT id, correlation_id, organization_id, customer_id, session_id, idempotency_key, intent_type, offering_id, entitlement_class, duration_days, festival_class_id, child_id, shopify_product_gid, shopify_variant_gid, policy_version, division_id, division_name_snapshot, staff_access_consent, amount, currency_code, line_identity_protocol, cart_reference, status, expires_at::text, created_at::text FROM ${this.schema}.checkout_intents WHERE organization_id = $1 AND correlation_id = $2`,
 			[organizationId, correlationId],
 		)) as Array<Record<string, unknown>>;
 		if (!rows[0]) return null;
@@ -279,7 +285,14 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 		return cartFromRow(row);
 	}
 	private intent(row: Record<string, unknown>): CheckoutIntentRecord {
-		return intentFromRow(row);
+		return {
+			...intentFromRow(row),
+			lineIdentityProtocol:
+				row.line_identity_protocol === null ||
+				row.line_identity_protocol === undefined
+					? null
+					: String(row.line_identity_protocol),
+		};
 	}
 	private async getIntentLines(
 		runner: { unsafe(sql: string, params?: unknown[]): Promise<unknown> },

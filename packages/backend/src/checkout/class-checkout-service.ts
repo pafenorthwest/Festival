@@ -13,13 +13,20 @@ import type { MembershipCommerceRepository } from "../commerce/membership-commer
 import type { CustomerAccountRepository } from "../customer/customer-account-repository.js";
 import { AppError } from "../errors/app-error.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
+import {
+	CHECKOUT_INTENT_LINE_ID_ATTRIBUTE_KEY,
+	type ExpectedClassCheckoutIntentLine,
+	requireClassCheckoutIntentLineMapping,
+} from "./checkout-line-helpers.js";
 import type {
 	CheckoutCartRecord,
+	CheckoutIntentLineItemRecord,
 	CheckoutIntentOutcome,
 	CheckoutIntentRecord,
 	CheckoutRepository,
 	CreateCheckoutIntentLineInput,
 } from "./checkout-repository.js";
+import { CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL } from "./checkout-repository.js";
 import {
 	calculateTotalAmount,
 	resolveFestivalClassConfiguration,
@@ -503,6 +510,7 @@ export class ClassCheckoutService {
 			amount: totalAmount,
 			currencyCode,
 			expiresAtIso,
+			lineIdentityProtocol: CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL,
 			lines: intentLines,
 		});
 	}
@@ -539,16 +547,17 @@ export class ClassCheckoutService {
 		festivalId: string,
 		intent: CheckoutIntentRecord,
 		validatedLines: ValidatedLineItem[],
+		intentLines: readonly CheckoutIntentLineItemRecord[],
 	): Promise<void> {
 		for (let i = 0; i < validatedLines.length; i++) {
 			const vl = validatedLines[i];
-			const lineRecord = intent.lines?.[i];
+			const lineRecord = intentLines[i];
 			await this.checkout.insertRegistrationMetadata({
 				id: randomUUID(),
 				organizationId,
 				festivalId,
 				checkoutIntentId: intent.id,
-				checkoutIntentLineId: lineRecord?.id ?? null,
+				checkoutIntentLineId: lineRecord.id,
 				teacherMembershipId: vl.teacherEntitlementId,
 				accompanistMembershipId: vl.accompanistEntitlementId,
 				repertoireJson: vl.normalizedPieces,
@@ -561,6 +570,7 @@ export class ClassCheckoutService {
 		input: StartClassCheckoutInput;
 		intent: CheckoutIntentRecord;
 		validatedLines: ValidatedLineItem[];
+		intentLines: readonly CheckoutIntentLineItemRecord[];
 		currencyCode: string;
 		expiresAtIso: string;
 		defaultIntegrationVersion: number;
@@ -570,6 +580,7 @@ export class ClassCheckoutService {
 			input,
 			intent,
 			validatedLines,
+			intentLines,
 			currencyCode,
 			expiresAtIso,
 			setStage,
@@ -582,14 +593,14 @@ export class ClassCheckoutService {
 		}
 
 		const cartLines = validatedLines.map((vl, index) => {
-			const lineRecord = intent.lines?.[index];
+			const lineRecord = intentLines[index];
 			return {
 				merchandiseId: vl.classConfig.shopifyVariantGid,
 				quantity: 1,
 				attributes: [
 					{
-						key: "festival_checkout_intent_line_id",
-						value: lineRecord?.id ?? "",
+						key: CHECKOUT_INTENT_LINE_ID_ATTRIBUTE_KEY,
+						value: lineRecord.id,
 					},
 				],
 			};
@@ -662,16 +673,31 @@ export class ClassCheckoutService {
 	): Promise<ClassCheckoutResult> {
 		let stage: ClassCheckoutFailureStage = "registration_metadata";
 		try {
+			const expectedIntentLines: ExpectedClassCheckoutIntentLine[] =
+				validatedLines.map((line) => ({
+					festivalClassId: line.classConfig.id,
+					childId: line.child.id,
+					shopifyProductGid: line.classConfig.shopifyProductGid,
+					shopifyVariantGid: line.classConfig.shopifyVariantGid,
+					amount: line.classConfig.price,
+					currencyCode,
+				}));
+			const intentLines = requireClassCheckoutIntentLineMapping(
+				intent,
+				expectedIntentLines,
+			);
 			await this.insertAllRegistrationMetadata(
 				input.organizationId,
 				targetFestival.id,
 				intent,
 				validatedLines,
+				intentLines,
 			);
 			return await this.createAndVerifyCart({
 				input,
 				intent,
 				validatedLines,
+				intentLines,
 				currencyCode,
 				expiresAtIso,
 				defaultIntegrationVersion,

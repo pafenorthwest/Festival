@@ -37,8 +37,9 @@
 ## Delivery
 
 - Delivered: scalar repertoire snapshot persistence, database-failure
-  classification and safe diagnostics, production logger wiring, and focused
-  service/route/persistence regression coverage.
+  classification and safe diagnostics, production logger wiring, durable
+  paid-line mapping from `origin/main`, and focused service/route/persistence
+  regression coverage.
 - Exceptions: None
 - Deferred work: None
 - Dirty-worktree decision: continue — only approved task artifacts and the
@@ -48,7 +49,8 @@
 
 - Lint: passed — `bun run lint:backend`
 - Build: passed — `bun run build:backend`
-- Tests: passed — 94 focused tests across checkout helper, class checkout
-  service, and customer registration routes
-- Code review: passed — no actionable findings, confidence 0.92
-- Clean merge: not run — landing was not requested
+- Tests: passed — 124 focused tests across checkout helper, class checkout,
+  customer registration route, checkout repository, and class order projection
+- Code review: passed — no actionable findings, confidence 0.94
+- Merge integration: passed — `origin/main` merged without rebasing; durable
+  intent-line IDs now drive both registration metadata and Shopify cart lines

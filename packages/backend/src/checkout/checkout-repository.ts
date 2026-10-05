@@ -41,6 +41,9 @@ export interface CheckoutCartRecord {
 
 export type CheckoutIntentType = "membership" | "class_entry";
 
+/** Durable protocol marker for class checkout cart-line identity attributes. */
+export const CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL = "class_line_identity_v1";
+
 export interface CheckoutIntentLineItemRecord {
 	id: string;
 	checkoutIntentId: string;
@@ -83,6 +86,8 @@ export interface CheckoutIntentRecord {
 	status: CheckoutIntentStatus;
 	expiresAtIso: string;
 	createdAtIso: string;
+	/** Null is reserved for pre-protocol historical checkout intents. */
+	lineIdentityProtocol?: string | null;
 	lines?: CheckoutIntentLineItemRecord[];
 }
 
@@ -266,6 +271,10 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 			divisionId: record.divisionId ?? null,
 			divisionNameSnapshot: record.divisionNameSnapshot ?? null,
 			staffAccessConsent: record.staffAccessConsent ?? false,
+			lineIdentityProtocol:
+				record.intentType === "class_entry"
+					? CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL
+					: null,
 			id: randomUUID(),
 			correlationId: randomUUID(),
 			cartReference: null,

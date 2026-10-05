@@ -138,6 +138,7 @@ describe("RegistrationChangeRepository", () => {
 				organizationId: "org-1",
 				classEntitlementId: "ent-1",
 				shopifyOrderId: "gid://shopify/Order/1",
+				shopifyOrderLineId: "gid://shopify/LineItem/1",
 				amountCents: 5000,
 			});
 
@@ -145,10 +146,12 @@ describe("RegistrationChangeRepository", () => {
 			expect(refund.amountCents).toBe(5000);
 			expect(refund.currency).toBe("USD");
 			expect(refund.status).toBe("pending");
+			expect(refund.shopifyOrderLineId).toBe("gid://shopify/LineItem/1");
 
 			const retrieved = await repo.getRefundEvent("org-1", refund.id);
 			expect(retrieved).not.toBeNull();
 			expect(retrieved?.id).toBe(refund.id);
+			expect(retrieved?.shopifyOrderLineId).toBe("gid://shopify/LineItem/1");
 
 			const retrievedWithoutOrg = await repo.getRefundEvent(refund.id);
 			expect(retrievedWithoutOrg?.id).toBe(refund.id);
