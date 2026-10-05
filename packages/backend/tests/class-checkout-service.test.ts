@@ -16,6 +16,7 @@ import {
 	InMemoryCheckoutRepository,
 } from "../src/checkout/checkout-repository.js";
 import {
+	type ClassCheckoutFailureLogger,
 	ClassCheckoutService,
 	type ClassCheckoutStorefront,
 	type StartClassCheckoutInput,
@@ -40,6 +41,23 @@ interface FixtureOptions {
 	mockStorefront?: Partial<ClassCheckoutStorefront>;
 	defaultCurrencyCode?: string;
 	commerce?: InMemoryMembershipCommerceRepository;
+	failureLogger?: ClassCheckoutFailureLogger;
+}
+
+class CapturingClassCheckoutFailureLogger
+	implements ClassCheckoutFailureLogger
+{
+	readonly entries: Array<{
+		message: string;
+		context: Parameters<ClassCheckoutFailureLogger["error"]>[1];
+	}> = [];
+
+	error(
+		message: string,
+		context: Parameters<ClassCheckoutFailureLogger["error"]>[1],
+	): void {
+		this.entries.push({ message, context });
+	}
 }
 
 async function createFixture(options: FixtureOptions = {}) {
@@ -228,6 +246,7 @@ async function createFixture(options: FixtureOptions = {}) {
 		storefront,
 		commerce,
 		nowFn,
+		options.failureLogger,
 	);
 
 	const defaultPieces: RepertoirePiece[] = [
@@ -1052,10 +1071,13 @@ describe("ClassCheckoutService", () => {
 	});
 
 	it("triggers markFailed compensation and throws 503 on upstream storefront failure", async () => {
+		const failureLogger = new CapturingClassCheckoutFailureLogger();
+		const rawErrorText = "storefront provider detail";
 		const f = await createFixture({
+			failureLogger,
 			mockStorefront: {
 				checkout: async () => {
-					throw new Error("Storefront unavailable");
+					throw new Error(rawErrorText);
 				},
 			},
 		});
@@ -1074,6 +1096,14 @@ describe("ClassCheckoutService", () => {
 		const createdIntent = [...intents.values()][0];
 		expect(createdIntent).toBeDefined();
 		expect(createdIntent?.status).toBe("failed");
+		expect(failureLogger.entries[0]).toEqual({
+			message: "Class checkout failed.",
+			context: expect.objectContaining({
+				stage: "checkout_url",
+				errorName: "Error",
+			}),
+		});
+		expect(JSON.stringify(failureLogger.entries)).not.toContain(rawErrorText);
 	});
 
 	it("triggers markFailed compensation and throws 503 on disallowed checkout URL domain", async () => {
@@ -1101,16 +1131,24 @@ describe("ClassCheckoutService", () => {
 		expect(createdIntent?.status).toBe("failed");
 	});
 
-	it("triggers markFailed compensation and throws 503 when insertRegistrationMetadata throws", async () => {
-		const f = await createFixture();
+	it("returns a safe database failure and records SQLSTATE for metadata persistence errors", async () => {
+		const failureLogger = new CapturingClassCheckoutFailureLogger();
+		const f = await createFixture({ failureLogger });
+		const rawErrorText = "database driver detail";
+		const databaseError = Object.assign(new Error(rawErrorText), {
+			name: "PostgresError",
+			code: "ERR_POSTGRES_SERVER_ERROR",
+			errno: "22023",
+		});
 
 		f.checkout.insertRegistrationMetadata = async () => {
-			throw new Error("Metadata write failure");
+			throw databaseError;
 		};
 
 		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
-			status: 503,
-			code: "checkout_retryable_upstream",
+			message: "We couldn't save this class registration. Please try again.",
+			status: 500,
+			code: "checkout_database_failure",
 		});
 
 		const intents = (
@@ -1121,6 +1159,26 @@ describe("ClassCheckoutService", () => {
 		const createdIntent = [...intents.values()][0];
 		expect(createdIntent).toBeDefined();
 		expect(createdIntent?.status).toBe("failed");
+		expect(failureLogger.entries).toEqual([
+			{
+				message: "Class checkout failed.",
+				context: expect.objectContaining({
+					operation: "checkout.class",
+					stage: "registration_metadata",
+					organizationId: f.organization.id,
+					checkoutIntentId: createdIntent?.id,
+					correlationId: expect.any(String),
+					lineCount: 1,
+					errorName: "PostgresError",
+					errorCode: "ERR_POSTGRES_SERVER_ERROR",
+					databaseSqlState: "22023",
+				}),
+			},
+		]);
+		const loggedContext = failureLogger.entries[0]?.context;
+		expect(loggedContext).not.toHaveProperty("errorMessage");
+		expect(loggedContext).not.toHaveProperty("errorDetail");
+		expect(JSON.stringify(failureLogger.entries)).not.toContain(rawErrorText);
 	});
 
 	for (const scenario of [
@@ -1407,6 +1465,7 @@ describe("ClassCheckoutService", () => {
 			capturedCartInput = input;
 			return { shopifyCartId: "gid://shopify/Cart/multi-cart-1" };
 		};
+		const insertMetadataSpy = spyOn(f.checkout, "insertRegistrationMetadata");
 
 		const result = await f.service.start({
 			organizationId: f.organization.id,
@@ -1470,6 +1529,14 @@ describe("ClassCheckoutService", () => {
 			CHECKOUT_INTENT_LINE_ID_ATTRIBUTE_KEY,
 		);
 		expect(cartInput.lines[1].attributes?.[0].value).toBe(line2.id);
+		expect(insertMetadataSpy).toHaveBeenNthCalledWith(
+			1,
+			expect.objectContaining({ checkoutIntentLineId: line1.id }),
+		);
+		expect(insertMetadataSpy).toHaveBeenNthCalledWith(
+			2,
+			expect.objectContaining({ checkoutIntentLineId: line2.id }),
+		);
 	});
 
 	it("rejects multi-line checkout when lineItems is empty with 400", async () => {

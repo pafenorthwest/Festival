@@ -101,6 +101,49 @@ interface ValidatedLineItem {
 	accompanistEntitlementId: string | null;
 }
 
+export type ClassCheckoutFailureStage =
+	| "registration_metadata"
+	| "load_integration"
+	| "create_cart"
+	| "attach_cart"
+	| "mark_checkout_started"
+	| "checkout_url"
+	| "verify_checkout_url"
+	| "mark_failed"
+	| "resume_load_integration"
+	| "resume_mark_checkout_started"
+	| "resume_checkout_url"
+	| "resume_verify_checkout_url"
+	| "resume_mark_failed";
+
+export interface ClassCheckoutFailureLogger {
+	error(
+		message: string,
+		context: {
+			operation: "checkout.class";
+			stage: ClassCheckoutFailureStage;
+			organizationId: string;
+			checkoutIntentId: string;
+			correlationId: string;
+			lineCount: number;
+			errorName?: "AppError" | "Error" | "PostgresError";
+			errorCode?: string;
+			databaseSqlState?: string;
+			databaseConstraint?: string;
+			databaseTable?: string;
+			databaseColumn?: string;
+		},
+	): void;
+}
+
+const silentClassCheckoutFailureLogger: ClassCheckoutFailureLogger = {
+	error: () => undefined,
+};
+
+export const consoleClassCheckoutFailureLogger: ClassCheckoutFailureLogger = {
+	error: (message, context) => console.error(message, context),
+};
+
 export class ClassCheckoutService {
 	constructor(
 		private readonly organizations: OrganizationRepository,
@@ -109,6 +152,7 @@ export class ClassCheckoutService {
 		private readonly storefront: ClassCheckoutStorefront,
 		private readonly commerce?: MembershipCommerceRepository,
 		private readonly now: () => Date = () => new Date(),
+		private readonly failureLogger: ClassCheckoutFailureLogger = silentClassCheckoutFailureLogger,
 	) {}
 
 	async evaluateEligibility(
@@ -566,6 +610,7 @@ export class ClassCheckoutService {
 		currencyCode: string;
 		expiresAtIso: string;
 		defaultIntegrationVersion: number;
+		setStage: (stage: ClassCheckoutFailureStage) => void;
 	}): Promise<ClassCheckoutResult> {
 		const {
 			input,
@@ -574,7 +619,9 @@ export class ClassCheckoutService {
 			intentLines,
 			currencyCode,
 			expiresAtIso,
+			setStage,
 		} = params;
+		setStage("load_integration");
 		const storefrontIntegration =
 			await this.organizations.getShopifyIntegration(input.organizationId);
 		if (!storefrontIntegration) {
@@ -595,6 +642,7 @@ export class ClassCheckoutService {
 			};
 		});
 
+		setStage("create_cart");
 		const cartResponse = await this.storefront.createCart({
 			organizationId: input.organizationId,
 			shopifyVariantGid: validatedLines[0].classConfig.shopifyVariantGid,
@@ -609,6 +657,7 @@ export class ClassCheckoutService {
 				? input.integrationVersion
 				: Number(input.integrationVersion) || params.defaultIntegrationVersion;
 
+		setStage("attach_cart");
 		const cart = await this.checkout.attachCart({
 			intentId: intent.id,
 			shopifyCartId: cartResponse.shopifyCartId,
@@ -619,13 +668,16 @@ export class ClassCheckoutService {
 			expiresAtIso,
 		});
 
+		setStage("mark_checkout_started");
 		await this.checkout.markCheckoutStarted(intent.id);
 
+		setStage("checkout_url");
 		const checkout = await this.storefront.checkout({
 			organizationId: input.organizationId,
 			shopifyCartId: cart.shopifyCartId,
 		});
 
+		setStage("verify_checkout_url");
 		const integration = await this.organizations.getShopifyIntegration(
 			input.organizationId,
 		);
@@ -655,6 +707,7 @@ export class ClassCheckoutService {
 		expiresAtIso: string,
 		defaultIntegrationVersion: number,
 	): Promise<ClassCheckoutResult> {
+		let stage: ClassCheckoutFailureStage = "registration_metadata";
 		try {
 			const expectedIntentLines: ExpectedClassCheckoutIntentLine[] =
 				validatedLines.map((line) => ({
@@ -684,10 +737,19 @@ export class ClassCheckoutService {
 				currencyCode,
 				expiresAtIso,
 				defaultIntegrationVersion,
+				setStage: (nextStage) => {
+					stage = nextStage;
+				},
 			});
-		} catch (_error) {
-			await this.checkout.markFailed(intent.id);
-			throw retryableCheckoutError();
+		} catch (error) {
+			return this.reportAndMarkFailed({
+				stage,
+				organizationId: input.organizationId,
+				intent,
+				lineCount: validatedLines.length,
+				error,
+				markFailedStage: "mark_failed",
+			});
 		}
 	}
 
@@ -698,17 +760,21 @@ export class ClassCheckoutService {
 		},
 		input: { organizationId: string },
 	): Promise<ClassCheckoutResult> {
+		let stage: ClassCheckoutFailureStage = "resume_load_integration";
 		try {
 			const storefrontIntegration =
 				await this.organizations.getShopifyIntegration(input.organizationId);
 			if (!storefrontIntegration) {
 				throw new AppError("Shopify checkout is unavailable.", 503);
 			}
+			stage = "resume_mark_checkout_started";
 			await this.checkout.markCheckoutStarted(outcome.intent.id);
+			stage = "resume_checkout_url";
 			const checkout = await this.storefront.checkout({
 				organizationId: input.organizationId,
 				shopifyCartId: outcome.cart.shopifyCartId,
 			});
+			stage = "resume_verify_checkout_url";
 			const integration = await this.organizations.getShopifyIntegration(
 				input.organizationId,
 			);
@@ -726,11 +792,73 @@ export class ClassCheckoutService {
 				correlationId: outcome.intent.correlationId,
 				intent: outcome.intent,
 			};
-		} catch (_error) {
-			await this.checkout.markFailed(outcome.intent.id);
-			throw retryableCheckoutError();
+		} catch (error) {
+			return this.reportAndMarkFailed({
+				stage,
+				organizationId: input.organizationId,
+				intent: outcome.intent,
+				lineCount: outcome.intent.lines?.length ?? 0,
+				error,
+				markFailedStage: "resume_mark_failed",
+			});
 		}
 	}
+
+	private async reportAndMarkFailed(params: {
+		stage: ClassCheckoutFailureStage;
+		organizationId: string;
+		intent: CheckoutIntentRecord;
+		lineCount: number;
+		error: unknown;
+		markFailedStage: "mark_failed" | "resume_mark_failed";
+	}): Promise<never> {
+		this.logFailure(params);
+		try {
+			await this.checkout.markFailed(params.intent.id);
+		} catch (markFailedError) {
+			this.logFailure({
+				...params,
+				stage: params.markFailedStage,
+				error: markFailedError,
+			});
+			throw checkoutFailureError(markFailedError);
+		}
+		throw checkoutFailureError(params.error);
+	}
+
+	private logFailure(params: {
+		stage: ClassCheckoutFailureStage;
+		organizationId: string;
+		intent: CheckoutIntentRecord;
+		lineCount: number;
+		error: unknown;
+	}): void {
+		const postgres = postgresDiagnostic(params.error);
+		this.failureLogger.error("Class checkout failed.", {
+			operation: "checkout.class",
+			stage: params.stage,
+			organizationId: params.organizationId,
+			checkoutIntentId: params.intent.id,
+			correlationId: params.intent.correlationId,
+			lineCount: params.lineCount,
+			...safeErrorDiagnostic(params.error),
+			...postgres,
+		});
+	}
+}
+
+function checkoutFailureError(error: unknown): AppError {
+	return postgresDiagnostic(error)
+		? databaseCheckoutError()
+		: retryableCheckoutError();
+}
+
+function databaseCheckoutError(): AppError {
+	return new AppError(
+		"We couldn't save this class registration. Please try again.",
+		500,
+		"checkout_database_failure",
+	);
 }
 
 function retryableCheckoutError(): AppError {
@@ -739,6 +867,87 @@ function retryableCheckoutError(): AppError {
 		503,
 		"checkout_retryable_upstream",
 	);
+}
+
+function safeErrorDiagnostic(error: unknown): {
+	errorName?: "AppError" | "Error" | "PostgresError";
+	errorCode?: string;
+} {
+	if (isPostgresError(error)) {
+		const code = readStringProperty(error, "code");
+		return {
+			errorName: "PostgresError",
+			...(code && /^ERR_POSTGRES_[A-Z0-9_]{1,96}$/.test(code)
+				? { errorCode: code }
+				: {}),
+		};
+	}
+	if (error instanceof AppError) {
+		return {
+			errorName: "AppError",
+			...(error.code ? { errorCode: error.code } : {}),
+		};
+	}
+	return error instanceof Error ? { errorName: "Error" } : {};
+}
+
+function postgresDiagnostic(error: unknown): {
+	databaseSqlState?: string;
+	databaseConstraint?: string;
+	databaseTable?: string;
+	databaseColumn?: string;
+} | null {
+	if (!isPostgresError(error)) return null;
+	return {
+		...safeSqlState(readStringProperty(error, "errno")),
+		...safeDatabaseIdentifier(
+			"databaseConstraint",
+			readStringProperty(error, "constraint"),
+		),
+		...safeDatabaseIdentifier(
+			"databaseTable",
+			readStringProperty(error, "table"),
+		),
+		...safeDatabaseIdentifier(
+			"databaseColumn",
+			readStringProperty(error, "column"),
+		),
+	};
+}
+
+function isPostgresError(error: unknown): error is object {
+	return (
+		!!error &&
+		typeof error === "object" &&
+		readStringProperty(error, "name") === "PostgresError"
+	);
+}
+
+function readStringProperty(
+	value: object,
+	property: string,
+): string | undefined {
+	const candidate = (value as Record<string, unknown>)[property];
+	return typeof candidate === "string" ? candidate : undefined;
+}
+
+function safeSqlState(value: string | undefined): {
+	databaseSqlState?: string;
+} {
+	return value && /^[0-9A-Z]{5}$/.test(value)
+		? { databaseSqlState: value }
+		: {};
+}
+
+function safeDatabaseIdentifier(
+	property: "databaseConstraint" | "databaseTable" | "databaseColumn",
+	value: string | undefined,
+): Partial<
+	Record<"databaseConstraint" | "databaseTable" | "databaseColumn", string>
+> {
+	return value && /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(value)
+		? { [property]: value }
+		: {};
 }
 
 function isAllowedCheckoutUrl(value: string, storeDomain: string): boolean {
