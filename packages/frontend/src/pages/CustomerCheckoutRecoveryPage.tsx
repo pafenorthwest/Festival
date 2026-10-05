@@ -13,27 +13,93 @@ interface CustomerCheckoutRecoveryPageProps {
 	app: FestivalAppController;
 }
 
-function resolveErrorMessage(err: unknown): string {
-	if (err instanceof Error) {
-		const msg = err.message.toLowerCase();
-		if (
-			msg.includes("expired") ||
-			(err as { status?: number }).status === 410
-		) {
-			return "This recovery link has expired. Please contact the organization to request a new recovery link.";
-		}
-		if (
-			msg.includes("already been used") ||
-			msg.includes("consumed") ||
-			(err as { status?: number }).status === 409
-		) {
-			return "This recovery link has already been used to resume checkout.";
-		}
-		if (msg.includes("invalidated")) {
-			return "This checkout recovery request is no longer valid.";
-		}
-		return err.message;
+export const CLASS_CHECKOUT_RECOVERY_UNSUPPORTED_CODE =
+	"class_checkout_recovery_unsupported";
+export const CLASS_CHECKOUT_RECOVERY_UNSUPPORTED_MESSAGE =
+	"Class checkout recovery is not available yet. Please restart your class checkout.";
+
+export function isClassCheckoutRecoveryUnsupported(err: unknown): boolean {
+	if (!err) return false;
+	const code =
+		typeof (err as { code?: unknown })?.code === "string"
+			? (err as { code: string }).code.toLowerCase()
+			: "";
+	const rawMessage =
+		err instanceof Error
+			? err.message
+			: typeof (err as { message?: unknown })?.message === "string"
+				? (err as { message: string }).message
+				: typeof err === "string"
+					? err
+					: "";
+	const msg = rawMessage.toLowerCase();
+	return (
+		code === CLASS_CHECKOUT_RECOVERY_UNSUPPORTED_CODE ||
+		msg.includes(CLASS_CHECKOUT_RECOVERY_UNSUPPORTED_CODE) ||
+		msg.includes(CLASS_CHECKOUT_RECOVERY_UNSUPPORTED_MESSAGE.toLowerCase())
+	);
+}
+
+export function shouldHideResumeAction(
+	loadError: unknown,
+	resumeError: unknown,
+): boolean {
+	return (
+		isClassCheckoutRecoveryUnsupported(loadError) ||
+		isClassCheckoutRecoveryUnsupported(resumeError)
+	);
+}
+
+export function resolveErrorMessage(err: unknown): string {
+	const code =
+		typeof (err as { code?: unknown })?.code === "string"
+			? (err as { code: string }).code.toLowerCase()
+			: "";
+	const status =
+		typeof (err as { status?: unknown })?.status === "number"
+			? (err as { status: number }).status
+			: undefined;
+	const rawMessage =
+		err instanceof Error
+			? err.message
+			: typeof (err as { message?: unknown })?.message === "string"
+				? (err as { message: string }).message
+				: "";
+	const msg = rawMessage.toLowerCase();
+
+	if (
+		code === CLASS_CHECKOUT_RECOVERY_UNSUPPORTED_CODE ||
+		msg.includes(CLASS_CHECKOUT_RECOVERY_UNSUPPORTED_CODE)
+	) {
+		return CLASS_CHECKOUT_RECOVERY_UNSUPPORTED_MESSAGE;
 	}
+
+	if (
+		msg.includes("expired") ||
+		status === 410 ||
+		code === "checkout_expired" ||
+		code === "expired"
+	) {
+		return "This recovery link has expired. Please contact the organization to request a new recovery link.";
+	}
+
+	if (
+		msg.includes("already been used") ||
+		msg.includes("consumed") ||
+		code === "consumed" ||
+		code === "already_used"
+	) {
+		return "This recovery link has already been used to resume checkout.";
+	}
+
+	if (msg.includes("invalidated")) {
+		return "This checkout recovery request is no longer valid.";
+	}
+
+	if (rawMessage) {
+		return rawMessage;
+	}
+
 	return "An unexpected error occurred while loading your recovery review.";
 }
 
@@ -134,6 +200,9 @@ export function CustomerCheckoutRecoveryPage(
 		return null;
 	};
 
+	const isClassRecoveryUnsupported = () =>
+		shouldHideResumeAction(loadError(), resumeError());
+
 	return (
 		<Show
 			when={!props.app.isCustomerSessionLoading()}
@@ -233,18 +302,20 @@ export function CustomerCheckoutRecoveryPage(
 								</dd>
 							</dl>
 
-							<div class="recovery-actions">
-								<Button
-									type="button"
-									class="button-primary"
-									disabled={isResuming()}
-									onClick={handleResumePurchase}
-								>
-									{isResuming()
-										? "Redirecting to Checkout…"
-										: "Resume Purchase"}
-								</Button>
-							</div>
+							<Show when={!isClassRecoveryUnsupported()}>
+								<div class="recovery-actions">
+									<Button
+										type="button"
+										class="button-primary"
+										disabled={isResuming()}
+										onClick={handleResumePurchase}
+									>
+										{isResuming()
+											? "Redirecting to Checkout…"
+											: "Resume Purchase"}
+									</Button>
+								</div>
+							</Show>
 						</div>
 					</Show>
 				</section>

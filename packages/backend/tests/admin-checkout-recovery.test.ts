@@ -299,6 +299,15 @@ describe("Admin Checkout Recovery Routes & Service", () => {
 			);
 			recoveryRepo.addIntent(
 				makeIntent({
+					id: "intent-class-entry",
+					organizationId: orgId,
+					customerId: "cust-1",
+					intentType: "class_entry",
+					status: "ready",
+				}),
+			);
+			recoveryRepo.addIntent(
+				makeIntent({
 					id: "intent-paid-order",
 					organizationId: orgId,
 					customerId: "cust-1",
@@ -329,6 +338,7 @@ describe("Admin Checkout Recovery Routes & Service", () => {
 			expect(ids).not.toContain("intent-superseded");
 			expect(ids).not.toContain("intent-cust2");
 			expect(ids).not.toContain("intent-paid-order");
+			expect(ids).not.toContain("intent-class-entry");
 		});
 	});
 

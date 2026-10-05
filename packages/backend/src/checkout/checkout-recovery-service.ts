@@ -99,10 +99,11 @@ export class CheckoutRecoveryService {
 	async listRecoverableIntents(
 		params: ListRecoverableIntentsParams,
 	): Promise<RecoverableCheckoutIntentRecord[]> {
-		const intents = await this.recoveryRepository.listRecoverableIntents({
+		const rawIntents = await this.recoveryRepository.listRecoverableIntents({
 			organizationId: params.organizationId,
 			customerId: params.customerId,
 		});
+		const intents = rawIntents.filter((i) => i.intentType !== "class_entry");
 
 		await this.auditLogger.log({
 			action: "list_intents",

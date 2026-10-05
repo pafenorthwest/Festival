@@ -172,6 +172,11 @@ export function assertRecoveryRequestPending(
 	return request;
 }
 
+export const CLASS_CHECKOUT_RECOVERY_UNSUPPORTED_CODE =
+	"class_checkout_recovery_unsupported";
+export const CLASS_CHECKOUT_RECOVERY_UNSUPPORTED_MESSAGE =
+	"Class checkout recovery is not available yet. Please restart your class checkout.";
+
 export function assertSourceIntentValid(
 	intent: RecoverableCheckoutIntentRecord | null,
 	customerId: string,
@@ -179,6 +184,13 @@ export function assertSourceIntentValid(
 	if (!intent) throw new AppError("Checkout intent not found.", 404);
 	if (intent.customerId !== customerId) {
 		throw new AppError("Customer mismatch for checkout intent.", 403);
+	}
+	if (intent.intentType === "class_entry") {
+		throw new AppError(
+			CLASS_CHECKOUT_RECOVERY_UNSUPPORTED_MESSAGE,
+			409,
+			CLASS_CHECKOUT_RECOVERY_UNSUPPORTED_CODE,
+		);
 	}
 	return intent;
 }
