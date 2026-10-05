@@ -1599,6 +1599,7 @@ describe("ClassCheckoutService", () => {
 		const f = await createFixture();
 		const response = await f.service.evaluateEligibility({
 			organizationId: f.organization.id,
+			customerId: f.customer.id,
 			festivalId: f.festival?.id ?? "",
 			items: [
 				{
@@ -1651,6 +1652,7 @@ describe("ClassCheckoutService", () => {
 
 		const response = await f.service.evaluateEligibility({
 			organizationId: f.organization.id,
+			customerId: f.customer.id,
 			festivalId,
 			items: [
 				{
@@ -1722,6 +1724,7 @@ describe("ClassCheckoutService", () => {
 
 		const response = await f.service.evaluateEligibility({
 			organizationId: f.organization.id,
+			customerId: f.customer.id,
 			festivalId,
 			items: [
 				{
@@ -1744,6 +1747,7 @@ describe("ClassCheckoutService", () => {
 		const f = await createFixture();
 		const response = await f.service.evaluateEligibility({
 			organizationId: f.organization.id,
+			customerId: f.customer.id,
 			festivalId: f.festival?.id ?? "",
 			items: [
 				{
@@ -1759,6 +1763,172 @@ describe("ClassCheckoutService", () => {
 
 		expect(response.isEligible).toBe(false);
 		expect(response.results[1].reasonCode).toBe("ALREADY_REGISTERED");
+	});
+
+	it("evaluateEligibility successfully evaluates when all children belong to authenticated customer", async () => {
+		const f = await createFixture();
+		const secondChild = await f.customers.createChild({
+			organizationId: f.organization.id,
+			parentCustomerId: f.customer.id,
+			displayName: "Bob Smith",
+		});
+		const response = await f.service.evaluateEligibility({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			festivalId: f.festival?.id ?? "",
+			items: [
+				{
+					childId: f.child.id,
+					festivalClassId: f.classConfig.id,
+				},
+				{
+					childId: secondChild.id,
+					festivalClassId: f.classConfig.id,
+				},
+			],
+		});
+
+		expect(response.isEligible).toBe(true);
+		expect(response.results).toHaveLength(2);
+		expect(response.results[0].reasonCode).toBe("AVAILABLE");
+		expect(response.results[1].reasonCode).toBe("AVAILABLE");
+	});
+
+	it("evaluateEligibility rejects with HTTP 404 Child not found when child belongs to another customer (IDOR prevention)", async () => {
+		const f = await createFixture();
+		const { customer: otherCustomer } = await f.customers.createCustomerSession(
+			{
+				sessionId: "session-other-parent",
+				organizationId: f.organization.id,
+				shopifyCustomerGid: "gid://shopify/Customer/888",
+				encryptedTokens: "encrypted-tokens",
+				csrfToken: "csrf-token-other",
+				integrationVersion: 1,
+				createdAtIso: new Date().toISOString(),
+				lastSeenAtIso: new Date().toISOString(),
+				expiresAtIso: new Date(Date.now() + 3600_000).toISOString(),
+			},
+		);
+		const otherChild = await f.customers.createChild({
+			organizationId: f.organization.id,
+			parentCustomerId: otherCustomer.id,
+			displayName: "Charlie Other",
+		});
+
+		let entitlementsQueried = false;
+		if (f.commerce) {
+			const originalList = f.commerce.listClassEntitlements.bind(f.commerce);
+			f.commerce.listClassEntitlements = async (...args) => {
+				entitlementsQueried = true;
+				return originalList(...args);
+			};
+		}
+
+		let caughtError: unknown;
+		try {
+			await f.service.evaluateEligibility({
+				organizationId: f.organization.id,
+				customerId: f.customer.id,
+				festivalId: f.festival?.id ?? "",
+				items: [
+					{
+						childId: otherChild.id,
+						festivalClassId: f.classConfig.id,
+					},
+				],
+			});
+		} catch (err) {
+			caughtError = err;
+		}
+
+		expect(caughtError).toBeInstanceOf(AppError);
+		const appErr = caughtError as AppError;
+		expect(appErr.status).toBe(404);
+		expect(appErr.message).toBe("Child not found.");
+		expect(entitlementsQueried).toBe(false);
+	});
+
+	it("evaluateEligibility rejects with HTTP 404 Child not found when child does not exist", async () => {
+		const f = await createFixture();
+		let caughtError: unknown;
+		try {
+			await f.service.evaluateEligibility({
+				organizationId: f.organization.id,
+				customerId: f.customer.id,
+				festivalId: f.festival?.id ?? "",
+				items: [
+					{
+						childId: "nonexistent-child-id",
+						festivalClassId: f.classConfig.id,
+					},
+				],
+			});
+		} catch (err) {
+			caughtError = err;
+		}
+
+		expect(caughtError).toBeInstanceOf(AppError);
+		const appErr = caughtError as AppError;
+		expect(appErr.status).toBe(404);
+		expect(appErr.message).toBe("Child not found.");
+	});
+
+	it("evaluateEligibility fails closed with 404 and does not evaluate when 1 child is owned and 1 is unowned in multi-line request", async () => {
+		const f = await createFixture();
+		const { customer: otherCustomer } = await f.customers.createCustomerSession(
+			{
+				sessionId: "session-other-parent-2",
+				organizationId: f.organization.id,
+				shopifyCustomerGid: "gid://shopify/Customer/777",
+				encryptedTokens: "encrypted-tokens",
+				csrfToken: "csrf-token-other-2",
+				integrationVersion: 1,
+				createdAtIso: new Date().toISOString(),
+				lastSeenAtIso: new Date().toISOString(),
+				expiresAtIso: new Date(Date.now() + 3600_000).toISOString(),
+			},
+		);
+		const otherChild = await f.customers.createChild({
+			organizationId: f.organization.id,
+			parentCustomerId: otherCustomer.id,
+			displayName: "Daisy Other",
+		});
+
+		let entitlementsQueried = false;
+		if (f.commerce) {
+			const originalList = f.commerce.listClassEntitlements.bind(f.commerce);
+			f.commerce.listClassEntitlements = async (...args) => {
+				entitlementsQueried = true;
+				return originalList(...args);
+			};
+		}
+
+		let caughtError: unknown;
+		try {
+			await f.service.evaluateEligibility({
+				organizationId: f.organization.id,
+				customerId: f.customer.id,
+				festivalId: f.festival?.id ?? "",
+				items: [
+					{
+						childId: f.child.id,
+						festivalClassId: f.classConfig.id,
+					},
+					{
+						childId: otherChild.id,
+						festivalClassId: f.classConfig.id,
+					},
+				],
+			});
+		} catch (err) {
+			caughtError = err;
+		}
+
+		expect(caughtError).toBeInstanceOf(AppError);
+		const appErr = caughtError as AppError;
+		expect(appErr.status).toBe(404);
+		expect(appErr.message).toBe("Child not found.");
+		expect(entitlementsQueried).toBe(false);
 	});
 
 	it("start(...) rejects with 400 and missing_prerequisite when eligibility check fails", async () => {
@@ -1836,5 +2006,175 @@ describe("ClassCheckoutService", () => {
 			status: 400,
 			code: "already_registered",
 		});
+	});
+
+	it("start(...) rejects with 400 and blocks checkout when candidate-marked checkout line is missing prerequisite", async () => {
+		const f = await createFixture();
+		const festivalId = f.festival?.id ?? "";
+		const prerequisiteSubtype =
+			await f.organizations.createRegistrationCatalogValue({
+				organizationId: f.organization.id,
+				kind: "class_subtype",
+				displayName: "Prerequisite Solo Subtype",
+				normalizedName: "prerequisite solo subtype",
+			});
+		const masterclassSubtype =
+			await f.organizations.createRegistrationCatalogValue({
+				organizationId: f.organization.id,
+				kind: "class_subtype",
+				displayName: "Dependent Masterclass Subtype",
+				normalizedName: "dependent masterclass subtype",
+				requiredSubtypeId: prerequisiteSubtype.id,
+			});
+		const masterclassClass =
+			await f.organizations.createFestivalClassConfiguration({
+				organizationId: f.organization.id,
+				festivalId,
+				displayName: "Dependent Masterclass Class",
+				classSubtypeId: masterclassSubtype.id,
+				divisionId: f.division.id,
+				minimumAge: 8,
+				maximumAge: 12,
+				price: "75.00",
+				maximumPerformancePieces: 1,
+				performanceMinutes: 15,
+				capacity: 10,
+				isActive: true,
+				shopifyProductGid: "gid://shopify/Product/108",
+				shopifyVariantGid: "gid://shopify/ProductVariant/208",
+			});
+
+		const secondChild = await f.customers.createChild({
+			organizationId: f.organization.id,
+			parentCustomerId: f.customer.id,
+			displayName: "Second Performer",
+		});
+		await f.customers.createChildAgeSnapshot({
+			organizationId: f.organization.id,
+			childId: secondChild.id,
+			asOfDate: "2026-03-01",
+			age: 10,
+		});
+
+		const idempotencyKey = "77777777-8888-9999-aaaa-bbbbbbbbbbbb";
+		await expect(
+			f.service.start({
+				organizationId: f.organization.id,
+				customerId: f.customer.id,
+				sessionId: f.session.sessionId,
+				idempotencyKey,
+				buyerAccessToken: "buyer-token-test",
+				lineItems: [
+					{
+						festivalClassId: f.classConfig.id,
+						childId: f.child.id,
+						teacherId: f.teacherId,
+						pieces: f.defaultPieces,
+					},
+					{
+						id: "candidate:masterclass",
+						festivalClassId: masterclassClass.id,
+						childId: secondChild.id,
+						teacherId: f.teacherId,
+						pieces: f.defaultPieces,
+						isCandidate: true,
+					} as unknown as ClassCheckoutLineItemInput,
+				],
+			}),
+		).rejects.toMatchObject({
+			status: 400,
+			code: "missing_prerequisite",
+		});
+
+		const outcome = await f.checkout.getOutcome({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			sessionId: f.session.sessionId,
+			idempotencyKey,
+		});
+		expect(outcome).toBeNull();
+	});
+
+	it("start(...) strips candidate markers and evaluates complete cart normally", async () => {
+		const f = await createFixture();
+		const festivalId = f.festival?.id ?? "";
+		const prerequisiteSubtype =
+			await f.organizations.createRegistrationCatalogValue({
+				organizationId: f.organization.id,
+				kind: "class_subtype",
+				displayName: "Solo Subtype",
+				normalizedName: "solo subtype",
+			});
+		const dependentSubtype =
+			await f.organizations.createRegistrationCatalogValue({
+				organizationId: f.organization.id,
+				kind: "class_subtype",
+				displayName: "Concerto Subtype",
+				normalizedName: "concerto subtype",
+				requiredSubtypeId: prerequisiteSubtype.id,
+			});
+		const soloClass = await f.organizations.createFestivalClassConfiguration({
+			organizationId: f.organization.id,
+			festivalId,
+			displayName: "Solo Piano Class",
+			classSubtypeId: prerequisiteSubtype.id,
+			divisionId: f.division.id,
+			minimumAge: 8,
+			maximumAge: 12,
+			price: "50.00",
+			maximumPerformancePieces: 1,
+			performanceMinutes: 10,
+			capacity: 10,
+			isActive: true,
+			shopifyProductGid: "gid://shopify/Product/109",
+			shopifyVariantGid: "gid://shopify/ProductVariant/209",
+		});
+		const concertoClass =
+			await f.organizations.createFestivalClassConfiguration({
+				organizationId: f.organization.id,
+				festivalId,
+				displayName: "Concerto Piano Class",
+				classSubtypeId: dependentSubtype.id,
+				divisionId: f.division.id,
+				minimumAge: 8,
+				maximumAge: 12,
+				price: "75.00",
+				maximumPerformancePieces: 1,
+				performanceMinutes: 15,
+				capacity: 10,
+				isActive: true,
+				shopifyProductGid: "gid://shopify/Product/110",
+				shopifyVariantGid: "gid://shopify/ProductVariant/210",
+			});
+
+		const idempotencyKey = "88888888-9999-aaaa-bbbb-cccccccccccc";
+		const result = await f.service.start({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			sessionId: f.session.sessionId,
+			idempotencyKey,
+			buyerAccessToken: "buyer-token-test",
+			lineItems: [
+				{
+					festivalClassId: soloClass.id,
+					childId: f.child.id,
+					teacherId: f.teacherId,
+					pieces: f.defaultPieces,
+				},
+				{
+					id: "candidate:concerto",
+					festivalClassId: concertoClass.id,
+					childId: f.child.id,
+					teacherId: f.teacherId,
+					pieces: f.defaultPieces,
+					isCandidate: true,
+				} as unknown as ClassCheckoutLineItemInput,
+			],
+		});
+
+		expect(result.checkoutUrl).toBeDefined();
+		expect(result.intent?.lines).toHaveLength(2);
+		expect(result.intent?.lines?.[0].festivalClassId).toBe(soloClass.id);
+		expect(result.intent?.lines?.[1].festivalClassId).toBe(concertoClass.id);
 	});
 });

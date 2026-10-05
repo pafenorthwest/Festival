@@ -1,11 +1,15 @@
 import { describe, expect, it } from "bun:test";
 import { Hono } from "hono";
-import type { ClassCheckoutService } from "../src/checkout/class-checkout-service.js";
+import { InMemoryCheckoutRepository } from "../src/checkout/checkout-repository.js";
+import { ClassCheckoutService } from "../src/checkout/class-checkout-service.js";
+import { InMemoryMembershipCommerceRepository } from "../src/commerce/membership-commerce-repository.js";
 import {
 	CUSTOMER_SESSION_COOKIE,
 	type CustomerAccountService,
 } from "../src/customer/customer-account-service.js";
+import { InMemoryCustomerAccountRepository } from "../src/customer/in-memory-customer-account-repository.js";
 import { AppError } from "../src/errors/app-error.js";
+import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
 import {
 	buildCustomerRegistrationRoutes,
 	type CustomerRegistrationRoutesOptions,
@@ -179,11 +183,21 @@ function createFakeServices() {
 			calls.evaluateEligibility.push(input);
 			const typed = input as {
 				organizationId: string;
+				customerId: string;
 				festivalShortName?: string;
 				items: Array<{ childId: string; festivalClassId: string }>;
 			};
 			if (typed.festivalShortName === "nonexistent-festival") {
 				throw new AppError("Active festival not found.", 404);
+			}
+			if (
+				typed.items.some(
+					(item) =>
+						item.childId === "other_cust_child" ||
+						item.childId === "nonexistent_child",
+				)
+			) {
+				throw new AppError("Child not found.", 404);
 			}
 			return {
 				results: typed.items.map((item) => ({
@@ -439,6 +453,50 @@ describe("Customer Registration Routes", () => {
 				festivalShortName: "spring-2026",
 				lineItems: payload.lineItems,
 			});
+		});
+
+		it("strips candidate markers from lineItems payload before calling checkoutService.start", async () => {
+			const { customerAccountService, classCheckoutService, calls } =
+				createFakeServices();
+			const app = createTestApp({
+				customerAccountService,
+				classCheckoutService,
+			});
+			const payload = {
+				lineItems: [
+					{
+						id: "candidate:class_1",
+						festivalClassId: "class_1",
+						childId: "child_1",
+						teacherId: "teacher_1",
+						pieces: [
+							{ title: "Piece 1", composer: "Bach", durationSeconds: 120 },
+						],
+						isCandidate: true,
+					},
+				],
+			};
+			const headers = {
+				...AUTH,
+				...JSON_HDR,
+				"Idempotency-Key": VALID_UUID,
+				"X-CSRF-Token": "csrf_1",
+				Origin: "https://fest.example.com",
+			};
+			const res = await req(
+				app,
+				"POST",
+				"/festivals/spring-2026/registration/checkout",
+				headers,
+				JSON.stringify(payload),
+			);
+			expect(res.status).toBe(200);
+			expect(calls.startCheckout.length).toBe(1);
+			const receivedLines = (
+				calls.startCheckout[0] as { lineItems: Array<Record<string, unknown>> }
+			).lineItems;
+			expect(receivedLines[0].isCandidate).toBeUndefined();
+			expect(receivedLines[0].id).toBe("class_1");
 		});
 
 		it("handles /class-checkout without festivalShortName in route", async () => {
@@ -895,8 +953,10 @@ describe("Customer Registration Routes", () => {
 			expect(calls.evaluateEligibility.length).toBe(1);
 			expect(calls.evaluateEligibility[0]).toEqual({
 				organizationId: "org_1",
+				customerId: "cust_1",
 				festivalShortName: "spring-2026",
 				items: payload.items,
+				mode: "advisory",
 			});
 		});
 
@@ -1027,6 +1087,345 @@ describe("Customer Registration Routes", () => {
 			expect(await res.json()).toEqual({
 				error: "Class checkout is unavailable.",
 			});
+		});
+
+		it("rejects with HTTP 404 when child belongs to another customer (IDOR prevention)", async () => {
+			const { customerAccountService, classCheckoutService } =
+				createFakeServices();
+			const app = createTestApp({
+				customerAccountService,
+				classCheckoutService,
+			});
+			const headers = {
+				...AUTH,
+				...JSON_HDR,
+				"X-CSRF-Token": "csrf_1",
+				Origin: "https://fest.example.com",
+			};
+			const res = await req(
+				app,
+				"POST",
+				"/festivals/spring-2026/registration/eligibility",
+				headers,
+				JSON.stringify({
+					items: [{ childId: "other_cust_child", festivalClassId: "class_1" }],
+				}),
+			);
+			expect(res.status).toBe(404);
+			expect(await res.json()).toEqual({
+				error: "Child not found.",
+			});
+		});
+
+		it("rejects with HTTP 404 when child does not exist", async () => {
+			const { customerAccountService, classCheckoutService } =
+				createFakeServices();
+			const app = createTestApp({
+				customerAccountService,
+				classCheckoutService,
+			});
+			const headers = {
+				...AUTH,
+				...JSON_HDR,
+				"X-CSRF-Token": "csrf_1",
+				Origin: "https://fest.example.com",
+			};
+			const res = await req(
+				app,
+				"POST",
+				"/festivals/spring-2026/registration/eligibility",
+				headers,
+				JSON.stringify({
+					items: [{ childId: "nonexistent_child", festivalClassId: "class_1" }],
+				}),
+			);
+			expect(res.status).toBe(404);
+			expect(await res.json()).toEqual({
+				error: "Child not found.",
+			});
+		});
+
+		it("in multi-line request where 1 child is owned and 1 is unowned, fails closed with 404 and does not evaluate", async () => {
+			const { customerAccountService, classCheckoutService } =
+				createFakeServices();
+			const app = createTestApp({
+				customerAccountService,
+				classCheckoutService,
+			});
+			const headers = {
+				...AUTH,
+				...JSON_HDR,
+				"X-CSRF-Token": "csrf_1",
+				Origin: "https://fest.example.com",
+			};
+			const res = await req(
+				app,
+				"POST",
+				"/festivals/spring-2026/registration/eligibility",
+				headers,
+				JSON.stringify({
+					items: [
+						{ childId: "child_1", festivalClassId: "class_1" },
+						{ childId: "other_cust_child", festivalClassId: "class_2" },
+					],
+				}),
+			);
+			expect(res.status).toBe(404);
+			expect(await res.json()).toEqual({
+				error: "Child not found.",
+			});
+		});
+	});
+
+	describe("POST /festivals/:festivalShortName/registration/eligibility (route integration with real ClassCheckoutService)", () => {
+		async function setupRealIntegration() {
+			const orgRepo = new InMemoryOrganizationRepository();
+			const org = await orgRepo.createOrganization({
+				name: "Pacific Arts",
+				slug: "pafe",
+			});
+			const festival = await orgRepo.createFestival({
+				id: "fest-1",
+				organizationId: org.id,
+				code: "PAFE26",
+				shortName: "spring-2026",
+				name: "Spring 2026",
+				startDate: "2026-05-01",
+				endDate: "2026-05-10",
+			});
+			await orgRepo.setPrimaryFestival(org.id, festival.id);
+
+			const subtype = await orgRepo.createRegistrationCatalogValue({
+				organizationId: org.id,
+				kind: "class_subtype",
+				displayName: "Solo",
+				normalizedName: "solo",
+			});
+			const division = await orgRepo.createRegistrationCatalogValue({
+				organizationId: org.id,
+				kind: "division",
+				displayName: "Junior",
+				normalizedName: "junior",
+			});
+			const classConfig = await orgRepo.createFestivalClassConfiguration({
+				organizationId: org.id,
+				festivalId: festival.id,
+				displayName: "Piano Solo",
+				classSubtypeId: subtype.id,
+				divisionId: division.id,
+				minimumAge: 5,
+				maximumAge: 18,
+				price: "40.00",
+				maximumPerformancePieces: 2,
+				performanceMinutes: 10,
+				capacity: 20,
+				isActive: true,
+				shopifyProductGid: "gid://shopify/Product/1",
+				shopifyVariantGid: "gid://shopify/ProductVariant/1",
+			});
+
+			const custRepo = new InMemoryCustomerAccountRepository();
+			const checkoutRepo = new InMemoryCheckoutRepository();
+			const commerceRepo = new InMemoryMembershipCommerceRepository();
+			const storefront = {
+				createCart: async () => ({ shopifyCartId: "cart-1" }),
+				checkout: async () => ({ checkoutUrl: "https://fest.example.com" }),
+			};
+
+			const { customer: cust1 } = await custRepo.createCustomerSession({
+				sessionId: "sess_cust_1",
+				organizationId: org.id,
+				shopifyCustomerGid: "gid://shopify/Customer/100",
+				encryptedTokens: "token-1",
+				csrfToken: "valid-csrf",
+				integrationVersion: 1,
+				createdAtIso: new Date().toISOString(),
+				lastSeenAtIso: new Date().toISOString(),
+				expiresAtIso: new Date(Date.now() + 3600_000).toISOString(),
+			});
+
+			const child1 = await custRepo.createChild({
+				organizationId: org.id,
+				parentCustomerId: cust1.id,
+				displayName: "Owned Child 1",
+			});
+			const child2 = await custRepo.createChild({
+				organizationId: org.id,
+				parentCustomerId: cust1.id,
+				displayName: "Owned Child 2",
+			});
+
+			const { customer: cust2 } = await custRepo.createCustomerSession({
+				sessionId: "sess_cust_2",
+				organizationId: org.id,
+				shopifyCustomerGid: "gid://shopify/Customer/200",
+				encryptedTokens: "token-2",
+				csrfToken: "valid-csrf-2",
+				integrationVersion: 1,
+				createdAtIso: new Date().toISOString(),
+				lastSeenAtIso: new Date().toISOString(),
+				expiresAtIso: new Date(Date.now() + 3600_000).toISOString(),
+			});
+
+			const otherChild = await custRepo.createChild({
+				organizationId: org.id,
+				parentCustomerId: cust2.id,
+				displayName: "Other Customer Child",
+			});
+
+			const classCheckoutService = new ClassCheckoutService(
+				orgRepo,
+				custRepo,
+				checkoutRepo,
+				storefront,
+				commerceRepo,
+			);
+
+			const customerAccountService = {
+				customerSession: async (
+					_slug: string,
+					sessionId?: string,
+					csrfToken?: string,
+					_origin?: string,
+				) => {
+					if (!sessionId) {
+						throw new AppError("Customer session is invalid.", 401);
+					}
+					if (csrfToken !== "valid-csrf") {
+						throw new AppError("CSRF validation failed.", 403);
+					}
+					return {
+						organizationId: org.id,
+						customerId: cust1.id,
+					};
+				},
+			} as unknown as CustomerAccountService;
+
+			const app = createTestApp({
+				customerAccountService,
+				classCheckoutService,
+			});
+
+			const headers = {
+				Cookie: `${CUSTOMER_SESSION_COOKIE}=sess_cust_1`,
+				"Content-Type": "application/json",
+				"X-CSRF-Token": "valid-csrf",
+				Origin: "https://fest.example.com",
+			};
+
+			return {
+				app,
+				headers,
+				child1,
+				child2,
+				otherChild,
+				classConfig,
+				commerceRepo,
+			};
+		}
+
+		it("successfully evaluates when all children belong to authenticated customer", async () => {
+			const ctx = await setupRealIntegration();
+			const res = await req(
+				ctx.app,
+				"POST",
+				"/festivals/spring-2026/registration/eligibility",
+				ctx.headers,
+				JSON.stringify({
+					items: [
+						{ childId: ctx.child1.id, festivalClassId: ctx.classConfig.id },
+						{ childId: ctx.child2.id, festivalClassId: ctx.classConfig.id },
+					],
+				}),
+			);
+			expect(res.status).toBe(200);
+			const data = (await res.json()) as {
+				results: Array<{ isEligible: boolean }>;
+			};
+			expect(data.results).toHaveLength(2);
+			expect(data.results[0].isEligible).toBe(true);
+			expect(data.results[1].isEligible).toBe(true);
+		});
+
+		it("rejects with HTTP 404 when child belongs to another customer (IDOR prevention)", async () => {
+			const ctx = await setupRealIntegration();
+			let entitlementsQueried = false;
+			const originalList = ctx.commerceRepo.listClassEntitlements.bind(
+				ctx.commerceRepo,
+			);
+			ctx.commerceRepo.listClassEntitlements = async (...args) => {
+				entitlementsQueried = true;
+				return originalList(...args);
+			};
+
+			const res = await req(
+				ctx.app,
+				"POST",
+				"/festivals/spring-2026/registration/eligibility",
+				ctx.headers,
+				JSON.stringify({
+					items: [
+						{ childId: ctx.otherChild.id, festivalClassId: ctx.classConfig.id },
+					],
+				}),
+			);
+			expect(res.status).toBe(404);
+			expect(await res.json()).toEqual({
+				error: "Child not found.",
+			});
+			expect(entitlementsQueried).toBe(false);
+		});
+
+		it("rejects with HTTP 404 when child does not exist", async () => {
+			const ctx = await setupRealIntegration();
+			const res = await req(
+				ctx.app,
+				"POST",
+				"/festivals/spring-2026/registration/eligibility",
+				ctx.headers,
+				JSON.stringify({
+					items: [
+						{
+							childId: "nonexistent-child-id",
+							festivalClassId: ctx.classConfig.id,
+						},
+					],
+				}),
+			);
+			expect(res.status).toBe(404);
+			expect(await res.json()).toEqual({
+				error: "Child not found.",
+			});
+		});
+
+		it("in multi-line request where 1 child is owned and 1 is unowned, fails closed with 404 and does not evaluate", async () => {
+			const ctx = await setupRealIntegration();
+			let entitlementsQueried = false;
+			const originalList = ctx.commerceRepo.listClassEntitlements.bind(
+				ctx.commerceRepo,
+			);
+			ctx.commerceRepo.listClassEntitlements = async (...args) => {
+				entitlementsQueried = true;
+				return originalList(...args);
+			};
+
+			const res = await req(
+				ctx.app,
+				"POST",
+				"/festivals/spring-2026/registration/eligibility",
+				ctx.headers,
+				JSON.stringify({
+					items: [
+						{ childId: ctx.child1.id, festivalClassId: ctx.classConfig.id },
+						{ childId: ctx.otherChild.id, festivalClassId: ctx.classConfig.id },
+					],
+				}),
+			);
+			expect(res.status).toBe(404);
+			expect(await res.json()).toEqual({
+				error: "Child not found.",
+			});
+			expect(entitlementsQueried).toBe(false);
 		});
 	});
 

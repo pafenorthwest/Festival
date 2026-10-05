@@ -6,9 +6,13 @@ import type {
 	FestivalClassConfiguration,
 	FestivalRecord,
 	ProposedPurchaseLineItem,
+	PurchaseEligibilityMode,
 	RepertoirePiece,
 } from "@festival/common";
-import { evaluatePurchaseEligibility } from "@festival/common";
+import {
+	evaluatePurchaseEligibility,
+	stripCandidateMarker,
+} from "@festival/common";
 import type { MembershipCommerceRepository } from "../commerce/membership-commerce-repository.js";
 import type { CustomerAccountRepository } from "../customer/customer-account-repository.js";
 import { AppError } from "../errors/app-error.js";
@@ -73,6 +77,15 @@ export interface StartClassCheckoutInput {
 	lineItems?: ClassCheckoutLineItemInput[];
 }
 
+export interface EvaluatePurchaseEligibilityInput {
+	organizationId: string;
+	customerId: string;
+	festivalId?: string;
+	festivalShortName?: string;
+	items: ProposedPurchaseLineItem[];
+	mode?: PurchaseEligibilityMode;
+}
+
 export interface ClassCheckoutResult {
 	checkoutUrl: string;
 	intentId: string;
@@ -98,12 +111,23 @@ export class ClassCheckoutService {
 		private readonly now: () => Date = () => new Date(),
 	) {}
 
-	async evaluateEligibility(input: {
-		organizationId: string;
-		festivalId?: string;
-		festivalShortName?: string;
-		items: ProposedPurchaseLineItem[];
-	}): Promise<EvaluatePurchaseEligibilityResponse> {
+	async evaluateEligibility(
+		input: EvaluatePurchaseEligibilityInput,
+	): Promise<EvaluatePurchaseEligibilityResponse> {
+		if (!input.customerId?.trim()) {
+			throw new AppError("Customer ID is required.", 400);
+		}
+		const children = await this.customers.listChildren(
+			input.organizationId,
+			input.customerId,
+		);
+		const ownedChildIds = new Set(children.map((c) => c.id));
+		for (const item of input.items) {
+			if (!ownedChildIds.has(item.childId)) {
+				throw new AppError("Child not found.", 404);
+			}
+		}
+
 		const festivals = await this.organizations.listFestivals(
 			input.organizationId,
 		);
@@ -133,6 +157,7 @@ export class ClassCheckoutService {
 			classes,
 			subtypes,
 			activeEntitlements,
+			mode: input.mode ?? "cart",
 		});
 	}
 
@@ -177,6 +202,7 @@ export class ClassCheckoutService {
 		}
 		await this.checkEligibility(
 			input.organizationId,
+			input.customerId,
 			targetFestival.id,
 			lineItems,
 		);
@@ -270,7 +296,9 @@ export class ClassCheckoutService {
 					400,
 				);
 			}
-			return input.lineItems;
+			return input.lineItems.map(
+				(item) => stripCandidateMarker(item) as ClassCheckoutLineItemInput,
+			);
 		}
 		if (!input.festivalClassId?.trim()) {
 			throw new AppError("Festival class ID is required.", 400);
@@ -282,13 +310,13 @@ export class ClassCheckoutService {
 			throw new AppError("Teacher ID is required.", 400);
 		}
 		return [
-			{
+			stripCandidateMarker({
 				festivalClassId: input.festivalClassId,
 				childId: input.childId,
 				teacherId: input.teacherId,
 				accompanistId: input.accompanistId,
 				pieces: input.pieces ?? [],
-			},
+			}) as ClassCheckoutLineItemInput,
 		];
 	}
 
@@ -412,15 +440,23 @@ export class ClassCheckoutService {
 
 	private async checkEligibility(
 		organizationId: string,
+		customerId: string,
 		festivalId: string,
 		lineItems: ClassCheckoutLineItemInput[],
 	): Promise<void> {
 		const eligibility = await this.evaluateEligibility({
 			organizationId,
+			customerId,
 			festivalId,
-			items: lineItems,
+			items: lineItems.map(
+				(item) => stripCandidateMarker(item) as ClassCheckoutLineItemInput,
+			),
+			mode: "cart",
 		});
-		if (!eligibility.isEligible) {
+		if (
+			!eligibility.isEligible ||
+			eligibility.results.some((r) => !r.isEligible)
+		) {
 			const failure = eligibility.results.find((r) => !r.isEligible);
 			throw new AppError(
 				failure?.message ?? "Class registration is not eligible.",
