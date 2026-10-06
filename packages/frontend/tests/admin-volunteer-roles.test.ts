@@ -64,18 +64,59 @@ describe("admin volunteer role and shift management", () => {
 		expect(lifecycle).toContain('"org-admin-volunteers"');
 	});
 
-	it("renders coverage gaps section with metric badges and unfilled shifts", async () => {
+	it("renders a shift coverage section with metric badges and coverage percentage", async () => {
 		const page = await read("../src/pages/VolunteerRolesPage.tsx");
 		const styles = await read("../src/styles.css");
 
-		expect(page).toContain("Coverage Gaps");
+		expect(page).toContain("Volunteer Shift Coverage");
 		expect(page).toContain("getVolunteerCoverageGaps");
 		expect(page).toContain("Total Shifts:");
 		expect(page).toContain("Filled Shifts:");
 		expect(page).toContain("Open Shifts:");
 		expect(page).toContain("Coverage Percentage:");
-		expect(page).toContain("listing-table coverage-gaps-table");
-		expect(styles).toContain(".coverage-gaps-table");
 		expect(styles).toContain(".coverage-metrics");
+	});
+
+	it("shows an Open/Filled status badge on every listed shift, per #232", async () => {
+		const page = await read("../src/pages/VolunteerRolesPage.tsx");
+		const styles = await read("../src/styles.css");
+
+		expect(page).toContain("listing-table coverage-slots-table");
+		expect(page).toContain("filteredSlots()");
+		expect(page).toContain("slot.status");
+		expect(styles).toContain(".coverage-slots-table");
+	});
+
+	it("makes the Total/Filled/Open summary badges into accessible filters, per #232", async () => {
+		const page = await read("../src/pages/VolunteerRolesPage.tsx");
+		const styles = await read("../src/styles.css");
+
+		expect(page).toContain("slotStatusFilter");
+		expect(page).toContain("setSlotStatusFilter");
+		expect(page).toContain("coverage-metrics-filter");
+		expect(page).toContain('aria-pressed={slotStatusFilter() === "all"}');
+		expect(page).toContain('aria-pressed={slotStatusFilter() === "Filled"}');
+		expect(page).toContain('aria-pressed={slotStatusFilter() === "Open"}');
+		expect(styles).toContain(".coverage-metrics-filter");
+		expect(styles).toContain('.coverage-metrics-filter[aria-pressed="true"]');
+	});
+
+	it("shows a filter-aware empty state when no shifts match the active filter, per #232", async () => {
+		const page = await read("../src/pages/VolunteerRolesPage.tsx");
+
+		expect(page).toContain(
+			"No shifts have been created for this festival yet.",
+		);
+		expect(page).toContain("shifts match this filter.");
+	});
+
+	it("displays shift dates as weekday + MM/DD, per specs/VOLUNTEER-PORTAL.md", async () => {
+		const page = await read("../src/pages/VolunteerRolesPage.tsx");
+
+		expect(page).toContain(
+			'import { formatScheduleDate } from "../app/appFormatting.js"',
+		);
+		expect(page).toContain("formatScheduleDate(shift.date)");
+		expect(page).toContain("formatScheduleDate(slot.date)");
 	});
 });

@@ -285,6 +285,47 @@ describe("volunteer domain schemas and validation", () => {
 			expect(summary.unfilledShifts).toBe(2);
 			expect(summary.coveragePercentage).toBe(0);
 		});
+
+		it("lists every shift with a computed Open/Filled status", () => {
+			const assignments: VolunteerAssignment[] = [
+				{
+					id: "assign-1",
+					organizationId: "org-1",
+					shiftId: "shift-1",
+					volunteerId: "vol-1",
+					status: "active",
+					createdAtIso: "2026-01-01T00:00:00Z",
+					cancelledAtIso: null,
+				},
+			];
+
+			const summary = calculateCoverageGaps(shifts, roles, assignments);
+			expect(summary.slots).toHaveLength(2);
+			const filled = summary.slots.find((slot) => slot.shiftId === "shift-1");
+			const open = summary.slots.find((slot) => slot.shiftId === "shift-2");
+			expect(filled?.status).toBe("Filled");
+			expect(open?.status).toBe("Open");
+			expect(filled?.roleDisplayName).toBe("Room Proctor");
+			expect(open?.roleDisplayName).toBe("Greeter");
+		});
+
+		it("marks a shift Open again once its assignment is cancelled", () => {
+			const cancelled: VolunteerAssignment[] = [
+				{
+					id: "assign-1",
+					organizationId: "org-1",
+					shiftId: "shift-1",
+					volunteerId: "vol-1",
+					status: "cancelled",
+					createdAtIso: "2026-01-01T00:00:00Z",
+					cancelledAtIso: "2026-01-02T00:00:00Z",
+				},
+			];
+
+			const summary = calculateCoverageGaps(shifts, roles, cancelled);
+			const slot = summary.slots.find((s) => s.shiftId === "shift-1");
+			expect(slot?.status).toBe("Open");
+		});
 	});
 
 	describe("validateShiftBookingConflicts", () => {

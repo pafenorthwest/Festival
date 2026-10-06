@@ -1,4 +1,5 @@
 import { For, Show } from "solid-js";
+import { formatScheduleDate } from "../app/appFormatting.js";
 import type { VolunteerRole, VolunteerShiftListing } from "../lib/api.js";
 import { Button } from "./Button.js";
 
@@ -60,7 +61,8 @@ export function VolunteerAvailableShiftsSection(
 											</label>
 										</span>
 										<span>
-											<strong>{shift.date}</strong> ({shift.period})
+											<strong>{formatScheduleDate(shift.date)}</strong> (
+											{shift.period})
 										</span>
 										<span>
 											<Show when={shift.timeText}>
