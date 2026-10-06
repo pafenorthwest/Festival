@@ -13,6 +13,7 @@ import { AdminFestivalsPage } from "./pages/AdminFestivalsPage.js";
 import { AdminHomePage } from "./pages/AdminHomePage.js";
 import { AdminIntegrationsPage } from "./pages/AdminIntegrationsPage.js";
 import { AdminMembershipProductsPage } from "./pages/AdminMembershipProductsPage.js";
+import { AdminRoomsPage } from "./pages/AdminRoomsPage.js";
 import { AdminRosterPage } from "./pages/AdminRosterPage.js";
 import { AdminSettingsPage } from "./pages/AdminSettingsPage.js";
 import { AdminUsersPage } from "./pages/AdminUsersPage.js";
@@ -193,6 +194,12 @@ export default function App() {
 						</Match>
 						<Match when={app.route().kind === "org-admin-volunteers"}>
 							<VolunteerRolesPage
+								app={app}
+								slug={(app.route() as { slug: string }).slug}
+							/>
+						</Match>
+						<Match when={app.route().kind === "org-admin-rooms"}>
+							<AdminRoomsPage
 								app={app}
 								slug={(app.route() as { slug: string }).slug}
 							/>

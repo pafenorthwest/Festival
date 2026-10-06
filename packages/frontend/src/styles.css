@@ -1480,6 +1480,11 @@ form.shopify-integration-card {
 	white-space: nowrap;
 }
 
+.rooms-table .listing-table-header,
+.rooms-table .listing-table-row {
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
 .festival-classes-table .listing-table-header,
 .festival-classes-table .listing-table-row {
 	grid-template-columns: minmax(130px, 1.8fr) minmax(90px, 1fr) minmax(
@@ -1881,7 +1886,9 @@ form.shopify-integration-card {
 	.volunteer-shifts-table .listing-table-header,
 	.volunteer-shifts-table .listing-table-row,
 	.festival-classes-table .listing-table-header,
-	.festival-classes-table .listing-table-row {
+	.festival-classes-table .listing-table-row,
+	.rooms-table .listing-table-header,
+	.rooms-table .listing-table-row {
 		grid-template-columns: 1fr;
 	}
 

@@ -66,6 +66,16 @@ export const CURRENT_ROUTE_SECURITY = [
 	},
 	{
 		method: "GET",
+		path: "/api/organizations/:slug/admin/festivals/:festivalShortName/rooms",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/festivals/:festivalShortName/rooms",
+		authenticationClass: "admin",
+	},
+	{
+		method: "GET",
 		path: "/api/firebase-session",
 		authenticationClass: "firebase",
 	},

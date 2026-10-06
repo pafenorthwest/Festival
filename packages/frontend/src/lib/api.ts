@@ -1025,6 +1025,51 @@ export function listFestivalClassSubtypes(
 	);
 }
 
+export type PianoType = "upright" | "grand";
+
+export interface RoomPianoConfiguration {
+	pianoType: PianoType;
+	count: number;
+}
+
+export interface Room {
+	id: string;
+	organizationId: string;
+	festivalId: string;
+	name: string;
+	pianoConfigurations: RoomPianoConfiguration[];
+	createdAtIso: string;
+}
+
+export interface CreateRoomInput {
+	name: string;
+	pianoConfigurations: RoomPianoConfiguration[];
+}
+
+export function listRooms(idToken: string, slug: string, festivalSlug: string) {
+	return requestJson<{ rooms: Room[] }>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/festivals/${encodeURIComponent(festivalSlug)}/rooms`,
+		undefined,
+		idToken,
+	);
+}
+
+export function createRoom(
+	idToken: string,
+	slug: string,
+	festivalSlug: string,
+	input: CreateRoomInput,
+) {
+	return requestJson<Room>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/festivals/${encodeURIComponent(festivalSlug)}/rooms`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+		idToken,
+	);
+}
+
 export function createFestivalClassSubtype(
 	idToken: string,
 	slug: string,
