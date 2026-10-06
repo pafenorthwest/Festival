@@ -377,11 +377,12 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 												<Button
 													type="button"
 													variant="secondary"
-													onClick={() =>
+													onClick={() => {
+														cancelEditShift();
 														setSelectedRoleId((current) =>
 															current === role.id ? null : role.id,
-														)
-													}
+														);
+													}}
 												>
 													{selectedRoleId() === role.id
 														? "Hide shifts"

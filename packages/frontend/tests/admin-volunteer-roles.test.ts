@@ -106,6 +106,27 @@ describe("admin volunteer role and shift management", () => {
 		expect(page).toContain("Could not delete role.");
 	});
 
+	it("clears an in-progress shift edit when switching the selected role, per review on #255", async () => {
+		const page = await read("../src/pages/VolunteerRolesPage.tsx");
+
+		// Without this, submitting a shift edit after switching roles (or
+		// hiding the current role's shifts) would send the previous role's
+		// editingShiftId scoped under the newly selected role, which the
+		// backend rejects as a 404 (shift not found under that role).
+		const manageShiftsButton = page.slice(
+			page.indexOf(
+				"<Button",
+				page.indexOf('span class="listing-table-actions"'),
+			),
+			page.indexOf("Manage shifts"),
+		);
+		expect(manageShiftsButton).toContain("cancelEditShift();");
+		expect(manageShiftsButton).toContain("setSelectedRoleId((current) =>");
+		expect(manageShiftsButton.indexOf("cancelEditShift()")).toBeLessThan(
+			manageShiftsButton.indexOf("setSelectedRoleId("),
+		);
+	});
+
 	it("lets an admin edit or delete a shift, per the volunteer admin build screen", async () => {
 		const page = await read("../src/pages/VolunteerRolesPage.tsx");
 
