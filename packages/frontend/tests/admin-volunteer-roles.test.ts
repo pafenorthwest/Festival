@@ -103,6 +103,7 @@ describe("admin volunteer role and shift management", () => {
 			'{editingRoleId() ? "Save changes" : "Create role"}',
 		);
 		expect(page).toContain("cancelEditRole");
+		expect(page).toContain("Could not delete role.");
 	});
 
 	it("lets an admin edit or delete a shift, per the volunteer admin build screen", async () => {
@@ -114,5 +115,6 @@ describe("admin volunteer role and shift management", () => {
 		expect(page).toContain('{editingShiftId() ? "Edit shift" : "Add a shift"}');
 		expect(page).toContain('{editingShiftId() ? "Save changes" : "Add shift"}');
 		expect(page).toContain("cancelEditShift");
+		expect(page).toContain("Could not delete shift.");
 	});
 });

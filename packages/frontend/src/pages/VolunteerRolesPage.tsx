@@ -159,6 +159,7 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 		) {
 			return;
 		}
+		setRoleFormError(null);
 		setDeletingRoleId(role.id);
 		try {
 			await deleteVolunteerRole(token, props.slug, festivalShortName, role.id);
@@ -166,6 +167,10 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 			if (selectedRoleId() === role.id) setSelectedRoleId(null);
 			await refetchRoles();
 			await refetchCoverageGaps();
+		} catch (error) {
+			setRoleFormError(
+				error instanceof Error ? error.message : "Could not delete role.",
+			);
 		} finally {
 			setDeletingRoleId(null);
 		}
@@ -282,6 +287,7 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 		const roleId = selectedRoleId();
 		if (!token || !festivalShortName || !roleId) return;
 		if (!confirm("Delete this shift?")) return;
+		setShiftFormError(null);
 		setDeletingShiftId(shift.id);
 		try {
 			await deleteVolunteerShift(
@@ -294,6 +300,10 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 			if (editingShiftId() === shift.id) cancelEditShift();
 			await refetchShifts();
 			await refetchCoverageGaps();
+		} catch (error) {
+			setShiftFormError(
+				error instanceof Error ? error.message : "Could not delete shift.",
+			);
 		} finally {
 			setDeletingShiftId(null);
 		}
