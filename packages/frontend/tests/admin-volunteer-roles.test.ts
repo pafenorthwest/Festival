@@ -109,4 +109,14 @@ describe("admin volunteer role and shift management", () => {
 		);
 		expect(page).toContain("shifts match this filter.");
 	});
+
+	it("displays shift dates as weekday + MM/DD, per specs/VOLUNTEER-PORTAL.md", async () => {
+		const page = await read("../src/pages/VolunteerRolesPage.tsx");
+
+		expect(page).toContain(
+			'import { formatScheduleDate } from "../app/appFormatting.js"',
+		);
+		expect(page).toContain("formatScheduleDate(shift.date)");
+		expect(page).toContain("formatScheduleDate(slot.date)");
+	});
 });
