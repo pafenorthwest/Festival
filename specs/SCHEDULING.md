@@ -6,21 +6,21 @@ Extends [Phase 5 — Scheduling + Physical Space Modeling](ROADMAP-2026.md#phase
 
 ## Purpose and scope
 
-Translate verified, placed Festival registrations into a real-world room-and-time schedule, let staff assign and adjust that schedule manually, and let each audience see the slice of it that belongs to them. Reuse the existing Firebase configuration and authenticated accounts, and the existing Rooms admin panel ([#277](https://github.com/pafenorthwest/Festival/pull/277)) as the room inventory this spec schedules against.
+Translate verified Festival registrations with a confirmed outcome into a real-world room-and-time schedule, let staff assign and adjust that schedule manually, and let each audience see the slice of it that belongs to them. Reuse the existing Firebase configuration and authenticated accounts, and the Rooms admin panel proposed in [#277](https://github.com/pafenorthwest/Festival/pull/277) as the room inventory this spec schedules against.
 
-"Placed," used throughout this document, is not yet a real status anywhere in the codebase — see [Open decision 3](#open-decisions) before treating anything here as buildable today.
+This document uses "confirmed" to mean a class registration that is paid, verified, and not on a waitlist — the real `class_entitlements.status` value (`'confirmed' | 'waitlisted' | 'cancelled' | 'revoked'`, defined in `packages/common/src/entitlements.ts` and enforced by a schema `CHECK` constraint). That enum is real and already in use today. What is *not* built is the soft-capacity allocation decision [#28](https://github.com/pafenorthwest/Festival/issues/28) describes — see [Open decision 3](#open-decisions) before treating scheduling's confirmed/waitlisted filter as battle-tested today.
 
 Three assets make up the scheduling domain:
 
-1. **Rooms** — already specified and built (see [Rooms](#rooms-already-built) below). This document extends it with scheduling use, not new room fields.
+1. **Rooms** — already specified, and proposed but not yet merged (see [Rooms](#rooms-pending-277) below). This document extends it with scheduling use, not new room fields.
 2. **Scheduled hours** — the bookable time blocks a room offers, defined in this document.
 3. **Self-service availability settings** — adjudicators' own record of when they can be scheduled, defined in this document.
 
 Version one is **manual scheduling only**. No automated solver, and no automatic assignment. Staff place each performer into a slot by hand, informed by the adjudicator-availability status the system surfaces for that slot.
 
-### Rooms (already built)
+### Rooms (pending #277)
 
-[#277](https://github.com/pafenorthwest/Festival/pull/277) added the Festival admin Rooms panel: a festival-scoped list of rooms, each with an optional piano configuration (upright and/or grand, positive whole-number counts, capped at 3 pianos per room). That remains the room asset for this spec — scheduling reads from it but does not change its fields or its 3-piano cap. Scheduling does not add a general room capacity; see [Scheduled hours](#scheduled-hours) for why.
+[#277](https://github.com/pafenorthwest/Festival/pull/277) proposes the Festival admin Rooms panel: a festival-scoped list of rooms, each with an optional piano configuration (upright and/or grand, positive whole-number counts, capped at 3 pianos per room). As of this writing it's open, not yet merged or reviewed. If it merges with its fields unchanged, that remains the room asset for this spec — scheduling reads from it but does not change its fields or its 3-piano cap. If review changes those fields, this section needs a pass too. Scheduling does not add a general room capacity; see [Scheduled hours](#scheduled-hours) for why.
 
 ### Visibility and authorization
 
@@ -35,7 +35,7 @@ All scheduling activity — rooms, scheduled hours, availability, and assignment
 
 ## Scheduled hours
 
-A **scheduled hour** is a bookable time block offered by a specific room within a festival. Staff define scheduled hours after creating rooms, mirroring the Volunteer Portal's "create roles, then create slots for each role" build pattern.
+A **scheduled hour** is a bookable time block offered by a specific room within a festival. Staff define scheduled hours after creating rooms, mirroring how [VOLUNTEER-PORTAL.md](VOLUNTEER-PORTAL.md) has admins "create roles within a festival before creating their slots."
 
 Each scheduled hour has:
 
@@ -65,15 +65,15 @@ This feature has a real, unresolved prerequisite: **this codebase has no adjudic
 
 ## Assignment
 
-An **assignment** places one class registration into one scheduled hour. It does not need its own concept of a performer group: `packages/common/src/registration.ts` already carries `childId`, `teacherId`, and `accompanistId`/`accompanistMembershipId` on every registration, so an assignment reaches the accompanist, the teacher, and the performing child by following the registration it's attached to — scheduling adds no new linkage for any of them. This also resolves what each personalized view in [#38](https://github.com/pafenorthwest/Festival/issues/38) actually queries: join assignments to their registration, then filter by whichever id matches the signed-in person.
+An **assignment** places one class registration into one scheduled hour. It does not need its own concept of a performer group: a registration already traces to its child, teacher, and accompanist through existing tables, so an assignment reaches all three by following the registration it's attached to — scheduling adds no new linkage for any of them. I checked the actual path, not just the TypeScript request type, since those aren't the same thing: `registration_metadata` (the persisted record, not the API request payload) has no direct `child_id` or `teacher_id` column. The child comes through `checkout_intent_id` → `checkout_intents.child_id`; the teacher and accompanist come through `teacher_membership_id`/`accompanist_membership_id` → `membership_entitlements.customer_id`. It's a few joins, not direct fields, but the linkage is real and already exists. This also resolves what each personalized view in [#38](https://github.com/pafenorthwest/Festival/issues/38) actually queries: join an assignment to its registration, then follow that chain to whichever person matches the signed-in user.
 
-- Only confirmed **placed** class registrations are valid assignment candidates by default. Waitlisted registrations are excluded from normal assignment.
+- Only registrations whose `class_entitlements.status` is `confirmed` are valid assignment candidates by default. Registrations with `status: "waitlisted"` are excluded from normal assignment.
 - A waitlisted registration may be assigned only through a separately approved, explicitly audited override. The override record captures the approver, the reason, the registration's prior allocation status (waitlisted), and a timestamp. The scheduling workspace must show this audit context to authorized staff wherever an overridden assignment appears.
 - Staff assign and reassign manually from the scheduling workspace. There is no automated solver in version one, matching [#31](https://github.com/pafenorthwest/Festival/issues/31) and [#32](https://github.com/pafenorthwest/Festival/issues/32)'s explicit non-goal.
 - Reassignment (moving an existing assignment to a different scheduled hour or room) must be fast and must not require rebuilding the surrounding schedule, per [#32](https://github.com/pafenorthwest/Festival/issues/32)'s acceptance criteria.
 - All assignment changes — create, move, remove — are audited: actor, prior state, new state, and timestamp.
 
-This spec inherits a real, unresolved dependency from [#28](https://github.com/pafenorthwest/Festival/issues/28) (soft-capacity placement and waitlist allocation): **this codebase has no "placed" or "waitlisted" registration status today.** I checked directly — neither concept exists anywhere in `packages/common` or `packages/backend` outside of issue text. Scheduling's entire assignment-candidate model depends on that distinction existing first. Either #28 ships before scheduling implementation begins, or this spec's "placed" input is stubbed/deferred — that choice belongs to the team, not this document, and is recorded as an open decision below.
+`class_entitlements.status` already distinguishes `confirmed` from `waitlisted` today (`packages/common/src/entitlements.ts`, enforced by a schema `CHECK` constraint) — scheduling's filter in the bullet above needs no new schema work. What [#28](https://github.com/pafenorthwest/Festival/issues/28) (soft-capacity placement and waitlist allocation) actually describes — allocating each verified paid registration to `confirmed` or `waitlisted` based on an editable soft-capacity threshold, decided at payment time — is not implemented. I checked `shopify-order-projection-service.ts`: every class entitlement is created as `status: "confirmed"` unconditionally when payment is verified, with no threshold check and no path to `waitlisted` at creation. Capacity is instead enforced earlier, as a hard pre-payment block in `purchase-eligibility.ts` (`checkCapacitySoldOut`, returning `SOLD_OUT`) — the "Fixed hard capacity" option #28's own option-evaluation table rejects. The only place `waitlisted` is actually assigned today is `drop-transfer-service.ts`, when an admin transfers an existing registration to a different, full class — a different flow from the one #28 specifies. So scheduling can filter on the real `confirmed`/`waitlisted` enum without waiting on new schema, but in today's codebase that filter will almost never exclude anything, since no registration is ever waitlisted at initial signup. Whether that gap matters for this version of scheduling, or whether scheduling should wait for #28's real soft-capacity allocation first, is recorded as an open decision below.
 
 ## Scheduling workspace (admin)
 
@@ -104,16 +104,16 @@ Schedule dates and times display in the festival's local timezone, using the sam
 
 Retains the Phase 5 roadmap's conceptual records, refined with this spec's detail. Exact storage design is outside this specification draft.
 
-- A **room** belongs to one festival (already built in [#277](https://github.com/pafenorthwest/Festival/pull/277); not redefined here).
+- A **room** belongs to one festival (proposed in [#277](https://github.com/pafenorthwest/Festival/pull/277), not yet merged; not redefined here).
 - A **scheduled hour** belongs to one room in one festival, and has a required date, start time, end time, an optional staff-facing label, and an optional division and adjudicator. Scheduled hours in the same room do not overlap, and each holds at most one assignment.
 - An **adjudicator availability record** links an adjudicator's account to a festival and a set of date/time ranges they've marked available.
-- An **assignment** connects one placed (or audited-override waitlisted) registration to one scheduled hour, with an actor, timestamp, and change history. It carries no fields of its own for child, teacher, or accompanist — those come from the registration it's attached to.
+- An **assignment** connects one confirmed (or audited-override waitlisted) registration to one scheduled hour, with an actor, timestamp, and change history. It carries no fields of its own for child, teacher, or accompanist — those come from the registration it's attached to.
 - An **assignment audit entry** records actor, prior state, new state, and timestamp for every assignment change, including waitlist overrides' approver and reason.
 
 ## Acceptance criteria
 
 1. Admins can define scheduled hours for an existing room, each with a room, date, start time, end time, and an optional division and adjudicator; two scheduled hours in the same room may not overlap.
-2. Admins can assign a placed registration to a scheduled hour from the scheduling workspace; a scheduled hour holds at most one assignment.
+2. Admins can assign a confirmed registration to a scheduled hour from the scheduling workspace; a scheduled hour holds at most one assignment.
 3. Waitlisted registrations are absent from the normal candidate list and can be assigned only through the approved, audited override, which records approver, reason, prior status, and timestamp.
 4. Reassigning an existing assignment to a different scheduled hour or room does not require rebuilding the surrounding schedule.
 5. Every assignment change (create, move, remove) is recorded with actor, prior state, new state, and timestamp.
@@ -121,9 +121,9 @@ Retains the Phase 5 roadmap's conceptual records, refined with this spec's detai
 7. An adjudicator can set and change their own availability for a festival, expressed as date/time ranges; they cannot see another adjudicator's availability.
 8. The scheduling workspace visibly distinguishes an assignment made outside an adjudicator's stated availability, without hard-blocking it.
 9. An adjudicator's personalized view shows only the classes scheduled into hours where they're named as the adjudicator.
-10. An accompanist's personalized view shows only assignments whose registration's `accompanistId`/`accompanistMembershipId` matches them — no new accompanist-to-schedule linkage is created for this purpose.
-11. A teacher's personalized view shows only assignments whose registration's `teacherId` matches them.
-12. A parent/guardian's personalized view shows only assignments whose registration's `childId` is one of their own children.
+10. An accompanist's personalized view shows only assignments whose registration's `accompanist_membership_id` traces to them — no new accompanist-to-schedule linkage is created for this purpose.
+11. A teacher's personalized view shows only assignments whose registration's `teacher_membership_id` traces to them.
+12. A parent/guardian's personalized view shows only assignments whose registration's `checkout_intent_id` traces to one of their own children.
 13. All four personalized views require login and enforce relationship-based access; none can view another person's schedule slice.
 14. A public class schedule is available without login and contains no personal or contact information.
 15. Every schedule view, personalized and public, is usable online and has a printer-friendly format.
@@ -135,7 +135,7 @@ Implementation must include tests for changed behavior, particularly Firebase in
 
 ## Deferred scope
 
-- An automated scheduling solver (explicitly out of scope per [#31](https://github.com/pafenorthwest/Festival/issues/31)/[#32](https://github.com/pafenorthwest/Festival/issues/32); "don't build a solver yet").
+- An automated scheduling solver — explicitly out of scope: #31 calls for "manual assignment flows before any automated solver work," and #32 states the workflow "does not depend on an automated solver."
 - The iOS app client from [#38](https://github.com/pafenorthwest/Festival/issues/38) — tracked as a stretch goal, not required for this version.
 - Automated notifications when a schedule changes (this spec does not define a Mailchimp/communications event contract for scheduling, unlike the Volunteer Portal's booking/cancellation events).
 - Hard-blocking an assignment outside an adjudicator's stated availability. Version one surfaces the mismatch; it does not prevent the override.
@@ -147,5 +147,5 @@ Two of these are genuine engineering/product-modeling questions I worked through
 
 1. **Adjudicator identity — recommendation:** model `adjudicator` as a new Firebase intent type, parallel to the existing `volunteer` intent ([VOLUNTEER-PORTAL.md](VOLUNTEER-PORTAL.md)): an authenticated account self-enrolls as an adjudicator for one festival (not a persistent organization-membership role, since adjudicators are typically outside judges specific to a festival, not staff). This reuses an already-proven pattern in this exact codebase rather than inventing a new identity shape. Self-service availability and the scheduled-hour adjudicator field both depend on this being confirmed before implementation.
 2. **Availability lock — recommendation:** let an adjudicator edit their availability at any time, including after an assignment exists. Don't block the edit or silently require staff review; let the resulting mismatch surface through the same visible-distinction mechanism as any other availability mismatch (acceptance criterion 8). This keeps the rule singular (one mismatch-detection mechanism, not two) and matches the "override-friendly, not over-automated" principle [#32](https://github.com/pafenorthwest/Festival/issues/32) already establishes for staff; extending it to adjudicators' own edits is a small, consistent step, not a new principle.
-3. **Dependency on #28 — needs Eric's call, not resolvable here:** scheduling's "placed vs. waitlisted" assignment-candidate model assumes [#28](https://github.com/pafenorthwest/Festival/issues/28)'s soft-capacity placement already exists. Neither "placed" nor "waitlisted" exists in the codebase today — I checked directly. Should #28 ship first, or should this spec define a temporary/stubbed placement signal for scheduling to build against in the meantime? This is a roadmap-sequencing decision, not a modeling one.
+3. **Dependency on #28 — needs Eric's call, not resolvable here:** the `confirmed`/`waitlisted` enum scheduling's assignment-candidate filter relies on already exists (`class_entitlements.status`), so there's no missing schema. But [#28](https://github.com/pafenorthwest/Festival/issues/28)'s actual feature — allocating each verified paid registration to `confirmed` or `waitlisted` by an editable soft-capacity threshold at payment time — isn't implemented; today every registration is created `confirmed` unconditionally, and capacity is enforced earlier instead, as a hard pre-payment block that #28 explicitly rejects as a model. In practice that means scheduling's waitlisted-registrations-excluded-by-default rule would currently almost never trigger, since nothing is waitlisted at signup today — only `drop-transfer-service.ts`'s class-transfer flow ever produces a `waitlisted` registration. Should #28 ship its real soft-capacity allocation before scheduling implementation begins, so the waitlist-exclusion rule actually does something meaningful at signup time, or is scheduling's override-friendly design (criterion 3) an acceptable reason to build scheduling against today's narrower, transfer-only waitlist in the meantime? This is a roadmap-sequencing decision, not a modeling one.
 4. **Export format specifics — needs Eric's call, not resolvable here:** [#31](https://github.com/pafenorthwest/Festival/issues/31)/[#32](https://github.com/pafenorthwest/Festival/issues/32) call for PDF/CSV export but do not specify a layout, grouping, or the fields each format includes. This is a product-content decision (what the printed program should actually look like), not something inferable from the existing codebase.
