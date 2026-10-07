@@ -175,6 +175,26 @@ describe("admin rooms routes", () => {
 		expect(response.status).toBe(400);
 	});
 
+	it("rejects non-array pianoConfigurations", async () => {
+		const { app } = await createTestApp();
+		await createOrgAndFestivalAsAdmin(app);
+
+		const response = await app.fetch(
+			new Request(
+				ROOMS_BASE,
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify(
+						createRoomPayload({
+							pianoConfigurations: { pianoType: "upright", count: 1 },
+						}),
+					),
+				}),
+			),
+		);
+		expect(response.status).toBe(400);
+	});
+
 	it("rejects a non-positive or non-integer piano count", async () => {
 		const { app } = await createTestApp();
 		await createOrgAndFestivalAsAdmin(app);

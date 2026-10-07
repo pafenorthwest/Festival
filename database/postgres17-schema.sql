@@ -947,6 +947,35 @@ CREATE TABLE orgs.repertoire_works (
 
 
 --
+-- Name: room_piano_configurations; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.room_piano_configurations (
+    id text NOT NULL,
+    organization_id text NOT NULL,
+    festival_id text NOT NULL,
+    room_id text NOT NULL,
+    piano_type text NOT NULL,
+    count integer NOT NULL,
+    CONSTRAINT room_piano_configurations_count_check CHECK ((count > 0)),
+    CONSTRAINT room_piano_configurations_piano_type_check CHECK ((piano_type = ANY (ARRAY['upright'::text, 'grand'::text])))
+);
+
+
+--
+-- Name: rooms; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.rooms (
+    id text NOT NULL,
+    organization_id text NOT NULL,
+    festival_id text NOT NULL,
+    name text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
 -- Name: shopify_customer_account_integrations; Type: TABLE; Schema: orgs; Owner: -
 --
 
@@ -1838,6 +1867,38 @@ ALTER TABLE ONLY orgs.repertoire_works
 
 
 --
+-- Name: room_piano_configurations room_piano_configurations_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.room_piano_configurations
+    ADD CONSTRAINT room_piano_configurations_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: room_piano_configurations room_piano_configurations_room_id_piano_type_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.room_piano_configurations
+    ADD CONSTRAINT room_piano_configurations_room_id_piano_type_key UNIQUE (room_id, piano_type);
+
+
+--
+-- Name: rooms rooms_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.rooms
+    ADD CONSTRAINT rooms_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: rooms rooms_id_festival_id_organization_id_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.rooms
+    ADD CONSTRAINT rooms_id_festival_id_organization_id_key UNIQUE (id, festival_id, organization_id);
+
+
+--
 -- Name: shopify_customer_account_integrations shopify_customer_account_integrations_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
 --
 
@@ -2430,6 +2491,20 @@ CREATE INDEX repertoire_work_contributors_contributor_idx ON orgs.repertoire_wor
 --
 
 CREATE INDEX repertoire_works_organization_title_idx ON orgs.repertoire_works USING btree (organization_id, normalized_title);
+
+
+--
+-- Name: room_piano_configurations_room_idx; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX room_piano_configurations_room_idx ON orgs.room_piano_configurations USING btree (room_id);
+
+
+--
+-- Name: rooms_org_festival_idx; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX rooms_org_festival_idx ON orgs.rooms USING btree (organization_id, festival_id);
 
 
 --
@@ -3184,6 +3259,62 @@ ALTER TABLE ONLY orgs.repertoire_work_contributors
 
 ALTER TABLE ONLY orgs.repertoire_works
     ADD CONSTRAINT repertoire_works_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: room_piano_configurations room_piano_configurations_festival_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.room_piano_configurations
+    ADD CONSTRAINT room_piano_configurations_festival_id_fkey FOREIGN KEY (festival_id) REFERENCES orgs.festivals(id) ON DELETE CASCADE;
+
+
+--
+-- Name: room_piano_configurations room_piano_configurations_festival_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.room_piano_configurations
+    ADD CONSTRAINT room_piano_configurations_festival_id_organization_id_fkey FOREIGN KEY (festival_id, organization_id) REFERENCES orgs.festivals(id, organization_id) ON DELETE CASCADE;
+
+
+--
+-- Name: room_piano_configurations room_piano_configurations_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.room_piano_configurations
+    ADD CONSTRAINT room_piano_configurations_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: room_piano_configurations room_piano_configurations_room_id_festival_id_organizat_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.room_piano_configurations
+    ADD CONSTRAINT room_piano_configurations_room_id_festival_id_organizat_fkey FOREIGN KEY (room_id, festival_id, organization_id) REFERENCES orgs.rooms(id, festival_id, organization_id) ON DELETE CASCADE;
+
+
+--
+-- Name: rooms rooms_festival_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.rooms
+    ADD CONSTRAINT rooms_festival_id_fkey FOREIGN KEY (festival_id) REFERENCES orgs.festivals(id) ON DELETE CASCADE;
+
+
+--
+-- Name: rooms rooms_festival_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.rooms
+    ADD CONSTRAINT rooms_festival_id_organization_id_fkey FOREIGN KEY (festival_id, organization_id) REFERENCES orgs.festivals(id, organization_id) ON DELETE CASCADE;
+
+
+--
+-- Name: rooms rooms_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.rooms
+    ADD CONSTRAINT rooms_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
 
 
 --

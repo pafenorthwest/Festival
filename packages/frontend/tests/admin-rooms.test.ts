@@ -67,4 +67,11 @@ describe("admin rooms panel", () => {
 		expect(page).toContain("function describePianos(");
 		expect(page).toContain('"No pianos"');
 	});
+
+	it("tracks props.slug in the rooms resource key", async () => {
+		const page = await read("../src/pages/AdminRoomsPage.tsx");
+
+		expect(page).toContain("const slug = props.slug;");
+		expect(page).toContain("[token, slug, festivalShortName]");
+	});
 });

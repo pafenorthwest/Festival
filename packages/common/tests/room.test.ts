@@ -89,4 +89,36 @@ describe("validateCreateRoomInput", () => {
 			"Total pianos in a room must not exceed 3.",
 		);
 	});
+
+	it("rejects non-array pianoConfigurations", () => {
+		const invalidInputs = [
+			{ pianoType: "upright", count: 1 },
+			"upright",
+			null,
+			123,
+			true,
+		];
+		for (const invalid of invalidInputs) {
+			const result = validateCreateRoomInput({
+				name: "Room A",
+				pianoConfigurations: invalid,
+			});
+			expect(result.valid).toBe(false);
+			expect(result.errors).toContain("Piano configurations must be an array.");
+		}
+	});
+
+	it("rejects non-object array items in pianoConfigurations", () => {
+		const invalidItems = [null, "upright", 123, true, []];
+		for (const invalid of invalidItems) {
+			const result = validateCreateRoomInput({
+				name: "Room A",
+				pianoConfigurations: [invalid],
+			});
+			expect(result.valid).toBe(false);
+			expect(result.errors).toContain(
+				"Each piano configuration must be an object.",
+			);
+		}
+	});
 });

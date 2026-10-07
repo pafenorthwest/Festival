@@ -61,13 +61,14 @@ export function AdminRoomsPage(props: AdminRoomsPageProps) {
 	const [rooms, { refetch: refetchRooms }] = createResource(
 		() => {
 			const token = idToken();
+			const slug = props.slug;
 			const festivalShortName = selectedFestival()?.shortName;
-			return token && festivalShortName
-				? ([token, festivalShortName] as const)
+			return token && slug && festivalShortName
+				? ([token, slug, festivalShortName] as const)
 				: undefined;
 		},
-		async ([token, festivalShortName]) => {
-			const response = await listRooms(token, props.slug, festivalShortName);
+		async ([token, slug, festivalShortName]) => {
+			const response = await listRooms(token, slug, festivalShortName);
 			return response.rooms;
 		},
 	);

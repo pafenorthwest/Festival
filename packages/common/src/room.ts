@@ -44,15 +44,20 @@ export function validateCreateRoomInput(
 		errors.push("Room name must be 100 characters or less.");
 	}
 
-	const rawConfigurations = Array.isArray(body.pianoConfigurations)
-		? body.pianoConfigurations
-		: [];
+	let rawConfigurations: unknown[] = [];
+	if (body.pianoConfigurations !== undefined) {
+		if (!Array.isArray(body.pianoConfigurations)) {
+			errors.push("Piano configurations must be an array.");
+		} else {
+			rawConfigurations = body.pianoConfigurations;
+		}
+	}
 	const pianoConfigurations: RoomPianoConfiguration[] = [];
 	const seenTypes = new Set<PianoType>();
 	let totalPianos = 0;
 
 	for (const entry of rawConfigurations) {
-		if (!entry || typeof entry !== "object") {
+		if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
 			errors.push("Each piano configuration must be an object.");
 			continue;
 		}
