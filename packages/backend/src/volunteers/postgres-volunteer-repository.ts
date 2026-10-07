@@ -5,6 +5,8 @@ import type {
 	BookShiftsOutcome,
 	CreateRoleInput,
 	CreateShiftInput,
+	UpdateRoleInput,
+	UpdateShiftInput,
 	UpsertVolunteerInput,
 	VolunteerAssignmentRecord,
 	VolunteerRecord,
@@ -99,6 +101,35 @@ export class PostgresVolunteerRepository implements VolunteerRepository {
 		return this.role(rows[0]);
 	}
 
+	async updateRole(input: UpdateRoleInput) {
+		const rows = (await sql.unsafe(
+			`UPDATE ${this.schema}.volunteer_roles
+			 SET display_name = $4, description = $5, details_url = $6, is_room_proctor = $7
+			 WHERE id = $1 AND organization_id = $2 AND festival_id = $3
+			 RETURNING id, organization_id, festival_id, slug, display_name, description, details_url, is_room_proctor, created_at::text`,
+			[
+				input.roleId,
+				input.organizationId,
+				input.festivalId,
+				input.displayName,
+				input.description,
+				input.detailsUrl,
+				input.isRoomProctor,
+			],
+		)) as Array<Record<string, unknown>>;
+		return rows[0] ? this.role(rows[0]) : null;
+	}
+
+	async deleteRole(organizationId: string, festivalId: string, roleId: string) {
+		const rows = (await sql.unsafe(
+			`DELETE FROM ${this.schema}.volunteer_roles
+			 WHERE id = $1 AND organization_id = $2 AND festival_id = $3
+			 RETURNING id`,
+			[roleId, organizationId, festivalId],
+		)) as Array<Record<string, unknown>>;
+		return rows.length > 0;
+	}
+
 	async createShift(input: CreateShiftInput) {
 		const rows = (await sql.unsafe(
 			`INSERT INTO ${this.schema}.volunteer_shifts (id, organization_id, festival_id, role_id, date, period, time_text, division, adjudicator)
@@ -124,6 +155,42 @@ export class PostgresVolunteerRepository implements VolunteerRepository {
 			throw new Error("Volunteer shift role is outside the selected festival.");
 		}
 		return this.shift(rows[0]);
+	}
+
+	async updateShift(input: UpdateShiftInput) {
+		const rows = (await sql.unsafe(
+			`UPDATE ${this.schema}.volunteer_shifts
+			 SET date = $5, period = $6, time_text = $7, division = $8, adjudicator = $9
+			 WHERE id = $1 AND organization_id = $2 AND festival_id = $3 AND role_id = $4
+			 RETURNING id, organization_id, festival_id, role_id, date::text, period, time_text, division, adjudicator, created_at::text`,
+			[
+				input.shiftId,
+				input.organizationId,
+				input.festivalId,
+				input.roleId,
+				input.date,
+				input.period,
+				input.timeText,
+				input.division,
+				input.adjudicator,
+			],
+		)) as Array<Record<string, unknown>>;
+		return rows[0] ? this.shift(rows[0]) : null;
+	}
+
+	async deleteShift(
+		organizationId: string,
+		festivalId: string,
+		roleId: string,
+		shiftId: string,
+	) {
+		const rows = (await sql.unsafe(
+			`DELETE FROM ${this.schema}.volunteer_shifts
+			 WHERE id = $1 AND organization_id = $2 AND festival_id = $3 AND role_id = $4
+			 RETURNING id`,
+			[shiftId, organizationId, festivalId, roleId],
+		)) as Array<Record<string, unknown>>;
+		return rows.length > 0;
 	}
 
 	async getRole(organizationId: string, festivalId: string, roleId: string) {
