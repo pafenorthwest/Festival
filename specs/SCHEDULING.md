@@ -8,13 +8,15 @@ Extends [Phase 5 — Scheduling + Physical Space Modeling](ROADMAP-2026.md#phase
 
 Translate verified, placed Festival registrations into a real-world room-and-time schedule, let staff assign and adjust that schedule manually, and let each audience see the slice of it that belongs to them. Reuse the existing Firebase configuration and authenticated accounts, and the existing Rooms admin panel ([#277](https://github.com/pafenorthwest/Festival/pull/277)) as the room inventory this spec schedules against.
 
+"Placed," used throughout this document, is not yet a real status anywhere in the codebase — see [Open decision 3](#open-decisions) before treating anything here as buildable today.
+
 Three assets make up the scheduling domain:
 
 1. **Rooms** — already specified and built (see [Rooms](#rooms-already-built) below). This document extends it with scheduling use, not new room fields.
 2. **Scheduled hours** — the bookable time blocks a room offers, defined in this document.
 3. **Self-service availability settings** — adjudicators' own record of when they can be scheduled, defined in this document.
 
-Version one is **manual scheduling only**. No automated solver, and no automatic assignment. Staff place each performer into a slot by hand, informed by availability and capacity data the system surfaces.
+Version one is **manual scheduling only**. No automated solver, and no automatic assignment. Staff place each performer into a slot by hand, informed by the adjudicator-availability status the system surfaces for that slot.
 
 ### Rooms (already built)
 
@@ -25,7 +27,7 @@ Version one is **manual scheduling only**. No automated solver, and no automatic
 - A Firebase `admin` intent type may define rooms' scheduled hours, make and change assignments, and view the consolidated schedule for the selected festival. This applies to every Festival administrative role (Admin, Division Chair, Concert Chair, and equivalent), matching the admin intent pattern established in [VOLUNTEER-PORTAL.md](VOLUNTEER-PORTAL.md).
 - An adjudicator may set and change only their own availability. They must never see another adjudicator's availability or the consolidated schedule, unless they separately hold an admin intent.
 - Personalized schedule views (adjudicator, accompanist, teacher, parent/guardian) each show only that authenticated person's own relationship to the schedule — their assigned classes, their placements, their students' entries, or their children's entries, respectively. None of these views expose another person's schedule.
-- A public, unauthenticated view shows only a high-level class schedule — no contact information, no personal relationships, no adjudicator identity beyond what the festival already displays publicly for a class.
+- A public, unauthenticated view shows only a high-level class schedule — no contact information, no personal relationships, and no adjudicator identity. I checked: this app has no existing precedent of showing adjudicator names publicly for a class, so this spec doesn't assume one either; whether to add that is a product decision outside this document's scope.
 
 ### Festival scope
 
@@ -50,10 +52,12 @@ A scheduled hour has an optional **division** (referencing the organization's ex
 
 ## Self-service availability settings
 
-An adjudicator records the scheduled hours they are available for, within a festival, before staff assign them. This is self-service: the adjudicator sets their own availability; staff do not set it on their behalf in version one.
+An adjudicator records when they're available within a festival, before staff build scheduled hours around them. This is self-service: the adjudicator sets their own availability; staff do not set it on their behalf in version one.
 
-- Availability is expressed as a set of scheduled hours (or, equivalently, room/date/time ranges) the adjudicator marks as available.
-- An adjudicator may change their availability at any time, including after an assignment already exists for that hour; the change does not lock, and does not require staff review (see [Open decisions](#open-decisions) for the reasoning).
+Availability has to be expressed as date/time ranges, not as a set of existing scheduled hours — an adjudicator can't mark a scheduled hour available before staff have tagged them onto one, and staff can't tag them onto one without knowing their availability first. Staff define scheduled hours and assign an adjudicator to each by matching it against that adjudicator's stated time ranges, not the other way around.
+
+- Availability is a set of date/time ranges within the festival, in the festival's local timezone.
+- An adjudicator may change their availability at any time, including after a scheduled hour already names them as its adjudicator; the change does not lock, and does not require staff review (see [Open decisions](#open-decisions) for the reasoning).
 - Staff use availability as a filter or warning when assigning: version one does not hard-block an assignment outside stated availability, since staff must retain override ability (matching the "keep the experience override-friendly rather than over-automated" principle from [#32](https://github.com/pafenorthwest/Festival/issues/32)), but the scheduling workspace must make unavailable-outside-availability assignments visibly distinct so staff do not do so by accident.
 - Only the adjudicator who owns an availability record, and admin intent types, may view it. Other adjudicators cannot see each other's availability.
 
@@ -75,7 +79,7 @@ This spec inherits a real, unresolved dependency from [#28](https://github.com/p
 
 - Requires the Firebase `admin` intent type, regardless of the holder's Festival administrative role, matching the Volunteer Portal's admin-build-screen pattern.
 - Staff define rooms' scheduled hours here (rooms themselves are defined in the existing Rooms panel).
-- Staff see placed registrations as assignment candidates, with each candidate's adjudicator-availability status visible (available, unavailable, or availability not yet set) wherever that's relevant to the assignment.
+- When staff consider a scheduled hour that names an adjudicator, that adjudicator's availability status for it is visible (available, unavailable, or not yet set) — this is a property of the scheduled hour under consideration, not of the candidate registration.
 - Waitlisted registrations are absent from the normal candidate list; they appear only through the approved audited override flow, with that context visible.
 - Staff can export the resulting schedule as PDF and CSV.
 - Per [#32](https://github.com/pafenorthwest/Festival/issues/32): the workspace favors overrides over automation at every step. Staff must always be able to make a manual exception.
@@ -102,7 +106,7 @@ Retains the Phase 5 roadmap's conceptual records, refined with this spec's detai
 
 - A **room** belongs to one festival (already built in [#277](https://github.com/pafenorthwest/Festival/pull/277); not redefined here).
 - A **scheduled hour** belongs to one room in one festival, and has a required date, start time, end time, an optional staff-facing label, and an optional division and adjudicator. Scheduled hours in the same room do not overlap, and each holds at most one assignment.
-- An **adjudicator availability record** links an adjudicator's account to a festival and a set of scheduled hours (or equivalent time ranges) they've marked available.
+- An **adjudicator availability record** links an adjudicator's account to a festival and a set of date/time ranges they've marked available.
 - An **assignment** connects one placed (or audited-override waitlisted) registration to one scheduled hour, with an actor, timestamp, and change history. It carries no fields of its own for child, teacher, or accompanist — those come from the registration it's attached to.
 - An **assignment audit entry** records actor, prior state, new state, and timestamp for every assignment change, including waitlist overrides' approver and reason.
 
@@ -114,7 +118,7 @@ Retains the Phase 5 roadmap's conceptual records, refined with this spec's detai
 4. Reassigning an existing assignment to a different scheduled hour or room does not require rebuilding the surrounding schedule.
 5. Every assignment change (create, move, remove) is recorded with actor, prior state, new state, and timestamp.
 6. Staff can export the festival's schedule as PDF and CSV from the scheduling workspace.
-7. An adjudicator can set and change their own availability for a festival, expressed as a set of scheduled hours; they cannot see another adjudicator's availability.
+7. An adjudicator can set and change their own availability for a festival, expressed as date/time ranges; they cannot see another adjudicator's availability.
 8. The scheduling workspace visibly distinguishes an assignment made outside an adjudicator's stated availability, without hard-blocking it.
 9. An adjudicator's personalized view shows only the classes scheduled into hours where they're named as the adjudicator.
 10. An accompanist's personalized view shows only assignments whose registration's `accompanistId`/`accompanistMembershipId` matches them — no new accompanist-to-schedule linkage is created for this purpose.
