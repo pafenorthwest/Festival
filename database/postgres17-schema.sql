@@ -78,6 +78,50 @@ CREATE TABLE orgs.app_user (
 
 
 --
+-- Name: billing_adjustments; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.billing_adjustments (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    customer_id text NOT NULL,
+    admin_user_id text NOT NULL,
+    adjustment_type text NOT NULL,
+    amount_cents integer NOT NULL,
+    currency_code text DEFAULT 'USD'::text NOT NULL,
+    reason text NOT NULL,
+    reference_type text,
+    reference_id text,
+    approved_decision_id text,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT billing_adjustments_adjustment_type_check CHECK ((adjustment_type = ANY (ARRAY['refund'::text, 'credit_issue'::text, 'credit_apply'::text, 'manual_charge'::text, 'write_off'::text]))),
+    CONSTRAINT billing_adjustments_amount_cents_check CHECK ((amount_cents > 0))
+);
+
+
+--
+-- Name: billing_ledger; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.billing_ledger (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    customer_id text NOT NULL,
+    entry_type text NOT NULL,
+    amount_cents integer NOT NULL,
+    direction text NOT NULL,
+    balance_after_cents integer NOT NULL,
+    currency_code text DEFAULT 'USD'::text NOT NULL,
+    adjustment_id uuid,
+    notes text,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT billing_ledger_balance_after_cents_check CHECK ((balance_after_cents >= 0)),
+    CONSTRAINT billing_ledger_direction_check CHECK ((direction = ANY (ARRAY['inflow'::text, 'outflow'::text]))),
+    CONSTRAINT billing_ledger_entry_type_check CHECK ((entry_type = ANY (ARRAY['credit'::text, 'debit'::text, 'adjustment'::text])))
+);
+
+
+--
 -- Name: checkout_carts; Type: TABLE; Schema: orgs; Owner: -
 --
 
@@ -175,6 +219,20 @@ CREATE TABLE orgs.class_entitlements (
     CONSTRAINT class_entitlements_paid_amount_cents_check CHECK ((paid_amount_cents >= 0)),
     CONSTRAINT class_entitlements_paid_currency_code_check CHECK ((paid_currency_code ~ '^[A-Z]{3}$'::text)),
     CONSTRAINT class_entitlements_status_check CHECK ((status = ANY (ARRAY['confirmed'::text, 'waitlisted'::text, 'cancelled'::text, 'revoked'::text])))
+);
+
+
+--
+-- Name: credit_balances; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.credit_balances (
+    organization_id text NOT NULL,
+    customer_id text NOT NULL,
+    balance_cents integer DEFAULT 0 NOT NULL,
+    currency_code text DEFAULT 'USD'::text NOT NULL,
+    updated_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT credit_balances_balance_cents_check CHECK ((balance_cents >= 0))
 );
 
 
@@ -381,6 +439,40 @@ CREATE TABLE orgs.invites (
 
 
 --
+-- Name: invoice_line_items; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.invoice_line_items (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    invoice_id uuid NOT NULL,
+    organization_id text NOT NULL,
+    description text NOT NULL,
+    amount_cents integer NOT NULL,
+    quantity integer DEFAULT 1 NOT NULL,
+    reference_type text,
+    reference_id text
+);
+
+
+--
+-- Name: invoices; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.invoices (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    customer_id text NOT NULL,
+    status text DEFAULT 'draft'::text NOT NULL,
+    total_cents integer DEFAULT 0 NOT NULL,
+    currency_code text DEFAULT 'USD'::text NOT NULL,
+    due_date date,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    updated_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT invoices_status_check CHECK ((status = ANY (ARRAY['draft'::text, 'issued'::text, 'paid'::text, 'cancelled'::text, 'written_off'::text])))
+);
+
+
+--
 -- Name: membership_division_policies; Type: TABLE; Schema: orgs; Owner: -
 --
 
@@ -550,6 +642,65 @@ CREATE TABLE orgs.memberships (
     origin text NOT NULL,
     joined_at timestamp with time zone DEFAULT now() NOT NULL,
     welcome_dismissed_at timestamp with time zone
+);
+
+
+--
+-- Name: message_events; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.message_events (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    event_type text NOT NULL,
+    recipient_destination text NOT NULL,
+    payload jsonb DEFAULT '{}'::jsonb NOT NULL,
+    idempotency_key text NOT NULL,
+    status text DEFAULT 'pending'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    updated_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT message_events_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'delivered'::text, 'failed'::text, 'skipped'::text])))
+);
+
+
+--
+-- Name: message_logs; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.message_logs (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    event_id uuid,
+    template_id uuid,
+    channel text NOT NULL,
+    provider text NOT NULL,
+    status text NOT NULL,
+    provider_message_id text,
+    attempts integer DEFAULT 1 NOT NULL,
+    error_message text,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT message_logs_channel_check CHECK ((channel = ANY (ARRAY['email'::text, 'sms'::text]))),
+    CONSTRAINT message_logs_status_check CHECK ((status = ANY (ARRAY['delivered'::text, 'failed'::text, 'retry'::text])))
+);
+
+
+--
+-- Name: message_templates; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.message_templates (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    template_key text NOT NULL,
+    channel text NOT NULL,
+    version integer DEFAULT 1 NOT NULL,
+    subject text,
+    body text NOT NULL,
+    variables jsonb DEFAULT '[]'::jsonb NOT NULL,
+    is_active boolean DEFAULT true NOT NULL,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    updated_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT message_templates_channel_check CHECK ((channel = ANY (ARRAY['email'::text, 'sms'::text])))
 );
 
 
@@ -729,6 +880,29 @@ CREATE TABLE orgs.repertoire_contributors (
 
 
 --
+-- Name: repertoire_review_items; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.repertoire_review_items (
+    id text DEFAULT (gen_random_uuid())::text NOT NULL,
+    organization_id text NOT NULL,
+    registration_repertoire_item_id text NOT NULL,
+    status text DEFAULT 'pending'::text NOT NULL,
+    claimed_by_uid text,
+    claimed_by_name text,
+    claimed_at timestamp with time zone,
+    flag_reason text,
+    flag_notes text,
+    reviewer_notes text,
+    resolved_work_id text,
+    reviewed_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    updated_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT repertoire_review_items_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'claimed'::text, 'approved'::text, 'flagged'::text])))
+);
+
+
+--
 -- Name: repertoire_work_classifications; Type: TABLE; Schema: orgs; Owner: -
 --
 
@@ -763,6 +937,7 @@ CREATE TABLE orgs.repertoire_works (
     organization_id text NOT NULL,
     display_title text NOT NULL,
     normalized_title text NOT NULL,
+    imslp_url text,
     is_active boolean DEFAULT true NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -1055,6 +1230,30 @@ ALTER TABLE ONLY orgs.app_user
 
 
 --
+-- Name: billing_adjustments billing_adjustments_organization_id_reference_type_referenc_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.billing_adjustments
+    ADD CONSTRAINT billing_adjustments_organization_id_reference_type_referenc_key UNIQUE (organization_id, reference_type, reference_id, adjustment_type);
+
+
+--
+-- Name: billing_adjustments billing_adjustments_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.billing_adjustments
+    ADD CONSTRAINT billing_adjustments_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: billing_ledger billing_ledger_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.billing_ledger
+    ADD CONSTRAINT billing_ledger_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: checkout_carts checkout_carts_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
 --
 
@@ -1092,6 +1291,14 @@ ALTER TABLE ONLY orgs.checkout_intent_lines
 
 ALTER TABLE ONLY orgs.class_entitlements
     ADD CONSTRAINT class_entitlements_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: credit_balances credit_balances_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.credit_balances
+    ADD CONSTRAINT credit_balances_pkey PRIMARY KEY (organization_id, customer_id);
 
 
 --
@@ -1231,6 +1438,22 @@ ALTER TABLE ONLY orgs.invites
 
 
 --
+-- Name: invoice_line_items invoice_line_items_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.invoice_line_items
+    ADD CONSTRAINT invoice_line_items_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: invoices invoices_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.invoices
+    ADD CONSTRAINT invoices_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: membership_division_policies membership_division_policies_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
 --
 
@@ -1332,6 +1555,46 @@ ALTER TABLE ONLY orgs.membership_validation_decisions
 
 ALTER TABLE ONLY orgs.memberships
     ADD CONSTRAINT memberships_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: message_events message_events_organization_id_idempotency_key_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.message_events
+    ADD CONSTRAINT message_events_organization_id_idempotency_key_key UNIQUE (organization_id, idempotency_key);
+
+
+--
+-- Name: message_events message_events_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.message_events
+    ADD CONSTRAINT message_events_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: message_logs message_logs_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.message_logs
+    ADD CONSTRAINT message_logs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: message_templates message_templates_organization_id_template_key_version_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.message_templates
+    ADD CONSTRAINT message_templates_organization_id_template_key_version_key UNIQUE (organization_id, template_key, version);
+
+
+--
+-- Name: message_templates message_templates_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.message_templates
+    ADD CONSTRAINT message_templates_pkey PRIMARY KEY (id);
 
 
 --
@@ -1516,6 +1779,22 @@ ALTER TABLE ONLY orgs.repertoire_contributors
 
 ALTER TABLE ONLY orgs.repertoire_contributors
     ADD CONSTRAINT repertoire_contributors_organization_id_normalized_name_key UNIQUE (organization_id, normalized_name);
+
+
+--
+-- Name: repertoire_review_items repertoire_review_items_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.repertoire_review_items
+    ADD CONSTRAINT repertoire_review_items_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: repertoire_review_items repertoire_review_items_registration_repertoire_item_id_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.repertoire_review_items
+    ADD CONSTRAINT repertoire_review_items_registration_repertoire_item_id_key UNIQUE (registration_repertoire_item_id);
 
 
 --
@@ -1860,6 +2139,13 @@ CREATE UNIQUE INDEX idx_app_user_email_lower ON orgs.app_user USING btree (lower
 
 
 --
+-- Name: idx_billing_ledger_org_customer_created; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_billing_ledger_org_customer_created ON orgs.billing_ledger USING btree (organization_id, customer_id, created_at);
+
+
+--
 -- Name: idx_festival_children_parent_name; Type: INDEX; Schema: orgs; Owner: -
 --
 
@@ -1923,6 +2209,13 @@ CREATE UNIQUE INDEX idx_memberships_user_org ON orgs.memberships USING btree (us
 
 
 --
+-- Name: idx_message_logs_org_event; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_message_logs_org_event ON orgs.message_logs USING btree (organization_id, event_id);
+
+
+--
 -- Name: idx_organization_divisions_name; Type: INDEX; Schema: orgs; Owner: -
 --
 
@@ -1969,6 +2262,20 @@ CREATE UNIQUE INDEX idx_products_shopify_product_variant_gid ON orgs.products US
 --
 
 CREATE UNIQUE INDEX idx_products_shopify_variant_gid ON orgs.products USING btree (shopify_variant_gid);
+
+
+--
+-- Name: idx_repertoire_review_items_org_claimed; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_repertoire_review_items_org_claimed ON orgs.repertoire_review_items USING btree (organization_id, claimed_by_uid);
+
+
+--
+-- Name: idx_repertoire_review_items_org_status; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_repertoire_review_items_org_status ON orgs.repertoire_review_items USING btree (organization_id, status);
 
 
 --
@@ -2176,6 +2483,30 @@ ALTER TABLE ONLY orgs.accompanist_membership_entitlement_details
 
 
 --
+-- Name: billing_adjustments billing_adjustments_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.billing_adjustments
+    ADD CONSTRAINT billing_adjustments_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: billing_ledger billing_ledger_adjustment_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.billing_ledger
+    ADD CONSTRAINT billing_ledger_adjustment_id_fkey FOREIGN KEY (adjustment_id) REFERENCES orgs.billing_adjustments(id) ON DELETE SET NULL;
+
+
+--
+-- Name: billing_ledger billing_ledger_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.billing_ledger
+    ADD CONSTRAINT billing_ledger_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
 -- Name: checkout_carts checkout_carts_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
 --
 
@@ -2288,6 +2619,30 @@ ALTER TABLE ONLY orgs.invites
 
 
 --
+-- Name: invoice_line_items invoice_line_items_invoice_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.invoice_line_items
+    ADD CONSTRAINT invoice_line_items_invoice_id_fkey FOREIGN KEY (invoice_id) REFERENCES orgs.invoices(id) ON DELETE CASCADE;
+
+
+--
+-- Name: invoice_line_items invoice_line_items_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.invoice_line_items
+    ADD CONSTRAINT invoice_line_items_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: invoices invoices_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.invoices
+    ADD CONSTRAINT invoices_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
 -- Name: membership_division_policies membership_division_policies_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
 --
 
@@ -2389,6 +2744,46 @@ ALTER TABLE ONLY orgs.memberships
 
 ALTER TABLE ONLY orgs.memberships
     ADD CONSTRAINT memberships_user_id_fkey FOREIGN KEY (user_id) REFERENCES orgs.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: message_events message_events_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.message_events
+    ADD CONSTRAINT message_events_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: message_logs message_logs_event_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.message_logs
+    ADD CONSTRAINT message_logs_event_id_fkey FOREIGN KEY (event_id) REFERENCES orgs.message_events(id) ON DELETE CASCADE;
+
+
+--
+-- Name: message_logs message_logs_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.message_logs
+    ADD CONSTRAINT message_logs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: message_logs message_logs_template_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.message_logs
+    ADD CONSTRAINT message_logs_template_id_fkey FOREIGN KEY (template_id) REFERENCES orgs.message_templates(id) ON DELETE SET NULL;
+
+
+--
+-- Name: message_templates message_templates_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.message_templates
+    ADD CONSTRAINT message_templates_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
 
 
 --
@@ -2560,6 +2955,14 @@ ALTER TABLE ONLY orgs.class_entitlements
 
 
 --
+-- Name: credit_balances credit_balances_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.credit_balances
+    ADD CONSTRAINT credit_balances_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
 -- Name: registration_change_logs registration_change_logs_class_entitlement_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
 --
 
@@ -2701,6 +3104,30 @@ ALTER TABLE ONLY orgs.repertoire_classifications
 
 ALTER TABLE ONLY orgs.repertoire_contributors
     ADD CONSTRAINT repertoire_contributors_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: repertoire_review_items repertoire_review_items_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.repertoire_review_items
+    ADD CONSTRAINT repertoire_review_items_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: repertoire_review_items repertoire_review_items_registration_repertoire_item_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.repertoire_review_items
+    ADD CONSTRAINT repertoire_review_items_registration_repertoire_item_id_fkey FOREIGN KEY (registration_repertoire_item_id) REFERENCES orgs.registration_repertoire_items(id) ON DELETE CASCADE;
+
+
+--
+-- Name: repertoire_review_items repertoire_review_items_resolved_work_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.repertoire_review_items
+    ADD CONSTRAINT repertoire_review_items_resolved_work_id_fkey FOREIGN KEY (resolved_work_id) REFERENCES orgs.repertoire_works(id) ON DELETE SET NULL;
 
 
 --
