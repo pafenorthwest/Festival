@@ -120,6 +120,8 @@ async function fixture(
 	let discoveryCalls = 0;
 	let discoveryIssuer = issuer;
 	let authorizationEndpoint = "https://accounts.shopify.com/auth";
+	let graphqlApi = "https://accounts.shopify.com/customer/api/2026-07/graphql";
+	const graphqlRequests: { method: string | undefined; url: string }[] = [];
 	let now = new Date();
 	const fetcher: typeof fetch = async (input, init) => {
 		const url = new URL(input.toString());
@@ -135,10 +137,7 @@ async function fixture(
 		}
 		if (url.pathname === "/.well-known/customer-account-api") {
 			discoveryCalls++;
-			return response({
-				graphql_api:
-					"https://accounts.shopify.com/customer/api/2026-07/graphql",
-			});
+			return response({ graphql_api: graphqlApi });
 		}
 		if (url.pathname === "/jwks") {
 			jwksCalls++;
@@ -159,6 +158,7 @@ async function fixture(
 			});
 		}
 		if (url.pathname.endsWith("/graphql")) {
+			graphqlRequests.push({ method: init?.method, url: url.toString() });
 			const body = JSON.parse(String(init?.body));
 			if (body.query.includes("FestivalCustomerIdentity"))
 				return response({
@@ -266,9 +266,13 @@ async function fixture(
 		setAuthorizationEndpoint: (value: string) => {
 			authorizationEndpoint = value;
 		},
+		setGraphqlApi: (value: string) => {
+			graphqlApi = value;
+		},
 		tokenCalls: () => tokenCalls,
 		discoveryCalls: () => discoveryCalls,
 		jwksCalls: () => jwksCalls,
+		graphqlRequests: () => [...graphqlRequests],
 	};
 }
 
@@ -435,6 +439,65 @@ describe("CustomerAccountService", () => {
 			"https://festival.example.com/api/customer-auth/callback",
 		);
 		expect(settings.settings).not.toHaveProperty("clientSecret");
+	});
+	it("uses Festival's pinned API version for a matching Customer Account discovery endpoint", async () => {
+		const f = await fixture();
+		const auth = await f.authenticate();
+		await f.service.orders("festival", auth.sessionId);
+		expect(f.graphqlRequests()).toEqual([
+			{
+				method: "POST",
+				url: "https://accounts.shopify.com/customer/api/2026-07/graphql",
+			},
+			{
+				method: "POST",
+				url: "https://accounts.shopify.com/customer/api/2026-07/graphql",
+			},
+		]);
+	});
+	it("normalizes a newer discovered Customer Account GraphQL API version to Festival's pin", async () => {
+		const f = await fixture();
+		f.setGraphqlApi(
+			"https://shopify.com/123456789/account/customer/api/2026-10/graphql",
+		);
+		const result = await f.service.saveAndVerify(f.org.id, "festival", {
+			storefrontDomain: "store.example.com",
+			clientId: "customer-client",
+			clientSecret: "customer-secret",
+		});
+		expect(result.settings.readiness).toBe("ready");
+		const auth = await f.authenticate();
+		await f.service.orders("festival", auth.sessionId);
+		expect(f.graphqlRequests()).toEqual([
+			{
+				method: "POST",
+				url: "https://shopify.com/123456789/account/customer/api/2026-07/graphql",
+			},
+			{
+				method: "POST",
+				url: "https://shopify.com/123456789/account/customer/api/2026-07/graphql",
+			},
+		]);
+	});
+	it("rejects malformed or pre-pin Customer Account discovery GraphQL endpoints", async () => {
+		const f = await fixture();
+		for (const graphqlApi of [
+			"https://accounts.shopify.com/customer/api/2026-10/graphql/extra",
+			"https://accounts.shopify.com/customer/api/2026-11/graphql",
+			"https://accounts.shopify.com/customer/api/2026-10/graphql?unexpected=true",
+			"https://accounts.shopify.com/customer/api/2026-04/graphql",
+			"https://shopify.com/123456789//account/customer/api/2026-10/graphql",
+			"https://shopify.com/123456789/account/../account/customer/api/2026-10/graphql",
+			"https://shopify.com/123456789/account/%2e%2e/account/customer/api/2026-10/graphql",
+		]) {
+			f.setGraphqlApi(graphqlApi);
+			const result = await f.service.saveAndVerify(f.org.id, "festival", {
+				storefrontDomain: "store.example.com",
+				clientId: "customer-client",
+				clientSecret: "customer-secret",
+			});
+			expect(result.settings.readiness).toBe("failed");
+		}
 	});
 	it("uses one-time state, encrypted tokens, tenant-bound opaque sessions, and allowlisted orders", async () => {
 		const f = await fixture();

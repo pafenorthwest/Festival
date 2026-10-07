@@ -150,8 +150,10 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			display_name TEXT NOT NULL, normalized_name TEXT NOT NULL,
 			is_active BOOLEAN NOT NULL DEFAULT TRUE,
 			display_order INTEGER NOT NULL CHECK (display_order >= 0),
+			required_subtype_id TEXT NULL REFERENCES ${safeSchema}.registration_catalog_values (id) ON DELETE SET NULL,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			UNIQUE (organization_id, kind, normalized_name), UNIQUE (organization_id, kind, display_order)
+			UNIQUE (organization_id, kind, normalized_name), UNIQUE (organization_id, kind, display_order),
+			CHECK (required_subtype_id IS NULL OR required_subtype_id <> id)
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.festival_class_configurations (
 			id TEXT PRIMARY KEY,
@@ -240,9 +242,26 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			child_id TEXT NULL REFERENCES ${safeSchema}.festival_children (id),
 			shopify_product_gid TEXT NOT NULL, shopify_variant_gid TEXT NOT NULL, policy_version TEXT NULL,
 			division_id TEXT NULL, division_name_snapshot TEXT NULL, staff_access_consent BOOLEAN NOT NULL DEFAULT FALSE,
-			amount TEXT NOT NULL, currency_code TEXT NOT NULL, cart_reference TEXT NULL REFERENCES ${safeSchema}.checkout_carts (reference),
+			amount TEXT NOT NULL, currency_code TEXT NOT NULL, line_identity_protocol TEXT NULL,
+			cart_reference TEXT NULL REFERENCES ${safeSchema}.checkout_carts (reference),
 			status TEXT NOT NULL CHECK (status IN ('creating', 'ready', 'checkout_started', 'failed', 'expired', 'superseded', 'approved', 'rejected', 'needs_review')),
 			expires_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.checkout_intent_lines (
+			id TEXT PRIMARY KEY,
+			checkout_intent_id TEXT NOT NULL REFERENCES ${safeSchema}.checkout_intents (id) ON DELETE CASCADE,
+			line_index INTEGER NOT NULL,
+			line_type TEXT NOT NULL DEFAULT 'class_entry',
+			festival_class_id TEXT NULL REFERENCES ${safeSchema}.festival_class_configurations (id),
+			child_id TEXT NULL REFERENCES ${safeSchema}.festival_children (id),
+			offering_id TEXT NULL REFERENCES ${safeSchema}.products (id),
+			shopify_product_gid TEXT NOT NULL,
+			shopify_variant_gid TEXT NOT NULL,
+			amount TEXT NOT NULL,
+			currency_code TEXT NOT NULL,
+			division_id TEXT NULL,
+			division_name_snapshot TEXT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.checkout_recovery_requests (
 			id TEXT PRIMARY KEY,
@@ -264,6 +283,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			parent_customer_id TEXT NOT NULL,
 			child_id TEXT NOT NULL REFERENCES ${safeSchema}.festival_children (id) ON DELETE RESTRICT,
 			checkout_intent_id TEXT NOT NULL REFERENCES ${safeSchema}.checkout_intents (id) ON DELETE RESTRICT,
+			checkout_intent_line_id TEXT NULL REFERENCES ${safeSchema}.checkout_intent_lines (id) ON DELETE SET NULL,
 			shopify_order_gid TEXT NOT NULL,
 			shopify_order_line_gid TEXT NOT NULL,
 			paid_amount_cents INTEGER NOT NULL CHECK (paid_amount_cents >= 0),
@@ -292,6 +312,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			registration_change_log_id TEXT REFERENCES ${safeSchema}.registration_change_logs (id) ON DELETE SET NULL,
 			class_entitlement_id TEXT REFERENCES ${safeSchema}.class_entitlements (id) ON DELETE CASCADE,
 			shopify_order_id TEXT,
+			shopify_order_line_id TEXT,
 			shopify_refund_id TEXT,
 			amount_cents INTEGER NOT NULL,
 			currency TEXT NOT NULL DEFAULT 'USD',
@@ -318,6 +339,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			organization_id TEXT NOT NULL,
 			festival_id TEXT NOT NULL,
 			checkout_intent_id TEXT NOT NULL,
+			checkout_intent_line_id TEXT,
 			class_entitlement_id TEXT,
 			teacher_membership_id TEXT NOT NULL,
 			accompanist_membership_id TEXT,
@@ -331,6 +353,8 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 				FOREIGN KEY (festival_id) REFERENCES ${safeSchema}.festivals(id) ON DELETE RESTRICT,
 			CONSTRAINT registration_metadata_checkout_intent_id_fkey
 				FOREIGN KEY (checkout_intent_id) REFERENCES ${safeSchema}.checkout_intents(id) ON DELETE RESTRICT,
+			CONSTRAINT registration_metadata_checkout_intent_line_id_fkey
+				FOREIGN KEY (checkout_intent_line_id) REFERENCES ${safeSchema}.checkout_intent_lines(id) ON DELETE CASCADE,
 			CONSTRAINT registration_metadata_class_entitlement_id_fkey
 				FOREIGN KEY (class_entitlement_id) REFERENCES ${safeSchema}.class_entitlements(id) ON DELETE SET NULL,
 			CONSTRAINT registration_metadata_teacher_membership_id_fkey
@@ -474,6 +498,9 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			status TEXT NOT NULL CHECK (status IN ('received', 'processing', 'processed', 'failed')),
 			attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
 			failure_category TEXT NULL CHECK (failure_category IN ('upstream', 'persistence', 'invalid')),
+			failure_stage TEXT NULL CHECK (failure_stage IN ('order_read', 'projection')),
+			failure_code TEXT NULL CHECK (failure_code IS NULL OR failure_code IN ('shopify_upstream', 'shopify_transport', 'invalid_data', 'paid_line_conflict', 'persistence', 'unexpected')),
+			shopify_request_id TEXT NULL, failed_at TIMESTAMPTZ NULL,
 			received_at TIMESTAMPTZ NOT NULL, processing_started_at TIMESTAMPTZ NULL, processed_at TIMESTAMPTZ NULL,
 			UNIQUE (organization_id, webhook_id)
 		);
@@ -549,7 +576,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			FOREIGN KEY (volunteer_id, festival_id, organization_id) REFERENCES ${safeSchema}.volunteers (id, festival_id, organization_id) ON DELETE CASCADE
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.credit_balances (
-			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
 			customer_id TEXT NOT NULL,
 			balance_cents INTEGER NOT NULL DEFAULT 0 CHECK (balance_cents >= 0),
 			currency_code TEXT NOT NULL DEFAULT 'USD',
@@ -558,7 +585,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.billing_adjustments (
 			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
 			customer_id TEXT NOT NULL,
 			admin_user_id TEXT NOT NULL,
 			adjustment_type TEXT NOT NULL CHECK (adjustment_type IN ('refund', 'credit_issue', 'credit_apply', 'manual_charge', 'write_off')),
@@ -573,7 +600,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.billing_ledger (
 			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
 			customer_id TEXT NOT NULL,
 			entry_type TEXT NOT NULL CHECK (entry_type IN ('credit', 'debit', 'adjustment')),
 			amount_cents INTEGER NOT NULL,
@@ -586,7 +613,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.invoices (
 			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
 			customer_id TEXT NOT NULL,
 			status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'issued', 'paid', 'cancelled', 'written_off')),
 			total_cents INTEGER NOT NULL DEFAULT 0,
@@ -598,7 +625,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.invoice_line_items (
 			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 			invoice_id UUID NOT NULL REFERENCES ${safeSchema}.invoices (id) ON DELETE CASCADE,
-			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
 			description TEXT NOT NULL,
 			amount_cents INTEGER NOT NULL,
 			quantity INTEGER NOT NULL DEFAULT 1,
@@ -607,7 +634,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.message_templates (
 			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
 			template_key TEXT NOT NULL,
 			channel TEXT NOT NULL CHECK (channel IN ('email', 'sms')),
 			version INTEGER NOT NULL DEFAULT 1,
@@ -621,7 +648,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.message_events (
 			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
 			event_type TEXT NOT NULL,
 			recipient_destination TEXT NOT NULL,
 			payload JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -633,7 +660,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.message_logs (
 			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			organization_id UUID NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
 			event_id UUID REFERENCES ${safeSchema}.message_events (id) ON DELETE CASCADE,
 			template_id UUID REFERENCES ${safeSchema}.message_templates (id) ON DELETE SET NULL,
 			channel TEXT NOT NULL CHECK (channel IN ('email', 'sms')),
@@ -707,6 +734,9 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		CREATE INDEX IF NOT EXISTS idx_class_entitlements_checkout_intent ON ${safeSchema}.class_entitlements (organization_id, checkout_intent_id);
 		CREATE INDEX IF NOT EXISTS idx_class_entitlements_shopify_order ON ${safeSchema}.class_entitlements (organization_id, shopify_order_gid);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_class_entitlements_order_line ON ${safeSchema}.class_entitlements (organization_id, shopify_order_line_gid);
+		CREATE UNIQUE INDEX IF NOT EXISTS class_entitlements_checkout_intent_line_id_key
+			ON ${safeSchema}.class_entitlements (checkout_intent_line_id)
+			WHERE checkout_intent_line_id IS NOT NULL;
 		CREATE INDEX IF NOT EXISTS idx_registration_change_logs_org_class_entitlement
 			ON ${safeSchema}.registration_change_logs (organization_id, class_entitlement_id);
 		CREATE INDEX IF NOT EXISTS idx_registration_change_logs_org_festival
@@ -715,8 +745,16 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			ON ${safeSchema}.refund_events (organization_id, class_entitlement_id);
 		CREATE INDEX IF NOT EXISTS idx_checkout_intents_org_class ON ${safeSchema}.checkout_intents (organization_id, festival_class_id) WHERE festival_class_id IS NOT NULL;
 		CREATE INDEX IF NOT EXISTS idx_checkout_intents_org_child ON ${safeSchema}.checkout_intents (organization_id, child_id) WHERE child_id IS NOT NULL;
-		CREATE UNIQUE INDEX IF NOT EXISTS registration_metadata_checkout_intent_id_unique
+		CREATE INDEX IF NOT EXISTS idx_checkout_intent_lines_intent_id ON ${safeSchema}.checkout_intent_lines (checkout_intent_id);
+		CREATE UNIQUE INDEX IF NOT EXISTS checkout_intent_lines_checkout_intent_id_line_index_key
+			ON ${safeSchema}.checkout_intent_lines (checkout_intent_id, line_index);
+		CREATE INDEX IF NOT EXISTS idx_checkout_intent_lines_child_id ON ${safeSchema}.checkout_intent_lines (child_id);
+		CREATE INDEX IF NOT EXISTS idx_checkout_intent_lines_festival_class_id ON ${safeSchema}.checkout_intent_lines (festival_class_id);
+		CREATE INDEX IF NOT EXISTS registration_metadata_checkout_intent_id_idx
 			ON ${safeSchema}.registration_metadata(checkout_intent_id);
+		CREATE UNIQUE INDEX IF NOT EXISTS registration_metadata_checkout_intent_line_id_unique
+			ON ${safeSchema}.registration_metadata(checkout_intent_line_id)
+			WHERE checkout_intent_line_id IS NOT NULL;
 		CREATE INDEX IF NOT EXISTS registration_metadata_organization_class_entitlement_idx
 			ON ${safeSchema}.registration_metadata(organization_id, class_entitlement_id)
 			WHERE class_entitlement_id IS NOT NULL;
@@ -740,6 +778,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			ON ${safeSchema}.billing_ledger (organization_id, customer_id, created_at);
 		CREATE INDEX IF NOT EXISTS idx_message_logs_org_event
 			ON ${safeSchema}.message_logs (organization_id, event_id);
+		CREATE INDEX IF NOT EXISTS registration_catalog_values_required_subtype_idx ON ${safeSchema}.registration_catalog_values (organization_id, required_subtype_id);
 	`;
 }
 
@@ -755,6 +794,37 @@ export async function initializePostgresSchema(schema: string): Promise<void> {
 		await transaction.unsafe(
 			"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
 			[safeSchema],
+		);
+		await transaction.unsafe(`CREATE SCHEMA IF NOT EXISTS ${safeSchema};`);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.registration_metadata ADD COLUMN IF NOT EXISTS checkout_intent_line_id TEXT;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.class_entitlements ADD COLUMN IF NOT EXISTS checkout_intent_line_id TEXT;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.checkout_intents ADD COLUMN IF NOT EXISTS line_identity_protocol TEXT;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.refund_events ADD COLUMN IF NOT EXISTS shopify_order_line_id TEXT;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.shopify_webhook_deliveries ADD COLUMN IF NOT EXISTS failure_stage TEXT;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.shopify_webhook_deliveries ADD COLUMN IF NOT EXISTS failure_code TEXT;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.shopify_webhook_deliveries ADD COLUMN IF NOT EXISTS shopify_request_id TEXT;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.shopify_webhook_deliveries ADD COLUMN IF NOT EXISTS failed_at TIMESTAMPTZ;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.registration_catalog_values ADD COLUMN IF NOT EXISTS required_subtype_id TEXT;`,
+		);
+		await transaction.unsafe(
+			`DROP INDEX IF EXISTS ${safeSchema}.registration_metadata_checkout_intent_id_unique;`,
 		);
 		await transaction.unsafe(buildCanonicalPostgresSchemaSql(safeSchema));
 		await transaction.unsafe(

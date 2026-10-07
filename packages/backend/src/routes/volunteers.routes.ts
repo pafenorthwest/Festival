@@ -565,6 +565,11 @@ export function buildVolunteerRoutes(
 					coveragePercentage: summary.coveragePercentage,
 					unfilled: summary.gaps,
 					gaps: summary.gaps,
+					// Every slot in the festival, each with a server-computed
+					// Open/Filled status — powers the filterable slot list on
+					// the admin page. See calculateCoverageGaps in
+					// @festival/common.
+					slots: summary.slots,
 				});
 			} catch (error) {
 				return toJsonError(c, error);

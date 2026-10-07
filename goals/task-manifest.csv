@@ -43,3 +43,8 @@ number,taskname,first_create_date,first_create_hhmmss,first_create_git_hash
 42,issue-157-sql-migrations,2026-09-13,000000,-------
 43,review-pr-150-fix-open-issue,2026-09-13,000000,-------
 44,phase-2-class-purchase-entitlement,2026-09-22,000000,-------
+45,align-shopify-discovery-url,2026-10-04,000000,-------
+46,configurable-shopify-audit-path,2026-10-04,000000,-------
+47,issue-258-paid-line-correlation,2026-10-04,000000,-------
+48,pr-250,2026-10-04,000000,-------
+49,class-checkout-hardening,2026-10-04,000000,-------

@@ -15,6 +15,8 @@ import type {
 	CanonicalContributor,
 	CanonicalWork,
 	ClaimReviewInput,
+	ClassCheckoutLineItemInput,
+	ClassEligibilityResult,
 	ClassRegistrationMetadata,
 	CommunicationValidationResult,
 	CoverageGapShift,
@@ -41,6 +43,7 @@ import type {
 	DropRegistrationInput,
 	DropRegistrationResult,
 	DropRegistrationValidationResult,
+	EvaluatePurchaseEligibilityResponse,
 	FestivalClassConfigurationDto,
 	FestivalSummary,
 	FlagReviewInput,
@@ -61,6 +64,7 @@ import type {
 	OrganizationLandingResponse,
 	OrganizationMembershipListResponse,
 	OrganizationTimezoneResponse,
+	ProposedPurchaseLineItem,
 	PublicMembershipProductsListResponse,
 	PublicOrganizationDivisionListResponse,
 	PublicOrganizationLandingResponse,
@@ -88,6 +92,8 @@ import type {
 	SaveShopifyIntegrationInput,
 	SaveShopifyIntegrationResponse,
 	SessionResponse,
+	ShiftCoverageEntry,
+	ShiftCoverageStatus,
 	ShopifyIntegrationDiagnosticsResponse,
 	ShopifyIntegrationSettingsResponse,
 	TransferRegistrationInput,
@@ -214,6 +220,8 @@ export type {
 	CanonicalContributor,
 	CanonicalWork,
 	ClaimReviewInput,
+	ClassCheckoutLineItemInput,
+	ClassEligibilityResult,
 	CommunicationValidationResult,
 	CoverageGapShift,
 	CoverageGapsSummary,
@@ -223,6 +231,7 @@ export type {
 	DropRegistrationInput,
 	DropRegistrationResult,
 	DropRegistrationValidationResult,
+	EvaluatePurchaseEligibilityResponse,
 	FlagReviewInput,
 	MessageChannel,
 	MessageDeliveryStatus,
@@ -231,6 +240,7 @@ export type {
 	MessageLogStatus,
 	MessageTemplate,
 	NormalizeReviewInput,
+	ProposedPurchaseLineItem,
 	RefundEvent,
 	RefundEventStatus,
 	RegistrationActorRole,
@@ -243,6 +253,8 @@ export type {
 	RepertoireReviewQueueSummary,
 	RepertoireReviewStatus,
 	ResolveFlagInput,
+	ShiftCoverageEntry,
+	ShiftCoverageStatus,
 	TransferRegistrationInput,
 	TransferRegistrationResult,
 	TransferRegistrationValidationResult,
@@ -1018,10 +1030,39 @@ export function createFestivalClassSubtype(
 	slug: string,
 	festivalSlug: string,
 	displayName: string,
+	requiredSubtypeId?: string | null,
 ) {
 	return requestJson<{ value: RegistrationCatalogValue }>(
 		`/api/organizations/${encodeURIComponent(slug)}/admin/festivals/${encodeURIComponent(festivalSlug)}/class-subtypes`,
-		{ method: "POST", body: JSON.stringify({ displayName }) },
+		{
+			method: "POST",
+			body: JSON.stringify({
+				displayName,
+				...(requiredSubtypeId !== undefined
+					? { requiredSubtypeId: requiredSubtypeId || null }
+					: {}),
+			}),
+		},
+		idToken,
+	);
+}
+
+export function updateAdminClassSubtype(
+	idToken: string,
+	slug: string,
+	id: string,
+	input: {
+		displayName?: string;
+		isActive?: boolean;
+		requiredSubtypeId?: string | null;
+	},
+) {
+	return requestJson<{ value: RegistrationCatalogValue }>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/class-subtypes/${encodeURIComponent(id)}`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
 		idToken,
 	);
 }
@@ -1404,9 +1445,71 @@ export function listRegistrationAccompanists(
 	);
 }
 
+export interface EvaluateRegistrationEligibilityInput {
+	items: ProposedPurchaseLineItem[];
+	csrfToken?: string;
+}
+
+export interface EvaluateRegistrationEligibilityResponse {
+	results: ClassEligibilityResult[];
+}
+
+export function evaluateRegistrationEligibility(
+	slug: string,
+	festivalSlug: string,
+	itemsOrInputOrCsrf:
+		| ProposedPurchaseLineItem[]
+		| EvaluateRegistrationEligibilityInput
+		| string,
+	itemsOrCsrf?: ProposedPurchaseLineItem[] | string,
+): Promise<EvaluateRegistrationEligibilityResponse> {
+	let items: ProposedPurchaseLineItem[] = [];
+	let csrfToken = "";
+
+	if (typeof itemsOrInputOrCsrf === "string") {
+		csrfToken = itemsOrInputOrCsrf;
+		if (Array.isArray(itemsOrCsrf)) {
+			items = itemsOrCsrf;
+		} else if (
+			typeof itemsOrCsrf === "object" &&
+			itemsOrCsrf !== null &&
+			"items" in itemsOrCsrf
+		) {
+			items = (itemsOrCsrf as EvaluateRegistrationEligibilityInput).items;
+		}
+	} else if (Array.isArray(itemsOrInputOrCsrf)) {
+		items = itemsOrInputOrCsrf;
+		if (typeof itemsOrCsrf === "string") {
+			csrfToken = itemsOrCsrf;
+		}
+	} else if (
+		typeof itemsOrInputOrCsrf === "object" &&
+		itemsOrInputOrCsrf !== null
+	) {
+		items = itemsOrInputOrCsrf.items ?? [];
+		csrfToken =
+			itemsOrInputOrCsrf.csrfToken ??
+			(typeof itemsOrCsrf === "string" ? itemsOrCsrf : "");
+	}
+
+	const headers: Record<string, string> = {};
+	if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
+
+	return requestJson<EvaluateRegistrationEligibilityResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/registration/eligibility`,
+		{
+			method: "POST",
+			headers,
+			body: JSON.stringify({ items }),
+		},
+		undefined,
+		"",
+	);
+}
+
 export interface StartClassCheckoutInput {
-	festivalClassId: string;
-	childId: string;
+	festivalClassId?: string;
+	childId?: string;
 	teacherId?: string;
 	pieces?: RepertoirePiece[];
 	divisionId?: string;
@@ -1415,6 +1518,8 @@ export interface StartClassCheckoutInput {
 	festivalShortName?: string;
 	currency?: string;
 	currencyCode?: string;
+	lineItems?: ProposedPurchaseLineItem[] | ClassCheckoutLineItemInput[];
+	items?: ProposedPurchaseLineItem[] | ClassCheckoutLineItemInput[];
 }
 
 export interface StartClassCheckoutResponse {
@@ -1468,12 +1573,26 @@ export function startClassCheckout(
 	if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
 	if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
 
+	const payloadToSend = { ...input };
+	delete (payloadToSend as Record<string, unknown>).csrfToken;
+	delete (payloadToSend as Record<string, unknown>).idempotencyKey;
+
+	if (
+		"items" in (payloadToSend as Record<string, unknown>) &&
+		!payloadToSend.lineItems
+	) {
+		payloadToSend.lineItems = (
+			payloadToSend as unknown as { items: ProposedPurchaseLineItem[] }
+		).items;
+		delete (payloadToSend as Record<string, unknown>).items;
+	}
+
 	return requestJson<StartClassCheckoutResponse>(
 		`/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/registration/checkout`,
 		{
 			method: "POST",
 			headers,
-			body: JSON.stringify(input),
+			body: JSON.stringify(payloadToSend),
 		},
 		undefined,
 		"",

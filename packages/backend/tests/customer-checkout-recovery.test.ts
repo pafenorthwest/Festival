@@ -174,25 +174,29 @@ async function seedRecovery(ctx: {
 	customerId?: string;
 	expiresAtIso?: string;
 	status?: "pending" | "consumed" | "expired";
+	intentType?: "membership" | "class_entry";
 }) {
 	const customerId = ctx.customerId ?? "cust-1";
 	const rawToken = "recovery-token-xyz-123";
 	const tokenHash = createHash("sha256").update(rawToken).digest("hex");
 
+	const isClass = ctx.intentType === "class_entry";
 	const createdOutcome = await ctx.checkoutRepo.createIntent({
 		organizationId: ctx.org.id,
 		customerId,
 		sessionId: "sess-1",
 		idempotencyKey: `idem-${randomUUID()}`,
-		intentType: "membership",
-		offeringId: ctx.offering.id,
-		entitlementClass: "teacher_membership",
-		durationDays: 365,
+		intentType: isClass ? "class_entry" : "membership",
+		offeringId: isClass ? null : ctx.offering.id,
+		entitlementClass: isClass ? null : "teacher_membership",
+		durationDays: isClass ? null : 365,
+		festivalClassId: isClass ? "class-1" : null,
+		childId: isClass ? "child-1" : null,
 		shopifyProductGid: "gid://shopify/Product/1",
 		shopifyVariantGid: "gid://shopify/ProductVariant/1",
-		divisionId: ctx.division.id,
-		divisionNameSnapshot: "Senior Strings",
-		staffAccessConsent: true,
+		divisionId: isClass ? null : ctx.division.id,
+		divisionNameSnapshot: isClass ? null : "Senior Strings",
+		staffAccessConsent: !isClass,
 		amount: "50.00",
 		currencyCode: "USD",
 		expiresAtIso: "2030-01-01T00:00:00.000Z",
@@ -472,5 +476,70 @@ describe("Customer Checkout Recovery Routes", () => {
 			},
 		);
 		expect(res.status).toBe(409);
+	});
+
+	it("rejects reviewing class_entry recovery token with 409 class_checkout_recovery_unsupported", async () => {
+		const ctx = await createTestContext();
+		const { rawToken } = await seedRecovery({
+			...ctx,
+			intentType: "class_entry",
+		});
+
+		const res = await ctx.app.request(
+			`/organizations/${ctx.org.slug}/customer/checkout-recovery/${rawToken}`,
+			{
+				headers: { Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1` },
+			},
+		);
+		expect(res.status).toBe(409);
+		const body = (await res.json()) as { code: string; error: string };
+		expect(body.code).toBe("class_checkout_recovery_unsupported");
+		expect(body.error).toBe(
+			"Class checkout recovery is not available yet. Please restart your class checkout.",
+		);
+	});
+
+	it("rejects resuming class_entry recovery with 409 and keeps source intent unmutated and token unconsumed", async () => {
+		const ctx = await createTestContext();
+		const { rawToken, tokenHash, intent } = await seedRecovery({
+			...ctx,
+			intentType: "class_entry",
+		});
+
+		const res = await ctx.app.request(
+			`/organizations/${ctx.org.slug}/customer/checkout-recovery/${rawToken}/checkout`,
+			{
+				method: "POST",
+				headers: { Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1` },
+			},
+		);
+		expect(res.status).toBe(409);
+		const body = (await res.json()) as { code: string; error: string };
+		expect(body.code).toBe("class_checkout_recovery_unsupported");
+		expect(body.error).toBe(
+			"Class checkout recovery is not available yet. Please restart your class checkout.",
+		);
+
+		const sourceInRecoveryRepo = await ctx.recoveryRepo.findIntentById(
+			ctx.org.id,
+			intent.id,
+		);
+		expect(sourceInRecoveryRepo?.status).toBe(intent.status);
+
+		const checkoutIntents = (
+			ctx.checkoutRepo as unknown as {
+				intents: Map<string, { id: string; status: string }>;
+			}
+		).intents;
+		expect(checkoutIntents.get(intent.id)?.status).not.toBe("failed");
+		expect(checkoutIntents.size).toBe(1);
+
+		const requestInRepo = await ctx.recoveryRepo.findRecoveryRequestByTokenHash(
+			tokenHash,
+			ctx.org.id,
+		);
+		expect(requestInRepo?.status).toBe("pending");
+		expect(requestInRepo?.consumedAtIso).toBeNull();
+		expect(ctx.storefrontCalls).toHaveLength(0);
 	});
 });

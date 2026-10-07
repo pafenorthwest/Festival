@@ -8,6 +8,7 @@ import {
 	createFestivalClassSubtype,
 	listFestivalClassSubtypes,
 	setPrimaryFestival,
+	updateAdminClassSubtype,
 } from "../lib/api.js";
 import { buildFestivalAdminClassesPath } from "../lib/routes.js";
 
@@ -21,9 +22,16 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 	>({});
 	const [selectedFestivalSlug, setSelectedFestivalSlug] = createSignal("");
 	const [subtypeDraft, setSubtypeDraft] = createSignal("");
+	const [requiredSubtypeDraft, setRequiredSubtypeDraft] = createSignal("");
+	const [editingSubtypeId, setEditingSubtypeId] = createSignal<string | null>(
+		null,
+	);
+	const [editingRequiredSubtypeId, setEditingRequiredSubtypeId] =
+		createSignal("");
 	const [subtypeError, setSubtypeError] = createSignal("");
 	const [isLoadingSubtypes, setIsLoadingSubtypes] = createSignal(false);
 	const [isCreatingSubtype, setIsCreatingSubtype] = createSignal(false);
+	const [isUpdatingSubtype, setIsUpdatingSubtype] = createSignal(false);
 
 	createEffect(() => {
 		const route = props.app.route();
@@ -64,6 +72,60 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 		})();
 	});
 
+	function getRequiredSubtypeName(id: string): string {
+		const subtypes = classSubtypesByFestival()[selectedFestivalSlug()] ?? [];
+		const match = subtypes.find((s) => s.id === id);
+		return match ? match.displayName : id;
+	}
+
+	function startEditing(subtype: RegistrationCatalogValue) {
+		setEditingSubtypeId(subtype.id);
+		setEditingRequiredSubtypeId(subtype.requiredSubtypeId ?? "");
+		setSubtypeError("");
+	}
+
+	function cancelEditing() {
+		setEditingSubtypeId(null);
+		setEditingRequiredSubtypeId("");
+		setSubtypeError("");
+	}
+
+	async function saveSubtypePrerequisite(subtypeId: string) {
+		const route = props.app.route();
+		const user = props.app.firebaseUser();
+		const festivalSlug = selectedFestivalSlug();
+		if (route.kind !== "org-admin-festivals" || !user || !festivalSlug) return;
+
+		setIsUpdatingSubtype(true);
+		setSubtypeError("");
+		try {
+			const token = await user.getIdToken();
+			const response = await updateAdminClassSubtype(
+				token,
+				route.slug,
+				subtypeId,
+				{
+					requiredSubtypeId: editingRequiredSubtypeId() || null,
+				},
+			);
+			setClassSubtypesByFestival((current) => ({
+				...current,
+				[festivalSlug]: (current[festivalSlug] ?? []).map((item) =>
+					item.id === subtypeId ? response.value : item,
+				),
+			}));
+			setEditingSubtypeId(null);
+		} catch (reason) {
+			setSubtypeError(
+				reason instanceof Error
+					? reason.message
+					: "Class subtype could not be updated.",
+			);
+		} finally {
+			setIsUpdatingSubtype(false);
+		}
+	}
+
 	async function createSubtype() {
 		const route = props.app.route();
 		const user = props.app.firebaseUser();
@@ -82,12 +144,14 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 				route.slug,
 				festivalSlug,
 				displayName,
+				requiredSubtypeDraft(),
 			);
 			setClassSubtypesByFestival((current) => ({
 				...current,
 				[festivalSlug]: [...(current[festivalSlug] ?? []), response.value],
 			}));
 			setSubtypeDraft("");
+			setRequiredSubtypeDraft("");
 		} catch (reason) {
 			setSubtypeError(
 				reason instanceof Error
@@ -286,6 +350,9 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 							onChange={(event) => {
 								setSelectedFestivalSlug(event.currentTarget.value);
 								setSubtypeError("");
+								setSubtypeDraft("");
+								setRequiredSubtypeDraft("");
+								setEditingSubtypeId(null);
 							}}
 						>
 							<option value="">Select a festival</option>
@@ -307,6 +374,25 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 								disabled={isCreatingSubtype()}
 							/>
 						</label>
+						<label class="field">
+							<span>Requires Subtype</span>
+							<select
+								value={requiredSubtypeDraft()}
+								onChange={(event) =>
+									setRequiredSubtypeDraft(event.currentTarget.value)
+								}
+								disabled={isCreatingSubtype()}
+							>
+								<option value="">None (no prerequisite)</option>
+								<For
+									each={classSubtypesByFestival()[selectedFestivalSlug()] ?? []}
+								>
+									{(subtype) => (
+										<option value={subtype.id}>{subtype.displayName}</option>
+									)}
+								</For>
+							</select>
+						</label>
 						<Button
 							type="button"
 							disabled={isCreatingSubtype() || isLoadingSubtypes()}
@@ -324,7 +410,83 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 								<For
 									each={classSubtypesByFestival()[selectedFestivalSlug()] ?? []}
 								>
-									{(subtype) => <li>{subtype.displayName}</li>}
+									{(subtype) => (
+										<li>
+											<Show
+												when={editingSubtypeId() === subtype.id}
+												fallback={
+													<div class="festival-subtype-item">
+														<span>
+															{subtype.displayName}
+															{subtype.requiredSubtypeId
+																? ` (requires: ${getRequiredSubtypeName(subtype.requiredSubtypeId)})`
+																: ""}
+														</span>
+														<Button
+															type="button"
+															variant="secondary"
+															disabled={
+																isUpdatingSubtype() || isCreatingSubtype()
+															}
+															onClick={() => startEditing(subtype)}
+														>
+															Edit
+														</Button>
+													</div>
+												}
+											>
+												<div class="festival-subtype-edit-form">
+													<span>{subtype.displayName}</span>
+													<label class="field">
+														<span>Requires Subtype</span>
+														<select
+															value={editingRequiredSubtypeId()}
+															onChange={(event) =>
+																setEditingRequiredSubtypeId(
+																	event.currentTarget.value,
+																)
+															}
+															disabled={isUpdatingSubtype()}
+														>
+															<option value="">None (no prerequisite)</option>
+															<For
+																each={(
+																	classSubtypesByFestival()[
+																		selectedFestivalSlug()
+																	] ?? []
+																).filter((option) => option.id !== subtype.id)}
+															>
+																{(option) => (
+																	<option value={option.id}>
+																		{option.displayName}
+																	</option>
+																)}
+															</For>
+														</select>
+													</label>
+													<div class="festival-subtype-edit-actions">
+														<Button
+															type="button"
+															disabled={isUpdatingSubtype()}
+															onClick={() =>
+																void saveSubtypePrerequisite(subtype.id)
+															}
+														>
+															Save
+														</Button>
+														<Button
+															type="button"
+															variant="secondary"
+															disabled={isUpdatingSubtype()}
+															onClick={() => cancelEditing()}
+														>
+															Cancel
+														</Button>
+													</div>
+												</div>
+											</Show>
+										</li>
+									)}
 								</For>
 							</ul>
 							<Show

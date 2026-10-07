@@ -72,6 +72,12 @@ describe("PostgresCheckoutRepository", () => {
 		expect(value).toContain("SET status = 'failed'");
 	});
 
+	it("persists and hydrates the durable line-identity protocol marker", async () => {
+		const value = await source();
+		expect(value).toContain("line_identity_protocol");
+		expect(value).toContain("lineIdentityProtocol:");
+	});
+
 	it("loads repertoire snapshots with one tenant-scoped joined query", async () => {
 		const value = await source();
 		expect(value).toContain(

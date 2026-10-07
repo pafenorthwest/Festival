@@ -31,7 +31,10 @@ import {
 	type CheckoutRepository,
 	InMemoryCheckoutRepository,
 } from "./checkout/checkout-repository.js";
-import { ClassCheckoutService } from "./checkout/class-checkout-service.js";
+import {
+	ClassCheckoutService,
+	consoleClassCheckoutFailureLogger,
+} from "./checkout/class-checkout-service.js";
 import { MembershipCheckoutService } from "./checkout/membership-checkout-service.js";
 import { PostgresCheckoutRecoveryRepository } from "./checkout/postgres-checkout-recovery-repository.js";
 import { PostgresCheckoutRepository } from "./checkout/postgres-checkout-repository.js";
@@ -209,7 +212,9 @@ export async function createApp(options: CreateAppOptions = {}) {
 			: new InMemoryAppUserRepository());
 	await appUserRepository.ensureReady();
 	const shopifyAdminApiClient = new ShopifyAdminApiClient();
-	const shopifyMutationAuditWriter = new FileShopifyMutationAuditWriter();
+	const shopifyMutationAuditWriter = new FileShopifyMutationAuditWriter(
+		env.shopifyAdminAuditPath,
+	);
 	const shopifyLifecycleService = new ShopifyProductLifecycleService(
 		shopifyAdminApiClient,
 		shopifyMutationAuditWriter,
@@ -355,6 +360,8 @@ export async function createApp(options: CreateAppOptions = {}) {
 					checkoutRepository,
 					new ShopifyMembershipCheckoutClient(repository, secretKeyring),
 					commerceRepository,
+					undefined,
+					consoleClassCheckoutFailureLogger,
 				)
 			: undefined);
 	const shopifyOrderProjectionService =

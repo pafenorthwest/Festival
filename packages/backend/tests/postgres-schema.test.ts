@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import {
 	buildCanonicalPostgresSchemaSql,
 	postgresSchemaName,
@@ -42,6 +44,16 @@ test("canonical PostgreSQL schema defines the final empty-database shape only", 
 	);
 	expect(schema).toContain("idx_registration_change_logs_org_festival");
 	expect(schema).toContain("idx_refund_events_org_class_entitlement");
+	expect(schema).toContain("shopify_order_line_id TEXT");
+	expect(schema).toContain("line_identity_protocol TEXT NULL");
+	expect(schema).toContain("failure_stage TEXT NULL");
+	expect(schema).toContain("failure_code TEXT NULL");
+	expect(schema).toContain("shopify_request_id TEXT NULL");
+	expect(schema).toContain("failed_at TIMESTAMPTZ NULL");
+	expect(schema).toContain(
+		"checkout_intent_lines_checkout_intent_id_line_index_key",
+	);
+	expect(schema).toContain("class_entitlements_checkout_intent_line_id_key");
 	expect(schema).toContain("CREATE EXTENSION IF NOT EXISTS pgcrypto");
 	expect(schema).toContain("CREATE EXTENSION IF NOT EXISTS btree_gist");
 	expect(schema).toContain("EXCLUDE USING gist");
@@ -51,6 +63,35 @@ test("canonical PostgreSQL schema defines the final empty-database shape only", 
 	expect(schema).not.toMatch(
 		/ALTER TABLE|DROP (?:COLUMN|CONSTRAINT|INDEX)|\n\s*(?:INSERT INTO|UPDATE [A-Za-z_])/,
 	);
+});
+
+test("paid-line identity migration preflights duplicates before adding constraints", async () => {
+	const migration = await readFile(
+		resolve(
+			import.meta.dir,
+			"../../../database/migrations/20261004_issue_258_paid_line_identity.sql",
+		),
+		"utf8",
+	);
+
+	expect(migration.trimStart()).toStartWith("BEGIN;");
+	expect(migration.trimEnd()).toEndWith("COMMIT;");
+	expect(migration).toContain("GROUP BY checkout_intent_id, line_index");
+	expect(migration).toContain("GROUP BY checkout_intent_line_id");
+	expect(migration).toContain("RAISE EXCEPTION");
+	expect(migration).toContain("checkout_intent_id=%s, line_index=%s, count=%s");
+	expect(migration).toContain("checkout_intent_line_id=%s, count=%s");
+	expect(migration).toContain("USING DETAIL");
+	expect(migration).toContain("HINT = 'Resolve the listed duplicate");
+	expect(migration).toContain("ADD COLUMN IF NOT EXISTS shopify_order_line_id");
+	expect(migration).toContain(
+		"ADD COLUMN IF NOT EXISTS line_identity_protocol",
+	);
+	expect(migration).toContain(
+		"checkout_intent_lines_checkout_intent_id_line_index_key",
+	);
+	expect(migration).toContain("class_entitlements_checkout_intent_line_id_key");
+	expect(migration).not.toMatch(/\b(?:DELETE|UPDATE|INSERT)\b/);
 });
 
 test("canonical PostgreSQL schema enforces one active volunteer assignment per shift", () => {

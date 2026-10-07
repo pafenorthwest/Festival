@@ -83,3 +83,75 @@ export function formatTotalDuration(pieces: RepertoirePiece[]): string {
 	if (secs === 0) return `${mins} min`;
 	return `${mins}m ${secs}s`;
 }
+
+export function isRegistrationSelectionValid(
+	child: { hasCurrentValidAgeSnapshot?: boolean } | null,
+	classConfig: { maximumPerformancePieces: number } | null,
+	divisionId: string,
+	teacherId: string,
+	classId: string,
+	pieces: RepertoirePiece[],
+): boolean {
+	if (!child?.hasCurrentValidAgeSnapshot || !classConfig) return false;
+	if (!divisionId || !teacherId || !classId) return false;
+	if (
+		pieces.length < 1 ||
+		pieces.length > classConfig.maximumPerformancePieces
+	) {
+		return false;
+	}
+	return pieces.every(
+		(p) =>
+			Boolean(p.title.trim()) &&
+			Boolean(p.composer.trim()) &&
+			p.durationSeconds > 0,
+	);
+}
+
+export function normalizeMaxPieces(pieces?: number): 1 | 2 | 3 {
+	if (pieces === 2) return 2;
+	if (pieces === 3) return 3;
+	return 1;
+}
+
+export function findById<T extends { id: string }>(
+	items: T[] | undefined,
+	id: string,
+): T | null {
+	return items?.find((item) => item.id === id) ?? null;
+}
+
+export function formatClassOption(c: {
+	displayName: string;
+	price: string;
+	minimumAge: number;
+	maximumAge: number;
+}): string {
+	return `${c.displayName} · $${c.price} (${c.minimumAge}–${c.maximumAge} yrs)`;
+}
+
+export function createSelectHandler(
+	setter: (val: string) => void,
+	clearSetters: ((val: string) => void)[] = [],
+) {
+	return (e: Event & { currentTarget: HTMLSelectElement }) => {
+		setter(e.currentTarget.value);
+		for (const clear of clearSetters) clear("");
+	};
+}
+
+export function createRegistrationSelectHandlers(
+	setChild: (id: string) => void,
+	setDivision: (id: string) => void,
+	setTeacher: (id: string) => void,
+	setClass: (id: string) => void,
+	setAccompanist: (id: string) => void,
+) {
+	return {
+		onChildChange: createSelectHandler(setChild, [setClass]),
+		onDivisionChange: createSelectHandler(setDivision, [setTeacher, setClass]),
+		onTeacherChange: createSelectHandler(setTeacher, [setClass]),
+		onClassChange: createSelectHandler(setClass),
+		onAccompanistChange: createSelectHandler(setAccompanist),
+	};
+}

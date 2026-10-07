@@ -64,6 +64,90 @@ integrationTest(
 );
 
 integrationTest(
+	"upgrades legacy registration tables before building multi-line indexes",
+	async () => {
+		const schema = `legacy_multiline_${randomUUID().replaceAll("-", "")}`;
+		try {
+			await sql.unsafe(
+				`CREATE SCHEMA ${schema};
+                 CREATE TABLE ${schema}.registration_catalog_values (
+                   id TEXT PRIMARY KEY,
+                   organization_id TEXT NOT NULL,
+                   kind TEXT NOT NULL,
+                   display_name TEXT NOT NULL,
+                   normalized_name TEXT NOT NULL,
+                   is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                   display_order INTEGER NOT NULL,
+                   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                   UNIQUE (organization_id, kind, normalized_name),
+                   UNIQUE (organization_id, kind, display_order)
+                 );
+                 CREATE TABLE ${schema}.registration_metadata (
+                   id TEXT NOT NULL,
+                   organization_id TEXT NOT NULL,
+                   festival_id TEXT NOT NULL,
+                   checkout_intent_id TEXT NOT NULL,
+                   class_entitlement_id TEXT,
+                   teacher_membership_id TEXT NOT NULL,
+                   accompanist_membership_id TEXT,
+                   repertoire_json JSONB NOT NULL,
+                   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                   PRIMARY KEY (id),
+                   UNIQUE (id, organization_id)
+                 );
+                 CREATE UNIQUE INDEX registration_metadata_checkout_intent_id_unique
+                   ON ${schema}.registration_metadata (checkout_intent_id);`,
+			);
+
+			await initializePostgresSchema(schema);
+
+			const columns = (await sql.unsafe(
+				"SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name IN ('registration_catalog_values', 'registration_metadata')",
+				[schema],
+			)) as Array<{ table_name: string; column_name: string }>;
+			expect(columns).toEqual(
+				expect.arrayContaining([
+					{
+						table_name: "registration_catalog_values",
+						column_name: "required_subtype_id",
+					},
+					{
+						table_name: "registration_metadata",
+						column_name: "checkout_intent_line_id",
+					},
+				]),
+			);
+			const indexes = (await sql.unsafe(
+				"SELECT to_regclass($1) AS legacy_index, to_regclass($2) AS line_index, to_regclass($3) AS subtype_index",
+				[
+					`${schema}.registration_metadata_checkout_intent_id_unique`,
+					`${schema}.registration_metadata_checkout_intent_line_id_unique`,
+					`${schema}.registration_catalog_values_required_subtype_idx`,
+				],
+			)) as Array<{
+				legacy_index: string | null;
+				line_index: string | null;
+				subtype_index: string | null;
+			}>;
+			expect(indexes).toHaveLength(1);
+			expect(indexes[0]?.legacy_index).toBeNull();
+			expect(indexes[0]?.line_index).not.toBeNull();
+			expect(indexes[0]?.subtype_index).not.toBeNull();
+
+			await sql.unsafe(
+				`INSERT INTO ${schema}.registration_metadata (id, organization_id, festival_id, checkout_intent_id, checkout_intent_line_id, teacher_membership_id, repertoire_json)
+				 VALUES
+				 ('metadata-1', 'organization', 'festival', 'intent', 'line-1', 'teacher', '[]'::jsonb),
+				 ('metadata-2', 'organization', 'festival', 'intent', 'line-2', 'teacher', '[]'::jsonb);`,
+			);
+		} finally {
+			await sql.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+		}
+	},
+);
+
+integrationTest(
 	"requires and atomically binds verified identity email for Teacher entitlements",
 	async () => {
 		const schema = `identity_${randomUUID().replaceAll("-", "")}`;

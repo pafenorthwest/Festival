@@ -524,6 +524,11 @@ export const CURRENT_ROUTE_SECURITY = [
 		authenticationClass: "customer",
 	},
 	{
+		method: "POST",
+		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/registration/eligibility",
+		authenticationClass: "customer",
+	},
+	{
 		method: "GET",
 		path: "/api/organizations/:slug/customer/class-registrations",
 		authenticationClass: "customer",

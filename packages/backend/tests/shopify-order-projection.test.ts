@@ -198,6 +198,7 @@ function paidOrder(correlationId: string): ShopifyPaidOrder {
 				quantity: 1,
 				paidAmount: "75.00",
 				paidCurrencyCode: "USD",
+				customAttributes: [],
 			},
 		],
 	};
@@ -600,6 +601,7 @@ describe("Shopify order projection", () => {
 					quantity: 1,
 					paidAmount: "25.00",
 					paidCurrencyCode: "USD",
+					customAttributes: [],
 				},
 			],
 		});

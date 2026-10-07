@@ -2,7 +2,7 @@ BEGIN;
 
 CREATE TABLE IF NOT EXISTS orgs.message_templates (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    organization_id uuid NOT NULL REFERENCES orgs.organizations(id) ON DELETE CASCADE,
+    organization_id text NOT NULL REFERENCES orgs.organizations(id) ON DELETE CASCADE,
     template_key text NOT NULL,
     channel text NOT NULL CHECK (channel IN ('email', 'sms')),
     version integer NOT NULL DEFAULT 1,
@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS orgs.message_templates (
 
 CREATE TABLE IF NOT EXISTS orgs.message_events (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    organization_id uuid NOT NULL REFERENCES orgs.organizations(id) ON DELETE CASCADE,
+    organization_id text NOT NULL REFERENCES orgs.organizations(id) ON DELETE CASCADE,
     event_type text NOT NULL,
     recipient_destination text NOT NULL,
     payload jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS orgs.message_events (
 
 CREATE TABLE IF NOT EXISTS orgs.message_logs (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    organization_id uuid NOT NULL REFERENCES orgs.organizations(id) ON DELETE CASCADE,
+    organization_id text NOT NULL REFERENCES orgs.organizations(id) ON DELETE CASCADE,
     event_id uuid REFERENCES orgs.message_events(id) ON DELETE CASCADE,
     template_id uuid REFERENCES orgs.message_templates(id) ON DELETE SET NULL,
     channel text NOT NULL CHECK (channel IN ('email', 'sms')),

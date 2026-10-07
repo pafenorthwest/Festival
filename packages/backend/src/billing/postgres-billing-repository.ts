@@ -374,7 +374,7 @@ export class PostgresBillingRepository implements BillingRepository {
 			});
 		}
 
-		// 3. partial_payment: confirmed class entitlement where paid amount < checkout intent price
+		// 3. partial_payment: confirmed class entitlement where paid amount < expected price (or currency mismatch or invalid line link)
 		const partialPaymentRows = (await sql.unsafe(
 			`SELECT
 				ce.id as entitlement_id,
@@ -382,26 +382,48 @@ export class PostgresBillingRepository implements BillingRepository {
 				ce.shopify_order_gid,
 				ce.paid_amount_cents,
 				ce.paid_currency_code,
-				ci.amount as intent_amount
+				(ce.checkout_intent_line_id IS NOT NULL AND (cil.id IS NULL OR ci.id IS NULL)) as is_invalid_line,
+				CASE
+					WHEN ce.checkout_intent_line_id IS NOT NULL THEN cil.amount
+					ELSE ci.amount
+				END as expected_amount,
+				CASE
+					WHEN ce.checkout_intent_line_id IS NOT NULL THEN COALESCE(cil.currency_code, ci.currency_code, 'USD')
+					ELSE COALESCE(ci.currency_code, 'USD')
+				END as expected_currency
 			 FROM ${this.schema}.class_entitlements ce
-			 JOIN ${this.schema}.checkout_intents ci
+			 LEFT JOIN ${this.schema}.checkout_intents ci
 				ON ci.organization_id = ce.organization_id
 				AND ci.id = ce.checkout_intent_id
+			 LEFT JOIN ${this.schema}.checkout_intent_lines cil
+				ON cil.checkout_intent_id = ce.checkout_intent_id
+				AND cil.id = ce.checkout_intent_line_id
 			 WHERE ce.organization_id = $1
 			   AND ce.status = 'confirmed'
-			   AND ci.amount IS NOT NULL
 			   AND ce.paid_amount_cents > 0
-			   AND ce.paid_amount_cents < ROUND(ci.amount::numeric * 100)`,
+			   AND (
+			       (ce.checkout_intent_line_id IS NOT NULL AND (cil.id IS NULL OR ci.id IS NULL))
+			       OR (
+			           CASE WHEN ce.checkout_intent_line_id IS NOT NULL THEN cil.amount ELSE ci.amount END IS NOT NULL
+			           AND (
+			               ce.paid_amount_cents < ROUND((CASE WHEN ce.checkout_intent_line_id IS NOT NULL THEN cil.amount ELSE ci.amount END)::numeric * 100)
+			               OR ce.paid_currency_code <> (CASE WHEN ce.checkout_intent_line_id IS NOT NULL THEN COALESCE(cil.currency_code, ci.currency_code, 'USD') ELSE COALESCE(ci.currency_code, 'USD') END)
+			           )
+			       )
+			   )`,
 			[organizationId],
 		)) as Array<Record<string, unknown>>;
 
 		for (const row of partialPaymentRows) {
+			const isInvalidLine = Boolean(row.is_invalid_line);
 			results.push({
 				id: randomUUID(),
 				organizationId,
 				customerId: String(row.customer_id),
 				mismatchType: "partial_payment",
-				description: "Partial payment received for class entitlement.",
+				description: isInvalidLine
+					? "Missing or invalid checkout intent line for confirmed class entitlement."
+					: "Partial payment received for class entitlement.",
 				entitlementId: String(row.entitlement_id),
 				shopifyOrderId: String(row.shopify_order_gid),
 				amountCents: Number(row.paid_amount_cents),

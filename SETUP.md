@@ -340,6 +340,21 @@ sudo install -m 0600 -o <festival-service-user> -g <festival-service-user> /dev/
 
 Festival appends minimal NDJSON mutation records and fails the mutation when the destination cannot be opened before the Shopify call. Deployment operations—not the application—must configure rotation, retention, disk-usage monitoring, access review, and any host-level aggregation. Do not ingest this audit stream into the Festival database.
 
+For local development without elevated permissions, set an absolute writable file
+path in the repo-root `.env`. The checked-in `develop.env` uses this example:
+
+```dotenv
+SHOPIFY_ADMIN_AUDIT_PATH=/tmp/festival-shopify-admin-audit.ndjson
+```
+
+`/tmp` already exists on normal development hosts, but the backend does not
+create parent directories. Use a directory you own if `/tmp` is unsuitable.
+The override is backend-only; do not add it to `packages/frontend/.env.local`.
+When unset or blank, Festival continues to use the production default
+`/var/log/festival/shopify-admin-audit.ndjson` and requires the production
+provisioning above. Invalid, relative, or NUL-containing override values stop
+the backend at startup.
+
 #### Shopify Customer Accounts (Headless)
 
 Customer authentication uses a confidential Customer Account client through the

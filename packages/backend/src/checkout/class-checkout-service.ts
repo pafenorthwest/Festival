@@ -1,21 +1,57 @@
 import { randomUUID } from "node:crypto";
-import type { FestivalRecord, RepertoirePiece } from "@festival/common";
+import type {
+	ClassCheckoutLineItemInput,
+	EvaluatePurchaseEligibilityResponse,
+	FestivalChildRecord,
+	FestivalClassConfiguration,
+	FestivalRecord,
+	ProposedPurchaseLineItem,
+	PurchaseEligibilityMode,
+	RepertoirePiece,
+} from "@festival/common";
+import {
+	evaluatePurchaseEligibility,
+	stripCandidateMarker,
+} from "@festival/common";
 import type { MembershipCommerceRepository } from "../commerce/membership-commerce-repository.js";
 import type { CustomerAccountRepository } from "../customer/customer-account-repository.js";
 import { AppError } from "../errors/app-error.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
+import {
+	CHECKOUT_INTENT_LINE_ID_ATTRIBUTE_KEY,
+	type ExpectedClassCheckoutIntentLine,
+	requireClassCheckoutIntentLineMapping,
+} from "./checkout-line-helpers.js";
 import type {
+	CheckoutCartRecord,
+	CheckoutIntentLineItemRecord,
+	CheckoutIntentOutcome,
 	CheckoutIntentRecord,
 	CheckoutRepository,
+	CreateCheckoutIntentLineInput,
 } from "./checkout-repository.js";
+import { CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL } from "./checkout-repository.js";
+import {
+	calculateTotalAmount,
+	resolveFestivalClassConfiguration,
+	resolveTargetFestival,
+	validateActiveChildAgeSnapshot,
+	validateAndNormalizeRepertoirePieces,
+	validateChildAgeRange,
+} from "./class-checkout-helpers.js";
 
 export interface ClassCheckoutStorefront {
 	createCart(input: {
 		organizationId: string;
-		shopifyVariantGid: string;
+		shopifyVariantGid?: string;
 		buyerAccessToken: string;
 		correlationId: string;
 		currencyCode?: string;
+		lines?: Array<{
+			merchandiseId: string;
+			quantity: number;
+			attributes?: Array<{ key: string; value: string }>;
+		}>;
 	}): Promise<{ shopifyCartId: string }>;
 	checkout(input: {
 		organizationId: string;
@@ -30,14 +66,24 @@ export interface StartClassCheckoutInput {
 	customerId: string;
 	sessionId: string;
 	idempotencyKey: string;
-	festivalClassId: string;
-	childId: string;
+	festivalClassId?: string;
+	childId?: string;
 	divisionId?: string;
 	buyerAccessToken: string;
 	integrationVersion?: string | number;
-	teacherId: string;
+	teacherId?: string;
 	accompanistId?: string | null;
-	pieces: RepertoirePiece[];
+	pieces?: RepertoirePiece[];
+	lineItems?: ClassCheckoutLineItemInput[];
+}
+
+export interface EvaluatePurchaseEligibilityInput {
+	organizationId: string;
+	customerId: string;
+	festivalId?: string;
+	festivalShortName?: string;
+	items: ProposedPurchaseLineItem[];
+	mode?: PurchaseEligibilityMode;
 }
 
 export interface ClassCheckoutResult {
@@ -47,7 +93,56 @@ export interface ClassCheckoutResult {
 	intent?: CheckoutIntentRecord;
 }
 
-const MAX_SNAPSHOT_VALIDITY_MS = 90 * 24 * 60 * 60 * 1000;
+interface ValidatedLineItem {
+	child: FestivalChildRecord;
+	classConfig: FestivalClassConfiguration;
+	normalizedPieces: RepertoirePiece[];
+	teacherEntitlementId: string;
+	accompanistEntitlementId: string | null;
+}
+
+export type ClassCheckoutFailureStage =
+	| "registration_metadata"
+	| "load_integration"
+	| "create_cart"
+	| "attach_cart"
+	| "mark_checkout_started"
+	| "checkout_url"
+	| "verify_checkout_url"
+	| "mark_failed"
+	| "resume_load_integration"
+	| "resume_mark_checkout_started"
+	| "resume_checkout_url"
+	| "resume_verify_checkout_url"
+	| "resume_mark_failed";
+
+export interface ClassCheckoutFailureLogger {
+	error(
+		message: string,
+		context: {
+			operation: "checkout.class";
+			stage: ClassCheckoutFailureStage;
+			organizationId: string;
+			checkoutIntentId: string;
+			correlationId: string;
+			lineCount: number;
+			errorName?: "AppError" | "Error" | "PostgresError";
+			errorCode?: string;
+			databaseSqlState?: string;
+			databaseConstraint?: string;
+			databaseTable?: string;
+			databaseColumn?: string;
+		},
+	): void;
+}
+
+const silentClassCheckoutFailureLogger: ClassCheckoutFailureLogger = {
+	error: () => undefined,
+};
+
+export const consoleClassCheckoutFailureLogger: ClassCheckoutFailureLogger = {
+	error: (message, context) => console.error(message, context),
+};
 
 export class ClassCheckoutService {
 	constructor(
@@ -55,56 +150,67 @@ export class ClassCheckoutService {
 		private readonly customers: CustomerAccountRepository,
 		private readonly checkout: CheckoutRepository,
 		private readonly storefront: ClassCheckoutStorefront,
-		_commerce?: MembershipCommerceRepository,
+		private readonly commerce?: MembershipCommerceRepository,
 		private readonly now: () => Date = () => new Date(),
+		private readonly failureLogger: ClassCheckoutFailureLogger = silentClassCheckoutFailureLogger,
 	) {}
 
-	async start(input: StartClassCheckoutInput): Promise<ClassCheckoutResult> {
-		if (
-			!input.organizationId?.trim() ||
-			!input.customerId?.trim() ||
-			!input.sessionId?.trim()
-		) {
-			throw new AppError("Customer session is invalid.", 401);
+	async evaluateEligibility(
+		input: EvaluatePurchaseEligibilityInput,
+	): Promise<EvaluatePurchaseEligibilityResponse> {
+		if (!input.customerId?.trim()) {
+			throw new AppError("Customer ID is required.", 400);
 		}
-		if (!input.festivalClassId?.trim()) {
-			throw new AppError("Festival class ID is required.", 400);
-		}
-		if (!input.childId?.trim()) {
-			throw new AppError("Child ID is required.", 400);
-		}
-		if (!input.teacherId?.trim()) {
-			throw new AppError("Teacher ID is required.", 400);
-		}
-		if (!input.buyerAccessToken?.trim()) {
-			throw new AppError("Buyer access token is required.", 400);
-		}
-
-		// 1. Validates parent customer auth / session
-		const session = await this.customers.getSession(input.sessionId);
-		const currentTime = this.now();
-		if (
-			!session ||
-			session.revokedAtIso ||
-			session.organizationId !== input.organizationId ||
-			session.customerId !== input.customerId ||
-			new Date(session.expiresAtIso) <= currentTime
-		) {
-			throw new AppError("Customer session is invalid.", 401);
-		}
-
-		const customer = await this.customers.getCustomer(
+		const children = await this.customers.listChildren(
 			input.organizationId,
 			input.customerId,
 		);
-		if (
-			!customer ||
-			customer.shopifyCustomerGid !== session.shopifyCustomerGid
-		) {
-			throw new AppError("Customer session is invalid.", 401);
+		const ownedChildIds = new Set(children.map((c) => c.id));
+		for (const item of input.items) {
+			if (!ownedChildIds.has(item.childId)) {
+				throw new AppError("Child not found.", 404);
+			}
 		}
 
-		// 2. Check for existing checkout outcome by idempotency key
+		const festivals = await this.organizations.listFestivals(
+			input.organizationId,
+		);
+		const targetFestival = resolveTargetFestival(festivals, {
+			festivalId: input.festivalId,
+			festivalShortName: input.festivalShortName,
+		});
+		const classes = await this.organizations.listFestivalClassConfigurations(
+			input.organizationId,
+			targetFestival.id,
+			false,
+		);
+		const subtypes = await this.organizations.listRegistrationCatalogValues(
+			input.organizationId,
+			"class_subtype",
+		);
+		const activeEntitlements = this.commerce
+			? await this.commerce.listClassEntitlements({
+					organizationId: input.organizationId,
+					festivalId: targetFestival.id,
+				})
+			: [];
+		return evaluatePurchaseEligibility({
+			organizationId: input.organizationId,
+			festivalId: targetFestival.id,
+			items: input.items,
+			classes,
+			subtypes,
+			activeEntitlements,
+			mode: input.mode ?? "cart",
+		});
+	}
+
+	async start(input: StartClassCheckoutInput): Promise<ClassCheckoutResult> {
+		const currentTime = this.now();
+		const { session } = await this.validateSessionAndCustomer(
+			input,
+			currentTime,
+		);
 		const existing = await this.checkout.getOutcome({
 			organizationId: input.organizationId,
 			customerId: input.customerId,
@@ -112,263 +218,38 @@ export class ClassCheckoutService {
 			idempotencyKey: input.idempotencyKey,
 		});
 		if (existing) {
-			if (existing.kind === "in_progress") {
-				throw new AppError(
-					"Checkout is already in progress.",
-					409,
-					"checkout_in_progress",
-				);
-			}
-			if (existing.kind === "active") {
-				throw new AppError(
-					"This checkout has already completed.",
-					409,
-					"checkout_already_completed",
-				);
-			}
-			if (existing.kind === "expired") {
-				throw new AppError("Checkout has expired.", 409, "checkout_expired");
-			}
-			if (existing.kind === "failed") {
-				throw new AppError(
-					"This checkout attempt cannot continue.",
-					409,
-					"checkout_terminal_failure",
-				);
-			}
-			if (existing.kind === "ready") {
-				return this.resume(existing, input);
-			}
+			if (existing.kind === "ready") return this.resume(existing, input);
+			this.handleOutcome(existing);
 		}
-
-		// 3. Verifies child belongs to parent customer
+		const festivals = await this.organizations.listFestivals(
+			input.organizationId,
+		);
+		const targetFestival = resolveTargetFestival(festivals, {
+			festivalId: input.festivalId,
+			festivalShortName: input.festivalShortName,
+		});
+		const lineItems = this.normalizeLineItems(input);
 		const children = await this.customers.listChildren(
 			input.organizationId,
 			input.customerId,
 		);
-		const child = children.find((item) => item.id === input.childId);
-		if (!child) {
-			throw new AppError(
-				"Child not found or does not belong to parent customer.",
-				404,
-			);
+		const validatedLines: ValidatedLineItem[] = [];
+		for (const line of lineItems) {
+			const vl = await this.validateLine(input.organizationId, line, {
+				targetFestival,
+				festivals,
+				children,
+				currentTime,
+				divisionId: lineItems.length === 1 ? input.divisionId : undefined,
+			});
+			validatedLines.push(vl);
 		}
-
-		// 4. Verifies active age snapshot for child (<= 90 days validity)
-		const snapshots = await this.customers.listChildAgeSnapshots(
+		await this.checkEligibility(
 			input.organizationId,
-			input.childId,
+			input.customerId,
+			targetFestival.id,
+			lineItems,
 		);
-		const activeSnapshot = snapshots.find((item) => !item.supersededAtIso);
-		if (!activeSnapshot) {
-			throw new AppError("Child does not have an active age snapshot.", 400);
-		}
-
-		const validUntil = new Date(activeSnapshot.validUntilIso);
-		const snapshotAgeMs =
-			currentTime.getTime() - new Date(activeSnapshot.createdAtIso).getTime();
-		if (validUntil <= currentTime || snapshotAgeMs > MAX_SNAPSHOT_VALIDITY_MS) {
-			throw new AppError("Child age snapshot has expired.", 400);
-		}
-
-		// 5. Verifies class configuration exists, is active, and is tied to the target festival and organization
-		const festivals = await this.organizations.listFestivals(
-			input.organizationId,
-		);
-		let targetFestival: FestivalRecord | undefined;
-		if (input.festivalId?.trim() && input.festivalShortName?.trim()) {
-			const targetShortName = input.festivalShortName.trim().toLowerCase();
-			targetFestival = festivals.find(
-				(item) =>
-					item.id === input.festivalId?.trim() &&
-					item.shortName.toLowerCase() === targetShortName,
-			);
-		} else if (input.festivalId?.trim()) {
-			targetFestival = festivals.find(
-				(item) => item.id === input.festivalId?.trim(),
-			);
-		} else if (input.festivalShortName?.trim()) {
-			const targetShortName = input.festivalShortName.trim().toLowerCase();
-			targetFestival = festivals.find(
-				(item) => item.shortName.toLowerCase() === targetShortName,
-			);
-		} else {
-			targetFestival = festivals.find((item) => item.isPrimary);
-		}
-		if (!targetFestival) {
-			throw new AppError("Active festival not found.", 404);
-		}
-
-		const classConfigs =
-			await this.organizations.listFestivalClassConfigurations(
-				input.organizationId,
-				targetFestival.id,
-				false,
-			);
-		const classConfig = classConfigs.find(
-			(item) => item.id === input.festivalClassId,
-		);
-		if (!classConfig) {
-			for (const otherFest of festivals) {
-				if (otherFest.id === targetFestival.id) continue;
-				const otherConfigs =
-					await this.organizations.listFestivalClassConfigurations(
-						input.organizationId,
-						otherFest.id,
-						false,
-					);
-				if (otherConfigs.some((item) => item.id === input.festivalClassId)) {
-					throw new AppError(
-						"Festival class configuration does not belong to the active festival.",
-						400,
-					);
-				}
-			}
-			throw new AppError("Festival class configuration not found.", 404);
-		}
-		if (!classConfig.isActive) {
-			throw new AppError("Festival class configuration is inactive.", 400);
-		}
-		if (
-			classConfig.organizationId !== input.organizationId ||
-			classConfig.festivalId !== targetFestival.id
-		) {
-			throw new AppError(
-				"Festival class configuration does not belong to the active festival.",
-				400,
-			);
-		}
-		if (
-			input.divisionId !== undefined &&
-			input.divisionId !== classConfig.divisionId
-		) {
-			throw new AppError(
-				"Selected class does not belong to the requested division.",
-				400,
-			);
-		}
-
-		// 6. Verifies child's age meets festival_class_configurations [minimum_age, maximum_age] rules
-		const childAge = activeSnapshot.age;
-		if (
-			childAge < classConfig.minimumAge ||
-			childAge > classConfig.maximumAge
-		) {
-			throw new AppError(
-				`Child age (${childAge}) is outside the allowed range of [${classConfig.minimumAge}, ${classConfig.maximumAge}].`,
-				400,
-			);
-		}
-
-		// 7. Validate pieces
-		if (!Array.isArray(input.pieces) || input.pieces.length === 0) {
-			throw new AppError("Repertoire pieces must be a non-empty array.", 400);
-		}
-		if (input.pieces.length > classConfig.maximumPerformancePieces) {
-			throw new AppError(
-				`Number of pieces (${input.pieces.length}) exceeds the maximum allowed (${classConfig.maximumPerformancePieces}).`,
-				400,
-			);
-		}
-		for (const piece of input.pieces) {
-			if (!piece || typeof piece.title !== "string" || !piece.title.trim()) {
-				throw new AppError(
-					"Each repertoire piece must have a valid title.",
-					400,
-				);
-			}
-			if (
-				typeof piece.composer !== "string" ||
-				piece.composer.trim().length === 0
-			) {
-				throw new AppError(
-					"Each repertoire piece must have a valid composer.",
-					400,
-				);
-			}
-			if (
-				piece.movement !== undefined &&
-				piece.movement !== null &&
-				typeof piece.movement !== "string"
-			) {
-				throw new AppError(
-					"Each repertoire piece must have a valid movement.",
-					400,
-				);
-			}
-			if (
-				typeof piece.durationSeconds !== "number" ||
-				piece.durationSeconds <= 0 ||
-				!Number.isSafeInteger(piece.durationSeconds) ||
-				piece.durationSeconds > 2_147_483_647
-			) {
-				throw new AppError(
-					"Each repertoire piece must have a positive whole-number duration in seconds.",
-					400,
-				);
-			}
-		}
-		// Relational snapshots use the validated, display-ready values.
-		const normalizedPieces: RepertoirePiece[] = input.pieces.map((piece) => ({
-			title: piece.title.trim(),
-			composer: piece.composer.trim(),
-			movement:
-				typeof piece.movement === "string"
-					? piece.movement.trim() || undefined
-					: undefined,
-			durationSeconds: piece.durationSeconds,
-		}));
-		const totalDurationMinutes =
-			normalizedPieces.reduce((sum, p) => sum + p.durationSeconds, 0) / 60;
-		if (totalDurationMinutes > classConfig.performanceMinutes) {
-			throw new AppError(
-				`Total performance duration (${totalDurationMinutes} minutes) exceeds the maximum allowed of ${classConfig.performanceMinutes} minutes.`,
-				400,
-			);
-		}
-
-		// 8. Resolve teacherId
-		const teacherGrants =
-			await this.organizations.listEntitlementGrantSnapshots(
-				input.organizationId,
-				input.teacherId.trim(),
-			);
-		const activeTeacherGrant = teacherGrants.find(
-			(grant) =>
-				grant.entitlementClass === "teacher_membership" &&
-				grant.divisionId === classConfig.divisionId &&
-				grant.status === "active",
-		);
-		if (!activeTeacherGrant) {
-			throw new AppError(
-				"Selected teacher does not have an active membership for this division.",
-				400,
-			);
-		}
-		const teacherEntitlementId = activeTeacherGrant.id;
-
-		// 9. Resolve optional accompanistId
-		let accompanistEntitlementId: string | null = null;
-		if (input.accompanistId?.trim()) {
-			const accompanistGrants =
-				await this.organizations.listAccompanistMembershipGrants({
-					organizationId: input.organizationId,
-					customerId: input.accompanistId.trim(),
-					currentOnly: true,
-				});
-			const activeAccompanistGrant = accompanistGrants.find(
-				(grant) => grant.status === "active" || grant.isCurrent === true,
-			);
-			if (!activeAccompanistGrant) {
-				throw new AppError(
-					"Selected accompanist does not have an active membership.",
-					400,
-				);
-			}
-			accompanistEntitlementId = activeAccompanistGrant.id;
-		}
-
-		// 10. Check if checkout is already in progress
 		if (
 			await this.checkout.hasProcessingIntent(
 				input.organizationId,
@@ -382,36 +263,295 @@ export class ClassCheckoutService {
 				"checkout_in_progress",
 			);
 		}
-
-		// 11. Creates a checkout intent with intent_type: 'class_entry'
 		const organization = await this.organizations.findOrganizationById(
 			input.organizationId,
 		);
-		if (!organization) {
-			throw new AppError("Organization was not found.", 404);
-		}
+		if (!organization) throw new AppError("Organization was not found.", 404);
 		const currencyCode = organization.defaultCurrencyCode || "USD";
-
 		const expiresAtIso = new Date(
 			currentTime.getTime() + 30 * 60_000,
 		).toISOString();
+		const outcome = await this.createMultiLineIntent(
+			input,
+			validatedLines,
+			currencyCode,
+			expiresAtIso,
+		);
+		if (outcome.kind === "ready") return this.resume(outcome, input);
+		this.handleOutcome(outcome);
+		if (outcome.kind !== "created")
+			throw new AppError("Failed to create checkout intent.", 500);
 
-		const outcome = await this.checkout.createIntent({
+		return this.executeStorefrontCheckout(
+			input,
+			targetFestival,
+			outcome.intent,
+			validatedLines,
+			currencyCode,
+			expiresAtIso,
+			session.integrationVersion || 1,
+		);
+	}
+
+	private async validateSessionAndCustomer(
+		input: StartClassCheckoutInput,
+		currentTime: Date,
+	) {
+		if (
+			!input.organizationId?.trim() ||
+			!input.customerId?.trim() ||
+			!input.sessionId?.trim()
+		) {
+			throw new AppError("Customer session is invalid.", 401);
+		}
+		if (!input.buyerAccessToken?.trim()) {
+			throw new AppError("Buyer access token is required.", 400);
+		}
+		const session = await this.customers.getSession(input.sessionId);
+		if (
+			!session ||
+			session.revokedAtIso ||
+			session.organizationId !== input.organizationId ||
+			session.customerId !== input.customerId ||
+			new Date(session.expiresAtIso) <= currentTime
+		) {
+			throw new AppError("Customer session is invalid.", 401);
+		}
+		const customer = await this.customers.getCustomer(
+			input.organizationId,
+			input.customerId,
+		);
+		if (
+			!customer ||
+			customer.shopifyCustomerGid !== session.shopifyCustomerGid
+		) {
+			throw new AppError("Customer session is invalid.", 401);
+		}
+		return { session, customer };
+	}
+
+	private normalizeLineItems(
+		input: StartClassCheckoutInput,
+	): ClassCheckoutLineItemInput[] {
+		if (input.lineItems) {
+			if (input.lineItems.length === 0) {
+				throw new AppError(
+					"Class checkout requires at least one line item.",
+					400,
+				);
+			}
+			return input.lineItems.map(
+				(item) => stripCandidateMarker(item) as ClassCheckoutLineItemInput,
+			);
+		}
+		if (!input.festivalClassId?.trim()) {
+			throw new AppError("Festival class ID is required.", 400);
+		}
+		if (!input.childId?.trim()) {
+			throw new AppError("Child ID is required.", 400);
+		}
+		if (!input.teacherId?.trim()) {
+			throw new AppError("Teacher ID is required.", 400);
+		}
+		return [
+			stripCandidateMarker({
+				festivalClassId: input.festivalClassId,
+				childId: input.childId,
+				teacherId: input.teacherId,
+				accompanistId: input.accompanistId,
+				pieces: input.pieces ?? [],
+			}) as ClassCheckoutLineItemInput,
+		];
+	}
+
+	private async validateTeacherAndAccompanist(
+		organizationId: string,
+		divisionId: string,
+		teacherId: string,
+		accompanistId?: string | null,
+	): Promise<{
+		teacherEntitlementId: string;
+		accompanistEntitlementId: string | null;
+	}> {
+		const teacherGrants =
+			await this.organizations.listEntitlementGrantSnapshots(
+				organizationId,
+				teacherId.trim(),
+			);
+		const activeTeacherGrant = teacherGrants.find(
+			(grant) =>
+				grant.entitlementClass === "teacher_membership" &&
+				grant.divisionId === divisionId &&
+				grant.status === "active",
+		);
+		if (!activeTeacherGrant) {
+			throw new AppError(
+				"Selected teacher does not have an active membership for this division.",
+				400,
+			);
+		}
+		let accompanistEntitlementId: string | null = null;
+		if (accompanistId?.trim()) {
+			const accompanistGrants =
+				await this.organizations.listAccompanistMembershipGrants({
+					organizationId,
+					customerId: accompanistId.trim(),
+					currentOnly: true,
+				});
+			const activeAccompanistGrant = accompanistGrants.find(
+				(grant) => grant.status === "active" || grant.isCurrent === true,
+			);
+			if (!activeAccompanistGrant) {
+				throw new AppError(
+					"Selected accompanist does not have an active membership.",
+					400,
+				);
+			}
+			accompanistEntitlementId = activeAccompanistGrant.id;
+		}
+		return {
+			teacherEntitlementId: activeTeacherGrant.id,
+			accompanistEntitlementId,
+		};
+	}
+
+	private async validateLine(
+		organizationId: string,
+		line: ClassCheckoutLineItemInput,
+		ctx: {
+			targetFestival: FestivalRecord;
+			festivals: FestivalRecord[];
+			children: FestivalChildRecord[];
+			currentTime: Date;
+			divisionId?: string;
+		},
+	): Promise<ValidatedLineItem> {
+		if (!line.festivalClassId?.trim()) {
+			throw new AppError("Festival class ID is required.", 400);
+		}
+		if (!line.childId?.trim()) {
+			throw new AppError("Child ID is required.", 400);
+		}
+		if (!line.teacherId?.trim()) {
+			throw new AppError("Teacher ID is required.", 400);
+		}
+		const child = ctx.children.find((c) => c.id === line.childId);
+		if (!child) {
+			throw new AppError(
+				"Child not found or does not belong to parent customer.",
+				404,
+			);
+		}
+		const snapshots = await this.customers.listChildAgeSnapshots(
+			organizationId,
+			line.childId,
+		);
+		const activeSnapshot = validateActiveChildAgeSnapshot(
+			snapshots,
+			ctx.currentTime,
+		);
+		const classConfig = await resolveFestivalClassConfiguration(
+			this.organizations,
+			{
+				organizationId,
+				targetFestival: ctx.targetFestival,
+				festivals: ctx.festivals,
+				festivalClassId: line.festivalClassId,
+				divisionId:
+					(line as { divisionId?: string }).divisionId ?? ctx.divisionId,
+			},
+		);
+		validateChildAgeRange(activeSnapshot.age, classConfig);
+		const normalizedPieces = validateAndNormalizeRepertoirePieces(
+			line.pieces,
+			classConfig,
+		);
+		const { teacherEntitlementId, accompanistEntitlementId } =
+			await this.validateTeacherAndAccompanist(
+				organizationId,
+				classConfig.divisionId,
+				line.teacherId,
+				line.accompanistId,
+			);
+		return {
+			child,
+			classConfig,
+			normalizedPieces,
+			teacherEntitlementId,
+			accompanistEntitlementId,
+		};
+	}
+
+	private async checkEligibility(
+		organizationId: string,
+		customerId: string,
+		festivalId: string,
+		lineItems: ClassCheckoutLineItemInput[],
+	): Promise<void> {
+		const eligibility = await this.evaluateEligibility({
+			organizationId,
+			customerId,
+			festivalId,
+			items: lineItems.map(
+				(item) => stripCandidateMarker(item) as ClassCheckoutLineItemInput,
+			),
+			mode: "cart",
+		});
+		if (
+			!eligibility.isEligible ||
+			eligibility.results.some((r) => !r.isEligible)
+		) {
+			const failure = eligibility.results.find((r) => !r.isEligible);
+			throw new AppError(
+				failure?.message ?? "Class registration is not eligible.",
+				400,
+				failure?.reasonCode?.toLowerCase(),
+			);
+		}
+	}
+
+	private async createMultiLineIntent(
+		input: StartClassCheckoutInput,
+		validatedLines: ValidatedLineItem[],
+		currencyCode: string,
+		expiresAtIso: string,
+	): Promise<CheckoutIntentOutcome> {
+		const intentLines: CreateCheckoutIntentLineInput[] = validatedLines.map(
+			(vl, index) => ({
+				lineIndex: index,
+				lineType: "class_entry",
+				festivalClassId: vl.classConfig.id,
+				childId: vl.child.id,
+				shopifyProductGid: vl.classConfig.shopifyProductGid,
+				shopifyVariantGid: vl.classConfig.shopifyVariantGid,
+				amount: vl.classConfig.price,
+				currencyCode,
+				divisionId: vl.classConfig.divisionId,
+				divisionNameSnapshot: vl.classConfig.divisionId ?? null,
+			}),
+		);
+		const totalAmount = calculateTotalAmount(intentLines.map((l) => l.amount));
+
+		return this.checkout.createIntent({
 			organizationId: input.organizationId,
 			customerId: input.customerId,
 			sessionId: input.sessionId,
 			idempotencyKey: input.idempotencyKey,
 			intentType: "class_entry",
-			festivalClassId: classConfig.id,
-			divisionId: classConfig.divisionId,
-			childId: child.id,
-			shopifyProductGid: classConfig.shopifyProductGid,
-			shopifyVariantGid: classConfig.shopifyVariantGid,
-			amount: classConfig.price,
+			festivalClassId: validatedLines[0].classConfig.id,
+			divisionId: validatedLines[0].classConfig.divisionId,
+			childId: validatedLines[0].child.id,
+			shopifyProductGid: validatedLines[0].classConfig.shopifyProductGid,
+			shopifyVariantGid: validatedLines[0].classConfig.shopifyVariantGid,
+			amount: totalAmount,
 			currencyCode,
 			expiresAtIso,
+			lineIdentityProtocol: CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL,
+			lines: intentLines,
 		});
+	}
 
+	private handleOutcome(outcome: CheckoutIntentOutcome): void {
 		if (outcome.kind === "in_progress") {
 			throw new AppError(
 				"Checkout is already in progress.",
@@ -436,104 +576,205 @@ export class ClassCheckoutService {
 				"checkout_terminal_failure",
 			);
 		}
-		if (outcome.kind === "ready") {
-			return this.resume(outcome, input);
-		}
+	}
 
-		const intent = outcome.intent;
-
-		// 12. Storefront cart, checkout, and verification
-		try {
+	private async insertAllRegistrationMetadata(
+		organizationId: string,
+		festivalId: string,
+		intent: CheckoutIntentRecord,
+		validatedLines: ValidatedLineItem[],
+		intentLines: readonly CheckoutIntentLineItemRecord[],
+	): Promise<void> {
+		for (let i = 0; i < validatedLines.length; i++) {
+			const vl = validatedLines[i];
+			const lineRecord = intentLines[i];
 			await this.checkout.insertRegistrationMetadata({
 				id: randomUUID(),
-				organizationId: input.organizationId,
-				festivalId: targetFestival.id,
+				organizationId,
+				festivalId,
 				checkoutIntentId: intent.id,
-				teacherMembershipId: teacherEntitlementId,
-				accompanistMembershipId: accompanistEntitlementId,
-				repertoireJson: normalizedPieces,
-				repertoireSnapshotPieces: normalizedPieces,
+				checkoutIntentLineId: lineRecord.id,
+				teacherMembershipId: vl.teacherEntitlementId,
+				accompanistMembershipId: vl.accompanistEntitlementId,
+				repertoireJson: vl.normalizedPieces,
+				repertoireSnapshotPieces: vl.normalizedPieces,
 			});
+		}
+	}
 
-			// Pre-flight integration read: validates Shopify integration existence and captures initial integrationVersion before cart creation
-			const storefrontIntegration =
-				await this.organizations.getShopifyIntegration(input.organizationId);
-			if (!storefrontIntegration) {
-				throw new AppError("Shopify checkout is unavailable.", 503);
-			}
+	private async createAndVerifyCart(params: {
+		input: StartClassCheckoutInput;
+		intent: CheckoutIntentRecord;
+		validatedLines: ValidatedLineItem[];
+		intentLines: readonly CheckoutIntentLineItemRecord[];
+		currencyCode: string;
+		expiresAtIso: string;
+		defaultIntegrationVersion: number;
+		setStage: (stage: ClassCheckoutFailureStage) => void;
+	}): Promise<ClassCheckoutResult> {
+		const {
+			input,
+			intent,
+			validatedLines,
+			intentLines,
+			currencyCode,
+			expiresAtIso,
+			setStage,
+		} = params;
+		setStage("load_integration");
+		const storefrontIntegration =
+			await this.organizations.getShopifyIntegration(input.organizationId);
+		if (!storefrontIntegration) {
+			throw new AppError("Shopify checkout is unavailable.", 503);
+		}
 
-			const cartResponse = await this.storefront.createCart({
-				organizationId: input.organizationId,
-				shopifyVariantGid: classConfig.shopifyVariantGid,
-				buyerAccessToken: input.buyerAccessToken,
-				correlationId: intent.correlationId,
-				currencyCode,
-			});
-
-			const integrationVersion =
-				typeof input.integrationVersion === "number"
-					? input.integrationVersion
-					: Number(input.integrationVersion) || session.integrationVersion || 1;
-
-			const cart = await this.checkout.attachCart({
-				intentId: intent.id,
-				shopifyCartId: cartResponse.shopifyCartId,
-				organizationId: input.organizationId,
-				customerId: input.customerId,
-				sessionId: input.sessionId,
-				integrationVersion,
-				expiresAtIso,
-			});
-
-			await this.checkout.markCheckoutStarted(intent.id);
-
-			const checkout = await this.storefront.checkout({
-				organizationId: input.organizationId,
-				shopifyCartId: cart.shopifyCartId,
-			});
-
-			// Post-cart verification read: re-checks integration version to detect concurrent store updates (race conditions) and validates checkout URL domain
-			const integration = await this.organizations.getShopifyIntegration(
-				input.organizationId,
-			);
-			if (
-				!integration ||
-				integration.integrationVersion !==
-					storefrontIntegration.integrationVersion ||
-				!isAllowedCheckoutUrl(checkout.checkoutUrl, integration.storeDomain)
-			) {
-				throw new AppError("Shopify checkout is unavailable.", 503);
-			}
-
+		const cartLines = validatedLines.map((vl, index) => {
+			const lineRecord = intentLines[index];
 			return {
-				checkoutUrl: checkout.checkoutUrl,
-				intentId: intent.id,
-				correlationId: intent.correlationId,
-				intent,
+				merchandiseId: vl.classConfig.shopifyVariantGid,
+				quantity: 1,
+				attributes: [
+					{
+						key: CHECKOUT_INTENT_LINE_ID_ATTRIBUTE_KEY,
+						value: lineRecord.id,
+					},
+				],
 			};
-		} catch (_error) {
-			await this.checkout.markFailed(intent.id);
-			throw retryableCheckoutError();
+		});
+
+		setStage("create_cart");
+		const cartResponse = await this.storefront.createCart({
+			organizationId: input.organizationId,
+			shopifyVariantGid: validatedLines[0].classConfig.shopifyVariantGid,
+			lines: cartLines,
+			buyerAccessToken: input.buyerAccessToken,
+			correlationId: intent.correlationId,
+			currencyCode,
+		});
+
+		const integrationVersion =
+			typeof input.integrationVersion === "number"
+				? input.integrationVersion
+				: Number(input.integrationVersion) || params.defaultIntegrationVersion;
+
+		setStage("attach_cart");
+		const cart = await this.checkout.attachCart({
+			intentId: intent.id,
+			shopifyCartId: cartResponse.shopifyCartId,
+			organizationId: input.organizationId,
+			customerId: input.customerId,
+			sessionId: input.sessionId,
+			integrationVersion,
+			expiresAtIso,
+		});
+
+		setStage("mark_checkout_started");
+		await this.checkout.markCheckoutStarted(intent.id);
+
+		setStage("checkout_url");
+		const checkout = await this.storefront.checkout({
+			organizationId: input.organizationId,
+			shopifyCartId: cart.shopifyCartId,
+		});
+
+		setStage("verify_checkout_url");
+		const integration = await this.organizations.getShopifyIntegration(
+			input.organizationId,
+		);
+		if (
+			!integration ||
+			integration.integrationVersion !==
+				storefrontIntegration.integrationVersion ||
+			!isAllowedCheckoutUrl(checkout.checkoutUrl, integration.storeDomain)
+		) {
+			throw new AppError("Shopify checkout is unavailable.", 503);
+		}
+
+		return {
+			checkoutUrl: checkout.checkoutUrl,
+			intentId: intent.id,
+			correlationId: intent.correlationId,
+			intent,
+		};
+	}
+
+	private async executeStorefrontCheckout(
+		input: StartClassCheckoutInput,
+		targetFestival: FestivalRecord,
+		intent: CheckoutIntentRecord,
+		validatedLines: ValidatedLineItem[],
+		currencyCode: string,
+		expiresAtIso: string,
+		defaultIntegrationVersion: number,
+	): Promise<ClassCheckoutResult> {
+		let stage: ClassCheckoutFailureStage = "registration_metadata";
+		try {
+			const expectedIntentLines: ExpectedClassCheckoutIntentLine[] =
+				validatedLines.map((line) => ({
+					festivalClassId: line.classConfig.id,
+					childId: line.child.id,
+					shopifyProductGid: line.classConfig.shopifyProductGid,
+					shopifyVariantGid: line.classConfig.shopifyVariantGid,
+					amount: line.classConfig.price,
+					currencyCode,
+				}));
+			const intentLines = requireClassCheckoutIntentLineMapping(
+				intent,
+				expectedIntentLines,
+			);
+			await this.insertAllRegistrationMetadata(
+				input.organizationId,
+				targetFestival.id,
+				intent,
+				validatedLines,
+				intentLines,
+			);
+			return await this.createAndVerifyCart({
+				input,
+				intent,
+				validatedLines,
+				intentLines,
+				currencyCode,
+				expiresAtIso,
+				defaultIntegrationVersion,
+				setStage: (nextStage) => {
+					stage = nextStage;
+				},
+			});
+		} catch (error) {
+			return this.reportAndMarkFailed({
+				stage,
+				organizationId: input.organizationId,
+				intent,
+				lineCount: validatedLines.length,
+				error,
+				markFailedStage: "mark_failed",
+			});
 		}
 	}
 
 	private async resume(
-		outcome: { intent: CheckoutIntentRecord; cart: { shopifyCartId: string } },
+		outcome: {
+			intent: CheckoutIntentRecord;
+			cart: CheckoutCartRecord | { shopifyCartId: string };
+		},
 		input: { organizationId: string },
 	): Promise<ClassCheckoutResult> {
+		let stage: ClassCheckoutFailureStage = "resume_load_integration";
 		try {
-			// Pre-flight integration read: validates Shopify integration existence before resuming checkout
 			const storefrontIntegration =
 				await this.organizations.getShopifyIntegration(input.organizationId);
 			if (!storefrontIntegration) {
 				throw new AppError("Shopify checkout is unavailable.", 503);
 			}
+			stage = "resume_mark_checkout_started";
 			await this.checkout.markCheckoutStarted(outcome.intent.id);
+			stage = "resume_checkout_url";
 			const checkout = await this.storefront.checkout({
 				organizationId: input.organizationId,
 				shopifyCartId: outcome.cart.shopifyCartId,
 			});
-			// Post-cart verification read: re-checks integration version to detect concurrent updates (race conditions) and validates checkout URL domain
+			stage = "resume_verify_checkout_url";
 			const integration = await this.organizations.getShopifyIntegration(
 				input.organizationId,
 			);
@@ -551,11 +792,73 @@ export class ClassCheckoutService {
 				correlationId: outcome.intent.correlationId,
 				intent: outcome.intent,
 			};
-		} catch (_error) {
-			await this.checkout.markFailed(outcome.intent.id);
-			throw retryableCheckoutError();
+		} catch (error) {
+			return this.reportAndMarkFailed({
+				stage,
+				organizationId: input.organizationId,
+				intent: outcome.intent,
+				lineCount: outcome.intent.lines?.length ?? 0,
+				error,
+				markFailedStage: "resume_mark_failed",
+			});
 		}
 	}
+
+	private async reportAndMarkFailed(params: {
+		stage: ClassCheckoutFailureStage;
+		organizationId: string;
+		intent: CheckoutIntentRecord;
+		lineCount: number;
+		error: unknown;
+		markFailedStage: "mark_failed" | "resume_mark_failed";
+	}): Promise<never> {
+		this.logFailure(params);
+		try {
+			await this.checkout.markFailed(params.intent.id);
+		} catch (markFailedError) {
+			this.logFailure({
+				...params,
+				stage: params.markFailedStage,
+				error: markFailedError,
+			});
+			throw checkoutFailureError(markFailedError);
+		}
+		throw checkoutFailureError(params.error);
+	}
+
+	private logFailure(params: {
+		stage: ClassCheckoutFailureStage;
+		organizationId: string;
+		intent: CheckoutIntentRecord;
+		lineCount: number;
+		error: unknown;
+	}): void {
+		const postgres = postgresDiagnostic(params.error);
+		this.failureLogger.error("Class checkout failed.", {
+			operation: "checkout.class",
+			stage: params.stage,
+			organizationId: params.organizationId,
+			checkoutIntentId: params.intent.id,
+			correlationId: params.intent.correlationId,
+			lineCount: params.lineCount,
+			...safeErrorDiagnostic(params.error),
+			...postgres,
+		});
+	}
+}
+
+function checkoutFailureError(error: unknown): AppError {
+	return postgresDiagnostic(error)
+		? databaseCheckoutError()
+		: retryableCheckoutError();
+}
+
+function databaseCheckoutError(): AppError {
+	return new AppError(
+		"We couldn't save this class registration. Please try again.",
+		500,
+		"checkout_database_failure",
+	);
 }
 
 function retryableCheckoutError(): AppError {
@@ -564,6 +867,87 @@ function retryableCheckoutError(): AppError {
 		503,
 		"checkout_retryable_upstream",
 	);
+}
+
+function safeErrorDiagnostic(error: unknown): {
+	errorName?: "AppError" | "Error" | "PostgresError";
+	errorCode?: string;
+} {
+	if (isPostgresError(error)) {
+		const code = readStringProperty(error, "code");
+		return {
+			errorName: "PostgresError",
+			...(code && /^ERR_POSTGRES_[A-Z0-9_]{1,96}$/.test(code)
+				? { errorCode: code }
+				: {}),
+		};
+	}
+	if (error instanceof AppError) {
+		return {
+			errorName: "AppError",
+			...(error.code ? { errorCode: error.code } : {}),
+		};
+	}
+	return error instanceof Error ? { errorName: "Error" } : {};
+}
+
+function postgresDiagnostic(error: unknown): {
+	databaseSqlState?: string;
+	databaseConstraint?: string;
+	databaseTable?: string;
+	databaseColumn?: string;
+} | null {
+	if (!isPostgresError(error)) return null;
+	return {
+		...safeSqlState(readStringProperty(error, "errno")),
+		...safeDatabaseIdentifier(
+			"databaseConstraint",
+			readStringProperty(error, "constraint"),
+		),
+		...safeDatabaseIdentifier(
+			"databaseTable",
+			readStringProperty(error, "table"),
+		),
+		...safeDatabaseIdentifier(
+			"databaseColumn",
+			readStringProperty(error, "column"),
+		),
+	};
+}
+
+function isPostgresError(error: unknown): error is object {
+	return (
+		!!error &&
+		typeof error === "object" &&
+		readStringProperty(error, "name") === "PostgresError"
+	);
+}
+
+function readStringProperty(
+	value: object,
+	property: string,
+): string | undefined {
+	const candidate = (value as Record<string, unknown>)[property];
+	return typeof candidate === "string" ? candidate : undefined;
+}
+
+function safeSqlState(value: string | undefined): {
+	databaseSqlState?: string;
+} {
+	return value && /^[0-9A-Z]{5}$/.test(value)
+		? { databaseSqlState: value }
+		: {};
+}
+
+function safeDatabaseIdentifier(
+	property: "databaseConstraint" | "databaseTable" | "databaseColumn",
+	value: string | undefined,
+): Partial<
+	Record<"databaseConstraint" | "databaseTable" | "databaseColumn", string>
+> {
+	return value && /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(value)
+		? { [property]: value }
+		: {};
 }
 
 function isAllowedCheckoutUrl(value: string, storeDomain: string): boolean {

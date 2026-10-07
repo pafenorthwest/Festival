@@ -49,7 +49,10 @@ import type {
 	UpdateShopifyWebhookReadinessInput,
 	UpsertShopifyIntegrationInput,
 } from "./organization-repository.js";
-import { ShopifyShopOwnershipError } from "./organization-repository.js";
+import {
+	assertValidSubtypeDependency,
+	ShopifyShopOwnershipError,
+} from "./organization-repository.js";
 
 type StoredTeacherEntitlement = Omit<EntitlementGrantSnapshot, "status">;
 type StoredAccompanistEntitlement = Omit<
@@ -1056,6 +1059,19 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		return record;
 	}
 
+	private getSubtypesMap(organizationId: string): Map<string, string | null> {
+		const map = new Map<string, string | null>();
+		for (const val of this.registrationCatalogValues.values()) {
+			if (
+				val.organizationId === organizationId &&
+				val.kind === "class_subtype"
+			) {
+				map.set(val.id, val.requiredSubtypeId ?? null);
+			}
+		}
+		return map;
+	}
+
 	async listRegistrationCatalogValues(
 		organizationId: string,
 		kind: RegistrationCatalogKind,
@@ -1071,9 +1087,10 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			.sort(
 				(a, b) => a.displayOrder - b.displayOrder || a.id.localeCompare(b.id),
 			)
-			.map(
-				({ kind: _kind, normalizedName: _normalizedName, ...value }) => value,
-			);
+			.map(({ kind: _kind, normalizedName: _normalizedName, ...value }) => ({
+				...value,
+				requiredSubtypeId: value.requiredSubtypeId ?? null,
+			}));
 	}
 
 	async createRegistrationCatalogValue(input: {
@@ -1081,6 +1098,7 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		kind: RegistrationCatalogKind;
 		displayName: string;
 		normalizedName: string;
+		requiredSubtypeId?: string | null;
 	}): Promise<RegistrationCatalogValue> {
 		if (
 			[...this.registrationCatalogValues.values()].some(
@@ -1091,9 +1109,17 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			)
 		)
 			throw new Error("Registration catalog value already exists.");
+		const id = randomUUID();
+		if (input.kind === "class_subtype" && input.requiredSubtypeId) {
+			assertValidSubtypeDependency(
+				id,
+				input.requiredSubtypeId,
+				this.getSubtypesMap(input.organizationId),
+			);
+		}
 		const now = new Date().toISOString();
 		const record = {
-			id: randomUUID(),
+			id,
 			organizationId: input.organizationId,
 			kind: input.kind,
 			displayName: input.displayName,
@@ -1105,12 +1131,17 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 					input.kind,
 				)
 			).length,
+			requiredSubtypeId:
+				input.kind === "class_subtype" ? input.requiredSubtypeId || null : null,
 			createdAtIso: now,
 			updatedAtIso: now,
 		};
 		this.registrationCatalogValues.set(record.id, record);
 		const { kind: _kind, normalizedName: _normalizedName, ...result } = record;
-		return result;
+		return {
+			...result,
+			requiredSubtypeId: result.requiredSubtypeId ?? null,
+		};
 	}
 
 	async listFestivalClassSubtypes(
@@ -1157,6 +1188,7 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		displayName?: string;
 		normalizedName?: string;
 		isActive?: boolean;
+		requiredSubtypeId?: string | null;
 	}): Promise<RegistrationCatalogValue | null> {
 		const current = this.registrationCatalogValues.get(input.id);
 		if (
@@ -1176,16 +1208,30 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			)
 		)
 			throw new Error("Registration catalog value already exists.");
+		if (input.kind === "class_subtype" && input.requiredSubtypeId) {
+			assertValidSubtypeDependency(
+				input.id,
+				input.requiredSubtypeId,
+				this.getSubtypesMap(input.organizationId),
+			);
+		}
 		const updated = {
 			...current,
 			displayName: input.displayName ?? current.displayName,
 			normalizedName: input.normalizedName ?? current.normalizedName,
 			isActive: input.isActive ?? current.isActive,
+			requiredSubtypeId:
+				input.requiredSubtypeId !== undefined
+					? input.requiredSubtypeId || null
+					: (current.requiredSubtypeId ?? null),
 			updatedAtIso: new Date().toISOString(),
 		};
 		this.registrationCatalogValues.set(updated.id, updated);
 		const { kind: _kind, normalizedName: _normalizedName, ...result } = updated;
-		return result;
+		return {
+			...result,
+			requiredSubtypeId: result.requiredSubtypeId ?? null,
+		};
 	}
 
 	async reorderRegistrationCatalogValues(

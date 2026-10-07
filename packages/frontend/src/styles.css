@@ -1274,6 +1274,24 @@ form.shopify-integration-card {
 	padding-left: 1.25rem;
 }
 
+.festival-subtype-item {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.75rem;
+}
+
+.festival-subtype-edit-form {
+	display: grid;
+	gap: 0.5rem;
+	margin: 0.25rem 0;
+}
+
+.festival-subtype-edit-actions {
+	display: flex;
+	gap: 0.5rem;
+}
+
 .status-dot {
 	width: 0.65rem;
 	height: 0.65rem;
@@ -1533,9 +1551,23 @@ form.shopify-integration-card {
 	align-items: center;
 }
 
-.coverage-gaps-table .listing-table-header,
-.coverage-gaps-table .listing-table-row {
-	grid-template-columns: minmax(0, 1.2fr) 7rem 6rem minmax(0, 1.2fr);
+.coverage-metrics-filter {
+	border: none;
+	cursor: pointer;
+}
+
+.coverage-metrics-filter[aria-pressed="true"] {
+	outline: 2px solid var(--bullet-accent-strong);
+	outline-offset: 2px;
+}
+
+.coverage-slots-table .listing-table-header,
+.coverage-slots-table .listing-table-row {
+	grid-template-columns: minmax(0, 1.2fr) 6rem 5rem minmax(0, 1.2fr) 6rem;
+}
+
+.coverage-slots-table .listing-table-row .badge {
+	border-radius: 4px;
 }
 
 .volunteer-schedule-table .listing-table-header,

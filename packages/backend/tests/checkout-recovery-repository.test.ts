@@ -107,6 +107,32 @@ describe("CheckoutRecoveryRepository", () => {
 			expect(ids).not.toContain("intent-superseded");
 		});
 
+		it("excludes class_entry checkout intents from recoverable intent query list", async () => {
+			const repo = new InMemoryCheckoutRecoveryRepository();
+			repo.addIntent(
+				makeIntent({
+					id: "intent-membership",
+					intentType: "membership",
+					status: "ready",
+				}),
+			);
+			repo.addIntent(
+				makeIntent({
+					id: "intent-class-entry",
+					intentType: "class_entry",
+					status: "ready",
+				}),
+			);
+
+			const results = await repo.listRecoverableIntents({
+				organizationId: "org-1",
+				customerId: "cust-1",
+			});
+			const ids = results.map((r) => r.id);
+			expect(ids).toContain("intent-membership");
+			expect(ids).not.toContain("intent-class-entry");
+		});
+
 		it("excludes intents with completed order projection from recoverable listing", async () => {
 			const repo = new InMemoryCheckoutRecoveryRepository();
 			repo.addIntent(

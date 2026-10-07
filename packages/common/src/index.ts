@@ -8,6 +8,7 @@ export * from "./entitlements.js";
 export * from "./errors.js";
 export * from "./membership-status.js";
 export * from "./organization.js";
+export * from "./purchase-eligibility.js";
 export * from "./registration.js";
 export * from "./repertoire.js";
 export * from "./rules.js";

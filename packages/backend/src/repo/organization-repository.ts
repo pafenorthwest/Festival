@@ -399,6 +399,7 @@ export interface OrganizationRepository {
 		kind: RegistrationCatalogKind;
 		displayName: string;
 		normalizedName: string;
+		requiredSubtypeId?: string | null;
 	}): Promise<RegistrationCatalogValue>;
 	updateRegistrationCatalogValue(input: {
 		organizationId: string;
@@ -407,6 +408,7 @@ export interface OrganizationRepository {
 		displayName?: string;
 		normalizedName?: string;
 		isActive?: boolean;
+		requiredSubtypeId?: string | null;
 	}): Promise<RegistrationCatalogValue | null>;
 	reorderRegistrationCatalogValues(
 		organizationId: string,
@@ -461,4 +463,34 @@ export interface OrganizationRepository {
 		organizationId: string,
 		divisionId: string,
 	): Promise<Array<{ id: string; name: string }>>;
+}
+
+export function assertValidSubtypeDependency(
+	id: string | undefined,
+	requiredSubtypeId: string,
+	subtypes: Map<string, string | null>,
+): void {
+	if (id && id === requiredSubtypeId) {
+		throw new Error("Class subtype cannot depend on itself.");
+	}
+	if (!subtypes.has(requiredSubtypeId)) {
+		throw new Error("Required class subtype was not found.");
+	}
+	let currentId: string | null | undefined = subtypes.get(requiredSubtypeId);
+	const visited = new Set<string>();
+	if (id) {
+		visited.add(id);
+	}
+	visited.add(requiredSubtypeId);
+
+	while (currentId) {
+		if (id && currentId === id) {
+			throw new Error("Class subtype dependency cycle detected.");
+		}
+		if (visited.has(currentId)) {
+			throw new Error("Class subtype dependency cycle detected.");
+		}
+		visited.add(currentId);
+		currentId = subtypes.get(currentId);
+	}
 }

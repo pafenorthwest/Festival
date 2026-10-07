@@ -61,6 +61,8 @@ const DEFAULT_DISCOVERY_CACHE_BYTES = 4 * 1024 * 1024;
 const DEFAULT_JWKS_CACHE_BYTES = 8 * 1024 * 1024;
 export const CUSTOMER_SESSION_COOKIE = "festival_customer_session";
 const MAX_SNAPSHOT_VALIDITY_MS = 90 * 24 * 60 * 60 * 1000;
+const CUSTOMER_ACCOUNT_GRAPHQL_PATH =
+	/^(\/(?:\d+\/account\/)?customer\/api\/)(\d{4}-(?:01|04|07|10))(\/graphql)$/;
 
 interface Discovery {
 	issuer: string;
@@ -388,7 +390,7 @@ export class CustomerAccountService {
 			if (typeof oidcCandidate[field] !== "string") throw safeError();
 		if (typeof apiCandidate.graphql_api !== "string") throw safeError();
 		const oidc = oidcCandidate as unknown as Discovery;
-		const api = apiCandidate as unknown as ApiDiscovery;
+		const api: ApiDiscovery = { graphql_api: apiCandidate.graphql_api };
 		for (const endpoint of [
 			oidc.authorization_endpoint,
 			oidc.token_endpoint,
@@ -400,10 +402,17 @@ export class CustomerAccountService {
 			this.transport.assertDestination(new URL(endpoint), domain);
 		}
 		const graph = new URL(api.graphql_api);
+		const graphPath = CUSTOMER_ACCOUNT_GRAPHQL_PATH.exec(graph.pathname);
 		if (
-			!graph.pathname.includes(`/customer/api/${CUSTOMER_ACCOUNT_API_VERSION}/`)
+			api.graphql_api !== graph.toString() ||
+			!graphPath ||
+			graphPath[2] < CUSTOMER_ACCOUNT_API_VERSION ||
+			graph.search ||
+			graph.hash
 		)
 			throw safeError();
+		graph.pathname = `${graphPath[1]}${CUSTOMER_ACCOUNT_API_VERSION}${graphPath[3]}`;
+		api.graphql_api = graph.toString();
 		const issuer = new URL(oidc.issuer);
 		const issuerHost = issuer.hostname.toLowerCase();
 		if (
@@ -982,6 +991,16 @@ export class CustomerAccountService {
 			integrationVersion: touched.integrationVersion,
 			shopifyCustomerAccessToken: bundle.accessToken,
 		};
+	}
+
+	/** Customer-session and CSRF boundary for customer operations. */
+	async customerSession(
+		slug: string,
+		sessionId: string | undefined,
+		csrf: string | undefined,
+		origin: string | undefined,
+	) {
+		return this.formAccess(slug, sessionId, csrf, origin);
 	}
 
 	/** Customer-session and CSRF boundary for Festival-owned, non-payment forms. */

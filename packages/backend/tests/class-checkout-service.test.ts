@@ -5,12 +5,23 @@ import type {
 	FestivalRecord,
 	RepertoirePiece,
 } from "@festival/common";
-import { InMemoryCheckoutRepository } from "../src/checkout/checkout-repository.js";
 import {
+	CHECKOUT_INTENT_LINE_ID_ATTRIBUTE_KEY,
+	type ExpectedClassCheckoutIntentLine,
+	requireClassCheckoutIntentLineMapping,
+} from "../src/checkout/checkout-line-helpers.js";
+import {
+	type CheckoutIntentLineItemRecord,
+	CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL,
+	InMemoryCheckoutRepository,
+} from "../src/checkout/checkout-repository.js";
+import {
+	type ClassCheckoutFailureLogger,
 	ClassCheckoutService,
 	type ClassCheckoutStorefront,
 	type StartClassCheckoutInput,
 } from "../src/checkout/class-checkout-service.js";
+import { InMemoryMembershipCommerceRepository } from "../src/commerce/membership-commerce-repository.js";
 import { InMemoryCustomerAccountRepository } from "../src/customer/in-memory-customer-account-repository.js";
 import { AppError } from "../src/errors/app-error.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
@@ -29,6 +40,24 @@ interface FixtureOptions {
 	storeDomain?: string;
 	mockStorefront?: Partial<ClassCheckoutStorefront>;
 	defaultCurrencyCode?: string;
+	commerce?: InMemoryMembershipCommerceRepository;
+	failureLogger?: ClassCheckoutFailureLogger;
+}
+
+class CapturingClassCheckoutFailureLogger
+	implements ClassCheckoutFailureLogger
+{
+	readonly entries: Array<{
+		message: string;
+		context: Parameters<ClassCheckoutFailureLogger["error"]>[1];
+	}> = [];
+
+	error(
+		message: string,
+		context: Parameters<ClassCheckoutFailureLogger["error"]>[1],
+	): void {
+		this.entries.push({ message, context });
+	}
 }
 
 async function createFixture(options: FixtureOptions = {}) {
@@ -207,13 +236,17 @@ async function createFixture(options: FixtureOptions = {}) {
 		...options.mockStorefront,
 	};
 
+	const commerce =
+		options.commerce ?? new InMemoryMembershipCommerceRepository();
+
 	const service = new ClassCheckoutService(
 		organizations,
 		customers,
 		checkout,
 		storefront,
-		undefined,
+		commerce,
 		nowFn,
+		options.failureLogger,
 	);
 
 	const defaultPieces: RepertoirePiece[] = [
@@ -240,6 +273,7 @@ async function createFixture(options: FixtureOptions = {}) {
 		organizations,
 		customers,
 		checkout,
+		commerce,
 		organization,
 		division,
 		festival,
@@ -283,6 +317,9 @@ describe("ClassCheckoutService", () => {
 		expect(stored).toBeDefined();
 		expect(stored?.id).toBe(result.intentId);
 		expect(stored?.intentType).toBe("class_entry");
+		expect(stored?.lineIdentityProtocol).toBe(
+			CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL,
+		);
 		expect(stored?.festivalClassId).toBe(f.classConfig.id);
 		expect(stored?.childId).toBe(f.child.id);
 		expect(stored?.shopifyProductGid).toBe("gid://shopify/Product/100");
@@ -1034,10 +1071,13 @@ describe("ClassCheckoutService", () => {
 	});
 
 	it("triggers markFailed compensation and throws 503 on upstream storefront failure", async () => {
+		const failureLogger = new CapturingClassCheckoutFailureLogger();
+		const rawErrorText = "storefront provider detail";
 		const f = await createFixture({
+			failureLogger,
 			mockStorefront: {
 				checkout: async () => {
-					throw new Error("Storefront unavailable");
+					throw new Error(rawErrorText);
 				},
 			},
 		});
@@ -1056,6 +1096,14 @@ describe("ClassCheckoutService", () => {
 		const createdIntent = [...intents.values()][0];
 		expect(createdIntent).toBeDefined();
 		expect(createdIntent?.status).toBe("failed");
+		expect(failureLogger.entries[0]).toEqual({
+			message: "Class checkout failed.",
+			context: expect.objectContaining({
+				stage: "checkout_url",
+				errorName: "Error",
+			}),
+		});
+		expect(JSON.stringify(failureLogger.entries)).not.toContain(rawErrorText);
 	});
 
 	it("triggers markFailed compensation and throws 503 on disallowed checkout URL domain", async () => {
@@ -1083,16 +1131,24 @@ describe("ClassCheckoutService", () => {
 		expect(createdIntent?.status).toBe("failed");
 	});
 
-	it("triggers markFailed compensation and throws 503 when insertRegistrationMetadata throws", async () => {
-		const f = await createFixture();
+	it("returns a safe database failure and records SQLSTATE for metadata persistence errors", async () => {
+		const failureLogger = new CapturingClassCheckoutFailureLogger();
+		const f = await createFixture({ failureLogger });
+		const rawErrorText = "database driver detail";
+		const databaseError = Object.assign(new Error(rawErrorText), {
+			name: "PostgresError",
+			code: "ERR_POSTGRES_SERVER_ERROR",
+			errno: "22023",
+		});
 
 		f.checkout.insertRegistrationMetadata = async () => {
-			throw new Error("Metadata write failure");
+			throw databaseError;
 		};
 
 		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
-			status: 503,
-			code: "checkout_retryable_upstream",
+			message: "We couldn't save this class registration. Please try again.",
+			status: 500,
+			code: "checkout_database_failure",
 		});
 
 		const intents = (
@@ -1103,6 +1159,123 @@ describe("ClassCheckoutService", () => {
 		const createdIntent = [...intents.values()][0];
 		expect(createdIntent).toBeDefined();
 		expect(createdIntent?.status).toBe("failed");
+		expect(failureLogger.entries).toEqual([
+			{
+				message: "Class checkout failed.",
+				context: expect.objectContaining({
+					operation: "checkout.class",
+					stage: "registration_metadata",
+					organizationId: f.organization.id,
+					checkoutIntentId: createdIntent?.id,
+					correlationId: expect.any(String),
+					lineCount: 1,
+					errorName: "PostgresError",
+					errorCode: "ERR_POSTGRES_SERVER_ERROR",
+					databaseSqlState: "22023",
+				}),
+			},
+		]);
+		const loggedContext = failureLogger.entries[0]?.context;
+		expect(loggedContext).not.toHaveProperty("errorMessage");
+		expect(loggedContext).not.toHaveProperty("errorDetail");
+		expect(JSON.stringify(failureLogger.entries)).not.toContain(rawErrorText);
+	});
+
+	for (const scenario of [
+		{
+			name: "has no persisted lines",
+			corrupt: () => [],
+		},
+		{
+			name: "has a noncanonical persisted line ID",
+			corrupt: (lines: readonly CheckoutIntentLineItemRecord[]) =>
+				lines.map((line, index) =>
+					index === 0 ? { ...line, id: line.id.toUpperCase() } : line,
+				),
+		},
+		{
+			name: "does not match the validated child mapping",
+			corrupt: (lines: readonly CheckoutIntentLineItemRecord[]) =>
+				lines.map((line, index) =>
+					index === 0 ? { ...line, childId: "wrong-child" } : line,
+				),
+		},
+	] as const) {
+		it(`fails safely before metadata or cart creation when the durable intent ${scenario.name}`, async () => {
+			const f = await createFixture();
+			const createCartSpy = spyOn(f.storefront, "createCart");
+			const insertMetadataSpy = spyOn(f.checkout, "insertRegistrationMetadata");
+			const markFailedSpy = spyOn(f.checkout, "markFailed");
+			const originalCreateIntent = f.checkout.createIntent.bind(f.checkout);
+
+			f.checkout.createIntent = async (input) => {
+				const outcome = await originalCreateIntent(input);
+				if (outcome.kind !== "created") return outcome;
+				const corruptedLines = scenario.corrupt(outcome.intent.lines ?? []);
+				return {
+					...outcome,
+					intent: { ...outcome.intent, lines: corruptedLines },
+				};
+			};
+
+			await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+				status: 503,
+				code: "checkout_retryable_upstream",
+			});
+
+			expect(createCartSpy).not.toHaveBeenCalled();
+			expect(insertMetadataSpy).not.toHaveBeenCalled();
+			const intents = (
+				f.checkout as unknown as {
+					intents: Map<string, { id: string; status: string }>;
+				}
+			).intents;
+			const createdIntent = [...intents.values()][0];
+			expect(markFailedSpy).toHaveBeenCalledWith(createdIntent.id);
+			expect(createdIntent.status).toBe("failed");
+		});
+	}
+
+	it("rejects duplicate durable intent-line IDs rather than mapping by position", () => {
+		const checkoutIntentId = "12345678-1234-4234-8234-123456789abc";
+		const duplicateLineId = "87654321-1234-4234-8234-123456789abc";
+		const lines = [
+			{
+				id: duplicateLineId,
+				checkoutIntentId,
+				lineIndex: 0,
+			},
+			{
+				id: duplicateLineId,
+				checkoutIntentId,
+				lineIndex: 1,
+			},
+		] as CheckoutIntentLineItemRecord[];
+		const expectedLines: ExpectedClassCheckoutIntentLine[] = [
+			{
+				festivalClassId: "class-1",
+				childId: "child-1",
+				shopifyProductGid: "gid://shopify/Product/1",
+				shopifyVariantGid: "gid://shopify/ProductVariant/1",
+				amount: "50.00",
+				currencyCode: "USD",
+			},
+			{
+				festivalClassId: "class-2",
+				childId: "child-2",
+				shopifyProductGid: "gid://shopify/Product/2",
+				shopifyVariantGid: "gid://shopify/ProductVariant/2",
+				amount: "50.00",
+				currencyCode: "USD",
+			},
+		];
+
+		expect(() =>
+			requireClassCheckoutIntentLineMapping(
+				{ id: checkoutIntentId, lines },
+				expectedLines,
+			),
+		).toThrow("Checkout intent line persistence");
 	});
 
 	it("compensates class-registration metadata write failures, marking intent failed and allowing retry", async () => {
@@ -1243,5 +1416,832 @@ describe("ClassCheckoutService", () => {
 		expect(capturedCartInput).toMatchObject({
 			currencyCode: "USD",
 		});
+	});
+
+	it("successfully creates a multi-line checkout intent and cart with multiple line items", async () => {
+		const f = await createFixture();
+		const festivalId = f.festival?.id ?? "";
+
+		const secondSubtype = await f.organizations.createRegistrationCatalogValue({
+			organizationId: f.organization.id,
+			kind: "class_subtype",
+			displayName: "Violin Solo",
+			normalizedName: "violin solo",
+		});
+		const secondClass = await f.organizations.createFestivalClassConfiguration({
+			organizationId: f.organization.id,
+			festivalId,
+			displayName: "Junior Violin Level 1",
+			classSubtypeId: secondSubtype.id,
+			divisionId: f.division.id,
+			minimumAge: 8,
+			maximumAge: 12,
+			price: "55.00",
+			maximumPerformancePieces: 2,
+			performanceMinutes: 10,
+			capacity: 20,
+			isActive: true,
+			shopifyProductGid: "gid://shopify/Product/101",
+			shopifyVariantGid: "gid://shopify/ProductVariant/201",
+		});
+
+		const secondChild = await f.customers.createChild({
+			organizationId: f.organization.id,
+			parentCustomerId: f.customer.id,
+			displayName: "Bob Smith",
+		});
+		await f.customers.createChildAgeSnapshot({
+			organizationId: f.organization.id,
+			childId: secondChild.id,
+			age: 11,
+			validUntilIso: new Date(
+				f.now.getTime() + 90 * 24 * 3600_000,
+			).toISOString(),
+			createdAtIso: f.now.toISOString(),
+		});
+
+		let capturedCartInput: unknown;
+		f.storefront.createCart = async (input) => {
+			capturedCartInput = input;
+			return { shopifyCartId: "gid://shopify/Cart/multi-cart-1" };
+		};
+		const insertMetadataSpy = spyOn(f.checkout, "insertRegistrationMetadata");
+
+		const result = await f.service.start({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			sessionId: f.session.sessionId,
+			idempotencyKey: "22222222-3333-4444-5555-666666666666",
+			buyerAccessToken: "buyer-token-test",
+			lineItems: [
+				{
+					festivalClassId: f.classConfig.id,
+					childId: f.child.id,
+					teacherId: f.teacherId,
+					pieces: f.defaultPieces,
+				},
+				{
+					festivalClassId: secondClass.id,
+					childId: secondChild.id,
+					teacherId: f.teacherId,
+					pieces: [
+						{
+							title: "Violin Partita No. 2",
+							composer: "J.S. Bach",
+							durationSeconds: 240,
+						},
+					],
+				},
+			],
+		});
+
+		expect(result.checkoutUrl).toBe(`https://${f.storeDomain}/checkouts/c123`);
+		expect(result.intent?.lines).toHaveLength(2);
+		expect(result.intent?.amount).toBe("100.00");
+
+		const [line1, line2] = result.intent?.lines ?? [];
+		expect(line1.festivalClassId).toBe(f.classConfig.id);
+		expect(line1.childId).toBe(f.child.id);
+		expect(line1.amount).toBe("45.00");
+		expect(line2.festivalClassId).toBe(secondClass.id);
+		expect(line2.childId).toBe(secondChild.id);
+		expect(line2.amount).toBe("55.00");
+
+		const cartInput = capturedCartInput as {
+			lines: Array<{
+				merchandiseId: string;
+				quantity: number;
+				attributes?: Array<{ key: string; value: string }>;
+			}>;
+		};
+		expect(cartInput.lines).toHaveLength(2);
+		expect(cartInput.lines[0].merchandiseId).toBe(
+			"gid://shopify/ProductVariant/200",
+		);
+		expect(cartInput.lines[0].attributes?.[0].key).toBe(
+			CHECKOUT_INTENT_LINE_ID_ATTRIBUTE_KEY,
+		);
+		expect(cartInput.lines[0].attributes?.[0].value).toBe(line1.id);
+		expect(cartInput.lines[1].merchandiseId).toBe(
+			"gid://shopify/ProductVariant/201",
+		);
+		expect(cartInput.lines[1].attributes?.[0].key).toBe(
+			CHECKOUT_INTENT_LINE_ID_ATTRIBUTE_KEY,
+		);
+		expect(cartInput.lines[1].attributes?.[0].value).toBe(line2.id);
+		expect(insertMetadataSpy).toHaveBeenNthCalledWith(
+			1,
+			expect.objectContaining({ checkoutIntentLineId: line1.id }),
+		);
+		expect(insertMetadataSpy).toHaveBeenNthCalledWith(
+			2,
+			expect.objectContaining({ checkoutIntentLineId: line2.id }),
+		);
+	});
+
+	it("rejects multi-line checkout when lineItems is empty with 400", async () => {
+		const f = await createFixture();
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				lineItems: [],
+			}),
+		).rejects.toMatchObject({
+			status: 400,
+			message: "Class checkout requires at least one line item.",
+		});
+	});
+
+	it("rejects multi-line checkout when child age on second line is outside allowed range", async () => {
+		const f = await createFixture();
+		const secondChild = await f.customers.createChild({
+			organizationId: f.organization.id,
+			parentCustomerId: f.customer.id,
+			displayName: "Older Child",
+		});
+		await f.customers.createChildAgeSnapshot({
+			organizationId: f.organization.id,
+			childId: secondChild.id,
+			age: 15,
+			validUntilIso: new Date(
+				f.now.getTime() + 90 * 24 * 3600_000,
+			).toISOString(),
+			createdAtIso: f.now.toISOString(),
+		});
+
+		await expect(
+			f.service.start({
+				organizationId: f.organization.id,
+				customerId: f.customer.id,
+				sessionId: f.session.sessionId,
+				idempotencyKey: "33333333-4444-5555-6666-777777777777",
+				buyerAccessToken: "buyer-token-test",
+				lineItems: [
+					{
+						festivalClassId: f.classConfig.id,
+						childId: f.child.id,
+						teacherId: f.teacherId,
+						pieces: f.defaultPieces,
+					},
+					{
+						festivalClassId: f.classConfig.id,
+						childId: secondChild.id,
+						teacherId: f.teacherId,
+						pieces: f.defaultPieces,
+					},
+				],
+			}),
+		).rejects.toMatchObject({
+			status: 400,
+			message: "Child age (15) is outside the allowed range of [8, 12].",
+		});
+	});
+
+	it("compensates and marks intent failed when insertRegistrationMetadata fails on second line", async () => {
+		const f = await createFixture();
+		const secondChild = await f.customers.createChild({
+			organizationId: f.organization.id,
+			parentCustomerId: f.customer.id,
+			displayName: "Second Child",
+		});
+		await f.customers.createChildAgeSnapshot({
+			organizationId: f.organization.id,
+			childId: secondChild.id,
+			age: 10,
+			validUntilIso: new Date(
+				f.now.getTime() + 90 * 24 * 3600_000,
+			).toISOString(),
+			createdAtIso: f.now.toISOString(),
+		});
+
+		let callCount = 0;
+		const originalInsert = f.checkout.insertRegistrationMetadata.bind(
+			f.checkout,
+		);
+		f.checkout.insertRegistrationMetadata = async (params) => {
+			callCount++;
+			if (callCount === 2) {
+				throw new Error("Database error on metadata insert");
+			}
+			return originalInsert(params);
+		};
+
+		await expect(
+			f.service.start({
+				organizationId: f.organization.id,
+				customerId: f.customer.id,
+				sessionId: f.session.sessionId,
+				idempotencyKey: "44444444-5555-6666-7777-888888888888",
+				buyerAccessToken: "buyer-token-test",
+				lineItems: [
+					{
+						festivalClassId: f.classConfig.id,
+						childId: f.child.id,
+						teacherId: f.teacherId,
+						pieces: f.defaultPieces,
+					},
+					{
+						festivalClassId: f.classConfig.id,
+						childId: secondChild.id,
+						teacherId: f.teacherId,
+						pieces: f.defaultPieces,
+					},
+				],
+			}),
+		).rejects.toMatchObject({
+			status: 503,
+			code: "checkout_retryable_upstream",
+		});
+
+		const intents = (
+			f.checkout as unknown as {
+				intents: Map<string, { status: string }>;
+			}
+		).intents;
+		const createdIntent = [...intents.values()][0];
+		expect(createdIntent?.status).toBe("failed");
+	});
+
+	it("evaluateEligibility evaluates proposed items successfully when prerequisites are met", async () => {
+		const f = await createFixture();
+		const response = await f.service.evaluateEligibility({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			festivalId: f.festival?.id ?? "",
+			items: [
+				{
+					childId: f.child.id,
+					festivalClassId: f.classConfig.id,
+				},
+			],
+		});
+
+		expect(response.isEligible).toBe(true);
+		expect(response.results).toHaveLength(1);
+		expect(response.results[0].reasonCode).toBe("AVAILABLE");
+	});
+
+	it("evaluateEligibility returns MISSING_PREREQUISITE when subtype dependency is not satisfied", async () => {
+		const f = await createFixture();
+		const festivalId = f.festival?.id ?? "";
+		const prerequisiteSubtype =
+			await f.organizations.createRegistrationCatalogValue({
+				organizationId: f.organization.id,
+				kind: "class_subtype",
+				displayName: "Prerequisite Solo",
+				normalizedName: "prerequisite solo",
+			});
+		const masterclassSubtype =
+			await f.organizations.createRegistrationCatalogValue({
+				organizationId: f.organization.id,
+				kind: "class_subtype",
+				displayName: "Masterclass",
+				normalizedName: "masterclass",
+				requiredSubtypeId: prerequisiteSubtype.id,
+			});
+		const masterclassClass =
+			await f.organizations.createFestivalClassConfiguration({
+				organizationId: f.organization.id,
+				festivalId,
+				displayName: "Masterclass Piano",
+				classSubtypeId: masterclassSubtype.id,
+				divisionId: f.division.id,
+				minimumAge: 8,
+				maximumAge: 12,
+				price: "60.00",
+				maximumPerformancePieces: 1,
+				performanceMinutes: 15,
+				capacity: 10,
+				isActive: true,
+				shopifyProductGid: "gid://shopify/Product/102",
+				shopifyVariantGid: "gid://shopify/ProductVariant/202",
+			});
+
+		const response = await f.service.evaluateEligibility({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			festivalId,
+			items: [
+				{
+					childId: f.child.id,
+					festivalClassId: masterclassClass.id,
+				},
+			],
+		});
+
+		expect(response.isEligible).toBe(false);
+		expect(response.results[0].reasonCode).toBe("MISSING_PREREQUISITE");
+		expect(response.results[0].dependencyDescriptor?.requiredSubtypeId).toBe(
+			prerequisiteSubtype.id,
+		);
+	});
+
+	it("evaluateEligibility resolves prerequisite satisfied by another item in the same batch", async () => {
+		const f = await createFixture();
+		const festivalId = f.festival?.id ?? "";
+		const prerequisiteSubtype =
+			await f.organizations.createRegistrationCatalogValue({
+				organizationId: f.organization.id,
+				kind: "class_subtype",
+				displayName: "Prerequisite Solo",
+				normalizedName: "prerequisite solo",
+			});
+		const prerequisiteClass =
+			await f.organizations.createFestivalClassConfiguration({
+				organizationId: f.organization.id,
+				festivalId,
+				displayName: "Solo Piano Qualifying",
+				classSubtypeId: prerequisiteSubtype.id,
+				divisionId: f.division.id,
+				minimumAge: 8,
+				maximumAge: 12,
+				price: "50.00",
+				maximumPerformancePieces: 2,
+				performanceMinutes: 10,
+				capacity: 10,
+				isActive: true,
+				shopifyProductGid: "gid://shopify/Product/103",
+				shopifyVariantGid: "gid://shopify/ProductVariant/203",
+			});
+		const masterclassSubtype =
+			await f.organizations.createRegistrationCatalogValue({
+				organizationId: f.organization.id,
+				kind: "class_subtype",
+				displayName: "Masterclass",
+				normalizedName: "masterclass",
+				requiredSubtypeId: prerequisiteSubtype.id,
+			});
+		const masterclassClass =
+			await f.organizations.createFestivalClassConfiguration({
+				organizationId: f.organization.id,
+				festivalId,
+				displayName: "Masterclass Piano",
+				classSubtypeId: masterclassSubtype.id,
+				divisionId: f.division.id,
+				minimumAge: 8,
+				maximumAge: 12,
+				price: "60.00",
+				maximumPerformancePieces: 1,
+				performanceMinutes: 15,
+				capacity: 10,
+				isActive: true,
+				shopifyProductGid: "gid://shopify/Product/104",
+				shopifyVariantGid: "gid://shopify/ProductVariant/204",
+			});
+
+		const response = await f.service.evaluateEligibility({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			festivalId,
+			items: [
+				{
+					childId: f.child.id,
+					festivalClassId: prerequisiteClass.id,
+				},
+				{
+					childId: f.child.id,
+					festivalClassId: masterclassClass.id,
+				},
+			],
+		});
+
+		expect(response.isEligible).toBe(true);
+		expect(response.results[0].reasonCode).toBe("AVAILABLE");
+		expect(response.results[1].reasonCode).toBe("AVAILABLE");
+	});
+
+	it("evaluateEligibility detects duplicate registration for same child in same class in batch", async () => {
+		const f = await createFixture();
+		const response = await f.service.evaluateEligibility({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			festivalId: f.festival?.id ?? "",
+			items: [
+				{
+					childId: f.child.id,
+					festivalClassId: f.classConfig.id,
+				},
+				{
+					childId: f.child.id,
+					festivalClassId: f.classConfig.id,
+				},
+			],
+		});
+
+		expect(response.isEligible).toBe(false);
+		expect(response.results[1].reasonCode).toBe("ALREADY_REGISTERED");
+	});
+
+	it("evaluateEligibility successfully evaluates when all children belong to authenticated customer", async () => {
+		const f = await createFixture();
+		const secondChild = await f.customers.createChild({
+			organizationId: f.organization.id,
+			parentCustomerId: f.customer.id,
+			displayName: "Bob Smith",
+		});
+		const response = await f.service.evaluateEligibility({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			festivalId: f.festival?.id ?? "",
+			items: [
+				{
+					childId: f.child.id,
+					festivalClassId: f.classConfig.id,
+				},
+				{
+					childId: secondChild.id,
+					festivalClassId: f.classConfig.id,
+				},
+			],
+		});
+
+		expect(response.isEligible).toBe(true);
+		expect(response.results).toHaveLength(2);
+		expect(response.results[0].reasonCode).toBe("AVAILABLE");
+		expect(response.results[1].reasonCode).toBe("AVAILABLE");
+	});
+
+	it("evaluateEligibility rejects with HTTP 404 Child not found when child belongs to another customer (IDOR prevention)", async () => {
+		const f = await createFixture();
+		const { customer: otherCustomer } = await f.customers.createCustomerSession(
+			{
+				sessionId: "session-other-parent",
+				organizationId: f.organization.id,
+				shopifyCustomerGid: "gid://shopify/Customer/888",
+				encryptedTokens: "encrypted-tokens",
+				csrfToken: "csrf-token-other",
+				integrationVersion: 1,
+				createdAtIso: new Date().toISOString(),
+				lastSeenAtIso: new Date().toISOString(),
+				expiresAtIso: new Date(Date.now() + 3600_000).toISOString(),
+			},
+		);
+		const otherChild = await f.customers.createChild({
+			organizationId: f.organization.id,
+			parentCustomerId: otherCustomer.id,
+			displayName: "Charlie Other",
+		});
+
+		let entitlementsQueried = false;
+		if (f.commerce) {
+			const originalList = f.commerce.listClassEntitlements.bind(f.commerce);
+			f.commerce.listClassEntitlements = async (...args) => {
+				entitlementsQueried = true;
+				return originalList(...args);
+			};
+		}
+
+		let caughtError: unknown;
+		try {
+			await f.service.evaluateEligibility({
+				organizationId: f.organization.id,
+				customerId: f.customer.id,
+				festivalId: f.festival?.id ?? "",
+				items: [
+					{
+						childId: otherChild.id,
+						festivalClassId: f.classConfig.id,
+					},
+				],
+			});
+		} catch (err) {
+			caughtError = err;
+		}
+
+		expect(caughtError).toBeInstanceOf(AppError);
+		const appErr = caughtError as AppError;
+		expect(appErr.status).toBe(404);
+		expect(appErr.message).toBe("Child not found.");
+		expect(entitlementsQueried).toBe(false);
+	});
+
+	it("evaluateEligibility rejects with HTTP 404 Child not found when child does not exist", async () => {
+		const f = await createFixture();
+		let caughtError: unknown;
+		try {
+			await f.service.evaluateEligibility({
+				organizationId: f.organization.id,
+				customerId: f.customer.id,
+				festivalId: f.festival?.id ?? "",
+				items: [
+					{
+						childId: "nonexistent-child-id",
+						festivalClassId: f.classConfig.id,
+					},
+				],
+			});
+		} catch (err) {
+			caughtError = err;
+		}
+
+		expect(caughtError).toBeInstanceOf(AppError);
+		const appErr = caughtError as AppError;
+		expect(appErr.status).toBe(404);
+		expect(appErr.message).toBe("Child not found.");
+	});
+
+	it("evaluateEligibility fails closed with 404 and does not evaluate when 1 child is owned and 1 is unowned in multi-line request", async () => {
+		const f = await createFixture();
+		const { customer: otherCustomer } = await f.customers.createCustomerSession(
+			{
+				sessionId: "session-other-parent-2",
+				organizationId: f.organization.id,
+				shopifyCustomerGid: "gid://shopify/Customer/777",
+				encryptedTokens: "encrypted-tokens",
+				csrfToken: "csrf-token-other-2",
+				integrationVersion: 1,
+				createdAtIso: new Date().toISOString(),
+				lastSeenAtIso: new Date().toISOString(),
+				expiresAtIso: new Date(Date.now() + 3600_000).toISOString(),
+			},
+		);
+		const otherChild = await f.customers.createChild({
+			organizationId: f.organization.id,
+			parentCustomerId: otherCustomer.id,
+			displayName: "Daisy Other",
+		});
+
+		let entitlementsQueried = false;
+		if (f.commerce) {
+			const originalList = f.commerce.listClassEntitlements.bind(f.commerce);
+			f.commerce.listClassEntitlements = async (...args) => {
+				entitlementsQueried = true;
+				return originalList(...args);
+			};
+		}
+
+		let caughtError: unknown;
+		try {
+			await f.service.evaluateEligibility({
+				organizationId: f.organization.id,
+				customerId: f.customer.id,
+				festivalId: f.festival?.id ?? "",
+				items: [
+					{
+						childId: f.child.id,
+						festivalClassId: f.classConfig.id,
+					},
+					{
+						childId: otherChild.id,
+						festivalClassId: f.classConfig.id,
+					},
+				],
+			});
+		} catch (err) {
+			caughtError = err;
+		}
+
+		expect(caughtError).toBeInstanceOf(AppError);
+		const appErr = caughtError as AppError;
+		expect(appErr.status).toBe(404);
+		expect(appErr.message).toBe("Child not found.");
+		expect(entitlementsQueried).toBe(false);
+	});
+
+	it("start(...) rejects with 400 and missing_prerequisite when eligibility check fails", async () => {
+		const f = await createFixture();
+		const festivalId = f.festival?.id ?? "";
+		const prerequisiteSubtype =
+			await f.organizations.createRegistrationCatalogValue({
+				organizationId: f.organization.id,
+				kind: "class_subtype",
+				displayName: "Required Subtype",
+				normalizedName: "required subtype",
+			});
+		const masterclassSubtype =
+			await f.organizations.createRegistrationCatalogValue({
+				organizationId: f.organization.id,
+				kind: "class_subtype",
+				displayName: "Dependent Masterclass",
+				normalizedName: "dependent masterclass",
+				requiredSubtypeId: prerequisiteSubtype.id,
+			});
+		const masterclassClass =
+			await f.organizations.createFestivalClassConfiguration({
+				organizationId: f.organization.id,
+				festivalId,
+				displayName: "Dependent Masterclass Class",
+				classSubtypeId: masterclassSubtype.id,
+				divisionId: f.division.id,
+				minimumAge: 8,
+				maximumAge: 12,
+				price: "60.00",
+				maximumPerformancePieces: 1,
+				performanceMinutes: 15,
+				capacity: 10,
+				isActive: true,
+				shopifyProductGid: "gid://shopify/Product/105",
+				shopifyVariantGid: "gid://shopify/ProductVariant/205",
+			});
+
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				festivalClassId: masterclassClass.id,
+			}),
+		).rejects.toMatchObject({
+			status: 400,
+			code: "missing_prerequisite",
+		});
+	});
+
+	it("start(...) rejects with 400 and already_registered when batch has duplicate registrations for same child", async () => {
+		const f = await createFixture();
+		await expect(
+			f.service.start({
+				organizationId: f.organization.id,
+				customerId: f.customer.id,
+				sessionId: f.session.sessionId,
+				idempotencyKey: "55555555-6666-7777-8888-999999999999",
+				buyerAccessToken: "buyer-token-test",
+				lineItems: [
+					{
+						festivalClassId: f.classConfig.id,
+						childId: f.child.id,
+						teacherId: f.teacherId,
+						pieces: f.defaultPieces,
+					},
+					{
+						festivalClassId: f.classConfig.id,
+						childId: f.child.id,
+						teacherId: f.teacherId,
+						pieces: f.defaultPieces,
+					},
+				],
+			}),
+		).rejects.toMatchObject({
+			status: 400,
+			code: "already_registered",
+		});
+	});
+
+	it("start(...) rejects with 400 and blocks checkout when candidate-marked checkout line is missing prerequisite", async () => {
+		const f = await createFixture();
+		const festivalId = f.festival?.id ?? "";
+		const prerequisiteSubtype =
+			await f.organizations.createRegistrationCatalogValue({
+				organizationId: f.organization.id,
+				kind: "class_subtype",
+				displayName: "Prerequisite Solo Subtype",
+				normalizedName: "prerequisite solo subtype",
+			});
+		const masterclassSubtype =
+			await f.organizations.createRegistrationCatalogValue({
+				organizationId: f.organization.id,
+				kind: "class_subtype",
+				displayName: "Dependent Masterclass Subtype",
+				normalizedName: "dependent masterclass subtype",
+				requiredSubtypeId: prerequisiteSubtype.id,
+			});
+		const masterclassClass =
+			await f.organizations.createFestivalClassConfiguration({
+				organizationId: f.organization.id,
+				festivalId,
+				displayName: "Dependent Masterclass Class",
+				classSubtypeId: masterclassSubtype.id,
+				divisionId: f.division.id,
+				minimumAge: 8,
+				maximumAge: 12,
+				price: "75.00",
+				maximumPerformancePieces: 1,
+				performanceMinutes: 15,
+				capacity: 10,
+				isActive: true,
+				shopifyProductGid: "gid://shopify/Product/108",
+				shopifyVariantGid: "gid://shopify/ProductVariant/208",
+			});
+
+		const secondChild = await f.customers.createChild({
+			organizationId: f.organization.id,
+			parentCustomerId: f.customer.id,
+			displayName: "Second Performer",
+		});
+		await f.customers.createChildAgeSnapshot({
+			organizationId: f.organization.id,
+			childId: secondChild.id,
+			asOfDate: "2026-03-01",
+			age: 10,
+		});
+
+		const idempotencyKey = "77777777-8888-9999-aaaa-bbbbbbbbbbbb";
+		await expect(
+			f.service.start({
+				organizationId: f.organization.id,
+				customerId: f.customer.id,
+				sessionId: f.session.sessionId,
+				idempotencyKey,
+				buyerAccessToken: "buyer-token-test",
+				lineItems: [
+					{
+						festivalClassId: f.classConfig.id,
+						childId: f.child.id,
+						teacherId: f.teacherId,
+						pieces: f.defaultPieces,
+					},
+					{
+						id: "candidate:masterclass",
+						festivalClassId: masterclassClass.id,
+						childId: secondChild.id,
+						teacherId: f.teacherId,
+						pieces: f.defaultPieces,
+						isCandidate: true,
+					} as unknown as ClassCheckoutLineItemInput,
+				],
+			}),
+		).rejects.toMatchObject({
+			status: 400,
+			code: "missing_prerequisite",
+		});
+
+		const outcome = await f.checkout.getOutcome({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			sessionId: f.session.sessionId,
+			idempotencyKey,
+		});
+		expect(outcome).toBeNull();
+	});
+
+	it("start(...) strips candidate markers and evaluates complete cart normally", async () => {
+		const f = await createFixture();
+		const festivalId = f.festival?.id ?? "";
+		const prerequisiteSubtype =
+			await f.organizations.createRegistrationCatalogValue({
+				organizationId: f.organization.id,
+				kind: "class_subtype",
+				displayName: "Solo Subtype",
+				normalizedName: "solo subtype",
+			});
+		const dependentSubtype =
+			await f.organizations.createRegistrationCatalogValue({
+				organizationId: f.organization.id,
+				kind: "class_subtype",
+				displayName: "Concerto Subtype",
+				normalizedName: "concerto subtype",
+				requiredSubtypeId: prerequisiteSubtype.id,
+			});
+		const soloClass = await f.organizations.createFestivalClassConfiguration({
+			organizationId: f.organization.id,
+			festivalId,
+			displayName: "Solo Piano Class",
+			classSubtypeId: prerequisiteSubtype.id,
+			divisionId: f.division.id,
+			minimumAge: 8,
+			maximumAge: 12,
+			price: "50.00",
+			maximumPerformancePieces: 1,
+			performanceMinutes: 10,
+			capacity: 10,
+			isActive: true,
+			shopifyProductGid: "gid://shopify/Product/109",
+			shopifyVariantGid: "gid://shopify/ProductVariant/209",
+		});
+		const concertoClass =
+			await f.organizations.createFestivalClassConfiguration({
+				organizationId: f.organization.id,
+				festivalId,
+				displayName: "Concerto Piano Class",
+				classSubtypeId: dependentSubtype.id,
+				divisionId: f.division.id,
+				minimumAge: 8,
+				maximumAge: 12,
+				price: "75.00",
+				maximumPerformancePieces: 1,
+				performanceMinutes: 15,
+				capacity: 10,
+				isActive: true,
+				shopifyProductGid: "gid://shopify/Product/110",
+				shopifyVariantGid: "gid://shopify/ProductVariant/210",
+			});
+
+		const idempotencyKey = "88888888-9999-aaaa-bbbb-cccccccccccc";
+		const result = await f.service.start({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			sessionId: f.session.sessionId,
+			idempotencyKey,
+			buyerAccessToken: "buyer-token-test",
+			lineItems: [
+				{
+					festivalClassId: soloClass.id,
+					childId: f.child.id,
+					teacherId: f.teacherId,
+					pieces: f.defaultPieces,
+				},
+				{
+					id: "candidate:concerto",
+					festivalClassId: concertoClass.id,
+					childId: f.child.id,
+					teacherId: f.teacherId,
+					pieces: f.defaultPieces,
+					isCandidate: true,
+				} as unknown as ClassCheckoutLineItemInput,
+			],
+		});
+
+		expect(result.checkoutUrl).toBeDefined();
+		expect(result.intent?.lines).toHaveLength(2);
+		expect(result.intent?.lines?.[0].festivalClassId).toBe(soloClass.id);
+		expect(result.intent?.lines?.[1].festivalClassId).toBe(concertoClass.id);
 	});
 });

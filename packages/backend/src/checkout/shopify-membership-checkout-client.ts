@@ -28,16 +28,23 @@ export class ShopifyMembershipCheckoutClient
 
 	async createCart(input: {
 		organizationId: string;
-		shopifyVariantGid: string;
+		shopifyVariantGid?: string;
 		buyerAccessToken: string;
 		correlationId: string;
+		lines?: Array<{
+			merchandiseId: string;
+			quantity: number;
+			attributes?: Array<{ key: string; value: string }>;
+		}>;
 	}) {
 		const payload = await this.call(
 			input.organizationId,
 			`mutation FestivalCreateCart($input: CartInput!) { cartCreate(input: $input) { cart { id } userErrors { message } warnings { message } } }`,
 			{
 				input: {
-					lines: [{ merchandiseId: input.shopifyVariantGid, quantity: 1 }],
+					lines: input.lines ?? [
+						{ merchandiseId: input.shopifyVariantGid ?? "", quantity: 1 },
+					],
 					attributes: [
 						{ key: "festival_checkout_intent_id", value: input.correlationId },
 					],

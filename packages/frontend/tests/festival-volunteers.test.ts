@@ -288,4 +288,22 @@ describe("volunteer sign-in flow", () => {
 		expect(page).toContain("Shift booking conflict");
 		expect(page).toContain("Volunteer enrollment not found");
 	});
+
+	it("displays shift dates as weekday + MM/DD, per specs/VOLUNTEER-PORTAL.md", async () => {
+		const myShifts = await read(
+			"../src/components/VolunteerMyShiftsSection.tsx",
+		);
+		const available = await read(
+			"../src/components/VolunteerAvailableShiftsSection.tsx",
+		);
+
+		expect(myShifts).toContain(
+			'import { formatScheduleDate } from "../app/appFormatting.js"',
+		);
+		expect(myShifts).toContain("formatScheduleDate(entry.shift.date)");
+		expect(available).toContain(
+			'import { formatScheduleDate } from "../app/appFormatting.js"',
+		);
+		expect(available).toContain("formatScheduleDate(shift.date)");
+	});
 });

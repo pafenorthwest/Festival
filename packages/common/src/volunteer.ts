@@ -169,6 +169,28 @@ export interface CoverageGapShift {
 	isRoomProctor: boolean;
 }
 
+export const SHIFT_COVERAGE_STATUSES = ["Open", "Filled"] as const;
+export type ShiftCoverageStatus = (typeof SHIFT_COVERAGE_STATUSES)[number];
+
+/**
+ * One volunteer slot (shift) with a server-computed Open/Filled status.
+ * Unlike CoverageGapShift (which only lists unfilled slots), this covers
+ * every slot in the festival, so it's the source for a full, filterable
+ * slot list rather than just a gaps report.
+ */
+export interface ShiftCoverageEntry {
+	shiftId: string;
+	roleId: string;
+	roleDisplayName: string;
+	date: string;
+	period: ShiftPeriod;
+	timeText: string | null;
+	division: string | null;
+	adjudicator: string | null;
+	isRoomProctor: boolean;
+	status: ShiftCoverageStatus;
+}
+
 export interface CoverageGapsSummary {
 	totalShifts: number;
 	coveredShifts: number;
@@ -179,6 +201,8 @@ export interface CoverageGapsSummary {
 	gaps: CoverageGapShift[];
 	gapsByDate?: Record<string, CoverageGapShift[]>;
 	gapsByRole?: Record<string, CoverageGapShift[]>;
+	/** Every slot in the festival, each with a computed Open/Filled status. */
+	slots: ShiftCoverageEntry[];
 }
 
 export interface VolunteerValidationResult<T> {
@@ -504,12 +528,28 @@ export function calculateCoverageGaps(
 	const gaps: CoverageGapShift[] = [];
 	const gapsByDate: Record<string, CoverageGapShift[]> = {};
 	const gapsByRole: Record<string, CoverageGapShift[]> = {};
+	const slots: ShiftCoverageEntry[] = [];
 
 	for (const shift of shifts) {
-		if (activeAssignmentShiftIds.has(shift.id)) {
+		const role = roleMap.get(shift.roleId);
+		const isFilled = activeAssignmentShiftIds.has(shift.id);
+
+		slots.push({
+			shiftId: shift.id,
+			roleId: shift.roleId,
+			roleDisplayName: role?.displayName ?? "Unknown Role",
+			date: shift.date,
+			period: shift.period,
+			timeText: shift.timeText,
+			division: shift.division,
+			adjudicator: shift.adjudicator,
+			isRoomProctor: role?.isRoomProctor ?? false,
+			status: isFilled ? "Filled" : "Open",
+		});
+
+		if (isFilled) {
 			continue;
 		}
-		const role = roleMap.get(shift.roleId);
 		const gap: CoverageGapShift = {
 			shiftId: shift.id,
 			id: shift.id,
@@ -551,6 +591,7 @@ export function calculateCoverageGaps(
 		gaps,
 		gapsByDate,
 		gapsByRole,
+		slots,
 	};
 }
 
