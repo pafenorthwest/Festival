@@ -18,7 +18,7 @@ Version one is **manual scheduling only**. No automated solver, and no automatic
 
 ### Rooms (already built)
 
-[#277](https://github.com/pafenorthwest/Festival/pull/277) added the Festival admin Rooms panel: a festival-scoped list of rooms, each with an optional piano configuration (upright and/or grand, positive whole-number counts, capped at 3 pianos per room). That remains the room asset for this spec — scheduling reads from it but does not change its fields or its 3-piano cap. Any new room-level need scheduling surfaces (for example, room capacity for non-piano purposes) is an open decision below, not an assumption.
+[#277](https://github.com/pafenorthwest/Festival/pull/277) added the Festival admin Rooms panel: a festival-scoped list of rooms, each with an optional piano configuration (upright and/or grand, positive whole-number counts, capped at 3 pianos per room). That remains the room asset for this spec — scheduling reads from it but does not change its fields or its 3-piano cap. Scheduling does not add a general room capacity; see [Scheduled hours](#scheduled-hours) for why.
 
 ### Visibility and authorization
 
@@ -44,14 +44,16 @@ Each scheduled hour has:
 
 Scheduled hours do not overlap within the same room: two scheduled hours for the same room may not share any time range on the same date. This is a stricter rule than the Volunteer Portal's AM/PM granularity, because scheduling needs exact time precision to translate into a printable program.
 
-A single scheduled hour may contain multiple assignments (multiple classes or performers using the same room block back-to-back), subject to the capacity rules below.
+Each scheduled hour holds **at most one assignment** in version one. A room judging a sequence of performers back-to-back is modeled as a sequence of scheduled hours in that room (for example, five consecutive 10-minute blocks), not as one block holding five assignments — this keeps "scheduled hour" and "assignment" in a strict one-to-one relationship, which both the export format and the personalized views below depend on.
+
+A scheduled hour has an optional **division** (referencing the organization's existing division list, the same entity used elsewhere for class registration and membership) and an optional **adjudicator**, for the same reason the Volunteer Portal's Room Proctor role already pairs a division and adjudicator on a shift: staff need to know who is judging a block before they can check that person's availability against it. The adjudicator reference depends on resolving adjudicator identity — see [Open decisions](#open-decisions).
 
 ## Self-service availability settings
 
 An adjudicator records the scheduled hours they are available for, within a festival, before staff assign them. This is self-service: the adjudicator sets their own availability; staff do not set it on their behalf in version one.
 
 - Availability is expressed as a set of scheduled hours (or, equivalently, room/date/time ranges) the adjudicator marks as available.
-- An adjudicator may change their availability at any time before an assignment locks it in (see [Open decisions](#open-decisions) for whether an existing assignment blocks further availability changes).
+- An adjudicator may change their availability at any time, including after an assignment already exists for that hour; the change does not lock, and does not require staff review (see [Open decisions](#open-decisions) for the reasoning).
 - Staff use availability as a filter or warning when assigning: version one does not hard-block an assignment outside stated availability, since staff must retain override ability (matching the "keep the experience override-friendly rather than over-automated" principle from [#32](https://github.com/pafenorthwest/Festival/issues/32)), but the scheduling workspace must make unavailable-outside-availability assignments visibly distinct so staff do not do so by accident.
 - Only the adjudicator who owns an availability record, and admin intent types, may view it. Other adjudicators cannot see each other's availability.
 
@@ -59,7 +61,7 @@ This feature has a real, unresolved prerequisite: **this codebase has no adjudic
 
 ## Assignment
 
-An **assignment** places one performer (or performer group, such as an accompanist-performer pair) into a scheduled hour.
+An **assignment** places one class registration into one scheduled hour. It does not need its own concept of a performer group: `packages/common/src/registration.ts` already carries `childId`, `teacherId`, and `accompanistId`/`accompanistMembershipId` on every registration, so an assignment reaches the accompanist, the teacher, and the performing child by following the registration it's attached to — scheduling adds no new linkage for any of them. This also resolves what each personalized view in [#38](https://github.com/pafenorthwest/Festival/issues/38) actually queries: join assignments to their registration, then filter by whichever id matches the signed-in person.
 
 - Only confirmed **placed** class registrations are valid assignment candidates by default. Waitlisted registrations are excluded from normal assignment.
 - A waitlisted registration may be assigned only through a separately approved, explicitly audited override. The override record captures the approver, the reason, the registration's prior allocation status (waitlisted), and a timestamp. The scheduling workspace must show this audit context to authorized staff wherever an overridden assignment appears.
@@ -99,25 +101,25 @@ Schedule dates and times display in the festival's local timezone, using the sam
 Retains the Phase 5 roadmap's conceptual records, refined with this spec's detail. Exact storage design is outside this specification draft.
 
 - A **room** belongs to one festival (already built in [#277](https://github.com/pafenorthwest/Festival/pull/277); not redefined here).
-- A **scheduled hour** belongs to one room in one festival, and has a required date, start time, end time, and optional staff-facing label. Scheduled hours in the same room do not overlap.
+- A **scheduled hour** belongs to one room in one festival, and has a required date, start time, end time, an optional staff-facing label, and an optional division and adjudicator. Scheduled hours in the same room do not overlap, and each holds at most one assignment.
 - An **adjudicator availability record** links an adjudicator's account to a festival and a set of scheduled hours (or equivalent time ranges) they've marked available.
-- An **assignment** connects a placed (or audited-override waitlisted) registration to a scheduled hour, with an actor, timestamp, and change history.
+- An **assignment** connects one placed (or audited-override waitlisted) registration to one scheduled hour, with an actor, timestamp, and change history. It carries no fields of its own for child, teacher, or accompanist — those come from the registration it's attached to.
 - An **assignment audit entry** records actor, prior state, new state, and timestamp for every assignment change, including waitlist overrides' approver and reason.
 
 ## Acceptance criteria
 
-1. Admins can define scheduled hours for an existing room, each with a room, date, start time, and end time; two scheduled hours in the same room may not overlap.
-2. Admins can assign a placed registration to a scheduled hour from the scheduling workspace.
+1. Admins can define scheduled hours for an existing room, each with a room, date, start time, end time, and an optional division and adjudicator; two scheduled hours in the same room may not overlap.
+2. Admins can assign a placed registration to a scheduled hour from the scheduling workspace; a scheduled hour holds at most one assignment.
 3. Waitlisted registrations are absent from the normal candidate list and can be assigned only through the approved, audited override, which records approver, reason, prior status, and timestamp.
 4. Reassigning an existing assignment to a different scheduled hour or room does not require rebuilding the surrounding schedule.
 5. Every assignment change (create, move, remove) is recorded with actor, prior state, new state, and timestamp.
 6. Staff can export the festival's schedule as PDF and CSV from the scheduling workspace.
 7. An adjudicator can set and change their own availability for a festival, expressed as a set of scheduled hours; they cannot see another adjudicator's availability.
 8. The scheduling workspace visibly distinguishes an assignment made outside an adjudicator's stated availability, without hard-blocking it.
-9. An adjudicator's personalized view shows only the classes assigned to them.
-10. An accompanist's personalized view shows only schedule entries tied to their own placements.
-11. A teacher's personalized view shows only schedule entries for their own students.
-12. A parent/guardian's personalized view shows only schedule entries for their own children.
+9. An adjudicator's personalized view shows only the classes scheduled into hours where they're named as the adjudicator.
+10. An accompanist's personalized view shows only assignments whose registration's `accompanistId`/`accompanistMembershipId` matches them — no new accompanist-to-schedule linkage is created for this purpose.
+11. A teacher's personalized view shows only assignments whose registration's `teacherId` matches them.
+12. A parent/guardian's personalized view shows only assignments whose registration's `childId` is one of their own children.
 13. All four personalized views require login and enforce relationship-based access; none can view another person's schedule slice.
 14. A public class schedule is available without login and contains no personal or contact information.
 15. Every schedule view, personalized and public, is usable online and has a printer-friendly format.
@@ -133,13 +135,13 @@ Implementation must include tests for changed behavior, particularly Firebase in
 - The iOS app client from [#38](https://github.com/pafenorthwest/Festival/issues/38) — tracked as a stretch goal, not required for this version.
 - Automated notifications when a schedule changes (this spec does not define a Mailchimp/communications event contract for scheduling, unlike the Volunteer Portal's booking/cancellation events).
 - Hard-blocking an assignment outside an adjudicator's stated availability. Version one surfaces the mismatch; it does not prevent the override.
-- Room capacity beyond the existing piano configuration (for example, a general attendee/seating capacity), unless the team decides scheduling needs it — see open decisions.
+- A general room/scheduled-hour capacity (for example, audience seats). Resolved by the one-assignment-per-scheduled-hour rule above, not an open question — see [Scheduled hours](#scheduled-hours).
 
 ## Open decisions
 
-1. **Adjudicator identity:** Does this spec require a new "adjudicator" account/intent type distinct from the existing organization-member and volunteer models, or should adjudicators be modeled as a new flavor of an existing identity (for example, an invited member with an "Adjudicator" role)? Self-service availability cannot be built until this is resolved.
-2. **Dependency on #28:** Scheduling's "placed vs. waitlisted" assignment-candidate model assumes [#28](https://github.com/pafenorthwest/Festival/issues/28)'s soft-capacity placement already exists. Neither "placed" nor "waitlisted" exists in the codebase today. Should #28 ship first, or should this spec define a temporary/stubbed placement signal for scheduling to build against in the meantime?
-3. **Availability lock:** Once an adjudicator is assigned to a scheduled hour, can they still edit their availability to mark that hour unavailable? If so, does the existing assignment silently become an availability-mismatch (per acceptance criterion 8), or does it require staff review?
-4. **Room capacity beyond pianos:** Does a scheduled hour need a general capacity (for example, number of performers or audience seats), or is version one limited to one assignment track per scheduled hour, with multiple simultaneous assignments handled by creating multiple scheduled hours?
-5. **Export format specifics:** [#31](https://github.com/pafenorthwest/Festival/issues/31)/[#32](https://github.com/pafenorthwest/Festival/issues/32) call for PDF/CSV export but do not specify a layout, grouping, or the fields each format includes. This needs a concrete contract before implementation.
-6. **Accompanist/teacher/student linkage:** [#38](https://github.com/pafenorthwest/Festival/issues/38) assumes schedule entries can already be traced to a specific accompanist's placements and a specific teacher's students. Does that linkage already exist in the registration/entitlement data model, or does scheduling need to establish it?
+Two of these are genuine engineering/product-modeling questions I worked through against the existing codebase and have a recommendation for. The other two are sequencing and product-content calls that belong to Eric/the team, not something I can resolve by reading code.
+
+1. **Adjudicator identity — recommendation:** model `adjudicator` as a new Firebase intent type, parallel to the existing `volunteer` intent ([VOLUNTEER-PORTAL.md](VOLUNTEER-PORTAL.md)): an authenticated account self-enrolls as an adjudicator for one festival (not a persistent organization-membership role, since adjudicators are typically outside judges specific to a festival, not staff). This reuses an already-proven pattern in this exact codebase rather than inventing a new identity shape. Self-service availability and the scheduled-hour adjudicator field both depend on this being confirmed before implementation.
+2. **Availability lock — recommendation:** let an adjudicator edit their availability at any time, including after an assignment exists. Don't block the edit or silently require staff review; let the resulting mismatch surface through the same visible-distinction mechanism as any other availability mismatch (acceptance criterion 8). This keeps the rule singular (one mismatch-detection mechanism, not two) and matches the "override-friendly, not over-automated" principle [#32](https://github.com/pafenorthwest/Festival/issues/32) already establishes for staff; extending it to adjudicators' own edits is a small, consistent step, not a new principle.
+3. **Dependency on #28 — needs Eric's call, not resolvable here:** scheduling's "placed vs. waitlisted" assignment-candidate model assumes [#28](https://github.com/pafenorthwest/Festival/issues/28)'s soft-capacity placement already exists. Neither "placed" nor "waitlisted" exists in the codebase today — I checked directly. Should #28 ship first, or should this spec define a temporary/stubbed placement signal for scheduling to build against in the meantime? This is a roadmap-sequencing decision, not a modeling one.
+4. **Export format specifics — needs Eric's call, not resolvable here:** [#31](https://github.com/pafenorthwest/Festival/issues/31)/[#32](https://github.com/pafenorthwest/Festival/issues/32) call for PDF/CSV export but do not specify a layout, grouping, or the fields each format includes. This is a product-content decision (what the printed program should actually look like), not something inferable from the existing codebase.
