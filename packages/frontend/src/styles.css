@@ -1423,8 +1423,11 @@ form.shopify-integration-card {
 .volunteer-roles-table .listing-table-row {
 	/* Fixed widths, not auto: each row is its own grid, so auto-sized
 	   columns can size independently per row and drift out of
-	   alignment with the header and with each other. */
-	grid-template-columns: minmax(0, 1fr) 7rem 9rem;
+	   alignment with the header and with each other. The actions
+	   column is wide enough for all three row buttons (Manage
+	   shifts/Hide shifts, Edit, Delete/Deleting…) on one line; it wraps
+	   if a narrower viewport can't fit that. */
+	grid-template-columns: minmax(0, 1fr) 7rem 21rem;
 }
 
 .volunteer-roles-table .listing-table-header span:last-child {
@@ -1437,6 +1440,7 @@ form.shopify-integration-card {
 
 .volunteer-roles-table .listing-table-actions {
 	justify-content: flex-end;
+	flex-wrap: wrap;
 }
 
 .volunteer-roles-table .badge {
@@ -1458,6 +1462,26 @@ form.shopify-integration-card {
 
 .volunteer-shifts-table .listing-table-header,
 .volunteer-shifts-table .listing-table-row {
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 12rem;
+}
+
+.volunteer-shifts-table .listing-table-header span:last-child {
+	text-align: right;
+}
+
+.volunteer-shifts-table .listing-table-actions {
+	justify-content: flex-end;
+	flex-wrap: wrap;
+}
+
+.volunteer-shifts-table .listing-table-actions .secondary-button {
+	padding: 0.55rem 0.9rem;
+	font-size: 0.86rem;
+	white-space: nowrap;
+}
+
+.rooms-table .listing-table-header,
+.rooms-table .listing-table-row {
 	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 
@@ -1532,9 +1556,23 @@ form.shopify-integration-card {
 	align-items: center;
 }
 
-.coverage-gaps-table .listing-table-header,
-.coverage-gaps-table .listing-table-row {
-	grid-template-columns: minmax(0, 1.2fr) 7rem 6rem minmax(0, 1.2fr);
+.coverage-metrics-filter {
+	border: none;
+	cursor: pointer;
+}
+
+.coverage-metrics-filter[aria-pressed="true"] {
+	outline: 2px solid var(--bullet-accent-strong);
+	outline-offset: 2px;
+}
+
+.coverage-slots-table .listing-table-header,
+.coverage-slots-table .listing-table-row {
+	grid-template-columns: minmax(0, 1.2fr) 6rem 5rem minmax(0, 1.2fr) 6rem;
+}
+
+.coverage-slots-table .listing-table-row .badge {
+	border-radius: 4px;
 }
 
 .volunteer-schedule-table .listing-table-header,
@@ -1848,7 +1886,9 @@ form.shopify-integration-card {
 	.volunteer-shifts-table .listing-table-header,
 	.volunteer-shifts-table .listing-table-row,
 	.festival-classes-table .listing-table-header,
-	.festival-classes-table .listing-table-row {
+	.festival-classes-table .listing-table-row,
+	.rooms-table .listing-table-header,
+	.rooms-table .listing-table-row {
 		grid-template-columns: 1fr;
 	}
 

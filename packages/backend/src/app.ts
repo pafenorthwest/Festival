@@ -31,7 +31,10 @@ import {
 	type CheckoutRepository,
 	InMemoryCheckoutRepository,
 } from "./checkout/checkout-repository.js";
-import { ClassCheckoutService } from "./checkout/class-checkout-service.js";
+import {
+	ClassCheckoutService,
+	consoleClassCheckoutFailureLogger,
+} from "./checkout/class-checkout-service.js";
 import { MembershipCheckoutService } from "./checkout/membership-checkout-service.js";
 import { PostgresCheckoutRecoveryRepository } from "./checkout/postgres-checkout-recovery-repository.js";
 import { PostgresCheckoutRepository } from "./checkout/postgres-checkout-repository.js";
@@ -75,6 +78,11 @@ import { InMemoryAppUserRepository } from "./repo/in-memory-app-user-repository.
 import type { OrganizationRepository } from "./repo/organization-repository.js";
 import { PostgresAppUserRepository } from "./repo/postgres-app-user-repository.js";
 import { PostgresOrganizationRepository } from "./repo/postgres-organization-repository.js";
+import { PostgresRoomRepository } from "./rooms/postgres-room-repository.js";
+import {
+	InMemoryRoomRepository,
+	type RoomRepository,
+} from "./rooms/room-repository.js";
 import { buildApiRouter } from "./routes/api-router.js";
 import { buildAuthRouter } from "./routes/auth-router.js";
 import { assertRouteSecurityInventory } from "./routes/route-security.js";
@@ -133,6 +141,7 @@ export interface CreateAppOptions {
 	billingReconciliationService?: BillingReconciliationService;
 	communicationRepository?: CommunicationRepository;
 	communicationService?: CommunicationService;
+	roomRepository?: RoomRepository;
 }
 
 function privateTokenMatches(
@@ -228,10 +237,18 @@ export async function createApp(options: CreateAppOptions = {}) {
 	const adminClassCatalogService =
 		options.adminClassCatalogService ??
 		new AdminClassCatalogService(repository, adminClassShopifySync);
+	const roomRepository =
+		options.roomRepository ??
+		(env.databaseSchema
+			? new PostgresRoomRepository(env.databaseSchema)
+			: new InMemoryRoomRepository());
+	if (roomRepository instanceof PostgresRoomRepository)
+		await roomRepository.ensureReady();
 	const organizationService = new OrganizationService(
 		repository,
 		adminClassCatalogService,
 		{ enableDropTransfer: Boolean(env.enableDropTransfer) },
+		roomRepository,
 	);
 	const shopifyWebhookSubscriptionService = secretKeyring
 		? new ShopifyWebhookSubscriptionService(
@@ -357,6 +374,8 @@ export async function createApp(options: CreateAppOptions = {}) {
 					checkoutRepository,
 					new ShopifyMembershipCheckoutClient(repository, secretKeyring),
 					commerceRepository,
+					undefined,
+					consoleClassCheckoutFailureLogger,
 				)
 			: undefined);
 	const shopifyOrderProjectionService =

@@ -220,6 +220,52 @@ export function buildAdminOrgRoutes(options: {
 	);
 
 	router.get(
+		"/organizations/:slug/admin/festivals/:festivalShortName/rooms",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				return c.json(
+					await organizationService.listRoomsForTenant(
+						getRequiredTenant(c),
+						c.req.param("festivalShortName"),
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.post(
+		"/organizations/:slug/admin/festivals/:festivalShortName/rooms",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				const payload = await c.req.json();
+				assertAllowedFields(
+					payload,
+					["name", "pianoConfigurations"],
+					"Room request",
+				);
+				c.status(201);
+				return c.json(
+					await organizationService.createRoomForTenant(
+						getRequiredTenant(c),
+						c.req.param("festivalShortName"),
+						payload,
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.get(
 		"/organizations/:slug/admin/festivals/:festivalShortName/classes",
 		requireAuth(authVerifier),
 		requireTenant(repository),

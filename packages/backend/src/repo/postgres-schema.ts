@@ -575,6 +575,24 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			FOREIGN KEY (shift_id, festival_id, organization_id) REFERENCES ${safeSchema}.volunteer_shifts (id, festival_id, organization_id) ON DELETE CASCADE,
 			FOREIGN KEY (volunteer_id, festival_id, organization_id) REFERENCES ${safeSchema}.volunteers (id, festival_id, organization_id) ON DELETE CASCADE
 		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.rooms (
+			id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			festival_id TEXT NOT NULL REFERENCES ${safeSchema}.festivals (id) ON DELETE CASCADE,
+			name TEXT NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			FOREIGN KEY (festival_id, organization_id) REFERENCES ${safeSchema}.festivals (id, organization_id) ON DELETE CASCADE,
+			UNIQUE (id, festival_id, organization_id)
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.room_piano_configurations (
+			id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			festival_id TEXT NOT NULL REFERENCES ${safeSchema}.festivals (id) ON DELETE CASCADE,
+			room_id TEXT NOT NULL,
+			piano_type TEXT NOT NULL CHECK (piano_type IN ('upright', 'grand')),
+			count INTEGER NOT NULL CHECK (count > 0),
+			FOREIGN KEY (festival_id, organization_id) REFERENCES ${safeSchema}.festivals (id, organization_id) ON DELETE CASCADE,
+			FOREIGN KEY (room_id, festival_id, organization_id) REFERENCES ${safeSchema}.rooms (id, festival_id, organization_id) ON DELETE CASCADE,
+			UNIQUE (room_id, piano_type)
+		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.credit_balances (
 			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
 			customer_id TEXT NOT NULL,
@@ -727,6 +745,8 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		CREATE INDEX IF NOT EXISTS volunteer_roles_org_festival_idx ON ${safeSchema}.volunteer_roles (organization_id, festival_id);
 		CREATE INDEX IF NOT EXISTS volunteer_shifts_org_festival_role_idx ON ${safeSchema}.volunteer_shifts (organization_id, festival_id, role_id);
 		CREATE UNIQUE INDEX IF NOT EXISTS volunteer_assignments_active_shift_key ON ${safeSchema}.volunteer_assignments (shift_id) WHERE status = 'active';
+		CREATE INDEX IF NOT EXISTS rooms_org_festival_idx ON ${safeSchema}.rooms (organization_id, festival_id);
+		CREATE INDEX IF NOT EXISTS room_piano_configurations_room_idx ON ${safeSchema}.room_piano_configurations (room_id);
 		CREATE INDEX IF NOT EXISTS idx_class_entitlements_org_class ON ${safeSchema}.class_entitlements (organization_id, festival_class_id);
 		CREATE INDEX IF NOT EXISTS idx_class_entitlements_org_parent ON ${safeSchema}.class_entitlements (organization_id, parent_customer_id);
 		CREATE INDEX IF NOT EXISTS idx_class_entitlements_org_child ON ${safeSchema}.class_entitlements (organization_id, child_id);

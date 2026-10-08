@@ -22,7 +22,7 @@ describe("repository nginx security policy", () => {
 				"organizations",
 				"invites",
 				"admin/users",
-				"admin/(?:festivals(?:/[^/]+(?:/primary)?)?|shopify|shopify-customer-account)",
+				"admin/(?:festivals(?:/[^/]+(?:/primary|/rooms)?)?|shopify|shopify-customer-account)",
 				"admin/shopify/diagnostics",
 				"admin/membership-products",
 				"membership-products(?:/[^/]+/retire)?",
@@ -37,7 +37,7 @@ describe("repository nginx security policy", () => {
 				"customer/checkout-recovery/[^/]+",
 				"customer/logout",
 				"customer/profile",
-				"festivals/[^/]+/volunteers/(?:roles(?:/[^/]+/shifts)?|enroll)",
+				"festivals/[^/]+/volunteers/(?:roles(?:/[^/]+(?:/shifts(?:/[^/]+)?)?)?|enroll)",
 				"shopify/webhooks/orders-paid",
 				"v1/auth/sync",
 				"v1/auth/login-event",
@@ -50,6 +50,7 @@ describe("repository nginx security policy", () => {
 			expect(config).toContain("limit_except POST OPTIONS");
 			expect(config).toContain("limit_except DELETE OPTIONS");
 			expect(config).toContain("limit_except GET POST OPTIONS");
+			expect(config).toContain("limit_except GET POST PATCH DELETE OPTIONS");
 			expect(config).toContain("location /api/ { return 404; }");
 			expect(config).toContain("location = /api { return 404; }");
 			expect(config).toContain(

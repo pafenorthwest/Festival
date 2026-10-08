@@ -92,6 +92,8 @@ import type {
 	SaveShopifyIntegrationInput,
 	SaveShopifyIntegrationResponse,
 	SessionResponse,
+	ShiftCoverageEntry,
+	ShiftCoverageStatus,
 	ShopifyIntegrationDiagnosticsResponse,
 	ShopifyIntegrationSettingsResponse,
 	TransferRegistrationInput,
@@ -187,6 +189,21 @@ export interface CreateVolunteerShiftInput {
 	adjudicator?: string | null;
 }
 
+export interface UpdateVolunteerRoleInput {
+	displayName: string;
+	description: string;
+	detailsUrl?: string | null;
+	isRoomProctor: boolean;
+}
+
+export interface UpdateVolunteerShiftInput {
+	date: string;
+	period: "AM" | "PM";
+	timeText?: string | null;
+	division?: string | null;
+	adjudicator?: string | null;
+}
+
 export type {
 	AddCatalogWorkInput,
 	AdminCustomerSearchResponse,
@@ -236,6 +253,8 @@ export type {
 	RepertoireReviewQueueSummary,
 	RepertoireReviewStatus,
 	ResolveFlagInput,
+	ShiftCoverageEntry,
+	ShiftCoverageStatus,
 	TransferRegistrationInput,
 	TransferRegistrationResult,
 	TransferRegistrationValidationResult,
@@ -1006,6 +1025,51 @@ export function listFestivalClassSubtypes(
 	);
 }
 
+export type PianoType = "upright" | "grand";
+
+export interface RoomPianoConfiguration {
+	pianoType: PianoType;
+	count: number;
+}
+
+export interface Room {
+	id: string;
+	organizationId: string;
+	festivalId: string;
+	name: string;
+	pianoConfigurations: RoomPianoConfiguration[];
+	createdAtIso: string;
+}
+
+export interface CreateRoomInput {
+	name: string;
+	pianoConfigurations: RoomPianoConfiguration[];
+}
+
+export function listRooms(idToken: string, slug: string, festivalSlug: string) {
+	return requestJson<{ rooms: Room[] }>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/festivals/${encodeURIComponent(festivalSlug)}/rooms`,
+		undefined,
+		idToken,
+	);
+}
+
+export function createRoom(
+	idToken: string,
+	slug: string,
+	festivalSlug: string,
+	input: CreateRoomInput,
+) {
+	return requestJson<Room>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/festivals/${encodeURIComponent(festivalSlug)}/rooms`,
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+		idToken,
+	);
+}
+
 export function createFestivalClassSubtype(
 	idToken: string,
 	slug: string,
@@ -1139,6 +1203,72 @@ export function createVolunteerShift(
 		{
 			method: "POST",
 			body: JSON.stringify(input),
+		},
+		idToken,
+	);
+}
+
+export function updateVolunteerRole(
+	idToken: string,
+	slug: string,
+	festivalShortName: string,
+	roleId: string,
+	input: UpdateVolunteerRoleInput,
+) {
+	return requestJson<VolunteerRole>(
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalShortName)}/volunteers/roles/${encodeURIComponent(roleId)}`,
+		{
+			method: "PATCH",
+			body: JSON.stringify(input),
+		},
+		idToken,
+	);
+}
+
+export function deleteVolunteerRole(
+	idToken: string,
+	slug: string,
+	festivalShortName: string,
+	roleId: string,
+) {
+	return requestJson<{ status: string }>(
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalShortName)}/volunteers/roles/${encodeURIComponent(roleId)}`,
+		{
+			method: "DELETE",
+		},
+		idToken,
+	);
+}
+
+export function updateVolunteerShift(
+	idToken: string,
+	slug: string,
+	festivalShortName: string,
+	roleId: string,
+	shiftId: string,
+	input: UpdateVolunteerShiftInput,
+) {
+	return requestJson<VolunteerShift>(
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalShortName)}/volunteers/roles/${encodeURIComponent(roleId)}/shifts/${encodeURIComponent(shiftId)}`,
+		{
+			method: "PATCH",
+			body: JSON.stringify(input),
+		},
+		idToken,
+	);
+}
+
+export function deleteVolunteerShift(
+	idToken: string,
+	slug: string,
+	festivalShortName: string,
+	roleId: string,
+	shiftId: string,
+) {
+	return requestJson<{ status: string }>(
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalShortName)}/volunteers/roles/${encodeURIComponent(roleId)}/shifts/${encodeURIComponent(shiftId)}`,
+		{
+			method: "DELETE",
 		},
 		idToken,
 	);

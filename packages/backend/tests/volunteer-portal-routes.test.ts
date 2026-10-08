@@ -399,6 +399,7 @@ describe("volunteer portal routes", () => {
 			openShifts: number;
 			coveragePercentage: number;
 			gaps: Array<{ shiftId: string }>;
+			slots: Array<{ shiftId: string; status: string }>;
 		};
 		expect(initialGaps.totalShifts).toBe(1);
 		expect(initialGaps.filledShifts).toBe(0);
@@ -406,6 +407,9 @@ describe("volunteer portal routes", () => {
 		expect(initialGaps.coveragePercentage).toBe(0);
 		expect(initialGaps.gaps).toHaveLength(1);
 		expect(initialGaps.gaps[0].shiftId).toBe(shift.id);
+		expect(initialGaps.slots).toHaveLength(1);
+		expect(initialGaps.slots[0].shiftId).toBe(shift.id);
+		expect(initialGaps.slots[0].status).toBe("Open");
 
 		// Enroll member and book the shift
 		await app.fetch(
@@ -438,11 +442,39 @@ describe("volunteer portal routes", () => {
 			openShifts: number;
 			coveragePercentage: number;
 			gaps: Array<{ shiftId: string }>;
+			slots: Array<{ shiftId: string; status: string }>;
 		};
 		expect(filledGaps.totalShifts).toBe(1);
 		expect(filledGaps.filledShifts).toBe(1);
 		expect(filledGaps.openShifts).toBe(0);
 		expect(filledGaps.coveragePercentage).toBe(100);
 		expect(filledGaps.gaps).toHaveLength(0);
+		expect(filledGaps.slots).toHaveLength(1);
+		expect(filledGaps.slots[0].shiftId).toBe(shift.id);
+		expect(filledGaps.slots[0].status).toBe("Filled");
+
+		// Cancel the assignment and confirm the slot reopens
+		const assignmentsRes = await app.fetch(
+			new Request(`${VOLUNTEERS_BASE}/my-schedule`, withAuth("member")),
+		);
+		const assignments = (await assignmentsRes.json()) as Array<{
+			assignment: { id: string };
+		}>;
+		await app.fetch(
+			new Request(
+				`${VOLUNTEERS_BASE}/assignments/${assignments[0].assignment.id}/cancel`,
+				withAuth("member", { method: "POST" }),
+			),
+		);
+
+		const reopenedGapsRes = await app.fetch(
+			new Request(`${VOLUNTEERS_BASE}/coverage-gaps`, withAuth("admin")),
+		);
+		const reopenedGaps = (await reopenedGapsRes.json()) as {
+			openShifts: number;
+			slots: Array<{ shiftId: string; status: string }>;
+		};
+		expect(reopenedGaps.openShifts).toBe(1);
+		expect(reopenedGaps.slots[0].status).toBe("Open");
 	});
 });

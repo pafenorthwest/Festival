@@ -72,10 +72,32 @@ export interface CreateRoleInput {
 	isRoomProctor: boolean;
 }
 
+export interface UpdateRoleInput {
+	organizationId: string;
+	festivalId: string;
+	roleId: string;
+	displayName: string;
+	description: string;
+	detailsUrl: string | null;
+	isRoomProctor: boolean;
+}
+
 export interface CreateShiftInput {
 	organizationId: string;
 	festivalId: string;
 	roleId: string;
+	date: string;
+	period: ShiftPeriod;
+	timeText: string | null;
+	division: string | null;
+	adjudicator: string | null;
+}
+
+export interface UpdateShiftInput {
+	organizationId: string;
+	festivalId: string;
+	roleId: string;
+	shiftId: string;
 	date: string;
 	period: ShiftPeriod;
 	timeText: string | null;
@@ -93,6 +115,19 @@ export interface VolunteerRepository {
 
 	createRole(input: CreateRoleInput): Promise<VolunteerRoleRecord>;
 	createShift(input: CreateShiftInput): Promise<VolunteerShiftRecord>;
+	updateRole(input: UpdateRoleInput): Promise<VolunteerRoleRecord | null>;
+	deleteRole(
+		organizationId: string,
+		festivalId: string,
+		roleId: string,
+	): Promise<boolean>;
+	updateShift(input: UpdateShiftInput): Promise<VolunteerShiftRecord | null>;
+	deleteShift(
+		organizationId: string,
+		festivalId: string,
+		roleId: string,
+		shiftId: string,
+	): Promise<boolean>;
 
 	getRole(
 		organizationId: string,
@@ -200,6 +235,51 @@ export class InMemoryVolunteerRepository implements VolunteerRepository {
 		return { ...record };
 	}
 
+	async updateRole(input: UpdateRoleInput) {
+		const existing = this.roles.get(input.roleId);
+		if (
+			!existing ||
+			existing.organizationId !== input.organizationId ||
+			existing.festivalId !== input.festivalId
+		) {
+			return null;
+		}
+		const updated: VolunteerRoleRecord = {
+			...existing,
+			displayName: input.displayName,
+			description: input.description,
+			detailsUrl: input.detailsUrl,
+			isRoomProctor: input.isRoomProctor,
+		};
+		this.roles.set(updated.id, updated);
+		return { ...updated };
+	}
+
+	async deleteRole(organizationId: string, festivalId: string, roleId: string) {
+		const existing = this.roles.get(roleId);
+		if (
+			!existing ||
+			existing.organizationId !== organizationId ||
+			existing.festivalId !== festivalId
+		) {
+			return false;
+		}
+		this.roles.delete(roleId);
+		const shiftIdsForRole = new Set<string>();
+		for (const shift of this.shifts.values()) {
+			if (shift.roleId === roleId) {
+				shiftIdsForRole.add(shift.id);
+				this.shifts.delete(shift.id);
+			}
+		}
+		for (const assignment of this.assignments.values()) {
+			if (shiftIdsForRole.has(assignment.shiftId)) {
+				this.assignments.delete(assignment.id);
+			}
+		}
+		return true;
+	}
+
 	async createShift(input: CreateShiftInput) {
 		const role = this.roles.get(input.roleId);
 		if (
@@ -216,6 +296,52 @@ export class InMemoryVolunteerRepository implements VolunteerRepository {
 		};
 		this.shifts.set(record.id, record);
 		return { ...record };
+	}
+
+	async updateShift(input: UpdateShiftInput) {
+		const existing = this.shifts.get(input.shiftId);
+		if (
+			!existing ||
+			existing.organizationId !== input.organizationId ||
+			existing.festivalId !== input.festivalId ||
+			existing.roleId !== input.roleId
+		) {
+			return null;
+		}
+		const updated: VolunteerShiftRecord = {
+			...existing,
+			date: input.date,
+			period: input.period,
+			timeText: input.timeText,
+			division: input.division,
+			adjudicator: input.adjudicator,
+		};
+		this.shifts.set(updated.id, updated);
+		return { ...updated };
+	}
+
+	async deleteShift(
+		organizationId: string,
+		festivalId: string,
+		roleId: string,
+		shiftId: string,
+	) {
+		const existing = this.shifts.get(shiftId);
+		if (
+			!existing ||
+			existing.organizationId !== organizationId ||
+			existing.festivalId !== festivalId ||
+			existing.roleId !== roleId
+		) {
+			return false;
+		}
+		this.shifts.delete(shiftId);
+		for (const assignment of this.assignments.values()) {
+			if (assignment.shiftId === shiftId) {
+				this.assignments.delete(assignment.id);
+			}
+		}
+		return true;
 	}
 
 	async getRole(organizationId: string, festivalId: string, roleId: string) {

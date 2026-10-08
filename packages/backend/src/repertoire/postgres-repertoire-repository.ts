@@ -106,7 +106,7 @@ function buildBaseReviewSelect(schema: string): string {
 			rc.id AS canonical_contributor_id,
 			rc.display_name AS canonical_composer,
 			fc.display_name AS performer_name,
-			fcc.name AS class_type,
+			fcc.display_name AS class_type,
 			od.id AS division_id,
 			od.display_name AS division_name
 		FROM ${schema}.repertoire_review_items rri

@@ -228,6 +228,17 @@ function createFakeServices() {
 			if (typedInput.festivalClassId === "other-org-class") {
 				throw new AppError("Festival class configuration not found.", 404);
 			}
+			if (typedInput.festivalClassId === "database-failure-class") {
+				const error = new AppError(
+					"We couldn't save this class registration. Please try again.",
+					500,
+					"checkout_database_failure",
+				);
+				Object.assign(error, {
+					rawDatabaseDiagnostic: "synthetic database diagnostic",
+				});
+				throw error;
+			}
 			if (Array.isArray(typedInput.pieces)) {
 				for (const piece of typedInput.pieces) {
 					if (typeof piece?.composer !== "string" || !piece.composer.trim()) {
@@ -398,6 +409,47 @@ describe("Customer Registration Routes", () => {
 				buyerAccessToken: "buyer_tok_1",
 				idempotencyKey: VALID_UUID,
 			});
+		});
+
+		it("returns a safe 500 response for a database checkout failure", async () => {
+			const { customerAccountService, classCheckoutService } =
+				createFakeServices();
+			const app = createTestApp({
+				customerAccountService,
+				classCheckoutService,
+			});
+			const res = await req(
+				app,
+				"POST",
+				"/festivals/spring-2026/registration/checkout",
+				{
+					...AUTH,
+					...JSON_HDR,
+					"Idempotency-Key": VALID_UUID,
+					"X-CSRF-Token": "csrf_token_1",
+					Origin: "https://fest.example.com",
+				},
+				JSON.stringify({
+					festivalClassId: "database-failure-class",
+					childId: "child_1",
+				}),
+			);
+
+			expect(res.status).toBe(500);
+			const json = await res.json();
+			expect(json).toEqual({
+				error: "We couldn't save this class registration. Please try again.",
+				code: "checkout_database_failure",
+			});
+			expect(json).not.toHaveProperty("rawDatabaseDiagnostic");
+			expect(json).not.toHaveProperty("databaseSqlState");
+			expect(json).not.toHaveProperty("databaseConstraint");
+			expect(json).not.toHaveProperty("databaseTable");
+			expect(json).not.toHaveProperty("databaseColumn");
+			expect(json).not.toHaveProperty("stage");
+			expect(JSON.stringify(json)).not.toContain(
+				"synthetic database diagnostic",
+			);
 		});
 
 		it("handles multi-line checkout with lineItems payload", async () => {

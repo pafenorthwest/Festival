@@ -6,6 +6,7 @@ import {
 	onCleanup,
 	Show,
 } from "solid-js";
+import { formatScheduleDate } from "../app/appFormatting.js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { AccessDeniedPanel } from "../components/AccessDeniedPanel.js";
 import { Button } from "../components/Button.js";
@@ -14,9 +15,13 @@ import {
 	type CreateVolunteerShiftInput,
 	createVolunteerRole,
 	createVolunteerShift,
+	deleteVolunteerRole,
+	deleteVolunteerShift,
 	getVolunteerCoverageGaps,
 	getVolunteerRoles,
 	getVolunteerShiftsForRole,
+	updateVolunteerRole,
+	updateVolunteerShift,
 } from "../lib/api.js";
 import { subscribeToAuthChanges } from "../lib/firebase-auth.js";
 
@@ -77,30 +82,98 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 	const [roleDraft, setRoleDraft] = createSignal(emptyRoleDraft);
 	const [roleFormError, setRoleFormError] = createSignal<string | null>(null);
 	const [isCreatingRole, setIsCreatingRole] = createSignal(false);
+	const [editingRoleId, setEditingRoleId] = createSignal<string | null>(null);
+	const [deletingRoleId, setDeletingRoleId] = createSignal<string | null>(null);
 
-	async function handleCreateRole(event: Event) {
+	function startEditRole(role: {
+		id: string;
+		displayName: string;
+		description: string;
+		detailsUrl: string | null;
+		isRoomProctor: boolean;
+	}) {
+		setRoleFormError(null);
+		setEditingRoleId(role.id);
+		setRoleDraft({
+			slug: "",
+			displayName: role.displayName,
+			description: role.description,
+			detailsUrl: role.detailsUrl ?? "",
+			isRoomProctor: role.isRoomProctor,
+		});
+	}
+
+	function cancelEditRole() {
+		setEditingRoleId(null);
+		setRoleDraft(emptyRoleDraft);
+		setRoleFormError(null);
+	}
+
+	async function handleRoleFormSubmit(event: Event) {
 		event.preventDefault();
 		const token = idToken();
 		const festivalShortName = selectedFestival()?.shortName;
 		if (!token || !festivalShortName) return;
 		setRoleFormError(null);
 		setIsCreatingRole(true);
+		const editingId = editingRoleId();
 		try {
-			await createVolunteerRole(
-				token,
-				props.slug,
-				festivalShortName,
-				roleDraft(),
-			);
+			if (editingId) {
+				await updateVolunteerRole(
+					token,
+					props.slug,
+					festivalShortName,
+					editingId,
+					roleDraft(),
+				);
+				setEditingRoleId(null);
+			} else {
+				await createVolunteerRole(
+					token,
+					props.slug,
+					festivalShortName,
+					roleDraft(),
+				);
+			}
 			setRoleDraft(emptyRoleDraft);
 			await refetchRoles();
 			await refetchCoverageGaps();
 		} catch (error) {
 			setRoleFormError(
-				error instanceof Error ? error.message : "Could not create role.",
+				error instanceof Error
+					? error.message
+					: `Could not ${editingId ? "update" : "create"} role.`,
 			);
 		} finally {
 			setIsCreatingRole(false);
+		}
+	}
+
+	async function handleDeleteRole(role: { id: string; displayName: string }) {
+		const token = idToken();
+		const festivalShortName = selectedFestival()?.shortName;
+		if (!token || !festivalShortName) return;
+		if (
+			!confirm(
+				`Delete the "${role.displayName}" role? This also deletes all of its shifts.`,
+			)
+		) {
+			return;
+		}
+		setRoleFormError(null);
+		setDeletingRoleId(role.id);
+		try {
+			await deleteVolunteerRole(token, props.slug, festivalShortName, role.id);
+			if (editingRoleId() === role.id) cancelEditRole();
+			if (selectedRoleId() === role.id) setSelectedRoleId(null);
+			await refetchRoles();
+			await refetchCoverageGaps();
+		} catch (error) {
+			setRoleFormError(
+				error instanceof Error ? error.message : "Could not delete role.",
+			);
+		} finally {
+			setDeletingRoleId(null);
 		}
 	}
 
@@ -115,6 +188,19 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 		([token, festivalShortName]) =>
 			getVolunteerCoverageGaps(props.slug, festivalShortName, token),
 	);
+
+	// "all" | "Filled" | "Open": which of the three summary counts is the
+	// active filter for the slot list below them. See #232.
+	const [slotStatusFilter, setSlotStatusFilter] = createSignal<
+		"all" | "Filled" | "Open"
+	>("all");
+	const filteredSlots = createMemo(() => {
+		const slots = coverageGaps()?.slots ?? [];
+		const filter = slotStatusFilter();
+		return filter === "all"
+			? slots
+			: slots.filter((slot) => slot.status === filter);
+	});
 
 	const [selectedRoleId, setSelectedRoleId] = createSignal<string | null>(null);
 	const selectedRole = () =>
@@ -136,8 +222,37 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 	const [shiftDraft, setShiftDraft] = createSignal(emptyShiftDraft);
 	const [shiftFormError, setShiftFormError] = createSignal<string | null>(null);
 	const [isCreatingShift, setIsCreatingShift] = createSignal(false);
+	const [editingShiftId, setEditingShiftId] = createSignal<string | null>(null);
+	const [deletingShiftId, setDeletingShiftId] = createSignal<string | null>(
+		null,
+	);
 
-	async function handleCreateShift(event: Event) {
+	function startEditShift(shift: {
+		id: string;
+		date: string;
+		period: "AM" | "PM";
+		timeText: string | null;
+		division: string | null;
+		adjudicator: string | null;
+	}) {
+		setShiftFormError(null);
+		setEditingShiftId(shift.id);
+		setShiftDraft({
+			date: shift.date,
+			period: shift.period,
+			timeText: shift.timeText ?? "",
+			division: shift.division ?? "",
+			adjudicator: shift.adjudicator ?? "",
+		});
+	}
+
+	function cancelEditShift() {
+		setEditingShiftId(null);
+		setShiftDraft(emptyShiftDraft);
+		setShiftFormError(null);
+	}
+
+	async function handleShiftFormSubmit(event: Event) {
 		event.preventDefault();
 		const token = idToken();
 		const festivalShortName = selectedFestival()?.shortName;
@@ -145,23 +260,66 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 		if (!token || !festivalShortName || !roleId) return;
 		setShiftFormError(null);
 		setIsCreatingShift(true);
+		const editingId = editingShiftId();
 		try {
-			await createVolunteerShift(
-				token,
-				props.slug,
-				festivalShortName,
-				roleId,
-				shiftDraft(),
-			);
+			if (editingId) {
+				await updateVolunteerShift(
+					token,
+					props.slug,
+					festivalShortName,
+					roleId,
+					editingId,
+					shiftDraft(),
+				);
+				setEditingShiftId(null);
+			} else {
+				await createVolunteerShift(
+					token,
+					props.slug,
+					festivalShortName,
+					roleId,
+					shiftDraft(),
+				);
+			}
 			setShiftDraft(emptyShiftDraft);
 			await refetchShifts();
 			await refetchCoverageGaps();
 		} catch (error) {
 			setShiftFormError(
-				error instanceof Error ? error.message : "Could not create shift.",
+				error instanceof Error
+					? error.message
+					: `Could not ${editingId ? "update" : "create"} shift.`,
 			);
 		} finally {
 			setIsCreatingShift(false);
+		}
+	}
+
+	async function handleDeleteShift(shift: { id: string }) {
+		const token = idToken();
+		const festivalShortName = selectedFestival()?.shortName;
+		const roleId = selectedRoleId();
+		if (!token || !festivalShortName || !roleId) return;
+		if (!confirm("Delete this shift?")) return;
+		setShiftFormError(null);
+		setDeletingShiftId(shift.id);
+		try {
+			await deleteVolunteerShift(
+				token,
+				props.slug,
+				festivalShortName,
+				roleId,
+				shift.id,
+			);
+			if (editingShiftId() === shift.id) cancelEditShift();
+			await refetchShifts();
+			await refetchCoverageGaps();
+		} catch (error) {
+			setShiftFormError(
+				error instanceof Error ? error.message : "Could not delete shift.",
+			);
+		} finally {
+			setDeletingShiftId(null);
 		}
 	}
 
@@ -233,15 +391,33 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 												<Button
 													type="button"
 													variant="secondary"
-													onClick={() =>
+													onClick={() => {
+														cancelEditShift();
 														setSelectedRoleId((current) =>
 															current === role.id ? null : role.id,
-														)
-													}
+														);
+													}}
 												>
 													{selectedRoleId() === role.id
 														? "Hide shifts"
 														: "Manage shifts"}
+												</Button>
+												<Button
+													type="button"
+													variant="secondary"
+													onClick={() => startEditRole(role)}
+												>
+													Edit
+												</Button>
+												<Button
+													type="button"
+													variant="secondary"
+													disabled={deletingRoleId() === role.id}
+													onClick={() => handleDeleteRole(role)}
+												>
+													{deletingRoleId() === role.id
+														? "Deleting…"
+														: "Delete"}
 												</Button>
 											</Show>
 										</span>
@@ -266,13 +442,14 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 										<div class="listing-table-header">
 											<span>Date</span>
 											<span>Details</span>
+											<span>Actions</span>
 										</div>
 										<For each={shifts()}>
 											{(shift) => (
 												<div class="listing-table-row">
 													<span>
 														<strong>
-															{shift.date} {shift.period}
+															{formatScheduleDate(shift.date)} {shift.period}
 														</strong>
 													</span>
 													<span>
@@ -285,14 +462,33 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 															</span>
 														</Show>
 													</span>
+													<span class="listing-table-actions">
+														<Button
+															type="button"
+															variant="secondary"
+															onClick={() => startEditShift(shift)}
+														>
+															Edit
+														</Button>
+														<Button
+															type="button"
+															variant="secondary"
+															disabled={deletingShiftId() === shift.id}
+															onClick={() => handleDeleteShift(shift)}
+														>
+															{deletingShiftId() === shift.id
+																? "Deleting…"
+																: "Delete"}
+														</Button>
+													</span>
 												</div>
 											)}
 										</For>
 									</div>
 								</Show>
 
-								<form class="flow-panel" onSubmit={handleCreateShift}>
-									<h3>Add a shift</h3>
+								<form class="flow-panel" onSubmit={handleShiftFormSubmit}>
+									<h3>{editingShiftId() ? "Edit shift" : "Add a shift"}</h3>
 									<Show when={role().isRoomProctor}>
 										<p class="muted">
 											This is a Room Proctor role, so each shift needs a
@@ -375,29 +571,40 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 										</section>
 									</Show>
 									<Button type="submit" disabled={isCreatingShift()}>
-										Add shift
+										{editingShiftId() ? "Save changes" : "Add shift"}
 									</Button>
+									<Show when={editingShiftId()}>
+										<Button
+											type="button"
+											variant="secondary"
+											onClick={cancelEditShift}
+										>
+											Cancel
+										</Button>
+									</Show>
 								</form>
 							</section>
 						)}
 					</Show>
 
 					<Show when={props.app.hasVolunteerAdminIntent()}>
-						<form class="flow-panel" onSubmit={handleCreateRole}>
-							<h3>Create a role</h3>
-							<label class="field">
-								<span>Slug</span>
-								<input
-									type="text"
-									value={roleDraft().slug}
-									onInput={(event) =>
-										setRoleDraft((current) => ({
-											...current,
-											slug: event.currentTarget.value,
-										}))
-									}
-								/>
-							</label>
+						<form class="flow-panel" onSubmit={handleRoleFormSubmit}>
+							<h3>{editingRoleId() ? "Edit role" : "Create a role"}</h3>
+							<Show when={!editingRoleId()}>
+								<label class="field">
+									<span>Slug</span>
+									<input
+										type="text"
+										value={roleDraft().slug}
+										onInput={(event) =>
+											setRoleDraft((current) => ({
+												...current,
+												slug: event.currentTarget.value,
+											}))
+										}
+									/>
+								</label>
+							</Show>
 							<label class="field">
 								<span>Display name</span>
 								<input
@@ -454,74 +661,107 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 								<section class="banner error-banner">{roleFormError()}</section>
 							</Show>
 							<Button type="submit" disabled={isCreatingRole()}>
-								Create role
+								{editingRoleId() ? "Save changes" : "Create role"}
 							</Button>
+							<Show when={editingRoleId()}>
+								<Button
+									type="button"
+									variant="secondary"
+									onClick={cancelEditRole}
+								>
+									Cancel
+								</Button>
+							</Show>
 						</form>
 					</Show>
 
 					<Show when={props.app.hasVolunteerAdminIntent()}>
 						<section class="flow-panel coverage-gaps-panel">
-							<h3>Coverage Gaps</h3>
+							<h3>Volunteer Shift Coverage</h3>
 							<Show when={coverageGaps.loading}>
-								<p>Loading coverage gaps…</p>
+								<p>Loading shift coverage…</p>
 							</Show>
 							<Show when={coverageGaps.error}>
 								<section class="banner error-banner">
-									Could not load coverage gaps: {String(coverageGaps.error)}
+									Could not load shift coverage: {String(coverageGaps.error)}
 								</section>
 							</Show>
 							<Show when={coverageGaps()}>
 								{(gaps) => (
 									<>
 										<div class="coverage-metrics">
-											<span class="badge badge-neutral">
+											<button
+												type="button"
+												class="badge badge-neutral coverage-metrics-filter"
+												aria-pressed={slotStatusFilter() === "all"}
+												onClick={() => setSlotStatusFilter("all")}
+											>
 												Total Shifts: {gaps().totalShifts}
-											</span>
-											<span class="badge badge-active">
+											</button>
+											<button
+												type="button"
+												class="badge badge-active coverage-metrics-filter"
+												aria-pressed={slotStatusFilter() === "Filled"}
+												onClick={() => setSlotStatusFilter("Filled")}
+											>
 												Filled Shifts:{" "}
 												{gaps().filledShifts ?? gaps().coveredShifts}
-											</span>
-											<span class="badge badge-rejected">
+											</button>
+											<button
+												type="button"
+												class="badge badge-rejected coverage-metrics-filter"
+												aria-pressed={slotStatusFilter() === "Open"}
+												onClick={() => setSlotStatusFilter("Open")}
+											>
 												Open Shifts:{" "}
 												{gaps().openShifts ?? gaps().unfilledShifts}
-											</span>
+											</button>
 											<span class="badge badge-processing">
 												Coverage Percentage: {gaps().coveragePercentage}%
 											</span>
 										</div>
 										<Show
-											when={(gaps().unfilled ?? gaps().gaps).length > 0}
+											when={filteredSlots().length > 0}
 											fallback={
-												<p class="muted">All shifts are currently filled.</p>
+												<p class="muted">
+													{slotStatusFilter() === "all"
+														? "No shifts have been created for this festival yet."
+														: `No ${slotStatusFilter().toLowerCase()} shifts match this filter.`}
+												</p>
 											}
 										>
-											<div class="listing-table coverage-gaps-table">
+											<div class="listing-table coverage-slots-table">
 												<div class="listing-table-header">
 													<span>Role</span>
 													<span>Date</span>
 													<span>Period</span>
 													<span>Location</span>
+													<span>Status</span>
 												</div>
-												<For each={gaps().unfilled ?? gaps().gaps}>
-													{(gap) => (
+												<For each={filteredSlots()}>
+													{(slot) => (
 														<div class="listing-table-row">
 															<span>
-																<strong>
-																	{gap.roleDisplayName || gap.roleName}
-																</strong>
+																<strong>{slot.roleDisplayName}</strong>
 															</span>
-															<span>{gap.date}</span>
+															<span>{formatScheduleDate(slot.date)}</span>
 															<span>
-																{gap.period}
-																<Show when={gap.timeText}>
-																	<span class="muted"> ({gap.timeText})</span>
+																{slot.period}
+																<Show when={slot.timeText}>
+																	<span class="muted"> ({slot.timeText})</span>
 																</Show>
 															</span>
 															<span>
-																{gap.division
-																	? `${gap.division}${gap.adjudicator ? ` (${gap.adjudicator})` : ""}`
-																	: ((gap as { location?: string }).location ??
-																		"—")}
+																{slot.division
+																	? `${slot.division}${slot.adjudicator ? ` (${slot.adjudicator})` : ""}`
+																	: "—"}
+															</span>
+															<span>
+																<span
+																	class={`badge ${slot.status === "Filled" ? "badge-active" : "badge-rejected"}`}
+																>
+																	{slot.status}
+																</span>
 															</span>
 														</div>
 													)}

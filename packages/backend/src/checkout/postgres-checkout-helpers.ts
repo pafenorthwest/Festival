@@ -140,33 +140,21 @@ async function insertRepertoireItems(
 	schema: string,
 	items: RegistrationRepertoireItem[],
 ): Promise<void> {
-	if (items.length === 0) return;
-	await tx.unsafe(
-		`INSERT INTO ${schema}.registration_repertoire_items (id, organization_id, registration_metadata_id, repertoire_work_id, title_snapshot, performed_movement_text, duration_seconds, display_order)
-		 SELECT id, organization_id, registration_metadata_id, NULL, title_snapshot, performed_movement_text, duration_seconds, display_order
-		 FROM jsonb_to_recordset($1::jsonb) AS item(
-			id TEXT,
-			organization_id TEXT,
-			registration_metadata_id TEXT,
-			title_snapshot TEXT,
-			performed_movement_text TEXT,
-			duration_seconds INTEGER,
-			display_order SMALLINT
-		 )`,
-		[
-			JSON.stringify(
-				items.map((item) => ({
-					id: item.id,
-					organization_id: item.organizationId,
-					registration_metadata_id: item.registrationMetadataId,
-					title_snapshot: item.titleSnapshot,
-					performed_movement_text: item.performedMovementText,
-					duration_seconds: item.durationSeconds,
-					display_order: item.displayOrder,
-				})),
-			),
-		],
-	);
+	for (const item of items) {
+		await tx.unsafe(
+			`INSERT INTO ${schema}.registration_repertoire_items (id, organization_id, registration_metadata_id, repertoire_work_id, title_snapshot, performed_movement_text, duration_seconds, display_order)
+			 VALUES ($1, $2, $3, NULL, $4, $5, $6, $7)`,
+			[
+				item.id,
+				item.organizationId,
+				item.registrationMetadataId,
+				item.titleSnapshot,
+				item.performedMovementText,
+				item.durationSeconds,
+				item.displayOrder,
+			],
+		);
+	}
 }
 
 async function insertRepertoireContributors(
@@ -184,20 +172,20 @@ async function insertRepertoireContributors(
 			position: contributor.displayOrder,
 		})),
 	);
-	if (contributors.length === 0) return;
-	await tx.unsafe(
-		`INSERT INTO ${schema}.registration_repertoire_item_contributors (id, organization_id, registration_repertoire_item_id, repertoire_contributor_id, display_name_snapshot, contributor_role, position)
-		 SELECT id, organization_id, registration_repertoire_item_id, NULL, display_name_snapshot, contributor_role, position
-		 FROM jsonb_to_recordset($1::jsonb) AS contributor(
-			id TEXT,
-			organization_id TEXT,
-			registration_repertoire_item_id TEXT,
-			display_name_snapshot TEXT,
-			contributor_role TEXT,
-			position SMALLINT
-		 )`,
-		[JSON.stringify(contributors)],
-	);
+	for (const contributor of contributors) {
+		await tx.unsafe(
+			`INSERT INTO ${schema}.registration_repertoire_item_contributors (id, organization_id, registration_repertoire_item_id, repertoire_contributor_id, display_name_snapshot, contributor_role, position)
+			 VALUES ($1, $2, $3, NULL, $4, $5, $6)`,
+			[
+				contributor.id,
+				contributor.organization_id,
+				contributor.registration_repertoire_item_id,
+				contributor.display_name_snapshot,
+				contributor.contributor_role,
+				contributor.position,
+			],
+		);
+	}
 }
 
 export function registrationMetadataFromRow(

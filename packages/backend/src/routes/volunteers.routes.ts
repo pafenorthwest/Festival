@@ -26,6 +26,8 @@ import {
 	validateCreateRoleRequest,
 	validateCreateShiftRequest,
 	validateEnrollVolunteerRequest,
+	validateUpdateRoleRequest,
+	validateUpdateShiftRequest,
 } from "../volunteers/volunteer-validation.js";
 
 export interface VolunteerRoutesOptions {
@@ -108,6 +110,68 @@ export function buildVolunteerRoutes(
 		},
 	);
 
+	router.patch(
+		"/roles/:roleId",
+		requireAuth(options.authVerifier),
+		requireTenant(options.repository),
+		requireAdminIntent(),
+		requireVolunteerScope(options.repository),
+		async (c) => {
+			try {
+				if (!options.volunteerRepository) {
+					throw new AppError("Volunteer roles are unavailable.", 503);
+				}
+				const tenant = getRequiredTenant(c);
+				const scope = getRequiredVolunteerScope(c);
+				const payload = await c.req.json();
+				const validated = validateUpdateRoleRequest(payload);
+				if ("errors" in validated) {
+					throw new AppError(validated.errors.join(" "), 400);
+				}
+				const updated = await options.volunteerRepository.updateRole({
+					organizationId: tenant.organization.id,
+					festivalId: scope.festival.id,
+					roleId: c.req.param("roleId"),
+					...validated.request,
+				});
+				if (!updated) {
+					throw new AppError("Volunteer role not found.", 404);
+				}
+				return c.json(updated);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.delete(
+		"/roles/:roleId",
+		requireAuth(options.authVerifier),
+		requireTenant(options.repository),
+		requireAdminIntent(),
+		requireVolunteerScope(options.repository),
+		async (c) => {
+			try {
+				if (!options.volunteerRepository) {
+					throw new AppError("Volunteer roles are unavailable.", 503);
+				}
+				const tenant = getRequiredTenant(c);
+				const scope = getRequiredVolunteerScope(c);
+				const deleted = await options.volunteerRepository.deleteRole(
+					tenant.organization.id,
+					scope.festival.id,
+					c.req.param("roleId"),
+				);
+				if (!deleted) {
+					throw new AppError("Volunteer role not found.", 404);
+				}
+				return c.json({ status: "deleted" });
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
 	router.get(
 		"/roles/:roleId/shifts",
 		requireAuth(options.authVerifier),
@@ -173,6 +237,76 @@ export function buildVolunteerRoutes(
 						...validated.request,
 					}),
 				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.patch(
+		"/roles/:roleId/shifts/:shiftId",
+		requireAuth(options.authVerifier),
+		requireTenant(options.repository),
+		requireAdminIntent(),
+		requireVolunteerScope(options.repository),
+		async (c) => {
+			try {
+				if (!options.volunteerRepository) {
+					throw new AppError("Volunteer roles are unavailable.", 503);
+				}
+				const tenant = getRequiredTenant(c);
+				const scope = getRequiredVolunteerScope(c);
+				const role = await options.volunteerRepository.getRole(
+					tenant.organization.id,
+					scope.festival.id,
+					c.req.param("roleId"),
+				);
+				if (!role) throw new AppError("Volunteer role not found.", 404);
+				const payload = await c.req.json();
+				const validated = validateUpdateShiftRequest(payload, role);
+				if ("errors" in validated) {
+					throw new AppError(validated.errors.join(" "), 400);
+				}
+				const updated = await options.volunteerRepository.updateShift({
+					organizationId: tenant.organization.id,
+					festivalId: scope.festival.id,
+					roleId: role.id,
+					shiftId: c.req.param("shiftId"),
+					...validated.request,
+				});
+				if (!updated) {
+					throw new AppError("Volunteer shift not found.", 404);
+				}
+				return c.json(updated);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.delete(
+		"/roles/:roleId/shifts/:shiftId",
+		requireAuth(options.authVerifier),
+		requireTenant(options.repository),
+		requireAdminIntent(),
+		requireVolunteerScope(options.repository),
+		async (c) => {
+			try {
+				if (!options.volunteerRepository) {
+					throw new AppError("Volunteer roles are unavailable.", 503);
+				}
+				const tenant = getRequiredTenant(c);
+				const scope = getRequiredVolunteerScope(c);
+				const deleted = await options.volunteerRepository.deleteShift(
+					tenant.organization.id,
+					scope.festival.id,
+					c.req.param("roleId"),
+					c.req.param("shiftId"),
+				);
+				if (!deleted) {
+					throw new AppError("Volunteer shift not found.", 404);
+				}
+				return c.json({ status: "deleted" });
 			} catch (error) {
 				return toJsonError(c, error);
 			}
@@ -431,6 +565,11 @@ export function buildVolunteerRoutes(
 					coveragePercentage: summary.coveragePercentage,
 					unfilled: summary.gaps,
 					gaps: summary.gaps,
+					// Every slot in the festival, each with a server-computed
+					// Open/Filled status — powers the filterable slot list on
+					// the admin page. See calculateCoverageGaps in
+					// @festival/common.
+					slots: summary.slots,
 				});
 			} catch (error) {
 				return toJsonError(c, error);
