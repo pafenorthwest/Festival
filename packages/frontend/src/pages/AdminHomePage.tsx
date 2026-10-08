@@ -7,6 +7,7 @@ import {
 	buildOrgAdminFestivalsPath,
 	buildOrgAdminIntegrationsPath,
 	buildOrgAdminMembershipsPath,
+	buildOrgAdminRoomsPath,
 	buildOrgAdminSettingsPath,
 	buildOrgAdminUsersPath,
 	buildOrgAdminVolunteersPath,
@@ -162,6 +163,18 @@ export function AdminHomePage(props: AdminHomePageProps) {
 				>
 					<strong>Volunteers</strong>
 					<span>Review volunteer roles and shift coverage.</span>
+				</button>
+				<button
+					type="button"
+					class="admin-workflow-card"
+					disabled={!props.app.isAdminMember()}
+					onClick={() => {
+						if (!props.app.isAdminMember()) return;
+						props.app.navigate(buildOrgAdminRoomsPath(props.app.slug));
+					}}
+				>
+					<strong>Rooms</strong>
+					<span>Define festival rooms and their piano configurations.</span>
 				</button>
 				<button
 					type="button"

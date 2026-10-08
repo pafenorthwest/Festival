@@ -33,6 +33,7 @@ import {
 	type SessionResponse,
 	type UpdateOrganizationDivisionInput,
 	type UpdateOrganizationTimezoneInput,
+	validateCreateRoomInput,
 	validateDivisionName,
 	validateFestivalDates,
 	validateFestivalName,
@@ -48,6 +49,7 @@ import type {
 	OrganizationRepository,
 	UpdateFestivalClassConfigurationInput,
 } from "../repo/organization-repository.js";
+import type { RoomRepository } from "../rooms/room-repository.js";
 import type { AdminClassCatalogService } from "./admin-class-catalog.service.js";
 
 function toSessionMembership(
@@ -129,6 +131,7 @@ export class OrganizationService {
 		readonly repository: OrganizationRepository,
 		private readonly adminClassCatalogService?: AdminClassCatalogService,
 		private readonly options?: { enableDropTransfer?: boolean },
+		private readonly roomRepository?: RoomRepository,
 	) {}
 
 	async getSession(identity?: AuthenticatedUser): Promise<SessionResponse> {
@@ -940,6 +943,47 @@ export class OrganizationService {
 		} catch (error) {
 			handleCatalogRepositoryError(error);
 		}
+	}
+
+	async listRoomsForTenant(tenant: TenantContext, festivalShortName: string) {
+		if (!this.roomRepository) {
+			throw new AppError("Rooms are unavailable.", 503);
+		}
+		const festival = await this.repository.findFestivalByShortName(
+			tenant.organization.id,
+			festivalShortName,
+		);
+		if (!festival) throw new AppError("Festival not found.", 404);
+		return {
+			rooms: await this.roomRepository.listRooms(
+				tenant.organization.id,
+				festival.id,
+			),
+		};
+	}
+
+	async createRoomForTenant(
+		tenant: TenantContext,
+		festivalShortName: string,
+		payload: unknown,
+	) {
+		if (!this.roomRepository) {
+			throw new AppError("Rooms are unavailable.", 503);
+		}
+		const festival = await this.repository.findFestivalByShortName(
+			tenant.organization.id,
+			festivalShortName,
+		);
+		if (!festival) throw new AppError("Festival not found.", 404);
+		const validated = validateCreateRoomInput(payload);
+		if (!validated.valid || !validated.data) {
+			throw new AppError(validated.errors.join(" "), 400);
+		}
+		return this.roomRepository.createRoom({
+			organizationId: tenant.organization.id,
+			festivalId: festival.id,
+			...validated.data,
+		});
 	}
 
 	async createFestivalClass(

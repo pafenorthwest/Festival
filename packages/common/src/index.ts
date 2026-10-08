@@ -11,6 +11,7 @@ export * from "./organization.js";
 export * from "./purchase-eligibility.js";
 export * from "./registration.js";
 export * from "./repertoire.js";
+export * from "./room.js";
 export * from "./rules.js";
 export * from "./shopify.js";
 export * from "./volunteer.js";
