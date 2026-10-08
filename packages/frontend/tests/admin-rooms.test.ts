@@ -27,6 +27,29 @@ describe("admin rooms panel", () => {
 		expect(home).toContain("<strong>Rooms</strong>");
 	});
 
+	it("uses the admin header and Rooms breadcrumb on the rooms route", async () => {
+		const state = await read("../src/app/createFestivalAppState.ts");
+		const header = await read("../src/components/AppHeader.tsx");
+		const adminRouteKinds = state
+			.split("const ADMIN_ROUTE_KINDS = [")[1]
+			?.split("] as const;")[0];
+		const adminSubRoute = state
+			.split("const isAdminSubRoute = createMemo(")[1]
+			?.split("const adminBreadcrumb =")[0];
+		const adminBreadcrumb = state
+			.split("const adminBreadcrumb = createMemo(")[1]
+			?.split("const adminUserLabel =")[0];
+
+		expect(adminRouteKinds).toContain('"org-admin-rooms"');
+		expect(adminSubRoute).toContain('route().kind === "org-admin-rooms"');
+		expect(adminBreadcrumb).toMatch(
+			/case "org-admin-rooms":\s*return "Admin > Rooms";/,
+		);
+		expect(header).toContain("when={props.app.isAdminRoute()}");
+		expect(header).toContain("{props.app.adminBreadcrumb()}");
+		expect(header).toContain("when={props.app.isAdminSubRoute()}");
+	});
+
 	it("loads the festival list when visiting the admin rooms page", async () => {
 		const lifecycle = await read("../src/app/useFestivalLifecycle.ts");
 
