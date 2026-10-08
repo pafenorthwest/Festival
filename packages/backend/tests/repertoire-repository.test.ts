@@ -537,14 +537,14 @@ describe("Repertoire Repository Layer", () => {
 						INSERT INTO ${schema}.organizations (id, name, slug) VALUES ('${orgId}', 'Org ${orgId}', 'org-${orgId}');
 						INSERT INTO ${schema}.festivals (id, organization_id, code, short_name, is_primary, name, start_date, end_date)
 						VALUES ('${festivalId}', '${orgId}', 'FEST', 'fest', TRUE, 'Festival', '2027-01-01', '2027-01-02');
-						INSERT INTO ${schema}.festival_customers (id, organization_id, shopify_customer_gid)
-						VALUES ('${customerId}', '${orgId}', 'gid://shopify/Customer/${customerId}');
+						INSERT INTO ${schema}.festival_customers (id, organization_id, shopify_customer_gid, created_at, updated_at)
+						VALUES ('${customerId}', '${orgId}', 'gid://shopify/Customer/${customerId}', NOW(), NOW());
 						INSERT INTO ${schema}.products (id, organization_id, product_category, entitlement_class, duration_days, shopify_product_gid, shopify_variant_gid, product_name_snapshot)
 						VALUES ('prod-${membershipId}', '${orgId}', 'membership', 'teacher_membership', 365, 'gid://shopify/Product/1', 'gid://shopify/Variant/1', 'Teacher');
 						INSERT INTO ${schema}.membership_entitlements (id, organization_id, customer_id, entitlement_class, source, offering_id, starts_on, ends_on)
 						VALUES ('${membershipId}', '${orgId}', '${customerId}', 'teacher_membership', 'teacher_checkout', 'prod-${membershipId}', '2026-01-01', '2027-01-01');
 						INSERT INTO ${schema}.checkout_intents (id, correlation_id, organization_id, customer_id, session_id, idempotency_key, intent_type, shopify_product_gid, shopify_variant_gid, amount, currency_code, status, expires_at)
-						VALUES ('${intentId}', '${randomUUID()}', '${orgId}', '${customerId}', 'sess-1', 'idem-1', 'teacher_pass', 'gid://shopify/Product/1', 'gid://shopify/Variant/1', '10.00', 'USD', 'checkout_started', NOW() + INTERVAL '1 hour');
+						VALUES ('${intentId}', '${randomUUID()}', '${orgId}', '${customerId}', 'sess-1', 'idem-1', 'membership', 'gid://shopify/Product/1', 'gid://shopify/Variant/1', '10.00', 'USD', 'checkout_started', NOW() + INTERVAL '1 hour');
 						INSERT INTO ${schema}.registration_metadata (id, organization_id, festival_id, checkout_intent_id, teacher_membership_id, repertoire_json)
 						VALUES ('${metadataId}', '${orgId}', '${festivalId}', '${intentId}', '${membershipId}', '[]');
 						INSERT INTO ${schema}.registration_repertoire_items (id, organization_id, registration_metadata_id, title_snapshot, duration_seconds, display_order)
