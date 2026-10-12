@@ -1,0 +1,12 @@
+Audience: Parent or family account contact only
+Trigger: Waitlisted student is actually added to a class and the registration is confirmed
+Subject: [Student Name] has been added to [Class or Division]
+--- EMAIL ---
+Hello [Parent First Name],
+
+[Student Name] has been added to [Class or Division] for the [Festival Year] PAFE Festival. The registration is now confirmed.
+
+Please review the details here: [Registration URL]. If anything needs correction, contact [Registrar Email]. We will send the schedule when it is finalized.
+
+Thank you,
+The PAFE Festival Team

@@ -1,0 +1,14 @@
+Audience: Parent or family account contact only
+Trigger: Student is newly waitlisted or a waitlist status changes, excluding invitation, promotion, withdrawal, and no-room events
+Subject: Waitlist update for [Student Name] — [Class or Division]
+--- EMAIL ---
+Hello [Parent First Name],
+
+The waitlist status for [Student Name]'s [Class or Division] registration is now: [Plain-language Status].
+
+[One sentence explaining what this status means and whether any action is needed.]
+
+You can review the registration here: [Registration URL]. If you have questions, contact [Registrar Email].
+
+Thank you,
+The PAFE Festival Team

@@ -1,0 +1,12 @@
+Audience: Parent or family account contact only
+Trigger: Parent-requested withdrawal from a waitlist is recorded
+Subject: [Student Name]'s PAFE waitlist withdrawal is recorded
+--- EMAIL ---
+Hello [Parent First Name],
+
+We have recorded your request to remove [Student Name] from the waitlist for [Class or Division]. No further waitlist invitations will be sent for this entry.
+
+If this was a mistake, contact [Registrar Email] so we can review the options available at that time.
+
+Thank you,
+The PAFE Festival Team

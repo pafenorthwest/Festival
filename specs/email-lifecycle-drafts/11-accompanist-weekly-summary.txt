@@ -1,0 +1,24 @@
+Audience: One accompanist, covering only students linked to that accompanist
+Trigger: Weekly scheduled summary after validated changes; skip if this accompanist has no changes
+Subject: Your PAFE accompaniment update — week of [Week Start Date]
+--- EMAIL ---
+Hello [Accompanist First Name],
+
+Here are the changes involving students assigned to you from [Week Start Date] through [Week End Date]. These are registration updates, not the final performance schedule.
+
+Newly confirmed assignments:
+[Student Name] — [Class or Division]; [Piece Title] by [Composer]; [Second Piece, if applicable]
+[Repeat for each assignment or write "None"]
+
+Updated assignments or repertoire:
+[Student Name] — [What changed]; current repertoire: [Piece Title] by [Composer]
+[Repeat or write "None"]
+
+Waitlist changes relevant to your assignments:
+[Student Name] — [Class or Division]; [Plain-language status]
+[Repeat or write "None"]
+
+Please review the relevant details at [Member Portal URL]. If something needs correction, contact [Registrar Email]. We will send your finalized schedule separately after publication.
+
+Thank you,
+The PAFE Festival Team

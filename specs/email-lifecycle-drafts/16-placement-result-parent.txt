@@ -1,0 +1,15 @@
+Audience: Parent or family account contact under the proposed Festival policy; legacy recipients are unverified
+Trigger: Staff finalizes and explicitly releases placement results for the class or placement group under the proposed Festival policy
+Subject: [Student Name]'s PAFE placement result
+--- EMAIL ---
+Hello [Parent First Name],
+
+The placement result for [Student Name] in [Class or Placement Group] is now available.
+
+Result: [Exact approved placement wording]
+
+You can review the result and any next steps here: [Result URL]. If you have questions, contact [Registrar Email].
+
+Thank you for participating in the [Festival Year] PAFE Festival.
+
+The PAFE Festival Team

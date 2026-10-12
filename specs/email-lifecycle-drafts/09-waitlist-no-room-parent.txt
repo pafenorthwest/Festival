@@ -1,0 +1,11 @@
+Audience: Parent or family account contact only
+Trigger: Staff confirms no place is available and releases the waitlist closeout notice
+Subject: PAFE waitlist update for [Student Name]
+--- EMAIL ---
+Hello [Parent First Name],
+
+We are sorry that we cannot offer [Student Name] a place in [Class or Division] for the [Festival Year] PAFE Festival.
+
+Thank you for your patience while we reviewed the available places. If you have questions about this registration, contact [Registrar Email].
+
+The PAFE Festival Team

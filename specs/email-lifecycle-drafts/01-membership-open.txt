@@ -1,0 +1,17 @@
+Audience: Teachers and accompanists who participated in the prior festival year
+Trigger: Staff opens [Festival Year] membership registration and releases the one-time invitation
+Subject: [Festival Year] PAFE teacher and accompanist registration is open
+--- EMAIL ---
+Hello [First Name],
+
+Membership registration for the [Festival Year] PAFE Festival is open. We invite you to participate again as a [teacher/accompanist/both].
+
+Please register here: [Membership Registration URL]
+Registration deadline: [Deadline, if applicable]
+
+Please review your contact details and the divisions in which you plan to participate. We will use those details to connect you with student registrations and send your schedule after it is finalized.
+
+Questions? Contact [Registrar Email].
+
+Thank you,
+The PAFE Festival Team

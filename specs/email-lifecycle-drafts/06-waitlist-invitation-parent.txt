@@ -1,0 +1,15 @@
+Audience: Parent or family account contact only
+Trigger: Staff releases an invitation to a waitlisted student after approving an available opportunity
+Subject: Please respond about [Student Name]'s PAFE waitlist opportunity
+--- EMAIL ---
+Hello [Parent First Name],
+
+An opportunity may be available for [Student Name] in [Class or Division]. Please let us know whether you would like to accept it.
+
+Respond here: [Response URL or Registrar Email]
+Please respond by: [Response Deadline]
+
+We will confirm the registration separately if a place is assigned. If you no longer wish to remain on the waitlist, please let us know.
+
+Thank you,
+The PAFE Festival Team

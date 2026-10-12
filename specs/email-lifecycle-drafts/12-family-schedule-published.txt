@@ -1,0 +1,21 @@
+Audience: Parent or family account contact with a scheduled student
+Trigger: Staff approves and publishes the final schedule version
+Subject: Your family's [Festival Year] PAFE schedule
+--- EMAIL ---
+Hello [Parent First Name],
+
+The [Festival Year] PAFE schedule is ready for your family.
+
+[Student Name] — [Class or Division]
+Date and time: [Date] at [Time and Time Zone]
+Location: [Venue and Room]
+Repertoire: [Piece 1 Title] by [Piece 1 Composer]; [Piece 2, if applicable]
+Teacher: [Teacher Name, if applicable]
+Accompanist: [Accompanist Name, if applicable]
+
+[Repeat the block for each scheduled registration in this family.]
+
+Please review the full schedule and arrival instructions here: [Schedule URL]. If any detail appears wrong, contact [Registrar Email].
+
+Thank you,
+The PAFE Festival Team

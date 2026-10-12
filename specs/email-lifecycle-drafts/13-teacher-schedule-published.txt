@@ -1,0 +1,20 @@
+Audience: One teacher with scheduled students
+Trigger: Staff approves and publishes the final schedule version
+Subject: Your [Festival Year] PAFE student schedule
+--- EMAIL ---
+Hello [Teacher First Name],
+
+The [Festival Year] PAFE schedule for your students is ready.
+
+[Student Name] — [Class or Division]
+Date and time: [Date] at [Time and Time Zone]
+Location: [Venue and Room]
+Repertoire: [Piece 1 Title] by [Piece 1 Composer]; [Piece 2, if applicable]
+Accompanist: [Accompanist Name, if applicable]
+
+[Repeat for each scheduled student assigned to this teacher, in time order.]
+
+Please review the complete schedule and instructions here: [Member Schedule URL]. If an assignment or repertoire entry needs correction, contact [Registrar Email].
+
+Thank you,
+The PAFE Festival Team

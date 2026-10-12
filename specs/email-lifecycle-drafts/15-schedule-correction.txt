@@ -1,0 +1,18 @@
+Audience: Affected parent, teacher, or accompanist; send one role-specific version to each affected person
+Trigger: Staff publishes a correction after the schedule was already released
+Subject: Correction to [Student Name]'s PAFE schedule
+--- EMAIL ---
+Hello [Recipient First Name],
+
+We have corrected the published schedule for [Student Name] in [Class or Division].
+
+Changed detail: [Describe exactly what changed]
+Current date and time: [Date] at [Time and Time Zone]
+Current location: [Venue and Room]
+Current repertoire: [Piece 1 Title] by [Piece 1 Composer]; [Piece 2, if applicable]
+
+Please use this current information and review [Schedule URL]. If you have questions, contact [Registrar Email].
+
+We apologize for the change.
+
+The PAFE Festival Team

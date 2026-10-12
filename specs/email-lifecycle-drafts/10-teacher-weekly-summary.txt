@@ -1,0 +1,24 @@
+Audience: One teacher, covering only students linked to that teacher
+Trigger: Weekly scheduled summary after validated changes; skip if this teacher has no changes
+Subject: Your PAFE student update — week of [Week Start Date]
+--- EMAIL ---
+Hello [Teacher First Name],
+
+Here are the changes involving your students recorded from [Week Start Date] through [Week End Date]. These are registration updates, not the final performance schedule.
+
+Newly confirmed registrations:
+[Student Name] — [Class or Division]; [Piece Title] by [Composer]; [Second Piece, if applicable]
+[Repeat for each new registration or write "None"]
+
+Updated registrations or repertoire:
+[Student Name] — [What changed]; current repertoire: [Piece Title] by [Composer]
+[Repeat or write "None"]
+
+Waitlist changes:
+[Student Name] — [Class or Division]; [Plain-language status]
+[Repeat or write "None"]
+
+Please review the relevant details at [Member Portal URL]. If something needs correction, contact [Registrar Email]. We will send your finalized schedule separately after publication.
+
+Thank you,
+The PAFE Festival Team

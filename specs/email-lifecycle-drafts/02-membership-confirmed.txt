@@ -1,0 +1,16 @@
+Audience: Teacher and/or accompanist whose current-year membership was confirmed
+Trigger: Current-year membership and participating role/divisions are confirmed
+Subject: Your [Festival Year] PAFE membership is confirmed
+--- EMAIL ---
+Hello [First Name],
+
+Your [Festival Year] PAFE membership is confirmed for [Role and Division List].
+
+You can review your information here: [Member Account URL]
+
+We will send updates about students connected to you as registration progresses. Your final schedule will follow after staff approves and publishes it.
+
+If your role, divisions, or contact details need correction, contact [Registrar Email].
+
+Thank you,
+The PAFE Festival Team

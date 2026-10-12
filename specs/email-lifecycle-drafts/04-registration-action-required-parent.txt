@@ -1,0 +1,17 @@
+Audience: Parent or family account contact only
+Trigger: Registration validation finds a specific issue requiring action
+Subject: Action needed for [Student Name]'s PAFE registration
+--- EMAIL ---
+Hello [Parent First Name],
+
+We need your help with [Student Name]'s [Class or Division] registration:
+
+[Plain-language description of issue and required correction]
+
+Please make the change here: [Registration URL]
+Requested by: [Date, if applicable]
+
+If you cannot make the change or believe the information is already correct, contact [Registrar Email]. We will confirm the registration after the issue is resolved.
+
+Thank you,
+The PAFE Festival Team

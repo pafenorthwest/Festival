@@ -1,0 +1,21 @@
+To: [PAFE planning team]
+Subject: Draft email lifecycle and recipient-specific templates for [Festival Year]
+
+Hello team,
+
+I have drafted the participant emails for the [Festival Year] Festival. Each attached template names its audience and send condition. The lifecycle map shows which sends exist in PafeTools and which would be new Festival behavior.
+
+The proposed flow is:
+
+1. When membership registration opens, invite prior-year teachers and accompanists. Send a welcome after a current-year membership is confirmed.
+2. Shopify sends the order receipt to the purchasing parent. Festival does not send a second receipt. After registration is validated, Festival sends the parent either a confirmation or a specific action-required notice.
+3. Parents receive timely waitlist status, invitation, promotion, withdrawal, and no-room notices as those decisions are recorded and released. Routine student registration and repertoire changes are grouped into separate weekly summaries for each teacher and accompanist.
+4. When staff approves and publishes the final schedule, send each family its student schedule and repertoire, and each teacher and accompanist a role-specific schedule of their assigned students. Send a correction only to people affected by a later published change.
+5. Under the proposed Festival policy, when staff releases placement results, send a placement notice to the family. Legacy placement recipients cannot be verified from the checkout because its runtime template controls To/Cc; teacher and accompanist handling needs a policy decision.
+
+The weekly summaries are proposed Festival behavior, not a PafeTools feature. They should include only changes relevant to the named member and should be skipped if there are no changes. Schedule emails should be staff-triggered after review, because they contain individual times, rooms, and repertoire.
+
+Please review the audience and trigger matrix in LIFECYCLE.md, then the individual .txt templates. Fields in [brackets] need real values or approved wording before any send. The legacy template text is not available in this checkout, so these are new drafts informed by the C# send paths rather than transcriptions.
+
+Thank you,
+[Name]

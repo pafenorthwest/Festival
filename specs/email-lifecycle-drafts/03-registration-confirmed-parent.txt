@@ -1,0 +1,19 @@
+Audience: Parent or family account contact only
+Trigger: Student registration passes validation and is confirmed; Shopify has already handled the order receipt
+Subject: [Student Name]'s PAFE registration is confirmed
+--- EMAIL ---
+Hello [Parent First Name],
+
+[Student Name]'s registration for [Class or Division] in the [Festival Year] PAFE Festival is confirmed.
+
+Repertoire on file:
+[Piece 1 Title] — [Piece 1 Composer]
+[Piece 2 Title and Composer, if applicable]
+
+Teacher: [Teacher Name, if applicable]
+Accompanist: [Accompanist Name, if applicable]
+
+Please review the registration here: [Registration URL]. If any detail is wrong, contact [Registrar Email] by [Correction Date, if applicable]. We will send the performance schedule after it is finalized.
+
+Thank you,
+The PAFE Festival Team
