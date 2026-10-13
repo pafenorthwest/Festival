@@ -1347,4 +1347,153 @@ describe("CustomerAccountService", () => {
 		);
 		expect(noFestRes.metadata.id).toBe("reg-meta-1");
 	});
+
+	it("does not allow reading Shopify order history without a session, or across tenants", async () => {
+		const f = await fixture();
+		await expect(f.service.orders("festival", undefined)).rejects.toMatchObject(
+			{ status: 401 },
+		);
+		const auth = await f.authenticate();
+		await expect(
+			f.service.orders("other", auth.sessionId),
+		).rejects.toMatchObject({ status: 401 });
+	});
+
+	it("does not allow a customer session to list class registrations across tenants", async () => {
+		const f = await fixture();
+		const auth = await f.authenticate();
+		await expect(
+			f.service.listClassRegistrations("other", auth.sessionId),
+		).rejects.toMatchObject({ status: 401 });
+	});
+
+	it("only lists the authenticated parent's own class registrations, not another parent's", async () => {
+		const f = await fixture();
+		const festival = await f.organizations.createFestival({
+			id: "fest-1",
+			organizationId: f.org.id,
+			code: "SPF26",
+			name: "Spring Festival 2026",
+			shortName: "spring-2026",
+			startDate: "2026-05-15",
+			endDate: "2026-05-20",
+		});
+		const classConfig = await f.organizations.createFestivalClassConfiguration({
+			organizationId: f.org.id,
+			festivalId: festival.id,
+			displayName: "Solo Piano",
+			classSubtypeId: "piano",
+			divisionId: "div_1",
+			minimumAge: 5,
+			maximumAge: 18,
+			price: 30,
+			maximumPerformancePieces: 2,
+			performanceMinutes: 10,
+			capacity: 20,
+		});
+		const auth = await f.authenticate();
+
+		await f.commerce.createClassEntitlement({
+			organizationId: f.org.id,
+			festivalId: festival.id,
+			festivalClassId: classConfig.id,
+			parentCustomerId: "a-different-parent",
+			childId: "someone-elses-child",
+			checkoutIntentId: "intent-other-parent",
+			shopifyOrderGid: "gid://shopify/Order/999",
+			shopifyOrderLineGid: "gid://shopify/LineItem/999",
+			paidAmountCents: 3000,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+
+		const result = await f.service.listClassRegistrations(
+			"festival",
+			auth.sessionId,
+		);
+		expect(result.registrations).toEqual([]);
+	});
+
+	it("exposes the verified Shopify paid time on a class registration, and null when no payment evidence exists yet", async () => {
+		const f = await fixture();
+		const festival = await f.organizations.createFestival({
+			id: "fest-1",
+			organizationId: f.org.id,
+			code: "SPF26",
+			name: "Spring Festival 2026",
+			shortName: "spring-2026",
+			startDate: "2026-05-15",
+			endDate: "2026-05-20",
+		});
+		const classConfig = await f.organizations.createFestivalClassConfiguration({
+			organizationId: f.org.id,
+			festivalId: festival.id,
+			displayName: "Solo Piano",
+			classSubtypeId: "piano",
+			divisionId: "div_1",
+			minimumAge: 5,
+			maximumAge: 18,
+			price: 30,
+			maximumPerformancePieces: 2,
+			performanceMinutes: 10,
+			capacity: 20,
+		});
+		const auth = await f.authenticate();
+		const storedSession = await f.repository.getSession(auth.sessionId);
+		if (!storedSession) throw new Error("session");
+		const customerId = storedSession.customerId;
+		const unpaidChild = await f.repository.createChild({
+			organizationId: f.org.id,
+			parentCustomerId: customerId,
+			displayName: "Unpaid-Evidence Child",
+		});
+
+		const paidEntitlement = await f.commerce.createClassEntitlement({
+			organizationId: f.org.id,
+			festivalId: festival.id,
+			festivalClassId: classConfig.id,
+			parentCustomerId: customerId,
+			childId: "child-with-paid-order",
+			checkoutIntentId: "intent-paid",
+			shopifyOrderGid: "gid://shopify/Order/paid-1",
+			shopifyOrderLineGid: "gid://shopify/LineItem/paid-1",
+			paidAmountCents: 3000,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+		await f.commerce.upsertOrderProjection({
+			organizationId: f.org.id,
+			shopifyOrderGid: "gid://shopify/Order/paid-1",
+			fullyPaidAtIso: "2026-05-01T12:00:00.000Z",
+			updatedAtIso: "2026-05-01T12:00:00.000Z",
+		});
+
+		await f.commerce.createClassEntitlement({
+			organizationId: f.org.id,
+			festivalId: festival.id,
+			festivalClassId: classConfig.id,
+			parentCustomerId: customerId,
+			childId: unpaidChild.id,
+			checkoutIntentId: "intent-no-projection",
+			shopifyOrderGid: "gid://shopify/Order/no-projection-1",
+			shopifyOrderLineGid: "gid://shopify/LineItem/no-projection-1",
+			paidAmountCents: 3000,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+
+		const result = await f.service.listClassRegistrations(
+			"festival",
+			auth.sessionId,
+		);
+		const paid = result.registrations.find(
+			(r) => r.entitlement.id === paidEntitlement.id,
+		);
+		const noProjection = result.registrations.find(
+			(r) =>
+				r.entitlement.shopifyOrderGid === "gid://shopify/Order/no-projection-1",
+		);
+		expect(paid?.paidAtIso).toBe("2026-05-01T12:00:00.000Z");
+		expect(noProjection?.paidAtIso).toBeNull();
+	});
 });

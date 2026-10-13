@@ -103,7 +103,9 @@ export function CustomerAccountOrdersPage(props: {
 
 	async function loadRegistrations() {
 		try {
-			const res = (await listCustomerClassRegistrations(props.slug)) as {
+			const res = (await listCustomerClassRegistrations(
+				props.slug,
+			)) as unknown as {
 				registrations?: RegistrationItemRecord[];
 			};
 			if (res && Array.isArray(res.registrations)) {

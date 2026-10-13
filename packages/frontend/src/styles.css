@@ -646,6 +646,31 @@ button.compact-header-button {
 	border-top: 1px solid var(--bullet-panel-border);
 }
 
+.customer-classes-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+	gap: 0.9rem;
+}
+
+.customer-class-card {
+	padding: 1rem;
+	border: 1px solid var(--bullet-panel-border);
+	border-radius: 12px;
+	background: rgba(255, 255, 255, 0.72);
+	display: grid;
+	gap: 0.35rem;
+}
+
+.customer-class-card h3,
+.customer-class-card p {
+	margin: 0;
+}
+
+.customer-class-card-paid-at {
+	color: var(--bullet-soft-ink);
+	font-size: 0.88rem;
+}
+
 .customer-membership-section-header,
 .customer-membership-card > header {
 	display: flex;
