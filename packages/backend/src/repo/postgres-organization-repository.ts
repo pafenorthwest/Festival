@@ -2301,6 +2301,24 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		return rows[0] ? mapFestivalClassConfiguration(rows[0]) : null;
 	}
 
+	async findActiveFestivalClassByShortName(
+		organizationId: string,
+		festivalShortName: string,
+		classId: string,
+		festivalId?: string,
+	): Promise<FestivalClassConfiguration | null> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT c.* FROM ${this.schema}.festival_class_configurations c
+			 INNER JOIN ${this.schema}.festivals f ON f.id = c.festival_id AND f.organization_id = c.organization_id
+			 WHERE c.organization_id = $1 AND LOWER(BTRIM(f.short_name)) = LOWER(BTRIM($2))
+			 AND c.id = $3 AND c.is_active AND ($4::text IS NULL OR f.id = $4)
+			 LIMIT 1`,
+			[organizationId, festivalShortName, classId, festivalId?.trim() || null],
+		)) as FestivalClassConfigurationRow[];
+		return rows[0] ? mapFestivalClassConfiguration(rows[0]) : null;
+	}
+
 	async listFestivalClassConfigurations(
 		organizationId: string,
 		festivalId: string,

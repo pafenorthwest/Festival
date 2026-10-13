@@ -163,6 +163,61 @@ describe("PostgresOrganizationRepository", () => {
 		});
 	});
 
+	describe("findActiveFestivalClassByShortName", () => {
+		it("resolves an active class and festival in one scoped query", async () => {
+			const repo = new PostgresOrganizationRepository("test_schema");
+			const readySpy = spyOn(repo, "ensureReady").mockResolvedValue();
+			const unsafeSpy = spyOn(sql, "unsafe").mockResolvedValueOnce([mockRow]);
+			try {
+				const result = await repo.findActiveFestivalClassByShortName(
+					"org-1",
+					" PNW2026 ",
+					"class-1",
+					"fest-1",
+				);
+				expect(result).toEqual(expectedClassConfig);
+				expect(unsafeSpy).toHaveBeenCalledTimes(1);
+				const [query, params] = unsafeSpy.mock.calls[0] as [string, unknown[]];
+				expect(query).toContain("INNER JOIN test_schema.festivals f");
+				expect(query).toContain("c.organization_id = $1");
+				expect(query).toContain(
+					"LOWER(BTRIM(f.short_name)) = LOWER(BTRIM($2))",
+				);
+				expect(query).toContain("c.id = $3 AND c.is_active");
+				expect(query).toContain("f.id = $4");
+				expect(params).toEqual(["org-1", " PNW2026 ", "class-1", "fest-1"]);
+			} finally {
+				unsafeSpy.mockRestore();
+				readySpy.mockRestore();
+			}
+		});
+
+		it("returns null when no active scoped class matches", async () => {
+			const repo = new PostgresOrganizationRepository("test_schema");
+			const readySpy = spyOn(repo, "ensureReady").mockResolvedValue();
+			const unsafeSpy = spyOn(sql, "unsafe").mockResolvedValueOnce([]);
+			try {
+				expect(
+					await repo.findActiveFestivalClassByShortName(
+						"org-1",
+						"pnw2026",
+						"missing",
+					),
+				).toBeNull();
+				expect(unsafeSpy).toHaveBeenCalledTimes(1);
+				expect(unsafeSpy.mock.calls[0]?.[1]).toEqual([
+					"org-1",
+					"pnw2026",
+					"missing",
+					null,
+				]);
+			} finally {
+				unsafeSpy.mockRestore();
+				readySpy.mockRestore();
+			}
+		});
+	});
+
 	describe("updateFestivalClassConfiguration", () => {
 		let repo: PostgresOrganizationRepository;
 		let unsafeSpy: ReturnType<typeof spyOn>;

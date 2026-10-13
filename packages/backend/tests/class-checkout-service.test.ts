@@ -536,13 +536,81 @@ describe("ClassCheckoutService", () => {
 
 	it("successfully checks out with explicit festivalShortName", async () => {
 		const f = await createFixture();
+		const lookup = spyOn(f.organizations, "findActiveFestivalClassByShortName");
+		const listFestivals = spyOn(f.organizations, "listFestivals");
 
 		const result = await f.service.start({
 			...f.defaultInput,
-			festivalShortName: "pnw2026",
+			festivalShortName: " PNW2026 ",
 		});
 
 		expect(result.checkoutUrl).toBeDefined();
+		expect(lookup).toHaveBeenCalledTimes(1);
+		expect(lookup).toHaveBeenCalledWith(
+			f.organization.id,
+			"PNW2026",
+			f.classConfig.id,
+			undefined,
+		);
+		// Eligibility still resolves its festival independently; class resolution does not scan festivals.
+		expect(listFestivals).toHaveBeenCalledTimes(1);
+	});
+
+	it("returns 404 for an inactive class on the named festival checkout", async () => {
+		const f = await createFixture({ isClassActive: false });
+		await expect(
+			f.service.start({ ...f.defaultInput, festivalShortName: "pnw2026" }),
+		).rejects.toMatchObject({
+			status: 404,
+			message: "Festival class configuration not found.",
+		});
+	});
+
+	it("returns 404 when festival ID conflicts with the named festival", async () => {
+		const f = await createFixture();
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				festivalShortName: "pnw2026",
+				festivalId: "other-festival",
+			}),
+		).rejects.toMatchObject({ status: 404 });
+	});
+
+	it("returns 404 for a cross-tenant class on the named festival checkout", async () => {
+		const f = await createFixture();
+		const org2 = await f.organizations.createOrganization({
+			name: "Other",
+			slug: "other",
+		});
+		const fest2 = await f.organizations.createFestival({
+			id: "fest-other-org",
+			organizationId: org2.id,
+			code: "PNW2026",
+			shortName: "pnw2026",
+			name: "Other festival",
+			startDate: "2026-11-01",
+			endDate: "2026-11-10",
+		});
+		const otherClass = await f.organizations.createFestivalClassConfiguration({
+			organizationId: org2.id,
+			festivalId: fest2.id,
+			displayName: "Other class",
+			classSubtypeId: f.classConfig.classSubtypeId,
+			divisionId: f.division.id,
+			minimumAge: 8,
+			maximumAge: 12,
+			price: "50.00",
+			maximumPerformancePieces: 2,
+			performanceMinutes: 10,
+		});
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				festivalShortName: "pnw2026",
+				festivalClassId: otherClass.id,
+			}),
+		).rejects.toMatchObject({ status: 404 });
 	});
 
 	it("successfully checks out with explicit festivalId for non-primary festival", async () => {
@@ -682,7 +750,7 @@ describe("ClassCheckoutService", () => {
 		});
 	});
 
-	it("fails with 400 when requested festivalShortName targets a festival and class belongs to primary festival", async () => {
+	it("returns 404 when requested festivalShortName targets another festival", async () => {
 		const f = await createFixture();
 
 		await f.organizations.createFestival({
@@ -702,9 +770,8 @@ describe("ClassCheckoutService", () => {
 				festivalClassId: f.classConfig.id,
 			}),
 		).rejects.toMatchObject({
-			status: 400,
-			message:
-				"Festival class configuration does not belong to the active festival.",
+			status: 404,
+			message: "Festival class configuration not found.",
 		});
 	});
 
@@ -1466,9 +1533,14 @@ describe("ClassCheckoutService", () => {
 			return { shopifyCartId: "gid://shopify/Cart/multi-cart-1" };
 		};
 		const insertMetadataSpy = spyOn(f.checkout, "insertRegistrationMetadata");
+		const scopedLookup = spyOn(
+			f.organizations,
+			"findActiveFestivalClassByShortName",
+		);
 
 		const result = await f.service.start({
 			organizationId: f.organization.id,
+			festivalShortName: "pnw2026",
 			customerId: f.customer.id,
 			sessionId: f.session.sessionId,
 			idempotencyKey: "22222222-3333-4444-5555-666666666666",
@@ -1497,6 +1569,7 @@ describe("ClassCheckoutService", () => {
 
 		expect(result.checkoutUrl).toBe(`https://${f.storeDomain}/checkouts/c123`);
 		expect(result.intent?.lines).toHaveLength(2);
+		expect(scopedLookup).toHaveBeenCalledTimes(2);
 		expect(result.intent?.amount).toBe("100.00");
 
 		const [line1, line2] = result.intent?.lines ?? [];
@@ -1537,6 +1610,63 @@ describe("ClassCheckoutService", () => {
 			2,
 			expect.objectContaining({ checkoutIntentLineId: line2.id }),
 		);
+	});
+
+	it("rejects named multi-line checkout when normalized short names match different festivals", async () => {
+		const f = await createFixture();
+		const otherFestival = await f.organizations.createFestival({
+			id: "fest-short-name-collision",
+			organizationId: f.organization.id,
+			code: "PNW2026ALT",
+			shortName: " PNW2026 ",
+			name: "Other PNW Festival 2026",
+			startDate: "2026-12-01",
+			endDate: "2026-12-10",
+		});
+		const otherClass = await f.organizations.createFestivalClassConfiguration({
+			organizationId: f.organization.id,
+			festivalId: otherFestival.id,
+			displayName: "Other Junior Solo Piano",
+			classSubtypeId: f.classConfig.classSubtypeId,
+			divisionId: f.division.id,
+			minimumAge: 8,
+			maximumAge: 12,
+			price: "45.00",
+			maximumPerformancePieces: 2,
+			performanceMinutes: 10,
+			capacity: 25,
+			isActive: true,
+		});
+		const createIntent = spyOn(f.checkout, "createIntent");
+		const createCart = spyOn(f.storefront, "createCart");
+		const insertMetadata = spyOn(f.checkout, "insertRegistrationMetadata");
+
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				festivalShortName: "pnw2026",
+				lineItems: [
+					{
+						festivalClassId: f.classConfig.id,
+						childId: f.child.id,
+						teacherId: f.teacherId,
+						pieces: f.defaultPieces,
+					},
+					{
+						festivalClassId: otherClass.id,
+						childId: f.child.id,
+						teacherId: f.teacherId,
+						pieces: f.defaultPieces,
+					},
+				],
+			}),
+		).rejects.toMatchObject({
+			status: 404,
+			message: "Festival class configuration not found.",
+		});
+		expect(createIntent).not.toHaveBeenCalled();
+		expect(createCart).not.toHaveBeenCalled();
+		expect(insertMetadata).not.toHaveBeenCalled();
 	});
 
 	it("rejects multi-line checkout when lineItems is empty with 400", async () => {

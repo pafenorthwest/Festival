@@ -430,6 +430,12 @@ export interface OrganizationRepository {
 		organizationId: string,
 		classId: string,
 	): Promise<FestivalClassConfiguration | null>;
+	findActiveFestivalClassByShortName(
+		organizationId: string,
+		festivalShortName: string,
+		classId: string,
+		festivalId?: string,
+	): Promise<FestivalClassConfiguration | null>;
 	listFestivalClassConfigurations(
 		organizationId: string,
 		festivalId: string,
