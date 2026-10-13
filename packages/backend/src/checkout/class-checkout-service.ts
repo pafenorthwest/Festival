@@ -221,13 +221,13 @@ export class ClassCheckoutService {
 			if (existing.kind === "ready") return this.resume(existing, input);
 			this.handleOutcome(existing);
 		}
-		const festivals = await this.organizations.listFestivals(
-			input.organizationId,
-		);
-		const targetFestival = resolveTargetFestival(festivals, {
-			festivalId: input.festivalId,
-			festivalShortName: input.festivalShortName,
-		});
+		const namedFestival = input.festivalShortName?.trim();
+		const festivals = namedFestival
+			? []
+			: await this.organizations.listFestivals(input.organizationId);
+		const targetFestival = namedFestival
+			? undefined
+			: resolveTargetFestival(festivals, { festivalId: input.festivalId });
 		const lineItems = this.normalizeLineItems(input);
 		const children = await this.customers.listChildren(
 			input.organizationId,
@@ -238,16 +238,28 @@ export class ClassCheckoutService {
 			const vl = await this.validateLine(input.organizationId, line, {
 				targetFestival,
 				festivals,
+				festivalShortName: namedFestival,
+				festivalId: input.festivalId,
 				children,
 				currentTime,
 				divisionId: lineItems.length === 1 ? input.divisionId : undefined,
 			});
 			validatedLines.push(vl);
 		}
+		const targetFestivalId =
+			targetFestival?.id ?? validatedLines[0].classConfig.festivalId;
+		if (
+			namedFestival &&
+			validatedLines.some(
+				(line) => line.classConfig.festivalId !== targetFestivalId,
+			)
+		) {
+			throw new AppError("Festival class configuration not found.", 404);
+		}
 		await this.checkEligibility(
 			input.organizationId,
 			input.customerId,
-			targetFestival.id,
+			targetFestivalId,
 			lineItems,
 		);
 		if (
@@ -284,7 +296,7 @@ export class ClassCheckoutService {
 
 		return this.executeStorefrontCheckout(
 			input,
-			targetFestival,
+			targetFestivalId,
 			outcome.intent,
 			validatedLines,
 			currencyCode,
@@ -419,8 +431,10 @@ export class ClassCheckoutService {
 		organizationId: string,
 		line: ClassCheckoutLineItemInput,
 		ctx: {
-			targetFestival: FestivalRecord;
+			targetFestival?: FestivalRecord;
 			festivals: FestivalRecord[];
+			festivalShortName?: string;
+			festivalId?: string;
 			children: FestivalChildRecord[];
 			currentTime: Date;
 			divisionId?: string;
@@ -450,17 +464,41 @@ export class ClassCheckoutService {
 			snapshots,
 			ctx.currentTime,
 		);
-		const classConfig = await resolveFestivalClassConfiguration(
-			this.organizations,
-			{
+		let classConfig: FestivalClassConfiguration | null;
+		if (ctx.festivalShortName) {
+			classConfig = await this.organizations.findActiveFestivalClassByShortName(
 				organizationId,
-				targetFestival: ctx.targetFestival,
-				festivals: ctx.festivals,
-				festivalClassId: line.festivalClassId,
-				divisionId:
-					(line as { divisionId?: string }).divisionId ?? ctx.divisionId,
-			},
-		);
+				ctx.festivalShortName,
+				line.festivalClassId,
+				ctx.festivalId,
+			);
+		} else if (ctx.targetFestival) {
+			classConfig = await resolveFestivalClassConfiguration(
+				this.organizations,
+				{
+					organizationId,
+					targetFestival: ctx.targetFestival,
+					festivals: ctx.festivals,
+					festivalClassId: line.festivalClassId,
+				},
+			);
+		} else {
+			throw new AppError("Active festival not found.", 404);
+		}
+		if (!classConfig) {
+			throw new AppError("Festival class configuration not found.", 404);
+		}
+		const requestedDivisionId =
+			(line as { divisionId?: string }).divisionId ?? ctx.divisionId;
+		if (
+			requestedDivisionId !== undefined &&
+			requestedDivisionId !== classConfig.divisionId
+		) {
+			throw new AppError(
+				"Selected class does not belong to the requested division.",
+				400,
+			);
+		}
 		validateChildAgeRange(activeSnapshot.age, classConfig);
 		const normalizedPieces = validateAndNormalizeRepertoirePieces(
 			line.pieces,
@@ -700,7 +738,7 @@ export class ClassCheckoutService {
 
 	private async executeStorefrontCheckout(
 		input: StartClassCheckoutInput,
-		targetFestival: FestivalRecord,
+		festivalId: string,
 		intent: CheckoutIntentRecord,
 		validatedLines: ValidatedLineItem[],
 		currencyCode: string,
@@ -724,7 +762,7 @@ export class ClassCheckoutService {
 			);
 			await this.insertAllRegistrationMetadata(
 				input.organizationId,
-				targetFestival.id,
+				festivalId,
 				intent,
 				validatedLines,
 				intentLines,

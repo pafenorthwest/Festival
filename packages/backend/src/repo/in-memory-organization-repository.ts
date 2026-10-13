@@ -1351,6 +1351,29 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		return { ...record };
 	}
 
+	async findActiveFestivalClassByShortName(
+		organizationId: string,
+		festivalShortName: string,
+		classId: string,
+		festivalId?: string,
+	): Promise<FestivalClassConfiguration | null> {
+		const record = this.festivalClassConfigurations.get(classId);
+		const festival = record && this.festivals.get(record.festivalId);
+		if (
+			!record ||
+			!festival ||
+			record.organizationId !== organizationId ||
+			festival.organizationId !== organizationId ||
+			!record.isActive ||
+			festival.shortName.trim().toLowerCase() !==
+				festivalShortName.trim().toLowerCase() ||
+			(festivalId?.trim() && festival.id !== festivalId.trim())
+		) {
+			return null;
+		}
+		return { ...record };
+	}
+
 	async listFestivalClassConfigurations(
 		organizationId: string,
 		festivalId: string,
