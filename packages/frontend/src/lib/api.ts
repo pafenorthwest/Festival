@@ -1674,6 +1674,7 @@ export interface CustomerClassRegistrationItem {
 	metadata?: ClassRegistrationMetadata | null;
 	festivalSlug?: string;
 	festivalShortName?: string;
+	paidAtIso: string | null;
 }
 
 export interface CustomerClassRegistrationsResponse {

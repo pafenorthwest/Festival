@@ -179,6 +179,8 @@ export interface CustomerClassRegistrationItem {
 	festivalClass?: FestivalClassConfiguration;
 	child?: { id: string; name: string };
 	metadata?: ClassRegistrationMetadata | null;
+	/** Verified Shopify payment time from the order projection; null when no matching projection exists yet. */
+	paidAtIso: string | null;
 }
 
 export interface CustomerClassRegistrationsResponse {
@@ -1155,6 +1157,21 @@ export class CustomerAccountService {
 			festivalId: festival?.id,
 		});
 
+		const projections = await this.commerce.listOrderProjectionsByGids(
+			session.organizationId,
+			[
+				...new Set(
+					entitlements.map((entitlement) => entitlement.shopifyOrderGid),
+				),
+			],
+		);
+		const paidAtByOrderGid = new Map(
+			projections.map((projection) => [
+				projection.shopifyOrderGid,
+				projection.fullyPaidAtIso ?? null,
+			]),
+		);
+
 		const classConfigCache = new Map<
 			string,
 			Map<string, FestivalClassConfiguration>
@@ -1199,6 +1216,7 @@ export class CustomerAccountService {
 					festivalClass,
 					child,
 					metadata,
+					paidAtIso: paidAtByOrderGid.get(entitlement.shopifyOrderGid) ?? null,
 				};
 			}),
 		);

@@ -1,6 +1,7 @@
 import { Button } from "../components/Button.js";
 import {
 	buildOrgCustomerAccountChildrenPath,
+	buildOrgCustomerAccountClassesPath,
 	buildOrgCustomerAccountContactPath,
 	buildOrgCustomerAccountMembershipsPath,
 	buildOrgCustomerAccountOrdersPath,
@@ -44,6 +45,13 @@ export function CustomerAccountNavigation(props: { slug: string }) {
 				onClick={() => navigate(buildOrgCustomerAccountOrdersPath(props.slug))}
 			>
 				Order History
+			</Button>
+			<Button
+				type="button"
+				variant="compact-header"
+				onClick={() => navigate(buildOrgCustomerAccountClassesPath(props.slug))}
+			>
+				Classes
 			</Button>
 		</nav>
 	);

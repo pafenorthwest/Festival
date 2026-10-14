@@ -3,6 +3,7 @@ import {
 	customerSignInPath,
 	getCustomerMembershipStatus,
 } from "../src/lib/api.js";
+import { buildOrgCustomerAccountClassesPath } from "../src/lib/routes.js";
 
 const membershipsPage = await Bun.file(
 	new URL("../src/pages/CustomerAccountMembershipsPage.tsx", import.meta.url),
@@ -13,11 +14,20 @@ const contactPage = await Bun.file(
 const ordersPage = await Bun.file(
 	new URL("../src/pages/CustomerAccountOrdersPage.tsx", import.meta.url),
 ).text();
+const classesPage = await Bun.file(
+	new URL("../src/pages/CustomerAccountClassesPage.tsx", import.meta.url),
+).text();
 const layout = await Bun.file(
 	new URL("../src/pages/CustomerAccountPageLayout.tsx", import.meta.url),
 ).text();
 const admin = await Bun.file(
 	new URL("../src/components/CustomerAccountAdminCard.tsx", import.meta.url),
+).text();
+const navigation = await Bun.file(
+	new URL("../src/pages/CustomerAccountNavigation.tsx", import.meta.url),
+).text();
+const sideNavigation = await Bun.file(
+	new URL("../src/components/OrganizationSideNavigation.tsx", import.meta.url),
 ).text();
 const api = await Bun.file(
 	new URL("../src/lib/api.ts", import.meta.url),
@@ -143,5 +153,43 @@ describe("customer account frontend boundary", () => {
 		expect(admin).toContain("Callback URL");
 		expect(admin).toContain("Save & Verify");
 		expect(admin).not.toContain("accessToken");
+	});
+
+	it("builds the Account > Classes path", () => {
+		expect(buildOrgCustomerAccountClassesPath("pafe")).toBe(
+			"/org/pafe/account/classes",
+		);
+	});
+
+	it("is reachable from account navigation with a graduation-hat icon and accessible name", () => {
+		expect(navigation).toContain("buildOrgCustomerAccountClassesPath");
+		expect(navigation).toContain("Classes");
+		expect(sideNavigation).toContain("buildOrgCustomerAccountClassesPath");
+		expect(sideNavigation).toContain('aria-label="Classes"');
+		expect(sideNavigation).toContain("school");
+	});
+
+	it("loads purchased classes through the allowlisted registration DTO and defines loading, empty, and error states", () => {
+		expect(classesPage).toContain("listCustomerClassRegistrations");
+		expect(classesPage).toContain("Loading your purchased classes");
+		expect(classesPage).toContain("No purchased classes found.");
+		expect(classesPage).toContain(
+			"Purchased classes could not be loaded. Please try again.",
+		);
+		expect(classesPage).toContain('aria-live="polite"');
+		expect(classesPage).toContain('role="status"');
+		expect(classesPage).toContain('role="alert"');
+		expect(classesPage).toContain("registration.paidAtIso");
+		expect(classesPage).toContain("registration.festivalClass?.displayName");
+		expect(classesPage).toContain("registration.child?.name");
+		expect(classesPage).not.toMatch(
+			/shopifyOrderGid|shopifyOrderLineGid|checkoutIntentId|accessToken|refreshToken|idToken/,
+		);
+	});
+
+	it("shows a neutral missing-date message, not an implied unconfirmed payment, when paidAtIso is null", () => {
+		expect(classesPage).toContain("Payment date unavailable");
+		expect(classesPage).not.toContain("not yet confirmed");
+		expect(classesPage).toContain("if (!paidAtIso)");
 	});
 });

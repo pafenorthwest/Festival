@@ -216,6 +216,10 @@ export interface MembershipCommerceRepository {
 	upsertOrderProjection(
 		input: ShopifyOrderProjectionInput,
 	): Promise<ShopifyOrderProjection>;
+	listOrderProjectionsByGids(
+		organizationId: string,
+		shopifyOrderGids: readonly string[],
+	): Promise<ShopifyOrderProjection[]>;
 	recordPendingDecision(input: {
 		organizationId: string;
 		shopifyOrderGid: string;
@@ -442,6 +446,20 @@ export class InMemoryMembershipCommerceRepository
 		};
 		this.projections.set(key, projection);
 		return { ...projection };
+	}
+
+	async listOrderProjectionsByGids(
+		organizationId: string,
+		shopifyOrderGids: readonly string[],
+	): Promise<ShopifyOrderProjection[]> {
+		const gids = new Set(shopifyOrderGids);
+		return [...this.projections.values()]
+			.filter(
+				(projection) =>
+					projection.organizationId === organizationId &&
+					gids.has(projection.shopifyOrderGid),
+			)
+			.map((projection) => ({ ...projection }));
 	}
 
 	async recordPendingDecision(input: {

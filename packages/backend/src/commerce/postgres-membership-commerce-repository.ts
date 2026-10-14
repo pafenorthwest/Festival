@@ -324,6 +324,33 @@ export class PostgresMembershipCommerceRepository
 		};
 	}
 
+	async listOrderProjectionsByGids(
+		organizationId: string,
+		shopifyOrderGids: readonly string[],
+	): Promise<ShopifyOrderProjection[]> {
+		if (shopifyOrderGids.length === 0) return [];
+		const rows = (await sql.unsafe(
+			`SELECT organization_id, shopify_order_gid, shopify_customer_gid, correlation_id, fully_paid_at::text, currency_code, created_at::text, updated_at::text FROM ${this.schema}.shopify_order_projections WHERE organization_id = $1 AND shopify_order_gid = ANY($2)`,
+			[organizationId, sql.array([...shopifyOrderGids], "text")],
+		)) as Array<Record<string, unknown>>;
+		return rows.map((row) => ({
+			organizationId: String(row.organization_id),
+			shopifyOrderGid: String(row.shopify_order_gid),
+			shopifyCustomerGid:
+				row.shopify_customer_gid === null
+					? undefined
+					: String(row.shopify_customer_gid),
+			correlationId:
+				row.correlation_id === null ? undefined : String(row.correlation_id),
+			fullyPaidAtIso:
+				row.fully_paid_at === null ? undefined : String(row.fully_paid_at),
+			currencyCode:
+				row.currency_code === null ? undefined : String(row.currency_code),
+			createdAtIso: String(row.created_at),
+			updatedAtIso: String(row.updated_at),
+		}));
+	}
+
 	async recordPendingDecision(input: {
 		organizationId: string;
 		shopifyOrderGid: string;
