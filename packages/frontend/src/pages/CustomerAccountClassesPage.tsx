@@ -4,7 +4,7 @@ import { listCustomerClassRegistrations } from "../lib/api.js";
 import { CustomerAccountPageLayout } from "./CustomerAccountPageLayout.js";
 
 function formatPaidAt(paidAtIso: string | null): string {
-	if (!paidAtIso) return "Payment not yet confirmed";
+	if (!paidAtIso) return "Payment date unavailable";
 	return new Date(paidAtIso).toLocaleString(undefined, {
 		year: "numeric",
 		month: "2-digit",

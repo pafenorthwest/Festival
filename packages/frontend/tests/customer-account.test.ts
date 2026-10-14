@@ -187,8 +187,9 @@ describe("customer account frontend boundary", () => {
 		);
 	});
 
-	it("shows an unconfirmed-payment message rather than a blank or raw value when paidAtIso is null", () => {
-		expect(classesPage).toContain("Payment not yet confirmed");
+	it("shows a neutral missing-date message, not an implied unconfirmed payment, when paidAtIso is null", () => {
+		expect(classesPage).toContain("Payment date unavailable");
+		expect(classesPage).not.toContain("not yet confirmed");
 		expect(classesPage).toContain("if (!paidAtIso)");
 	});
 });
