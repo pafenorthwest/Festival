@@ -223,65 +223,27 @@ Legacy ciphertext is intentionally unsupported for the current localhost-develop
 
 #### Shopify paid-order webhook and reconciliation
 
+For ordered store, app, Headless, extension, and test-checkout onboarding, follow
+[New Shopify integration test store](SHOPIFY_INTEGRATION_TEST_STORE.md).
+
 Festival registers and repairs one app-owned paid-order webhook for each
 verified Organization that sells a Teacher Membership. The webhook's HMAC is
 verified with the Organization's already-saved Shopify Admin app client secret;
 do not create a Shopify Admin UI webhook or copy its store-level signing value.
 
-Use this ordered checklist when setting up or diagnosing a store:
+`FESTIVAL_PUBLIC_ORIGIN` must be the externally reachable HTTPS origin without
+a path, credentials, or explicit port. Its paid-order callback is
+`https://<festival-public-origin>/api/shopify/webhooks/orders-paid`. Public DNS,
+TLS, proxy routing, and request-body forwarding must work from outside the
+private network. An unsigned probe must be rejected by Festival's HMAC check;
+do not weaken that check to make a probe pass. Do not use `localhost`, the
+private backend port, or the reconciliation endpoint. `ORDERS_PAID` does not
+require a separate `write_webhooks` scope.
 
-1. In Shopify Dev Dashboard, confirm the app and development store appear under
-   the same Shopify organization. Installing an app on a store does not by
-   itself satisfy the client-credentials ownership requirement.
-2. Open **Partner Dashboard → Apps → your app → API access requests** and
-   request **Protected customer data** for paid-order membership verification.
-   Select only the fields required by Festival and save the request. For
-   development-only or custom-distributed apps, the 16-question Partner review
-   questionnaire and public-app review submission are not required. See
-   Shopify's [request-access instructions](https://shopify.dev/docs/apps/launch/protected-customer-data#request-access-to-protected-customer-data).
-3. Open **Partner Dashboard → Apps → your app → Distribution**, select
-   **Custom distribution**, enter the target store's `*.myshopify.com` domain,
-   and generate the install link. Copy the generated link and open it in a
-   browser while signed in as an administrator of that target store; complete
-   the install or scope-update approval. The link is an installation and
-   permission-approval step, not a Festival credential: do not paste it into
-   Festival's Client ID, Client secret, or Store URL fields.
-4. In Shopify Dev Dashboard, set the app webhook API version to `2026-07` and
-   add all Festival-required Admin and Customer Account scopes, including
-   `read_customers` and `read_orders`. Release the version, then repeat the
-   generated Custom-distribution install-link approval on the target store when
-   Shopify requires consent for the changed scopes. Festival reads the effective
-   scopes returned by that store's access token; a checked Dev Dashboard scope
-   alone is not proof that access was granted.
-   `ORDERS_PAID` does not require a separate `write_webhooks` scope.
-5. Set `FESTIVAL_PUBLIC_ORIGIN` before starting a keyring-enabled Festival
-   backend. It must be the externally reachable HTTPS origin without a path,
-   credentials, or explicit port:
-
-   ```text
-   FESTIVAL_PUBLIC_ORIGIN=https://<festival-public-origin>
-   ```
-
-   The resulting callback is
-   `https://<festival-public-origin>/api/shopify/webhooks/orders-paid`. Confirm
-   its public DNS, TLS certificate, proxy routing, and request-body forwarding
-   work from outside the private network. An unsigned probe must be rejected by
-   Festival's HMAC check; do not weaken that check to make a probe pass. Do not
-   use `localhost`, the private backend port, or the reconciliation endpoint.
-6. Start Festival, save and verify the Organization's Shopify Admin integration,
-   and confirm the returned effective capability includes `read_orders`.
-   Festival then lists and creates or repairs the app-owned `ORDERS_PAID`
-   subscription. Run **Shopify Integration > Diagnostics** to repair it again
-   later. Festival never creates subscriptions at startup or during paid-order
-   reconciliation, and no manual store-level webhook is a supported workaround.
-
-For an end-to-end development test, initiate a Teacher Membership checkout from
-Festival and complete it in Shopify's **Test payment gateway** with card number
-`1`, any future expiration date, and any three-digit security code. A generic
-Shopify test notification does not contain Festival's checkout correlation, so
-it cannot verify entitlement issuance. A valid paid checkout should result in a
-`processed` delivery, an `approved` validation decision, and one active
-`entitlement_grants` row for the customer.
+After the Organization's Shopify Admin integration is saved and verified,
+Festival lists and creates or repairs the app-owned `ORDERS_PAID` subscription.
+**Shopify Integration → Diagnostics** can repair it again later. Festival never
+creates subscriptions at startup or during paid-order reconciliation.
 
 #### Shopify paid-order reconciliation
 
@@ -317,15 +279,9 @@ not be exposed through nginx.
 
 #### Shopify Dev Dashboard app
 
-Festival uses Shopify's Dev Dashboard app install plus client credentials grant for backend Admin API access.
-
-In the Shopify Dev Dashboard:
-- Configure scopes in the app version: `read_customers,read_orders,read_products,write_products,customer_read_customers,customer_read_draft_orders,customer_read_metaobjects,customer_read_orders`.
-- Release the version.
-- In Partner Dashboard, request Protected customer data and configure Custom
-  distribution for the target store. Generate the install link, then open it
-  while signed into that store to complete installation or approve the released
-  scope update.
+Follow [New Shopify integration test store](SHOPIFY_INTEGRATION_TEST_STORE.md)
+for the Dev Dashboard app version, installation, distribution, and scope setup.
+Festival uses Shopify's client credentials grant for backend Admin API access.
 
 In Festival's organization admin page, enter the store's `*.myshopify.com` domain plus the app Client ID and Client secret. The backend uses Admin GraphQL `2026-07`, verifies the returned canonical shop and already-granted scopes, and does not request scopes during token exchange. Short-lived access tokens remain only in an early-expiry process-local cache and are never persisted.
 
@@ -359,23 +315,13 @@ the backend at startup.
 
 Customer authentication uses a confidential Customer Account client through the
 Festival BFF. It is separate from both Firebase and the Shopify Admin API client.
-
-1. Enable Shopify's new customer accounts for the tenant store and install the
-   Headless channel.
-2. Create/configure the Customer Account client and enable the minimum order
-   permission (`customer_read_orders`). Do not reuse Admin API credentials.
-3. Configure protected customer data in Shopify. The initial Festival DTO uses
-   Level 1 order data and intentionally excludes name, address, email, and phone.
-   Production access can require Shopify review/approval; development-store rules
-   differ. Festival treats Shopify denial or field redaction as unavailable order
-   access and does not provide a manual approval override.
-4. Set `FESTIVAL_PUBLIC_ORIGIN` to the externally visible Festival origin. In
-   production it must be HTTPS. Start the backend, open
-   `/org/:slug/admin/integrations`, and use the **Shopify Customer Accounts** card.
-5. Enter the storefront/account domain, Customer Account client ID, and client
-   secret, then choose **Save & Verify**. Copy the displayed callback and logout
-   return URLs exactly into Shopify. The callback is shared but its one-time state
-   binds it to the tenant; return targets are restricted to `/org/:slug/account`.
+Follow [New Shopify integration test store](SHOPIFY_INTEGRATION_TEST_STORE.md)
+for the Headless channel, client permissions, and callback/logout setup. The
+initial Festival DTO uses Level 1 order data and intentionally excludes name,
+address, email, and phone. Festival treats Shopify denial or field redaction as
+unavailable order access and does not provide a manual approval override. The
+callback is shared, but its one-time state binds it to the tenant; return
+targets are restricted to `/org/:slug/account`.
 
 Customer Account client secrets and customer tokens use distinct tenant-bound
 AES-256-GCM purposes under `FESTIVAL_SECRET_KEYS_JSON`. Saving or rotating the
@@ -726,7 +672,8 @@ manual **Admin Tool Shopify Integration Run** against a new database:
    **Shopify Integration > Diagnostics** so the paid-order webhook is checked.
 3. Recreate the registration/catalog configuration and the required membership
    and accompanist offerings.
-4. Record any Shopify Dev Dashboard or protected-customer-data setup that could
+4. Record any Shopify Dev Dashboard setup from the
+   [integration test store guide](SHOPIFY_INTEGRATION_TEST_STORE.md) that could
    not be completed through the Admin Tool.
 
 The automated PostgreSQL 17 schema contract covers fresh initialization and
