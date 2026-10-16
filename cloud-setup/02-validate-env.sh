@@ -81,6 +81,17 @@ password = values.get("DB_PASSWORD", "")
 if password and (len(password) < 20 or re.search(r"[\s$#'\"\\]", password)):
     errors.append("DB_PASSWORD must have at least 20 characters and avoid whitespace, $, #, quotes, and backslashes")
 
+if values.get("TRUST_PROXY_HEADERS") != "true":
+    errors.append("TRUST_PROXY_HEADERS must be true for this cloud deployment")
+
+reconciliation_token = values.get("FESTIVAL_RECONCILIATION_TOKEN", "").strip()
+if reconciliation_token and not re.fullmatch(r"[A-Za-z0-9_-]{32,}", reconciliation_token):
+    errors.append("FESTIVAL_RECONCILIATION_TOKEN must contain at least 32 base64url-safe characters (letters, digits, _, or -)")
+elif not reconciliation_token:
+    errors.append("FESTIVAL_RECONCILIATION_TOKEN is required")
+elif reconciliation_token == password:
+    errors.append("FESTIVAL_RECONCILIATION_TOKEN must be distinct from DB_PASSWORD")
+
 if values.get("FIREBASE_PROJECT_ID") != values.get("FRONT_FIREBASE_PROJECT_ID"):
     errors.append("FIREBASE_PROJECT_ID and FRONT_FIREBASE_PROJECT_ID must match")
 

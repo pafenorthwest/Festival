@@ -26,7 +26,10 @@ this checkout.
    option) and return to the checkout. Build **your own**
    `cloud-setup/.env` using [`.env.example`](.env.example) as a guide. The
    scripts never create or fill in this file. Set its mode to `600` and keep
-   real passwords, Firebase credentials, and encryption keys out of Git.
+   real passwords, Firebase credentials, and encryption keys out of Git. Set
+   `TRUST_PROXY_HEADERS=true` and supply a distinct, randomly generated
+   `FESTIVAL_RECONCILIATION_TOKEN` of at least 32 letters, digits, `_`, or `-`
+   characters; do not reuse the database password.
 4. Run `bash cloud-setup/02-validate-env.sh`. It checks required values and
    placeholders without printing secrets. Fix every reported error before the
    next step.
@@ -46,6 +49,17 @@ and PostgreSQL have no host-published ports. The frontend listens on host
 before exposing the app publicly. Do not point public traffic at backend port
 3000 or database port 5432. See [SECURITY.md](../SECURITY.md) for the network
 and firewall boundary.
+
+The backend trusts proxy headers in this production configuration. The
+checked-in frontend Nginx overwrites incoming forwarded headers before sending
+requests to the private backend. With an external HTTPS proxy in front of the
+frontend container, Nginx sees that proxy as its remote peer, so login events
+may record the proxy or gateway IP instead of the client's IP. Recording the
+real client IP requires deliberate trusted ingress configuration later. Keep
+the backend private. The reconciliation token is required in the env file, but
+these scripts do not schedule reconciliation jobs. Since the backend has no
+host-published port, a scheduler must run on the private Docker network to
+reach its private routes.
 
 Frontend Firebase values are embedded when its image is built. After changing
 those values, rerun image preparation before starting or recreating the
