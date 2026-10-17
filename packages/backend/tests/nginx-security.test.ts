@@ -48,6 +48,18 @@ describe("repository nginx security policy", () => {
 
 			expect(config).toContain("limit_except GET OPTIONS");
 			expect(config).toContain("limit_except POST OPTIONS");
+			expect(config).toMatch(
+				/location ~ \^\/api\/organizations\/\[\^\/\]\+\/admin\/membership-products\$ \{\s+limit_except GET POST OPTIONS \{ deny all; \}/,
+			);
+			expect(
+				config.indexOf(
+					"location ~ ^/api/organizations/[^/]+/admin/membership-products$",
+				),
+			).toBeLessThan(
+				config.indexOf(
+					"organizations/[^/]+/admin/membership-products(?:/[^/]+/retire)?",
+				),
+			);
 			expect(config).toContain("limit_except DELETE OPTIONS");
 			expect(config).toContain("limit_except GET POST OPTIONS");
 			expect(config).toContain("limit_except GET POST PATCH DELETE OPTIONS");
