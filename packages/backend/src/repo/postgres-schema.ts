@@ -731,6 +731,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		CREATE INDEX IF NOT EXISTS idx_festival_customers_org_email ON ${safeSchema}.festival_customers(organization_id,LOWER(email));
 		CREATE INDEX IF NOT EXISTS idx_festival_customers_org_phone ON ${safeSchema}.festival_customers(organization_id,phone);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_festival_children_parent_name ON ${safeSchema}.festival_children(organization_id, parent_customer_id, LOWER(display_name));
+		CREATE INDEX IF NOT EXISTS idx_festival_child_age_snapshots_org_child_active ON ${safeSchema}.festival_child_age_snapshots (organization_id, child_id, created_at DESC) WHERE superseded_at IS NULL;
 		CREATE UNIQUE INDEX IF NOT EXISTS checkout_intents_scope_key ON ${safeSchema}.checkout_intents(organization_id, customer_id, session_id, idempotency_key);
 		CREATE INDEX IF NOT EXISTS idx_recovery_requests_org_cust ON ${safeSchema}.checkout_recovery_requests (organization_id, customer_id);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_recovery_requests_token_hash ON ${safeSchema}.checkout_recovery_requests (token_hash);

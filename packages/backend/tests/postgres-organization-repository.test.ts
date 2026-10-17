@@ -518,4 +518,153 @@ describe("PostgresOrganizationRepository", () => {
 			expect(error).toBe(unexpectedError);
 		});
 	});
+
+	describe("findActiveTeacherEntitlementGrant and findCurrentAccompanistMembershipGrant", () => {
+		let repo: PostgresOrganizationRepository;
+		let unsafeSpy: ReturnType<typeof spyOn>;
+
+		beforeEach(() => {
+			repo = new PostgresOrganizationRepository("test_schema");
+			spyOn(repo, "ensureReady").mockResolvedValue();
+			unsafeSpy = spyOn(sql, "unsafe");
+		});
+
+		afterEach(() => {
+			unsafeSpy.mockRestore();
+		});
+
+		it("findActiveTeacherEntitlementGrant queries with division, active lifecycle, and deterministic ORDER BY created_at ASC, id ASC LIMIT 1", async () => {
+			const dbRow = {
+				id: "grant-1",
+				organization_id: "org-1",
+				customer_id: "teacher-1",
+				entitlement_class: "teacher_membership",
+				offering_id: "offering-1",
+				duration_days: 365,
+				division_id: "div-1",
+				division_name_snapshot: "Junior Piano",
+				paid_amount: "50.00",
+				paid_currency_code: "USD",
+				checkout_intent_id: "intent-1",
+				shopify_order_gid: "gid://shopify/Order/1",
+				shopify_order_line_gid: "gid://shopify/LineItem/1",
+				starts_on: "2026-01-01",
+				ends_on: "2027-01-01",
+				status: "active",
+				created_at: "2026-01-01T00:00:00.000Z",
+			};
+			unsafeSpy.mockResolvedValueOnce([dbRow]);
+
+			const result = await repo.findActiveTeacherEntitlementGrant({
+				organizationId: "org-1",
+				customerId: "teacher-1",
+				divisionId: "div-1",
+			});
+
+			expect(result).toEqual({
+				id: "grant-1",
+				organizationId: "org-1",
+				customerId: "teacher-1",
+				entitlementClass: "teacher_membership",
+				offeringId: "offering-1",
+				durationDays: 365,
+				divisionId: "div-1",
+				divisionNameSnapshot: "Junior Piano",
+				paidAmount: "50.00",
+				paidCurrencyCode: "USD",
+				checkoutIntentId: "intent-1",
+				shopifyOrderGid: "gid://shopify/Order/1",
+				shopifyOrderLineGid: "gid://shopify/LineItem/1",
+				startsOn: "2026-01-01",
+				endsOn: "2027-01-01",
+				status: "active",
+				createdAtIso: "2026-01-01T00:00:00.000Z",
+			});
+			expect(unsafeSpy).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class='teacher_membership' AND ed.division_id=$3 AND e.revoked_at IS NULL AND e.starts_on <= (NOW() AT TIME ZONE o.timezone)::date AND e.ends_on > (NOW() AT TIME ZONE o.timezone)::date ORDER BY e.created_at ASC, e.id ASC LIMIT 1",
+				),
+				["org-1", "teacher-1", "div-1"],
+			);
+		});
+
+		it("findActiveTeacherEntitlementGrant returns null when no active grant matches", async () => {
+			unsafeSpy.mockResolvedValueOnce([]);
+			const result = await repo.findActiveTeacherEntitlementGrant({
+				organizationId: "org-1",
+				customerId: "teacher-1",
+				divisionId: "div-missing",
+			});
+			expect(result).toBeNull();
+		});
+
+		it("findCurrentAccompanistMembershipGrant queries with active lifecycle and deterministic ORDER BY e.created_at ASC, e.id ASC LIMIT 1", async () => {
+			const dbRow = {
+				id: "acc-grant-1",
+				organization_id: "org-1",
+				customer_id: "acc-1",
+				normalized_email: "acc@example.com",
+				offering_id: "offering-acc",
+				offering_name_snapshot: "Accompanist Membership",
+				source: "accompanist_form",
+				contact_name: "Sam Acc",
+				contact_email: "acc@example.com",
+				contact_city: "Seattle",
+				contact_phone: "555-0100",
+				divisions: [{ divisionId: "div-1", divisionName: "Junior Piano" }],
+				starts_on: "2026-01-01",
+				ends_on: "2027-01-01",
+				status: "active",
+				is_current: true,
+				created_at: "2026-01-01T00:00:00.000Z",
+			};
+			unsafeSpy.mockResolvedValueOnce([dbRow]);
+
+			const result = await repo.findCurrentAccompanistMembershipGrant({
+				organizationId: "org-1",
+				customerId: "acc-1",
+			});
+
+			expect(result).toEqual({
+				id: "acc-grant-1",
+				organizationId: "org-1",
+				customerId: "acc-1",
+				normalizedEmail: "acc@example.com",
+				offeringId: "offering-acc",
+				offeringNameSnapshot: "Accompanist Membership",
+				source: "accompanist_form",
+				contact: {
+					name: "Sam Acc",
+					email: "acc@example.com",
+					city: "Seattle",
+					phone: "555-0100",
+				},
+				divisions: [{ divisionId: "div-1", divisionName: "Junior Piano" }],
+				startsOn: "2026-01-01",
+				endsOn: "2027-01-01",
+				status: "active",
+				isCurrent: true,
+				createdAtIso: "2026-01-01T00:00:00.000Z",
+			});
+			expect(unsafeSpy).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class='accompanist_membership' AND e.revoked_at IS NULL AND e.starts_on <= (NOW() AT TIME ZONE o.timezone)::date AND e.ends_on > (NOW() AT TIME ZONE o.timezone)::date",
+				),
+				["org-1", "acc-1"],
+			);
+			expect(unsafeSpy).toHaveBeenCalledWith(
+				expect.stringContaining("ORDER BY e.created_at ASC, e.id ASC LIMIT 1"),
+				["org-1", "acc-1"],
+			);
+		});
+
+		it("findCurrentAccompanistMembershipGrant returns null when no current grant matches", async () => {
+			unsafeSpy.mockResolvedValueOnce([]);
+			const result = await repo.findCurrentAccompanistMembershipGrant({
+				organizationId: "org-1",
+				customerId: "acc-missing",
+			});
+			expect(result).toBeNull();
+		});
+	});
 });

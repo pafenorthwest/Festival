@@ -1013,6 +1013,33 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		return this.withAccompanistLifecycle(grant);
 	}
 
+	async findCurrentAccompanistMembershipGrant(input: {
+		organizationId: string;
+		customerId: string;
+	}): Promise<AccompanistMembershipGrant | null> {
+		const grants = [...this.accompanistMembershipGrants.values()]
+			.filter(
+				(grant) =>
+					grant.organizationId === input.organizationId &&
+					grant.customerId === input.customerId,
+			)
+			.sort(
+				(a, b) =>
+					a.createdAtIso.localeCompare(b.createdAtIso) ||
+					a.id.localeCompare(b.id),
+			)
+			.map((grant) => this.withAccompanistLifecycle(grant))
+			.filter((grant) => grant.isCurrent);
+		const match = grants[0];
+		return match
+			? {
+					...match,
+					contact: { ...match.contact },
+					divisions: match.divisions.map((division) => ({ ...division })),
+				}
+			: null;
+	}
+
 	async listAccompanistMembershipGrants(input: {
 		organizationId: string;
 		customerId?: string;
@@ -1463,6 +1490,30 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			record.entitlementClass,
 		);
 		return this.withTeacherLifecycle(record);
+	}
+
+	async findActiveTeacherEntitlementGrant(input: {
+		organizationId: string;
+		customerId: string;
+		divisionId: string;
+	}): Promise<EntitlementGrantSnapshot | null> {
+		return (
+			[...this.entitlementGrants.values()]
+				.filter(
+					(grant) =>
+						grant.organizationId === input.organizationId &&
+						grant.customerId === input.customerId &&
+						grant.entitlementClass === TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS &&
+						grant.divisionId === input.divisionId,
+				)
+				.sort(
+					(a, b) =>
+						a.createdAtIso.localeCompare(b.createdAtIso) ||
+						a.id.localeCompare(b.id),
+				)
+				.map((grant) => this.withTeacherLifecycle(grant))
+				.find((grant) => grant.status === "active") ?? null
+		);
 	}
 
 	async listEntitlementGrantSnapshots(

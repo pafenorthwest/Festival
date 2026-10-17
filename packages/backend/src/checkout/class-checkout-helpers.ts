@@ -1,5 +1,8 @@
 import type {
+	AccompanistMembershipGrant,
+	EntitlementGrantSnapshot,
 	FestivalChildAgeSnapshot,
+	FestivalChildRecord,
 	FestivalClassConfiguration,
 	FestivalRecord,
 	RepertoirePiece,
@@ -85,11 +88,41 @@ export function validateAndNormalizeRepertoirePieces(
 	return normalizedPieces;
 }
 
+export function validateChildOwnership(
+	childOrChildren:
+		| FestivalChildRecord
+		| null
+		| undefined
+		| FestivalChildRecord[],
+	childId?: string,
+	parentCustomerId?: string,
+): FestivalChildRecord {
+	const child = Array.isArray(childOrChildren)
+		? childOrChildren.find((item) => item.id === childId)
+		: childOrChildren;
+	if (
+		!child ||
+		(childId !== undefined && child.id !== childId) ||
+		(parentCustomerId !== undefined &&
+			child.parentCustomerId !== parentCustomerId)
+	) {
+		throw new AppError(
+			"Child not found or does not belong to parent customer.",
+			404,
+		);
+	}
+	return child;
+}
+
 export function validateActiveChildAgeSnapshot(
-	snapshots: FestivalChildAgeSnapshot[],
+	snapshots: FestivalChildAgeSnapshot[] | FestivalChildAgeSnapshot | null,
 	currentTime: Date,
 ): FestivalChildAgeSnapshot {
-	const activeSnapshot = snapshots.find((item) => !item.supersededAtIso);
+	const activeSnapshot = Array.isArray(snapshots)
+		? snapshots.find((item) => !item.supersededAtIso)
+		: snapshots && !snapshots.supersededAtIso
+			? snapshots
+			: undefined;
 	if (!activeSnapshot) {
 		throw new AppError("Child does not have an active age snapshot.", 400);
 	}
@@ -112,6 +145,76 @@ export function validateChildAgeRange(
 			400,
 		);
 	}
+}
+
+export function validateTeacherEntitlement(
+	grantOrGrants:
+		| EntitlementGrantSnapshot
+		| null
+		| undefined
+		| EntitlementGrantSnapshot[],
+	divisionId: string,
+	teacherId?: string,
+): EntitlementGrantSnapshot {
+	if (teacherId !== undefined && !teacherId.trim()) {
+		throw new AppError("Teacher ID is required.", 400);
+	}
+	const activeGrant = Array.isArray(grantOrGrants)
+		? grantOrGrants.find(
+				(grant) =>
+					grant.entitlementClass === "teacher_membership" &&
+					grant.divisionId === divisionId &&
+					grant.status === "active",
+			)
+		: grantOrGrants &&
+				grantOrGrants.entitlementClass === "teacher_membership" &&
+				grantOrGrants.divisionId === divisionId &&
+				grantOrGrants.status === "active"
+			? grantOrGrants
+			: undefined;
+	if (!activeGrant) {
+		throw new AppError(
+			"Selected teacher does not have an active membership for this division.",
+			400,
+		);
+	}
+	return activeGrant;
+}
+
+export function validateAccompanistSelection(
+	grantOrGrants:
+		| AccompanistMembershipGrant
+		| null
+		| undefined
+		| AccompanistMembershipGrant[],
+	accompanistId?: string | null,
+	accompanimentRequired?: boolean,
+): string | null {
+	const trimmedId = accompanistId?.trim();
+	if (!trimmedId) {
+		if (accompanimentRequired) {
+			throw new AppError(
+				"Accompanist selection is required when accompaniment is required for this class.",
+				400,
+			);
+		}
+		return null;
+	}
+	const activeGrant = Array.isArray(grantOrGrants)
+		? grantOrGrants.find(
+				(grant) => grant.status === "active" || grant.isCurrent === true,
+			)
+		: grantOrGrants &&
+				(grantOrGrants.status === "active" || grantOrGrants.isCurrent === true)
+			? grantOrGrants
+			: undefined;
+	if (!activeGrant) {
+		throw new AppError(
+			"Selected accompanist does not have an active membership.",
+			400,
+		);
+	}
+	return activeGrant.id;
 }
 
 export function resolveTargetFestival(
@@ -149,33 +252,27 @@ export async function resolveFestivalClassConfiguration(
 	input: {
 		organizationId: string;
 		targetFestival: FestivalRecord;
-		festivals: FestivalRecord[];
+		festivals?: FestivalRecord[];
 		festivalClassId: string;
 		divisionId?: string;
 	},
 ): Promise<FestivalClassConfiguration> {
-	const classConfigs = await organizations.listFestivalClassConfigurations(
+	const classConfig = await organizations.findFestivalClassConfigurationById(
 		input.organizationId,
 		input.targetFestival.id,
-		false,
-	);
-	const classConfig = classConfigs.find(
-		(item) => item.id === input.festivalClassId,
+		input.festivalClassId,
 	);
 	if (!classConfig) {
-		for (const otherFest of input.festivals) {
-			if (otherFest.id === input.targetFestival.id) continue;
-			const otherConfigs = await organizations.listFestivalClassConfigurations(
+		const otherFestivalClass =
+			await organizations.findFestivalClassConfigurationById(
 				input.organizationId,
-				otherFest.id,
-				false,
+				input.festivalClassId,
 			);
-			if (otherConfigs.some((item) => item.id === input.festivalClassId)) {
-				throw new AppError(
-					"Festival class configuration does not belong to the active festival.",
-					400,
-				);
-			}
+		if (otherFestivalClass) {
+			throw new AppError(
+				"Festival class configuration does not belong to the active festival.",
+				400,
+			);
 		}
 		throw new AppError("Festival class configuration not found.", 404);
 	}

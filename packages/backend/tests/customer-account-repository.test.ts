@@ -284,4 +284,85 @@ describe("customer account repository contract", () => {
 			await repo.getConsentedCustomer("other", customer.id, "notice-v1"),
 		).toBeNull();
 	});
+
+	it("findChild returns owned child and null for wrong parent, wrong organization, or missing child", async () => {
+		const repo = new InMemoryCustomerAccountRepository();
+		const child = await repo.createChild({
+			organizationId: "org",
+			parentCustomerId: "parent-1",
+			displayName: "Jordan",
+		});
+
+		expect(await repo.findChild("org", "parent-1", child.id)).toEqual(child);
+		expect(await repo.findChild("org", "wrong-parent", child.id)).toBeNull();
+		expect(await repo.findChild("wrong-org", "parent-1", child.id)).toBeNull();
+		expect(await repo.findChild("org", "parent-1", "missing-child")).toBeNull();
+	});
+
+	it("findActiveChildAgeSnapshot returns nonsuperseded snapshot including expired, null when none or all superseded, and newest when multiple exist", async () => {
+		const repo = new InMemoryCustomerAccountRepository();
+		const child = await repo.createChild({
+			organizationId: "org",
+			parentCustomerId: "parent-1",
+			displayName: "Morgan",
+		});
+
+		expect(await repo.findActiveChildAgeSnapshot("org", child.id)).toBeNull();
+
+		const expired = await repo.createChildAgeSnapshot({
+			organizationId: "org",
+			childId: child.id,
+			age: 8,
+			validUntilIso: "2020-01-01T00:00:00.000Z",
+			createdAtIso: "2019-10-01T00:00:00.000Z",
+		});
+		expect(await repo.findActiveChildAgeSnapshot("org", child.id)).toEqual(
+			expired,
+		);
+		expect(
+			await repo.findActiveChildAgeSnapshot("wrong-org", child.id),
+		).toBeNull();
+
+		const active = await repo.createChildAgeSnapshot({
+			organizationId: "org",
+			childId: child.id,
+			age: 9,
+			validUntilIso: "2027-01-01T00:00:00.000Z",
+			createdAtIso: "2026-10-01T00:00:00.000Z",
+		});
+		expect(await repo.findActiveChildAgeSnapshot("org", child.id)).toEqual(
+			active,
+		);
+
+		const internalSnapshots = (
+			repo as unknown as {
+				childAgeSnapshots: Map<
+					string,
+					Awaited<ReturnType<typeof repo.createChildAgeSnapshot>>
+				>;
+			}
+		).childAgeSnapshots;
+		const olderUnsuperseded = {
+			id: "snap-older",
+			organizationId: "org",
+			childId: child.id,
+			age: 8,
+			createdAtIso: "2026-09-01T00:00:00.000Z",
+			validUntilIso: "2027-01-01T00:00:00.000Z",
+		};
+		internalSnapshots.set(olderUnsuperseded.id, olderUnsuperseded);
+		expect(await repo.findActiveChildAgeSnapshot("org", child.id)).toEqual(
+			active,
+		);
+
+		for (const [id, snap] of internalSnapshots.entries()) {
+			if (snap.childId === child.id) {
+				internalSnapshots.set(id, {
+					...snap,
+					supersededAtIso: "2026-10-02T00:00:00.000Z",
+				});
+			}
+		}
+		expect(await repo.findActiveChildAgeSnapshot("org", child.id)).toBeNull();
+	});
 });

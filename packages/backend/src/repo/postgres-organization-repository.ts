@@ -1957,6 +1957,18 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		throw new Error("Unreachable accompanist membership contention state.");
 	}
 
+	async findCurrentAccompanistMembershipGrant(input: {
+		organizationId: string;
+		customerId: string;
+	}): Promise<AccompanistMembershipGrant | null> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT e.id,e.organization_id,e.customer_id,identity.normalized_email,e.offering_id,COALESCE(p.product_name_snapshot,'Accompanist Membership') AS offering_name_snapshot,e.source,d.contact_name,d.contact_email,d.contact_city,d.contact_phone,COALESCE(jsonb_agg(jsonb_build_object('divisionId',ed.division_id,'divisionName',ed.division_name_snapshot)) FILTER (WHERE ed.division_id IS NOT NULL),'[]') AS divisions,e.starts_on::text,e.ends_on::text,'active' AS status,TRUE AS is_current,e.created_at FROM ${this.schema}.membership_entitlements e JOIN ${this.schema}.organizations o ON o.id=e.organization_id LEFT JOIN ${this.schema}.products p ON p.id=e.offering_id JOIN ${this.schema}.accompanist_membership_entitlement_details d ON d.entitlement_id=e.id LEFT JOIN ${this.schema}.membership_identity_emails identity ON identity.organization_id=e.organization_id AND identity.customer_id=e.customer_id LEFT JOIN ${this.schema}.membership_entitlement_divisions ed ON ed.entitlement_id=e.id WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class='accompanist_membership' AND e.revoked_at IS NULL AND e.starts_on <= (NOW() AT TIME ZONE o.timezone)::date AND e.ends_on > (NOW() AT TIME ZONE o.timezone)::date GROUP BY e.id,identity.normalized_email,p.product_name_snapshot,d.contact_name,d.contact_email,d.contact_city,d.contact_phone,o.timezone ORDER BY e.created_at ASC, e.id ASC LIMIT 1`,
+			[input.organizationId, input.customerId],
+		)) as AccompanistMembershipGrantRow[];
+		return rows[0] ? mapAccompanistGrant(rows[0]) : null;
+	}
+
 	async listAccompanistMembershipGrants(input: {
 		organizationId: string;
 		customerId?: string;
@@ -2448,6 +2460,19 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			);
 		});
 		return { ...input, id, createdAtIso: new Date().toISOString() };
+	}
+
+	async findActiveTeacherEntitlementGrant(input: {
+		organizationId: string;
+		customerId: string;
+		divisionId: string;
+	}): Promise<EntitlementGrantSnapshot | null> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT e.id,e.organization_id,e.customer_id,e.entitlement_class,e.offering_id,d.duration_days,ed.division_id,ed.division_name_snapshot,d.paid_amount,d.paid_currency_code,d.checkout_intent_id,d.shopify_order_gid,d.shopify_order_line_gid,e.starts_on::text,e.ends_on::text,'active' AS status,e.created_at FROM ${this.schema}.membership_entitlements e JOIN ${this.schema}.organizations o ON o.id=e.organization_id JOIN ${this.schema}.teacher_membership_entitlement_details d ON d.entitlement_id=e.id JOIN ${this.schema}.membership_entitlement_divisions ed ON ed.entitlement_id=e.id WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class='teacher_membership' AND ed.division_id=$3 AND e.revoked_at IS NULL AND e.starts_on <= (NOW() AT TIME ZONE o.timezone)::date AND e.ends_on > (NOW() AT TIME ZONE o.timezone)::date ORDER BY e.created_at ASC, e.id ASC LIMIT 1`,
+			[input.organizationId, input.customerId, input.divisionId],
+		)) as EntitlementGrantRow[];
+		return rows[0] ? mapEntitlementGrant(rows[0]) : null;
 	}
 
 	async listEntitlementGrantSnapshots(

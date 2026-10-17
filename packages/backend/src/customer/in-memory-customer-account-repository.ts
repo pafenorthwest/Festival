@@ -334,6 +334,18 @@ export class InMemoryCustomerAccountRepository
 		this.children.set(child.id, child);
 		return child;
 	}
+	async findChild(
+		organizationId: string,
+		parentCustomerId: string,
+		childId: string,
+	) {
+		const child = this.children.get(childId);
+		return child &&
+			child.organizationId === organizationId &&
+			child.parentCustomerId === parentCustomerId
+			? child
+			: null;
+	}
 	async listChildren(organizationId: string, parentCustomerId: string) {
 		return [...this.children.values()].filter(
 			(child) =>
@@ -368,6 +380,22 @@ export class InMemoryCustomerAccountRepository
 		};
 		this.childAgeSnapshots.set(snapshot.id, snapshot);
 		return snapshot;
+	}
+	async findActiveChildAgeSnapshot(organizationId: string, childId: string) {
+		return (
+			[...this.childAgeSnapshots.values()]
+				.filter(
+					(snapshot) =>
+						snapshot.organizationId === organizationId &&
+						snapshot.childId === childId &&
+						!snapshot.supersededAtIso,
+				)
+				.sort(
+					(left, right) =>
+						right.createdAtIso.localeCompare(left.createdAtIso) ||
+						right.id.localeCompare(left.id),
+				)[0] ?? null
+		);
 	}
 	async listChildAgeSnapshots(organizationId: string, childId: string) {
 		return [...this.childAgeSnapshots.values()].filter(

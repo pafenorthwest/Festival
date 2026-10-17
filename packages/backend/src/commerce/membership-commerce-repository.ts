@@ -16,6 +16,8 @@ import type { CheckoutRepository } from "../checkout/checkout-repository.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
 import type { ClassEntitlementFilter } from "./class-entitlement-repository.js";
 
+export type { ClassEntitlementFilter };
+
 interface RegistrationMetadataEntitlementLinkRollback {
 	snapshotRegistrationMetadataEntitlementLinks(input: {
 		checkoutIntentIds: string[];
@@ -984,11 +986,18 @@ export class InMemoryMembershipCommerceRepository
 				)
 					return false;
 				if (
+					filter.festivalClassIds &&
+					!filter.festivalClassIds.includes(record.festivalClassId)
+				)
+					return false;
+				if (
 					filter.parentCustomerId &&
 					record.parentCustomerId !== filter.parentCustomerId
 				)
 					return false;
 				if (filter.childId && record.childId !== filter.childId) return false;
+				if (filter.childIds && !filter.childIds.includes(record.childId))
+					return false;
 				if (filter.status && record.status !== filter.status) return false;
 				return true;
 			})
