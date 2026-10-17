@@ -63,3 +63,7 @@ services:
 volumes:
   postgres_data:
   shopify_audit:
+
+networks:
+  default:
+    enable_ipv6: true
