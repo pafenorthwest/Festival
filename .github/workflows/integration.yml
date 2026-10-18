@@ -1,0 +1,85 @@
+name: Integration Deployment
+
+on:
+  push:
+    branches:
+      - release
+      - 'release/v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Format check
+        run: bun run format:check
+
+      - name: Build
+        run: bun run build
+
+      - name: Test
+        run: bun run test
+
+  deploy-integration:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment:
+      name: integration
+      url: https://int.artsfestival.online/
+
+    steps:
+      - name: Deploy to Integration Host via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DO_INTEGRATION_HOST }}
+          username: ${{ secrets.DO_INTEGRATION_USER || 'root' }}
+          key: ${{ secrets.DO_SSH_PRIVATE_KEY }}
+          script: |
+            set -euo pipefail
+            cd /opt/Festival
+            git fetch origin release
+            git checkout -B release origin/release
+            docker compose -f cloud-setup/compose.yml up -d --build
+
+  smoke-test:
+    needs: deploy-integration
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Smoke test healthz endpoint
+        run: |
+          for i in {1..12}; do
+            status=$(curl -s -o /dev/null -w "%{http_code}" https://int.artsfestival.online/healthz || true)
+            if [ "$status" = "200" ]; then
+              echo "Health check passed with HTTP 200 on attempt $i"
+              exit 0
+            fi
+            echo "Attempt $i: received status $status, retrying in 5s..."
+            sleep 5
+          done
+          echo "Health check failed after 12 retries"
+          exit 1
+
+      - name: Check admin endpoint
+        run: |
+          status=$(curl -s -o /dev/null -w "%{http_code}" https://int.artsfestival.online/org/pafe/admin || true)
+          echo "Admin endpoint returned HTTP $status"
+          if [ "$status" -lt 200 ] || [ "$status" -ge 400 ]; then
+            echo "Admin check failed with status $status"
+            exit 1
+          fi
