@@ -465,6 +465,13 @@ export class PostgresMembershipCommerceRepository
 			);
 		}
 		return sql.begin(async (tx) => {
+			// Acquire admission serialization before any fulfillment row locks.
+			if (classEntitlementInputs.length > 0) {
+				await tx.unsafe(
+					"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+					[`${this.schema}:class-capacity-cutoff`],
+				);
+			}
 			if (input.decision.checkoutIntentId) {
 				await tx.unsafe(
 					"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",

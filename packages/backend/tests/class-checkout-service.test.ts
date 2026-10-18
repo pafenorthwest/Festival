@@ -2968,8 +2968,6 @@ describe("ClassCheckoutService", () => {
 			return { shopifyCartId: "gid://shopify/Cart/race-cart-1" };
 		};
 
-		const markReadySpy = spyOn(f.checkout, "markIntentReady");
-		const attachCartSpy = spyOn(f.checkout, "attachCart");
 		const checkoutUrlSpy = spyOn(f.storefront, "checkout");
 		const idempotencyKey = "dddddddd-eeee-4fff-8000-000000000002";
 
@@ -2984,9 +2982,10 @@ describe("ClassCheckoutService", () => {
 			thrownError = error;
 		}
 
-		expect(markReadySpy).not.toHaveBeenCalled();
-		expect(attachCartSpy).not.toHaveBeenCalled();
 		expect(checkoutUrlSpy).not.toHaveBeenCalled();
+		expect(
+			(f.checkout as unknown as { carts: Map<string, unknown> }).carts.size,
+		).toBe(0);
 		expect(thrownError).toBeInstanceOf(AppError);
 		const appErr = thrownError as AppError;
 		expect(appErr.status).toBe(400);
@@ -3066,8 +3065,7 @@ describe("ClassCheckoutService", () => {
 			return { shopifyCartId: "gid://shopify/Cart/admin-race-cart" };
 		};
 
-		const markReadySpy = spyOn(f.checkout, "markIntentReady");
-		const attachCartSpy = spyOn(f.checkout, "attachCart");
+		const checkoutUrlSpy = spyOn(f.storefront, "checkout");
 		const idempotencyKey = "eeeeeeee-ffff-4000-8111-000000000003";
 
 		let thrownError: unknown;
@@ -3081,8 +3079,10 @@ describe("ClassCheckoutService", () => {
 			thrownError = error;
 		}
 
-		expect(markReadySpy).not.toHaveBeenCalled();
-		expect(attachCartSpy).not.toHaveBeenCalled();
+		expect(checkoutUrlSpy).not.toHaveBeenCalled();
+		expect(
+			(f.checkout as unknown as { carts: Map<string, unknown> }).carts.size,
+		).toBe(0);
 		expect(thrownError).toBeInstanceOf(AppError);
 		const appErr = thrownError as AppError;
 		expect(appErr.status).toBe(400);
@@ -3111,6 +3111,80 @@ describe("ClassCheckoutService", () => {
 		expect(createdIntent?.status).toBe("failed");
 		expect(createdIntent?.cartReference).toBeNull();
 	});
+
+	for (const cutoffChange of [
+		"capacity decrease",
+		"confirmed placement",
+	] as const) {
+		it(`rejects ${cutoffChange} after the final advisory check but before durable attachment (#284)`, async () => {
+			const f = await createFixture();
+			await f.commerce.createClassEntitlement({
+				organizationId: f.organization.id,
+				festivalId: f.festival?.id ?? "",
+				festivalClassId: f.classConfig.id,
+				parentCustomerId: "baseline-parent",
+				childId: "baseline-child",
+				checkoutIntentId: "baseline-intent",
+				shopifyOrderGid: "gid://shopify/Order/baseline",
+				shopifyOrderLineGid: "gid://shopify/OrderLineItem/baseline",
+				paidAmountCents: 4500,
+				paidCurrencyCode: "USD",
+				status: "confirmed",
+			});
+			await f.organizations.updateFestivalClassConfiguration({
+				organizationId: f.organization.id,
+				festivalId: f.festival?.id ?? "",
+				id: f.classConfig.id,
+				capacity: 2,
+			});
+			const original = f.checkout.markIntentReady.bind(f.checkout);
+			f.checkout.markIntentReady = async (input) => {
+				// This is the old gap: Shopify creation and the final service read
+				// have completed, but there is no durable cart reference yet.
+				if (cutoffChange === "capacity decrease") {
+					await f.organizations.updateFestivalClassConfiguration({
+						organizationId: f.organization.id,
+						festivalId: f.festival?.id ?? "",
+						id: f.classConfig.id,
+						capacity: 1,
+					});
+				} else {
+					await f.commerce.createClassEntitlement({
+						organizationId: f.organization.id,
+						festivalId: f.festival?.id ?? "",
+						festivalClassId: f.classConfig.id,
+						parentCustomerId: "other-parent",
+						childId: "other-child",
+						checkoutIntentId: "paid-intent",
+						shopifyOrderGid: "gid://shopify/Order/late-placement",
+						shopifyOrderLineGid: "gid://shopify/OrderLineItem/late-placement",
+						paidAmountCents: 4500,
+						paidCurrencyCode: "USD",
+						status: "confirmed",
+					});
+				}
+				return original(input);
+			};
+			const checkoutUrl = spyOn(f.storefront, "checkout");
+			await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+				code: "sold_out",
+			});
+			expect(checkoutUrl).not.toHaveBeenCalled();
+			const intents = (
+				f.checkout as unknown as {
+					intents: Map<
+						string,
+						{ status: string; cartReference: string | null }
+					>;
+				}
+			).intents;
+			expect([...intents.values()]).toHaveLength(1);
+			expect([...intents.values()][0]).toMatchObject({
+				status: "failed",
+				cartReference: null,
+			});
+		});
+	}
 
 	it("resumes grandfathered attached cart after class reaches capacity while blocking new checkouts (#145 + #284)", async () => {
 		const f = await createFixture();

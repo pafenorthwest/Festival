@@ -3,6 +3,8 @@ import type {
 	ClassRegistrationMetadata,
 	RepertoirePiece,
 } from "@festival/common";
+import type { AppError } from "../errors/app-error.js";
+import { withInMemoryCapacityLock } from "../repo/in-memory-capacity-lock.js";
 import {
 	buildIntentLineRecords,
 	repertoireItemsFromLegacyPieces,
@@ -112,11 +114,13 @@ export interface CheckoutRepository {
 	attachCart(
 		input: Omit<CheckoutCartRecord, "reference" | "createdAtIso" | "status"> & {
 			intentId: string;
+			capacityCheck?: () => Promise<AppError | null>;
 		},
 	): Promise<CheckoutCartRecord>;
 	markIntentReady?(
 		input: Omit<CheckoutCartRecord, "reference" | "createdAtIso" | "status"> & {
 			intentId: string;
+			capacityCheck?: () => Promise<AppError | null>;
 		},
 	): Promise<CheckoutCartRecord>;
 	markCheckoutStarted(intentId: string): Promise<void>;
@@ -303,26 +307,33 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 	async attachCart(
 		input: Omit<CheckoutCartRecord, "reference" | "createdAtIso" | "status"> & {
 			intentId: string;
+			capacityCheck?: () => Promise<AppError | null>;
 		},
 	) {
-		const intent = this.intents.get(input.intentId);
-		if (!intent || intent.status !== "creating")
-			throw new Error("Checkout intent cannot accept a cart.");
-		const value: CheckoutCartRecord = {
-			...input,
-			reference: randomUUID(),
-			status: "ready",
-			createdAtIso: this.now().toISOString(),
-		};
-		this.carts.set(value.reference, value);
-		intent.cartReference = value.reference;
-		intent.status = "ready";
-		return { ...value };
+		return withInMemoryCapacityLock(async () => {
+			const { capacityCheck, ...cartInput } = input;
+			const failure = await capacityCheck?.();
+			if (failure) throw failure;
+			const intent = this.intents.get(input.intentId);
+			if (!intent || intent.status !== "creating")
+				throw new Error("Checkout intent cannot accept a cart.");
+			const value: CheckoutCartRecord = {
+				...cartInput,
+				reference: randomUUID(),
+				status: "ready",
+				createdAtIso: this.now().toISOString(),
+			};
+			this.carts.set(value.reference, value);
+			intent.cartReference = value.reference;
+			intent.status = "ready";
+			return { ...value };
+		});
 	}
 
 	async markIntentReady(
 		input: Omit<CheckoutCartRecord, "reference" | "createdAtIso" | "status"> & {
 			intentId: string;
+			capacityCheck?: () => Promise<AppError | null>;
 		},
 	) {
 		return this.attachCart(input);

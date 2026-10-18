@@ -13,6 +13,7 @@ import {
 	isClassEntitlementStatus,
 } from "@festival/common";
 import type { CheckoutRepository } from "../checkout/checkout-repository.js";
+import { withInMemoryCapacityLock } from "../repo/in-memory-capacity-lock.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
 import type { ClassEntitlementFilter } from "./class-entitlement-repository.js";
 
@@ -925,45 +926,47 @@ export class InMemoryMembershipCommerceRepository
 	async createClassEntitlement(
 		input: CreateClassEntitlementInput,
 	): Promise<ClassEntitlement> {
-		assertValidClassEntitlementInput(input);
-		const lineKey = `${input.organizationId}\u0000${input.shopifyOrderLineGid}`;
-		const existingLineId = this.classEntitlementsByLine.get(lineKey);
-		if (existingLineId) {
-			const existing = this.classEntitlements.get(existingLineId);
-			if (existing) {
-				assertMatchingClassEntitlementReplay(existing, input);
-				return { ...existing };
+		return withInMemoryCapacityLock(() => {
+			assertValidClassEntitlementInput(input);
+			const lineKey = `${input.organizationId}\u0000${input.shopifyOrderLineGid}`;
+			const existingLineId = this.classEntitlementsByLine.get(lineKey);
+			if (existingLineId) {
+				const existing = this.classEntitlements.get(existingLineId);
+				if (existing) {
+					assertMatchingClassEntitlementReplay(existing, input);
+					return { ...existing };
+				}
 			}
-		}
-		const id = input.id ?? randomUUID();
-		const nowIso = this.now().toISOString();
-		const record: ClassEntitlement = {
-			id,
-			organizationId: input.organizationId,
-			festivalId: input.festivalId,
-			festivalClassId: input.festivalClassId,
-			parentCustomerId: input.parentCustomerId,
-			childId: input.childId,
-			checkoutIntentId: input.checkoutIntentId,
-			checkoutIntentLineId: input.checkoutIntentLineId ?? null,
-			shopifyOrderGid: input.shopifyOrderGid,
-			shopifyOrderLineGid: input.shopifyOrderLineGid,
-			paidAmountCents: input.paidAmountCents,
-			paidCurrencyCode: input.paidCurrencyCode,
-			status: input.status ?? "confirmed",
-			admittedCartReference: input.admittedCartReference ?? null,
-			capacityAtAllocation: input.capacityAtAllocation ?? null,
-			placedCountBeforeAllocation: input.placedCountBeforeAllocation ?? null,
-			createdAt: input.createdAt ?? nowIso,
-			updatedAt: input.updatedAt ?? nowIso,
-		};
-		this.classEntitlements.set(id, record);
-		this.classEntitlementsByLine.set(lineKey, id);
-		this.classEntitlementsByIntent.set(
-			`${input.organizationId}\u0000${input.checkoutIntentId}`,
-			id,
-		);
-		return { ...record };
+			const id = input.id ?? randomUUID();
+			const nowIso = this.now().toISOString();
+			const record: ClassEntitlement = {
+				id,
+				organizationId: input.organizationId,
+				festivalId: input.festivalId,
+				festivalClassId: input.festivalClassId,
+				parentCustomerId: input.parentCustomerId,
+				childId: input.childId,
+				checkoutIntentId: input.checkoutIntentId,
+				checkoutIntentLineId: input.checkoutIntentLineId ?? null,
+				shopifyOrderGid: input.shopifyOrderGid,
+				shopifyOrderLineGid: input.shopifyOrderLineGid,
+				paidAmountCents: input.paidAmountCents,
+				paidCurrencyCode: input.paidCurrencyCode,
+				status: input.status ?? "confirmed",
+				admittedCartReference: input.admittedCartReference ?? null,
+				capacityAtAllocation: input.capacityAtAllocation ?? null,
+				placedCountBeforeAllocation: input.placedCountBeforeAllocation ?? null,
+				createdAt: input.createdAt ?? nowIso,
+				updatedAt: input.updatedAt ?? nowIso,
+			};
+			this.classEntitlements.set(id, record);
+			this.classEntitlementsByLine.set(lineKey, id);
+			this.classEntitlementsByIntent.set(
+				`${input.organizationId}\u0000${input.checkoutIntentId}`,
+				id,
+			);
+			return { ...record };
+		});
 	}
 
 	async getClassEntitlement(
@@ -1056,13 +1059,15 @@ export class InMemoryMembershipCommerceRepository
 		id: string,
 		status: ClassEntitlementStatus,
 	): Promise<ClassEntitlement | null> {
-		if (!isClassEntitlementStatus(status)) {
-			throw new Error("Class entitlement status is invalid.");
-		}
-		const record = this.classEntitlements.get(id);
-		if (!record || record.organizationId !== organizationId) return null;
-		record.status = status;
-		record.updatedAt = this.now().toISOString();
-		return { ...record };
+		return withInMemoryCapacityLock(() => {
+			if (!isClassEntitlementStatus(status)) {
+				throw new Error("Class entitlement status is invalid.");
+			}
+			const record = this.classEntitlements.get(id);
+			if (!record || record.organizationId !== organizationId) return null;
+			record.status = status;
+			record.updatedAt = this.now().toISOString();
+			return { ...record };
+		});
 	}
 }
