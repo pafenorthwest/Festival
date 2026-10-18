@@ -64,9 +64,9 @@ async function createFixture(options: FixtureOptions = {}) {
 	const now = options.now ?? new Date("2026-09-21T12:00:00.000Z");
 	const nowFn = () => now;
 
-	const organizations = new InMemoryOrganizationRepository();
+	const organizations = new InMemoryOrganizationRepository(nowFn);
 	const customers = new InMemoryCustomerAccountRepository();
-	const checkout = new InMemoryCheckoutRepository();
+	const checkout = new InMemoryCheckoutRepository(nowFn);
 
 	const organization = await organizations.createOrganization({
 		name: "Pacific Northwest Music Festival",
@@ -2582,7 +2582,7 @@ describe("ClassCheckoutService", () => {
 		expect(findActiveChildAgeSnapshotSpy).toHaveBeenCalledTimes(1);
 		expect(findActiveTeacherEntitlementGrantSpy).toHaveBeenCalledTimes(1);
 		expect(findCurrentAccompanistMembershipGrantSpy).toHaveBeenCalledTimes(1);
-		expect(findFestivalClassConfigurationByIdSpy).toHaveBeenCalledTimes(2);
+		expect(findFestivalClassConfigurationByIdSpy).toHaveBeenCalledTimes(4);
 		expect(bulkClassLookup).not.toHaveBeenCalled();
 	});
 
@@ -2798,6 +2798,522 @@ describe("ClassCheckoutService", () => {
 				...f.defaultInput,
 				idempotencyKey: "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
 				festivalClassId: masterclassClass.id,
+			}),
+		).rejects.toMatchObject({
+			status: 400,
+			code: "sold_out",
+		});
+	});
+
+	it("rejects whole multi-line cart when mixed Open and Waitlist classes are submitted (#145 + #284)", async () => {
+		const f = await createFixture();
+		const festivalId = f.festival?.id ?? "";
+		const secondSubtype = await f.organizations.createRegistrationCatalogValue({
+			organizationId: f.organization.id,
+			kind: "class_subtype",
+			displayName: "Waitlist Solo",
+			normalizedName: "waitlist solo",
+		});
+		const waitlistClass =
+			await f.organizations.createFestivalClassConfiguration({
+				organizationId: f.organization.id,
+				festivalId,
+				displayName: "Junior Waitlist Piano",
+				classSubtypeId: secondSubtype.id,
+				divisionId: f.division.id,
+				minimumAge: 8,
+				maximumAge: 12,
+				price: "55.00",
+				maximumPerformancePieces: 2,
+				performanceMinutes: 10,
+				capacity: 1,
+				isActive: true,
+				shopifyProductGid: "gid://shopify/Product/284-1",
+				shopifyVariantGid: "gid://shopify/ProductVariant/284-1",
+			});
+
+		await f.commerce.createClassEntitlement({
+			organizationId: f.organization.id,
+			festivalId,
+			festivalClassId: waitlistClass.id,
+			parentCustomerId: "other-parent-customer",
+			childId: "other-child-id",
+			checkoutIntentId: "other-intent-waitlist",
+			shopifyOrderGid: "gid://shopify/Order/other-waitlist",
+			shopifyOrderLineGid: "gid://shopify/OrderLineItem/other-waitlist",
+			paidAmountCents: 5500,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+
+		const createCartSpy = spyOn(f.storefront, "createCart");
+		const createIntentSpy = spyOn(f.checkout, "createIntent");
+		const idempotencyKey = "cccccccc-dddd-4eee-8fff-000000000001";
+
+		let thrownError: unknown;
+		try {
+			await f.service.start({
+				organizationId: f.organization.id,
+				customerId: f.customer.id,
+				sessionId: f.session.sessionId,
+				idempotencyKey,
+				buyerAccessToken: "buyer-token-test",
+				lineItems: [
+					{
+						festivalClassId: f.classConfig.id,
+						childId: f.child.id,
+						teacherId: f.teacherId,
+						pieces: f.defaultPieces,
+					},
+					{
+						festivalClassId: waitlistClass.id,
+						childId: f.child.id,
+						teacherId: f.teacherId,
+						pieces: f.defaultPieces,
+					},
+				],
+			});
+		} catch (error) {
+			thrownError = error;
+		}
+
+		expect(createIntentSpy).not.toHaveBeenCalled();
+		expect(createCartSpy).not.toHaveBeenCalled();
+		expect(thrownError).toBeInstanceOf(AppError);
+		const appErr = thrownError as AppError;
+		expect(appErr.status).toBe(400);
+		expect(appErr.code).toBe("sold_out");
+		expect(appErr.details).toMatchObject({
+			waitlistedClassIds: [waitlistClass.id],
+			failures: [
+				{
+					childId: f.child.id,
+					festivalClassId: waitlistClass.id,
+					reasonCode: "SOLD_OUT",
+					availability: "waitlist",
+					capacity: 1,
+					placedCount: 1,
+				},
+			],
+		});
+
+		const outcome = await f.checkout.getOutcome({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			sessionId: f.session.sessionId,
+			idempotencyKey,
+		});
+		expect(outcome).toBeNull();
+	});
+
+	it("aborts at post-cartCreate cutpoint when concurrent placement reaches capacity while createCart is in flight (#284)", async () => {
+		const f = await createFixture();
+		const festivalId = f.festival?.id ?? "";
+		const raceSubtype = await f.organizations.createRegistrationCatalogValue({
+			organizationId: f.organization.id,
+			kind: "class_subtype",
+			displayName: "Race Solo",
+			normalizedName: "race solo",
+		});
+		const raceClass = await f.organizations.createFestivalClassConfiguration({
+			organizationId: f.organization.id,
+			festivalId,
+			displayName: "Race Piano Class",
+			classSubtypeId: raceSubtype.id,
+			divisionId: f.division.id,
+			minimumAge: 8,
+			maximumAge: 12,
+			price: "50.00",
+			maximumPerformancePieces: 2,
+			performanceMinutes: 10,
+			capacity: 2,
+			isActive: true,
+			shopifyProductGid: "gid://shopify/Product/284-race-1",
+			shopifyVariantGid: "gid://shopify/ProductVariant/284-race-1",
+		});
+
+		await f.commerce.createClassEntitlement({
+			organizationId: f.organization.id,
+			festivalId,
+			festivalClassId: raceClass.id,
+			parentCustomerId: "parent-1",
+			childId: "child-1",
+			checkoutIntentId: "intent-placed-1",
+			shopifyOrderGid: "gid://shopify/Order/placed-1",
+			shopifyOrderLineGid: "gid://shopify/OrderLineItem/placed-1",
+			paidAmountCents: 5000,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+
+		f.storefront.createCart = async () => {
+			await f.commerce.createClassEntitlement({
+				organizationId: f.organization.id,
+				festivalId,
+				festivalClassId: raceClass.id,
+				parentCustomerId: "parent-2",
+				childId: "child-2",
+				checkoutIntentId: "intent-placed-2",
+				shopifyOrderGid: "gid://shopify/Order/placed-2",
+				shopifyOrderLineGid: "gid://shopify/OrderLineItem/placed-2",
+				paidAmountCents: 5000,
+				paidCurrencyCode: "USD",
+				status: "confirmed",
+			});
+			return { shopifyCartId: "gid://shopify/Cart/race-cart-1" };
+		};
+
+		const markReadySpy = spyOn(f.checkout, "markIntentReady");
+		const attachCartSpy = spyOn(f.checkout, "attachCart");
+		const checkoutUrlSpy = spyOn(f.storefront, "checkout");
+		const idempotencyKey = "dddddddd-eeee-4fff-8000-000000000002";
+
+		let thrownError: unknown;
+		try {
+			await f.service.start({
+				...f.defaultInput,
+				idempotencyKey,
+				festivalClassId: raceClass.id,
+			});
+		} catch (error) {
+			thrownError = error;
+		}
+
+		expect(markReadySpy).not.toHaveBeenCalled();
+		expect(attachCartSpy).not.toHaveBeenCalled();
+		expect(checkoutUrlSpy).not.toHaveBeenCalled();
+		expect(thrownError).toBeInstanceOf(AppError);
+		const appErr = thrownError as AppError;
+		expect(appErr.status).toBe(400);
+		expect(appErr.code).toBe("sold_out");
+		expect(appErr.message).toMatch(/capacity|sold_out|waitlist/i);
+		expect(appErr.details).toMatchObject({
+			waitlistedClassIds: [raceClass.id],
+			failures: [
+				{
+					childId: f.child.id,
+					festivalClassId: raceClass.id,
+					reasonCode: "SOLD_OUT",
+					availability: "waitlist",
+					capacity: 2,
+					placedCount: 2,
+				},
+			],
+		});
+
+		const intents = (
+			f.checkout as unknown as {
+				intents: Map<string, { status: string; cartReference: string | null }>;
+			}
+		).intents;
+		const createdIntent = [...intents.values()][0];
+		expect(createdIntent?.status).toBe("failed");
+		expect(createdIntent?.cartReference).toBeNull();
+	});
+
+	it("aborts at post-cartCreate cutpoint when Admin decreases capacity to placedCount while createCart is in flight (#284)", async () => {
+		const f = await createFixture();
+		const festivalId = f.festival?.id ?? "";
+		const adminSubtype = await f.organizations.createRegistrationCatalogValue({
+			organizationId: f.organization.id,
+			kind: "class_subtype",
+			displayName: "Admin Cap Solo",
+			normalizedName: "admin cap solo",
+		});
+		const adminClass = await f.organizations.createFestivalClassConfiguration({
+			organizationId: f.organization.id,
+			festivalId,
+			displayName: "Admin Capacity Piano Class",
+			classSubtypeId: adminSubtype.id,
+			divisionId: f.division.id,
+			minimumAge: 8,
+			maximumAge: 12,
+			price: "50.00",
+			maximumPerformancePieces: 2,
+			performanceMinutes: 10,
+			capacity: 2,
+			isActive: true,
+			shopifyProductGid: "gid://shopify/Product/284-admin-1",
+			shopifyVariantGid: "gid://shopify/ProductVariant/284-admin-1",
+		});
+
+		await f.commerce.createClassEntitlement({
+			organizationId: f.organization.id,
+			festivalId,
+			festivalClassId: adminClass.id,
+			parentCustomerId: "parent-1",
+			childId: "child-1",
+			checkoutIntentId: "intent-admin-placed-1",
+			shopifyOrderGid: "gid://shopify/Order/admin-placed-1",
+			shopifyOrderLineGid: "gid://shopify/OrderLineItem/admin-placed-1",
+			paidAmountCents: 5000,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+
+		f.storefront.createCart = async () => {
+			await f.organizations.updateFestivalClassConfiguration({
+				organizationId: f.organization.id,
+				festivalId,
+				id: adminClass.id,
+				capacity: 1,
+			});
+			return { shopifyCartId: "gid://shopify/Cart/admin-race-cart" };
+		};
+
+		const markReadySpy = spyOn(f.checkout, "markIntentReady");
+		const attachCartSpy = spyOn(f.checkout, "attachCart");
+		const idempotencyKey = "eeeeeeee-ffff-4000-8111-000000000003";
+
+		let thrownError: unknown;
+		try {
+			await f.service.start({
+				...f.defaultInput,
+				idempotencyKey,
+				festivalClassId: adminClass.id,
+			});
+		} catch (error) {
+			thrownError = error;
+		}
+
+		expect(markReadySpy).not.toHaveBeenCalled();
+		expect(attachCartSpy).not.toHaveBeenCalled();
+		expect(thrownError).toBeInstanceOf(AppError);
+		const appErr = thrownError as AppError;
+		expect(appErr.status).toBe(400);
+		expect(appErr.code).toBe("sold_out");
+		expect(appErr.message).toMatch(/capacity|sold_out|waitlist/i);
+		expect(appErr.details).toMatchObject({
+			waitlistedClassIds: [adminClass.id],
+			failures: [
+				{
+					childId: f.child.id,
+					festivalClassId: adminClass.id,
+					reasonCode: "SOLD_OUT",
+					availability: "waitlist",
+					capacity: 1,
+					placedCount: 1,
+				},
+			],
+		});
+
+		const intents = (
+			f.checkout as unknown as {
+				intents: Map<string, { status: string; cartReference: string | null }>;
+			}
+		).intents;
+		const createdIntent = [...intents.values()][0];
+		expect(createdIntent?.status).toBe("failed");
+		expect(createdIntent?.cartReference).toBeNull();
+	});
+
+	it("resumes grandfathered attached cart after class reaches capacity while blocking new checkouts (#145 + #284)", async () => {
+		const f = await createFixture();
+		const festivalId = f.festival?.id ?? "";
+		const gfSubtype = await f.organizations.createRegistrationCatalogValue({
+			organizationId: f.organization.id,
+			kind: "class_subtype",
+			displayName: "Grandfathered Solo",
+			normalizedName: "grandfathered solo",
+		});
+		const gfClass = await f.organizations.createFestivalClassConfiguration({
+			organizationId: f.organization.id,
+			festivalId,
+			displayName: "Grandfathered Piano Class",
+			classSubtypeId: gfSubtype.id,
+			divisionId: f.division.id,
+			minimumAge: 8,
+			maximumAge: 12,
+			price: "50.00",
+			maximumPerformancePieces: 2,
+			performanceMinutes: 10,
+			capacity: 2,
+			isActive: true,
+			shopifyProductGid: "gid://shopify/Product/284-gf-1",
+			shopifyVariantGid: "gid://shopify/ProductVariant/284-gf-1",
+		});
+
+		await f.commerce.createClassEntitlement({
+			organizationId: f.organization.id,
+			festivalId,
+			festivalClassId: gfClass.id,
+			parentCustomerId: "parent-1",
+			childId: "child-1",
+			checkoutIntentId: "intent-gf-placed-1",
+			shopifyOrderGid: "gid://shopify/Order/gf-placed-1",
+			shopifyOrderLineGid: "gid://shopify/OrderLineItem/gf-placed-1",
+			paidAmountCents: 5000,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+
+		const grandfatheredKey = "ffffffff-0000-4111-8222-000000000004";
+		const initialResult = await f.service.start({
+			...f.defaultInput,
+			idempotencyKey: grandfatheredKey,
+			festivalClassId: gfClass.id,
+		});
+		expect(initialResult.checkoutUrl).toBe(
+			`https://${f.storeDomain}/checkouts/c123`,
+		);
+
+		// Class now reaches 2/2 capacity (waitlist)
+		await f.commerce.createClassEntitlement({
+			organizationId: f.organization.id,
+			festivalId,
+			festivalClassId: gfClass.id,
+			parentCustomerId: "parent-2",
+			childId: "child-2",
+			checkoutIntentId: "intent-gf-placed-2",
+			shopifyOrderGid: "gid://shopify/Order/gf-placed-2",
+			shopifyOrderLineGid: "gid://shopify/OrderLineItem/gf-placed-2",
+			paidAmountCents: 5000,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+
+		const createCartSpy = spyOn(f.storefront, "createCart");
+		const replayedResult = await f.service.start({
+			...f.defaultInput,
+			idempotencyKey: grandfatheredKey,
+			festivalClassId: gfClass.id,
+		});
+		expect(replayedResult.checkoutUrl).toBe(initialResult.checkoutUrl);
+		expect(replayedResult.intentId).toBe(initialResult.intentId);
+		expect(replayedResult.correlationId).toBe(initialResult.correlationId);
+		expect(createCartSpy).not.toHaveBeenCalled();
+
+		// A new customer attempting a fresh checkout on the now-waitlisted class is blocked
+		const { customer: customer2, session: session2 } =
+			await f.customers.createCustomerSession({
+				sessionId: "session-parent-2",
+				organizationId: f.organization.id,
+				shopifyCustomerGid: "gid://shopify/Customer/998",
+				encryptedTokens: "encrypted-token-2",
+				csrfToken: "csrf-token-2",
+				integrationVersion: 1,
+				createdAtIso: f.now.toISOString(),
+				lastSeenAtIso: f.now.toISOString(),
+				expiresAtIso: new Date(f.now.getTime() + 8 * 3600_000).toISOString(),
+			});
+		const child2 = await f.customers.createChild({
+			organizationId: f.organization.id,
+			parentCustomerId: customer2.id,
+			displayName: "New Performer",
+		});
+		await f.customers.createChildAgeSnapshot({
+			organizationId: f.organization.id,
+			childId: child2.id,
+			age: 10,
+			validUntilIso: new Date(
+				f.now.getTime() + 90 * 24 * 3600_000,
+			).toISOString(),
+			createdAtIso: f.now.toISOString(),
+		});
+
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				customerId: customer2.id,
+				sessionId: session2.sessionId,
+				childId: child2.id,
+				idempotencyKey: "11111111-0000-4111-8222-000000000005",
+				festivalClassId: gfClass.id,
+			}),
+		).rejects.toMatchObject({
+			status: 400,
+			code: "sold_out",
+		});
+	});
+
+	it("never grandfathers a bare/failed intent when class subsequently reaches capacity (#284)", async () => {
+		const f = await createFixture();
+		const festivalId = f.festival?.id ?? "";
+		const bareSubtype = await f.organizations.createRegistrationCatalogValue({
+			organizationId: f.organization.id,
+			kind: "class_subtype",
+			displayName: "Bare Intent Solo",
+			normalizedName: "bare intent solo",
+		});
+		const bareClass = await f.organizations.createFestivalClassConfiguration({
+			organizationId: f.organization.id,
+			festivalId,
+			displayName: "Bare Intent Piano Class",
+			classSubtypeId: bareSubtype.id,
+			divisionId: f.division.id,
+			minimumAge: 8,
+			maximumAge: 12,
+			price: "50.00",
+			maximumPerformancePieces: 2,
+			performanceMinutes: 10,
+			capacity: 1,
+			isActive: true,
+			shopifyProductGid: "gid://shopify/Product/284-bare-1",
+			shopifyVariantGid: "gid://shopify/ProductVariant/284-bare-1",
+		});
+
+		f.storefront.createCart = async () => {
+			throw new Error("Shopify cartCreate temporary failure");
+		};
+
+		const failedKey = "22222222-0000-4111-8222-000000000006";
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				idempotencyKey: failedKey,
+				festivalClassId: bareClass.id,
+			}),
+		).rejects.toMatchObject({
+			status: 503,
+			code: "checkout_retryable_upstream",
+		});
+
+		const intents = (
+			f.checkout as unknown as {
+				intents: Map<string, { status: string; cartReference: string | null }>;
+			}
+		).intents;
+		const failedIntent = [...intents.values()][0];
+		expect(failedIntent?.status).toBe("failed");
+		expect(failedIntent?.cartReference).toBeNull();
+
+		// Class now reaches capacity (1/1)
+		await f.commerce.createClassEntitlement({
+			organizationId: f.organization.id,
+			festivalId,
+			festivalClassId: bareClass.id,
+			parentCustomerId: "other-parent",
+			childId: "other-child",
+			checkoutIntentId: "intent-bare-other",
+			shopifyOrderGid: "gid://shopify/Order/bare-other",
+			shopifyOrderLineGid: "gid://shopify/OrderLineItem/bare-other",
+			paidAmountCents: 5000,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+
+		f.storefront.createCart = async () => ({
+			shopifyCartId: "gid://shopify/Cart/should-not-be-created",
+		});
+
+		// Retrying with the old key fails as terminal failure (never resumes)
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				idempotencyKey: failedKey,
+				festivalClassId: bareClass.id,
+			}),
+		).rejects.toMatchObject({
+			status: 409,
+			code: "checkout_terminal_failure",
+		});
+
+		// Retrying with a new key is blocked by the Waitlist gate
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				idempotencyKey: "33333333-0000-4111-8222-000000000007",
+				festivalClassId: bareClass.id,
 			}),
 		).rejects.toMatchObject({
 			status: 400,

@@ -1688,4 +1688,240 @@ describe("Customer Registration Routes", () => {
 			});
 		});
 	});
+
+	describe("POST checkout soft-capacity waitlist rejection (#145 + #284)", () => {
+		it("returns 400 sold_out with structured failures and waitlistedClassIds when multi-line cart contains a waitlisted class", async () => {
+			const orgRepo = new InMemoryOrganizationRepository();
+			const org = await orgRepo.createOrganization({
+				name: "Pacific Arts",
+				slug: "fest",
+			});
+			await orgRepo.upsertShopifyIntegration({
+				organizationId: org.id,
+				storeDomain: "fest.myshopify.com",
+				clientId: "client-id",
+				encryptedClientSecret: "secret",
+			});
+			const festival = await orgRepo.createFestival({
+				id: "fest-1",
+				organizationId: org.id,
+				code: "PAFE26",
+				shortName: "spring-2026",
+				name: "Spring 2026",
+				startDate: "2026-05-01",
+				endDate: "2026-05-10",
+			});
+			await orgRepo.setPrimaryFestival(org.id, festival.id);
+
+			const division = await orgRepo.createDivision({
+				organizationId: org.id,
+				displayName: "Junior",
+				normalizedName: "junior",
+			});
+			const subtypeOpen = await orgRepo.createRegistrationCatalogValue({
+				organizationId: org.id,
+				kind: "class_subtype",
+				displayName: "Solo Open",
+				normalizedName: "solo open",
+			});
+			const subtypeWaitlist = await orgRepo.createRegistrationCatalogValue({
+				organizationId: org.id,
+				kind: "class_subtype",
+				displayName: "Solo Waitlist",
+				normalizedName: "solo waitlist",
+			});
+			const openClass = await orgRepo.createFestivalClassConfiguration({
+				organizationId: org.id,
+				festivalId: festival.id,
+				displayName: "Open Piano Solo",
+				classSubtypeId: subtypeOpen.id,
+				divisionId: division.id,
+				minimumAge: 5,
+				maximumAge: 18,
+				price: "40.00",
+				maximumPerformancePieces: 2,
+				performanceMinutes: 10,
+				capacity: 2,
+				isActive: true,
+				shopifyProductGid: "gid://shopify/Product/open-1",
+				shopifyVariantGid: "gid://shopify/ProductVariant/open-1",
+			});
+			const waitlistClass = await orgRepo.createFestivalClassConfiguration({
+				organizationId: org.id,
+				festivalId: festival.id,
+				displayName: "Waitlist Piano Solo",
+				classSubtypeId: subtypeWaitlist.id,
+				divisionId: division.id,
+				minimumAge: 5,
+				maximumAge: 18,
+				price: "50.00",
+				maximumPerformancePieces: 2,
+				performanceMinutes: 10,
+				capacity: 1,
+				isActive: true,
+				shopifyProductGid: "gid://shopify/Product/waitlist-1",
+				shopifyVariantGid: "gid://shopify/ProductVariant/waitlist-1",
+			});
+
+			const offering = await orgRepo.createMembershipProductRecord({
+				organizationId: org.id,
+				entitlementClass: "teacher_membership",
+				durationDays: 365,
+				isActive: true,
+				shopifyProductGid: "gid://shopify/Product/t-1",
+				shopifyVariantGid: "gid://shopify/ProductVariant/t-1",
+				productNameSnapshot: "Teacher Membership",
+			});
+			const teacherId = "teacher-1";
+			await orgRepo.createEntitlementGrantSnapshot({
+				organizationId: org.id,
+				customerId: teacherId,
+				entitlementClass: "teacher_membership",
+				offeringId: offering.id,
+				durationDays: 365,
+				divisionId: division.id,
+				divisionNameSnapshot: division.displayName,
+				paidAmount: "50.00",
+				paidCurrencyCode: "USD",
+				checkoutIntentId: "teacher-intent-1",
+				shopifyOrderGid: "gid://shopify/Order/t-1",
+				shopifyOrderLineGid: "gid://shopify/LineItem/t-1",
+				startsOn: "2026-01-01",
+				endsOn: "2027-01-01",
+				status: "active",
+				verifiedIdentityEmail: "teacher@example.com",
+			});
+
+			const custRepo = new InMemoryCustomerAccountRepository();
+			const checkoutRepo = new InMemoryCheckoutRepository();
+			const commerceRepo = new InMemoryMembershipCommerceRepository();
+
+			await commerceRepo.createClassEntitlement({
+				organizationId: org.id,
+				festivalId: festival.id,
+				festivalClassId: waitlistClass.id,
+				parentCustomerId: "other-cust",
+				childId: "other-child",
+				checkoutIntentId: "other-intent",
+				shopifyOrderGid: "gid://shopify/Order/other",
+				shopifyOrderLineGid: "gid://shopify/OrderLineItem/other",
+				paidAmountCents: 5000,
+				paidCurrencyCode: "USD",
+				status: "confirmed",
+			});
+
+			const now = new Date("2026-05-01T12:00:00.000Z");
+			const { customer, session } = await custRepo.createCustomerSession({
+				sessionId: "sess_1",
+				organizationId: org.id,
+				shopifyCustomerGid: "gid://shopify/Customer/100",
+				encryptedTokens: "token-1",
+				csrfToken: "csrf_1",
+				integrationVersion: 1,
+				createdAtIso: now.toISOString(),
+				lastSeenAtIso: now.toISOString(),
+				expiresAtIso: new Date(now.getTime() + 3600_000).toISOString(),
+			});
+			const child = await custRepo.createChild({
+				organizationId: org.id,
+				parentCustomerId: customer.id,
+				displayName: "Performer One",
+			});
+			await custRepo.createChildAgeSnapshot({
+				organizationId: org.id,
+				childId: child.id,
+				age: 10,
+				validUntilIso: new Date(
+					now.getTime() + 90 * 24 * 3600_000,
+				).toISOString(),
+				createdAtIso: now.toISOString(),
+			});
+
+			let createCartCalled = false;
+			const storefront = {
+				createCart: async () => {
+					createCartCalled = true;
+					return { shopifyCartId: "gid://shopify/Cart/1" };
+				},
+				checkout: async () => ({
+					checkoutUrl: "https://fest.myshopify.com/checkouts/c1",
+				}),
+			};
+
+			const classCheckoutService = new ClassCheckoutService(
+				orgRepo,
+				custRepo,
+				checkoutRepo,
+				storefront,
+				commerceRepo,
+				() => now,
+			);
+			const customerAccountService = {
+				checkoutAccess: async () => ({
+					organizationId: org.id,
+					customerId: customer.id,
+					sessionId: session.sessionId,
+					integrationVersion: 1,
+					shopifyCustomerAccessToken: "buyer-token",
+				}),
+			} as unknown as CustomerAccountService;
+
+			const app = createTestApp({
+				customerAccountService,
+				classCheckoutService,
+			});
+
+			const res = await req(
+				app,
+				"POST",
+				"/festivals/spring-2026/registration/checkout",
+				{
+					...AUTH,
+					...JSON_HDR,
+					"Idempotency-Key": VALID_UUID,
+					"X-CSRF-Token": "csrf_1",
+					Origin: "https://fest.example.com",
+				},
+				JSON.stringify({
+					lineItems: [
+						{
+							festivalClassId: openClass.id,
+							childId: child.id,
+							teacherId,
+							pieces: [
+								{ title: "Piece 1", composer: "Bach", durationSeconds: 120 },
+							],
+						},
+						{
+							festivalClassId: waitlistClass.id,
+							childId: child.id,
+							teacherId,
+							pieces: [
+								{ title: "Piece 2", composer: "Mozart", durationSeconds: 120 },
+							],
+						},
+					],
+				}),
+			);
+
+			expect(res.status).toBe(400);
+			expect(createCartCalled).toBe(false);
+			const json = await res.json();
+			expect(json).toMatchObject({
+				error: "Class capacity is full.",
+				code: "sold_out",
+				waitlistedClassIds: [waitlistClass.id],
+				failures: [
+					{
+						childId: child.id,
+						festivalClassId: waitlistClass.id,
+						reasonCode: "SOLD_OUT",
+						availability: "waitlist",
+						capacity: 1,
+						placedCount: 1,
+					},
+				],
+			});
+		});
+	});
 });

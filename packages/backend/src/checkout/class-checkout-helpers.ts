@@ -341,3 +341,138 @@ export function calculateTotalAmount(
 	}
 	return (totalCents / 100).toFixed(2);
 }
+
+export interface ClassCheckoutFailureLineDetail {
+	childId: string;
+	festivalClassId: string;
+	reasonCode: string;
+	availability?: "open" | "waitlist";
+	reason?: string;
+	message?: string;
+	capacity?: number;
+	placedCount?: number;
+	lineItemId?: string;
+}
+
+export function buildEligibilityRejectionError(
+	results: ReadonlyArray<{
+		childId: string;
+		festivalClassId: string;
+		isEligible: boolean;
+		reasonCode: string;
+		message?: string;
+		availability?: "open" | "waitlist";
+		capacity?: number;
+		placedCount?: number;
+		lineItemId?: string;
+	}>,
+): AppError {
+	const failedResults = results.filter((r) => !r.isEligible);
+	const failures: ClassCheckoutFailureLineDetail[] = failedResults.map((r) => ({
+		childId: r.childId,
+		festivalClassId: r.festivalClassId,
+		reasonCode: r.reasonCode,
+		...(r.availability !== undefined ? { availability: r.availability } : {}),
+		...(r.message !== undefined
+			? { reason: r.message, message: r.message }
+			: {}),
+		...(r.capacity !== undefined ? { capacity: r.capacity } : {}),
+		...(r.placedCount !== undefined ? { placedCount: r.placedCount } : {}),
+		...(r.lineItemId !== undefined ? { lineItemId: r.lineItemId } : {}),
+	}));
+	const waitlistedClassIds = [
+		...new Set(
+			failures
+				.filter(
+					(f) => f.reasonCode === "SOLD_OUT" || f.availability === "waitlist",
+				)
+				.map((f) => f.festivalClassId),
+		),
+	];
+	const primaryFailure =
+		failedResults.find((r) => r.reasonCode === "SOLD_OUT") ?? failedResults[0];
+	const message =
+		primaryFailure?.reasonCode === "SOLD_OUT"
+			? (primaryFailure.message ??
+				"Class is at capacity and in waitlist availability.")
+			: (primaryFailure?.message ?? "Class registration is not eligible.");
+	const code = primaryFailure?.reasonCode?.toLowerCase() ?? "ineligible";
+	return new AppError(message, 400, code, {
+		failures,
+		waitlistedClassIds,
+	});
+}
+
+export async function verifyPostCartCreateCapacityCutoff(params: {
+	organizationId: string;
+	festivalId: string;
+	lines: ReadonlyArray<{ childId: string; festivalClassId: string }>;
+	organizations: OrganizationRepository;
+	countConfirmedEntitlements?: (
+		organizationId: string,
+		festivalClassId: string,
+	) => Promise<number>;
+}): Promise<AppError | null> {
+	const distinctClassIds = [
+		...new Set(params.lines.map((l) => l.festivalClassId)),
+	];
+	const failures: ClassCheckoutFailureLineDetail[] = [];
+
+	for (const classId of distinctClassIds) {
+		const freshClass =
+			await params.organizations.findFestivalClassConfigurationById(
+				params.organizationId,
+				params.festivalId,
+				classId,
+			);
+		const placedCount = params.countConfirmedEntitlements
+			? await params.countConfirmedEntitlements(params.organizationId, classId)
+			: 0;
+		const matchingLines = params.lines.filter(
+			(l) => l.festivalClassId === classId,
+		);
+
+		if (
+			!freshClass?.isActive ||
+			freshClass.organizationId !== params.organizationId ||
+			freshClass.festivalId !== params.festivalId ||
+			freshClass.capacity <= 0 ||
+			placedCount >= freshClass.capacity
+		) {
+			const capacity = freshClass?.capacity ?? 0;
+			const reason = !freshClass?.isActive
+				? "Class is no longer available and is in waitlist state."
+				: "Class has reached capacity and is now on the waitlist.";
+			for (const line of matchingLines) {
+				failures.push({
+					childId: line.childId,
+					festivalClassId: classId,
+					reasonCode: "SOLD_OUT",
+					availability: "waitlist",
+					reason,
+					message: reason,
+					capacity,
+					placedCount,
+				});
+			}
+		}
+	}
+
+	if (failures.length === 0) {
+		return null;
+	}
+
+	const waitlistedClassIds = [
+		...new Set(failures.map((f) => f.festivalClassId)),
+	];
+	return new AppError(
+		failures[0]?.message ??
+			"Class is at capacity and in waitlist availability.",
+		400,
+		"sold_out",
+		{
+			failures,
+			waitlistedClassIds,
+		},
+	);
+}
