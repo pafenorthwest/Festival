@@ -399,7 +399,7 @@ export class PostgresClassEntitlementRepository
 			conditions.push(`festival_class_id = $${params.length}`);
 		}
 		if (filter.festivalClassIds) {
-			params.push(filter.festivalClassIds);
+			params.push(sql.array(filter.festivalClassIds, "text"));
 			conditions.push(`festival_class_id = ANY($${params.length}::text[])`);
 		}
 		if (filter.parentCustomerId) {
@@ -411,7 +411,7 @@ export class PostgresClassEntitlementRepository
 			conditions.push(`child_id = $${params.length}`);
 		}
 		if (filter.childIds) {
-			params.push(filter.childIds);
+			params.push(sql.array(filter.childIds, "text"));
 			conditions.push(`child_id = ANY($${params.length}::text[])`);
 		}
 		if (filter.status) {

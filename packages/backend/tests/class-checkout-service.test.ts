@@ -2432,6 +2432,79 @@ describe("ClassCheckoutService", () => {
 		expect(listFestivalClassConfigurationsSpy).not.toHaveBeenCalled();
 	});
 
+	it("loads 25 advisory candidates with one targeted class query and preserves duplicate results", async () => {
+		const f = await createFixture();
+		const festivalId = f.festival?.id ?? "";
+		const template = await f.organizations.findFestivalClassConfigurationById(
+			f.organization.id,
+			festivalId,
+			f.classConfig.id,
+		);
+		if (!template) throw new Error("Fixture class not found.");
+		const {
+			id: _id,
+			createdAtIso: _createdAt,
+			updatedAtIso: _updatedAt,
+			...input
+		} = template;
+		const classIds = [f.classConfig.id];
+		for (let index = 1; index < 25; index++) {
+			const config = await f.organizations.createFestivalClassConfiguration({
+				...input,
+				displayName: `Candidate ${index}`,
+			});
+			classIds.push(config.id);
+		}
+		const individualLookup = spyOn(
+			f.organizations,
+			"findFestivalClassConfigurationById",
+		);
+		const bulkLookup = spyOn(
+			f.organizations,
+			"findFestivalClassConfigurationsByIds",
+		);
+		const items = classIds.map((festivalClassId) => ({
+			childId: f.child.id,
+			festivalClassId,
+			isCandidate: true,
+		}));
+		const response = await f.service.evaluateEligibility({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			festivalId,
+			items,
+		});
+		expect(response.results).toHaveLength(25);
+		expect(
+			response.results.every((result) => result.reasonCode === "AVAILABLE"),
+		).toBe(true);
+		expect(bulkLookup).toHaveBeenCalledTimes(1);
+		expect(bulkLookup).toHaveBeenCalledWith(
+			f.organization.id,
+			festivalId,
+			classIds,
+		);
+		expect(individualLookup).not.toHaveBeenCalled();
+
+		bulkLookup.mockClear();
+		const duplicate = await f.service.evaluateEligibility({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			festivalId,
+			items: [items[0], items[0]].map(
+				({ isCandidate: _candidate, ...item }) => item,
+			),
+		});
+		expect(duplicate.results.map((result) => result.reasonCode)).toEqual([
+			"AVAILABLE",
+			"ALREADY_REGISTERED",
+		]);
+		expect(bulkLookup).toHaveBeenCalledTimes(1);
+		expect(bulkLookup).toHaveBeenCalledWith(f.organization.id, festivalId, [
+			classIds[0],
+		]);
+	});
+
 	it("multi-line start() deduplicates child, age snapshot, teacher grant, accompanist grant, and class configuration lookups across lines and checkEligibility", async () => {
 		const f = await createFixture();
 		const festivalId = f.festival?.id ?? "";
@@ -2475,6 +2548,10 @@ describe("ClassCheckoutService", () => {
 			f.organizations,
 			"findFestivalClassConfigurationById",
 		);
+		const bulkClassLookup = spyOn(
+			f.organizations,
+			"findFestivalClassConfigurationsByIds",
+		);
 
 		const result = await f.service.start({
 			organizationId: f.organization.id,
@@ -2506,6 +2583,7 @@ describe("ClassCheckoutService", () => {
 		expect(findActiveTeacherEntitlementGrantSpy).toHaveBeenCalledTimes(1);
 		expect(findCurrentAccompanistMembershipGrantSpy).toHaveBeenCalledTimes(1);
 		expect(findFestivalClassConfigurationByIdSpy).toHaveBeenCalledTimes(2);
+		expect(bulkClassLookup).not.toHaveBeenCalled();
 	});
 
 	it("start() deterministically selects earliest active teacher grant and preserves teacherEntitlementId in registration metadata", async () => {
@@ -2613,10 +2691,47 @@ describe("ClassCheckoutService", () => {
 			status: "confirmed",
 		});
 
+		await f.organizations.updateFestivalClassConfiguration({
+			id: prerequisiteClass.id,
+			organizationId: f.organization.id,
+			festivalId,
+			isActive: false,
+		});
+		const {
+			id: _id,
+			createdAtIso: _createdAt,
+			updatedAtIso: _updatedAt,
+			...historicalConfig
+		} = prerequisiteClass;
+		const secondPrerequisiteClass =
+			await f.organizations.createFestivalClassConfiguration({
+				...historicalConfig,
+				displayName: "Another Qualifying Solo",
+				isActive: false,
+			});
+		for (const [index, festivalClassId] of [
+			prerequisiteClass.id,
+			secondPrerequisiteClass.id,
+		].entries()) {
+			await f.commerce.createClassEntitlement({
+				organizationId: f.organization.id,
+				festivalId,
+				festivalClassId,
+				parentCustomerId: f.customer.id,
+				childId: f.child.id,
+				checkoutIntentId: `additional-prereq-${index}`,
+				shopifyOrderGid: `gid://shopify/Order/additional-prereq-${index}`,
+				shopifyOrderLineGid: `gid://shopify/OrderLineItem/additional-prereq-${index}`,
+				paidAmountCents: 4000,
+				paidCurrencyCode: "USD",
+				status: "confirmed",
+			});
+		}
+
 		const listEntitlementsSpy = spyOn(f.commerce, "listClassEntitlements");
-		const findClassByIdSpy = spyOn(
+		const findClassesByIdsSpy = spyOn(
 			f.organizations,
-			"findFestivalClassConfigurationById",
+			"findFestivalClassConfigurationsByIds",
 		);
 
 		const eligibleEval = await f.service.evaluateEligibility({
@@ -2642,10 +2757,12 @@ describe("ClassCheckoutService", () => {
 			festivalId,
 			childIds: [f.child.id],
 		});
-		expect(findClassByIdSpy).toHaveBeenCalledWith(
+		expect(findClassesByIdsSpy).toHaveBeenCalledTimes(2);
+		expect(findClassesByIdsSpy).toHaveBeenNthCalledWith(
+			2,
 			f.organization.id,
 			festivalId,
-			prerequisiteClass.id,
+			[prerequisiteClass.id, secondPrerequisiteClass.id],
 		);
 
 		await f.commerce.createClassEntitlement({

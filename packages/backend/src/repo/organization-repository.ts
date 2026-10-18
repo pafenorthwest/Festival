@@ -425,6 +425,11 @@ export interface OrganizationRepository {
 	updateFestivalClassConfiguration(
 		input: UpdateFestivalClassConfigurationInput,
 	): Promise<FestivalClassConfiguration>;
+	findFestivalClassConfigurationsByIds(
+		organizationId: string,
+		festivalId: string,
+		classIds: string[],
+	): Promise<FestivalClassConfiguration[]>;
 	findFestivalClassConfigurationById(
 		organizationId: string,
 		festivalId: string,

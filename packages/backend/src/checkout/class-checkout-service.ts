@@ -213,15 +213,15 @@ export class ClassCheckoutService {
 		const uniqueClassIds = [
 			...new Set(input.items.map((item) => item.festivalClassId)),
 		];
-		for (const classId of uniqueClassIds) {
-			if (!classes.has(classId)) {
-				const cfg = await this.organizations.findFestivalClassConfigurationById(
+		const missingClassIds = uniqueClassIds.filter((id) => !classes.has(id));
+		if (missingClassIds.length > 0) {
+			const configs =
+				await this.organizations.findFestivalClassConfigurationsByIds(
 					input.organizationId,
 					targetFestival.id,
-					classId,
+					missingClassIds,
 				);
-				if (cfg) classes.set(cfg.id, cfg);
-			}
+			for (const cfg of configs) classes.set(cfg.id, cfg);
 		}
 
 		const activeEntitlements = await this.loadTargetedEntitlements({
@@ -272,20 +272,24 @@ export class ClassCheckoutService {
 		]);
 		const merged = new Map<string, ClassEntitlement>();
 		for (const ent of entitlementsByClass) merged.set(ent.id, ent);
+		const prerequisiteClassIds = new Set<string>();
 		for (const ent of entitlementsByChild) {
 			merged.set(ent.id, ent);
 			if (
 				ent.status === "confirmed" &&
 				!input.classes.has(ent.festivalClassId)
 			) {
-				const prereqCfg =
-					await this.organizations.findFestivalClassConfigurationById(
-						input.organizationId,
-						input.festivalId,
-						ent.festivalClassId,
-					);
-				if (prereqCfg) input.classes.set(prereqCfg.id, prereqCfg);
+				prerequisiteClassIds.add(ent.festivalClassId);
 			}
+		}
+		if (prerequisiteClassIds.size > 0) {
+			const configs =
+				await this.organizations.findFestivalClassConfigurationsByIds(
+					input.organizationId,
+					input.festivalId,
+					[...prerequisiteClassIds],
+				);
+			for (const cfg of configs) input.classes.set(cfg.id, cfg);
 		}
 		return [...merged.values()];
 	}

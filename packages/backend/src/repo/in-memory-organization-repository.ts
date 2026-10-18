@@ -1344,6 +1344,24 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		return { ...updated };
 	}
 
+	async findFestivalClassConfigurationsByIds(
+		organizationId: string,
+		festivalId: string,
+		classIds: string[],
+	): Promise<FestivalClassConfiguration[]> {
+		const records: FestivalClassConfiguration[] = [];
+		for (const classId of new Set(classIds)) {
+			const record = this.festivalClassConfigurations.get(classId);
+			if (
+				record?.organizationId === organizationId &&
+				record.festivalId === festivalId
+			) {
+				records.push({ ...record });
+			}
+		}
+		return records;
+	}
+
 	findFestivalClassConfigurationById(
 		organizationId: string,
 		festivalId: string,

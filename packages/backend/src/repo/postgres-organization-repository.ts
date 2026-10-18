@@ -2284,6 +2284,20 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		}
 	}
 
+	async findFestivalClassConfigurationsByIds(
+		organizationId: string,
+		festivalId: string,
+		classIds: string[],
+	): Promise<FestivalClassConfiguration[]> {
+		if (classIds.length === 0) return [];
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT * FROM ${this.schema}.festival_class_configurations WHERE organization_id = $1 AND festival_id = $2 AND id = ANY($3::text[])`,
+			[organizationId, festivalId, sql.array([...new Set(classIds)], "text")],
+		)) as FestivalClassConfigurationRow[];
+		return rows.map(mapFestivalClassConfiguration);
+	}
+
 	findFestivalClassConfigurationById(
 		organizationId: string,
 		festivalId: string,
