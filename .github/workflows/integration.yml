@@ -1,14 +1,14 @@
 name: Integration Deployment
 
 on:
-  push:
-    branches:
-      - release
-      - 'release/v*'
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: integration-deployment
+  cancel-in-progress: false
 
 jobs:
   verify:
@@ -17,6 +17,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -45,41 +47,49 @@ jobs:
     steps:
       - name: Deploy to Integration Host via SSH
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          DEPLOY_SHA: ${{ github.sha }}
         with:
           host: ${{ secrets.DO_INTEGRATION_HOST }}
-          username: ${{ secrets.DO_INTEGRATION_USER || 'root' }}
+          username: ${{ secrets.DO_INTEGRATION_USER || 'webadmin' }}
           key: ${{ secrets.DO_SSH_PRIVATE_KEY }}
+          envs: DEPLOY_SHA
+          command_timeout: 30m
           script: |
             set -euo pipefail
+            [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
             cd /opt/Festival
-            git fetch origin release
-            git checkout -B release origin/release
-            docker compose -f cloud-setup/compose.yml up -d --build
+            git fetch origin "$DEPLOY_SHA"
+            git checkout --detach "$DEPLOY_SHA"
+            test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"
+            git diff --quiet
+            git diff --cached --quiet
+            bash cloud-setup/03-prepare-images.sh
+            docker compose --env-file cloud-setup/.env -f cloud-setup/compose.yml up -d --no-build --pull never
 
   smoke-test:
     needs: deploy-integration
     runs-on: ubuntu-latest
 
     steps:
-      - name: Smoke test healthz endpoint
+      - name: Smoke test integration frontend and backend
         run: |
           for i in {1..12}; do
-            status=$(curl -s -o /dev/null -w "%{http_code}" https://int.artsfestival.online/healthz || true)
-            if [ "$status" = "200" ]; then
-              echo "Health check passed with HTTP 200 on attempt $i"
+            if curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
+              https://int.artsfestival.online/healthz > /dev/null \
+              && curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
+                https://int.artsfestival.online/api/organizations/pafe/landing \
+                --output "$RUNNER_TEMP/integration-landing.json" \
+              && jq --exit-status \
+                '.organization.slug == "pafe" and (.organization.name | type == "string") and (.festivals | type == "array")' \
+                "$RUNNER_TEMP/integration-landing.json" > /dev/null; then
+              echo "Frontend and database-backed API checks passed on attempt $i"
               exit 0
             fi
-            echo "Attempt $i: received status $status, retrying in 5s..."
-            sleep 5
+            if [ "$i" -lt 12 ]; then
+              echo "Attempt $i failed, retrying in 5s..."
+              sleep 5
+            fi
           done
-          echo "Health check failed after 12 retries"
+          echo "Integration smoke checks failed after 12 attempts"
           exit 1
-
-      - name: Check admin endpoint
-        run: |
-          status=$(curl -s -o /dev/null -w "%{http_code}" https://int.artsfestival.online/org/pafe/admin || true)
-          echo "Admin endpoint returned HTTP $status"
-          if [ "$status" -lt 200 ] || [ "$status" -ge 400 ]; then
-            echo "Admin check failed with status $status"
-            exit 1
-          fi
