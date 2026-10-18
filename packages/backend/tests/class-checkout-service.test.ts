@@ -2582,8 +2582,13 @@ describe("ClassCheckoutService", () => {
 		expect(findActiveChildAgeSnapshotSpy).toHaveBeenCalledTimes(1);
 		expect(findActiveTeacherEntitlementGrantSpy).toHaveBeenCalledTimes(1);
 		expect(findCurrentAccompanistMembershipGrantSpy).toHaveBeenCalledTimes(1);
-		expect(findFestivalClassConfigurationByIdSpy).toHaveBeenCalledTimes(4);
-		expect(bulkClassLookup).not.toHaveBeenCalled();
+		expect(findFestivalClassConfigurationByIdSpy).toHaveBeenCalledTimes(2);
+		expect(bulkClassLookup).toHaveBeenCalledTimes(1);
+		expect(bulkClassLookup).toHaveBeenCalledWith(
+			f.organization.id,
+			festivalId,
+			[f.classConfig.id, secondClass.id],
+		);
 	});
 
 	it("start() deterministically selects earliest active teacher grant and preserves teacherEntitlementId in registration metadata", async () => {

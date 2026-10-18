@@ -418,13 +418,16 @@ export async function verifyPostCartCreateCapacityCutoff(params: {
 	];
 	const failures: ClassCheckoutFailureLineDetail[] = [];
 
+	const configs =
+		await params.organizations.findFestivalClassConfigurationsByIds(
+			params.organizationId,
+			params.festivalId,
+			distinctClassIds,
+		);
+	const classMap = new Map(configs.map((c) => [c.id, c]));
+
 	for (const classId of distinctClassIds) {
-		const freshClass =
-			await params.organizations.findFestivalClassConfigurationById(
-				params.organizationId,
-				params.festivalId,
-				classId,
-			);
+		const freshClass = classMap.get(classId) ?? null;
 		const placedCount = params.countConfirmedEntitlements
 			? await params.countConfirmedEntitlements(params.organizationId, classId)
 			: 0;
