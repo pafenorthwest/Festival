@@ -184,6 +184,11 @@ export interface CustomerAccountRepository {
 	createChild(
 		input: Omit<FestivalChildRecord, "id" | "createdAtIso">,
 	): Promise<FestivalChildRecord>;
+	findChild(
+		organizationId: string,
+		parentCustomerId: string,
+		childId: string,
+	): Promise<FestivalChildRecord | null>;
 	listChildren(
 		organizationId: string,
 		parentCustomerId: string,
@@ -194,6 +199,10 @@ export interface CustomerAccountRepository {
 			"id" | "createdAtIso" | "supersededAtIso"
 		> & { createdAtIso?: string },
 	): Promise<FestivalChildAgeSnapshot>;
+	findActiveChildAgeSnapshot(
+		organizationId: string,
+		childId: string,
+	): Promise<FestivalChildAgeSnapshot | null>;
 	listChildAgeSnapshots(
 		organizationId: string,
 		childId: string,

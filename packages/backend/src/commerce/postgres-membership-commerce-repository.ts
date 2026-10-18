@@ -960,6 +960,10 @@ export class PostgresMembershipCommerceRepository
 			params.push(filter.festivalClassId);
 			conditions.push(`festival_class_id = $${params.length}`);
 		}
+		if (filter.festivalClassIds) {
+			params.push(sql.array(filter.festivalClassIds, "text"));
+			conditions.push(`festival_class_id = ANY($${params.length}::text[])`);
+		}
 		if (filter.parentCustomerId) {
 			params.push(filter.parentCustomerId);
 			conditions.push(`parent_customer_id = $${params.length}`);
@@ -967,6 +971,10 @@ export class PostgresMembershipCommerceRepository
 		if (filter.childId) {
 			params.push(filter.childId);
 			conditions.push(`child_id = $${params.length}`);
+		}
+		if (filter.childIds) {
+			params.push(sql.array(filter.childIds, "text"));
+			conditions.push(`child_id = ANY($${params.length}::text[])`);
 		}
 		if (filter.status) {
 			params.push(filter.status);

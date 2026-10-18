@@ -22,8 +22,10 @@ export interface ClassEntitlementFilter {
 	organizationId?: string;
 	festivalId?: string;
 	festivalClassId?: string;
+	festivalClassIds?: string[];
 	parentCustomerId?: string;
 	childId?: string;
+	childIds?: string[];
 	status?: ClassEntitlementStatus;
 }
 
@@ -168,11 +170,18 @@ export class InMemoryClassEntitlementRepository
 				)
 					return false;
 				if (
+					filter.festivalClassIds &&
+					!filter.festivalClassIds.includes(record.festivalClassId)
+				)
+					return false;
+				if (
 					filter.parentCustomerId &&
 					record.parentCustomerId !== filter.parentCustomerId
 				)
 					return false;
 				if (filter.childId && record.childId !== filter.childId) return false;
+				if (filter.childIds && !filter.childIds.includes(record.childId))
+					return false;
 				if (filter.status && record.status !== filter.status) return false;
 				return true;
 			})
@@ -389,6 +398,10 @@ export class PostgresClassEntitlementRepository
 			params.push(filter.festivalClassId);
 			conditions.push(`festival_class_id = $${params.length}`);
 		}
+		if (filter.festivalClassIds) {
+			params.push(sql.array(filter.festivalClassIds, "text"));
+			conditions.push(`festival_class_id = ANY($${params.length}::text[])`);
+		}
 		if (filter.parentCustomerId) {
 			params.push(filter.parentCustomerId);
 			conditions.push(`parent_customer_id = $${params.length}`);
@@ -396,6 +409,10 @@ export class PostgresClassEntitlementRepository
 		if (filter.childId) {
 			params.push(filter.childId);
 			conditions.push(`child_id = $${params.length}`);
+		}
+		if (filter.childIds) {
+			params.push(sql.array(filter.childIds, "text"));
+			conditions.push(`child_id = ANY($${params.length}::text[])`);
 		}
 		if (filter.status) {
 			params.push(filter.status);

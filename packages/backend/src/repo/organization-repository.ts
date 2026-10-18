@@ -366,6 +366,10 @@ export interface OrganizationRepository {
 	createAccompanistMembershipGrant(
 		input: CreateAccompanistMembershipGrantInput,
 	): Promise<AccompanistMembershipGrant>;
+	findCurrentAccompanistMembershipGrant(input: {
+		organizationId: string;
+		customerId: string;
+	}): Promise<AccompanistMembershipGrant | null>;
 	listAccompanistMembershipGrants(input: {
 		organizationId: string;
 		customerId?: string;
@@ -421,6 +425,11 @@ export interface OrganizationRepository {
 	updateFestivalClassConfiguration(
 		input: UpdateFestivalClassConfigurationInput,
 	): Promise<FestivalClassConfiguration>;
+	findFestivalClassConfigurationsByIds(
+		organizationId: string,
+		festivalId: string,
+		classIds: string[],
+	): Promise<FestivalClassConfiguration[]>;
 	findFestivalClassConfigurationById(
 		organizationId: string,
 		festivalId: string,
@@ -450,6 +459,11 @@ export interface OrganizationRepository {
 	createEntitlementGrantSnapshot(
 		input: CreateEntitlementGrantSnapshotInput,
 	): Promise<EntitlementGrantSnapshot>;
+	findActiveTeacherEntitlementGrant(input: {
+		organizationId: string;
+		customerId: string;
+		divisionId: string;
+	}): Promise<EntitlementGrantSnapshot | null>;
 	listEntitlementGrantSnapshots(
 		organizationId: string,
 		customerId?: string,
@@ -476,26 +490,17 @@ export function assertValidSubtypeDependency(
 	requiredSubtypeId: string,
 	subtypes: Map<string, string | null>,
 ): void {
-	if (id && id === requiredSubtypeId) {
+	if (id && id === requiredSubtypeId)
 		throw new Error("Class subtype cannot depend on itself.");
-	}
-	if (!subtypes.has(requiredSubtypeId)) {
+	if (!subtypes.has(requiredSubtypeId))
 		throw new Error("Required class subtype was not found.");
-	}
 	let currentId: string | null | undefined = subtypes.get(requiredSubtypeId);
-	const visited = new Set<string>();
-	if (id) {
-		visited.add(id);
-	}
-	visited.add(requiredSubtypeId);
-
+	const visited = new Set<string>(
+		id ? [id, requiredSubtypeId] : [requiredSubtypeId],
+	);
 	while (currentId) {
-		if (id && currentId === id) {
+		if ((id && currentId === id) || visited.has(currentId))
 			throw new Error("Class subtype dependency cycle detected.");
-		}
-		if (visited.has(currentId)) {
-			throw new Error("Class subtype dependency cycle detected.");
-		}
 		visited.add(currentId);
 		currentId = subtypes.get(currentId);
 	}

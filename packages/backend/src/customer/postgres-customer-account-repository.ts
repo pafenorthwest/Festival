@@ -72,6 +72,28 @@ interface StateRow {
 	offering_id: string | null;
 	expires_at: string;
 }
+interface ChildRow {
+	id: string;
+	organization_id: string;
+	parent_customer_id: string;
+	display_name: string;
+	created_at: string;
+}
+interface ChildAgeSnapshotRow {
+	id: string;
+	child_id: string;
+	organization_id: string;
+	age: number;
+	created_at: string;
+	valid_until: string;
+	superseded_at: string | null;
+}
+interface ConsentRow {
+	customer_id: string;
+	organization_id: string;
+	privacy_notice_version: string;
+	consented_at: string;
+}
 
 function schemaName(value: string) {
 	if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value))
@@ -108,7 +130,6 @@ function session(row: SessionRow): CustomerSessionRecord {
 		revokedAtIso: row.revoked_at ?? undefined,
 	};
 }
-
 function mailingAddress(
 	value: CustomerRow["mailing_address"],
 ): CustomerMailingAddress | null {
@@ -117,34 +138,66 @@ function mailingAddress(
 		? (JSON.parse(value) as CustomerMailingAddress)
 		: value;
 }
-
+function field<T>(
+	value: T | null,
+	source: "shopify" | "festival" | null,
+	updatedAtIso: string | null,
+) {
+	return { value, source, updatedAtIso };
+}
 function customer(row: CustomerRow): FestivalCustomerRecord {
 	return {
 		id: row.id,
 		organizationId: row.organization_id,
 		shopifyCustomerGid: row.shopify_customer_gid,
-		name: {
-			value: row.name,
-			source: row.name_source,
-			updatedAtIso: row.name_updated_at,
-		},
-		email: {
-			value: row.email,
-			source: row.email_source,
-			updatedAtIso: row.email_updated_at,
-		},
-		mailingAddress: {
-			value: mailingAddress(row.mailing_address),
-			source: row.mailing_address_source,
-			updatedAtIso: row.mailing_address_updated_at,
-		},
-		phone: {
-			value: row.phone,
-			source: row.phone_source,
-			updatedAtIso: row.phone_updated_at,
-		},
+		name: field(row.name, row.name_source, row.name_updated_at),
+		email: field(row.email, row.email_source, row.email_updated_at),
+		mailingAddress: field(
+			mailingAddress(row.mailing_address),
+			row.mailing_address_source,
+			row.mailing_address_updated_at,
+		),
+		phone: field(row.phone, row.phone_source, row.phone_updated_at),
 		createdAtIso: row.created_at,
 		updatedAtIso: row.updated_at,
+	};
+}
+function childRecord(row: ChildRow): FestivalChildRecord {
+	return {
+		id: row.id,
+		organizationId: row.organization_id,
+		parentCustomerId: row.parent_customer_id,
+		displayName: row.display_name,
+		createdAtIso: row.created_at,
+	};
+}
+function childAgeSnapshot(row: ChildAgeSnapshotRow): FestivalChildAgeSnapshot {
+	return {
+		id: row.id,
+		childId: row.child_id,
+		organizationId: row.organization_id,
+		age: row.age,
+		createdAtIso: row.created_at,
+		validUntilIso: row.valid_until,
+		...(row.superseded_at ? { supersededAtIso: row.superseded_at } : {}),
+	};
+}
+function consentRecord(row: ConsentRow): CustomerStaffAccessConsentRecord {
+	return {
+		customerId: row.customer_id,
+		organizationId: row.organization_id,
+		privacyNoticeVersion: row.privacy_notice_version,
+		consentedAtIso: row.consented_at,
+	};
+}
+function stateRecord(r: StateRow): CustomerOAuthStateRecord {
+	return {
+		stateHash: r.state_hash,
+		organizationId: r.organization_id,
+		nonce: r.nonce,
+		returnTo: r.return_to,
+		offeringId: r.offering_id ?? undefined,
+		expiresAtIso: r.expires_at,
 	};
 }
 
@@ -236,17 +289,7 @@ export class PostgresCustomerAccountRepository
 			`DELETE FROM ${this.schema}.shopify_customer_oauth_states WHERE state_hash=$1 AND expires_at>$2 RETURNING *`,
 			[hash, now],
 		)) as StateRow[];
-		const r = rows[0];
-		return r
-			? {
-					stateHash: r.state_hash,
-					organizationId: r.organization_id,
-					nonce: r.nonce,
-					returnTo: r.return_to,
-					offeringId: r.offering_id ?? undefined,
-					expiresAtIso: r.expires_at,
-				}
-			: null;
+		return rows[0] ? stateRecord(rows[0]) : null;
 	}
 	async createCustomerSession(s: Omit<CustomerSessionRecord, "customerId">) {
 		await this.ensureReady();
@@ -320,12 +363,7 @@ export class PostgresCustomerAccountRepository
 	}) {
 		await this.ensureReady();
 		const rows = (await sql.unsafe(
-			`UPDATE ${this.schema}.festival_customers SET
-			email=$3,
-			email_source='shopify',
-			email_updated_at=$4,
-			updated_at=GREATEST(updated_at,$4)
-			WHERE organization_id=$1 AND id=$2 RETURNING *`,
+			`UPDATE ${this.schema}.festival_customers SET email=$3,email_source='shopify',email_updated_at=$4,updated_at=GREATEST(updated_at,$4) WHERE organization_id=$1 AND id=$2 RETURNING *`,
 			[
 				input.organizationId,
 				input.customerId,
@@ -379,20 +417,9 @@ export class PostgresCustomerAccountRepository
 				consent.privacyNoticeVersion,
 				consent.consentedAtIso,
 			],
-		)) as Array<{
-			customer_id: string;
-			organization_id: string;
-			privacy_notice_version: string;
-			consented_at: string;
-		}>;
-		const row = rows[0];
-		if (!row) throw new Error("Customer consent persistence failed.");
-		return {
-			customerId: row.customer_id,
-			organizationId: row.organization_id,
-			privacyNoticeVersion: row.privacy_notice_version,
-			consentedAtIso: row.consented_at,
-		};
+		)) as ConsentRow[];
+		if (!rows[0]) throw new Error("Customer consent persistence failed.");
+		return consentRecord(rows[0]);
 	}
 	async getConsentedCustomer(
 		organizationId: string,
@@ -499,6 +526,18 @@ export class PostgresCustomerAccountRepository
 		);
 		return { ...input, id, createdAtIso };
 	}
+	async findChild(
+		organizationId: string,
+		parentCustomerId: string,
+		childId: string,
+	): Promise<FestivalChildRecord | null> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT id,organization_id,parent_customer_id,display_name,created_at FROM ${this.schema}.festival_children WHERE organization_id = $1 AND parent_customer_id = $2 AND id = $3 LIMIT 1`,
+			[organizationId, parentCustomerId, childId],
+		)) as ChildRow[];
+		return rows[0] ? childRecord(rows[0]) : null;
+	}
 	async listChildren(
 		organizationId: string,
 		parentCustomerId: string,
@@ -507,20 +546,8 @@ export class PostgresCustomerAccountRepository
 		const rows = (await sql.unsafe(
 			`SELECT id,organization_id,parent_customer_id,display_name,created_at FROM ${this.schema}.festival_children WHERE organization_id=$1 AND parent_customer_id=$2`,
 			[organizationId, parentCustomerId],
-		)) as Array<{
-			id: string;
-			organization_id: string;
-			parent_customer_id: string;
-			display_name: string;
-			created_at: string;
-		}>;
-		return rows.map((row) => ({
-			id: row.id,
-			organizationId: row.organization_id,
-			parentCustomerId: row.parent_customer_id,
-			displayName: row.display_name,
-			createdAtIso: row.created_at,
-		}));
+		)) as ChildRow[];
+		return rows.map(childRecord);
 	}
 	async createChildAgeSnapshot(
 		input: Omit<
@@ -548,6 +575,17 @@ export class PostgresCustomerAccountRepository
 		);
 		return { ...input, id, createdAtIso };
 	}
+	async findActiveChildAgeSnapshot(
+		organizationId: string,
+		childId: string,
+	): Promise<FestivalChildAgeSnapshot | null> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT id,child_id,organization_id,age,created_at,valid_until,superseded_at FROM ${this.schema}.festival_child_age_snapshots WHERE organization_id = $1 AND child_id = $2 AND superseded_at IS NULL ORDER BY created_at DESC, id DESC LIMIT 1`,
+			[organizationId, childId],
+		)) as ChildAgeSnapshotRow[];
+		return rows[0] ? childAgeSnapshot(rows[0]) : null;
+	}
 	async listChildAgeSnapshots(
 		organizationId: string,
 		childId: string,
@@ -556,23 +594,7 @@ export class PostgresCustomerAccountRepository
 		const rows = (await sql.unsafe(
 			`SELECT id,child_id,organization_id,age,created_at,valid_until,superseded_at FROM ${this.schema}.festival_child_age_snapshots WHERE organization_id=$1 AND child_id=$2`,
 			[organizationId, childId],
-		)) as Array<{
-			id: string;
-			child_id: string;
-			organization_id: string;
-			age: number;
-			created_at: string;
-			valid_until: string;
-			superseded_at: string | null;
-		}>;
-		return rows.map((row) => ({
-			id: row.id,
-			childId: row.child_id,
-			organizationId: row.organization_id,
-			age: row.age,
-			createdAtIso: row.created_at,
-			validUntilIso: row.valid_until,
-			...(row.superseded_at ? { supersededAtIso: row.superseded_at } : {}),
-		}));
+		)) as ChildAgeSnapshotRow[];
+		return rows.map(childAgeSnapshot);
 	}
 }

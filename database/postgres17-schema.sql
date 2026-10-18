@@ -2214,6 +2214,13 @@ CREATE UNIQUE INDEX idx_festival_children_parent_name ON orgs.festival_children 
 
 
 --
+-- Name: idx_festival_child_age_snapshots_org_child_active; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_festival_child_age_snapshots_org_child_active ON orgs.festival_child_age_snapshots USING btree (organization_id, child_id, created_at DESC) WHERE (superseded_at IS NULL);
+
+
+--
 -- Name: idx_festival_customers_org_email; Type: INDEX; Schema: orgs; Owner: -
 --
 

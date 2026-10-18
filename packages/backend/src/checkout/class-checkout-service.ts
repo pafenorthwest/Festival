@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type {
+	AccompanistMembershipGrant,
 	ClassCheckoutLineItemInput,
+	ClassEntitlement,
+	EntitlementGrantSnapshot,
 	EvaluatePurchaseEligibilityResponse,
+	FestivalChildAgeSnapshot,
 	FestivalChildRecord,
 	FestivalClassConfiguration,
 	FestivalRecord,
@@ -35,9 +39,12 @@ import {
 	calculateTotalAmount,
 	resolveFestivalClassConfiguration,
 	resolveTargetFestival,
+	validateAccompanistSelection,
 	validateActiveChildAgeSnapshot,
 	validateAndNormalizeRepertoirePieces,
 	validateChildAgeRange,
+	validateChildOwnership,
+	validateTeacherEntitlement,
 } from "./class-checkout-helpers.js";
 
 export interface ClassCheckoutStorefront {
@@ -101,6 +108,14 @@ interface ValidatedLineItem {
 	accompanistEntitlementId: string | null;
 }
 
+interface LineValidationCaches {
+	children: Map<string, FestivalChildRecord | null>;
+	ageSnapshots: Map<string, FestivalChildAgeSnapshot | null>;
+	classConfigs: Map<string, FestivalClassConfiguration>;
+	teacherGrants: Map<string, EntitlementGrantSnapshot | null>;
+	accompanistGrants: Map<string, AccompanistMembershipGrant | null>;
+}
+
 export type ClassCheckoutFailureStage =
 	| "registration_metadata"
 	| "load_integration"
@@ -157,43 +172,69 @@ export class ClassCheckoutService {
 
 	async evaluateEligibility(
 		input: EvaluatePurchaseEligibilityInput,
+		preloaded?: {
+			targetFestival?: FestivalRecord;
+			children?: Map<string, FestivalChildRecord | null>;
+			classes?: Map<string, FestivalClassConfiguration>;
+		},
 	): Promise<EvaluatePurchaseEligibilityResponse> {
 		if (!input.customerId?.trim()) {
 			throw new AppError("Customer ID is required.", 400);
 		}
-		const children = await this.customers.listChildren(
-			input.organizationId,
-			input.customerId,
-		);
-		const ownedChildIds = new Set(children.map((c) => c.id));
-		for (const item of input.items) {
-			if (!ownedChildIds.has(item.childId)) {
+		const uniqueChildIds = [
+			...new Set(input.items.map((item) => item.childId)),
+		];
+		for (const childId of uniqueChildIds) {
+			const child = preloaded?.children?.has(childId)
+				? (preloaded.children.get(childId) ?? null)
+				: await this.customers.findChild(
+						input.organizationId,
+						input.customerId,
+						childId,
+					);
+			if (!child) {
 				throw new AppError("Child not found.", 404);
 			}
 		}
 
-		const festivals = await this.organizations.listFestivals(
-			input.organizationId,
+		const targetFestival =
+			preloaded?.targetFestival ??
+			resolveTargetFestival(
+				await this.organizations.listFestivals(input.organizationId),
+				{
+					festivalId: input.festivalId,
+					festivalShortName: input.festivalShortName,
+				},
+			);
+
+		const classes = new Map<string, FestivalClassConfiguration>(
+			preloaded?.classes,
 		);
-		const targetFestival = resolveTargetFestival(festivals, {
-			festivalId: input.festivalId,
-			festivalShortName: input.festivalShortName,
+		const uniqueClassIds = [
+			...new Set(input.items.map((item) => item.festivalClassId)),
+		];
+		const missingClassIds = uniqueClassIds.filter((id) => !classes.has(id));
+		if (missingClassIds.length > 0) {
+			const configs =
+				await this.organizations.findFestivalClassConfigurationsByIds(
+					input.organizationId,
+					targetFestival.id,
+					missingClassIds,
+				);
+			for (const cfg of configs) classes.set(cfg.id, cfg);
+		}
+
+		const activeEntitlements = await this.loadTargetedEntitlements({
+			organizationId: input.organizationId,
+			festivalId: targetFestival.id,
+			uniqueClassIds,
+			uniqueChildIds,
+			classes,
 		});
-		const classes = await this.organizations.listFestivalClassConfigurations(
-			input.organizationId,
-			targetFestival.id,
-			false,
-		);
 		const subtypes = await this.organizations.listRegistrationCatalogValues(
 			input.organizationId,
 			"class_subtype",
 		);
-		const activeEntitlements = this.commerce
-			? await this.commerce.listClassEntitlements({
-					organizationId: input.organizationId,
-					festivalId: targetFestival.id,
-				})
-			: [];
 		return evaluatePurchaseEligibility({
 			organizationId: input.organizationId,
 			festivalId: targetFestival.id,
@@ -203,6 +244,54 @@ export class ClassCheckoutService {
 			activeEntitlements,
 			mode: input.mode ?? "cart",
 		});
+	}
+
+	private async loadTargetedEntitlements(input: {
+		organizationId: string;
+		festivalId: string;
+		uniqueClassIds: string[];
+		uniqueChildIds: string[];
+		classes: Map<string, FestivalClassConfiguration>;
+	}): Promise<ClassEntitlement[]> {
+		if (!this.commerce) return [];
+		const [entitlementsByClass, entitlementsByChild] = await Promise.all([
+			input.uniqueClassIds.length > 0
+				? this.commerce.listClassEntitlements({
+						organizationId: input.organizationId,
+						festivalId: input.festivalId,
+						festivalClassIds: input.uniqueClassIds,
+					})
+				: Promise.resolve([]),
+			input.uniqueChildIds.length > 0
+				? this.commerce.listClassEntitlements({
+						organizationId: input.organizationId,
+						festivalId: input.festivalId,
+						childIds: input.uniqueChildIds,
+					})
+				: Promise.resolve([]),
+		]);
+		const merged = new Map<string, ClassEntitlement>();
+		for (const ent of entitlementsByClass) merged.set(ent.id, ent);
+		const prerequisiteClassIds = new Set<string>();
+		for (const ent of entitlementsByChild) {
+			merged.set(ent.id, ent);
+			if (
+				ent.status === "confirmed" &&
+				!input.classes.has(ent.festivalClassId)
+			) {
+				prerequisiteClassIds.add(ent.festivalClassId);
+			}
+		}
+		if (prerequisiteClassIds.size > 0) {
+			const configs =
+				await this.organizations.findFestivalClassConfigurationsByIds(
+					input.organizationId,
+					input.festivalId,
+					[...prerequisiteClassIds],
+				);
+			for (const cfg of configs) input.classes.set(cfg.id, cfg);
+		}
+		return [...merged.values()];
 	}
 
 	async start(input: StartClassCheckoutInput): Promise<ClassCheckoutResult> {
@@ -229,20 +318,24 @@ export class ClassCheckoutService {
 			? undefined
 			: resolveTargetFestival(festivals, { festivalId: input.festivalId });
 		const lineItems = this.normalizeLineItems(input);
-		const children = await this.customers.listChildren(
-			input.organizationId,
-			input.customerId,
-		);
+		const caches: LineValidationCaches = {
+			children: new Map(),
+			ageSnapshots: new Map(),
+			classConfigs: new Map(),
+			teacherGrants: new Map(),
+			accompanistGrants: new Map(),
+		};
 		const validatedLines: ValidatedLineItem[] = [];
 		for (const line of lineItems) {
 			const vl = await this.validateLine(input.organizationId, line, {
+				customerId: input.customerId,
 				targetFestival,
 				festivals,
 				festivalShortName: namedFestival,
 				festivalId: input.festivalId,
-				children,
 				currentTime,
 				divisionId: lineItems.length === 1 ? input.divisionId : undefined,
+				caches,
 			});
 			validatedLines.push(vl);
 		}
@@ -261,6 +354,8 @@ export class ClassCheckoutService {
 			input.customerId,
 			targetFestivalId,
 			lineItems,
+			caches,
+			targetFestival,
 		);
 		if (
 			await this.checkout.hasProcessingIntent(
@@ -378,49 +473,56 @@ export class ClassCheckoutService {
 
 	private async validateTeacherAndAccompanist(
 		organizationId: string,
-		divisionId: string,
+		classConfig: FestivalClassConfiguration,
 		teacherId: string,
-		accompanistId?: string | null,
+		accompanistId: string | null | undefined,
+		caches: LineValidationCaches,
 	): Promise<{
 		teacherEntitlementId: string;
 		accompanistEntitlementId: string | null;
 	}> {
-		const teacherGrants =
-			await this.organizations.listEntitlementGrantSnapshots(
-				organizationId,
-				teacherId.trim(),
-			);
-		const activeTeacherGrant = teacherGrants.find(
-			(grant) =>
-				grant.entitlementClass === "teacher_membership" &&
-				grant.divisionId === divisionId &&
-				grant.status === "active",
-		);
-		if (!activeTeacherGrant) {
-			throw new AppError(
-				"Selected teacher does not have an active membership for this division.",
-				400,
+		const normalizedTeacherId = teacherId.trim();
+		const teacherCacheKey = `${normalizedTeacherId}\u0000${classConfig.divisionId}`;
+		if (!caches.teacherGrants.has(teacherCacheKey)) {
+			caches.teacherGrants.set(
+				teacherCacheKey,
+				await this.organizations.findActiveTeacherEntitlementGrant({
+					organizationId,
+					customerId: normalizedTeacherId,
+					divisionId: classConfig.divisionId,
+				}),
 			);
 		}
-		let accompanistEntitlementId: string | null = null;
-		if (accompanistId?.trim()) {
-			const accompanistGrants =
-				await this.organizations.listAccompanistMembershipGrants({
-					organizationId,
-					customerId: accompanistId.trim(),
-					currentOnly: true,
-				});
-			const activeAccompanistGrant = accompanistGrants.find(
-				(grant) => grant.status === "active" || grant.isCurrent === true,
-			);
-			if (!activeAccompanistGrant) {
-				throw new AppError(
-					"Selected accompanist does not have an active membership.",
-					400,
+		const activeTeacherGrant = validateTeacherEntitlement(
+			caches.teacherGrants.get(teacherCacheKey),
+			classConfig.divisionId,
+			normalizedTeacherId,
+		);
+
+		const normalizedAccompanistId = accompanistId?.trim();
+		const accompanimentRequired = Boolean(
+			(classConfig as { accompanimentRequired?: boolean })
+				.accompanimentRequired,
+		);
+		let accompanistGrant: AccompanistMembershipGrant | null | undefined;
+		if (normalizedAccompanistId) {
+			if (!caches.accompanistGrants.has(normalizedAccompanistId)) {
+				caches.accompanistGrants.set(
+					normalizedAccompanistId,
+					await this.organizations.findCurrentAccompanistMembershipGrant({
+						organizationId,
+						customerId: normalizedAccompanistId,
+					}),
 				);
 			}
-			accompanistEntitlementId = activeAccompanistGrant.id;
+			accompanistGrant = caches.accompanistGrants.get(normalizedAccompanistId);
 		}
+		const accompanistEntitlementId = validateAccompanistSelection(
+			accompanistGrant,
+			normalizedAccompanistId,
+			accompanimentRequired,
+		);
+
 		return {
 			teacherEntitlementId: activeTeacherGrant.id,
 			accompanistEntitlementId,
@@ -431,13 +533,14 @@ export class ClassCheckoutService {
 		organizationId: string,
 		line: ClassCheckoutLineItemInput,
 		ctx: {
+			customerId: string;
 			targetFestival?: FestivalRecord;
 			festivals: FestivalRecord[];
 			festivalShortName?: string;
 			festivalId?: string;
-			children: FestivalChildRecord[];
 			currentTime: Date;
 			divisionId?: string;
+			caches: LineValidationCaches;
 		},
 	): Promise<ValidatedLineItem> {
 		if (!line.festivalClassId?.trim()) {
@@ -449,47 +552,66 @@ export class ClassCheckoutService {
 		if (!line.teacherId?.trim()) {
 			throw new AppError("Teacher ID is required.", 400);
 		}
-		const child = ctx.children.find((c) => c.id === line.childId);
-		if (!child) {
-			throw new AppError(
-				"Child not found or does not belong to parent customer.",
-				404,
+		if (!ctx.caches.children.has(line.childId)) {
+			ctx.caches.children.set(
+				line.childId,
+				await this.customers.findChild(
+					organizationId,
+					ctx.customerId,
+					line.childId,
+				),
 			);
 		}
-		const snapshots = await this.customers.listChildAgeSnapshots(
-			organizationId,
+		const child = validateChildOwnership(
+			ctx.caches.children.get(line.childId),
 			line.childId,
+			ctx.customerId,
 		);
+		if (!ctx.caches.ageSnapshots.has(line.childId)) {
+			ctx.caches.ageSnapshots.set(
+				line.childId,
+				await this.customers.findActiveChildAgeSnapshot(
+					organizationId,
+					line.childId,
+				),
+			);
+		}
 		const activeSnapshot = validateActiveChildAgeSnapshot(
-			snapshots,
+			ctx.caches.ageSnapshots.get(line.childId) ?? null,
 			ctx.currentTime,
 		);
-		let classConfig: FestivalClassConfiguration | null;
-		if (ctx.festivalShortName) {
-			classConfig = await this.organizations.findActiveFestivalClassByShortName(
-				organizationId,
-				ctx.festivalShortName,
-				line.festivalClassId,
-				ctx.festivalId,
-			);
-		} else if (ctx.targetFestival) {
-			classConfig = await resolveFestivalClassConfiguration(
-				this.organizations,
-				{
-					organizationId,
-					targetFestival: ctx.targetFestival,
-					festivals: ctx.festivals,
-					festivalClassId: line.festivalClassId,
-				},
-			);
-		} else {
-			throw new AppError("Active festival not found.", 404);
-		}
-		if (!classConfig) {
-			throw new AppError("Festival class configuration not found.", 404);
-		}
 		const requestedDivisionId =
 			(line as { divisionId?: string }).divisionId ?? ctx.divisionId;
+		let classConfig: FestivalClassConfiguration | null | undefined =
+			ctx.caches.classConfigs.get(line.festivalClassId);
+		if (!classConfig) {
+			if (ctx.festivalShortName) {
+				classConfig =
+					await this.organizations.findActiveFestivalClassByShortName(
+						organizationId,
+						ctx.festivalShortName,
+						line.festivalClassId,
+						ctx.festivalId,
+					);
+			} else if (ctx.targetFestival) {
+				classConfig = await resolveFestivalClassConfiguration(
+					this.organizations,
+					{
+						organizationId,
+						targetFestival: ctx.targetFestival,
+						festivals: ctx.festivals,
+						festivalClassId: line.festivalClassId,
+						divisionId: requestedDivisionId,
+					},
+				);
+			} else {
+				throw new AppError("Active festival not found.", 404);
+			}
+			if (!classConfig) {
+				throw new AppError("Festival class configuration not found.", 404);
+			}
+			ctx.caches.classConfigs.set(line.festivalClassId, classConfig);
+		}
 		if (
 			requestedDivisionId !== undefined &&
 			requestedDivisionId !== classConfig.divisionId
@@ -507,9 +629,10 @@ export class ClassCheckoutService {
 		const { teacherEntitlementId, accompanistEntitlementId } =
 			await this.validateTeacherAndAccompanist(
 				organizationId,
-				classConfig.divisionId,
+				classConfig,
 				line.teacherId,
 				line.accompanistId,
+				ctx.caches,
 			);
 		return {
 			child,
@@ -525,16 +648,25 @@ export class ClassCheckoutService {
 		customerId: string,
 		festivalId: string,
 		lineItems: ClassCheckoutLineItemInput[],
+		caches: LineValidationCaches,
+		targetFestival?: FestivalRecord,
 	): Promise<void> {
-		const eligibility = await this.evaluateEligibility({
-			organizationId,
-			customerId,
-			festivalId,
-			items: lineItems.map(
-				(item) => stripCandidateMarker(item) as ClassCheckoutLineItemInput,
-			),
-			mode: "cart",
-		});
+		const eligibility = await this.evaluateEligibility(
+			{
+				organizationId,
+				customerId,
+				festivalId,
+				items: lineItems.map(
+					(item) => stripCandidateMarker(item) as ClassCheckoutLineItemInput,
+				),
+				mode: "cart",
+			},
+			{
+				targetFestival,
+				children: caches.children,
+				classes: caches.classConfigs,
+			},
+		);
 		if (
 			!eligibility.isEligible ||
 			eligibility.results.some((r) => !r.isEligible)
