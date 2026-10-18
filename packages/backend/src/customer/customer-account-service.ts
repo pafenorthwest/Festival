@@ -29,6 +29,7 @@ import {
 	CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION,
 	calendarDateInTimezone,
 	deriveFestivalMetadataCutoff,
+	evaluateClassCapacityStatus,
 	validateCustomerAccountSettings,
 	validateCustomerProfileInput,
 } from "@festival/common";
@@ -1977,18 +1978,37 @@ export class CustomerAccountService {
 		);
 
 		return {
-			classes: eligible.map((item) => ({
-				id: item.id,
-				displayName: item.displayName,
-				divisionId: item.divisionId,
-				classSubtypeId: item.classSubtypeId,
-				minimumAge: item.minimumAge,
-				maximumAge: item.maximumAge,
-				price: item.price,
-				maximumPerformancePieces: item.maximumPerformancePieces,
-				performanceMinutes: item.performanceMinutes,
-				capacity: item.capacity,
-			})),
+			classes: await Promise.all(
+				eligible.map(async (item) => {
+					const placedCount = this.commerce
+						? await this.commerce.countConfirmedClassEntitlements(
+								access.organizationId,
+								item.id,
+							)
+						: undefined;
+					return {
+						id: item.id,
+						displayName: item.displayName,
+						divisionId: item.divisionId,
+						classSubtypeId: item.classSubtypeId,
+						minimumAge: item.minimumAge,
+						maximumAge: item.maximumAge,
+						price: item.price,
+						maximumPerformancePieces: item.maximumPerformancePieces,
+						performanceMinutes: item.performanceMinutes,
+						capacity: item.capacity,
+						...(placedCount !== undefined
+							? {
+									placedCount,
+									availability: evaluateClassCapacityStatus(
+										item.capacity,
+										placedCount,
+									).availability,
+								}
+							: {}),
+					};
+				}),
+			),
 		};
 	}
 

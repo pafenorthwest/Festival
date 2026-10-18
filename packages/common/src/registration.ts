@@ -1,7 +1,10 @@
 import type {
 	ClassEntitlement,
 	ClassEntitlementStatus,
+	RegistrationEligibleClass,
 } from "./entitlements.js";
+
+export type { RegistrationEligibleClass };
 
 export interface RepertoirePiece {
 	title: string;

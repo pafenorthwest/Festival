@@ -137,6 +137,21 @@ function classEntitlementFromRow(
 		paidAmountCents: Number(row.paid_amount_cents),
 		paidCurrencyCode: String(row.paid_currency_code),
 		status: row.status as ClassEntitlementStatus,
+		admittedCartReference:
+			row.admitted_cart_reference !== null &&
+			row.admitted_cart_reference !== undefined
+				? String(row.admitted_cart_reference)
+				: null,
+		capacityAtAllocation:
+			row.capacity_at_allocation !== null &&
+			row.capacity_at_allocation !== undefined
+				? Number(row.capacity_at_allocation)
+				: null,
+		placedCountBeforeAllocation:
+			row.placed_count_before_allocation !== null &&
+			row.placed_count_before_allocation !== undefined
+				? Number(row.placed_count_before_allocation)
+				: null,
 		createdAt: String(row.created_at),
 		updatedAt: String(row.updated_at),
 	};
@@ -475,7 +490,7 @@ export class PostgresMembershipCommerceRepository
 				const existingClasses = await Promise.all(
 					classEntitlementInputs.map(async (classEntitlement) => {
 						const rows = (await tx.unsafe(
-							`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text
+							`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text
 							FROM ${this.schema}.class_entitlements
 							WHERE organization_id = $1 AND shopify_order_line_gid = $2
 							FOR UPDATE`,
@@ -725,10 +740,10 @@ export class PostgresMembershipCommerceRepository
 				const entitlementId = classEntitlementInput.id ?? randomUUID();
 				const insertedEntitlementRows = (await tx.unsafe(
 					`INSERT INTO ${this.schema}.class_entitlements (
-						id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at, updated_at
-					) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW(),NOW())
+						id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at, updated_at
+					) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW(),NOW())
 					ON CONFLICT (organization_id, shopify_order_line_gid) DO NOTHING
-					RETURNING id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text`,
+					RETURNING id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text`,
 					[
 						entitlementId,
 						classEntitlementInput.organizationId,
@@ -743,6 +758,9 @@ export class PostgresMembershipCommerceRepository
 						classEntitlementInput.paidAmountCents,
 						classEntitlementInput.paidCurrencyCode,
 						classEntitlementInput.status ?? "confirmed",
+						classEntitlementInput.admittedCartReference ?? null,
+						classEntitlementInput.capacityAtAllocation ?? null,
+						classEntitlementInput.placedCountBeforeAllocation ?? null,
 					],
 				)) as Array<Record<string, unknown>>;
 				let createdClassEntitlement = insertedEntitlementRows[0]
@@ -750,7 +768,7 @@ export class PostgresMembershipCommerceRepository
 					: undefined;
 				if (!createdClassEntitlement) {
 					const existingEntitlementRows = (await tx.unsafe(
-						`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text
+						`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text
 						FROM ${this.schema}.class_entitlements
 						WHERE organization_id = $1 AND shopify_order_line_gid = $2
 						FOR UPDATE`,
@@ -897,10 +915,10 @@ export class PostgresMembershipCommerceRepository
 		const id = input.id ?? randomUUID();
 		const rows = (await sql.unsafe(
 			`INSERT INTO ${this.schema}.class_entitlements (
-				id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at, updated_at
-			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW(),NOW())
+				id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at, updated_at
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW(),NOW())
 			ON CONFLICT (organization_id, shopify_order_line_gid) DO NOTHING
-			RETURNING id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text`,
+			RETURNING id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text`,
 			[
 				id,
 				input.organizationId,
@@ -915,6 +933,9 @@ export class PostgresMembershipCommerceRepository
 				input.paidAmountCents,
 				input.paidCurrencyCode,
 				input.status ?? "confirmed",
+				input.admittedCartReference ?? null,
+				input.capacityAtAllocation ?? null,
+				input.placedCountBeforeAllocation ?? null,
 			],
 		)) as Array<Record<string, unknown>>;
 		if (rows[0]) return classEntitlementFromRow(rows[0]);
@@ -934,7 +955,7 @@ export class PostgresMembershipCommerceRepository
 	): Promise<ClassEntitlement | null> {
 		await this.ensureReady();
 		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text
+			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text
 			FROM ${this.schema}.class_entitlements
 			WHERE organization_id = $1 AND id = $2`,
 			[organizationId, id],
@@ -983,7 +1004,7 @@ export class PostgresMembershipCommerceRepository
 		const whereClause =
 			conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text
+			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text
 			FROM ${this.schema}.class_entitlements
 			${whereClause}
 			ORDER BY created_at DESC`,
@@ -998,7 +1019,7 @@ export class PostgresMembershipCommerceRepository
 	): Promise<ClassEntitlement | null> {
 		await this.ensureReady();
 		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text
+			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text
 			FROM ${this.schema}.class_entitlements
 			WHERE organization_id = $1 AND shopify_order_line_gid = $2`,
 			[organizationId, shopifyOrderLineGid],
@@ -1012,12 +1033,24 @@ export class PostgresMembershipCommerceRepository
 	): Promise<ClassEntitlement | null> {
 		await this.ensureReady();
 		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text
+			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text
 			FROM ${this.schema}.class_entitlements
 			WHERE organization_id = $1 AND checkout_intent_id = $2`,
 			[organizationId, checkoutIntentId],
 		)) as Array<Record<string, unknown>>;
 		return rows[0] ? classEntitlementFromRow(rows[0]) : null;
+	}
+
+	async countConfirmedClassEntitlements(
+		organizationId: string,
+		festivalClassId: string,
+	): Promise<number> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT COUNT(*)::int AS count FROM ${this.schema}.class_entitlements WHERE organization_id = $1 AND festival_class_id = $2 AND status = 'confirmed'`,
+			[organizationId, festivalClassId],
+		)) as Array<{ count: number | string }>;
+		return Number(rows[0]?.count ?? 0);
 	}
 
 	async updateClassEntitlementStatus(
@@ -1033,7 +1066,7 @@ export class PostgresMembershipCommerceRepository
 			`UPDATE ${this.schema}.class_entitlements
 			SET status = $3, updated_at = NOW()
 			WHERE organization_id = $1 AND id = $2
-			RETURNING id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text`,
+			RETURNING id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text`,
 			[organizationId, id, status],
 		)) as Array<Record<string, unknown>>;
 		return rows[0] ? classEntitlementFromRow(rows[0]) : null;

@@ -1305,4 +1305,196 @@ describe("Class Order Projection and Entitlements", () => {
 			{ status: "needs_review", reasonCode: "correlation_invalid" },
 		]);
 	});
+
+	it("grandfathers concurrent attached carts when paid order arrives after class reaches capacity", async () => {
+		const f = await fixture();
+		await f.organizations.updateFestivalClassConfiguration({
+			id: f.classConfig.id,
+			organizationId: f.organization.id,
+			festivalId: f.festival.id,
+			capacity: 1,
+		});
+		const attachedFirst = await f.checkout.attachCart({
+			intentId: f.intent.id,
+			cartReference: "gid://shopify/Cart/cart-a",
+			checkoutUrl: "https://seattle-fest.myshopify.com/cart/c/cart-a",
+		});
+
+		const { customer: secondCustomer } =
+			await f.customers.createCustomerSession({
+				sessionId: "parent-session-2",
+				organizationId: f.organization.id,
+				shopifyCustomerGid: "gid://shopify/Customer/501",
+				encryptedTokens: "opaque",
+				csrfToken: "csrf",
+				integrationVersion: 1,
+				createdAtIso: NOW.toISOString(),
+				lastSeenAtIso: NOW.toISOString(),
+				expiresAtIso: "2030-01-01T00:00:00.000Z",
+			});
+		const secondChild = await f.customers.createChild({
+			organizationId: f.organization.id,
+			parentCustomerId: secondCustomer.id,
+			displayName: "Bob Violinist",
+			createdAtIso: NOW.toISOString(),
+		});
+		const secondLineId = "22222222-2222-4222-8222-222222222222";
+		const secondCreated = await f.checkout.createIntent({
+			organizationId: f.organization.id,
+			customerId: secondCustomer.id,
+			sessionId: "parent-session-2",
+			idempotencyKey: "second-grandfathered-cart",
+			intentType: "class_entry",
+			festivalClassId: f.classConfig.id,
+			childId: secondChild.id,
+			shopifyProductGid: f.classConfig.shopifyProductGid,
+			shopifyVariantGid: f.classConfig.shopifyVariantGid,
+			amount: f.classConfig.price,
+			currencyCode: "USD",
+			expiresAtIso: "2030-01-01T00:00:00.000Z",
+			lines: [
+				{
+					id: secondLineId,
+					lineType: "class_entry",
+					lineIndex: 0,
+					festivalClassId: f.classConfig.id,
+					childId: secondChild.id,
+					shopifyProductGid: f.classConfig.shopifyProductGid,
+					shopifyVariantGid: f.classConfig.shopifyVariantGid,
+					amount: f.classConfig.price,
+					currencyCode: "USD",
+				},
+			],
+		});
+		if (secondCreated.kind !== "created") {
+			throw new Error("Expected second checkout intent to be created");
+		}
+		const attachedSecond = await f.checkout.attachCart({
+			intentId: secondCreated.intent.id,
+			cartReference: "gid://shopify/Cart/cart-b",
+			checkoutUrl: "https://seattle-fest.myshopify.com/cart/c/cart-b",
+		});
+
+		const firstOrder = paidClassOrder(f.intent.correlationId);
+		f.orders.values.set(firstOrder.id, firstOrder);
+		const firstDelivery = await delivery(
+			f.commerce,
+			f.organization.id,
+			"webhook-cap-1",
+			firstOrder.id,
+		);
+		expect(await f.service.processDelivery(firstDelivery.id)).toBe("processed");
+
+		const secondOrder: ShopifyPaidOrder = {
+			id: "gid://shopify/Order/1001",
+			customerGid: "gid://shopify/Customer/501",
+			customerEmail: "parent2@example.test",
+			fullyPaid: true,
+			fullyPaidAtIso: "2026-09-21T17:35:00.000Z",
+			currencyCode: "USD",
+			customAttributes: [
+				{
+					key: "festival_checkout_intent_id",
+					value: secondCreated.intent.correlationId,
+				},
+			],
+			lineItems: [
+				{
+					id: "gid://shopify/LineItem/1001",
+					productGid: f.classConfig.shopifyProductGid,
+					variantGid: f.classConfig.shopifyVariantGid,
+					quantity: 1,
+					paidAmount: f.classConfig.price,
+					paidCurrencyCode: "USD",
+					customAttributes: [
+						{
+							key: "festival_checkout_intent_line_id",
+							value: secondLineId,
+						},
+					],
+				},
+			],
+		};
+		f.orders.values.set(secondOrder.id, secondOrder);
+		const secondDelivery = await delivery(
+			f.commerce,
+			f.organization.id,
+			"webhook-cap-2",
+			secondOrder.id,
+		);
+		expect(await f.service.processDelivery(secondDelivery.id)).toBe(
+			"processed",
+		);
+
+		const entitlements = await f.commerce.listClassEntitlements({
+			organizationId: f.organization.id,
+			festivalClassId: f.classConfig.id,
+		});
+		expect(entitlements).toHaveLength(2);
+		expect(entitlements).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					checkoutIntentId: f.intent.id,
+					status: "confirmed",
+					admittedCartReference: attachedFirst.reference,
+					capacityAtAllocation: 1,
+					placedCountBeforeAllocation: 0,
+				}),
+				expect.objectContaining({
+					checkoutIntentId: secondCreated.intent.id,
+					status: "confirmed",
+					admittedCartReference: attachedSecond.reference,
+					capacityAtAllocation: 1,
+					placedCountBeforeAllocation: 1,
+				}),
+			]),
+		);
+	});
+
+	it("marks unattached checkout intents for review when class is already at capacity", async () => {
+		const f = await fixture();
+		await f.organizations.updateFestivalClassConfiguration({
+			id: f.classConfig.id,
+			organizationId: f.organization.id,
+			festivalId: f.festival.id,
+			capacity: 1,
+		});
+		await f.commerce.createClassEntitlement({
+			organizationId: f.organization.id,
+			festivalId: f.festival.id,
+			festivalClassId: f.classConfig.id,
+			parentCustomerId: "existing-parent",
+			childId: "existing-child",
+			checkoutIntentId: "existing-intent",
+			shopifyOrderGid: "gid://shopify/Order/999",
+			shopifyOrderLineGid: "gid://shopify/LineItem/999",
+			paidAmountCents: 5000,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+
+		const order = paidClassOrder(f.intent.correlationId);
+		f.orders.values.set(order.id, order);
+		const received = await delivery(
+			f.commerce,
+			f.organization.id,
+			"webhook-unattached-over-cap",
+			order.id,
+		);
+		expect(await f.service.processDelivery(received.id)).toBe("processed");
+
+		const decisions = await f.commerce.listCustomerDecisions(
+			f.organization.id,
+			f.customer.id,
+		);
+		expect(decisions).toMatchObject([
+			{ status: "needs_review", reasonCode: "correlation_invalid" },
+		]);
+		expect(
+			await f.commerce.countConfirmedClassEntitlements(
+				f.organization.id,
+				f.classConfig.id,
+			),
+		).toBe(1);
+	});
 });

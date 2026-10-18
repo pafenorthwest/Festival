@@ -321,6 +321,36 @@ describe("OrganizationService - Festival Class Configuration", () => {
 		expect(updated.displayName).toBe("Violin Solo Intermediate");
 		expect(updated.price).toBe("45.00");
 		expect(updated.isActive).toBe(false);
+
+		// 6. Records actual placedCountAtChange when commerce repository is provided
+		const orgServiceWithCommerce = new OrganizationService(
+			repo,
+			undefined,
+			undefined,
+			undefined,
+			{
+				countConfirmedClassEntitlements: async () => 5,
+			},
+		);
+		await orgServiceWithCommerce.updateFestivalClass(
+			"pafe-org",
+			"pf2026",
+			createdClass.id,
+			{ capacity: 5 },
+			"admin-uid-2",
+		);
+		const audits = await repo.listFestivalClassCapacityAudits(
+			org.id,
+			createdClass.id,
+		);
+		expect(audits[0]).toMatchObject({
+			action: "capacity_updated",
+			previousCapacity: 15,
+			newCapacity: 5,
+			placedCountAtChange: 5,
+			availabilityAfterChange: "waitlist",
+			actorUid: "admin-uid-2",
+		});
 	});
 });
 

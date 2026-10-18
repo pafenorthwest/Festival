@@ -170,6 +170,19 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			CHECK (minimum_age >= 0 AND maximum_age >= minimum_age AND maximum_performance_pieces IN (1, 2, 3) AND performance_minutes > 0 AND capacity > 0)
 		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.festival_class_capacity_audit_logs (
+			id TEXT PRIMARY KEY,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			festival_id TEXT NOT NULL REFERENCES ${safeSchema}.festivals (id) ON DELETE CASCADE,
+			festival_class_id TEXT NOT NULL REFERENCES ${safeSchema}.festival_class_configurations (id) ON DELETE CASCADE,
+			actor_uid TEXT NULL,
+			action TEXT NOT NULL CHECK (action IN ('class_created', 'capacity_updated')),
+			previous_capacity INTEGER NULL CHECK (previous_capacity IS NULL OR previous_capacity > 0),
+			new_capacity INTEGER NOT NULL CHECK (new_capacity > 0),
+			placed_count_at_change INTEGER NOT NULL CHECK (placed_count_at_change >= 0),
+			availability_after_change TEXT NOT NULL CHECK (availability_after_change IN ('open', 'waitlist')),
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.festival_class_subtypes (
 			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
 			festival_id TEXT NOT NULL REFERENCES ${safeSchema}.festivals (id) ON DELETE CASCADE,
@@ -289,6 +302,9 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			paid_amount_cents INTEGER NOT NULL CHECK (paid_amount_cents >= 0),
 			paid_currency_code TEXT NOT NULL CHECK (paid_currency_code ~ '^[A-Z]{3}$'),
 			status TEXT NOT NULL CHECK (status IN ('confirmed', 'waitlisted', 'cancelled', 'revoked')),
+			admitted_cart_reference TEXT NULL,
+			capacity_at_allocation INTEGER NULL,
+			placed_count_before_allocation INTEGER NULL,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			FOREIGN KEY (parent_customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers(id, organization_id) ON DELETE RESTRICT
@@ -800,6 +816,8 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		CREATE INDEX IF NOT EXISTS idx_message_logs_org_event
 			ON ${safeSchema}.message_logs (organization_id, event_id);
 		CREATE INDEX IF NOT EXISTS registration_catalog_values_required_subtype_idx ON ${safeSchema}.registration_catalog_values (organization_id, required_subtype_id);
+		CREATE INDEX IF NOT EXISTS idx_festival_class_capacity_audit_logs_org_class_created
+			ON ${safeSchema}.festival_class_capacity_audit_logs (organization_id, festival_class_id, created_at DESC);
 	`;
 }
 
@@ -822,6 +840,15 @@ export async function initializePostgresSchema(schema: string): Promise<void> {
 		);
 		await transaction.unsafe(
 			`ALTER TABLE IF EXISTS ${safeSchema}.class_entitlements ADD COLUMN IF NOT EXISTS checkout_intent_line_id TEXT;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.class_entitlements ADD COLUMN IF NOT EXISTS admitted_cart_reference TEXT;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.class_entitlements ADD COLUMN IF NOT EXISTS capacity_at_allocation INTEGER;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.class_entitlements ADD COLUMN IF NOT EXISTS placed_count_before_allocation INTEGER;`,
 		);
 		await transaction.unsafe(
 			`ALTER TABLE IF EXISTS ${safeSchema}.checkout_intents ADD COLUMN IF NOT EXISTS line_identity_protocol TEXT;`,
