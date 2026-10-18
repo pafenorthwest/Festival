@@ -2221,11 +2221,77 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		return this.listRegistrationCatalogValues(organizationId, kind);
 	}
 
-	async createFestivalClassConfiguration(
+	async createFestivalClassConfigurationWithCapacityAudit(
 		input: CreateFestivalClassConfigurationInput,
+		actorUid?: string,
 	): Promise<FestivalClassConfiguration> {
 		await this.ensureReady();
-		const rows = (await sql.unsafe(
+		return sql.begin(async (transaction) => {
+			const created = await this.createFestivalClassConfiguration(
+				input,
+				transaction,
+			);
+			await this.recordFestivalClassCapacityAudit(
+				{
+					organizationId: input.organizationId,
+					festivalId: input.festivalId,
+					festivalClassId: created.id,
+					actorUid,
+					previousCapacity: null,
+					newCapacity: created.capacity,
+					placedCountAtChange: 0,
+					action: "class_created",
+				},
+				transaction,
+			);
+			return created;
+		});
+	}
+
+	async updateFestivalClassConfigurationWithCapacityAudit(
+		input: UpdateFestivalClassConfigurationInput,
+		actorUid?: string,
+	): Promise<FestivalClassConfiguration> {
+		await this.ensureReady();
+		return sql.begin(async (transaction) => {
+			const [previous] = await transaction.unsafe(
+				`SELECT capacity FROM ${this.schema}.festival_class_configurations WHERE organization_id = $1 AND festival_id = $2 AND id = $3 FOR UPDATE`,
+				[input.organizationId, input.festivalId, input.id],
+			);
+			if (!previous) throw new Error("Festival class configuration not found.");
+			const updated = await this.updateFestivalClassConfiguration(
+				input,
+				transaction,
+			);
+			if (updated.capacity !== Number(previous.capacity)) {
+				const [placed] = await transaction.unsafe(
+					`SELECT COUNT(*)::int AS count FROM ${this.schema}.class_entitlements WHERE organization_id = $1 AND festival_class_id = $2 AND status = 'confirmed'`,
+					[input.organizationId, input.id],
+				);
+				await this.recordFestivalClassCapacityAudit(
+					{
+						organizationId: input.organizationId,
+						festivalId: input.festivalId,
+						festivalClassId: input.id,
+						actorUid,
+						previousCapacity: Number(previous.capacity),
+						newCapacity: updated.capacity,
+						placedCountAtChange: Number(placed?.count ?? 0),
+						action: "capacity_updated",
+					},
+					transaction,
+				);
+			}
+			return updated;
+		});
+	}
+
+	async createFestivalClassConfiguration(
+		input: CreateFestivalClassConfigurationInput,
+		database: Pick<typeof sql, "unsafe"> = sql,
+	): Promise<FestivalClassConfiguration> {
+		await this.ensureReady();
+		const rows = (await database.unsafe(
 			`INSERT INTO ${this.schema}.festival_class_configurations (id, organization_id, festival_id, display_name, class_subtype_id, division_id, minimum_age, maximum_age, price, maximum_performance_pieces, performance_minutes, capacity, is_active, shopify_product_gid, shopify_variant_gid) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id, organization_id, festival_id, display_name, class_subtype_id, division_id, minimum_age, maximum_age, price, maximum_performance_pieces, performance_minutes, capacity, is_active, shopify_product_gid, shopify_variant_gid, created_at, updated_at`,
 			[
 				randomUUID(),
@@ -2252,10 +2318,11 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 
 	async updateFestivalClassConfiguration(
 		input: UpdateFestivalClassConfigurationInput,
+		database: Pick<typeof sql, "unsafe"> = sql,
 	): Promise<FestivalClassConfiguration> {
 		await this.ensureReady();
 		try {
-			const rows = (await sql.unsafe(
+			const rows = (await database.unsafe(
 				`UPDATE ${this.schema}.festival_class_configurations
 				 SET
 					display_name = COALESCE($4, display_name),
@@ -2398,6 +2465,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 
 	async recordFestivalClassCapacityAudit(
 		input: CreateFestivalClassCapacityAuditInput,
+		database: Pick<typeof sql, "unsafe"> = sql,
 	): Promise<FestivalClassCapacityAuditRecord> {
 		await this.ensureReady();
 		const previousCapacity = input.previousCapacity ?? null;
@@ -2408,7 +2476,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			input.availabilityAfterChange ??
 			evaluateClassCapacityStatus(input.newCapacity, input.placedCountAtChange)
 				.availability;
-		const rows = (await sql.unsafe(
+		const rows = (await database.unsafe(
 			`INSERT INTO ${this.schema}.festival_class_capacity_audit_logs (id, organization_id, festival_id, festival_class_id, actor_uid, action, previous_capacity, new_capacity, placed_count_at_change, availability_after_change, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11::timestamptz, NOW())) RETURNING id, organization_id, festival_id, festival_class_id, actor_uid, action, previous_capacity, new_capacity, placed_count_at_change, availability_after_change, created_at::text`,
 			[
 				input.id ?? randomUUID(),

@@ -412,6 +412,15 @@ export interface OrganizationRepository {
 		kind: RegistrationCatalogKind,
 		ids: string[],
 	): Promise<RegistrationCatalogValue[]>;
+	createFestivalClassConfigurationWithCapacityAudit(
+		input: CreateFestivalClassConfigurationInput,
+		actorUid?: string,
+	): Promise<FestivalClassConfiguration>;
+	updateFestivalClassConfigurationWithCapacityAudit(
+		input: UpdateFestivalClassConfigurationInput,
+		actorUid?: string,
+		countPlaced?: () => Promise<number>,
+	): Promise<FestivalClassConfiguration>;
 	createFestivalClassConfiguration(
 		input: CreateFestivalClassConfigurationInput,
 	): Promise<FestivalClassConfiguration>;

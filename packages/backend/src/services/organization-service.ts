@@ -14,7 +14,6 @@ import {
 	type DismissWelcomeResponse,
 	deriveDisplayName,
 	divisionNameUniquenessKey,
-	evaluateClassCapacityStatus,
 	type FestivalClassConfiguration,
 	type FestivalRecord,
 	type FestivalSummary,
@@ -1041,28 +1040,22 @@ export class OrganizationService {
 			if (!exists) throw new AppError("Class subtype not found.", 404);
 		}
 
-		const created = await this.repository.createFestivalClassConfiguration({
-			...input,
-			...validated,
-			organizationId: organization.id,
-			festivalId: festival.id,
-			maximumPerformancePieces: validated.maximumPerformancePieces ?? 1,
-			capacity: validated.capacity ?? DEFAULT_FESTIVAL_CLASS_CAPACITY,
-			shopifyProductGid: validated.shopifyProductGid ?? input.shopifyProductGid,
-			shopifyVariantGid: validated.shopifyVariantGid ?? input.shopifyVariantGid,
-		});
-		await this.repository.recordFestivalClassCapacityAudit({
-			organizationId: organization.id,
-			festivalId: festival.id,
-			festivalClassId: created.id,
-			actorUid: actorUid ?? null,
-			action: "class_created",
-			previousCapacity: null,
-			newCapacity: created.capacity,
-			placedCountAtChange: 0,
-			availabilityAfterChange: evaluateClassCapacityStatus(created.capacity, 0)
-				.availability,
-		});
+		const created =
+			await this.repository.createFestivalClassConfigurationWithCapacityAudit(
+				{
+					...input,
+					...validated,
+					organizationId: organization.id,
+					festivalId: festival.id,
+					maximumPerformancePieces: validated.maximumPerformancePieces ?? 1,
+					capacity: validated.capacity ?? DEFAULT_FESTIVAL_CLASS_CAPACITY,
+					shopifyProductGid:
+						validated.shopifyProductGid ?? input.shopifyProductGid,
+					shopifyVariantGid:
+						validated.shopifyVariantGid ?? input.shopifyVariantGid,
+				},
+				actorUid,
+			);
 		return created;
 	}
 
@@ -1114,34 +1107,24 @@ export class OrganizationService {
 		}
 
 		try {
-			const updated = await this.repository.updateFestivalClassConfiguration({
-				...validated,
-				id: classId,
-				organizationId: organization.id,
-				festivalId: festival.id,
-			});
-			if (updated.capacity !== existing.capacity) {
-				const placedCountAtChange = this.commerce
-					? await this.commerce.countConfirmedClassEntitlements(
-							organization.id,
-							classId,
-						)
-					: 0;
-				await this.repository.recordFestivalClassCapacityAudit({
-					organizationId: organization.id,
-					festivalId: festival.id,
-					festivalClassId: classId,
-					actorUid: actorUid ?? null,
-					action: "capacity_updated",
-					previousCapacity: existing.capacity,
-					newCapacity: updated.capacity,
-					placedCountAtChange,
-					availabilityAfterChange: evaluateClassCapacityStatus(
-						updated.capacity,
-						placedCountAtChange,
-					).availability,
-				});
-			}
+			const commerce = this.commerce;
+			const updated =
+				await this.repository.updateFestivalClassConfigurationWithCapacityAudit(
+					{
+						...validated,
+						id: classId,
+						organizationId: organization.id,
+						festivalId: festival.id,
+					},
+					actorUid,
+					commerce
+						? () =>
+								commerce.countConfirmedClassEntitlements(
+									organization.id,
+									classId,
+								)
+						: undefined,
+				);
 			return updated;
 		} catch (error) {
 			if (
