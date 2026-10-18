@@ -234,9 +234,29 @@ export async function createApp(options: CreateAppOptions = {}) {
 		shopifyLifecycleService,
 		secretKeyring ?? undefined,
 	);
+	const checkoutRepository =
+		options.checkoutRepository ??
+		(env.databaseSchema
+			? new PostgresCheckoutRepository(env.databaseSchema)
+			: new InMemoryCheckoutRepository());
+	if (checkoutRepository instanceof PostgresCheckoutRepository)
+		await checkoutRepository.ensureReady();
+	const commerceRepository =
+		options.commerceRepository ??
+		(env.databaseSchema
+			? new PostgresMembershipCommerceRepository(env.databaseSchema)
+			: new InMemoryMembershipCommerceRepository(
+					repository,
+					checkoutRepository,
+				));
+	await commerceRepository.ensureReady();
 	const adminClassCatalogService =
 		options.adminClassCatalogService ??
-		new AdminClassCatalogService(repository, adminClassShopifySync);
+		new AdminClassCatalogService(
+			repository,
+			adminClassShopifySync,
+			commerceRepository,
+		);
 	const roomRepository =
 		options.roomRepository ??
 		(env.databaseSchema
@@ -249,6 +269,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 		adminClassCatalogService,
 		{ enableDropTransfer: Boolean(env.enableDropTransfer) },
 		roomRepository,
+		commerceRepository,
 	);
 	const shopifyWebhookSubscriptionService = secretKeyring
 		? new ShopifyWebhookSubscriptionService(
@@ -302,22 +323,6 @@ export async function createApp(options: CreateAppOptions = {}) {
 			? new PostgresCustomerAccountRepository(env.databaseSchema)
 			: undefined);
 	if (customerAccountRepository) await customerAccountRepository.ensureReady();
-	const checkoutRepository =
-		options.checkoutRepository ??
-		(env.databaseSchema
-			? new PostgresCheckoutRepository(env.databaseSchema)
-			: new InMemoryCheckoutRepository());
-	if (checkoutRepository instanceof PostgresCheckoutRepository)
-		await checkoutRepository.ensureReady();
-	const commerceRepository =
-		options.commerceRepository ??
-		(env.databaseSchema
-			? new PostgresMembershipCommerceRepository(env.databaseSchema)
-			: new InMemoryMembershipCommerceRepository(
-					repository,
-					checkoutRepository,
-				));
-	await commerceRepository.ensureReady();
 	const customerAccountService =
 		options.customerAccountService ??
 		(secretKeyring && customerAccountRepository && env.publicOrigin

@@ -277,6 +277,10 @@ export interface MembershipCommerceRepository {
 		organizationId: string,
 		checkoutIntentId: string,
 	): Promise<ClassEntitlement | null>;
+	countConfirmedClassEntitlements(
+		organizationId: string,
+		festivalClassId: string,
+	): Promise<number>;
 	updateClassEntitlementStatus(
 		organizationId: string,
 		id: string,
@@ -947,6 +951,9 @@ export class InMemoryMembershipCommerceRepository
 			paidAmountCents: input.paidAmountCents,
 			paidCurrencyCode: input.paidCurrencyCode,
 			status: input.status ?? "confirmed",
+			admittedCartReference: input.admittedCartReference ?? null,
+			capacityAtAllocation: input.capacityAtAllocation ?? null,
+			placedCountBeforeAllocation: input.placedCountBeforeAllocation ?? null,
 			createdAt: input.createdAt ?? nowIso,
 			updatedAt: input.updatedAt ?? nowIso,
 		};
@@ -1025,6 +1032,23 @@ export class InMemoryMembershipCommerceRepository
 		);
 		if (!id) return null;
 		return this.getClassEntitlement(organizationId, id);
+	}
+
+	async countConfirmedClassEntitlements(
+		organizationId: string,
+		festivalClassId: string,
+	): Promise<number> {
+		let count = 0;
+		for (const record of this.classEntitlements.values()) {
+			if (
+				record.organizationId === organizationId &&
+				record.festivalClassId === festivalClassId &&
+				record.status === "confirmed"
+			) {
+				count += 1;
+			}
+		}
+		return count;
 	}
 
 	async updateClassEntitlementStatus(

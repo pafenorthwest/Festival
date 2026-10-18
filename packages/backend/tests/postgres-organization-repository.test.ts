@@ -667,4 +667,166 @@ describe("PostgresOrganizationRepository", () => {
 			expect(result).toBeNull();
 		});
 	});
+
+	describe("Festival class capacity audit logs", () => {
+		let repo: PostgresOrganizationRepository;
+		let unsafeSpy: ReturnType<typeof spyOn>;
+
+		beforeEach(() => {
+			repo = new PostgresOrganizationRepository("test_schema");
+			spyOn(repo, "ensureReady").mockResolvedValue();
+			unsafeSpy = spyOn(sql, "unsafe");
+		});
+
+		afterEach(() => {
+			unsafeSpy.mockRestore();
+		});
+
+		it("records class_created and capacity_updated audit entries with derived defaults", async () => {
+			unsafeSpy.mockResolvedValueOnce([
+				{
+					id: "audit-1",
+					organization_id: "org-1",
+					festival_id: "fest-1",
+					festival_class_id: "class-1",
+					actor_uid: "admin-1",
+					action: "class_created",
+					previous_capacity: null,
+					new_capacity: 100,
+					placed_count_at_change: 0,
+					availability_after_change: "open",
+					created_at: "2026-01-01T00:00:00.000Z",
+				},
+			]);
+
+			const createdAudit = await repo.recordFestivalClassCapacityAudit({
+				id: "audit-1",
+				organizationId: "org-1",
+				festivalId: "fest-1",
+				festivalClassId: "class-1",
+				actorUid: "admin-1",
+				previousCapacity: null,
+				newCapacity: 100,
+				placedCountAtChange: 0,
+				createdAtIso: "2026-01-01T00:00:00.000Z",
+			});
+
+			expect(createdAudit).toEqual({
+				id: "audit-1",
+				organizationId: "org-1",
+				festivalId: "fest-1",
+				festivalClassId: "class-1",
+				actorUid: "admin-1",
+				action: "class_created",
+				previousCapacity: null,
+				newCapacity: 100,
+				placedCountAtChange: 0,
+				availabilityAfterChange: "open",
+				createdAtIso: "2026-01-01T00:00:00.000Z",
+			});
+			expect(unsafeSpy).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"INSERT INTO test_schema.festival_class_capacity_audit_logs",
+				),
+				[
+					"audit-1",
+					"org-1",
+					"fest-1",
+					"class-1",
+					"admin-1",
+					"class_created",
+					null,
+					100,
+					0,
+					"open",
+					"2026-01-01T00:00:00.000Z",
+				],
+			);
+
+			unsafeSpy.mockResolvedValueOnce([
+				{
+					id: "audit-2",
+					organization_id: "org-1",
+					festival_id: "fest-1",
+					festival_class_id: "class-1",
+					actor_uid: null,
+					action: "capacity_updated",
+					previous_capacity: 100,
+					new_capacity: 2,
+					placed_count_at_change: 2,
+					availability_after_change: "waitlist",
+					created_at: "2026-01-02T00:00:00.000Z",
+				},
+			]);
+
+			const updatedAudit = await repo.recordFestivalClassCapacityAudit({
+				id: "audit-2",
+				organizationId: "org-1",
+				festivalId: "fest-1",
+				festivalClassId: "class-1",
+				previousCapacity: 100,
+				newCapacity: 2,
+				placedCountAtChange: 2,
+			});
+
+			expect(updatedAudit).toEqual({
+				id: "audit-2",
+				organizationId: "org-1",
+				festivalId: "fest-1",
+				festivalClassId: "class-1",
+				actorUid: null,
+				action: "capacity_updated",
+				previousCapacity: 100,
+				newCapacity: 2,
+				placedCountAtChange: 2,
+				availabilityAfterChange: "waitlist",
+				createdAtIso: "2026-01-02T00:00:00.000Z",
+			});
+		});
+
+		it("lists capacity audit entries ordered by created_at DESC, id DESC", async () => {
+			unsafeSpy.mockResolvedValueOnce([
+				{
+					id: "audit-2",
+					organization_id: "org-1",
+					festival_id: "fest-1",
+					festival_class_id: "class-1",
+					actor_uid: "admin-1",
+					action: "capacity_updated",
+					previous_capacity: 100,
+					new_capacity: 50,
+					placed_count_at_change: 10,
+					availability_after_change: "open",
+					created_at: "2026-01-02T00:00:00.000Z",
+				},
+			]);
+
+			const audits = await repo.listFestivalClassCapacityAudits(
+				"org-1",
+				"class-1",
+			);
+
+			expect(audits).toEqual([
+				{
+					id: "audit-2",
+					organizationId: "org-1",
+					festivalId: "fest-1",
+					festivalClassId: "class-1",
+					actorUid: "admin-1",
+					action: "capacity_updated",
+					previousCapacity: 100,
+					newCapacity: 50,
+					placedCountAtChange: 10,
+					availabilityAfterChange: "open",
+					createdAtIso: "2026-01-02T00:00:00.000Z",
+				},
+			]);
+			expect(unsafeSpy).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"FROM test_schema.festival_class_capacity_audit_logs WHERE organization_id = $1 AND festival_class_id = $2 ORDER BY created_at DESC, id DESC",
+				),
+				["org-1", "class-1"],
+			);
+		});
+	});
 });

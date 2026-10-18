@@ -1,4 +1,7 @@
-import { isValidIanaTimezone } from "./organization.js";
+import {
+	type ClassAvailabilityStatus,
+	isValidIanaTimezone,
+} from "./organization.js";
 
 export const TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS =
 	"teacher_membership" as const;
@@ -321,6 +324,9 @@ export interface ClassEntitlement {
 	paidAmountCents: number;
 	paidCurrencyCode: string;
 	status: ClassEntitlementStatus;
+	admittedCartReference?: string | null;
+	capacityAtAllocation?: number | null;
+	placedCountBeforeAllocation?: number | null;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -334,6 +340,9 @@ export type CreateClassEntitlementInput = Omit<
 	createdAt?: string;
 	updatedAt?: string;
 	checkoutIntentLineId?: string | null;
+	admittedCartReference?: string | null;
+	capacityAtAllocation?: number | null;
+	placedCountBeforeAllocation?: number | null;
 };
 
 export function assertValidClassEntitlementInput(
@@ -436,4 +445,6 @@ export interface RegistrationEligibleClass {
 	readonly maximumPerformancePieces: number;
 	readonly performanceMinutes: number;
 	readonly capacity: number;
+	readonly placedCount?: number;
+	readonly availability?: ClassAvailabilityStatus;
 }

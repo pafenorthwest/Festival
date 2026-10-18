@@ -73,6 +73,45 @@ export interface RegistrationAgeConfiguration {
 	updatedAtIso: string;
 }
 
+export const DEFAULT_FESTIVAL_CLASS_CAPACITY = 100;
+
+export type ClassAvailabilityStatus = "open" | "waitlist";
+
+export interface ClassCapacityStatus {
+	capacity: number;
+	placedCount: number;
+	remainingSpots: number;
+	isOverCapacity: boolean;
+	availability: ClassAvailabilityStatus;
+}
+
+export function evaluateClassCapacityStatus(
+	capacity: number,
+	placedCount: number,
+): ClassCapacityStatus {
+	return {
+		capacity,
+		placedCount,
+		remainingSpots: Math.max(0, capacity - placedCount),
+		isOverCapacity: placedCount > capacity,
+		availability: placedCount >= capacity ? "waitlist" : "open",
+	};
+}
+
+export interface FestivalClassCapacityAuditRecord {
+	id: string;
+	organizationId: string;
+	festivalId: string;
+	festivalClassId: string;
+	actorUid: string | null;
+	action: "class_created" | "capacity_updated";
+	previousCapacity: number | null;
+	newCapacity: number;
+	placedCountAtChange: number;
+	availabilityAfterChange: ClassAvailabilityStatus;
+	createdAtIso: string;
+}
+
 export interface FestivalClassConfiguration {
 	id: string;
 	organizationId: string;

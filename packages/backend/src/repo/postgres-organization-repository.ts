@@ -3,10 +3,12 @@ import type {
 	AccompanistDivisionSelectionPolicy,
 	AccompanistMembershipGrant,
 	AuthenticatedUser,
+	ClassAvailabilityStatus,
 	CreateEntitlementGrantSnapshotInput,
 	EntitlementClass,
 	EntitlementGrantSnapshot,
 	EntitlementGrantStatus,
+	FestivalClassCapacityAuditRecord,
 	FestivalClassConfiguration,
 	FestivalRecord,
 	OrganizationAdminUserEntry,
@@ -28,6 +30,7 @@ import {
 	AppError,
 	assertValidEntitlementDurationDays,
 	assertValidEntitlementGrantSnapshotInput,
+	evaluateClassCapacityStatus,
 	normalizeVerifiedShopifyIdentityEmail,
 } from "@festival/common";
 import { sql } from "bun";
@@ -35,6 +38,7 @@ import type {
 	AccompanistDivisionPolicyHistoryRecord,
 	AccompanistDivisionPolicyRecord,
 	CreateAccompanistMembershipGrantInput,
+	CreateFestivalClassCapacityAuditInput,
 	CreateFestivalClassConfigurationInput,
 	CreateFestivalRecordInput,
 	CreateInviteRecordInput,
@@ -275,6 +279,19 @@ interface FestivalClassConfigurationRow {
 	created_at: string;
 	updated_at: string;
 }
+interface FestivalClassCapacityAuditRow {
+	id: string;
+	organization_id: string;
+	festival_id: string;
+	festival_class_id: string;
+	actor_uid: string | null;
+	action: "class_created" | "capacity_updated";
+	previous_capacity: number | null;
+	new_capacity: number;
+	placed_count_at_change: number;
+	availability_after_change: ClassAvailabilityStatus;
+	created_at: string;
+}
 
 function mapOrganization(row: {
 	id: string;
@@ -340,6 +357,27 @@ function mapFestivalClassConfiguration(
 		shopifyVariantGid: row.shopify_variant_gid,
 		createdAtIso: row.created_at,
 		updatedAtIso: row.updated_at,
+	};
+}
+
+function mapFestivalClassCapacityAudit(
+	row: FestivalClassCapacityAuditRow,
+): FestivalClassCapacityAuditRecord {
+	return {
+		id: row.id,
+		organizationId: row.organization_id,
+		festivalId: row.festival_id,
+		festivalClassId: row.festival_class_id,
+		actorUid: row.actor_uid ?? null,
+		action: row.action,
+		previousCapacity:
+			row.previous_capacity !== null && row.previous_capacity !== undefined
+				? Number(row.previous_capacity)
+				: null,
+		newCapacity: Number(row.new_capacity),
+		placedCountAtChange: Number(row.placed_count_at_change),
+		availabilityAfterChange: row.availability_after_change,
+		createdAtIso: row.created_at,
 	};
 }
 
@@ -2356,6 +2394,53 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			[organizationId, festivalId, activeOnly],
 		)) as FestivalClassConfigurationRow[];
 		return rows.map(mapFestivalClassConfiguration);
+	}
+
+	async recordFestivalClassCapacityAudit(
+		input: CreateFestivalClassCapacityAuditInput,
+	): Promise<FestivalClassCapacityAuditRecord> {
+		await this.ensureReady();
+		const previousCapacity = input.previousCapacity ?? null;
+		const action =
+			input.action ??
+			(previousCapacity === null ? "class_created" : "capacity_updated");
+		const availabilityAfterChange =
+			input.availabilityAfterChange ??
+			evaluateClassCapacityStatus(input.newCapacity, input.placedCountAtChange)
+				.availability;
+		const rows = (await sql.unsafe(
+			`INSERT INTO ${this.schema}.festival_class_capacity_audit_logs (id, organization_id, festival_id, festival_class_id, actor_uid, action, previous_capacity, new_capacity, placed_count_at_change, availability_after_change, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11::timestamptz, NOW())) RETURNING id, organization_id, festival_id, festival_class_id, actor_uid, action, previous_capacity, new_capacity, placed_count_at_change, availability_after_change, created_at::text`,
+			[
+				input.id ?? randomUUID(),
+				input.organizationId,
+				input.festivalId,
+				input.festivalClassId,
+				input.actorUid ?? null,
+				action,
+				previousCapacity,
+				input.newCapacity,
+				input.placedCountAtChange,
+				availabilityAfterChange,
+				input.createdAtIso ?? null,
+			],
+		)) as FestivalClassCapacityAuditRow[];
+		const row = rows[0];
+		if (!row) {
+			throw new Error("Unable to record Festival class capacity audit.");
+		}
+		return mapFestivalClassCapacityAudit(row);
+	}
+
+	async listFestivalClassCapacityAudits(
+		organizationId: string,
+		festivalClassId: string,
+	): Promise<FestivalClassCapacityAuditRecord[]> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT id, organization_id, festival_id, festival_class_id, actor_uid, action, previous_capacity, new_capacity, placed_count_at_change, availability_after_change, created_at::text FROM ${this.schema}.festival_class_capacity_audit_logs WHERE organization_id = $1 AND festival_class_id = $2 ORDER BY created_at DESC, id DESC`,
+			[organizationId, festivalClassId],
+		)) as FestivalClassCapacityAuditRow[];
+		return rows.map(mapFestivalClassCapacityAudit);
 	}
 
 	async findProductRecordByShopifyProductGid(

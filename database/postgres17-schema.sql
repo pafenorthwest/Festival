@@ -214,6 +214,9 @@ CREATE TABLE orgs.class_entitlements (
     paid_amount_cents integer NOT NULL,
     paid_currency_code text NOT NULL,
     status text NOT NULL,
+    admitted_cart_reference text,
+    capacity_at_allocation integer,
+    placed_count_before_allocation integer,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT class_entitlements_paid_amount_cents_check CHECK ((paid_amount_cents >= 0)),
@@ -330,6 +333,30 @@ CREATE TABLE orgs.festival_class_configurations (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT festival_class_configurations_check CHECK (((minimum_age >= 0) AND (maximum_age >= minimum_age) AND (maximum_performance_pieces = ANY (ARRAY[1, 2, 3])) AND (performance_minutes > 0) AND (capacity > 0)))
+);
+
+
+--
+-- Name: festival_class_capacity_audit_logs; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.festival_class_capacity_audit_logs (
+    id text NOT NULL,
+    organization_id text NOT NULL,
+    festival_id text NOT NULL,
+    festival_class_id text NOT NULL,
+    actor_uid text,
+    action text NOT NULL,
+    previous_capacity integer,
+    new_capacity integer NOT NULL,
+    placed_count_at_change integer NOT NULL,
+    availability_after_change text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT festival_class_capacity_audit_logs_action_check CHECK ((action = ANY (ARRAY['class_created'::text, 'capacity_updated'::text]))),
+    CONSTRAINT festival_class_capacity_audit_logs_availability_after_change_check CHECK ((availability_after_change = ANY (ARRAY['open'::text, 'waitlist'::text]))),
+    CONSTRAINT festival_class_capacity_audit_logs_new_capacity_check CHECK ((new_capacity > 0)),
+    CONSTRAINT festival_class_capacity_audit_logs_placed_count_at_change_check CHECK ((placed_count_at_change >= 0)),
+    CONSTRAINT festival_class_capacity_audit_logs_previous_capacity_check CHECK (((previous_capacity IS NULL) OR (previous_capacity > 0)))
 );
 
 
@@ -1363,6 +1390,14 @@ ALTER TABLE ONLY orgs.festival_children
 
 
 --
+-- Name: festival_class_capacity_audit_logs festival_class_capacity_audit_logs_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_class_capacity_audit_logs
+    ADD CONSTRAINT festival_class_capacity_audit_logs_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: festival_class_configurations festival_class_configurations_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
 --
 
@@ -2221,6 +2256,13 @@ CREATE INDEX idx_festival_child_age_snapshots_org_child_active ON orgs.festival_
 
 
 --
+-- Name: idx_festival_class_capacity_audit_logs_org_class_created; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_festival_class_capacity_audit_logs_org_class_created ON orgs.festival_class_capacity_audit_logs USING btree (organization_id, festival_class_id, created_at DESC);
+
+
+--
 -- Name: idx_festival_customers_org_email; Type: INDEX; Schema: orgs; Owner: -
 --
 
@@ -2618,6 +2660,30 @@ ALTER TABLE ONLY orgs.checkout_intents
 
 ALTER TABLE ONLY orgs.checkout_intents
     ADD CONSTRAINT checkout_intents_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: festival_class_capacity_audit_logs festival_class_capacity_audit_logs_festival_class_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_class_capacity_audit_logs
+    ADD CONSTRAINT festival_class_capacity_audit_logs_festival_class_id_fkey FOREIGN KEY (festival_class_id) REFERENCES orgs.festival_class_configurations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: festival_class_capacity_audit_logs festival_class_capacity_audit_logs_festival_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_class_capacity_audit_logs
+    ADD CONSTRAINT festival_class_capacity_audit_logs_festival_id_fkey FOREIGN KEY (festival_id) REFERENCES orgs.festivals(id) ON DELETE CASCADE;
+
+
+--
+-- Name: festival_class_capacity_audit_logs festival_class_capacity_audit_logs_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_class_capacity_audit_logs
+    ADD CONSTRAINT festival_class_capacity_audit_logs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
 
 
 --

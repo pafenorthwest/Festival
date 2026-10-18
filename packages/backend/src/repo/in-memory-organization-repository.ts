@@ -6,6 +6,7 @@ import type {
 	CreateEntitlementGrantSnapshotInput,
 	EntitlementClass,
 	EntitlementGrantSnapshot,
+	FestivalClassCapacityAuditRecord,
 	FestivalClassConfiguration,
 	FestivalRecord,
 	OrganizationAdminUserEntry,
@@ -23,6 +24,7 @@ import {
 	calendarDateInTimezone,
 	deriveEntitlementLifecycle,
 	EMPTY_SHOPIFY_CAPABILITIES,
+	evaluateClassCapacityStatus,
 	isEntitlementClass,
 	normalizeVerifiedShopifyIdentityEmail,
 	TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
@@ -31,6 +33,7 @@ import type {
 	AccompanistDivisionPolicyHistoryRecord,
 	AccompanistDivisionPolicyRecord,
 	CreateAccompanistMembershipGrantInput,
+	CreateFestivalClassCapacityAuditInput,
 	CreateFestivalClassConfigurationInput,
 	CreateFestivalRecordInput,
 	CreateInviteRecordInput,
@@ -125,6 +128,8 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		string,
 		FestivalClassConfiguration
 	>();
+	private readonly festivalClassCapacityAudits: FestivalClassCapacityAuditRecord[] =
+		[];
 	private readonly customerContacts = new Map<
 		string,
 		MembershipCustomerContact
@@ -1431,6 +1436,50 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 					record.festivalId === festivalId &&
 					(!activeOnly || record.isActive),
 			)
+			.map((record) => ({ ...record }));
+	}
+
+	async recordFestivalClassCapacityAudit(
+		input: CreateFestivalClassCapacityAuditInput,
+	): Promise<FestivalClassCapacityAuditRecord> {
+		const previousCapacity = input.previousCapacity ?? null;
+		const record: FestivalClassCapacityAuditRecord = {
+			id: input.id ?? randomUUID(),
+			organizationId: input.organizationId,
+			festivalId: input.festivalId,
+			festivalClassId: input.festivalClassId,
+			actorUid: input.actorUid ?? null,
+			action:
+				input.action ??
+				(previousCapacity === null ? "class_created" : "capacity_updated"),
+			previousCapacity,
+			newCapacity: input.newCapacity,
+			placedCountAtChange: input.placedCountAtChange,
+			availabilityAfterChange:
+				input.availabilityAfterChange ??
+				evaluateClassCapacityStatus(
+					input.newCapacity,
+					input.placedCountAtChange,
+				).availability,
+			createdAtIso: input.createdAtIso ?? this.now().toISOString(),
+		};
+		this.festivalClassCapacityAudits.push(record);
+		return { ...record };
+	}
+
+	async listFestivalClassCapacityAudits(
+		organizationId: string,
+		festivalClassId: string,
+	): Promise<FestivalClassCapacityAuditRecord[]> {
+		return this.festivalClassCapacityAudits
+			.filter(
+				(record) =>
+					record.organizationId === organizationId &&
+					record.festivalClassId === festivalClassId,
+			)
+			.slice()
+			.reverse()
+			.sort((a, b) => b.createdAtIso.localeCompare(a.createdAtIso))
 			.map((record) => ({ ...record }));
 	}
 

@@ -196,7 +196,18 @@ function validateMultiLinePayment(
 type CorrelatedClassOrderLine = {
 	intentLine: CheckoutIntentLineItemRecord;
 	orderLine: ShopifyPaidOrder["lineItems"][number];
+	classConfig?: FestivalClassConfiguration;
+	festivalId?: string;
+	placedCountBeforeAllocation?: number;
 };
+
+function hasAttachedCart(intent: CheckoutIntentRecord): boolean {
+	return (
+		Boolean(intent.cartReference?.trim()) &&
+		intent.status !== "creating" &&
+		intent.status !== "failed"
+	);
+}
 
 /**
  * Correlate class-entitlement records to Shopify paid lines by the opaque UUID
@@ -707,6 +718,7 @@ export class ShopifyOrderProjectionService {
 			festivalId,
 			correlatedLines,
 			legacySingleLine,
+			placedCountBeforeAllocation,
 		} = await this.validateClassPurchase(
 			delivery.organizationId,
 			intent,
@@ -758,6 +770,7 @@ export class ShopifyOrderProjectionService {
 				classConfig,
 				correlatedLines,
 				legacySingleLine,
+				placedCountBeforeAllocation,
 			);
 			if (singleResult) return singleResult;
 		}
@@ -778,29 +791,43 @@ export class ShopifyOrderProjectionService {
 		classConfig: FestivalClassConfiguration,
 		correlatedLines: readonly CorrelatedClassOrderLine[],
 	): Promise<void> {
+		const admittedCartReference = intent.cartReference?.trim() || null;
 		await this.finalize(
 			delivery,
 			{
 				customerId: intent.customerId,
 				checkoutIntentId: intent.id,
 				status: "approved",
-				classEntitlements: correlatedLines.map(({ intentLine, orderLine }) => {
-					const paidMinor = moneyInMinorUnits(orderLine.paidAmount);
-					return {
-						organizationId: delivery.organizationId,
-						festivalId,
-						festivalClassId: intentLine.festivalClassId ?? classConfig.id,
-						parentCustomerId: intent.customerId,
-						childId: intentLine.childId ?? intent.childId ?? "",
-						checkoutIntentId: intent.id,
-						checkoutIntentLineId: intentLine.id,
-						shopifyOrderGid: order.id,
-						shopifyOrderLineGid: orderLine.id,
-						paidAmountCents: Number(paidMinor ?? 0n),
-						paidCurrencyCode: orderLine.paidCurrencyCode,
-						status: "confirmed" as const,
-					};
-				}),
+				classEntitlements: correlatedLines.map(
+					({
+						intentLine,
+						orderLine,
+						classConfig: lineConfig,
+						festivalId: lineFestivalId,
+						placedCountBeforeAllocation,
+					}) => {
+						const paidMinor = moneyInMinorUnits(orderLine.paidAmount);
+						const resolvedClassConfig = lineConfig ?? classConfig;
+						return {
+							organizationId: delivery.organizationId,
+							festivalId: lineFestivalId ?? festivalId,
+							festivalClassId:
+								intentLine.festivalClassId ?? resolvedClassConfig.id,
+							parentCustomerId: intent.customerId,
+							childId: intentLine.childId ?? intent.childId ?? "",
+							checkoutIntentId: intent.id,
+							checkoutIntentLineId: intentLine.id,
+							shopifyOrderGid: order.id,
+							shopifyOrderLineGid: orderLine.id,
+							paidAmountCents: Number(paidMinor ?? 0n),
+							paidCurrencyCode: orderLine.paidCurrencyCode,
+							status: "confirmed" as const,
+							admittedCartReference,
+							capacityAtAllocation: resolvedClassConfig.capacity,
+							placedCountBeforeAllocation: placedCountBeforeAllocation ?? null,
+						};
+					},
+				),
 			},
 			projection,
 		);
@@ -815,6 +842,7 @@ export class ShopifyOrderProjectionService {
 		classConfig: FestivalClassConfiguration,
 		correlatedLines: readonly CorrelatedClassOrderLine[] | undefined,
 		legacySingleLine: boolean | undefined,
+		placedCountBeforeAllocation?: number,
 	): Promise<ProcessingResult | undefined> {
 		const correlatedLine = correlatedLines?.[0];
 		const orderLine =
@@ -856,6 +884,9 @@ export class ShopifyOrderProjectionService {
 					paidAmountCents,
 					paidCurrencyCode: orderLine.paidCurrencyCode,
 					status: "confirmed",
+					admittedCartReference: intent.cartReference?.trim() || null,
+					capacityAtAllocation: classConfig.capacity,
+					placedCountBeforeAllocation: placedCountBeforeAllocation ?? null,
 				},
 			},
 			projection,
@@ -873,6 +904,7 @@ export class ShopifyOrderProjectionService {
 		festivalId?: string;
 		correlatedLines?: CorrelatedClassOrderLine[];
 		legacySingleLine?: boolean;
+		placedCountBeforeAllocation?: number;
 	}> {
 		const correlatedLines = correlateClassOrderLines(intent, order);
 		const legacySingleLine = isLegacySingleLineClassOrder(intent, order);
@@ -946,6 +978,7 @@ export class ShopifyOrderProjectionService {
 		festivalId?: string;
 		correlatedLines?: CorrelatedClassOrderLine[];
 		legacySingleLine?: boolean;
+		placedCountBeforeAllocation?: number;
 	}> {
 		if (!intent.festivalClassId || !intent.childId) {
 			return { reason: "upstream_invalid" };
@@ -988,9 +1021,21 @@ export class ShopifyOrderProjectionService {
 		) {
 			return { reason: "payment_mismatch" };
 		}
+		const placedCountBeforeAllocation =
+			await this.commerce.countConfirmedClassEntitlements(
+				organizationId,
+				classConfig.id,
+			);
+		if (
+			placedCountBeforeAllocation >= classConfig.capacity &&
+			!hasAttachedCart(intent)
+		) {
+			return { reason: "correlation_invalid" };
+		}
 		return {
 			classConfig,
 			festivalId,
+			placedCountBeforeAllocation,
 			...(correlatedLines ? { correlatedLines: [...correlatedLines] } : {}),
 			...(legacySingleLine ? { legacySingleLine: true } : {}),
 		};
@@ -1007,6 +1052,12 @@ export class ShopifyOrderProjectionService {
 		festivalId?: string;
 		correlatedLines?: CorrelatedClassOrderLine[];
 	}> {
+		if (!validateMultiLinePayment(intent, order)) {
+			return { reason: "payment_mismatch" };
+		}
+		const attachedCart = hasAttachedCart(intent);
+		const placedCountCache = new Map<string, number>();
+		const enrichedLines: CorrelatedClassOrderLine[] = [];
 		for (const { intentLine, orderLine } of correlatedLines) {
 			if (
 				orderLine.quantity !== 1 ||
@@ -1015,21 +1066,47 @@ export class ShopifyOrderProjectionService {
 			) {
 				return { reason: "offering_mismatch" };
 			}
+			const targetClassId =
+				intentLine.festivalClassId ?? intent.festivalClassId;
+			if (!targetClassId) return { reason: "upstream_invalid" };
+			const { classConfig: lineConfig, festivalId: lineFestivalId } =
+				await this.findActiveClassConfig(organizationId, targetClassId);
+			if (
+				!lineConfig ||
+				!lineFestivalId ||
+				lineConfig.shopifyProductGid !== intentLine.shopifyProductGid ||
+				lineConfig.shopifyVariantGid !== intentLine.shopifyVariantGid
+			) {
+				return { reason: "offering_mismatch" };
+			}
+			let placedCount = placedCountCache.get(lineConfig.id);
+			if (placedCount === undefined) {
+				placedCount = await this.commerce.countConfirmedClassEntitlements(
+					organizationId,
+					lineConfig.id,
+				);
+			}
+			if (placedCount >= lineConfig.capacity && !attachedCart) {
+				return { reason: "correlation_invalid" };
+			}
+			placedCountCache.set(lineConfig.id, placedCount + 1);
+			enrichedLines.push({
+				intentLine,
+				orderLine,
+				classConfig: lineConfig,
+				festivalId: lineFestivalId,
+				placedCountBeforeAllocation: placedCount,
+			});
 		}
-		if (!validateMultiLinePayment(intent, order)) {
-			return { reason: "payment_mismatch" };
+		const firstLine = enrichedLines[0];
+		if (!firstLine?.classConfig || !firstLine.festivalId) {
+			return { reason: "upstream_invalid" };
 		}
-		const targetClassId =
-			intent.festivalClassId ?? correlatedLines[0]?.intentLine.festivalClassId;
-		if (!targetClassId) return { reason: "upstream_invalid" };
-		const { classConfig, festivalId } = await this.findActiveClassConfig(
-			organizationId,
-			targetClassId,
-		);
-		if (!classConfig || !festivalId) {
-			return { reason: "offering_mismatch" };
-		}
-		return { classConfig, festivalId, correlatedLines: [...correlatedLines] };
+		return {
+			classConfig: firstLine.classConfig,
+			festivalId: firstLine.festivalId,
+			correlatedLines: enrichedLines,
+		};
 	}
 
 	private async projectConsentedCustomerProfile(

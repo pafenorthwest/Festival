@@ -2,9 +2,11 @@ import type {
 	AccompanistDivisionSelectionPolicy,
 	AccompanistMembershipGrant,
 	AuthenticatedUser,
+	ClassAvailabilityStatus,
 	CreateEntitlementGrantSnapshotInput,
 	EntitlementClass,
 	EntitlementGrantSnapshot,
+	FestivalClassCapacityAuditRecord,
 	FestivalClassConfiguration,
 	FestivalRecord,
 	OrganizationAdminUserEntry,
@@ -26,26 +28,22 @@ export interface MembershipWithOrganization {
 	membership: OrganizationMembershipRecord;
 	organization: OrganizationRecord;
 }
-
 export interface InviteWithOrganization {
 	invite: OrganizationInviteRecord;
 	organization: OrganizationRecord;
 }
-
 export interface CreateMembershipInput {
 	organizationId: string;
 	userId: string;
 	role: OrganizationMembershipRecord["role"];
 	origin: OrganizationMembershipRecord["origin"];
 }
-
 export interface CreateInviteRecordInput {
 	organizationId: string;
 	email: string;
 	role: OrganizationInviteRecord["role"];
 	invitedByUserId: string;
 }
-
 export interface CreateFestivalRecordInput {
 	id: string;
 	organizationId: string;
@@ -55,7 +53,6 @@ export interface CreateFestivalRecordInput {
 	startDate: string;
 	endDate: string;
 }
-
 export interface ShopifyIntegrationRecord {
 	organizationId: string;
 	storeDomain: string;
@@ -80,7 +77,6 @@ export interface ShopifyIntegrationRecord {
 	createdAtIso: string;
 	updatedAtIso: string;
 }
-
 export interface UpsertShopifyIntegrationInput {
 	organizationId: string;
 	storeDomain: string;
@@ -88,14 +84,12 @@ export interface UpsertShopifyIntegrationInput {
 	encryptedClientSecret: string;
 	encryptedStorefrontPrivateToken?: string;
 }
-
 interface UpdateShopifyVerificationBase {
 	organizationId: string;
 	lastTestedAtIso: string;
 	lastError?: string;
 	lastFailureCategory?: ShopifyFailureCategory;
 }
-
 export type UpdateShopifyVerificationInput =
 	| (UpdateShopifyVerificationBase & {
 			verificationStatus: "ok";
@@ -113,7 +107,6 @@ export type UpdateShopifyVerificationInput =
 			grantedScopes?: undefined;
 			capabilities?: undefined;
 	  });
-
 export type UpdateShopifyWebhookReadinessInput =
 	| {
 			organizationId: string;
@@ -131,21 +124,18 @@ export type UpdateShopifyWebhookReadinessInput =
 			failureCategory: ShopifyWebhookFailureCategory;
 			requestId?: string;
 	  };
-
 export class ShopifyShopOwnershipError extends Error {
 	constructor() {
 		super("Shopify shop is already assigned to another organization.");
 		this.name = "ShopifyShopOwnershipError";
 	}
 }
-
 export class AccompanistMembershipConflictError extends Error {
 	constructor() {
 		super("An active accompanist membership already exists.");
 		this.name = "AccompanistMembershipConflictError";
 	}
 }
-
 export interface ProductRecord {
 	id: string;
 	organizationId: string;
@@ -159,7 +149,6 @@ export interface ProductRecord {
 	createdAtIso: string;
 	updatedAtIso: string;
 }
-
 export interface CreateMembershipProductRecordInput {
 	organizationId: string;
 	entitlementClass: EntitlementClass;
@@ -169,21 +158,17 @@ export interface CreateMembershipProductRecordInput {
 	shopifyVariantGid: string;
 	productNameSnapshot: string;
 }
-
 export interface AccompanistDivisionPolicyRecord {
 	organizationId: string;
 	policy: AccompanistDivisionSelectionPolicy;
 	updatedAtIso: string;
 }
-
 export interface AccompanistDivisionPolicyHistoryRecord
 	extends AccompanistDivisionPolicyRecord {
 	id: string;
 	createdAtIso: string;
 }
-
 export type RegistrationCatalogKind = "class_subtype" | "instrument";
-
 export interface CreateFestivalClassConfigurationInput
 	extends Omit<
 		FestivalClassConfiguration,
@@ -191,7 +176,6 @@ export interface CreateFestivalClassConfigurationInput
 	> {
 	isActive?: boolean;
 }
-
 export interface UpdateFestivalClassConfigurationInput {
 	id: string;
 	organizationId: string;
@@ -207,7 +191,19 @@ export interface UpdateFestivalClassConfigurationInput {
 	shopifyProductGid?: string;
 	shopifyVariantGid?: string;
 }
-
+export interface CreateFestivalClassCapacityAuditInput {
+	id?: string;
+	organizationId: string;
+	festivalId: string;
+	festivalClassId: string;
+	actorUid?: string | null;
+	action?: "class_created" | "capacity_updated";
+	previousCapacity?: number | null;
+	newCapacity: number;
+	placedCountAtChange: number;
+	availabilityAfterChange?: ClassAvailabilityStatus;
+	createdAtIso?: string;
+}
 export interface CreateAccompanistMembershipGrantInput
 	extends Omit<
 		AccompanistMembershipGrant,
@@ -215,7 +211,6 @@ export interface CreateAccompanistMembershipGrantInput
 	> {
 	supersedeGrantId?: string;
 }
-
 export interface EntitlementRevocationRecord {
 	id: string;
 	entitlementId: string;
@@ -224,7 +219,6 @@ export interface EntitlementRevocationRecord {
 	reason: string;
 	revokedAtIso: string;
 }
-
 export interface MembershipCustomerContact {
 	customerId: string;
 	name?: string;
@@ -232,7 +226,6 @@ export interface MembershipCustomerContact {
 	phone?: string;
 	city?: string;
 }
-
 export interface OrganizationRepository {
 	ensureReady(): Promise<void>;
 	upsertUser(user: AuthenticatedUser): Promise<OrganizationUserRecord>;
@@ -450,6 +443,13 @@ export interface OrganizationRepository {
 		festivalId: string,
 		activeOnly?: boolean,
 	): Promise<FestivalClassConfiguration[]>;
+	recordFestivalClassCapacityAudit(
+		input: CreateFestivalClassCapacityAuditInput,
+	): Promise<FestivalClassCapacityAuditRecord>;
+	listFestivalClassCapacityAudits(
+		organizationId: string,
+		festivalClassId: string,
+	): Promise<FestivalClassCapacityAuditRecord[]>;
 	findProductRecordByShopifyProductGid(
 		shopifyProductGid: string,
 	): Promise<ProductRecord | null>;

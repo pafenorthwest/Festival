@@ -10,9 +10,11 @@ import {
 	type CreateOrganizationDivisionInput,
 	type CreateOrganizationInput,
 	type CreateOrganizationResponse,
+	DEFAULT_FESTIVAL_CLASS_CAPACITY,
 	type DismissWelcomeResponse,
 	deriveDisplayName,
 	divisionNameUniquenessKey,
+	evaluateClassCapacityStatus,
 	type FestivalClassConfiguration,
 	type FestivalRecord,
 	type FestivalSummary,
@@ -42,6 +44,7 @@ import {
 	validateRegistrationAgeDate,
 } from "@festival/common";
 import type { TenantContext } from "../auth/tenant-context.js";
+import type { MembershipCommerceRepository } from "../commerce/membership-commerce-repository.js";
 import { AppError } from "../errors/app-error.js";
 import type {
 	CreateFestivalClassConfigurationInput,
@@ -51,6 +54,10 @@ import type {
 } from "../repo/organization-repository.js";
 import type { RoomRepository } from "../rooms/room-repository.js";
 import type { AdminClassCatalogService } from "./admin-class-catalog.service.js";
+import {
+	validateCreateClassInput,
+	validateUpdateClassInput,
+} from "./admin-class-catalog-validation.js";
 
 function toSessionMembership(
 	record: MembershipWithOrganization,
@@ -132,6 +139,10 @@ export class OrganizationService {
 		private readonly adminClassCatalogService?: AdminClassCatalogService,
 		private readonly options?: { enableDropTransfer?: boolean },
 		private readonly roomRepository?: RoomRepository,
+		private readonly commerce?: Pick<
+			MembershipCommerceRepository,
+			"countConfirmedClassEntitlements"
+		>,
 	) {}
 
 	async getSession(identity?: AuthenticatedUser): Promise<SessionResponse> {
@@ -1013,26 +1024,46 @@ export class OrganizationService {
 		);
 		if (!festival) throw new AppError("Festival not found.", 404);
 
-		if (input.divisionId) {
+		const validated = validateCreateClassInput(input);
+
+		if (validated.divisionId) {
 			const divisions = await this.repository.listDivisions(organization.id);
-			const exists = divisions.some((d) => d.id === input.divisionId);
+			const exists = divisions.some((d) => d.id === validated.divisionId);
 			if (!exists) throw new AppError("Division not found.", 404);
 		}
 
-		if (input.classSubtypeId) {
+		if (validated.classSubtypeId) {
 			const subtypes = await this.repository.listFestivalClassSubtypes(
 				organization.id,
 				festival.id,
 			);
-			const exists = subtypes.some((s) => s.id === input.classSubtypeId);
+			const exists = subtypes.some((s) => s.id === validated.classSubtypeId);
 			if (!exists) throw new AppError("Class subtype not found.", 404);
 		}
 
-		return this.repository.createFestivalClassConfiguration({
+		const created = await this.repository.createFestivalClassConfiguration({
 			...input,
+			...validated,
 			organizationId: organization.id,
 			festivalId: festival.id,
+			maximumPerformancePieces: validated.maximumPerformancePieces ?? 1,
+			capacity: validated.capacity ?? DEFAULT_FESTIVAL_CLASS_CAPACITY,
+			shopifyProductGid: validated.shopifyProductGid ?? input.shopifyProductGid,
+			shopifyVariantGid: validated.shopifyVariantGid ?? input.shopifyVariantGid,
 		});
+		await this.repository.recordFestivalClassCapacityAudit({
+			organizationId: organization.id,
+			festivalId: festival.id,
+			festivalClassId: created.id,
+			actorUid: actorUid ?? null,
+			action: "class_created",
+			previousCapacity: null,
+			newCapacity: created.capacity,
+			placedCountAtChange: 0,
+			availabilityAfterChange: evaluateClassCapacityStatus(created.capacity, 0)
+				.availability,
+		});
+		return created;
 	}
 
 	async updateFestivalClass(
@@ -1064,21 +1095,54 @@ export class OrganizationService {
 		);
 		if (!festival) throw new AppError("Festival not found.", 404);
 
-		if (
-			"divisionId" in (input as object) ||
-			"classSubtypeId" in (input as object) ||
-			"festivalId" in (input as object)
-		) {
-			throw new AppError("Division and class subtype are immutable.", 400);
+		const validated = validateUpdateClassInput(input);
+		const existing = await this.repository.findFestivalClassConfigurationById(
+			organization.id,
+			festival.id,
+			classId,
+		);
+		if (!existing) {
+			throw new AppError("Festival class configuration not found.", 404);
+		}
+		const effectiveMin = validated.minimumAge ?? existing.minimumAge;
+		const effectiveMax = validated.maximumAge ?? existing.maximumAge;
+		if (effectiveMax < effectiveMin) {
+			throw new AppError(
+				"Maximum age must be greater than or equal to minimum age.",
+				400,
+			);
 		}
 
 		try {
-			return await this.repository.updateFestivalClassConfiguration({
-				...input,
+			const updated = await this.repository.updateFestivalClassConfiguration({
+				...validated,
 				id: classId,
 				organizationId: organization.id,
 				festivalId: festival.id,
 			});
+			if (updated.capacity !== existing.capacity) {
+				const placedCountAtChange = this.commerce
+					? await this.commerce.countConfirmedClassEntitlements(
+							organization.id,
+							classId,
+						)
+					: 0;
+				await this.repository.recordFestivalClassCapacityAudit({
+					organizationId: organization.id,
+					festivalId: festival.id,
+					festivalClassId: classId,
+					actorUid: actorUid ?? null,
+					action: "capacity_updated",
+					previousCapacity: existing.capacity,
+					newCapacity: updated.capacity,
+					placedCountAtChange,
+					availabilityAfterChange: evaluateClassCapacityStatus(
+						updated.capacity,
+						placedCountAtChange,
+					).availability,
+				});
+			}
+			return updated;
 		} catch (error) {
 			if (
 				error instanceof Error &&

@@ -148,6 +148,25 @@ function isActiveEntitlement(status: ClassEntitlementStatus): boolean {
 	return status !== "cancelled" && status !== "revoked";
 }
 
+export function isPlacedEntitlement(status: ClassEntitlementStatus): boolean {
+	return status === "confirmed";
+}
+
+export function countPlacedEntitlementsForClass(
+	entitlements: readonly ClassEntitlement[],
+	organizationId: string,
+	festivalId: string,
+	festivalClassId: string,
+): number {
+	return entitlements.filter(
+		(e) =>
+			e.organizationId === organizationId &&
+			e.festivalId === festivalId &&
+			e.festivalClassId === festivalClassId &&
+			isPlacedEntitlement(e.status),
+	).length;
+}
+
 function matchesDivisionAndAge(
 	candidate: FestivalClassConfiguration,
 	target: FestivalClassConfiguration,
@@ -282,7 +301,7 @@ function checkCapacitySoldOut(
 	}
 	const activeCount = ctx.activeEntitlements.filter(
 		(e) =>
-			e.festivalClassId === targetClass.id && isActiveEntitlement(e.status),
+			e.festivalClassId === targetClass.id && isPlacedEntitlement(e.status),
 	).length;
 	const itemsAheadCount = ctx.items
 		.slice(0, itemIndex)

@@ -55,6 +55,19 @@ test("commits a normalized PostgreSQL 17 schema-only snapshot", async () => {
 	expect(snapshot).toContain("CREATE TABLE orgs.room_piano_configurations");
 	expect(snapshot).toContain("rooms_org_festival_idx");
 	expect(snapshot).toContain("room_piano_configurations_room_idx");
+	expect(snapshot).toContain(
+		"CREATE TABLE orgs.festival_class_capacity_audit_logs",
+	);
+	expect(snapshot).toContain("festival_class_capacity_audit_logs_pkey");
+	expect(snapshot).toContain(
+		"festival_class_capacity_audit_logs_organization_id_fkey",
+	);
+	expect(snapshot).toContain(
+		"festival_class_capacity_audit_logs_festival_id_fkey",
+	);
+	expect(snapshot).toContain(
+		"festival_class_capacity_audit_logs_festival_class_id_fkey",
+	);
 	expect(snapshot).not.toContain("entitlement_grants");
 	expect(snapshot).not.toContain("accompanist_membership_grants");
 	expect(snapshot).not.toContain("\\restrict ");

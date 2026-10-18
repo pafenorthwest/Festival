@@ -1,3 +1,4 @@
+import { DEFAULT_FESTIVAL_CLASS_CAPACITY } from "@festival/common";
 import { AppError } from "../errors/app-error.js";
 import type {
 	CreateFestivalClassInput,
@@ -178,7 +179,9 @@ export function validateCreateClassInput(
 			true,
 			true,
 		) as number,
-		capacity: parseNumeric(raw.capacity, "Capacity", 1, false, true) ?? 100,
+		capacity:
+			parseNumeric(raw.capacity, "Capacity", 1, false, true) ??
+			DEFAULT_FESTIVAL_CLASS_CAPACITY,
 		...parseMetadata(raw),
 	};
 }
