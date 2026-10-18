@@ -403,6 +403,60 @@ describe("evaluatePurchaseEligibility", () => {
 
 		expect(res.isEligible).toBe(false);
 		expect(res.results[0].reasonCode).toBe("SOLD_OUT");
+		expect(res.results[0].availability).toBe("waitlist");
+		expect(res.results[0].capacity).toBe(1);
+		expect(res.results[0].placedCount).toBe(1);
+	});
+
+	it("enriches open and waitlist items with availability, capacity, and placedCount metadata", () => {
+		const openClass = createClass("class-open", SUBTYPE_SOLO, {
+			capacity: 2,
+		});
+		const waitlistClass = createClass("class-waitlist", SUBTYPE_SOLO, {
+			capacity: 1,
+		});
+		const existingOpen = createEntitlement(
+			"class-open",
+			"child-other-1",
+			"confirmed",
+		);
+		const existingWaitlist = createEntitlement(
+			"class-waitlist",
+			"child-other-2",
+			"confirmed",
+		);
+
+		const res = evaluatePurchaseEligibility({
+			organizationId: ORG_ID,
+			festivalId: FESTIVAL_ID,
+			items: [
+				{ childId: "child-1", festivalClassId: "class-open" },
+				{ childId: "child-1", festivalClassId: "class-waitlist" },
+			],
+			classes: [openClass, waitlistClass],
+			subtypes: defaultSubtypes,
+			activeEntitlements: [existingOpen, existingWaitlist],
+		});
+
+		expect(res.isEligible).toBe(false);
+		expect(res.results[0]).toMatchObject({
+			childId: "child-1",
+			festivalClassId: "class-open",
+			isEligible: true,
+			reasonCode: "AVAILABLE",
+			availability: "open",
+			capacity: 2,
+			placedCount: 1,
+		});
+		expect(res.results[1]).toMatchObject({
+			childId: "child-1",
+			festivalClassId: "class-waitlist",
+			isEligible: false,
+			reasonCode: "SOLD_OUT",
+			availability: "waitlist",
+			capacity: 1,
+			placedCount: 1,
+		});
 	});
 
 	it("accepts classes and subtypes passed as Maps or Arrays", () => {

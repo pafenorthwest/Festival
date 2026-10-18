@@ -114,8 +114,19 @@ export interface CheckoutRepository {
 			intentId: string;
 		},
 	): Promise<CheckoutCartRecord>;
+	markIntentReady?(
+		input: Omit<CheckoutCartRecord, "reference" | "createdAtIso" | "status"> & {
+			intentId: string;
+		},
+	): Promise<CheckoutCartRecord>;
 	markCheckoutStarted(intentId: string): Promise<void>;
 	markFailed(intentId: string): Promise<void>;
+	markIntentFailed?(input: {
+		organizationId?: string;
+		intentId: string;
+		failureCode?: string;
+		failureMessage?: string;
+	}): Promise<void>;
 	getCart(
 		reference: string,
 		organizationId: string,
@@ -221,6 +232,8 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		ClassRegistrationMetadata
 	>();
 
+	constructor(private readonly now: () => Date = () => new Date()) {}
+
 	async getOutcome(input: {
 		organizationId: string;
 		customerId: string;
@@ -246,6 +259,7 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 				intent.idempotencyKey === record.idempotencyKey,
 		);
 		if (existing) return this.outcomeFor(existing);
+		const nowIso = this.now().toISOString();
 		for (const intent of this.intents.values()) {
 			if (
 				intent.organizationId === record.organizationId &&
@@ -253,7 +267,7 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 				(intent.status === "creating" ||
 					intent.status === "ready" ||
 					intent.status === "checkout_started") &&
-				intent.expiresAtIso > new Date().toISOString()
+				intent.expiresAtIso > nowIso
 			) {
 				return { kind: "in_progress" as const };
 			}
@@ -279,7 +293,7 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 			correlationId: randomUUID(),
 			cartReference: null,
 			status: "creating",
-			createdAtIso: new Date().toISOString(),
+			createdAtIso: nowIso,
 		};
 		value.lines = buildIntentLineRecords(value, record.lines);
 		this.intents.set(value.id, value);
@@ -298,12 +312,20 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 			...input,
 			reference: randomUUID(),
 			status: "ready",
-			createdAtIso: new Date().toISOString(),
+			createdAtIso: this.now().toISOString(),
 		};
 		this.carts.set(value.reference, value);
 		intent.cartReference = value.reference;
 		intent.status = "ready";
 		return { ...value };
+	}
+
+	async markIntentReady(
+		input: Omit<CheckoutCartRecord, "reference" | "createdAtIso" | "status"> & {
+			intentId: string;
+		},
+	) {
+		return this.attachCart(input);
 	}
 
 	async markCheckoutStarted(intentId: string) {
@@ -328,6 +350,15 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 			const cart = this.carts.get(intent.cartReference);
 			if (cart) cart.status = "superseded";
 		}
+	}
+
+	async markIntentFailed(input: {
+		organizationId?: string;
+		intentId: string;
+		failureCode?: string;
+		failureMessage?: string;
+	}) {
+		await this.markFailed(input.intentId);
 	}
 
 	async getCart(
@@ -409,7 +440,7 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 			accompanistMembershipId: params.accompanistMembershipId,
 			repertoireJson: params.repertoireJson,
 			repertoireItems,
-			createdAt: new Date(),
+			createdAt: this.now(),
 		};
 		this.registrationMetadata.set(params.id, record);
 		this.registrationMetadata.set(params.checkoutIntentId, record);
@@ -514,8 +545,8 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 	private outcomeFor(
 		intent: CheckoutIntentRecord,
 	): Exclude<CheckoutIntentOutcome, { kind: "created" }> {
-		if (intent.expiresAtIso <= new Date().toISOString())
-			return { kind: "expired" };
+		const nowIso = this.now().toISOString();
+		if (intent.expiresAtIso <= nowIso) return { kind: "expired" };
 		if (intent.status === "creating") return { kind: "in_progress" };
 		if (intent.status === "failed") return { kind: "failed" };
 		const cart = intent.cartReference
@@ -524,7 +555,7 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		if (
 			cart &&
 			(intent.status === "ready" || intent.status === "checkout_started") &&
-			cart.expiresAtIso > new Date().toISOString() &&
+			cart.expiresAtIso > nowIso &&
 			cart.status !== "expired" &&
 			cart.status !== "superseded"
 		)

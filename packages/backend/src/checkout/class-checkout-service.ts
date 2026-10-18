@@ -36,6 +36,7 @@ import type {
 } from "./checkout-repository.js";
 import { CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL } from "./checkout-repository.js";
 import {
+	buildEligibilityRejectionError,
 	calculateTotalAmount,
 	resolveFestivalClassConfiguration,
 	resolveTargetFestival,
@@ -45,6 +46,7 @@ import {
 	validateChildAgeRange,
 	validateChildOwnership,
 	validateTeacherEntitlement,
+	verifyPostCartCreateCapacityCutoff,
 } from "./class-checkout-helpers.js";
 
 export interface ClassCheckoutStorefront {
@@ -671,12 +673,7 @@ export class ClassCheckoutService {
 			!eligibility.isEligible ||
 			eligibility.results.some((r) => !r.isEligible)
 		) {
-			const failure = eligibility.results.find((r) => !r.isEligible);
-			throw new AppError(
-				failure?.message ?? "Class registration is not eligible.",
-				400,
-				failure?.reasonCode?.toLowerCase(),
-			);
+			throw buildEligibilityRejectionError(eligibility.results);
 		}
 	}
 
@@ -774,6 +771,7 @@ export class ClassCheckoutService {
 
 	private async createAndVerifyCart(params: {
 		input: StartClassCheckoutInput;
+		festivalId: string;
 		intent: CheckoutIntentRecord;
 		validatedLines: ValidatedLineItem[];
 		intentLines: readonly CheckoutIntentLineItemRecord[];
@@ -784,6 +782,7 @@ export class ClassCheckoutService {
 	}): Promise<ClassCheckoutResult> {
 		const {
 			input,
+			festivalId,
 			intent,
 			validatedLines,
 			intentLines,
@@ -822,13 +821,41 @@ export class ClassCheckoutService {
 			currencyCode,
 		});
 
+		setStage("attach_cart");
+		const cutpointFailure = await verifyPostCartCreateCapacityCutoff({
+			organizationId: input.organizationId,
+			festivalId,
+			lines: validatedLines.map((vl) => ({
+				childId: vl.child.id,
+				festivalClassId: vl.classConfig.id,
+			})),
+			organizations: this.organizations,
+			countConfirmedEntitlements: this.commerce
+				? (orgId, classId) =>
+						this.commerce?.countConfirmedClassEntitlements(orgId, classId) ??
+						Promise.resolve(0)
+				: undefined,
+		});
+		if (cutpointFailure) {
+			if (this.checkout.markIntentFailed) {
+				await this.checkout.markIntentFailed({
+					organizationId: input.organizationId,
+					intentId: intent.id,
+					failureCode: "sold_out",
+					failureMessage: cutpointFailure.message,
+				});
+			} else {
+				await this.checkout.markFailed(intent.id);
+			}
+			throw cutpointFailure;
+		}
+
 		const integrationVersion =
 			typeof input.integrationVersion === "number"
 				? input.integrationVersion
 				: Number(input.integrationVersion) || params.defaultIntegrationVersion;
 
-		setStage("attach_cart");
-		const cart = await this.checkout.attachCart({
+		const attachCartInput = {
 			intentId: intent.id,
 			shopifyCartId: cartResponse.shopifyCartId,
 			organizationId: input.organizationId,
@@ -836,7 +863,10 @@ export class ClassCheckoutService {
 			sessionId: input.sessionId,
 			integrationVersion,
 			expiresAtIso,
-		});
+		};
+		const cart = this.checkout.markIntentReady
+			? await this.checkout.markIntentReady(attachCartInput)
+			: await this.checkout.attachCart(attachCartInput);
 
 		setStage("mark_checkout_started");
 		await this.checkout.markCheckoutStarted(intent.id);
@@ -901,6 +931,7 @@ export class ClassCheckoutService {
 			);
 			return await this.createAndVerifyCart({
 				input,
+				festivalId,
 				intent,
 				validatedLines,
 				intentLines,
@@ -912,6 +943,9 @@ export class ClassCheckoutService {
 				},
 			});
 		} catch (error) {
+			if (error instanceof AppError && error.status === 400) {
+				throw error;
+			}
 			return this.reportAndMarkFailed({
 				stage,
 				organizationId: input.organizationId,

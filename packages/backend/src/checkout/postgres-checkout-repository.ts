@@ -211,6 +211,13 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 			createdAtIso: new Date().toISOString(),
 		};
 	}
+	async markIntentReady(
+		input: Omit<CheckoutCartRecord, "reference" | "createdAtIso" | "status"> & {
+			intentId: string;
+		},
+	) {
+		return this.attachCart(input);
+	}
 	async markCheckoutStarted(intentId: string) {
 		await sql.begin(async (tx) => {
 			const rows = (await tx.unsafe(
@@ -238,6 +245,14 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 				);
 			}
 		});
+	}
+	async markIntentFailed(input: {
+		organizationId?: string;
+		intentId: string;
+		failureCode?: string;
+		failureMessage?: string;
+	}) {
+		await this.markFailed(input.intentId);
 	}
 	async getCart(
 		reference: string,
