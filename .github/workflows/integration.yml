@@ -53,6 +53,7 @@ jobs:
           host: ${{ secrets.DO_INTEGRATION_HOST }}
           username: ${{ secrets.DO_INTEGRATION_USER || 'webadmin' }}
           key: ${{ secrets.DO_SSH_PRIVATE_KEY }}
+          passphrase: ${{ secrets.DO_SSH_PASSPHRASE }}
           envs: DEPLOY_SHA
           command_timeout: 30m
           script: |
