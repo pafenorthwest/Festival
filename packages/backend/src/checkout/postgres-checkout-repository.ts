@@ -189,7 +189,7 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 			if (!intents[0]) throw new Error("Checkout intent cannot accept a cart.");
 			if (intents[0].intent_type === "class_entry") {
 				const lineRows = (await tx.unsafe(
-					`SELECT festival_class_id, child_id FROM ${this.schema}.checkout_intent_lines WHERE checkout_intent_id = $1 AND line_type = 'class_entry'`,
+					`SELECT festival_class_id, child_id FROM ${this.schema}.checkout_intent_lines WHERE checkout_intent_id = $1 AND line_type = 'class_entry' ORDER BY line_index ASC`,
 					[input.intentId],
 				)) as Array<Record<string, unknown>>;
 				const lines = (lineRows.length ? lineRows : [intents[0]]).map(

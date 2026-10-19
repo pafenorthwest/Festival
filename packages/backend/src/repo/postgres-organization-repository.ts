@@ -2254,6 +2254,10 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 	): Promise<FestivalClassConfiguration> {
 		await this.ensureReady();
 		return sql.begin(async (transaction) => {
+			await transaction.unsafe(
+				"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+				[`${this.schema}:class-capacity-cutoff`],
+			);
 			const [previous] = await transaction.unsafe(
 				`SELECT capacity FROM ${this.schema}.festival_class_configurations WHERE organization_id = $1 AND festival_id = $2 AND id = $3 FOR UPDATE`,
 				[input.organizationId, input.festivalId, input.id],

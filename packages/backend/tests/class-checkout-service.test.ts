@@ -295,6 +295,67 @@ async function createFixture(options: FixtureOptions = {}) {
 }
 
 describe("ClassCheckoutService", () => {
+	it("waits for audited capacity publication before durable cart admission", async () => {
+		const f = await createFixture();
+		await f.commerce.createClassEntitlement({
+			organizationId: f.organization.id,
+			festivalId: f.festival?.id ?? "",
+			festivalClassId: f.classConfig.id,
+			parentCustomerId: "other",
+			childId: "other",
+			checkoutIntentId: "paid",
+			shopifyOrderGid: "paid",
+			shopifyOrderLineGid: "paid-line",
+			paidAmountCents: 4500,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const original = f.checkout.markIntentReady.bind(f.checkout);
+		let update: Promise<unknown> | undefined;
+		f.checkout.markIntentReady = async (input) => {
+			update =
+				f.organizations.updateFestivalClassConfigurationWithCapacityAudit(
+					{
+						organizationId: f.organization.id,
+						festivalId: f.festival?.id ?? "",
+						id: f.classConfig.id,
+						capacity: 1,
+					},
+					"admin",
+					async () => {
+						entered.resolve();
+						await release.promise;
+						return 1;
+					},
+				);
+			await entered.promise;
+			const attached = original(input);
+			void attached.catch(() => undefined);
+			try {
+				await new Promise<void>((resolve) => setImmediate(resolve));
+				expect(
+					(
+						await f.organizations.findFestivalClassConfigurationById(
+							f.organization.id,
+							f.festival?.id ?? "",
+							f.classConfig.id,
+						)
+					)?.capacity,
+				).toBe(25);
+			} finally {
+				release.resolve();
+			}
+			await update;
+			return attached;
+		};
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			code: "sold_out",
+		});
+		await update;
+	});
+
 	it("successfully creates a checkout intent for a valid parent and eligible child", async () => {
 		const f = await createFixture({
 			classMinAge: 8,

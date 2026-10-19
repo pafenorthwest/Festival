@@ -613,7 +613,7 @@ describe("Validation & Invariants", () => {
 	it("cleans up Shopify product when database insert fails in createClass", async () => {
 		const { repo, org, festival, shopifyClient, service, input } =
 			await setupFixture(true);
-		repo.createFestivalClassConfiguration = async () => {
+		repo.createFestivalClassConfigurationWithCapacityAudit = async () => {
 			throw new Error("DB persistence failed");
 		};
 

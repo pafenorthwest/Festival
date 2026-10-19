@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { sql } from "bun";
 import { PostgresCheckoutRepository } from "../src/checkout/postgres-checkout-repository.js";
+import { PostgresOrganizationRepository } from "../src/repo/postgres-organization-repository.js";
 import { initializePostgresSchema } from "../src/repo/postgres-schema.js";
 
 const postgresTest = process.env.POSTGRES_INTEGRATION_URL ? test : test.skip;
@@ -28,7 +29,8 @@ async function fixture() {
 				`INSERT INTO ${schema}.checkout_intents (id, correlation_id, organization_id, customer_id, session_id, idempotency_key, intent_type, festival_class_id, child_id, shopify_product_gid, shopify_variant_gid, amount, currency_code, status, expires_at) VALUES ($1, $1, 'org', 'parent', $1, $1, 'class_entry', $2, 'child', 'product-a', 'variant-a', '50.00', 'USD', 'creating', $3)`,
 				[id, classes[0], expiresAtIso],
 			);
-			for (const [index, classId] of classes.entries()) {
+			// Physical insertion order deliberately differs from cart line order.
+			for (const [index, classId] of [...classes.entries()].reverse()) {
 				await sql.unsafe(
 					`INSERT INTO ${schema}.checkout_intent_lines (id, checkout_intent_id, line_index, line_type, festival_class_id, child_id, shopify_product_gid, shopify_variant_gid, amount, currency_code) VALUES ($1, $2, $3, 'class_entry', $4, 'child', 'product-a', 'variant-a', '50.00', 'USD')`,
 					[`${id}-line-${index}`, id, index, classId],
@@ -207,6 +209,74 @@ for (const cutoff of ["capacity decrease", "confirmed placement"] as const) {
 }
 
 postgresTest(
+	"PostgreSQL audited and direct capacity writers acquire admission lock before row locks",
+	async () => {
+		const f = await fixture();
+		const blocker = await sql.reserve();
+		const writer = await sql.reserve();
+		let audited: Promise<unknown> | undefined;
+		let direct: Promise<unknown> | undefined;
+		try {
+			await blocker.unsafe("BEGIN");
+			await blocker.unsafe(
+				"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+				[`${f.schema}:class-capacity-cutoff`],
+			);
+			const [{ pid }] = await blocker.unsafe("SELECT pg_backend_pid() AS pid");
+			audited = new PostgresOrganizationRepository(
+				f.schema,
+			).updateFestivalClassConfigurationWithCapacityAudit(
+				{
+					organizationId: "org",
+					festivalId: "festival",
+					id: "class-a",
+					capacity: 2,
+				},
+				"admin",
+			);
+			void audited.catch(() => undefined);
+			expect(await blockedBy(Number(pid))).not.toBeNull();
+			// The audited writer must still be waiting before acquiring its row
+			// lock. Otherwise this lock holder recreates the advisory/row cycle.
+			await blocker.unsafe("SET LOCAL lock_timeout = '1s'");
+			const locked = await blocker.unsafe(
+				`SELECT id FROM ${f.schema}.festival_class_configurations WHERE id = 'class-a' FOR UPDATE`,
+			);
+			expect(locked).toHaveLength(1);
+			const [{ pid: writerPid }] = await writer.unsafe(
+				"SELECT pg_backend_pid() AS pid",
+			);
+			direct = Promise.resolve(
+				writer.unsafe(
+					`UPDATE ${f.schema}.festival_class_configurations SET capacity = 3 WHERE id = 'class-a'`,
+				),
+			);
+			void direct.catch(() => undefined);
+			const deadline = Date.now() + 5_000;
+			let blockers: number[] = [];
+			do {
+				const rows = await sql.unsafe(
+					"SELECT pg_blocking_pids($1::int) AS blockers",
+					[writerPid],
+				);
+				blockers = rows[0]?.blockers ?? [];
+				if (blockers.length) break;
+			} while (Date.now() < deadline);
+			expect(blockers.map(Number)).toContain(Number(pid));
+			await blocker.unsafe("COMMIT");
+			await Promise.all([audited, direct]);
+		} finally {
+			await blocker.unsafe("ROLLBACK");
+			blocker.release();
+			await Promise.allSettled([audited, direct]);
+			writer.release();
+			await sql.unsafe(`DROP SCHEMA ${f.schema} CASCADE`);
+		}
+	},
+	20_000,
+);
+
+postgresTest(
 	"PostgreSQL multi-class cutoff rejects the whole cart without partial attachment",
 	async () => {
 		const f = await fixture();
@@ -214,8 +284,16 @@ postgresTest(
 			await f.intent("mixed", ["class-a", "class-b"]);
 			await f.intent("paid", ["class-b"]);
 			await f.place(sql, "paid", "class-b");
+			await f.intent("paid-a", ["class-a"]);
+			await f.place(sql, "paid-a", "class-a");
 			await expect(f.attach("mixed")).rejects.toMatchObject({
 				code: "sold_out",
+				details: {
+					failures: [
+						{ festivalClassId: "class-a" },
+						{ festivalClassId: "class-b" },
+					],
+				},
 			});
 			expect(await f.persisted("mixed")).toMatchObject({
 				status: "creating",

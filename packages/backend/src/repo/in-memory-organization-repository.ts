@@ -1313,23 +1313,25 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		input: CreateFestivalClassConfigurationInput,
 		actorUid?: string,
 	): Promise<FestivalClassConfiguration> {
-		const staged = this.stageClassCapacityWrite();
-		const created = await staged.createFestivalClassConfiguration(input);
-		await staged.recordFestivalClassCapacityAudit({
-			organizationId: input.organizationId,
-			festivalId: input.festivalId,
-			festivalClassId: created.id,
-			actorUid,
-			previousCapacity: null,
-			newCapacity: created.capacity,
-			placedCountAtChange: 0,
-			action: "class_created",
+		return withInMemoryCapacityLock(async () => {
+			const staged = this.stageClassCapacityWrite();
+			const created = staged.createFestivalClassConfigurationUnlocked(input);
+			await staged.recordFestivalClassCapacityAudit({
+				organizationId: input.organizationId,
+				festivalId: input.festivalId,
+				festivalClassId: created.id,
+				actorUid,
+				previousCapacity: null,
+				newCapacity: created.capacity,
+				placedCountAtChange: 0,
+				action: "class_created",
+			});
+			this.festivalClassConfigurations.set(created.id, created);
+			this.festivalClassCapacityAudits.push(
+				...staged.festivalClassCapacityAudits,
+			);
+			return { ...created };
 		});
-		this.festivalClassConfigurations.set(created.id, created);
-		this.festivalClassCapacityAudits.push(
-			...staged.festivalClassCapacityAudits,
-		);
-		return { ...created };
 	}
 
 	async updateFestivalClassConfigurationWithCapacityAudit(
@@ -1337,88 +1339,102 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		actorUid?: string,
 		countPlaced?: () => Promise<number>,
 	): Promise<FestivalClassConfiguration> {
-		const previous = this.festivalClassConfigurations.get(input.id);
-		const staged = this.stageClassCapacityWrite();
-		const updated = await staged.updateFestivalClassConfiguration(input);
-		if (updated.capacity !== previous?.capacity) {
-			await staged.recordFestivalClassCapacityAudit({
-				organizationId: input.organizationId,
-				festivalId: input.festivalId,
-				festivalClassId: input.id,
-				actorUid,
-				previousCapacity: previous?.capacity,
-				newCapacity: updated.capacity,
-				placedCountAtChange: countPlaced ? await countPlaced() : 0,
-				action: "capacity_updated",
-			});
-		}
-		if (this.festivalClassConfigurations.get(input.id) !== previous) {
-			throw new Error(
-				"Festival class configuration changed concurrently. Please retry.",
+		return withInMemoryCapacityLock(async () => {
+			const previous = this.festivalClassConfigurations.get(input.id);
+			const staged = this.stageClassCapacityWrite();
+			const updated = staged.updateFestivalClassConfigurationUnlocked(input);
+			if (updated.capacity !== previous?.capacity) {
+				await staged.recordFestivalClassCapacityAudit({
+					organizationId: input.organizationId,
+					festivalId: input.festivalId,
+					festivalClassId: input.id,
+					actorUid,
+					previousCapacity: previous?.capacity,
+					newCapacity: updated.capacity,
+					placedCountAtChange: countPlaced ? await countPlaced() : 0,
+					action: "capacity_updated",
+				});
+			}
+			if (this.festivalClassConfigurations.get(input.id) !== previous) {
+				throw new Error(
+					"Festival class configuration changed concurrently. Please retry.",
+				);
+			}
+			this.festivalClassConfigurations.set(updated.id, updated);
+			this.festivalClassCapacityAudits.push(
+				...staged.festivalClassCapacityAudits,
 			);
-		}
-		this.festivalClassConfigurations.set(updated.id, updated);
-		this.festivalClassCapacityAudits.push(
-			...staged.festivalClassCapacityAudits,
-		);
-		return { ...updated };
+			return { ...updated };
+		});
 	}
 
 	async createFestivalClassConfiguration(
 		input: CreateFestivalClassConfigurationInput,
 	): Promise<FestivalClassConfiguration> {
-		return withInMemoryCapacityLock(() => {
-			if (
-				!this.organizations.has(input.organizationId) ||
-				!this.festivals.has(input.festivalId)
-			)
-				throw new Error("Festival was not found.");
-			const now = new Date().toISOString();
-			const record: FestivalClassConfiguration = {
-				id: randomUUID(),
-				...input,
-				isActive: input.isActive ?? true,
-				createdAtIso: now,
-				updatedAtIso: now,
-			};
-			this.festivalClassConfigurations.set(record.id, record);
-			return { ...record };
-		});
+		return withInMemoryCapacityLock(() =>
+			this.createFestivalClassConfigurationUnlocked(input),
+		);
+	}
+
+	private createFestivalClassConfigurationUnlocked(
+		input: CreateFestivalClassConfigurationInput,
+	): FestivalClassConfiguration {
+		if (
+			!this.organizations.has(input.organizationId) ||
+			!this.festivals.has(input.festivalId)
+		)
+			throw new Error("Festival was not found.");
+		const now = new Date().toISOString();
+		const record: FestivalClassConfiguration = {
+			id: randomUUID(),
+			...input,
+			isActive: input.isActive ?? true,
+			createdAtIso: now,
+			updatedAtIso: now,
+		};
+		this.festivalClassConfigurations.set(record.id, record);
+		return { ...record };
 	}
 
 	async updateFestivalClassConfiguration(
 		input: UpdateFestivalClassConfigurationInput,
 	): Promise<FestivalClassConfiguration> {
-		return withInMemoryCapacityLock(() => {
-			const current = this.festivalClassConfigurations.get(input.id);
-			if (
-				!current ||
-				current.organizationId !== input.organizationId ||
-				current.festivalId !== input.festivalId
-			) {
-				throw new Error("Festival class configuration not found.");
-			}
-			const updated: FestivalClassConfiguration = {
-				...current,
-				displayName: input.displayName ?? current.displayName,
-				classSubtypeId: current.classSubtypeId,
-				divisionId: current.divisionId,
-				minimumAge: input.minimumAge ?? current.minimumAge,
-				maximumAge: input.maximumAge ?? current.maximumAge,
-				price: input.price ?? current.price,
-				maximumPerformancePieces:
-					input.maximumPerformancePieces ?? current.maximumPerformancePieces,
-				performanceMinutes:
-					input.performanceMinutes ?? current.performanceMinutes,
-				capacity: input.capacity ?? current.capacity,
-				isActive: input.isActive ?? current.isActive,
-				shopifyProductGid: input.shopifyProductGid ?? current.shopifyProductGid,
-				shopifyVariantGid: input.shopifyVariantGid ?? current.shopifyVariantGid,
-				updatedAtIso: new Date().toISOString(),
-			};
-			this.festivalClassConfigurations.set(updated.id, updated);
-			return { ...updated };
-		});
+		return withInMemoryCapacityLock(() =>
+			this.updateFestivalClassConfigurationUnlocked(input),
+		);
+	}
+
+	private updateFestivalClassConfigurationUnlocked(
+		input: UpdateFestivalClassConfigurationInput,
+	): FestivalClassConfiguration {
+		const current = this.festivalClassConfigurations.get(input.id);
+		if (
+			!current ||
+			current.organizationId !== input.organizationId ||
+			current.festivalId !== input.festivalId
+		) {
+			throw new Error("Festival class configuration not found.");
+		}
+		const updated: FestivalClassConfiguration = {
+			...current,
+			displayName: input.displayName ?? current.displayName,
+			classSubtypeId: current.classSubtypeId,
+			divisionId: current.divisionId,
+			minimumAge: input.minimumAge ?? current.minimumAge,
+			maximumAge: input.maximumAge ?? current.maximumAge,
+			price: input.price ?? current.price,
+			maximumPerformancePieces:
+				input.maximumPerformancePieces ?? current.maximumPerformancePieces,
+			performanceMinutes:
+				input.performanceMinutes ?? current.performanceMinutes,
+			capacity: input.capacity ?? current.capacity,
+			isActive: input.isActive ?? current.isActive,
+			shopifyProductGid: input.shopifyProductGid ?? current.shopifyProductGid,
+			shopifyVariantGid: input.shopifyVariantGid ?? current.shopifyVariantGid,
+			updatedAtIso: new Date().toISOString(),
+		};
+		this.festivalClassConfigurations.set(updated.id, updated);
+		return { ...updated };
 	}
 
 	async findFestivalClassConfigurationsByIds(

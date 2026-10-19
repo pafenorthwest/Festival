@@ -522,6 +522,14 @@ export class InMemoryMembershipCommerceRepository
 	private async finalizeDecisionAtomically(
 		input: Parameters<MembershipCommerceRepository["finalizeDecision"]>[0],
 	) {
+		return withInMemoryCapacityLock(() =>
+			this.finalizeDecisionAtomicallyUnlocked(input),
+		);
+	}
+
+	private async finalizeDecisionAtomicallyUnlocked(
+		input: Parameters<MembershipCommerceRepository["finalizeDecision"]>[0],
+	) {
 		const classEntitlementInputs =
 			input.classEntitlements ??
 			(input.classEntitlement ? [input.classEntitlement] : []);
@@ -810,7 +818,7 @@ export class InMemoryMembershipCommerceRepository
 				classEntitlements = [];
 				for (const classEntitlementInput of classEntitlementInputs) {
 					assertValidClassEntitlementInput(classEntitlementInput);
-					const classEntitlement = await this.createClassEntitlement(
+					const classEntitlement = this.createClassEntitlementUnlocked(
 						classEntitlementInput,
 					);
 					classEntitlements.push(classEntitlement);
@@ -926,47 +934,53 @@ export class InMemoryMembershipCommerceRepository
 	async createClassEntitlement(
 		input: CreateClassEntitlementInput,
 	): Promise<ClassEntitlement> {
-		return withInMemoryCapacityLock(() => {
-			assertValidClassEntitlementInput(input);
-			const lineKey = `${input.organizationId}\u0000${input.shopifyOrderLineGid}`;
-			const existingLineId = this.classEntitlementsByLine.get(lineKey);
-			if (existingLineId) {
-				const existing = this.classEntitlements.get(existingLineId);
-				if (existing) {
-					assertMatchingClassEntitlementReplay(existing, input);
-					return { ...existing };
-				}
+		return withInMemoryCapacityLock(() =>
+			this.createClassEntitlementUnlocked(input),
+		);
+	}
+
+	private createClassEntitlementUnlocked(
+		input: CreateClassEntitlementInput,
+	): ClassEntitlement {
+		assertValidClassEntitlementInput(input);
+		const lineKey = `${input.organizationId}\u0000${input.shopifyOrderLineGid}`;
+		const existingLineId = this.classEntitlementsByLine.get(lineKey);
+		if (existingLineId) {
+			const existing = this.classEntitlements.get(existingLineId);
+			if (existing) {
+				assertMatchingClassEntitlementReplay(existing, input);
+				return { ...existing };
 			}
-			const id = input.id ?? randomUUID();
-			const nowIso = this.now().toISOString();
-			const record: ClassEntitlement = {
-				id,
-				organizationId: input.organizationId,
-				festivalId: input.festivalId,
-				festivalClassId: input.festivalClassId,
-				parentCustomerId: input.parentCustomerId,
-				childId: input.childId,
-				checkoutIntentId: input.checkoutIntentId,
-				checkoutIntentLineId: input.checkoutIntentLineId ?? null,
-				shopifyOrderGid: input.shopifyOrderGid,
-				shopifyOrderLineGid: input.shopifyOrderLineGid,
-				paidAmountCents: input.paidAmountCents,
-				paidCurrencyCode: input.paidCurrencyCode,
-				status: input.status ?? "confirmed",
-				admittedCartReference: input.admittedCartReference ?? null,
-				capacityAtAllocation: input.capacityAtAllocation ?? null,
-				placedCountBeforeAllocation: input.placedCountBeforeAllocation ?? null,
-				createdAt: input.createdAt ?? nowIso,
-				updatedAt: input.updatedAt ?? nowIso,
-			};
-			this.classEntitlements.set(id, record);
-			this.classEntitlementsByLine.set(lineKey, id);
-			this.classEntitlementsByIntent.set(
-				`${input.organizationId}\u0000${input.checkoutIntentId}`,
-				id,
-			);
-			return { ...record };
-		});
+		}
+		const id = input.id ?? randomUUID();
+		const nowIso = this.now().toISOString();
+		const record: ClassEntitlement = {
+			id,
+			organizationId: input.organizationId,
+			festivalId: input.festivalId,
+			festivalClassId: input.festivalClassId,
+			parentCustomerId: input.parentCustomerId,
+			childId: input.childId,
+			checkoutIntentId: input.checkoutIntentId,
+			checkoutIntentLineId: input.checkoutIntentLineId ?? null,
+			shopifyOrderGid: input.shopifyOrderGid,
+			shopifyOrderLineGid: input.shopifyOrderLineGid,
+			paidAmountCents: input.paidAmountCents,
+			paidCurrencyCode: input.paidCurrencyCode,
+			status: input.status ?? "confirmed",
+			admittedCartReference: input.admittedCartReference ?? null,
+			capacityAtAllocation: input.capacityAtAllocation ?? null,
+			placedCountBeforeAllocation: input.placedCountBeforeAllocation ?? null,
+			createdAt: input.createdAt ?? nowIso,
+			updatedAt: input.updatedAt ?? nowIso,
+		};
+		this.classEntitlements.set(id, record);
+		this.classEntitlementsByLine.set(lineKey, id);
+		this.classEntitlementsByIntent.set(
+			`${input.organizationId}\u0000${input.checkoutIntentId}`,
+			id,
+		);
+		return { ...record };
 	}
 
 	async getClassEntitlement(
