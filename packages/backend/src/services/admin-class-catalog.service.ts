@@ -144,25 +144,19 @@ export class AdminClassCatalogService {
 			actorUid,
 		);
 		try {
-			const created = await this.repository.createFestivalClassConfiguration({
-				...input,
-				organizationId: org.id,
-				festivalId: festival.id,
-				maximumPerformancePieces: input.maximumPerformancePieces ?? 1,
-				capacity: input.capacity ?? DEFAULT_FESTIVAL_CLASS_CAPACITY,
-				shopifyProductGid: gids.shopifyProductGid,
-				shopifyVariantGid: gids.shopifyVariantGid,
-			});
-			await this.repository.recordFestivalClassCapacityAudit({
-				organizationId: org.id,
-				festivalId: festival.id,
-				festivalClassId: created.id,
-				actorUid: actorUid ?? null,
-				previousCapacity: null,
-				newCapacity: created.capacity,
-				placedCountAtChange: 0,
-				action: "class_created",
-			});
+			const created =
+				await this.repository.createFestivalClassConfigurationWithCapacityAudit(
+					{
+						...input,
+						organizationId: org.id,
+						festivalId: festival.id,
+						maximumPerformancePieces: input.maximumPerformancePieces ?? 1,
+						capacity: input.capacity ?? DEFAULT_FESTIVAL_CLASS_CAPACITY,
+						shopifyProductGid: gids.shopifyProductGid,
+						shopifyVariantGid: gids.shopifyVariantGid,
+					},
+					actorUid,
+				);
 			return created;
 		} catch (error) {
 			await this.shopifySync.tryCleanupProductGid(
@@ -208,27 +202,20 @@ export class AdminClassCatalogService {
 			input,
 			actorUid,
 		);
-		const updated = await this.repository.updateFestivalClassConfiguration({
-			...input,
-			id: classId,
-			organizationId: org.id,
-			festivalId: festival.id,
-		});
-		if (input.capacity !== undefined && input.capacity !== existing.capacity) {
-			const placedCount = this.commerce
-				? await this.commerce.countConfirmedClassEntitlements(org.id, classId)
-				: 0;
-			await this.repository.recordFestivalClassCapacityAudit({
-				organizationId: org.id,
-				festivalId: festival.id,
-				festivalClassId: classId,
-				actorUid: actorUid ?? null,
-				previousCapacity: existing.capacity,
-				newCapacity: updated.capacity,
-				placedCountAtChange: placedCount,
-				action: "capacity_updated",
-			});
-		}
+		const commerce = this.commerce;
+		const updated =
+			await this.repository.updateFestivalClassConfigurationWithCapacityAudit(
+				{
+					...input,
+					id: classId,
+					organizationId: org.id,
+					festivalId: festival.id,
+				},
+				actorUid,
+				commerce
+					? () => commerce.countConfirmedClassEntitlements(org.id, classId)
+					: undefined,
+			);
 		return updated;
 	}
 

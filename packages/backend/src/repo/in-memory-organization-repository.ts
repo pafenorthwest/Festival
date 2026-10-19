@@ -1296,6 +1296,73 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		return this.listRegistrationCatalogValues(organizationId, kind);
 	}
 
+	private stageClassCapacityWrite(): InMemoryOrganizationRepository {
+		// Publish only the affected record and its audits after all writes succeed.
+		const staged = Object.create(this) as InMemoryOrganizationRepository;
+		Object.defineProperties(staged, {
+			festivalClassConfigurations: {
+				value: new Map(this.festivalClassConfigurations),
+			},
+			festivalClassCapacityAudits: { value: [] },
+		});
+		return staged;
+	}
+
+	async createFestivalClassConfigurationWithCapacityAudit(
+		input: CreateFestivalClassConfigurationInput,
+		actorUid?: string,
+	): Promise<FestivalClassConfiguration> {
+		const staged = this.stageClassCapacityWrite();
+		const created = await staged.createFestivalClassConfiguration(input);
+		await staged.recordFestivalClassCapacityAudit({
+			organizationId: input.organizationId,
+			festivalId: input.festivalId,
+			festivalClassId: created.id,
+			actorUid,
+			previousCapacity: null,
+			newCapacity: created.capacity,
+			placedCountAtChange: 0,
+			action: "class_created",
+		});
+		this.festivalClassConfigurations.set(created.id, created);
+		this.festivalClassCapacityAudits.push(
+			...staged.festivalClassCapacityAudits,
+		);
+		return { ...created };
+	}
+
+	async updateFestivalClassConfigurationWithCapacityAudit(
+		input: UpdateFestivalClassConfigurationInput,
+		actorUid?: string,
+		countPlaced?: () => Promise<number>,
+	): Promise<FestivalClassConfiguration> {
+		const previous = this.festivalClassConfigurations.get(input.id);
+		const staged = this.stageClassCapacityWrite();
+		const updated = await staged.updateFestivalClassConfiguration(input);
+		if (updated.capacity !== previous?.capacity) {
+			await staged.recordFestivalClassCapacityAudit({
+				organizationId: input.organizationId,
+				festivalId: input.festivalId,
+				festivalClassId: input.id,
+				actorUid,
+				previousCapacity: previous?.capacity,
+				newCapacity: updated.capacity,
+				placedCountAtChange: countPlaced ? await countPlaced() : 0,
+				action: "capacity_updated",
+			});
+		}
+		if (this.festivalClassConfigurations.get(input.id) !== previous) {
+			throw new Error(
+				"Festival class configuration changed concurrently. Please retry.",
+			);
+		}
+		this.festivalClassConfigurations.set(updated.id, updated);
+		this.festivalClassCapacityAudits.push(
+			...staged.festivalClassCapacityAudits,
+		);
+		return { ...updated };
+	}
+
 	async createFestivalClassConfiguration(
 		input: CreateFestivalClassConfigurationInput,
 	): Promise<FestivalClassConfiguration> {

@@ -412,6 +412,21 @@ export interface OrganizationRepository {
 		kind: RegistrationCatalogKind,
 		ids: string[],
 	): Promise<RegistrationCatalogValue[]>;
+	createFestivalClassConfigurationWithCapacityAudit(
+		input: CreateFestivalClassConfigurationInput,
+		actorUid?: string,
+	): Promise<FestivalClassConfiguration>;
+	/**
+	 * @param countPlaced Supplies the confirmed placement count for the in-memory
+	 * adapter's capacity audit; defaults to zero when omitted. PostgreSQL ignores
+	 * this callback and counts persisted confirmed entitlements in the same
+	 * transaction as the capacity update and audit.
+	 */
+	updateFestivalClassConfigurationWithCapacityAudit(
+		input: UpdateFestivalClassConfigurationInput,
+		actorUid?: string,
+		countPlaced?: () => Promise<number>,
+	): Promise<FestivalClassConfiguration>;
 	createFestivalClassConfiguration(
 		input: CreateFestivalClassConfigurationInput,
 	): Promise<FestivalClassConfiguration>;
