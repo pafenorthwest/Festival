@@ -407,7 +407,21 @@ export async function verifyPostCartCreateCapacityCutoff(params: {
 	organizationId: string;
 	festivalId: string;
 	lines: ReadonlyArray<{ childId: string; festivalClassId: string }>;
-	organizations: OrganizationRepository;
+	organizations: {
+		findFestivalClassConfigurationsByIds(
+			organizationId: string,
+			festivalId: string,
+			classIds: string[],
+		): Promise<
+			Array<{
+				id: string;
+				organizationId: string;
+				festivalId: string;
+				isActive: boolean;
+				capacity: number;
+			}>
+		>;
+	};
 	countConfirmedEntitlements?: (
 		organizationId: string,
 		festivalClassId: string,

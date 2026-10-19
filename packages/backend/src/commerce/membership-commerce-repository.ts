@@ -13,6 +13,7 @@ import {
 	isClassEntitlementStatus,
 } from "@festival/common";
 import type { CheckoutRepository } from "../checkout/checkout-repository.js";
+import { withInMemoryCapacityLock } from "../repo/in-memory-capacity-lock.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
 import type { ClassEntitlementFilter } from "./class-entitlement-repository.js";
 
@@ -521,6 +522,14 @@ export class InMemoryMembershipCommerceRepository
 	private async finalizeDecisionAtomically(
 		input: Parameters<MembershipCommerceRepository["finalizeDecision"]>[0],
 	) {
+		return withInMemoryCapacityLock(() =>
+			this.finalizeDecisionAtomicallyUnlocked(input),
+		);
+	}
+
+	private async finalizeDecisionAtomicallyUnlocked(
+		input: Parameters<MembershipCommerceRepository["finalizeDecision"]>[0],
+	) {
 		const classEntitlementInputs =
 			input.classEntitlements ??
 			(input.classEntitlement ? [input.classEntitlement] : []);
@@ -809,7 +818,7 @@ export class InMemoryMembershipCommerceRepository
 				classEntitlements = [];
 				for (const classEntitlementInput of classEntitlementInputs) {
 					assertValidClassEntitlementInput(classEntitlementInput);
-					const classEntitlement = await this.createClassEntitlement(
+					const classEntitlement = this.createClassEntitlementUnlocked(
 						classEntitlementInput,
 					);
 					classEntitlements.push(classEntitlement);
@@ -925,6 +934,14 @@ export class InMemoryMembershipCommerceRepository
 	async createClassEntitlement(
 		input: CreateClassEntitlementInput,
 	): Promise<ClassEntitlement> {
+		return withInMemoryCapacityLock(() =>
+			this.createClassEntitlementUnlocked(input),
+		);
+	}
+
+	private createClassEntitlementUnlocked(
+		input: CreateClassEntitlementInput,
+	): ClassEntitlement {
 		assertValidClassEntitlementInput(input);
 		const lineKey = `${input.organizationId}\u0000${input.shopifyOrderLineGid}`;
 		const existingLineId = this.classEntitlementsByLine.get(lineKey);
@@ -1056,13 +1073,15 @@ export class InMemoryMembershipCommerceRepository
 		id: string,
 		status: ClassEntitlementStatus,
 	): Promise<ClassEntitlement | null> {
-		if (!isClassEntitlementStatus(status)) {
-			throw new Error("Class entitlement status is invalid.");
-		}
-		const record = this.classEntitlements.get(id);
-		if (!record || record.organizationId !== organizationId) return null;
-		record.status = status;
-		record.updatedAt = this.now().toISOString();
-		return { ...record };
+		return withInMemoryCapacityLock(() => {
+			if (!isClassEntitlementStatus(status)) {
+				throw new Error("Class entitlement status is invalid.");
+			}
+			const record = this.classEntitlements.get(id);
+			if (!record || record.organizationId !== organizationId) return null;
+			record.status = status;
+			record.updatedAt = this.now().toISOString();
+			return { ...record };
+		});
 	}
 }

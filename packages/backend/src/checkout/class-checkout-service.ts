@@ -822,40 +822,28 @@ export class ClassCheckoutService {
 		});
 
 		setStage("attach_cart");
-		const cutpointFailure = await verifyPostCartCreateCapacityCutoff({
-			organizationId: input.organizationId,
-			festivalId,
-			lines: validatedLines.map((vl) => ({
-				childId: vl.child.id,
-				festivalClassId: vl.classConfig.id,
-			})),
-			organizations: this.organizations,
-			countConfirmedEntitlements: this.commerce
-				? (orgId, classId) =>
-						this.commerce?.countConfirmedClassEntitlements(orgId, classId) ??
-						Promise.resolve(0)
-				: undefined,
-		});
-		if (cutpointFailure) {
-			if (this.checkout.markIntentFailed) {
-				await this.checkout.markIntentFailed({
-					organizationId: input.organizationId,
-					intentId: intent.id,
-					failureCode: "sold_out",
-					failureMessage: cutpointFailure.message,
-				});
-			} else {
-				await this.checkout.markFailed(intent.id);
-			}
-			throw cutpointFailure;
-		}
-
+		const capacityCheck = () =>
+			verifyPostCartCreateCapacityCutoff({
+				organizationId: input.organizationId,
+				festivalId,
+				lines: validatedLines.map((vl) => ({
+					childId: vl.child.id,
+					festivalClassId: vl.classConfig.id,
+				})),
+				organizations: this.organizations,
+				countConfirmedEntitlements: this.commerce
+					? (orgId, classId) =>
+							this.commerce?.countConfirmedClassEntitlements(orgId, classId) ??
+							Promise.resolve(0)
+					: undefined,
+			});
 		const integrationVersion =
 			typeof input.integrationVersion === "number"
 				? input.integrationVersion
 				: Number(input.integrationVersion) || params.defaultIntegrationVersion;
 
 		const attachCartInput = {
+			capacityCheck,
 			intentId: intent.id,
 			shopifyCartId: cartResponse.shopifyCartId,
 			organizationId: input.organizationId,
@@ -864,9 +852,26 @@ export class ClassCheckoutService {
 			integrationVersion,
 			expiresAtIso,
 		};
-		const cart = this.checkout.markIntentReady
-			? await this.checkout.markIntentReady(attachCartInput)
-			: await this.checkout.attachCart(attachCartInput);
+		let cart: CheckoutCartRecord;
+		try {
+			cart = this.checkout.markIntentReady
+				? await this.checkout.markIntentReady(attachCartInput)
+				: await this.checkout.attachCart(attachCartInput);
+		} catch (error) {
+			if (error instanceof AppError && error.code === "sold_out") {
+				if (this.checkout.markIntentFailed) {
+					await this.checkout.markIntentFailed({
+						organizationId: input.organizationId,
+						intentId: intent.id,
+						failureCode: "sold_out",
+						failureMessage: error.message,
+					});
+				} else {
+					await this.checkout.markFailed(intent.id);
+				}
+			}
+			throw error;
+		}
 
 		setStage("mark_checkout_started");
 		await this.checkout.markCheckoutStarted(intent.id);

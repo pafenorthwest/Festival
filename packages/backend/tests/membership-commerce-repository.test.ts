@@ -217,9 +217,15 @@ describe("membership commerce repository", () => {
 			checkout.linkRegistrationMetadataToEntitlement.bind(checkout);
 		let linkCount = 0;
 		let firstLinkedEntitlementId: string | undefined;
+		const provisional = Promise.withResolvers<void>();
+		const releaseRollback = Promise.withResolvers<void>();
 		checkout.linkRegistrationMetadataToEntitlement = async (params) => {
 			linkCount += 1;
-			if (linkCount === 2) throw new Error("Second entitlement link failed.");
+			if (linkCount === 2) {
+				provisional.resolve();
+				await releaseRollback.promise;
+				throw new Error("Second entitlement link failed.");
+			}
 			await linkRegistrationMetadata(params);
 			firstLinkedEntitlementId = params.classEntitlementId;
 		};
@@ -239,23 +245,68 @@ describe("membership commerce repository", () => {
 			status: "confirmed" as const,
 		});
 
-		await expect(
-			commerce.finalizeDecision({
-				deliveryId: delivery.delivery.id,
-				decision: {
-					organizationId,
-					customerId: "customer",
-					checkoutIntentId: "checkout-intent",
-					shopifyOrderGid: "gid://shopify/Order/500",
-					status: "approved",
-					updatedAtIso: now.toISOString(),
-				},
-				classEntitlements: [
-					line("gid://shopify/LineItem/500-1", 1),
-					line("gid://shopify/LineItem/500-2", 2),
-				],
-			}),
-		).rejects.toThrow("Second entitlement link failed.");
+		const finalization = commerce.finalizeDecision({
+			deliveryId: delivery.delivery.id,
+			decision: {
+				organizationId,
+				customerId: "customer",
+				checkoutIntentId: "checkout-intent",
+				shopifyOrderGid: "gid://shopify/Order/500",
+				status: "approved",
+				updatedAtIso: now.toISOString(),
+			},
+			classEntitlements: [
+				line("gid://shopify/LineItem/500-1", 1),
+				line("gid://shopify/LineItem/500-2", 2),
+			],
+		});
+		const rollback = finalization.then(
+			() => null,
+			(error: unknown) => error,
+		);
+		await provisional.promise;
+		const candidate = await checkout.createIntent({
+			organizationId,
+			customerId: "candidate",
+			sessionId: "candidate",
+			idempotencyKey: "candidate",
+			shopifyProductGid: "product",
+			shopifyVariantGid: "variant",
+			amount: "50.00",
+			currencyCode: "USD",
+			expiresAtIso: "2027-01-01T00:00:00.000Z",
+		});
+		if (candidate.kind !== "created")
+			throw new Error("Expected candidate intent.");
+		let checked = false;
+		const attachment = checkout.attachCart({
+			intentId: candidate.intent.id,
+			organizationId,
+			customerId: "candidate",
+			sessionId: "candidate",
+			shopifyCartId: "cart",
+			integrationVersion: 1,
+			expiresAtIso: "2027-01-01T00:00:00.000Z",
+			capacityCheck: async () => {
+				checked = true;
+				expect(
+					await commerce.listClassEntitlements({ organizationId }),
+				).toEqual([]);
+				return null;
+			},
+		});
+		void attachment.catch(() => undefined);
+		try {
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(checked).toBe(false);
+		} finally {
+			releaseRollback.resolve();
+		}
+		expect(await rollback).toMatchObject({
+			message: "Second entitlement link failed.",
+		});
+		expect((await attachment).status).toBe("ready");
+		expect(checked).toBe(true);
 
 		expect(await commerce.listClassEntitlements({ organizationId })).toEqual(
 			[],

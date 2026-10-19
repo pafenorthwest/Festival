@@ -5,6 +5,7 @@ import type {
 	RepertoirePiece,
 } from "@festival/common";
 import { sql } from "bun";
+import { countConfirmedClassEntitlements } from "../commerce/postgres-class-entitlement-count.js";
 import { initializePostgresSchema } from "../repo/postgres-schema.js";
 import { buildIntentLineRecords } from "./checkout-line-helpers.js";
 import type {
@@ -19,6 +20,7 @@ import {
 	CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL,
 	repertoireItemsFromLegacyPieces,
 } from "./checkout-repository.js";
+import { verifyPostCartCreateCapacityCutoff } from "./class-checkout-helpers.js";
 import {
 	cartFromRow,
 	insertRepertoireSnapshot,
@@ -176,11 +178,59 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 	) {
 		const reference = randomUUID();
 		const rows = await sql.begin(async (tx) => {
+			// This lock is also acquired before capacity and entitlement writes.
+			// Hold it only for the database admission/attachment transaction.
+			await tx.unsafe("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+				`${this.schema}:class-capacity-cutoff`,
+			]);
 			const intents = (await tx.unsafe(
-				`SELECT id FROM ${this.schema}.checkout_intents WHERE id = $1 AND status = 'creating' FOR UPDATE`,
-				[input.intentId],
+				`SELECT id, intent_type, festival_class_id, child_id FROM ${this.schema}.checkout_intents WHERE id = $1 AND organization_id = $2 AND status = 'creating' FOR UPDATE`,
+				[input.intentId, input.organizationId],
 			)) as Array<Record<string, unknown>>;
 			if (!intents[0]) throw new Error("Checkout intent cannot accept a cart.");
+			if (intents[0].intent_type === "class_entry") {
+				const lineRows = (await tx.unsafe(
+					`SELECT festival_class_id, child_id FROM ${this.schema}.checkout_intent_lines WHERE checkout_intent_id = $1 AND line_type = 'class_entry' ORDER BY line_index ASC`,
+					[input.intentId],
+				)) as Array<Record<string, unknown>>;
+				const lines = (lineRows.length ? lineRows : [intents[0]]).map(
+					(row) => ({
+						festivalClassId: String(row.festival_class_id),
+						childId: String(row.child_id),
+					}),
+				);
+				const classIds = [
+					...new Set(lines.map((line) => line.festivalClassId)),
+				];
+				const configRows = (await tx.unsafe(
+					`SELECT id, organization_id, festival_id, capacity, is_active FROM ${this.schema}.festival_class_configurations WHERE organization_id = $1 AND id = ANY($2::text[])`,
+					[input.organizationId, sql.array(classIds, "text")],
+				)) as Array<Record<string, unknown>>;
+				const configs = configRows.map((row) => ({
+					id: String(row.id),
+					organizationId: String(row.organization_id),
+					festivalId: String(row.festival_id),
+					capacity: Number(row.capacity),
+					isActive: Boolean(row.is_active),
+				}));
+				const failure = await verifyPostCartCreateCapacityCutoff({
+					organizationId: input.organizationId,
+					festivalId: configs[0]?.festivalId ?? "",
+					lines,
+					organizations: {
+						findFestivalClassConfigurationsByIds: async () => configs,
+					},
+					countConfirmedEntitlements: (organizationId, classId) =>
+						countConfirmedClassEntitlements(
+							tx,
+							this.schema,
+							organizationId,
+							classId,
+						),
+				});
+				if (failure) throw failure;
+			}
+
 			await tx.unsafe(
 				`INSERT INTO ${this.schema}.checkout_carts (reference, shopify_cart_id, organization_id, customer_id, session_id, integration_version, status, expires_at) VALUES ($1,$2,$3,$4,$5,$6,'ready',$7)`,
 				[

@@ -34,6 +34,7 @@ import {
 	normalizeVerifiedShopifyIdentityEmail,
 } from "@festival/common";
 import { sql } from "bun";
+import { countConfirmedClassEntitlements } from "../commerce/postgres-class-entitlement-count.js";
 import type {
 	AccompanistDivisionPolicyHistoryRecord,
 	AccompanistDivisionPolicyRecord,
@@ -2254,6 +2255,10 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 	): Promise<FestivalClassConfiguration> {
 		await this.ensureReady();
 		return sql.begin(async (transaction) => {
+			await transaction.unsafe(
+				"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+				[`${this.schema}:class-capacity-cutoff`],
+			);
 			const [previous] = await transaction.unsafe(
 				`SELECT capacity FROM ${this.schema}.festival_class_configurations WHERE organization_id = $1 AND festival_id = $2 AND id = $3 FOR UPDATE`,
 				[input.organizationId, input.festivalId, input.id],
@@ -2264,9 +2269,11 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				transaction,
 			);
 			if (updated.capacity !== Number(previous.capacity)) {
-				const [placed] = await transaction.unsafe(
-					`SELECT COUNT(*)::int AS count FROM ${this.schema}.class_entitlements WHERE organization_id = $1 AND festival_class_id = $2 AND status = 'confirmed'`,
-					[input.organizationId, input.id],
+				const placedCount = await countConfirmedClassEntitlements(
+					transaction,
+					this.schema,
+					input.organizationId,
+					input.id,
 				);
 				await this.recordFestivalClassCapacityAudit(
 					{
@@ -2276,7 +2283,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 						actorUid,
 						previousCapacity: Number(previous.capacity),
 						newCapacity: updated.capacity,
-						placedCountAtChange: Number(placed?.count ?? 0),
+						placedCountAtChange: placedCount,
 						action: "capacity_updated",
 					},
 					transaction,
