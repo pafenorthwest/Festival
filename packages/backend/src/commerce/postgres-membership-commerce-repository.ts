@@ -27,6 +27,7 @@ import type {
 	ShopifyWebhookDelivery,
 } from "./membership-commerce-repository.js";
 import { PaidLineConflictError } from "./membership-commerce-repository.js";
+import { countConfirmedClassEntitlements } from "./postgres-class-entitlement-count.js";
 
 function schemaName(value: string) {
 	if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(value))
@@ -1053,11 +1054,12 @@ export class PostgresMembershipCommerceRepository
 		festivalClassId: string,
 	): Promise<number> {
 		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`SELECT COUNT(*)::int AS count FROM ${this.schema}.class_entitlements WHERE organization_id = $1 AND festival_class_id = $2 AND status = 'confirmed'`,
-			[organizationId, festivalClassId],
-		)) as Array<{ count: number | string }>;
-		return Number(rows[0]?.count ?? 0);
+		return countConfirmedClassEntitlements(
+			sql,
+			this.schema,
+			organizationId,
+			festivalClassId,
+		);
 	}
 
 	async updateClassEntitlementStatus(

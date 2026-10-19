@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { sql } from "bun";
 import { PostgresCheckoutRepository } from "../src/checkout/postgres-checkout-repository.js";
+import { countConfirmedClassEntitlements } from "../src/commerce/postgres-class-entitlement-count.js";
 import { PostgresOrganizationRepository } from "../src/repo/postgres-organization-repository.js";
 import { initializePostgresSchema } from "../src/repo/postgres-schema.js";
 
@@ -81,6 +82,57 @@ async function blockedBy(pid: number) {
 	} while (Date.now() < deadline);
 	return null;
 }
+
+postgresTest(
+	"confirmed entitlement count uses the supplied transaction and class filter",
+	async () => {
+		const f = await fixture();
+		const transaction = await sql.reserve();
+		try {
+			await f.intent("uncommitted");
+			await f.intent("other-class", ["class-b"]);
+			await f.intent("cancelled");
+			await f.place(sql, "other-class", "class-b");
+			await f.place(sql, "cancelled");
+			await sql.unsafe(
+				`UPDATE ${f.schema}.class_entitlements SET status = 'cancelled' WHERE id = 'cancelled'`,
+			);
+			await transaction.unsafe("BEGIN");
+			await f.place(transaction, "uncommitted");
+			expect(
+				await countConfirmedClassEntitlements(
+					transaction,
+					f.schema,
+					"org",
+					"class-a",
+				),
+			).toBe(1);
+			expect(
+				await countConfirmedClassEntitlements(sql, f.schema, "org", "class-a"),
+			).toBe(0);
+			expect(
+				await countConfirmedClassEntitlements(
+					transaction,
+					f.schema,
+					"other-org",
+					"class-a",
+				),
+			).toBe(0);
+			expect(
+				await countConfirmedClassEntitlements(
+					transaction,
+					f.schema,
+					"org",
+					"class-b",
+				),
+			).toBe(1);
+		} finally {
+			await transaction.unsafe("ROLLBACK");
+			transaction.release();
+			await sql.unsafe(`DROP SCHEMA ${f.schema} CASCADE`);
+		}
+	},
+);
 
 for (const cutoff of ["capacity decrease", "confirmed placement"] as const) {
 	postgresTest(

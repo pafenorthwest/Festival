@@ -5,6 +5,7 @@ import type {
 	RepertoirePiece,
 } from "@festival/common";
 import { sql } from "bun";
+import { countConfirmedClassEntitlements } from "../commerce/postgres-class-entitlement-count.js";
 import { initializePostgresSchema } from "../repo/postgres-schema.js";
 import { buildIntentLineRecords } from "./checkout-line-helpers.js";
 import type {
@@ -219,13 +220,13 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 					organizations: {
 						findFestivalClassConfigurationsByIds: async () => configs,
 					},
-					countConfirmedEntitlements: async (organizationId, classId) => {
-						const counts = (await tx.unsafe(
-							`SELECT count(*)::integer AS count FROM ${this.schema}.class_entitlements WHERE organization_id = $1 AND festival_class_id = $2 AND status = 'confirmed'`,
-							[organizationId, classId],
-						)) as Array<{ count: number }>;
-						return Number(counts[0]?.count ?? 0);
-					},
+					countConfirmedEntitlements: (organizationId, classId) =>
+						countConfirmedClassEntitlements(
+							tx,
+							this.schema,
+							organizationId,
+							classId,
+						),
 				});
 				if (failure) throw failure;
 			}
