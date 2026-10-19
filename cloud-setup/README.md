@@ -70,6 +70,54 @@ volumes. If an image build runs out of memory on this 2 GB host, add swap
 through your host operations process and rerun `03-prepare-images.sh`; the
 script itself makes no swap or kernel changes.
 
+## Clean a host checkout and rerun integration
+
+The manual integration workflow stops before image preparation if the host
+checkout has staged or unstaged tracked changes. Log in as `webadmin`, then
+inspect those changes:
+
+```bash
+cd /opt/Festival
+git status --short
+git diff
+git diff --cached
+git ls-files -- cloud-setup/.env
+```
+
+The last command must print nothing: `cloud-setup/.env` must remain untracked
+(and may be ignored). If it prints the env path, stop and back up the env file
+outside the checkout before proceeding; restoring tracked files would also
+restore that file. Do not include env contents in patches or other shared
+output.
+
+If the tracked edits are worth keeping, save patches outside the checkout
+before discarding them. Use fresh filenames if these backups already exist:
+
+```bash
+git diff --binary --output=/home/webadmin/festival-unstaged.patch
+git diff --cached --binary --output=/home/webadmin/festival-staged.patch
+```
+
+Keep these backups private; they may contain sensitive local edits.
+
+After reviewing the changes and confirming the env file is untracked, discard
+the tracked edits and check the result:
+
+```bash
+git restore --source=HEAD --staged --worktree .
+git status --short
+```
+
+This restores tracked files to the checked-out commit and preserves the
+untracked or ignored `cloud-setup/.env`. **Do not run `git clean -fdx`**: it can
+delete that env file. Remaining untracked files do not fail the workflow's
+tracked-change checks.
+
+Once the tracked changes are gone, rerun the failed workflow run to retry the
+same verified commit SHA. Starting a new **Run workflow** instead captures the
+selected branch's current tip. This workflow deploys only to integration;
+production deployment remains out of scope.
+
 Adding `webadmin` to the `docker` group grants effective root-level control
 of the host. Limit access to that account and protect its SSH key. This setup
 does not change the root login or configure the cloud firewall, DNS, TLS,

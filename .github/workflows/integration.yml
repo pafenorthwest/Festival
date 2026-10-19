@@ -1,0 +1,96 @@
+name: Integration Deployment
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-deployment
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Format check
+        run: bun run format:check
+
+      - name: Build
+        run: bun run build
+
+      - name: Test
+        run: bun run test
+
+  deploy-integration:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment:
+      name: integration
+      url: https://int.artsfestival.online/
+
+    steps:
+      - name: Deploy to Integration Host via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          DEPLOY_SHA: ${{ github.sha }}
+        with:
+          host: ${{ secrets.DO_INTEGRATION_HOST }}
+          username: ${{ secrets.DO_INTEGRATION_USER || 'webadmin' }}
+          key: ${{ secrets.DO_SSH_PRIVATE_KEY }}
+          passphrase: ${{ secrets.DO_SSH_PASSPHRASE }}
+          envs: DEPLOY_SHA
+          command_timeout: 30m
+          script: |
+            set -euo pipefail
+            [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+            cd /opt/Festival
+            git fetch origin "$DEPLOY_SHA"
+            git checkout --detach "$DEPLOY_SHA"
+            test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"
+            git diff --quiet
+            git diff --cached --quiet
+            bash cloud-setup/03-prepare-images.sh
+            docker compose --env-file cloud-setup/.env -f cloud-setup/compose.yml up -d --no-build --pull never
+
+  smoke-test:
+    needs: deploy-integration
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Smoke test integration frontend and backend
+        run: |
+          for i in {1..12}; do
+            if curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
+              https://int.artsfestival.online/healthz > /dev/null \
+              && curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
+                https://int.artsfestival.online/api/organizations/pafe/landing \
+                --output "$RUNNER_TEMP/integration-landing.json" \
+              && jq --exit-status \
+                '.organization.slug == "pafe" and (.organization.name | type == "string") and (.festivals | type == "array")' \
+                "$RUNNER_TEMP/integration-landing.json" > /dev/null; then
+              echo "Frontend and database-backed API checks passed on attempt $i"
+              exit 0
+            fi
+            if [ "$i" -lt 12 ]; then
+              echo "Attempt $i failed, retrying in 5s..."
+              sleep 5
+            fi
+          done
+          echo "Integration smoke checks failed after 12 attempts"
+          exit 1
