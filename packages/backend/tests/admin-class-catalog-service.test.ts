@@ -625,6 +625,79 @@ describe("Validation & Invariants", () => {
 });
 
 describe("Capacity Policy & Audit Trail", () => {
+	it("discards a staged audit record if the audit writer appends then fails", async () => {
+		const { repo, org, createValid, update, getSaved } = await setupFixture();
+		const created = await createValid();
+		const recordAudit = repo.recordFestivalClassCapacityAudit;
+		repo.recordFestivalClassCapacityAudit = async function (input) {
+			await recordAudit.call(this, input);
+			throw new Error("Audit completion failed");
+		};
+		await expect(update(created.id, { capacity: 10 })).rejects.toThrow(
+			"Audit completion failed",
+		);
+		expect(await getSaved(created.id)).toEqual(created);
+		expect(
+			await repo.listFestivalClassCapacityAudits(org.id, created.id),
+		).toHaveLength(1);
+	});
+	it("rolls back class creation on capacity audit failure before cleaning up Shopify", async () => {
+		const { repo, org, festival, createValid, shopifyClient } =
+			await setupFixture(true);
+		const recordAudit = repo.recordFestivalClassCapacityAudit;
+		repo.recordFestivalClassCapacityAudit = async () => {
+			throw new Error("Capacity audit unavailable");
+		};
+		await expect(createValid()).rejects.toThrow("Capacity audit unavailable");
+		expect(
+			await repo.listFestivalClassConfigurations(org.id, festival.id, false),
+		).toEqual([]);
+		expect(shopifyClient.deletedProductGids).toEqual([PROD_GID]);
+		repo.recordFestivalClassCapacityAudit = recordAudit;
+		const retried = await createValid();
+		expect(
+			await repo.listFestivalClassConfigurations(org.id, festival.id, false),
+		).toHaveLength(1);
+		expect(
+			await repo.listFestivalClassCapacityAudits(org.id, retried.id),
+		).toMatchObject([
+			{ action: "class_created", previousCapacity: null, newCapacity: 25 },
+		]);
+	});
+
+	it("rolls back all class fields when capacity auditing fails and audits a safe retry", async () => {
+		const { repo, org, createValid, update, getSaved } = await setupFixture();
+		const created = await createValid({ capacity: 25 });
+		const recordAudit = repo.recordFestivalClassCapacityAudit;
+		repo.recordFestivalClassCapacityAudit = async () => {
+			throw new Error("Capacity audit unavailable");
+		};
+		await expect(
+			update(created.id, { capacity: 10, displayName: "Changed" }),
+		).rejects.toThrow("Capacity audit unavailable");
+		expect(await getSaved(created.id)).toEqual(created);
+		expect(
+			await repo.listFestivalClassCapacityAudits(org.id, created.id),
+		).toHaveLength(1);
+		repo.recordFestivalClassCapacityAudit = recordAudit;
+		await update(created.id, { capacity: 10, displayName: "Changed" });
+		expect(await getSaved(created.id)).toMatchObject({
+			capacity: 10,
+			displayName: "Changed",
+		});
+		const audits = await repo.listFestivalClassCapacityAudits(
+			org.id,
+			created.id,
+		);
+		expect(audits).toHaveLength(2);
+		expect(
+			audits.find((audit) => audit.action === "capacity_updated"),
+		).toMatchObject({ previousCapacity: 25, newCapacity: 10 });
+		await update(created.id, { capacity: 10 });
+		expect(
+			await repo.listFestivalClassCapacityAudits(org.id, created.id),
+		).toHaveLength(2);
+	});
 	it("defaults capacity to 100 on create and records class_created audit entry", async () => {
 		const { org, festival, service, input } = await setupFixture();
 		const raw = input();
