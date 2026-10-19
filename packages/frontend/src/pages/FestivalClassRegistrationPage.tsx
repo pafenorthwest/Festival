@@ -47,10 +47,10 @@ export function FestivalClassRegistrationPage(
 		(slug) => getPublicDivisions(slug),
 	);
 	const cart = createRegistrationCart();
-	const getCsrf = () =>
-		props.app.customerSession().authenticated
-			? props.app.customerSession().csrfToken
-			: "";
+	const getCsrf = () => {
+		const session = props.app.customerSession();
+		return session.authenticated ? session.csrfToken : "";
+	};
 	const eligibility = useCartEligibility({
 		slug: () => props.slug,
 		festivalSlug: () => props.festivalSlug,
