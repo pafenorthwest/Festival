@@ -5,12 +5,15 @@ import {
 	CUSTOMER_SESSION_COOKIE,
 	type CustomerAccountService,
 } from "../../customer/customer-account-service.js";
+import type { CustomerAvailabilityService } from "../../customer/customer-availability-service.js";
 import { AppError } from "../../errors/app-error.js";
 import { assertNoBearerPrincipal } from "../customer-auth/customer-auth.routes.js";
 import { resolveRequestOrigin } from "../shared/csrf-guard.js";
+import { buildCustomerAvailabilityRoutes } from "./customer-availability.routes.js";
 
 export interface CustomerRoutesOptions {
 	customerAccountService?: CustomerAccountService;
+	customerAvailabilityService?: CustomerAvailabilityService;
 }
 
 function requireCustomerAccountService(
@@ -131,13 +134,17 @@ export function buildCustomerRoutes(
 	options: CustomerRoutesOptions,
 ): Hono<{ Variables: Partial<ApiVariables> }> {
 	const router = new Hono<{ Variables: Partial<ApiVariables> }>();
-	const { customerAccountService } = options;
+	const { customerAccountService, customerAvailabilityService } = options;
 
 	router.get("/session", (c) => sessionHandler(c, customerAccountService));
 	router.get("/profile", (c) => getProfileHandler(c, customerAccountService));
 	router.post("/profile", (c) => postProfileHandler(c, customerAccountService));
 	router.get("/orders", (c) => ordersHandler(c, customerAccountService));
 	router.post("/logout", (c) => logoutHandler(c, customerAccountService));
+	router.route(
+		"/",
+		buildCustomerAvailabilityRoutes({ customerAvailabilityService }),
+	);
 
 	return router;
 }

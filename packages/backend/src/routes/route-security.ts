@@ -16,7 +16,7 @@ export type RouteAuthenticationClass =
 	(typeof ROUTE_AUTHENTICATION_CLASSES)[number];
 
 export interface RouteSecurityDeclaration {
-	method: "GET" | "HEAD" | "POST" | "PATCH" | "DELETE";
+	method: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE";
 	path: string;
 	authenticationClass: RouteAuthenticationClass;
 }
@@ -672,6 +672,26 @@ export const CURRENT_ROUTE_SECURITY = [
 		method: "POST",
 		path: "/api/organizations/:slug/communication/events",
 		authenticationClass: "tenant",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/customer/availability",
+		authenticationClass: "customer",
+	},
+	{
+		method: "PUT",
+		path: "/api/organizations/:slug/customer/availability",
+		authenticationClass: "customer",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/customer-account/availability",
+		authenticationClass: "customer",
+	},
+	{
+		method: "PUT",
+		path: "/api/organizations/:slug/customer-account/availability",
+		authenticationClass: "customer",
 	},
 ] as const satisfies readonly RouteSecurityDeclaration[];
 

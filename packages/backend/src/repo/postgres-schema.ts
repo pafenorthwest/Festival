@@ -238,6 +238,19 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			id TEXT PRIMARY KEY, child_id TEXT NOT NULL, organization_id TEXT NOT NULL,
 			age INTEGER NOT NULL, created_at TIMESTAMPTZ NOT NULL, valid_until TIMESTAMPTZ NOT NULL, superseded_at TIMESTAMPTZ NULL
 		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.customer_festival_availability (
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			festival_id TEXT NOT NULL REFERENCES ${safeSchema}.festivals (id) ON DELETE CASCADE,
+			customer_id TEXT NOT NULL,
+			subject_type TEXT NOT NULL CHECK (subject_type IN ('accompanist', 'child')),
+			subject_id TEXT NOT NULL,
+			festival_date DATE NOT NULL,
+			available_hours JSONB NOT NULL DEFAULT '[]'::jsonb,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (organization_id, festival_id, subject_type, subject_id, festival_date),
+			FOREIGN KEY (festival_id, organization_id) REFERENCES ${safeSchema}.festivals (id, organization_id) ON DELETE CASCADE,
+			FOREIGN KEY (customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers (id, organization_id) ON DELETE CASCADE
+		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.checkout_carts (
 			reference TEXT PRIMARY KEY, shopify_cart_id TEXT NOT NULL,
 			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
@@ -770,6 +783,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		CREATE INDEX IF NOT EXISTS idx_festival_customers_org_phone ON ${safeSchema}.festival_customers(organization_id,phone);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_festival_children_parent_name ON ${safeSchema}.festival_children(organization_id, parent_customer_id, LOWER(display_name));
 		CREATE INDEX IF NOT EXISTS idx_festival_child_age_snapshots_org_child_active ON ${safeSchema}.festival_child_age_snapshots (organization_id, child_id, created_at DESC) WHERE superseded_at IS NULL;
+		CREATE INDEX IF NOT EXISTS idx_customer_festival_availability_org_festival_customer ON ${safeSchema}.customer_festival_availability (organization_id, festival_id, customer_id);
 		CREATE UNIQUE INDEX IF NOT EXISTS checkout_intents_scope_key ON ${safeSchema}.checkout_intents(organization_id, customer_id, session_id, idempotency_key);
 		CREATE INDEX IF NOT EXISTS idx_recovery_requests_org_cust ON ${safeSchema}.checkout_recovery_requests (organization_id, customer_id);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_recovery_requests_token_hash ON ${safeSchema}.checkout_recovery_requests (token_hash);

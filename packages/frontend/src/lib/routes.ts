@@ -17,6 +17,7 @@ export type AppRoute =
 	| { kind: "org-customer-account-children"; slug: string }
 	| { kind: "org-customer-account-orders"; slug: string }
 	| { kind: "org-customer-account-classes"; slug: string }
+	| { kind: "org-customer-account-availability"; slug: string }
 	| { kind: "org-admin"; slug: string }
 	| { kind: "org-admin-users"; slug: string }
 	| { kind: "org-admin-integrations"; slug: string }
@@ -116,6 +117,10 @@ export function buildOrgCustomerAccountClassesPath(slug: string): string {
 	return `/org/${slug}/account/classes`;
 }
 
+export function buildOrgCustomerAccountAvailabilityPath(slug: string): string {
+	return `/organizations/${slug}/account/availability`;
+}
+
 export function buildOrgAdminUsersPath(slug: string): string {
 	return `/org/${slug}/admin/users`;
 }
@@ -194,6 +199,7 @@ export function isOrganizationPageRoute(route: AppRoute): boolean {
 		route.kind === "org-customer-account-children" ||
 		route.kind === "org-customer-account-orders" ||
 		route.kind === "org-customer-account-classes" ||
+		route.kind === "org-customer-account-availability" ||
 		route.kind === "org-checkout-recovery"
 	);
 }
@@ -321,6 +327,15 @@ export function parseRoute(pathname: string): AppRoute {
 		return {
 			kind: "org-customer-account-classes",
 			slug: customerAccountClassesMatch[1] ?? "",
+		};
+
+	const customerAccountAvailabilityMatch = pathname.match(
+		/^\/(?:organizations|org)\/([^/]+)\/account\/availability\/?$/,
+	);
+	if (customerAccountAvailabilityMatch)
+		return {
+			kind: "org-customer-account-availability",
+			slug: customerAccountAvailabilityMatch[1] ?? "",
 		};
 
 	const orgAdminMatch = pathname.match(/^\/org\/([^/]+)\/admin$/);

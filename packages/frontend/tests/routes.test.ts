@@ -16,6 +16,7 @@ import {
 	buildOrgAdminUsersPath,
 	buildOrgBillingPath,
 	buildOrgCheckoutRecoveryPath,
+	buildOrgCustomerAccountAvailabilityPath,
 	buildOrgCustomerAccountContactPath,
 	buildOrgCustomerAccountMembershipsPath,
 	buildOrgCustomerAccountOrdersPath,
@@ -78,6 +79,16 @@ describe("route helpers", () => {
 		});
 		expect(parseRoute("/org/festival-admins/account/orders")).toEqual({
 			kind: "org-customer-account-orders",
+			slug: "festival-admins",
+		});
+		expect(
+			parseRoute("/organizations/festival-admins/account/availability"),
+		).toEqual({
+			kind: "org-customer-account-availability",
+			slug: "festival-admins",
+		});
+		expect(parseRoute("/org/festival-admins/account/availability")).toEqual({
+			kind: "org-customer-account-availability",
 			slug: "festival-admins",
 		});
 		expect(parseRoute("/org/festival-admins/admin")).toEqual({
@@ -193,6 +204,11 @@ describe("route helpers", () => {
 		).toBe(true);
 		expect(
 			isOrganizationPageRoute(
+				parseRoute("/organizations/festival-admins/account/availability"),
+			),
+		).toBe(true);
+		expect(
+			isOrganizationPageRoute(
 				parseRoute("/org/festival-admins/checkout-recovery/tok-abc"),
 			),
 		).toBe(true);
@@ -254,6 +270,9 @@ describe("route helpers", () => {
 		);
 		expect(buildOrgCustomerAccountOrdersPath("festival-admins")).toBe(
 			"/org/festival-admins/account/orders",
+		);
+		expect(buildOrgCustomerAccountAvailabilityPath("festival-admins")).toBe(
+			"/organizations/festival-admins/account/availability",
 		);
 		expect(buildOrgAdminUsersPath("festival-admins")).toBe(
 			"/org/festival-admins/admin/users",

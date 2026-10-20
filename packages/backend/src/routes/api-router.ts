@@ -11,6 +11,7 @@ import type { MembershipCheckoutService } from "../checkout/membership-checkout-
 import type { MembershipStatusService } from "../commerce/membership-status-service.js";
 import type { CommunicationService } from "../communication/communication-service.js";
 import type { CustomerAccountService } from "../customer/customer-account-service.js";
+import type { CustomerAvailabilityService } from "../customer/customer-availability-service.js";
 import type { DropTransferService } from "../registration/drop-transfer-service.js";
 import type { RegistrationChangeRepository } from "../registration/registration-change-repository.js";
 import type { RepertoireRepository } from "../repertoire/index.js";
@@ -29,6 +30,7 @@ import { buildAdminShopifyRoutes } from "./admin-shopify/admin-shopify.routes.js
 import { buildCatalogRoutes } from "./catalog/catalog.routes.js";
 import { buildCommunicationRoutes } from "./communication.routes.js";
 import { buildCustomerRoutes } from "./customer/customer.routes.js";
+import { buildCustomerAvailabilityRoutes } from "./customer/customer-availability.routes.js";
 import { buildCustomerChildrenRoutes } from "./customer/customer-children.routes.js";
 import { buildCustomerMembershipRoutes } from "./customer/customer-membership.routes.js";
 import { buildCustomerRegistrationRoutes } from "./customer/customer-registration.routes.js";
@@ -46,6 +48,7 @@ export interface ApiRouterOptions {
 	shopifyIntegrationService?: ShopifyIntegrationService;
 	shopifyMembershipProductService?: ShopifyMembershipProductService;
 	customerAccountService?: CustomerAccountService;
+	customerAvailabilityService?: CustomerAvailabilityService;
 	publicMembershipProductService?: PublicMembershipProductService;
 	shopifyIntegrationDiagnosticService?: ShopifyIntegrationDiagnosticService;
 	membershipCheckoutService?: MembershipCheckoutService;
@@ -73,6 +76,7 @@ export function buildApiRouter(
 		shopifyIntegrationService,
 		shopifyMembershipProductService,
 		customerAccountService,
+		customerAvailabilityService,
 		publicMembershipProductService,
 		shopifyIntegrationDiagnosticService,
 		membershipCheckoutService,
@@ -157,7 +161,14 @@ export function buildApiRouter(
 
 	router.route(
 		"/organizations/:slug/customer",
-		buildCustomerRoutes({ customerAccountService }),
+		buildCustomerRoutes({
+			customerAccountService,
+			customerAvailabilityService,
+		}),
+	);
+	router.route(
+		"/organizations/:slug/customer-account",
+		buildCustomerAvailabilityRoutes({ customerAvailabilityService }),
 	);
 	router.route(
 		"/organizations/:slug/customer",
