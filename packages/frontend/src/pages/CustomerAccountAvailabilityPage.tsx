@@ -45,7 +45,7 @@ export function CustomerAccountAvailabilityPage(props: { slug: string }) {
 		detectNarrowViewport(),
 	);
 	const [currentDayIndex, setCurrentDayIndex] = createSignal(0);
-	let csrfToken = "";
+	const [csrfToken, setCsrfToken] = createSignal("");
 
 	onMount(() => {
 		if (
@@ -128,7 +128,7 @@ export function CustomerAccountAvailabilityPage(props: { slug: string }) {
 		try {
 			const response = await saveCustomerFestivalAvailability(
 				props.slug,
-				csrfToken,
+				csrfToken(),
 				{
 					festivalId,
 					subjects: toSaveSubjectsPayload(subjects()),
@@ -166,7 +166,7 @@ export function CustomerAccountAvailabilityPage(props: { slug: string }) {
 		<CustomerAccountPageLayout
 			slug={props.slug}
 			onAuthenticated={(session) => {
-				csrfToken = session.csrfToken;
+				setCsrfToken(session.csrfToken);
 				void loadAvailability();
 			}}
 		>

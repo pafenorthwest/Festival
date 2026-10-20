@@ -35,7 +35,7 @@ afterEach(() => {
 describe("customer account availability routes and navigation", () => {
 	it("parses and builds the customer account availability route", () => {
 		expect(buildOrgCustomerAccountAvailabilityPath("pafe")).toBe(
-			"/organizations/pafe/account/availability",
+			"/org/pafe/account/availability",
 		);
 		expect(parseRoute("/organizations/pafe/account/availability")).toEqual({
 			kind: "org-customer-account-availability",

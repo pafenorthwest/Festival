@@ -118,7 +118,7 @@ export function buildOrgCustomerAccountClassesPath(slug: string): string {
 }
 
 export function buildOrgCustomerAccountAvailabilityPath(slug: string): string {
-	return `/organizations/${slug}/account/availability`;
+	return `/org/${slug}/account/availability`;
 }
 
 export function buildOrgAdminUsersPath(slug: string): string {

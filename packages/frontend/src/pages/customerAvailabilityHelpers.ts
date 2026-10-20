@@ -3,6 +3,7 @@ import {
 	type AvailabilityHour,
 	type AvailabilitySubjectType,
 	buildDefaultAvailabilityDays,
+	DEFAULT_AVAILABLE_HOURS,
 	formatAvailabilityHourBlock,
 	type SaveSubjectFestivalAvailabilityInput,
 	type SubjectFestivalAvailability,
@@ -61,7 +62,7 @@ export function isSubjectHourAvailable(
 ): boolean {
 	const day = subject.days.find((entry) => entry.date === date);
 	if (!day) {
-		return hour !== 17;
+		return (DEFAULT_AVAILABLE_HOURS as readonly number[]).includes(hour);
 	}
 	return day.availableHours.includes(hour);
 }

@@ -272,7 +272,7 @@ describe("route helpers", () => {
 			"/org/festival-admins/account/orders",
 		);
 		expect(buildOrgCustomerAccountAvailabilityPath("festival-admins")).toBe(
-			"/organizations/festival-admins/account/availability",
+			"/org/festival-admins/account/availability",
 		);
 		expect(buildOrgAdminUsersPath("festival-admins")).toBe(
 			"/org/festival-admins/admin/users",

@@ -2,7 +2,6 @@ import {
 	type AvailabilityDayRecord,
 	type AvailabilitySubject,
 	type CustomerFestivalAvailabilityResponse,
-	calendarDateInTimezone,
 	DEFAULT_AVAILABLE_HOURS,
 	enumerateFestivalDates,
 	type FestivalRecord,
@@ -12,7 +11,6 @@ import {
 	type SubjectFestivalAvailability,
 	validateSaveCustomerFestivalAvailabilityRequest,
 } from "@festival/common";
-import { lifecycleForEntitlementRead } from "../commerce/entitlement-lifecycle.js";
 import { AppError } from "../errors/app-error.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
 import type { CustomerAccountRepository } from "./customer-account-repository.js";
@@ -115,51 +113,19 @@ export class CustomerAvailabilityService {
 		private readonly organizations: OrganizationRepository,
 		private readonly accounts: CustomerAccountRepository,
 		private readonly customerAccountService: CustomerAccountService,
-		private readonly now: () => Date = () => new Date(),
+		_now: () => Date = () => new Date(),
 	) {}
 
 	private async hasActiveAccompanistMembership(
 		organizationId: string,
 		customerId: string,
 	): Promise<boolean> {
-		const timezone =
-			await this.organizations.getOrganizationTimezone(organizationId);
-		const today = calendarDateInTimezone(this.now().toISOString(), timezone);
-		const orgWithHelper = this.organizations as OrganizationRepository & {
-			listAccompanistMembershipGrantsForCustomer?: (
-				orgId: string,
-				custId: string,
-				todayStr: string,
-			) => Promise<Array<{ status: string; isCurrent: boolean }>>;
-		};
-		const grants = orgWithHelper.listAccompanistMembershipGrantsForCustomer
-			? await orgWithHelper.listAccompanistMembershipGrantsForCustomer(
-					organizationId,
-					customerId,
-					today,
-				)
-			: await this.organizations.listAccompanistMembershipGrants({
-					organizationId,
-					customerId,
-					currentOnly: true,
-				});
-		return grants.some((grant) => {
-			const status =
-				"startsOn" in grant &&
-				typeof grant.startsOn === "string" &&
-				"endsOn" in grant &&
-				typeof grant.endsOn === "string"
-					? lifecycleForEntitlementRead(
-							grant as {
-								startsOn: string;
-								endsOn: string;
-								status?: string;
-							},
-							today,
-						)
-					: grant.status;
-			return status === "active" && grant.isCurrent;
-		});
+		const grant =
+			await this.organizations.findCurrentAccompanistMembershipGrant({
+				organizationId,
+				customerId,
+			});
+		return Boolean(grant && grant.status === "active" && grant.isCurrent);
 	}
 
 	private async resolveEligibleSubjects(
