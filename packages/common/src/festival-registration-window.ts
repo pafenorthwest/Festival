@@ -106,6 +106,9 @@ function resolveTimezoneDate(
 		minute: "2-digit",
 		second: "2-digit",
 	});
+	// If a local datetime falls inside a spring-forward DST gap (e.g. 02:30 AM
+	// when the clock jumps from 02:00 to 03:00), the 4-step convergence cleanly
+	// stabilizes and resolves to the post-gap boundary.
 	let guessMs = targetUtcMs;
 	for (let i = 0; i < 4; i++) {
 		const diff = getLocalAsUtcMs(dtf, new Date(guessMs)) - targetUtcMs;
