@@ -43,11 +43,9 @@ function createRepositories(dryRun: boolean): {
 	}
 	const databaseUrl = resolveDatabaseUrl();
 	if (!databaseUrl) {
-		return {
-			mode: "in-memory",
-			organizations: new InMemoryOrganizationRepository(),
-			accounts: new InMemoryCustomerAccountRepository(),
-		};
+		throw new Error(
+			"DATABASE_URL is not set. Run with --dry-run for in-memory execution.",
+		);
 	}
 	process.env.DATABASE_URL = databaseUrl;
 	const schema = process.env.DB_SCHEMA?.trim() || "public";

@@ -13,6 +13,7 @@ export interface SeedAdminUserFixture {
 
 export interface SeedSubtypeFixture {
 	displayName: string;
+	/** Prerequisite subtype name; must precede this subtype in fixture array. */
 	requiredSubtypeName?: string;
 }
 

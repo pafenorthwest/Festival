@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import {
 	addCalendarDays,
 	CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION,
@@ -66,92 +65,110 @@ interface ContactSyncCapable {
 	): void;
 }
 
-function syncInMemoryContact(
-	organizations: OrganizationRepository,
-	organizationId: string,
-	customerId: string,
-	contact: { name: string; email: string; phone: string; city: string },
-): void {
-	const target = organizations as OrganizationRepository & ContactSyncCapable;
-	target.setCustomerName?.(customerId, contact.name);
-	target.setCustomerContact?.(organizationId, {
-		customerId,
-		...contact,
+interface SyncInMemoryContactOptions {
+	organizations: OrganizationRepository;
+	organizationId: string;
+	customerId: string;
+	contact: { name: string; email: string; phone: string; city: string };
+}
+
+function syncInMemoryContact(options: SyncInMemoryContactOptions): void {
+	const target = options.organizations as OrganizationRepository &
+		ContactSyncCapable;
+	target.setCustomerName?.(options.customerId, options.contact.name);
+	target.setCustomerContact?.(options.organizationId, {
+		customerId: options.customerId,
+		...options.contact,
 	});
 }
 
+interface ResolveOrCreateCustomerOptions {
+	accounts: CustomerAccountRepository;
+	organizationId: string;
+	shopifyCustomerGid: string;
+	nowIso: string;
+}
+
 async function resolveOrCreateCustomer(
-	accounts: CustomerAccountRepository,
-	organizationId: string,
-	shopifyCustomerGid: string,
-	nowIso: string,
+	options: ResolveOrCreateCustomerOptions,
 ): Promise<FestivalCustomerRecord> {
-	const existing = await accounts.getCustomerByShopifyGid(
-		organizationId,
-		shopifyCustomerGid,
+	const existing = await options.accounts.getCustomerByShopifyGid(
+		options.organizationId,
+		options.shopifyCustomerGid,
 	);
 	if (existing) return existing;
-	const created = await accounts.createCustomerSession({
-		sessionId: `seed_sess_${randomUUID()}`,
-		organizationId,
-		shopifyCustomerGid,
+	const sanitizedGid = options.shopifyCustomerGid.replace(/[^a-zA-Z0-9]/g, "_");
+	const sessionId = `seed_sess_${options.organizationId.slice(0, 8)}_${sanitizedGid}`;
+	const created = await options.accounts.createCustomerSession({
+		sessionId,
+		organizationId: options.organizationId,
+		shopifyCustomerGid: options.shopifyCustomerGid,
 		encryptedTokens: "seed-encrypted-tokens",
 		csrfToken: "seed-csrf-token",
 		integrationVersion: 1,
-		createdAtIso: nowIso,
-		lastSeenAtIso: nowIso,
-		expiresAtIso: nowIso,
-		revokedAtIso: nowIso,
+		createdAtIso: options.nowIso,
+		lastSeenAtIso: options.nowIso,
+		expiresAtIso: options.nowIso,
+		revokedAtIso: options.nowIso,
 	});
 	return created.customer;
 }
 
-async function ensureCustomerProfile(
+interface EnsureCustomerProfileOptions {
 	deps: {
 		organizations: OrganizationRepository;
 		accounts: CustomerAccountRepository;
-	},
-	organizationId: string,
-	nowIso: string,
+	};
+	organizationId: string;
+	nowIso: string;
 	input: {
 		shopifyCustomerGid: string;
 		name: string;
 		email: string;
 		phone: string;
 		mailingAddress: SeedTeacherFixture["mailingAddress"];
-	},
+	};
+}
+
+async function ensureCustomerProfile(
+	options: EnsureCustomerProfileOptions,
 ): Promise<FestivalCustomerRecord> {
-	const customer = await resolveOrCreateCustomer(
-		deps.accounts,
-		organizationId,
-		input.shopifyCustomerGid,
-		nowIso,
-	);
-	const email = input.email.toLowerCase();
-	await deps.accounts.recordVerifiedShopifyEmail({
-		organizationId,
+	const customer = await resolveOrCreateCustomer({
+		accounts: options.deps.accounts,
+		organizationId: options.organizationId,
+		shopifyCustomerGid: options.input.shopifyCustomerGid,
+		nowIso: options.nowIso,
+	});
+	const email = options.input.email.toLowerCase();
+	await options.deps.accounts.recordVerifiedShopifyEmail({
+		organizationId: options.organizationId,
 		customerId: customer.id,
 		email,
-		verifiedAtIso: nowIso,
+		verifiedAtIso: options.nowIso,
 	});
-	const updated = await deps.accounts.applyCustomerProfile({
+	const updated = await options.deps.accounts.applyCustomerProfile({
 		customerId: customer.id,
-		organizationId,
+		organizationId: options.organizationId,
 		source: "festival",
-		updatedAtIso: nowIso,
-		profile: { ...input, email },
+		updatedAtIso: options.nowIso,
+		profile: { ...options.input, email },
 	});
-	await deps.accounts.recordStaffAccessConsent({
+	await options.deps.accounts.recordStaffAccessConsent({
 		customerId: customer.id,
-		organizationId,
+		organizationId: options.organizationId,
 		privacyNoticeVersion: CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION,
-		consentedAtIso: nowIso,
+		consentedAtIso: options.nowIso,
 	});
-	syncInMemoryContact(deps.organizations, organizationId, customer.id, {
-		name: input.name,
-		email,
-		phone: input.phone,
-		city: input.mailingAddress.city,
+	syncInMemoryContact({
+		organizations: options.deps.organizations,
+		organizationId: options.organizationId,
+		customerId: customer.id,
+		contact: {
+			name: options.input.name,
+			email,
+			phone: options.input.phone,
+			city: options.input.mailingAddress.city,
+		},
 	});
 	return updated ?? customer;
 }
@@ -176,25 +193,33 @@ async function ensureDivisions(
 	return byName;
 }
 
+interface EnsureSubtypesOptions {
+	organizations: OrganizationRepository;
+	organizationId: string;
+	festivalId: string;
+	fixtures: SeedOrganizationFixture["subtypes"];
+}
+
+/**
+ * Ensures class subtypes exist and are linked to festival.
+ * Requires prerequisite subtypes to precede dependent ones in fixtures array for ID resolution.
+ */
 async function ensureSubtypes(
-	organizations: OrganizationRepository,
-	organizationId: string,
-	festivalId: string,
-	fixtures: SeedOrganizationFixture["subtypes"],
+	options: EnsureSubtypesOptions,
 ): Promise<Map<string, RegistrationCatalogValue>> {
-	const existing = await organizations.listRegistrationCatalogValues(
-		organizationId,
+	const existing = await options.organizations.listRegistrationCatalogValues(
+		options.organizationId,
 		"class_subtype",
 	);
 	const byName = new Map(existing.map((s) => [s.displayName, s]));
-	for (const fixture of fixtures) {
+	for (const fixture of options.fixtures) {
 		const requiredId = fixture.requiredSubtypeName
 			? (byName.get(fixture.requiredSubtypeName)?.id ?? null)
 			: null;
 		let subtype = byName.get(fixture.displayName);
 		if (!subtype) {
-			subtype = await organizations.createRegistrationCatalogValue({
-				organizationId,
+			subtype = await options.organizations.createRegistrationCatalogValue({
+				organizationId: options.organizationId,
 				kind: "class_subtype",
 				displayName: fixture.displayName,
 				normalizedName: divisionNameUniquenessKey(fixture.displayName),
@@ -202,9 +227,9 @@ async function ensureSubtypes(
 			});
 			byName.set(fixture.displayName, subtype);
 		}
-		await organizations.associateFestivalClassSubtype({
-			organizationId,
-			festivalId,
+		await options.organizations.associateFestivalClassSubtype({
+			organizationId: options.organizationId,
+			festivalId: options.festivalId,
 			classSubtypeId: subtype.id,
 		});
 	}
@@ -228,12 +253,12 @@ async function ensureTeacherGrants(
 	teachers: SeedTeacherFixture[],
 ): Promise<{ teacherCount: number; grantCount: number }> {
 	for (const teacher of teachers) {
-		const customer = await ensureCustomerProfile(
+		const customer = await ensureCustomerProfile({
 			deps,
-			context.organizationId,
-			context.nowIso,
-			teacher,
-		);
+			organizationId: context.organizationId,
+			nowIso: context.nowIso,
+			input: teacher,
+		});
 		const division = context.divisions.get(teacher.divisionName);
 		if (!division) throw new Error(`Missing division ${teacher.divisionName}`);
 		const existing = await deps.organizations.findActiveTeacherEntitlementGrant(
@@ -282,16 +307,16 @@ async function ensureAccompanistGrants(
 	accompanists: SeedAccompanistFixture[],
 ): Promise<number> {
 	for (const item of accompanists) {
-		const customer = await ensureCustomerProfile(
+		const customer = await ensureCustomerProfile({
 			deps,
-			context.organizationId,
-			context.nowIso,
-			{
+			organizationId: context.organizationId,
+			nowIso: context.nowIso,
+			input: {
 				shopifyCustomerGid: item.shopifyCustomerGid,
 				...item.contact,
 				mailingAddress: item.mailingAddress,
 			},
-		);
+		});
 		const current =
 			await deps.organizations.findCurrentAccompanistMembershipGrant({
 				organizationId: context.organizationId,
@@ -429,12 +454,12 @@ async function seedSingleOrganization(
 		org.id,
 		fixture.divisions,
 	);
-	const subtypes = await ensureSubtypes(
-		deps.organizations,
-		org.id,
+	const subtypes = await ensureSubtypes({
+		organizations: deps.organizations,
+		organizationId: org.id,
 		festivalId,
-		fixture.subtypes,
-	);
+		fixtures: fixture.subtypes,
+	});
 	const offering =
 		(await deps.organizations.findMembershipProductRecordByClass(
 			org.id,
