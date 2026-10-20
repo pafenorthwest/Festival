@@ -1,4 +1,5 @@
 import {
+	type FestivalRegistrationWindow,
 	type FestivalSummary,
 	isFestivalRegistrationOpen,
 	isValidIanaTimezone,
@@ -84,14 +85,32 @@ export function buildRegistrationWindowPayload(
 	opensAtDraft?: string | null,
 	closesAtDraft?: string | null,
 	timezone = "UTC",
+	original?: FestivalRegistrationWindow,
 ): {
 	isValid: boolean;
 	error: string;
 	payload: UpdateFestivalRegistrationWindowInput;
 } {
-	const rawOpens = opensAtDraft?.trim() || null;
-	const rawCloses = closesAtDraft?.trim() || null;
 	const tz = isValidIanaTimezone(timezone) ? timezone : "UTC";
+	// Minute-only inputs cannot retain seconds or distinguish repeated DST hours.
+	const preserveUnchanged = (
+		draft: string | null | undefined,
+		stored: string | null | undefined,
+	) => {
+		const value = draft?.trim() || null;
+		return original &&
+			value === (toRegistrationWindowInputValue(stored, tz) || null)
+			? stored?.trim() || null
+			: value;
+	};
+	const rawOpens = preserveUnchanged(
+		opensAtDraft,
+		original?.registrationOpensAt,
+	);
+	const rawCloses = preserveUnchanged(
+		closesAtDraft,
+		original?.registrationClosesAt,
+	);
 	const validation = validateFestivalRegistrationWindow(
 		{
 			registrationOpensAt: rawOpens,

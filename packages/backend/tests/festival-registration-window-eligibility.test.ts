@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import { randomUUID } from "node:crypto";
 import type { RepertoirePiece } from "@festival/common";
 import { InMemoryCheckoutRepository } from "../src/checkout/checkout-repository.js";
@@ -381,67 +381,151 @@ describe("Festival registration window eligibility (#263)", () => {
 		).toHaveLength(0);
 	});
 
-	it("enforces exact inclusive open and close boundary instants across selection, cart, and checkout", async () => {
+	it.each([
+		["2026-06-01T15:59:59.999Z", false],
+		["2026-06-01T16:00:00.000Z", true],
+		["2026-06-15T23:59:58.999Z", true],
+		["2026-06-15T23:59:59.000Z", false],
+		["2026-06-15T23:59:59.001Z", false],
+	] as const)("enforces the window at %s across selection, advisory, cart, and checkout", async (instant, isOpen) => {
 		const opensAtIso = "2026-06-01T16:00:00.000Z";
 		const closesAtIso = "2026-06-15T23:59:59.000Z";
 		const f = await createRegistrationWindowFixture({
-			now: new Date("2026-06-01T15:59:59.999Z"),
+			now: new Date(instant),
 			registrationOpensAt: opensAtIso,
 			registrationClosesAt: closesAtIso,
 		});
+		const selection =
+			await f.customerAccountService.listRegistrationEligibleClasses(
+				f.organization.slug,
+				f.festival.shortName,
+				f.sessionId,
+				f.child.id,
+				f.division.id,
+				f.teacherId,
+			);
+		expect(selection.classes[0]?.isRegistrationOpen).toBe(isOpen);
+		for (const mode of ["advisory", "cart"] as const) {
+			const eligibility = await f.checkoutService.evaluateEligibility({
+				organizationId: f.organization.id,
+				customerId: f.customer.id,
+				festivalId: f.festival.id,
+				mode,
+				items: [{ childId: f.child.id, festivalClassId: f.classConfig.id }],
+			});
+			expect(eligibility.isEligible).toBe(isOpen);
+			expect(eligibility.results[0]?.reasonCode).toBe(
+				isOpen ? "AVAILABLE" : "REGISTRATION_CLOSED",
+			);
+		}
+		if (isOpen) {
+			const result = await f.checkoutService.start(f.buildCheckoutInput());
+			expect(result.checkoutUrl).toContain("https://");
+		} else {
+			await expect(
+				f.checkoutService.start(f.buildCheckoutInput()),
+			).rejects.toMatchObject({
+				status: 400,
+				code: "registration_closed",
+			});
+		}
+		expect(f.getCreateCartCalls()).toBe(isOpen ? 1 : 0);
+	});
 
-		// 1. 1ms before open -> closed
-		const beforeOpenEval = await f.checkoutService.evaluateEligibility({
-			organizationId: f.organization.id,
-			customerId: f.customer.id,
-			festivalId: f.festival.id,
-			items: [{ childId: f.child.id, festivalClassId: f.classConfig.id }],
+	it.each([
+		"hasProcessingIntent",
+		"findOrganizationById",
+	] as const)("rejects without creating an intent when registration closes during %s", async (stage) => {
+		const closesAtIso = "2026-06-01T12:01:00.000Z";
+		const f = await createRegistrationWindowFixture({
+			registrationOpensAt: "2026-06-01T11:00:00.000Z",
+			registrationClosesAt: closesAtIso,
 		});
-		expect(beforeOpenEval.isEligible).toBe(false);
-		expect(beforeOpenEval.results[0]?.reasonCode).toBe("REGISTRATION_CLOSED");
+		const createIntent = spyOn(f.checkout, "createIntent");
+		if (stage === "hasProcessingIntent") {
+			const original = f.checkout.hasProcessingIntent.bind(f.checkout);
+			spyOn(f.checkout, stage).mockImplementationOnce(async (...args) => {
+				const result = await original(...args);
+				f.setNow(new Date(closesAtIso));
+				return result;
+			});
+		} else {
+			const original = f.organizations.findOrganizationById.bind(
+				f.organizations,
+			);
+			spyOn(f.organizations, stage).mockImplementationOnce(async (...args) => {
+				const result = await original(...args);
+				f.setNow(new Date(closesAtIso));
+				return result;
+			});
+		}
 		await expect(
 			f.checkoutService.start(f.buildCheckoutInput()),
 		).rejects.toMatchObject({
 			status: 400,
 			code: "registration_closed",
+			message: "Registration is closed for this festival.",
+			details: {
+				failures: [
+					expect.objectContaining({
+						childId: f.child.id,
+						festivalClassId: f.classConfig.id,
+						reasonCode: "REGISTRATION_CLOSED",
+					}),
+				],
+			},
 		});
+		expect(createIntent).not.toHaveBeenCalled();
 		expect(f.getCreateCartCalls()).toBe(0);
+		expect(f.getCheckoutCalls()).toBe(0);
+	});
 
-		// 2. Exact open instant -> eligible
-		f.setNow(new Date(opensAtIso));
-		const atOpenEval = await f.checkoutService.evaluateEligibility({
-			organizationId: f.organization.id,
-			customerId: f.customer.id,
-			festivalId: f.festival.id,
-			items: [{ childId: f.child.id, festivalClassId: f.classConfig.id }],
+	it.each([
+		"insertRegistrationMetadata",
+		"getShopifyIntegration",
+	] as const)("fails the intent and rejects without creating a cart when registration closes during %s", async (stage) => {
+		const closesAtIso = "2026-06-01T12:01:00.000Z";
+		const f = await createRegistrationWindowFixture({
+			registrationOpensAt: "2026-06-01T11:00:00.000Z",
+			registrationClosesAt: closesAtIso,
 		});
-		expect(atOpenEval.isEligible).toBe(true);
-		expect(atOpenEval.results[0]?.reasonCode).toBe("AVAILABLE");
-
-		// 3. Exact close instant -> eligible and checkout succeeds
-		f.setNow(new Date(closesAtIso));
-		const atCloseEval = await f.checkoutService.evaluateEligibility({
-			organizationId: f.organization.id,
-			customerId: f.customer.id,
-			festivalId: f.festival.id,
-			items: [{ childId: f.child.id, festivalClassId: f.classConfig.id }],
+		const createIntent = spyOn(f.checkout, "createIntent");
+		if (stage === "insertRegistrationMetadata") {
+			const original = f.checkout.insertRegistrationMetadata.bind(f.checkout);
+			spyOn(f.checkout, stage).mockImplementationOnce(async (...args) => {
+				const result = await original(...args);
+				f.setNow(new Date(closesAtIso));
+				return result;
+			});
+		} else {
+			const original = f.organizations.getShopifyIntegration.bind(
+				f.organizations,
+			);
+			spyOn(f.organizations, stage).mockImplementationOnce(async (...args) => {
+				const result = await original(...args);
+				f.setNow(new Date(closesAtIso));
+				return result;
+			});
+		}
+		const input = f.buildCheckoutInput();
+		await expect(f.checkoutService.start(input)).rejects.toMatchObject({
+			status: 400,
+			code: "registration_closed",
+			message: "Registration is closed for this festival.",
+			details: {
+				failures: [
+					expect.objectContaining({
+						childId: f.child.id,
+						festivalClassId: f.classConfig.id,
+						reasonCode: "REGISTRATION_CLOSED",
+					}),
+				],
+			},
 		});
-		expect(atCloseEval.isEligible).toBe(true);
-		expect(atCloseEval.results[0]?.reasonCode).toBe("AVAILABLE");
-		const checkoutRes = await f.checkoutService.start(f.buildCheckoutInput());
-		expect(checkoutRes.checkoutUrl).toContain("https://");
-		expect(f.getCreateCartCalls()).toBe(1);
-
-		// 4. 1ms after close -> closed
-		f.setNow(new Date("2026-06-15T23:59:59.001Z"));
-		const afterCloseEval = await f.checkoutService.evaluateEligibility({
-			organizationId: f.organization.id,
-			customerId: f.customer.id,
-			festivalId: f.festival.id,
-			items: [{ childId: f.child.id, festivalClassId: f.classConfig.id }],
-		});
-		expect(afterCloseEval.isEligible).toBe(false);
-		expect(afterCloseEval.results[0]?.reasonCode).toBe("REGISTRATION_CLOSED");
+		expect(createIntent).toHaveBeenCalledTimes(1);
+		expect(f.getCreateCartCalls()).toBe(0);
+		expect(f.getCheckoutCalls()).toBe(0);
+		expect(await f.checkout.getOutcome(input)).toEqual({ kind: "failed" });
 	});
 
 	it("evaluates local registration windows using the organization's configured IANA timezone", async () => {

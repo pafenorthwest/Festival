@@ -106,9 +106,8 @@ function resolveTimezoneDate(
 		minute: "2-digit",
 		second: "2-digit",
 	});
-	// If a local datetime falls inside a spring-forward DST gap (e.g. 02:30 AM
-	// when the clock jumps from 02:00 to 03:00), the 4-step convergence cleanly
-	// stabilizes and resolves to the post-gap boundary.
+	// Nonexistent local times in a spring-forward DST gap may not converge.
+	// Reject them unless the resolved instant matches the requested wall time.
 	let guessMs = targetUtcMs;
 	for (let i = 0; i < 4; i++) {
 		const diff = getLocalAsUtcMs(dtf, new Date(guessMs)) - targetUtcMs;
@@ -117,7 +116,8 @@ function resolveTimezoneDate(
 		}
 		guessMs -= diff;
 	}
-	return new Date(guessMs);
+	const resolved = new Date(guessMs);
+	return getLocalAsUtcMs(dtf, resolved) === targetUtcMs ? resolved : null;
 }
 
 function parseExplicitOffsetIso(raw: string): Date | null {
@@ -268,5 +268,5 @@ export function isFestivalRegistrationOpen(
 		return false;
 	}
 	const nowMs = now.getTime();
-	return nowMs >= opensAt.getTime() && nowMs <= closesAt.getTime();
+	return nowMs >= opensAt.getTime() && nowMs < closesAt.getTime();
 }

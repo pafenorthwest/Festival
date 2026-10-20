@@ -77,7 +77,7 @@ describe("festival-registration-window", () => {
 		});
 	});
 
-	describe("exact inclusive boundaries", () => {
+	describe("inclusive opening and exclusive closing boundaries", () => {
 		const window = {
 			registrationOpensAt: "2026-04-01T09:00:00.000Z",
 			registrationClosesAt: "2026-04-15T17:00:00.000Z",
@@ -92,11 +92,20 @@ describe("festival-registration-window", () => {
 			).toBeTrue();
 		});
 
-		it("returns true when now equals closesAt exactly", () => {
+		it("returns false when now equals closesAt exactly", () => {
 			expect(
 				isFestivalRegistrationOpen(
 					window,
 					new Date("2026-04-15T17:00:00.000Z"),
+				),
+			).toBeFalse();
+		});
+
+		it("returns true 1ms before closesAt", () => {
+			expect(
+				isFestivalRegistrationOpen(
+					window,
+					new Date("2026-04-15T16:59:59.999Z"),
 				),
 			).toBeTrue();
 		});
@@ -184,10 +193,17 @@ describe("festival-registration-window", () => {
 			expect(
 				isFestivalRegistrationOpen(
 					laWindow,
-					new Date("2026-04-03T06:59:59.999Z"),
+					new Date("2026-04-03T06:59:59.998Z"),
 					"America/Los_Angeles",
 				),
 			).toBeTrue();
+			expect(
+				isFestivalRegistrationOpen(
+					laWindow,
+					new Date("2026-04-03T06:59:59.999Z"),
+					"America/Los_Angeles",
+				),
+			).toBeFalse();
 			expect(
 				isFestivalRegistrationOpen(
 					laWindow,
@@ -210,6 +226,70 @@ describe("festival-registration-window", () => {
 				errors: [],
 				opensAtIso: "2026-04-01T16:00:00.000Z",
 				closesAtIso: "2026-04-15T17:00:00.000Z",
+			});
+		});
+
+		it.each([
+			"America/Los_Angeles",
+			"America/New_York",
+		])("rejects nonexistent local times in %s", (timezone) => {
+			expect(
+				parseRegistrationWindowBoundary(
+					"2026-03-08T02:30:15.125",
+					"open",
+					timezone,
+				),
+			).toBeNull();
+			const window = {
+				registrationOpensAt: "2026-03-08T02:30",
+				registrationClosesAt: "2026-03-08T04:00",
+			};
+			expect(validateFestivalRegistrationWindow(window, timezone)).toEqual({
+				isValid: false,
+				errors: ["Registration open timestamp is invalid."],
+				opensAtIso: null,
+				closesAtIso: null,
+			});
+			expect(
+				isFestivalRegistrationOpen(
+					window,
+					new Date("2026-03-08T09:45:00.000Z"),
+					timezone,
+				),
+			).toBeFalse();
+		});
+
+		it("preserves valid local times and fractional precision around the DST gap", () => {
+			expect(
+				validateFestivalRegistrationWindow(
+					{
+						registrationOpensAt: "2026-03-08T01:59:59.999",
+						registrationClosesAt: "2026-03-08T03:00:00.001",
+					},
+					"America/Los_Angeles",
+				),
+			).toEqual({
+				isValid: true,
+				errors: [],
+				opensAtIso: "2026-03-08T09:59:59.999Z",
+				closesAtIso: "2026-03-08T10:00:00.001Z",
+			});
+		});
+
+		it("accepts explicit offsets even when the wall time falls in the organization DST gap", () => {
+			expect(
+				validateFestivalRegistrationWindow(
+					{
+						registrationOpensAt: "2026-03-08T02:30:00.125-08:00",
+						registrationClosesAt: "2026-03-08T04:00:00-07:00",
+					},
+					"America/Los_Angeles",
+				),
+			).toEqual({
+				isValid: true,
+				errors: [],
+				opensAtIso: "2026-03-08T10:30:00.125Z",
+				closesAtIso: "2026-03-08T11:00:00.000Z",
 			});
 		});
 	});

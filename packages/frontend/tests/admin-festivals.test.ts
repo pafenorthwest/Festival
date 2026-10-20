@@ -68,6 +68,114 @@ afterEach(() => {
 	globalThis.fetch = originalFetch;
 });
 
+describe("Registration window editor payloads", () => {
+	it.each([
+		{
+			registrationOpensAt: "2026-05-01",
+			registrationClosesAt: "2026-05-15",
+		},
+		{
+			registrationOpensAt: "2026-05-01T09:00:12.345Z",
+			registrationClosesAt: "2026-05-15T23:59:59.999Z",
+		},
+	])("preserves unchanged date boundaries and timestamp precision: %j", (original) => {
+		const result = buildRegistrationWindowPayload(
+			toRegistrationWindowInputValue(original.registrationOpensAt),
+			toRegistrationWindowInputValue(original.registrationClosesAt),
+			"UTC",
+			original,
+		);
+		expect(result.isValid).toBe(true);
+		expect(result.payload).toEqual(original);
+	});
+
+	it("preserves the second repeated DST hour on an unchanged save", () => {
+		const original = {
+			registrationOpensAt: "2026-10-31T16:00:12.345Z",
+			registrationClosesAt: "2026-11-01T09:30:00.000Z",
+		};
+		const timezone = "America/Los_Angeles";
+		const closesDraft = toRegistrationWindowInputValue(
+			original.registrationClosesAt,
+			timezone,
+		);
+		expect(closesDraft).toBe("2026-11-01T01:30");
+		const result = buildRegistrationWindowPayload(
+			toRegistrationWindowInputValue(original.registrationOpensAt, timezone),
+			closesDraft,
+			timezone,
+			original,
+		);
+		expect(result.isValid).toBe(true);
+		expect(result.payload).toEqual(original);
+	});
+
+	it("preserves each unchanged endpoint while validating edits against the full window", () => {
+		const original = {
+			registrationOpensAt: "2026-10-31T16:00:12.345Z",
+			registrationClosesAt: "2026-11-01T09:30:00.000Z",
+		};
+		const timezone = "America/Los_Angeles";
+		const closesDraft = toRegistrationWindowInputValue(
+			original.registrationClosesAt,
+			timezone,
+		);
+		const changedOpen = buildRegistrationWindowPayload(
+			"2026-11-01T01:45",
+			closesDraft,
+			timezone,
+			original,
+		);
+		expect(changedOpen.isValid).toBe(true);
+		expect(changedOpen.payload).toEqual({
+			registrationOpensAt: "2026-11-01T01:45",
+			registrationClosesAt: original.registrationClosesAt,
+		});
+
+		const changedClose = buildRegistrationWindowPayload(
+			toRegistrationWindowInputValue(original.registrationOpensAt, timezone),
+			"2026-11-02T01:30",
+			timezone,
+			original,
+		);
+		expect(changedClose.isValid).toBe(true);
+		expect(changedClose.payload).toEqual({
+			registrationOpensAt: original.registrationOpensAt,
+			registrationClosesAt: "2026-11-02T01:30",
+		});
+
+		const invalidOrder = buildRegistrationWindowPayload(
+			"2026-11-01T03:00",
+			closesDraft,
+			timezone,
+			original,
+		);
+		expect(invalidOrder.isValid).toBe(false);
+		expect(invalidOrder.error).toContain("on or after the open timestamp");
+	});
+
+	it("allows clearing both endpoints and rejects clearing only one", () => {
+		const original = {
+			registrationOpensAt: "2026-05-01T09:00:12.345Z",
+			registrationClosesAt: "2026-05-15T23:59:59.999Z",
+		};
+		const cleared = buildRegistrationWindowPayload(null, null, "UTC", original);
+		expect(cleared.isValid).toBe(true);
+		expect(cleared.payload).toEqual({
+			registrationOpensAt: null,
+			registrationClosesAt: null,
+		});
+		expect(
+			buildRegistrationWindowPayload(
+				null,
+				toRegistrationWindowInputValue(original.registrationClosesAt),
+				"UTC",
+				original,
+			).isValid,
+		).toBe(false);
+	});
+});
+
 describe("Festival Admin class subtype setup", () => {
 	it("loads and creates class subtypes in the selected festival context", () => {
 		expect(page).toContain("listFestivalClassSubtypes");

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
 	AccompanistMembershipGrant,
 	ClassCheckoutLineItemInput,
+	ClassEligibilityResult,
 	ClassEntitlement,
 	EntitlementGrantSnapshot,
 	EvaluatePurchaseEligibilityResponse,
@@ -121,6 +122,7 @@ interface LineValidationCaches {
 
 export type ClassCheckoutFailureStage =
 	| "registration_metadata"
+	| "registration_window"
 	| "load_integration"
 	| "create_cart"
 	| "attach_cart"
@@ -361,14 +363,6 @@ export class ClassCheckoutService {
 		) {
 			throw new AppError("Festival class configuration not found.", 404);
 		}
-		await this.checkEligibility(
-			input.organizationId,
-			input.customerId,
-			targetFestivalId,
-			lineItems,
-			caches,
-			targetFestival,
-		);
 		if (
 			await this.checkout.hasProcessingIntent(
 				input.organizationId,
@@ -390,6 +384,13 @@ export class ClassCheckoutService {
 		const expiresAtIso = new Date(
 			currentTime.getTime() + 30 * 60_000,
 		).toISOString();
+		const eligibilityResults = await this.checkEligibility(
+			input.organizationId,
+			input.customerId,
+			targetFestivalId,
+			lineItems,
+			caches,
+		);
 		const outcome = await this.createMultiLineIntent(
 			input,
 			validatedLines,
@@ -404,6 +405,7 @@ export class ClassCheckoutService {
 		return this.executeStorefrontCheckout(
 			input,
 			targetFestivalId,
+			eligibilityResults,
 			outcome.intent,
 			validatedLines,
 			currencyCode,
@@ -661,8 +663,7 @@ export class ClassCheckoutService {
 		festivalId: string,
 		lineItems: ClassCheckoutLineItemInput[],
 		caches: LineValidationCaches,
-		targetFestival?: FestivalRecord,
-	): Promise<void> {
+	): Promise<ClassEligibilityResult[]> {
 		const eligibility = await this.evaluateEligibility(
 			{
 				organizationId,
@@ -674,7 +675,6 @@ export class ClassCheckoutService {
 				mode: "cart",
 			},
 			{
-				targetFestival,
 				children: caches.children,
 				classes: caches.classConfigs,
 			},
@@ -684,6 +684,30 @@ export class ClassCheckoutService {
 			eligibility.results.some((r) => !r.isEligible)
 		) {
 			throw buildEligibilityRejectionError(eligibility.results);
+		}
+		return eligibility.results;
+	}
+
+	private async requireRegistrationOpen(
+		organizationId: string,
+		festivalId: string,
+		eligibilityResults: readonly ClassEligibilityResult[],
+	): Promise<void> {
+		const [festivals, timezone] = await Promise.all([
+			this.organizations.listFestivals(organizationId),
+			this.organizations.getOrganizationTimezone(organizationId),
+		]);
+		const festival = resolveTargetFestival(festivals, { festivalId });
+		if (!isFestivalRegistrationOpen(festival, this.now(), timezone)) {
+			throw buildEligibilityRejectionError(
+				eligibilityResults.map((result) => ({
+					...result,
+					eligible: false,
+					isEligible: false,
+					reasonCode: "REGISTRATION_CLOSED",
+					message: "Registration is closed for this festival.",
+				})),
+			);
 		}
 	}
 
@@ -782,6 +806,7 @@ export class ClassCheckoutService {
 	private async createAndVerifyCart(params: {
 		input: StartClassCheckoutInput;
 		festivalId: string;
+		eligibilityResults: readonly ClassEligibilityResult[];
 		intent: CheckoutIntentRecord;
 		validatedLines: ValidatedLineItem[];
 		intentLines: readonly CheckoutIntentLineItemRecord[];
@@ -821,6 +846,12 @@ export class ClassCheckoutService {
 			};
 		});
 
+		setStage("registration_window");
+		await this.requireRegistrationOpen(
+			input.organizationId,
+			festivalId,
+			params.eligibilityResults,
+		);
 		setStage("create_cart");
 		const cartResponse = await this.storefront.createCart({
 			organizationId: input.organizationId,
@@ -916,6 +947,7 @@ export class ClassCheckoutService {
 	private async executeStorefrontCheckout(
 		input: StartClassCheckoutInput,
 		festivalId: string,
+		eligibilityResults: readonly ClassEligibilityResult[],
 		intent: CheckoutIntentRecord,
 		validatedLines: ValidatedLineItem[],
 		currencyCode: string,
@@ -947,6 +979,7 @@ export class ClassCheckoutService {
 			return await this.createAndVerifyCart({
 				input,
 				festivalId,
+				eligibilityResults,
 				intent,
 				validatedLines,
 				intentLines,
@@ -958,7 +991,11 @@ export class ClassCheckoutService {
 				},
 			});
 		} catch (error) {
-			if (error instanceof AppError && error.status === 400) {
+			if (
+				error instanceof AppError &&
+				error.status === 400 &&
+				error.code !== "registration_closed"
+			) {
 				throw error;
 			}
 			return this.reportAndMarkFailed({
@@ -1042,7 +1079,10 @@ export class ClassCheckoutService {
 			});
 			throw checkoutFailureError(markFailedError);
 		}
-		throw checkoutFailureError(params.error);
+		throw params.error instanceof AppError &&
+			params.error.code === "registration_closed"
+			? params.error
+			: checkoutFailureError(params.error);
 	}
 
 	private logFailure(params: {

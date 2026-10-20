@@ -40,6 +40,7 @@ export function FestivalRegistrationWindowEditor(
 			clear ? null : opensDraft(),
 			clear ? null : closesDraft(),
 			props.timezone,
+			clear ? undefined : props.festival,
 		);
 		if (!check.isValid) {
 			setError(check.error);

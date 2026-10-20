@@ -623,8 +623,8 @@ describe("ClassCheckoutService", () => {
 			f.classConfig.id,
 			undefined,
 		);
-		// Eligibility still resolves its festival independently; class resolution does not scan festivals.
-		expect(listFestivals).toHaveBeenCalledTimes(1);
+		// Eligibility and the final cart window guard refresh the festival; class resolution does not scan festivals.
+		expect(listFestivals).toHaveBeenCalledTimes(2);
 	});
 
 	it("returns 404 for an inactive class on the named festival checkout", async () => {
