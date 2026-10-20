@@ -4,7 +4,7 @@ import type {
 	FestivalSummary,
 	SubjectFestivalAvailability,
 } from "@festival/common";
-import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createSignal, For, Index, onCleanup, onMount, Show } from "solid-js";
 import { Button } from "../components/Button.js";
 import {
 	getCustomerFestivalAvailability,
@@ -283,16 +283,16 @@ export function CustomerAccountAvailabilityPage(props: { slug: string }) {
 						</div>
 
 						<div class="availability-subjects-list">
-							<For each={subjects()}>
+							<Index each={subjects()}>
 								{(subject) => (
 									<SubjectAvailabilitySection
-										subject={subject}
+										subject={subject()}
 										visibleDates={visibleDates()}
 										disabled={saving()}
 										onToggleHour={handleToggleHour}
 									/>
 								)}
-							</For>
+							</Index>
 						</div>
 
 						<div class="availability-actions">
