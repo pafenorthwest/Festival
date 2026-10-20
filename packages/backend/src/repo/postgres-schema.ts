@@ -76,6 +76,8 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			name TEXT NOT NULL,
 			start_date DATE NOT NULL,
 			end_date DATE NOT NULL,
+			registration_opens_at TIMESTAMPTZ NULL,
+			registration_closes_at TIMESTAMPTZ NULL,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			UNIQUE (id, organization_id)
 		);
@@ -902,6 +904,12 @@ export async function initializePostgresSchema(schema: string): Promise<void> {
 		);
 		await transaction.unsafe(
 			`ALTER TABLE IF EXISTS ${safeSchema}.repertoire_works ADD COLUMN IF NOT EXISTS imslp_url TEXT;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.festivals ADD COLUMN IF NOT EXISTS registration_opens_at TIMESTAMPTZ;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.festivals ADD COLUMN IF NOT EXISTS registration_closes_at TIMESTAMPTZ;`,
 		);
 	});
 	initializations.set(safeSchema, initialization);

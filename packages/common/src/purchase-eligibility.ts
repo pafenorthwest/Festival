@@ -360,6 +360,17 @@ function evaluateItemEligibility(
 	itemIndex: number,
 	ctx: EvaluationContext,
 ): ClassEligibilityResult {
+	const targetClass = ctx.classesMap.get(item.festivalClassId);
+	const isTargetValid = Boolean(
+		targetClass?.isActive &&
+			targetClass.organizationId === ctx.organizationId &&
+			targetClass.festivalId === ctx.festivalId,
+	);
+	const capacityMetadata =
+		isTargetValid && targetClass
+			? getClassCapacityMetadata(targetClass, ctx)
+			: null;
+
 	if (!ctx.isRegistrationOpen) {
 		return {
 			childId: item.childId,
@@ -368,16 +379,12 @@ function evaluateItemEligibility(
 			isEligible: false,
 			reasonCode: "REGISTRATION_CLOSED",
 			message: "Registration is closed for this festival.",
+			...(capacityMetadata ?? {}),
 			...(item.id ? { lineItemId: item.id } : {}),
 		};
 	}
 
-	const targetClass = ctx.classesMap.get(item.festivalClassId);
-	if (
-		!targetClass?.isActive ||
-		targetClass.organizationId !== ctx.organizationId ||
-		targetClass.festivalId !== ctx.festivalId
-	) {
+	if (!isTargetValid || !targetClass) {
 		return {
 			childId: item.childId,
 			festivalClassId: item.festivalClassId,
@@ -388,8 +395,6 @@ function evaluateItemEligibility(
 			...(item.id ? { lineItemId: item.id } : {}),
 		};
 	}
-
-	const capacityMetadata = getClassCapacityMetadata(targetClass, ctx);
 
 	const duplicateResult = checkDuplicateRegistration(item, itemIndex, ctx);
 	if (duplicateResult) {

@@ -35,6 +35,8 @@ interface FixtureOptions {
 	snapshotValidDays?: number;
 	snapshotCreatedDaysAgo?: number;
 	isPrimaryFestival?: boolean;
+	registrationOpensAt?: string | null;
+	registrationClosesAt?: string | null;
 	maximumPerformancePieces?: number;
 	performanceMinutes?: number;
 	storeDomain?: string;
@@ -116,6 +118,14 @@ async function createFixture(options: FixtureOptions = {}) {
 			name: "PNW Festival 2026",
 			startDate: "2026-11-01",
 			endDate: "2026-11-10",
+			registrationOpensAt:
+				options.registrationOpensAt !== undefined
+					? options.registrationOpensAt
+					: "2026-01-01T00:00:00.000Z",
+			registrationClosesAt:
+				options.registrationClosesAt !== undefined
+					? options.registrationClosesAt
+					: "2027-12-31T23:59:59.999Z",
 		});
 		await organizations.setPrimaryFestival(organization.id, festival.id);
 
@@ -685,6 +695,8 @@ describe("ClassCheckoutService", () => {
 			name: "PNW Festival 2027",
 			startDate: "2027-11-01",
 			endDate: "2027-11-10",
+			registrationOpensAt: "2026-01-01T00:00:00.000Z",
+			registrationClosesAt: "2027-12-31T23:59:59.999Z",
 		});
 
 		const subtype = await f.organizations.createRegistrationCatalogValue({

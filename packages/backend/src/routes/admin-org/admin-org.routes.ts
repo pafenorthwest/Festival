@@ -1,4 +1,7 @@
-import type { CreateFestivalInput } from "@festival/common";
+import type {
+	CreateFestivalInput,
+	UpdateFestivalRegistrationWindowInput,
+} from "@festival/common";
 import { Hono } from "hono";
 import {
 	type ApiVariables,
@@ -164,6 +167,58 @@ export function buildAdminOrgRoutes(options: {
 					await organizationService.getAdminFestivalForTenant(
 						getRequiredTenant(c),
 						c.req.param("festivalShortName"),
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.put(
+		"/organizations/:slug/admin/festivals/:festivalShortName/registration-window",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				const payload = await c.req.json();
+				assertAllowedFields(
+					payload,
+					["registrationOpensAt", "registrationClosesAt"],
+					"Festival registration window request",
+				);
+				return c.json(
+					await organizationService.updateFestivalRegistrationWindowForTenant(
+						getRequiredTenant(c),
+						c.req.param("festivalShortName"),
+						payload as UpdateFestivalRegistrationWindowInput,
+					),
+				);
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.patch(
+		"/organizations/:slug/admin/festivals/:festivalShortName/registration-window",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				const payload = await c.req.json();
+				assertAllowedFields(
+					payload,
+					["registrationOpensAt", "registrationClosesAt"],
+					"Festival registration window request",
+				);
+				return c.json(
+					await organizationService.updateFestivalRegistrationWindowForTenant(
+						getRequiredTenant(c),
+						c.req.param("festivalShortName"),
+						payload as UpdateFestivalRegistrationWindowInput,
 					),
 				);
 			} catch (error) {

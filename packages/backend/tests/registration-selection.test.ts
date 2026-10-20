@@ -64,6 +64,8 @@ async function createSelectionFixture() {
 		shortName: "spring-2026",
 		startsOn: "2026-06-01",
 		endsOn: "2026-06-10",
+		registrationOpensAt: "2026-01-01T00:00:00.000Z",
+		registrationClosesAt: "2026-12-31T23:59:59.999Z",
 		status: "draft",
 	});
 

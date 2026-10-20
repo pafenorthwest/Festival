@@ -1,11 +1,24 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import {
+	createFestival,
 	createFestivalClassSubtype,
 	updateAdminClassSubtype,
+	updateFestivalRegistrationWindow,
 } from "../src/lib/api.js";
+import {
+	buildRegistrationWindowPayload,
+	formatFestivalRegistrationWindow,
+	toRegistrationWindowInputValue,
+} from "../src/pages/adminFestivalsHelpers.js";
 
 const page = await Bun.file(
 	new URL("../src/pages/AdminFestivalsPage.tsx", import.meta.url),
+).text();
+const windowEditor = await Bun.file(
+	new URL(
+		"../src/components/FestivalRegistrationWindowEditor.tsx",
+		import.meta.url,
+	),
 ).text();
 const classesPage = await Bun.file(
 	new URL("../src/pages/FestivalAdminClassesPage.tsx", import.meta.url),
@@ -114,6 +127,110 @@ describe("Festival Admin class subtype setup", () => {
 		expect(fetchCalls[1].init?.method).toBe("POST");
 		expect(JSON.parse(fetchCalls[1].init?.body as string)).toEqual({
 			requiredSubtypeId: "prereq-2",
+		});
+	});
+
+	it("displays and edits festival registration windows and keeps AdminFestivalsPage under 500 lines", async () => {
+		expect(page.split("\n").length).toBeLessThan(500);
+		expect(page).toContain("Registration window not set (Closed)");
+		expect(page).toContain("FestivalRegistrationWindowEditor");
+		expect(windowEditor).toContain("Registration opens at");
+		expect(windowEditor).toContain("Registration closes at");
+		expect(windowEditor).toContain("Save registration window");
+		expect(windowEditor).toContain("Clear window");
+		expect(windowEditor).toContain("Registration opens at (optional)");
+		expect(windowEditor).toContain("Registration closes at (optional)");
+		expect(api).toContain("export function updateFestivalRegistrationWindow");
+		expect(api).toContain("/registration-window");
+
+		expect(
+			formatFestivalRegistrationWindow(
+				{ registrationOpensAt: null, registrationClosesAt: null },
+				"UTC",
+			),
+		).toBe("Registration window not set (Closed)");
+
+		expect(
+			formatFestivalRegistrationWindow(
+				{
+					registrationOpensAt: "2026-05-01T00:00:00.000Z",
+					registrationClosesAt: "2026-05-15T23:59:00.000Z",
+				},
+				"UTC",
+				new Date("2026-05-10T12:00:00.000Z"),
+			),
+		).toBe("2026-05-01 00:00 – 2026-05-15 23:59 (Open)");
+
+		expect(
+			formatFestivalRegistrationWindow(
+				{
+					registrationOpensAt: "2026-05-01T00:00:00.000Z",
+					registrationClosesAt: "2026-05-15T23:59:00.000Z",
+				},
+				"UTC",
+				new Date("2026-06-01T00:00:00.000Z"),
+			),
+		).toBe("2026-05-01 00:00 – 2026-05-15 23:59 (Closed)");
+
+		expect(
+			toRegistrationWindowInputValue("2026-05-01T14:30:00.000Z", "UTC"),
+		).toBe("2026-05-01T14:30");
+
+		const invalidHalf = buildRegistrationWindowPayload(
+			"2026-05-01T09:00",
+			"",
+			"UTC",
+		);
+		expect(invalidHalf.isValid).toBe(false);
+		expect(invalidHalf.error).toContain("Both registration open and close");
+
+		const validPayload = buildRegistrationWindowPayload(
+			"2026-05-01T09:00",
+			"2026-05-15T17:00",
+			"UTC",
+		);
+		expect(validPayload.isValid).toBe(true);
+		expect(validPayload.payload).toEqual({
+			registrationOpensAt: "2026-05-01T09:00",
+			registrationClosesAt: "2026-05-15T17:00",
+		});
+
+		mockFetch();
+		await createFestival("test-token", "pafe", {
+			shortName: "spring-2026",
+			name: "Spring Festival 2026",
+			startDate: "2026-06-01",
+			endDate: "2026-06-05",
+			registrationOpensAt: "2026-05-01T09:00",
+			registrationClosesAt: "2026-05-15T17:00",
+		});
+		expect(fetchCalls[0].url).toBe("/api/organizations/pafe/admin/festivals");
+		expect(fetchCalls[0].init?.method).toBe("POST");
+		expect(JSON.parse(fetchCalls[0].init?.body as string)).toEqual({
+			shortName: "spring-2026",
+			name: "Spring Festival 2026",
+			startDate: "2026-06-01",
+			endDate: "2026-06-05",
+			registrationOpensAt: "2026-05-01T09:00",
+			registrationClosesAt: "2026-05-15T17:00",
+		});
+
+		await updateFestivalRegistrationWindow(
+			"test-token",
+			"pafe",
+			"spring-2026",
+			{
+				registrationOpensAt: "2026-05-02T09:00",
+				registrationClosesAt: "2026-05-20T17:00",
+			},
+		);
+		expect(fetchCalls[1].url).toBe(
+			"/api/organizations/pafe/admin/festivals/spring-2026/registration-window",
+		);
+		expect(fetchCalls[1].init?.method).toBe("PUT");
+		expect(JSON.parse(fetchCalls[1].init?.body as string)).toEqual({
+			registrationOpensAt: "2026-05-02T09:00",
+			registrationClosesAt: "2026-05-20T17:00",
 		});
 	});
 });

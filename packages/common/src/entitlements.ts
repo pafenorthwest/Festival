@@ -447,4 +447,5 @@ export interface RegistrationEligibleClass {
 	readonly capacity: number;
 	readonly placedCount?: number;
 	readonly availability?: ClassAvailabilityStatus;
+	readonly isRegistrationOpen?: boolean;
 }

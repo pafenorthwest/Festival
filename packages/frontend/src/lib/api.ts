@@ -102,6 +102,7 @@ import type {
 	TriggerMessageEventInput,
 	UpdateCustomerProfileInput,
 	UpdateFestivalClassInput,
+	UpdateFestivalRegistrationWindowInput,
 	UpdateMessageTemplateInput,
 	UpdateOrganizationDivisionInput,
 	UpdateOrganizationTimezoneInput,
@@ -927,6 +928,22 @@ export function setPrimaryFestival(
 	return requestJson<CreateFestivalResponse>(
 		`/api/organizations/${encodeURIComponent(slug)}/admin/festivals/${encodeURIComponent(festivalShortName)}/primary`,
 		{ method: "POST" },
+		idToken,
+	);
+}
+
+export function updateFestivalRegistrationWindow(
+	idToken: string,
+	slug: string,
+	festivalShortName: string,
+	input: UpdateFestivalRegistrationWindowInput,
+) {
+	return requestJson<CreateFestivalResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/festivals/${encodeURIComponent(festivalShortName)}/registration-window`,
+		{
+			method: "PUT",
+			body: JSON.stringify(input),
+		},
 		idToken,
 	);
 }

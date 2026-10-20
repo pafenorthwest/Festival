@@ -5,12 +5,20 @@ import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { AccessDeniedPanel } from "../components/AccessDeniedPanel.js";
 import { Button } from "../components/Button.js";
 import {
+	CreateFestivalForm,
+	FestivalRegistrationWindowEditor,
+} from "../components/FestivalRegistrationWindowEditor.js";
+import {
 	createFestivalClassSubtype,
 	listFestivalClassSubtypes,
 	setPrimaryFestival,
 	updateAdminClassSubtype,
+	updateFestivalRegistrationWindow,
 } from "../lib/api.js";
 import { buildFestivalAdminClassesPath } from "../lib/routes.js";
+import { formatFestivalRegistrationWindow } from "./adminFestivalsHelpers.js";
+
+export { updateFestivalRegistrationWindow };
 
 interface AdminFestivalsPageProps {
 	app: FestivalAppController;
@@ -32,6 +40,10 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 	const [isLoadingSubtypes, setIsLoadingSubtypes] = createSignal(false);
 	const [isCreatingSubtype, setIsCreatingSubtype] = createSignal(false);
 	const [isUpdatingSubtype, setIsUpdatingSubtype] = createSignal(false);
+	const [editingWindowSlug, setEditingWindowSlug] = createSignal<string | null>(
+		null,
+	);
+	const orgTimezone = () => props.app.organization()?.timezone ?? "UTC";
 
 	createEffect(() => {
 		const route = props.app.route();
@@ -41,9 +53,8 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 			route.kind !== "org-admin-festivals" ||
 			!user ||
 			!props.app.isAdminMember()
-		) {
+		)
 			return;
-		}
 		void (async () => {
 			setIsLoadingSubtypes(true);
 			setSubtypeError("");
@@ -51,12 +62,12 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 				const token = await user.getIdToken();
 				const entries = await Promise.all(
 					festivals.map(async (festival) => {
-						const response = await listFestivalClassSubtypes(
+						const res = await listFestivalClassSubtypes(
 							token,
 							route.slug,
 							festival.shortName,
 						);
-						return [festival.shortName, response.classSubtypes] as const;
+						return [festival.shortName, res.classSubtypes] as const;
 					}),
 				);
 				setClassSubtypesByFestival(Object.fromEntries(entries));
@@ -74,8 +85,7 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 
 	function getRequiredSubtypeName(id: string): string {
 		const subtypes = classSubtypesByFestival()[selectedFestivalSlug()] ?? [];
-		const match = subtypes.find((s) => s.id === id);
-		return match ? match.displayName : id;
+		return subtypes.find((s) => s.id === id)?.displayName ?? id;
 	}
 
 	function startEditing(subtype: RegistrationCatalogValue) {
@@ -95,7 +105,6 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 		const user = props.app.firebaseUser();
 		const festivalSlug = selectedFestivalSlug();
 		if (route.kind !== "org-admin-festivals" || !user || !festivalSlug) return;
-
 		setIsUpdatingSubtype(true);
 		setSubtypeError("");
 		try {
@@ -104,9 +113,7 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 				token,
 				route.slug,
 				subtypeId,
-				{
-					requiredSubtypeId: editingRequiredSubtypeId() || null,
-				},
+				{ requiredSubtypeId: editingRequiredSubtypeId() || null },
 			);
 			setClassSubtypesByFestival((current) => ({
 				...current,
@@ -163,6 +170,33 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 		}
 	}
 
+	async function handleSetPrimary(shortName: string, name: string) {
+		const current = props.app.festivals().find((item) => item.isPrimary);
+		if (
+			!confirm(
+				`Make ${name} primary instead of ${current?.name ?? "the current Festival"}?`,
+			)
+		)
+			return;
+		const user = props.app.firebaseUser();
+		if (!user) return;
+		props.app.setIsBusy(true);
+		try {
+			await setPrimaryFestival(
+				await user.getIdToken(),
+				(props.app.route() as { slug: string }).slug,
+				shortName,
+			);
+			location.reload();
+		} finally {
+			props.app.setIsBusy(false);
+		}
+	}
+
+	const currentSubtypes = () =>
+		classSubtypesByFestival()[selectedFestivalSlug()] ?? [];
+	const currentSlug = () => (props.app.route() as { slug: string }).slug;
+
 	return (
 		<Show
 			when={props.app.isAdminMember()}
@@ -183,6 +217,10 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 							const hasClassSubtypes = () =>
 								(classSubtypesByFestival()[festival.shortName] ?? []).length >
 								0;
+							const windowSummary = () =>
+								festival.registrationOpensAt && festival.registrationClosesAt
+									? formatFestivalRegistrationWindow(festival, orgTimezone())
+									: "Registration window not set (Closed)";
 							return (
 								<div class="festival-row">
 									<strong>{festival.name}</strong>
@@ -192,6 +230,16 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 									</span>
 									<span>{formatDateOnly(festival.startDate)}</span>
 									<span>{formatDateOnly(festival.endDate)}</span>
+									<span class="festival-registration-window">
+										{windowSummary()}
+									</span>
+									<Button
+										type="button"
+										variant="secondary"
+										onClick={() => setEditingWindowSlug(festival.shortName)}
+									>
+										Registration window
+									</Button>
 									<Button
 										type="button"
 										class="festival-classes-button"
@@ -209,7 +257,7 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 										onClick={() =>
 											props.app.navigate(
 												buildFestivalAdminClassesPath(
-													(props.app.route() as { slug: string }).slug,
+													currentSlug(),
 													festival.shortName,
 												),
 											)
@@ -229,112 +277,49 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 										<Button
 											type="button"
 											disabled={props.app.isBusy()}
-											onClick={async () => {
-												const current = props.app
-													.festivals()
-													.find((item) => item.isPrimary);
-												if (
-													!confirm(
-														`Make ${festival.name} primary instead of ${current?.name ?? "the current Festival"}?`,
-													)
-												)
-													return;
-												const user = props.app.firebaseUser();
-												if (!user) return;
-												props.app.setIsBusy(true);
-												try {
-													await setPrimaryFestival(
-														await user.getIdToken(),
-														(props.app.route() as { slug: string }).slug,
-														festival.shortName,
-													);
-													location.reload();
-												} finally {
-													props.app.setIsBusy(false);
-												}
-											}}
+											onClick={() =>
+												void handleSetPrimary(festival.shortName, festival.name)
+											}
 										>
 											Make primary
 										</Button>
+									</Show>
+									<Show when={editingWindowSlug() === festival.shortName}>
+										<FestivalRegistrationWindowEditor
+											festival={festival}
+											slug={currentSlug()}
+											timezone={orgTimezone()}
+											getIdToken={async () =>
+												(await props.app.firebaseUser()?.getIdToken()) ?? null
+											}
+											onSaved={(updated) => {
+												props.app.setFestivals((current) =>
+													current.map((item) =>
+														item.shortName === festival.shortName
+															? updated
+															: item,
+													),
+												);
+												setEditingWindowSlug(null);
+											}}
+											onCancel={() => setEditingWindowSlug(null)}
+										/>
 									</Show>
 								</div>
 							);
 						}}
 					</For>
 				</div>
-				<label class="field">
-					<span>Festival short name</span>
-					<input
-						type="text"
-						maxLength={64}
-						value={props.app.festivalDraft().shortName}
-						onInput={(event) =>
-							props.app.setFestivalDraft((current) => ({
-								...current,
-								shortName: event.currentTarget.value.toLowerCase(),
-							}))
-						}
-					/>
-				</label>
-				<label class="field">
-					<span>Festival name</span>
-					<input
-						type="text"
-						maxLength={255}
-						value={props.app.festivalDraft().name}
-						onInput={(event) => {
-							props.app.setFestivalNameTouched(true);
-							props.app.setFestivalDraft((current) => ({
-								...current,
-								name: event.currentTarget.value,
-							}));
-						}}
-						aria-invalid={props.app.hasFestivalNameError()}
-					/>
-				</label>
-				<Show
-					when={
-						props.app.shouldShowFestivalNameValidation() &&
-						props.app.festivalNameValidationMessage()
-					}
-				>
-					<section class="banner error-banner validation-banner">
-						{props.app.festivalNameValidationMessage()}
-					</section>
-				</Show>
-				<label class="field">
-					<span>Start date</span>
-					<input
-						type="date"
-						value={props.app.festivalDraft().startDate}
-						onInput={(event) =>
-							props.app.setFestivalDraft((current) => ({
-								...current,
-								startDate: event.currentTarget.value,
-							}))
-						}
-					/>
-				</label>
-				<label class="field">
-					<span>End date</span>
-					<input
-						type="date"
-						value={props.app.festivalDraft().endDate}
-						onInput={(event) =>
-							props.app.setFestivalDraft((current) => ({
-								...current,
-								endDate: event.currentTarget.value,
-							}))
-						}
-					/>
-				</label>
-				<Button
-					type="button"
-					onClick={props.app.handleCreateFestival}
-					disabled={props.app.isBusy()}
-				>
-					Create festival
-				</Button>
+				<CreateFestivalForm
+					draft={props.app.festivalDraft()}
+					hasNameError={props.app.hasFestivalNameError()}
+					showNameValidation={props.app.shouldShowFestivalNameValidation()}
+					nameValidationMessage={props.app.festivalNameValidationMessage()}
+					isBusy={props.app.isBusy()}
+					onUpdateDraft={props.app.setFestivalDraft}
+					onTouchName={() => props.app.setFestivalNameTouched(true)}
+					onSubmit={props.app.handleCreateFestival}
+				/>
 				<section
 					class="festival-subtypes-card"
 					aria-labelledby="class-subtypes-heading"
@@ -347,8 +332,8 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 						<span>Festival</span>
 						<select
 							value={selectedFestivalSlug()}
-							onChange={(event) => {
-								setSelectedFestivalSlug(event.currentTarget.value);
+							onChange={(e) => {
+								setSelectedFestivalSlug(e.currentTarget.value);
 								setSubtypeError("");
 								setSubtypeDraft("");
 								setRequiredSubtypeDraft("");
@@ -370,7 +355,7 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 								type="text"
 								maxLength={100}
 								value={subtypeDraft()}
-								onInput={(event) => setSubtypeDraft(event.currentTarget.value)}
+								onInput={(e) => setSubtypeDraft(e.currentTarget.value)}
 								disabled={isCreatingSubtype()}
 							/>
 						</label>
@@ -378,15 +363,11 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 							<span>Requires Subtype</span>
 							<select
 								value={requiredSubtypeDraft()}
-								onChange={(event) =>
-									setRequiredSubtypeDraft(event.currentTarget.value)
-								}
+								onChange={(e) => setRequiredSubtypeDraft(e.currentTarget.value)}
 								disabled={isCreatingSubtype()}
 							>
 								<option value="">None (no prerequisite)</option>
-								<For
-									each={classSubtypesByFestival()[selectedFestivalSlug()] ?? []}
-								>
+								<For each={currentSubtypes()}>
 									{(subtype) => (
 										<option value={subtype.id}>{subtype.displayName}</option>
 									)}
@@ -407,9 +388,7 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 						</Show>
 						<Show when={!isLoadingSubtypes()}>
 							<ul class="festival-subtype-list">
-								<For
-									each={classSubtypesByFestival()[selectedFestivalSlug()] ?? []}
-								>
+								<For each={currentSubtypes()}>
 									{(subtype) => (
 										<li>
 											<Show
@@ -441,20 +420,18 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 														<span>Requires Subtype</span>
 														<select
 															value={editingRequiredSubtypeId()}
-															onChange={(event) =>
+															onChange={(e) =>
 																setEditingRequiredSubtypeId(
-																	event.currentTarget.value,
+																	e.currentTarget.value,
 																)
 															}
 															disabled={isUpdatingSubtype()}
 														>
 															<option value="">None (no prerequisite)</option>
 															<For
-																each={(
-																	classSubtypesByFestival()[
-																		selectedFestivalSlug()
-																	] ?? []
-																).filter((option) => option.id !== subtype.id)}
+																each={currentSubtypes().filter(
+																	(option) => option.id !== subtype.id,
+																)}
 															>
 																{(option) => (
 																	<option value={option.id}>
@@ -489,12 +466,7 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 									)}
 								</For>
 							</ul>
-							<Show
-								when={
-									(classSubtypesByFestival()[selectedFestivalSlug()] ?? [])
-										.length === 0
-								}
-							>
+							<Show when={currentSubtypes().length === 0}>
 								<p class="muted">No class subtypes yet.</p>
 							</Show>
 						</Show>

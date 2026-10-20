@@ -32,12 +32,14 @@ import {
 	type ReorderOrganizationDivisionsInput,
 	type SessionMembership,
 	type SessionResponse,
+	type UpdateFestivalRegistrationWindowInput,
 	type UpdateOrganizationDivisionInput,
 	type UpdateOrganizationTimezoneInput,
 	validateCreateRoomInput,
 	validateDivisionName,
 	validateFestivalDates,
 	validateFestivalName,
+	validateFestivalRegistrationWindow,
 	validateOrganizationName,
 	validateOrganizationShortName,
 	validateRegistrationAgeDate,
@@ -99,6 +101,8 @@ function toFestivalSummary(record: FestivalRecord): FestivalSummary {
 		name: record.name,
 		startDate: record.startDate,
 		endDate: record.endDate,
+		registrationOpensAt: record.registrationOpensAt ?? null,
+		registrationClosesAt: record.registrationClosesAt ?? null,
 		createdAtIso: record.createdAtIso,
 	};
 }
@@ -755,6 +759,12 @@ export class OrganizationService {
 		};
 	}
 
+	private async requireOrganizationById(
+		organizationId: string,
+	): Promise<OrganizationRecord | null> {
+		return this.repository.findOrganizationById(organizationId);
+	}
+
 	async createFestivalForTenant(
 		tenant: TenantContext,
 		input: CreateFestivalInput,
@@ -769,6 +779,24 @@ export class OrganizationService {
 		];
 		if (errors.length > 0) {
 			throw new AppError(errors.join(" "), 400);
+		}
+
+		const organization =
+			(await this.requireOrganizationById(tenant.organization.id)) ??
+			tenant.organization;
+		const windowValidation = validateFestivalRegistrationWindow(
+			{
+				registrationOpensAt: input.registrationOpensAt,
+				registrationClosesAt: input.registrationClosesAt,
+			},
+			organization.timezone,
+		);
+		if (!windowValidation.isValid) {
+			throw new AppError(
+				windowValidation.errors[0] ?? "Registration window is invalid.",
+				400,
+				"invalid_registration_window",
+			);
 		}
 
 		const existingFestival = await this.repository.findFestivalByName(
@@ -796,11 +824,60 @@ export class OrganizationService {
 			name: nameValidation.normalized,
 			startDate: dateValidation.startDate,
 			endDate: dateValidation.endDate,
+			registrationOpensAt: windowValidation.opensAtIso,
+			registrationClosesAt: windowValidation.closesAtIso,
 		});
 
 		return {
 			festival: toFestivalSummary(festival),
 		};
+	}
+
+	async updateFestivalRegistrationWindowForTenant(
+		tenant: TenantContext,
+		festivalShortName: string,
+		input: UpdateFestivalRegistrationWindowInput,
+	): Promise<CreateFestivalResponse> {
+		if (!input || typeof input !== "object" || Array.isArray(input)) {
+			throw new AppError(
+				"Registration window update payload is required.",
+				400,
+				"invalid_registration_window",
+			);
+		}
+		const festival = await this.repository.findFestivalByShortName(
+			tenant.organization.id,
+			festivalShortName,
+		);
+		if (!festival) throw new AppError("Festival not found.", 404);
+
+		const organization =
+			(await this.requireOrganizationById(tenant.organization.id)) ??
+			tenant.organization;
+		const validation = validateFestivalRegistrationWindow(
+			{
+				registrationOpensAt: input.registrationOpensAt,
+				registrationClosesAt: input.registrationClosesAt,
+			},
+			organization.timezone,
+		);
+		if (!validation.isValid) {
+			throw new AppError(
+				validation.errors[0] ?? "Registration window is invalid.",
+				400,
+				"invalid_registration_window",
+			);
+		}
+
+		const updated = await this.repository.updateFestivalRegistrationWindow(
+			tenant.organization.id,
+			festival.id,
+			{
+				registrationOpensAt: validation.opensAtIso,
+				registrationClosesAt: validation.closesAtIso,
+			},
+		);
+		return { festival: toFestivalSummary(updated) };
 	}
 
 	async getPrimaryFestivalPath(

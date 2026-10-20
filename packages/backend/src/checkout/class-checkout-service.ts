@@ -15,6 +15,7 @@ import type {
 } from "@festival/common";
 import {
 	evaluatePurchaseEligibility,
+	isFestivalRegistrationOpen,
 	stripCandidateMarker,
 } from "@festival/common";
 import type { MembershipCommerceRepository } from "../commerce/membership-commerce-repository.js";
@@ -233,9 +234,17 @@ export class ClassCheckoutService {
 			uniqueChildIds,
 			classes,
 		});
-		const subtypes = await this.organizations.listRegistrationCatalogValues(
-			input.organizationId,
-			"class_subtype",
+		const [subtypes, timezone] = await Promise.all([
+			this.organizations.listRegistrationCatalogValues(
+				input.organizationId,
+				"class_subtype",
+			),
+			this.organizations.getOrganizationTimezone(input.organizationId),
+		]);
+		const isRegistrationOpen = isFestivalRegistrationOpen(
+			targetFestival,
+			this.now(),
+			timezone,
 		);
 		return evaluatePurchaseEligibility({
 			organizationId: input.organizationId,
@@ -244,6 +253,7 @@ export class ClassCheckoutService {
 			classes,
 			subtypes,
 			activeEntitlements,
+			isRegistrationOpen,
 			mode: input.mode ?? "cart",
 		});
 	}

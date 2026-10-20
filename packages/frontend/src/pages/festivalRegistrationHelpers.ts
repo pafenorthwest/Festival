@@ -86,13 +86,17 @@ export function formatTotalDuration(pieces: RepertoirePiece[]): string {
 
 export function isRegistrationSelectionValid(
 	child: { hasCurrentValidAgeSnapshot?: boolean } | null,
-	classConfig: { maximumPerformancePieces: number } | null,
+	classConfig: {
+		maximumPerformancePieces: number;
+		isRegistrationOpen?: boolean;
+	} | null,
 	divisionId: string,
 	teacherId: string,
 	classId: string,
 	pieces: RepertoirePiece[],
 ): boolean {
 	if (!child?.hasCurrentValidAgeSnapshot || !classConfig) return false;
+	if (classConfig.isRegistrationOpen === false) return false;
 	if (!divisionId || !teacherId || !classId) return false;
 	if (
 		pieces.length < 1 ||
