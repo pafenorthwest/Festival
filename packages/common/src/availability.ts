@@ -6,9 +6,9 @@ export const AVAILABILITY_HOURS = [
 
 export type AvailabilityHour = (typeof AVAILABILITY_HOURS)[number];
 
-export const DEFAULT_AVAILABLE_HOURS = [
+export const DEFAULT_AVAILABLE_HOURS: readonly AvailabilityHour[] = [
 	8, 9, 10, 11, 12, 13, 14, 15, 16,
-] as const;
+];
 
 export type AvailabilitySubjectType = "accompanist" | "child";
 

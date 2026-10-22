@@ -13,9 +13,7 @@ describe("availability helpers", () => {
 	it("defines default hours with 8:00 a.m.-5:00 p.m. available and 5:00-6:00 p.m. unavailable", () => {
 		expect(AVAILABILITY_HOURS).toEqual([8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
 		expect(DEFAULT_AVAILABLE_HOURS).toEqual([8, 9, 10, 11, 12, 13, 14, 15, 16]);
-		expect((DEFAULT_AVAILABLE_HOURS as readonly number[]).includes(17)).toBe(
-			false,
-		);
+		expect(DEFAULT_AVAILABLE_HOURS.includes(17)).toBe(false);
 
 		const days = buildDefaultAvailabilityDays(["2026-05-01", "2026-05-02"]);
 		expect(days).toEqual([

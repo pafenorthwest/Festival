@@ -62,7 +62,7 @@ export function isSubjectHourAvailable(
 ): boolean {
 	const day = subject.days.find((entry) => entry.date === date);
 	if (!day) {
-		return (DEFAULT_AVAILABLE_HOURS as readonly number[]).includes(hour);
+		return DEFAULT_AVAILABLE_HOURS.includes(hour);
 	}
 	return day.availableHours.includes(hour);
 }
