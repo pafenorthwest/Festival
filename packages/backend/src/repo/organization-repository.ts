@@ -52,6 +52,8 @@ export interface CreateFestivalRecordInput {
 	name: string;
 	startDate: string;
 	endDate: string;
+	registrationOpensAt?: string | null;
+	registrationClosesAt?: string | null;
 }
 export interface ShopifyIntegrationRecord {
 	organizationId: string;
@@ -311,6 +313,14 @@ export interface OrganizationRepository {
 	setPrimaryFestival(
 		organizationId: string,
 		festivalId: string,
+	): Promise<FestivalRecord>;
+	updateFestivalRegistrationWindow(
+		organizationId: string,
+		festivalId: string,
+		input: {
+			registrationOpensAt: string | null;
+			registrationClosesAt: string | null;
+		},
 	): Promise<FestivalRecord>;
 	dismissWelcome(
 		userId: string,

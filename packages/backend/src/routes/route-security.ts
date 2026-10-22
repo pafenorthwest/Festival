@@ -16,7 +16,7 @@ export type RouteAuthenticationClass =
 	(typeof ROUTE_AUTHENTICATION_CLASSES)[number];
 
 export interface RouteSecurityDeclaration {
-	method: "GET" | "HEAD" | "POST" | "PATCH" | "DELETE";
+	method: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE";
 	path: string;
 	authenticationClass: RouteAuthenticationClass;
 }
@@ -290,6 +290,16 @@ export const CURRENT_ROUTE_SECURITY = [
 	{
 		method: "GET",
 		path: "/api/organizations/:slug/admin/festivals/:festivalShortName",
+		authenticationClass: "admin",
+	},
+	{
+		method: "PUT",
+		path: "/api/organizations/:slug/admin/festivals/:festivalShortName/registration-window",
+		authenticationClass: "admin",
+	},
+	{
+		method: "PATCH",
+		path: "/api/organizations/:slug/admin/festivals/:festivalShortName/registration-window",
 		authenticationClass: "admin",
 	},
 	{

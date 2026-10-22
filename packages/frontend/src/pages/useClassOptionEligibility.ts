@@ -165,6 +165,18 @@ export function useClassOptionEligibility(
 			};
 		}
 
+		if (cls.isRegistrationOpen === false) {
+			const base = formatClassOption(cls);
+			return {
+				classId,
+				isEligible: false,
+				reasonCode: "REGISTRATION_CLOSED",
+				reasonText: "Registration closed",
+				badgeText: "Registration closed",
+				formattedOption: `${base} (Registration closed)`,
+			};
+		}
+
 		const serverResult = results().get(classId);
 		if (!serverResult) {
 			const base = formatClassOption(cls);
@@ -230,7 +242,11 @@ export function useClassOptionEligibility(
 
 	function formatOption(cls: RegistrationEligibleClass): string {
 		const opt = getOption(cls.id);
-		return opt ? opt.formattedOption : formatClassOption(cls);
+		if (opt) return opt.formattedOption;
+		const base = formatClassOption(cls);
+		return cls.isRegistrationOpen === false
+			? `${base} (Registration closed)`
+			: base;
 	}
 
 	return {

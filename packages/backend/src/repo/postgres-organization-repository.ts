@@ -107,6 +107,8 @@ interface FestivalRow {
 	name: string;
 	start_date: string;
 	end_date: string;
+	registration_opens_at?: Date | string | null;
+	registration_closes_at?: Date | string | null;
 	created_at: string;
 }
 
@@ -454,6 +456,11 @@ function mapUser(row: {
 	};
 }
 
+function toNullableIso(value?: Date | string | null): string | null {
+	if (!value) return null;
+	return value instanceof Date ? value.toISOString() : value;
+}
+
 function mapFestival(row: FestivalRow): FestivalRecord {
 	return {
 		id: row.id,
@@ -464,6 +471,8 @@ function mapFestival(row: FestivalRow): FestivalRecord {
 		name: row.name,
 		startDate: row.start_date,
 		endDate: row.end_date,
+		registrationOpensAt: toNullableIso(row.registration_opens_at),
+		registrationClosesAt: toNullableIso(row.registration_closes_at),
 		createdAtIso: row.created_at,
 	};
 }
@@ -1209,6 +1218,8 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				name,
 				start_date::text AS start_date,
 				end_date::text AS end_date,
+				registration_opens_at,
+				registration_closes_at,
 				created_at
 			 FROM ${this.schema}.festivals
 			 WHERE organization_id = $1
@@ -1233,7 +1244,9 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				is_primary,
 					name,
 					start_date,
-					end_date
+					end_date,
+					registration_opens_at,
+					registration_closes_at
 				) VALUES (
 					$1,
 					$2,
@@ -1246,7 +1259,9 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 					),
 					$5,
 					$6,
-					$7
+					$7,
+					$8,
+					$9
 				)
 			RETURNING
 				id,
@@ -1257,6 +1272,8 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				name,
 				start_date::text AS start_date,
 				end_date::text AS end_date,
+				registration_opens_at,
+				registration_closes_at,
 				created_at`,
 			[
 				input.id,
@@ -1266,6 +1283,8 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				input.name,
 				input.startDate,
 				input.endDate,
+				input.registrationOpensAt ?? null,
+				input.registrationClosesAt ?? null,
 			],
 		)) as FestivalRow[];
 
@@ -1283,9 +1302,13 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				id,
 				organization_id,
 				code,
+				short_name,
+				is_primary,
 				name,
 				start_date::text AS start_date,
 				end_date::text AS end_date,
+				registration_opens_at,
+				registration_closes_at,
 				created_at
 			 FROM ${this.schema}.festivals
 			 WHERE organization_id = $1
@@ -1303,7 +1326,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 	): Promise<FestivalRecord | null> {
 		await this.ensureReady();
 		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, code, short_name, is_primary, name, start_date::text AS start_date, end_date::text AS end_date, created_at FROM ${this.schema}.festivals WHERE organization_id = $1 AND short_name = $2 LIMIT 1`,
+			`SELECT id, organization_id, code, short_name, is_primary, name, start_date::text AS start_date, end_date::text AS end_date, registration_opens_at, registration_closes_at, created_at FROM ${this.schema}.festivals WHERE organization_id = $1 AND short_name = $2 LIMIT 1`,
 			[organizationId, shortName],
 		)) as FestivalRow[];
 		return rows[0] ? mapFestival(rows[0]) : null;
@@ -1326,8 +1349,46 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			if (!rows[0]) throw new Error("Festival not found.");
 		});
 		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, code, short_name, is_primary, name, start_date::text AS start_date, end_date::text AS end_date, created_at FROM ${this.schema}.festivals WHERE organization_id = $1 AND id = $2`,
+			`SELECT id, organization_id, code, short_name, is_primary, name, start_date::text AS start_date, end_date::text AS end_date, registration_opens_at, registration_closes_at, created_at FROM ${this.schema}.festivals WHERE organization_id = $1 AND id = $2`,
 			[organizationId, festivalId],
+		)) as FestivalRow[];
+		if (!rows[0]) throw new Error("Festival not found.");
+		return mapFestival(rows[0]);
+	}
+
+	async updateFestivalRegistrationWindow(
+		organizationId: string,
+		festivalId: string,
+		input: {
+			registrationOpensAt: string | null;
+			registrationClosesAt: string | null;
+		},
+	): Promise<FestivalRecord> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`UPDATE ${this.schema}.festivals
+			 SET registration_opens_at = $3,
+			     registration_closes_at = $4
+			 WHERE organization_id = $1
+			   AND id = $2
+			 RETURNING
+				id,
+				organization_id,
+				code,
+				short_name,
+				is_primary,
+				name,
+				start_date::text AS start_date,
+				end_date::text AS end_date,
+				registration_opens_at,
+				registration_closes_at,
+				created_at`,
+			[
+				organizationId,
+				festivalId,
+				input.registrationOpensAt,
+				input.registrationClosesAt,
+			],
 		)) as FestivalRow[];
 		if (!rows[0]) throw new Error("Festival not found.");
 		return mapFestival(rows[0]);

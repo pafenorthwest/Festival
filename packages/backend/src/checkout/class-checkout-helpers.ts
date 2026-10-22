@@ -390,7 +390,9 @@ export function buildEligibilityRejectionError(
 		),
 	];
 	const primaryFailure =
-		failedResults.find((r) => r.reasonCode === "SOLD_OUT") ?? failedResults[0];
+		failedResults.find((r) => r.reasonCode === "REGISTRATION_CLOSED") ??
+		failedResults.find((r) => r.reasonCode === "SOLD_OUT") ??
+		failedResults[0];
 	const message =
 		primaryFailure?.reasonCode === "SOLD_OUT"
 			? (primaryFailure.message ??

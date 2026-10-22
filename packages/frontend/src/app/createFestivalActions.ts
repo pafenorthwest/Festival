@@ -1,5 +1,9 @@
 import type { OrganizationAdminUserEntry } from "@festival/common";
-import { validateDivisionName, validateFestivalDates } from "@festival/common";
+import {
+	validateDivisionName,
+	validateFestivalDates,
+	validateFestivalRegistrationWindow,
+} from "@festival/common";
 import {
 	acceptInvite,
 	cancelAdminInvite,
@@ -344,6 +348,20 @@ export function createFestivalActions(
 			return;
 		}
 
+		const rawOpensAt = draft.registrationOpensAt?.trim() || null;
+		const rawClosesAt = draft.registrationClosesAt?.trim() || null;
+		const windowValidation = validateFestivalRegistrationWindow(
+			{
+				registrationOpensAt: rawOpensAt,
+				registrationClosesAt: rawClosesAt,
+			},
+			state.organization()?.timezone ?? "UTC",
+		);
+		if (!windowValidation.isValid) {
+			state.setErrorMessage(windowValidation.errors.join(" "));
+			return;
+		}
+
 		state.setIsBusy(true);
 		state.clearMessages();
 		try {
@@ -353,12 +371,20 @@ export function createFestivalActions(
 				name: nameValidation.normalized,
 				startDate: draft.startDate,
 				endDate: draft.endDate,
+				...(rawOpensAt || rawClosesAt
+					? {
+							registrationOpensAt: rawOpensAt,
+							registrationClosesAt: rawClosesAt,
+						}
+					: {}),
 			});
 			state.setFestivalDraft({
 				shortName: "",
 				name: "",
 				startDate: "",
 				endDate: "",
+				registrationOpensAt: "",
+				registrationClosesAt: "",
 			});
 			state.setFestivalNameTouched(false);
 			state.setCreateFestivalAttempted(false);
