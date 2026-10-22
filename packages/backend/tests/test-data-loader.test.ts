@@ -35,8 +35,8 @@ describe("loadTestData", () => {
 		});
 
 		expect(summary.organizationCount).toBe(TEST_DATA_ORGANIZATIONS.length);
-		expect(summary.totalDivisionCount).toBe(8);
-		expect(summary.totalSubtypeCount).toBe(8);
+		expect(summary.totalDivisionCount).toBe(11);
+		expect(summary.totalSubtypeCount).toBe(11);
 
 		const pafe = await organizations.findOrganizationBySlug("pafe-northwest");
 		expect(pafe).not.toBeNull();
@@ -47,6 +47,10 @@ describe("loadTestData", () => {
 			await organizations.findOrganizationBySlug("cascadia-music");
 		expect(cascadia).not.toBeNull();
 		expect(cascadia?.name).toBe("Cascadia Music Guild");
+
+		const testfest = await organizations.findOrganizationBySlug("testfest-org");
+		expect(testfest).not.toBeNull();
+		expect(testfest?.name).toBe("Testfest Organization");
 
 		if (!pafe) throw new Error("PAFE organization missing");
 
@@ -86,8 +90,8 @@ describe("loadTestData", () => {
 			now: fixedNow,
 		});
 
-		expect(summary.totalTeacherCount).toBe(6);
-		expect(summary.totalTeacherGrantCount).toBe(6);
+		expect(summary.totalTeacherCount).toBe(8);
+		expect(summary.totalTeacherGrantCount).toBe(8);
 
 		const pafe = await organizations.findOrganizationBySlug("pafe-northwest");
 		if (!pafe) throw new Error("PAFE organization missing");
@@ -140,7 +144,7 @@ describe("loadTestData", () => {
 			now: fixedNow,
 		});
 
-		expect(summary.totalAccompanistCount).toBe(3);
+		expect(summary.totalAccompanistCount).toBe(4);
 
 		const pafe = await organizations.findOrganizationBySlug("pafe-northwest");
 		if (!pafe) throw new Error("PAFE organization missing");
@@ -187,7 +191,7 @@ describe("loadTestData", () => {
 			now: fixedNow,
 		});
 
-		expect(summary.totalClassCount).toBe(6);
+		expect(summary.totalClassCount).toBe(9);
 
 		const pafeClasses = await organizationService.listFestivalClasses(
 			"pafe-northwest",
@@ -211,6 +215,64 @@ describe("loadTestData", () => {
 			"Cascadia Strings Solo (Ages 7-12)",
 			"Cascadia Piano Duets (Ages 9-15)",
 		]);
+
+		const testfestClasses = await organizationService.listFestivalClasses(
+			"testfest-org",
+			"testfest-2026",
+		);
+		expect(testfestClasses).toHaveLength(3);
+		expect(testfestClasses.map((c) => c.displayName)).toEqual([
+			"Testfest Piano Solo Beginner",
+			"Testfest Strings Solo Intermediate",
+			"Testfest Vocal Duet Open",
+		]);
+	});
+
+	test("loads testfest organization, divisions, teachers, and accompanists", async () => {
+		const { fixedNow, organizations, accounts } = createTestHarness();
+		await loadTestData({ organizations, accounts, now: fixedNow });
+
+		const testfest = await organizations.findOrganizationBySlug("testfest-org");
+		if (!testfest) throw new Error("Testfest organization missing");
+
+		const divisions = await organizations.listDivisions(testfest.id);
+		expect(divisions.map((d) => d.displayName)).toEqual([
+			"Piano",
+			"Strings",
+			"Vocal",
+		]);
+
+		const festivals = await organizations.listFestivals(testfest.id);
+		expect(festivals).toHaveLength(1);
+		expect(festivals[0]?.shortName).toBe("testfest-2026");
+		expect(festivals[0]?.isPrimary).toBe(true);
+
+		const subtypes = await organizations.listFestivalClassSubtypes(
+			testfest.id,
+			festivals[0]?.id ?? "",
+		);
+		expect(subtypes.map((s) => s.displayName)).toEqual([
+			"Solo",
+			"Duet",
+			"Ensemble",
+		]);
+
+		const pianoDiv = divisions.find((d) => d.displayName === "Piano");
+		const teachers = await organizations.listActiveTeachersForDivision(
+			testfest.id,
+			pianoDiv?.id ?? "",
+		);
+		expect(teachers.map((t) => t.name)).toEqual(["Testfest Teacher Alpha"]);
+
+		const accompanistGrants =
+			await organizations.listAccompanistMembershipGrants({
+				organizationId: testfest.id,
+				currentOnly: true,
+			});
+		expect(accompanistGrants).toHaveLength(1);
+		expect(accompanistGrants[0]?.contact.name).toBe(
+			"Testfest Accompanist Staff",
+		);
 	});
 
 	test("is idempotent when run repeatedly on the same repositories", async () => {
@@ -249,5 +311,11 @@ describe("loadTestData", () => {
 			"spring-2026",
 		);
 		expect(pafeClasses).toHaveLength(4);
+
+		const testfestClasses = await organizationService.listFestivalClasses(
+			"testfest-org",
+			"testfest-2026",
+		);
+		expect(testfestClasses).toHaveLength(3);
 	});
 });
