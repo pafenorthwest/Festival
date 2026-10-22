@@ -271,6 +271,67 @@ describe("useClassOptionEligibility hook", () => {
 		});
 	});
 
+	it("marks class ineligible with 'Registration closed' when isRegistrationOpen is false or REGISTRATION_CLOSED is returned", async () => {
+		await new Promise<void>((resolve) => {
+			createRoot(async (dispose) => {
+				const cart = createRegistrationCart();
+				const closedClass: RegistrationEligibleClass = {
+					...soloClass,
+					id: "class-closed-1",
+					isRegistrationOpen: false,
+				};
+				const [childId] = createSignal("child-1");
+				const [classes] = createSignal<RegistrationEligibleClass[]>([
+					closedClass,
+					concertoClass,
+				]);
+
+				const hook = useClassOptionEligibility({
+					slug: "test-org",
+					festivalSlug: "spring-2026",
+					childId,
+					classes,
+					cart,
+					evaluator: async () => ({
+						results: [
+							{
+								childId: "child-1",
+								festivalClassId: concertoClass.id,
+								eligible: false,
+								isEligible: false,
+								reasonCode: "REGISTRATION_CLOSED",
+								message: "Registration is closed for this festival.",
+							},
+						],
+					}),
+				});
+
+				// Immediately before server evaluation resolves, isRegistrationOpen: false blocks the option
+				expect(hook.isEligible(closedClass.id)).toBe(false);
+				expect(hook.getOption(closedClass.id)?.reasonCode).toBe(
+					"REGISTRATION_CLOSED",
+				);
+				expect(hook.formatOption(closedClass)).toContain("Registration closed");
+
+				await flushTicks();
+
+				const concertoOpt = hook.getOption(concertoClass.id);
+				expect(concertoOpt?.isEligible).toBe(false);
+				expect(concertoOpt?.reasonCode).toBe("REGISTRATION_CLOSED");
+				expect(concertoOpt?.reasonText).toBe("Registration closed");
+				expect(hook.formatOption(concertoClass)).toContain(
+					"Registration closed",
+				);
+				expect(hook.selectedReason(concertoClass.id)).toBe(
+					"Registration closed",
+				);
+
+				dispose();
+				resolve();
+			});
+		});
+	});
+
 	it("re-evaluates reactively when cart items change", async () => {
 		await new Promise<void>((resolve) => {
 			createRoot(async (dispose) => {

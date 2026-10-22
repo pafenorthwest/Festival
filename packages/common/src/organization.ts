@@ -301,6 +301,8 @@ export interface FestivalRecord {
 	name: string;
 	startDate: string;
 	endDate: string;
+	registrationOpensAt?: string | null;
+	registrationClosesAt?: string | null;
 	createdAtIso: string;
 }
 
@@ -312,6 +314,8 @@ export interface FestivalSummary {
 	name: string;
 	startDate: string;
 	endDate: string;
+	registrationOpensAt?: string | null;
+	registrationClosesAt?: string | null;
 	createdAtIso: string;
 }
 
@@ -373,6 +377,8 @@ export interface CreateFestivalInput {
 	name: string;
 	startDate: string;
 	endDate: string;
+	registrationOpensAt?: string | null;
+	registrationClosesAt?: string | null;
 }
 
 export interface CreateFestivalResponse {
@@ -677,3 +683,5 @@ export function deriveFestivalMetadataCutoff(
 	const cutoffDateStr = subtractCalendarDays(startDate, 42);
 	return getStartOfDayInTimezone(cutoffDateStr, timezone);
 }
+
+export * from "./festival-registration-window.js";

@@ -293,6 +293,16 @@ export const CURRENT_ROUTE_SECURITY = [
 		authenticationClass: "admin",
 	},
 	{
+		method: "PUT",
+		path: "/api/organizations/:slug/admin/festivals/:festivalShortName/registration-window",
+		authenticationClass: "admin",
+	},
+	{
+		method: "PATCH",
+		path: "/api/organizations/:slug/admin/festivals/:festivalShortName/registration-window",
+		authenticationClass: "admin",
+	},
+	{
 		method: "GET",
 		path: "/api/organizations/:slug/primary",
 		authenticationClass: "public",

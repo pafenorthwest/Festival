@@ -31,6 +31,7 @@ import {
 	deriveFestivalMetadataCutoff,
 	evaluateClassCapacityStatus,
 	isAccompanistMembershipGrantActive,
+	isFestivalRegistrationOpen,
 	validateCustomerAccountSettings,
 	validateCustomerProfileInput,
 } from "@festival/common";
@@ -1966,10 +1967,18 @@ export class CustomerAccountService {
 			);
 		}
 
-		const classes = await this.organizations.listFestivalClassConfigurations(
-			access.organizationId,
-			festival.id,
-			true,
+		const [classes, timezone] = await Promise.all([
+			this.organizations.listFestivalClassConfigurations(
+				access.organizationId,
+				festival.id,
+				true,
+			),
+			this.organizations.getOrganizationTimezone(access.organizationId),
+		]);
+		const isRegistrationOpen = isFestivalRegistrationOpen(
+			festival,
+			this.now(),
+			timezone,
 		);
 		const eligible = classes.filter(
 			(c) =>
@@ -1998,6 +2007,7 @@ export class CustomerAccountService {
 						maximumPerformancePieces: item.maximumPerformancePieces,
 						performanceMinutes: item.performanceMinutes,
 						capacity: item.capacity,
+						isRegistrationOpen,
 						...(placedCount !== undefined
 							? {
 									placedCount,

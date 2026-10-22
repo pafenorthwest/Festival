@@ -7,6 +7,7 @@ export * from "./customer-account.js";
 export * from "./domain.js";
 export * from "./entitlements.js";
 export * from "./errors.js";
+export * from "./festival-registration-window.js";
 export * from "./membership-status.js";
 export * from "./organization.js";
 export * from "./purchase-eligibility.js";

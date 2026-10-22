@@ -1244,6 +1244,8 @@ describe("Customer Registration Routes", () => {
 				name: "Spring 2026",
 				startDate: "2026-05-01",
 				endDate: "2026-05-10",
+				registrationOpensAt: "2020-01-01T00:00:00.000Z",
+				registrationClosesAt: "2099-12-31T23:59:59.999Z",
 			});
 			await orgRepo.setPrimaryFestival(org.id, festival.id);
 
@@ -1710,6 +1712,8 @@ describe("Customer Registration Routes", () => {
 				name: "Spring 2026",
 				startDate: "2026-05-01",
 				endDate: "2026-05-10",
+				registrationOpensAt: "2020-01-01T00:00:00.000Z",
+				registrationClosesAt: "2099-12-31T23:59:59.999Z",
 			});
 			await orgRepo.setPrimaryFestival(org.id, festival.id);
 

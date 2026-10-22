@@ -150,6 +150,7 @@ export function FestivalClassRegistrationPage(
 			child = selectedChild();
 		if (
 			!cls ||
+			cls.isRegistrationOpen === false ||
 			!child ||
 			!isReadyForCheckout() ||
 			isAlreadyInCart() ||
@@ -418,9 +419,17 @@ export function FestivalClassRegistrationPage(
 											</For>
 										</select>
 										<Show
-											when={classOptionEligibility.selectedReason(
-												selectedClassId(),
-											)}
+											when={
+												classOptionEligibility.selectedReason(
+													selectedClassId(),
+												) ||
+												(eligibleClasses().length > 0 &&
+												eligibleClasses().every(
+													(c) => c.isRegistrationOpen === false,
+												)
+													? "Registration closed"
+													: null)
+											}
 										>
 											{(reason) => (
 												<p class="field-error" role="alert">

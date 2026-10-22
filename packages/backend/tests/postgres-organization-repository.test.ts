@@ -829,4 +829,80 @@ describe("PostgresOrganizationRepository", () => {
 			);
 		});
 	});
+
+	describe("updateFestivalRegistrationWindow", () => {
+		let repo: PostgresOrganizationRepository;
+		let unsafeSpy: ReturnType<typeof spyOn>;
+
+		beforeEach(() => {
+			repo = new PostgresOrganizationRepository("test_schema");
+			spyOn(repo, "ensureReady").mockResolvedValue();
+			unsafeSpy = spyOn(sql, "unsafe");
+		});
+
+		afterEach(() => {
+			unsafeSpy.mockRestore();
+		});
+
+		it("updates registration_opens_at and registration_closes_at and maps Date/string/null", async () => {
+			unsafeSpy.mockResolvedValueOnce([
+				{
+					id: "fest-1",
+					organization_id: "org-1",
+					code: "abc123",
+					short_name: "spring-27",
+					is_primary: true,
+					name: "Spring Festival",
+					start_date: "2027-06-10",
+					end_date: "2027-06-12",
+					registration_opens_at: new Date("2027-03-01T00:00:00.000Z"),
+					registration_closes_at: "2027-05-01T23:59:59.999Z",
+					created_at: "2027-01-01T00:00:00.000Z",
+				},
+			]);
+
+			const result = await repo.updateFestivalRegistrationWindow(
+				"org-1",
+				"fest-1",
+				{
+					registrationOpensAt: "2027-03-01T00:00:00.000Z",
+					registrationClosesAt: "2027-05-01T23:59:59.999Z",
+				},
+			);
+
+			expect(result).toEqual({
+				id: "fest-1",
+				organizationId: "org-1",
+				code: "abc123",
+				shortName: "spring-27",
+				isPrimary: true,
+				name: "Spring Festival",
+				startDate: "2027-06-10",
+				endDate: "2027-06-12",
+				registrationOpensAt: "2027-03-01T00:00:00.000Z",
+				registrationClosesAt: "2027-05-01T23:59:59.999Z",
+				createdAtIso: "2027-01-01T00:00:00.000Z",
+			});
+			expect(unsafeSpy).toHaveBeenCalledWith(
+				expect.stringContaining("SET registration_opens_at = $3"),
+				[
+					"org-1",
+					"fest-1",
+					"2027-03-01T00:00:00.000Z",
+					"2027-05-01T23:59:59.999Z",
+				],
+			);
+		});
+
+		it("throws when festival is not found", async () => {
+			unsafeSpy.mockResolvedValueOnce([]);
+
+			await expect(
+				repo.updateFestivalRegistrationWindow("org-1", "missing", {
+					registrationOpensAt: null,
+					registrationClosesAt: null,
+				}),
+			).rejects.toThrow("Festival not found.");
+		});
+	});
 });

@@ -607,6 +607,8 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			name: input.name,
 			startDate: input.startDate,
 			endDate: input.endDate,
+			registrationOpensAt: input.registrationOpensAt ?? null,
+			registrationClosesAt: input.registrationClosesAt ?? null,
 			createdAtIso: new Date().toISOString(),
 		};
 
@@ -655,6 +657,27 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 				});
 		}
 		return { ...selected, isPrimary: true };
+	}
+
+	async updateFestivalRegistrationWindow(
+		organizationId: string,
+		festivalId: string,
+		input: {
+			registrationOpensAt: string | null;
+			registrationClosesAt: string | null;
+		},
+	): Promise<FestivalRecord> {
+		const existing = this.festivals.get(festivalId);
+		if (!existing || existing.organizationId !== organizationId) {
+			throw new Error("Festival not found.");
+		}
+		const updated: FestivalRecord = {
+			...existing,
+			registrationOpensAt: input.registrationOpensAt,
+			registrationClosesAt: input.registrationClosesAt,
+		};
+		this.festivals.set(festivalId, updated);
+		return { ...updated };
 	}
 
 	async dismissWelcome(
