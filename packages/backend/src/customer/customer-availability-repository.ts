@@ -306,38 +306,46 @@ export class PostgresCustomerAvailabilityRepository
 		entries: readonly UpsertCustomerFestivalAvailabilityInput[],
 	): Promise<void> {
 		if (entries.length === 0) return;
-		await sql.begin(async (tx) => {
-			for (const entry of entries) {
-				const hoursJson = JSON.stringify(
-					normalizeAvailableHours(entry.availableHours),
-				);
-				await tx.unsafe(
-					`INSERT INTO ${this.schema}.customer_festival_availability (
-						organization_id,
-						festival_id,
-						customer_id,
-						subject_type,
-						subject_id,
-						festival_date,
-						available_hours,
-						updated_at
-					) VALUES ($1, $2, $3, $4, $5, $6::date, $7::jsonb, NOW())
-					ON CONFLICT (organization_id, festival_id, subject_type, subject_id, festival_date)
-					DO UPDATE SET
-						available_hours = EXCLUDED.available_hours,
-						updated_at = NOW()
-					WHERE customer_festival_availability.customer_id = EXCLUDED.customer_id`,
-					[
-						entry.organizationId,
-						entry.festivalId,
-						entry.customerId,
-						entry.subjectType,
-						entry.subjectId,
-						entry.festivalDate,
-						hoursJson,
-					],
-				);
-			}
-		});
+
+		const valueClauses: string[] = [];
+		const params: unknown[] = [];
+
+		for (const [i, entry] of entries.entries()) {
+			const base = i * 7;
+			const hoursJson = JSON.stringify(
+				normalizeAvailableHours(entry.availableHours),
+			);
+			valueClauses.push(
+				`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}::date, $${base + 7}::jsonb, NOW())`,
+			);
+			params.push(
+				entry.organizationId,
+				entry.festivalId,
+				entry.customerId,
+				entry.subjectType,
+				entry.subjectId,
+				entry.festivalDate,
+				hoursJson,
+			);
+		}
+
+		await sql.unsafe(
+			`INSERT INTO ${this.schema}.customer_festival_availability (
+				organization_id,
+				festival_id,
+				customer_id,
+				subject_type,
+				subject_id,
+				festival_date,
+				available_hours,
+				updated_at
+			) VALUES ${valueClauses.join(", ")}
+			ON CONFLICT (organization_id, festival_id, subject_type, subject_id, festival_date)
+			DO UPDATE SET
+				available_hours = EXCLUDED.available_hours,
+				updated_at = NOW()
+			WHERE customer_festival_availability.customer_id = EXCLUDED.customer_id`,
+			params,
+		);
 	}
 }

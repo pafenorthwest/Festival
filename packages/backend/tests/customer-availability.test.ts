@@ -558,4 +558,102 @@ describe("CustomerAvailabilityService & routes", () => {
 		});
 		expect(ownerUpdated[0]?.availableHours).toEqual([11, 12]);
 	});
+
+	it("reuses preloaded festivals and subjects in buildAvailabilityResponse and saveAvailability", async () => {
+		const fx = await createAvailabilityFixture();
+		const { customer, sessionId } = await fx.registerCustomer();
+		const child = await fx.addChild(customer.id, "Brahms");
+
+		let listFestivalsCalls = 0;
+		const origListFestivals = fx.organizations.listFestivals.bind(
+			fx.organizations,
+		);
+		fx.organizations.listFestivals = async (orgId: string) => {
+			listFestivalsCalls += 1;
+			return origListFestivals(orgId);
+		};
+
+		let listChildrenCalls = 0;
+		const origListChildren = fx.accounts.listChildren.bind(fx.accounts);
+		fx.accounts.listChildren = async (orgId: string, custId: string) => {
+			listChildrenCalls += 1;
+			return origListChildren(orgId, custId);
+		};
+
+		await fx.availabilityService.saveAvailability(
+			fx.org.slug,
+			sessionId,
+			VALID_CSRF,
+			ORIGIN,
+			{
+				festivalId: fx.primaryFestival.id,
+				subjects: [
+					{
+						subjectType: "child",
+						subjectId: child.id,
+						days: [{ date: "2026-07-10", availableHours: [9, 10] }],
+					},
+				],
+			},
+		);
+
+		expect(listFestivalsCalls).toBe(1);
+		expect(listChildrenCalls).toBe(1);
+
+		const serviceInternal = fx.availabilityService as unknown as {
+			buildAvailabilityResponse: (
+				organizationId: string,
+				customerId: string,
+				festivalId?: string,
+				preloaded?: {
+					festivals?: unknown[];
+					eligibleSubjects?: unknown[];
+				},
+			) => Promise<unknown>;
+		};
+
+		listFestivalsCalls = 0;
+		listChildrenCalls = 0;
+		await serviceInternal.buildAvailabilityResponse(
+			fx.org.id,
+			customer.id,
+			fx.primaryFestival.id,
+			{
+				festivals: [fx.primaryFestival],
+				eligibleSubjects: [
+					{ subjectType: "child", subjectId: child.id, label: "Brahms" },
+				],
+			},
+		);
+		expect(listFestivalsCalls).toBe(0);
+		expect(listChildrenCalls).toBe(0);
+
+		listFestivalsCalls = 0;
+		listChildrenCalls = 0;
+		await serviceInternal.buildAvailabilityResponse(
+			fx.org.id,
+			customer.id,
+			fx.primaryFestival.id,
+			{
+				festivals: [fx.primaryFestival],
+			},
+		);
+		expect(listFestivalsCalls).toBe(0);
+		expect(listChildrenCalls).toBe(1);
+
+		listFestivalsCalls = 0;
+		listChildrenCalls = 0;
+		await serviceInternal.buildAvailabilityResponse(
+			fx.org.id,
+			customer.id,
+			fx.primaryFestival.id,
+			{
+				eligibleSubjects: [
+					{ subjectType: "child", subjectId: child.id, label: "Brahms" },
+				],
+			},
+		);
+		expect(listFestivalsCalls).toBe(1);
+		expect(listChildrenCalls).toBe(0);
+	});
 });

@@ -1,7 +1,9 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { sql } from "bun";
 import {
 	CorruptAvailabilityDataError,
 	type CorruptAvailabilityRecordContext,
+	PostgresCustomerAvailabilityRepository,
 	parseAvailabilityHours,
 	parseHoursJson,
 } from "../src/customer/customer-availability-repository.js";
@@ -143,5 +145,84 @@ describe("CustomerAvailabilityRepository - Corrupt Record Diagnostics", () => {
 				customerId: "cust-specific",
 			}),
 		).toThrow(CorruptAvailabilityDataError);
+	});
+});
+
+describe("PostgresCustomerAvailabilityRepository - upsertAvailability multi-row query", () => {
+	let repo: PostgresCustomerAvailabilityRepository;
+	let unsafeSpy: ReturnType<typeof spyOn>;
+
+	beforeEach(() => {
+		repo = new PostgresCustomerAvailabilityRepository("test_schema");
+		unsafeSpy = spyOn(sql, "unsafe");
+	});
+
+	afterEach(() => {
+		unsafeSpy.mockRestore();
+	});
+
+	it("returns early without executing query when entries is empty", async () => {
+		await repo.upsertAvailability([]);
+		expect(unsafeSpy).not.toHaveBeenCalled();
+	});
+
+	it("executes a single multi-row INSERT query with flattened parameters", async () => {
+		unsafeSpy.mockResolvedValueOnce([]);
+
+		const entries = [
+			{
+				organizationId: "org-1",
+				festivalId: "fest-1",
+				customerId: "cust-1",
+				subjectType: "child" as const,
+				subjectId: "child-1",
+				festivalDate: "2026-07-15",
+				availableHours: [10, 8, 9],
+			},
+			{
+				organizationId: "org-1",
+				festivalId: "fest-1",
+				customerId: "cust-1",
+				subjectType: "teacher" as const,
+				subjectId: "teacher-1",
+				festivalDate: "2026-07-16",
+				availableHours: [14, 15],
+			},
+		];
+
+		await repo.upsertAvailability(entries);
+
+		expect(unsafeSpy).toHaveBeenCalledTimes(1);
+		const [query, params] = unsafeSpy.mock.calls[0] as [string, unknown[]];
+
+		expect(query).toContain(
+			"INSERT INTO test_schema.customer_festival_availability",
+		);
+		expect(query).toContain(
+			"VALUES ($1, $2, $3, $4, $5, $6::date, $7::jsonb, NOW()), ($8, $9, $10, $11, $12, $13::date, $14::jsonb, NOW())",
+		);
+		expect(query).toContain(
+			"ON CONFLICT (organization_id, festival_id, subject_type, subject_id, festival_date)",
+		);
+		expect(query).toContain(
+			"WHERE customer_festival_availability.customer_id = EXCLUDED.customer_id",
+		);
+
+		expect(params).toEqual([
+			"org-1",
+			"fest-1",
+			"cust-1",
+			"child",
+			"child-1",
+			"2026-07-15",
+			JSON.stringify([8, 9, 10]),
+			"org-1",
+			"fest-1",
+			"cust-1",
+			"teacher",
+			"teacher-1",
+			"2026-07-16",
+			JSON.stringify([14, 15]),
+		]);
 	});
 });

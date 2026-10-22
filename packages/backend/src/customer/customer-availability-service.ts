@@ -22,6 +22,8 @@ import type {
 	UpsertCustomerFestivalAvailabilityInput,
 } from "./customer-availability-repository.js";
 
+export type Festival = FestivalRecord;
+
 function toFestivalSummary(festival: FestivalRecord): FestivalSummary {
 	return {
 		id: festival.id,
@@ -108,6 +110,25 @@ function verifySubjectsAuthorized(
 	}
 }
 
+function toAvailabilityEntries(
+	organizationId: string,
+	festivalId: string,
+	customerId: string,
+	subjects: SaveCustomerFestivalAvailabilityRequest["subjects"],
+): UpsertCustomerFestivalAvailabilityInput[] {
+	return subjects.flatMap((subject) =>
+		subject.days.map((day) => ({
+			organizationId,
+			festivalId,
+			customerId,
+			subjectType: subject.subjectType,
+			subjectId: subject.subjectId.trim(),
+			festivalDate: day.date,
+			availableHours: day.availableHours,
+		})),
+	);
+}
+
 export class CustomerAvailabilityService {
 	constructor(
 		private readonly availabilityRepository: CustomerAvailabilityRepository,
@@ -155,15 +176,66 @@ export class CustomerAvailabilityService {
 		return subjects;
 	}
 
-	private async buildAvailabilityResponse(
+	private async resolveAvailabilityContext(
 		organizationId: string,
 		customerId: string,
-		festivalId?: string,
-	): Promise<CustomerFestivalAvailabilityResponse> {
+		preloaded?: {
+			readonly festivals?: readonly Festival[];
+			readonly eligibleSubjects?: readonly AvailabilitySubject[];
+		},
+	): Promise<{
+		festivals: readonly Festival[];
+		eligibleSubjects: readonly AvailabilitySubject[];
+	}> {
+		const hasFestivals = preloaded?.festivals !== undefined;
+		const hasSubjects = preloaded?.eligibleSubjects !== undefined;
+		if (hasFestivals && hasSubjects) {
+			return {
+				festivals: preloaded.festivals as readonly Festival[],
+				eligibleSubjects:
+					preloaded.eligibleSubjects as readonly AvailabilitySubject[],
+			};
+		}
+		if (hasFestivals) {
+			const eligibleSubjects = await this.resolveEligibleSubjects(
+				organizationId,
+				customerId,
+			);
+			return {
+				festivals: preloaded.festivals as readonly Festival[],
+				eligibleSubjects,
+			};
+		}
+		if (hasSubjects) {
+			const festivals = await this.organizations.listFestivals(organizationId);
+			return {
+				festivals,
+				eligibleSubjects:
+					preloaded.eligibleSubjects as readonly AvailabilitySubject[],
+			};
+		}
 		const [festivals, eligibleSubjects] = await Promise.all([
 			this.organizations.listFestivals(organizationId),
 			this.resolveEligibleSubjects(organizationId, customerId),
 		]);
+		return { festivals, eligibleSubjects };
+	}
+
+	private async buildAvailabilityResponse(
+		organizationId: string,
+		customerId: string,
+		festivalId?: string,
+		preloaded?: {
+			readonly festivals?: readonly Festival[];
+			readonly eligibleSubjects?: readonly AvailabilitySubject[];
+		},
+	): Promise<CustomerFestivalAvailabilityResponse> {
+		const { festivals, eligibleSubjects } =
+			await this.resolveAvailabilityContext(
+				organizationId,
+				customerId,
+				preloaded,
+			);
 		const selected = selectFestival(festivals, festivalId);
 		if (!selected) {
 			return {
@@ -258,23 +330,18 @@ export class CustomerAvailabilityService {
 			access.customerId,
 		);
 		verifySubjectsAuthorized(input, eligibleSubjects);
-		const entries: UpsertCustomerFestivalAvailabilityInput[] =
-			input.subjects.flatMap((subject) =>
-				subject.days.map((day) => ({
-					organizationId: access.organizationId,
-					festivalId: selected.id,
-					customerId: access.customerId,
-					subjectType: subject.subjectType,
-					subjectId: subject.subjectId.trim(),
-					festivalDate: day.date,
-					availableHours: day.availableHours,
-				})),
-			);
+		const entries = toAvailabilityEntries(
+			access.organizationId,
+			selected.id,
+			access.customerId,
+			input.subjects,
+		);
 		await this.availabilityRepository.upsertAvailability(entries);
 		return this.buildAvailabilityResponse(
 			access.organizationId,
 			access.customerId,
 			selected.id,
+			{ festivals, eligibleSubjects },
 		);
 	}
 }
