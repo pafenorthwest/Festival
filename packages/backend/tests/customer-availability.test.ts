@@ -179,7 +179,6 @@ async function createAvailabilityFixture() {
 		"/organizations/:slug/customer",
 		buildCustomerRoutes({
 			customerAccountService: accountService,
-			customerAvailabilityService: availabilityService,
 		}),
 	);
 
@@ -495,5 +494,68 @@ describe("CustomerAvailabilityService & routes", () => {
 			},
 		);
 		expect(noCsrfRes.status).toBe(403);
+	});
+
+	it("upsertAvailability refuses to overwrite records owned by a different customer", async () => {
+		const repo = new InMemoryCustomerAvailabilityRepository();
+		const baseEntry = {
+			organizationId: "org-1",
+			festivalId: "fest-1",
+			customerId: "cust-owner",
+			subjectType: "child" as const,
+			subjectId: "child-1",
+			festivalDate: "2026-07-10",
+			availableHours: [9, 10],
+		};
+
+		await repo.upsertAvailability([baseEntry]);
+
+		const initial = await repo.listAvailability({
+			organizationId: "org-1",
+			festivalId: "fest-1",
+			customerId: "cust-owner",
+		});
+		expect(initial).toHaveLength(1);
+		expect(initial[0]?.availableHours).toEqual([9, 10]);
+
+		// Attempt overwrite by another customer
+		await repo.upsertAvailability([
+			{
+				...baseEntry,
+				customerId: "cust-attacker",
+				availableHours: [14, 15],
+			},
+		]);
+
+		const ownerAfter = await repo.listAvailability({
+			organizationId: "org-1",
+			festivalId: "fest-1",
+			customerId: "cust-owner",
+		});
+		expect(ownerAfter).toHaveLength(1);
+		expect(ownerAfter[0]?.availableHours).toEqual([9, 10]);
+
+		const attackerAfter = await repo.listAvailability({
+			organizationId: "org-1",
+			festivalId: "fest-1",
+			customerId: "cust-attacker",
+		});
+		expect(attackerAfter).toHaveLength(0);
+
+		// Legitimate update by original owner succeeds
+		await repo.upsertAvailability([
+			{
+				...baseEntry,
+				customerId: "cust-owner",
+				availableHours: [11, 12],
+			},
+		]);
+
+		const ownerUpdated = await repo.listAvailability({
+			organizationId: "org-1",
+			festivalId: "fest-1",
+			customerId: "cust-owner",
+		});
+		expect(ownerUpdated[0]?.availableHours).toEqual([11, 12]);
 	});
 });

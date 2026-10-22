@@ -1,6 +1,7 @@
 import {
 	type AvailabilityHour,
 	type AvailabilitySubjectType,
+	isAvailabilityHour,
 	normalizeAvailableHours,
 } from "@festival/common";
 import { sql } from "bun";
@@ -90,6 +91,10 @@ export class InMemoryCustomerAvailabilityRepository
 		for (const entry of entries) {
 			const normalized = normalizeAvailableHours(entry.availableHours);
 			const key = recordKey(entry);
+			const existing = this.records.get(key);
+			if (existing && existing.customerId !== entry.customerId) {
+				continue;
+			}
 			this.records.set(key, {
 				organizationId: entry.organizationId,
 				festivalId: entry.festivalId,
@@ -104,6 +109,67 @@ export class InMemoryCustomerAvailabilityRepository
 	}
 }
 
+export interface CorruptAvailabilityRecordContext {
+	organizationId: string;
+	festivalId: string;
+	customerId: string;
+	subjectType: string;
+	subjectId: string;
+	festivalDate: string;
+	rawPayload: unknown;
+}
+
+export class CorruptAvailabilityDataError extends Error {
+	readonly organizationId: string;
+	readonly festivalId: string;
+	readonly customerId: string;
+	readonly subjectType: string;
+	readonly subjectId: string;
+	readonly festivalDate: string;
+	readonly rawPayload: unknown;
+
+	readonly organization_id: string;
+	readonly festival_id: string;
+	readonly customer_id: string;
+	readonly subject_type: string;
+	readonly subject_id: string;
+	readonly festival_date: string;
+	readonly raw_payload: unknown;
+
+	constructor(
+		message: string,
+		context: CorruptAvailabilityRecordContext,
+		options?: { cause?: unknown },
+	) {
+		const rawPayloadStr =
+			typeof context.rawPayload === "string"
+				? context.rawPayload
+				: JSON.stringify(context.rawPayload);
+
+		super(
+			`${message} [organization_id=${context.organizationId}, festival_id=${context.festivalId}, customer_id=${context.customerId}, subject_type=${context.subjectType}, subject_id=${context.subjectId}, festival_date=${context.festivalDate}, raw_payload=${rawPayloadStr}]`,
+			options,
+		);
+		this.name = "CorruptAvailabilityDataError";
+
+		this.organizationId = context.organizationId;
+		this.festivalId = context.festivalId;
+		this.customerId = context.customerId;
+		this.subjectType = context.subjectType;
+		this.subjectId = context.subjectId;
+		this.festivalDate = context.festivalDate;
+		this.rawPayload = context.rawPayload;
+
+		this.organization_id = context.organizationId;
+		this.festival_id = context.festivalId;
+		this.customer_id = context.customerId;
+		this.subject_type = context.subjectType;
+		this.subject_id = context.subjectId;
+		this.festival_date = context.festivalDate;
+		this.raw_payload = context.rawPayload;
+	}
+}
+
 function schemaName(value: string): string {
 	if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(value)) {
 		throw new Error("Database schema is invalid.");
@@ -111,14 +177,63 @@ function schemaName(value: string): string {
 	return value;
 }
 
-function parseHoursJson(raw: unknown): AvailabilityHour[] {
-	const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
-	if (!Array.isArray(parsed)) {
-		return [];
+export function parseAvailabilityHours(
+	raw: unknown,
+	context: CorruptAvailabilityRecordContext,
+): AvailabilityHour[] {
+	let parsed: unknown = raw;
+	if (typeof raw === "string") {
+		try {
+			parsed = JSON.parse(raw);
+		} catch (cause) {
+			throw new CorruptAvailabilityDataError(
+				"Corrupt customer festival availability: invalid JSON.",
+				context,
+				{ cause },
+			);
+		}
 	}
-	return normalizeAvailableHours(
-		parsed.filter((value): value is number => typeof value === "number"),
-	);
+
+	if (!Array.isArray(parsed)) {
+		throw new CorruptAvailabilityDataError(
+			"Corrupt customer festival availability: expected array payload.",
+			context,
+		);
+	}
+
+	for (const value of parsed) {
+		if (typeof value !== "number" || !isAvailabilityHour(value)) {
+			throw new CorruptAvailabilityDataError(
+				`Corrupt customer festival availability: invalid hour ${JSON.stringify(value)}.`,
+				context,
+			);
+		}
+	}
+
+	try {
+		return normalizeAvailableHours(parsed as number[]);
+	} catch (cause) {
+		throw new CorruptAvailabilityDataError(
+			"Corrupt customer festival availability: failed to normalize hours.",
+			context,
+			{ cause },
+		);
+	}
+}
+
+export function parseHoursJson(
+	raw: unknown,
+	context?: Partial<CorruptAvailabilityRecordContext>,
+): AvailabilityHour[] {
+	return parseAvailabilityHours(raw, {
+		organizationId: context?.organizationId ?? "unknown",
+		festivalId: context?.festivalId ?? "unknown",
+		customerId: context?.customerId ?? "unknown",
+		subjectType: context?.subjectType ?? "unknown",
+		subjectId: context?.subjectId ?? "unknown",
+		festivalDate: context?.festivalDate ?? "unknown",
+		rawPayload: raw,
+	});
 }
 
 export class PostgresCustomerAvailabilityRepository
@@ -155,16 +270,36 @@ export class PostgresCustomerAvailabilityRepository
 			[input.organizationId, input.festivalId, input.customerId],
 		)) as Array<Record<string, unknown>>;
 
-		return rows.map((row) => ({
-			organizationId: row.organization_id as string,
-			festivalId: row.festival_id as string,
-			customerId: row.customer_id as string,
-			subjectType: row.subject_type as AvailabilitySubjectType,
-			subjectId: row.subject_id as string,
-			festivalDate: row.festival_date as string,
-			availableHours: parseHoursJson(row.available_hours),
-			updatedAtIso: row.updated_at as string,
-		}));
+		return rows.map((row) => {
+			const organizationId = row.organization_id as string;
+			const festivalId = row.festival_id as string;
+			const customerId = row.customer_id as string;
+			const subjectType = row.subject_type as AvailabilitySubjectType;
+			const subjectId = row.subject_id as string;
+			const festivalDate = row.festival_date as string;
+			const rawPayload = row.available_hours;
+
+			const availableHours = parseAvailabilityHours(rawPayload, {
+				organizationId,
+				festivalId,
+				customerId,
+				subjectType,
+				subjectId,
+				festivalDate,
+				rawPayload,
+			});
+
+			return {
+				organizationId,
+				festivalId,
+				customerId,
+				subjectType,
+				subjectId,
+				festivalDate,
+				availableHours,
+				updatedAtIso: row.updated_at as string,
+			};
+		});
 	}
 
 	async upsertAvailability(
@@ -189,9 +324,9 @@ export class PostgresCustomerAvailabilityRepository
 					) VALUES ($1, $2, $3, $4, $5, $6::date, $7::jsonb, NOW())
 					ON CONFLICT (organization_id, festival_id, subject_type, subject_id, festival_date)
 					DO UPDATE SET
-						customer_id = EXCLUDED.customer_id,
 						available_hours = EXCLUDED.available_hours,
-						updated_at = NOW()`,
+						updated_at = NOW()
+					WHERE customer_festival_availability.customer_id = EXCLUDED.customer_id`,
 					[
 						entry.organizationId,
 						entry.festivalId,

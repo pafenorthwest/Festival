@@ -30,6 +30,7 @@ import {
 	calendarDateInTimezone,
 	deriveFestivalMetadataCutoff,
 	evaluateClassCapacityStatus,
+	isAccompanistMembershipGrantActive,
 	validateCustomerAccountSettings,
 	validateCustomerProfileInput,
 } from "@festival/common";
@@ -1371,7 +1372,7 @@ export class CustomerAccountService {
 		const active = grants.find(
 			(g) =>
 				(g.id === trimmed || g.customerId === trimmed) &&
-				(g.status === "active" || g.isCurrent === true),
+				isAccompanistMembershipGrantActive(g),
 		);
 		if (!active) {
 			throw new AppError(

@@ -249,7 +249,8 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			PRIMARY KEY (organization_id, festival_id, subject_type, subject_id, festival_date),
 			FOREIGN KEY (festival_id, organization_id) REFERENCES ${safeSchema}.festivals (id, organization_id) ON DELETE CASCADE,
-			FOREIGN KEY (customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers (id, organization_id) ON DELETE CASCADE
+			FOREIGN KEY (customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers (id, organization_id) ON DELETE CASCADE,
+			CONSTRAINT chk_customer_festival_availability_hours CHECK (jsonb_typeof(available_hours) = 'array' AND available_hours <@ '[8,9,10,11,12,13,14,15,16,17]'::jsonb)
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.checkout_carts (
 			reference TEXT PRIMARY KEY, shopify_cart_id TEXT NOT NULL,
@@ -916,6 +917,24 @@ export async function initializePostgresSchema(schema: string): Promise<void> {
 		);
 		await transaction.unsafe(
 			`ALTER TABLE IF EXISTS ${safeSchema}.repertoire_works ADD COLUMN IF NOT EXISTS imslp_url TEXT;`,
+		);
+		await transaction.unsafe(
+			`DO $$
+			BEGIN
+				IF to_regclass('${safeSchema}.customer_festival_availability') IS NOT NULL AND NOT EXISTS (
+					SELECT 1
+					FROM pg_constraint con
+					JOIN pg_class rel ON rel.oid = con.conrelid
+					JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+					WHERE nsp.nspname = '${safeSchema}'
+					  AND rel.relname = 'customer_festival_availability'
+					  AND con.conname = 'chk_customer_festival_availability_hours'
+				) THEN
+					ALTER TABLE ${safeSchema}.customer_festival_availability
+					ADD CONSTRAINT chk_customer_festival_availability_hours
+					CHECK (jsonb_typeof(available_hours) = 'array' AND available_hours <@ '[8,9,10,11,12,13,14,15,16,17]'::jsonb);
+				END IF;
+			END $$;`,
 		);
 	});
 	initializations.set(safeSchema, initialization);

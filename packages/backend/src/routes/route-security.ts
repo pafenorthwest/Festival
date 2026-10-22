@@ -675,16 +675,6 @@ export const CURRENT_ROUTE_SECURITY = [
 	},
 	{
 		method: "GET",
-		path: "/api/organizations/:slug/customer/availability",
-		authenticationClass: "customer",
-	},
-	{
-		method: "PUT",
-		path: "/api/organizations/:slug/customer/availability",
-		authenticationClass: "customer",
-	},
-	{
-		method: "GET",
 		path: "/api/organizations/:slug/customer-account/availability",
 		authenticationClass: "customer",
 	},

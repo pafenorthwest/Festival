@@ -163,7 +163,6 @@ export function buildApiRouter(
 		"/organizations/:slug/customer",
 		buildCustomerRoutes({
 			customerAccountService,
-			customerAvailabilityService,
 		}),
 	);
 	router.route(

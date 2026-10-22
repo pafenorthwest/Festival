@@ -6,6 +6,7 @@ import {
 	enumerateFestivalDates,
 	type FestivalRecord,
 	type FestivalSummary,
+	isAccompanistMembershipGrantActive,
 	normalizeAvailableHours,
 	type SaveCustomerFestivalAvailabilityRequest,
 	type SubjectFestivalAvailability,
@@ -125,7 +126,7 @@ export class CustomerAvailabilityService {
 				organizationId,
 				customerId,
 			});
-		return Boolean(grant && grant.status === "active" && grant.isCurrent);
+		return Boolean(grant && isAccompanistMembershipGrantActive(grant));
 	}
 
 	private async resolveEligibleSubjects(
