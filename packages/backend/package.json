@@ -12,7 +12,8 @@
 		"dev": "bun --watch src/index.ts",
 		"lint": "tsc -p tsconfig.json --noEmit",
 		"build": "tsc -p tsconfig.json",
-		"test": "bun test"
+		"test": "bun test",
+		"seed:test-data": "bun run scripts/load-test-data.ts"
 	},
 	"type": "module"
 }
