@@ -11,6 +11,7 @@ shopify.app.toml
 
 # token files
 tok~ns
+database.env
 
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json

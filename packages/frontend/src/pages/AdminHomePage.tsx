@@ -48,6 +48,13 @@ export function AdminHomePage(props: AdminHomePageProps) {
 					type="button"
 					class="admin-workflow-card"
 					disabled={!props.app.isAdminMember()}
+					data-preload-path={
+						props.app.sessionMembership()
+							? buildOrgAdminDivisionsPath(
+									props.app.sessionMembership()?.organizationSlug ?? "",
+								)
+							: undefined
+					}
 					onClick={() => {
 						const membership = props.app.sessionMembership();
 						if (!membership || !props.app.isAdminMember()) return;
@@ -63,6 +70,13 @@ export function AdminHomePage(props: AdminHomePageProps) {
 					type="button"
 					class="admin-workflow-card"
 					disabled={!props.app.isAdminMember()}
+					data-preload-path={
+						props.app.sessionMembership()
+							? buildOrgAdminUsersPath(
+									props.app.sessionMembership()?.organizationSlug ?? "",
+								)
+							: undefined
+					}
 					onClick={() => {
 						const membership = props.app.sessionMembership();
 						if (!membership || !props.app.isAdminMember()) {
@@ -81,6 +95,13 @@ export function AdminHomePage(props: AdminHomePageProps) {
 					type="button"
 					class="admin-workflow-card"
 					disabled={!props.app.isAdminMember()}
+					data-preload-path={
+						props.app.sessionMembership()
+							? buildOrgAdminFestivalsPath(
+									props.app.sessionMembership()?.organizationSlug ?? "",
+								)
+							: undefined
+					}
 					onClick={() => {
 						const membership = props.app.sessionMembership();
 						if (!membership || !props.app.isAdminMember()) {
@@ -99,6 +120,13 @@ export function AdminHomePage(props: AdminHomePageProps) {
 					type="button"
 					class="admin-workflow-card shopify-integration-card"
 					disabled={!props.app.isAdminMember()}
+					data-preload-path={
+						props.app.sessionMembership()
+							? buildOrgAdminIntegrationsPath(
+									props.app.sessionMembership()?.organizationSlug ?? "",
+								)
+							: undefined
+					}
 					onClick={() => {
 						const membership = props.app.sessionMembership();
 						if (!membership || !props.app.isAdminMember()) {
@@ -117,6 +145,13 @@ export function AdminHomePage(props: AdminHomePageProps) {
 					type="button"
 					class="admin-workflow-card"
 					disabled={!props.app.isAdminMember()}
+					data-preload-path={
+						props.app.sessionMembership()
+							? buildOrgAdminMembershipsPath(
+									props.app.sessionMembership()?.organizationSlug ?? "",
+								)
+							: undefined
+					}
 					onClick={() => {
 						const membership = props.app.sessionMembership();
 						if (!membership || !props.app.isAdminMember()) {
@@ -135,6 +170,13 @@ export function AdminHomePage(props: AdminHomePageProps) {
 					type="button"
 					class="admin-workflow-card"
 					disabled={!props.app.isAdminMember()}
+					data-preload-path={
+						props.app.sessionMembership()
+							? buildOrgAdminSettingsPath(
+									props.app.sessionMembership()?.organizationSlug ?? "",
+								)
+							: undefined
+					}
 					onClick={() => {
 						const membership = props.app.sessionMembership();
 						if (!membership || !props.app.isAdminMember()) return;
@@ -150,6 +192,13 @@ export function AdminHomePage(props: AdminHomePageProps) {
 					type="button"
 					class="admin-workflow-card"
 					disabled={!props.app.hasVolunteerAdminIntent()}
+					data-preload-path={
+						props.app.sessionMembership()
+							? buildOrgAdminVolunteersPath(
+									props.app.sessionMembership()?.organizationSlug ?? "",
+								)
+							: undefined
+					}
 					onClick={() => {
 						const membership = props.app.sessionMembership();
 						if (!membership || !props.app.hasVolunteerAdminIntent()) {
@@ -168,6 +217,7 @@ export function AdminHomePage(props: AdminHomePageProps) {
 					type="button"
 					class="admin-workflow-card"
 					disabled={!props.app.isAdminMember()}
+					data-preload-path={buildOrgAdminRoomsPath(props.app.slug)}
 					onClick={() => {
 						if (!props.app.isAdminMember()) return;
 						props.app.navigate(buildOrgAdminRoomsPath(props.app.slug));
@@ -180,6 +230,7 @@ export function AdminHomePage(props: AdminHomePageProps) {
 					type="button"
 					class="admin-workflow-card checkout-recovery-card"
 					disabled={!props.app.isAdminMember()}
+					data-preload-path={buildOrgAdminCheckoutRecoveryPath(props.app.slug)}
 					onClick={() => {
 						if (!props.app.isAdminMember()) return;
 						props.app.navigate(

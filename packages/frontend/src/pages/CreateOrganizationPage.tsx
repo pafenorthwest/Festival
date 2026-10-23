@@ -129,6 +129,7 @@ export function CreateOrganizationPage(props: CreateOrganizationPageProps) {
 								<Button
 									type="button"
 									variant="secondary"
+									data-preload-path={buildOrgPath(membership.organizationSlug)}
 									onClick={() =>
 										props.app.navigate(
 											buildOrgPath(membership.organizationSlug),

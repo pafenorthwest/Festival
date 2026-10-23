@@ -5,7 +5,7 @@ import {
 	getPublicOrganizationLanding,
 	logoutCustomer,
 } from "../lib/api.js";
-import { isOrganizationPageRoute } from "../lib/routes.js";
+import { buildOrgPath, isOrganizationPageRoute } from "../lib/routes.js";
 import { Button } from "./Button.js";
 
 interface AppHeaderProps {
@@ -72,6 +72,13 @@ export function AppHeader(props: AppHeaderProps) {
 								<Button
 									type="button"
 									variant="compact-header"
+									data-preload-path={
+										props.app.sessionMembership()
+											? buildOrgPath(
+													props.app.sessionMembership()?.organizationSlug ?? "",
+												)
+											: undefined
+									}
 									onClick={props.app.backToAdmin}
 								>
 									Back to Admin
