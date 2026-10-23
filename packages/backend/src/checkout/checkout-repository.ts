@@ -318,7 +318,11 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 			const failure = await capacityCheck?.();
 			if (failure) throw failure;
 			const intent = this.intents.get(input.intentId);
-			if (!intent || intent.status !== "creating")
+			if (
+				!intent ||
+				intent.organizationId !== input.organizationId ||
+				intent.status !== "creating"
+			)
 				throw new Error("Checkout intent cannot accept a cart.");
 			const value: CheckoutCartRecord = {
 				...cartInput,
@@ -439,6 +443,17 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		repertoireSnapshotPieces?: RepertoirePiece[];
 		registrationSnapshot?: ClassRegistrationSnapshot | null;
 	}): Promise<ClassRegistrationMetadata> {
+		for (const existing of this.registrationMetadata.values()) {
+			if (existing.id === params.id)
+				throw new Error("Registration metadata ID already exists.");
+			if (
+				params.checkoutIntentLineId != null &&
+				existing.checkoutIntentLineId === params.checkoutIntentLineId
+			)
+				throw new Error(
+					"Registration metadata checkout intent line already exists.",
+				);
+		}
 		const repertoireItems = repertoireItemsFromLegacyPieces(
 			params.id,
 			params.organizationId,

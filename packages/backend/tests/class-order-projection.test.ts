@@ -1561,6 +1561,8 @@ describe("Class Order Projection and Entitlements", () => {
 		});
 		const attachedFirst = await f.checkout.attachCart({
 			intentId: f.intent.id,
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
 			cartReference: "gid://shopify/Cart/cart-a",
 			checkoutUrl: "https://seattle-fest.myshopify.com/cart/c/cart-a",
 		});
@@ -1616,6 +1618,8 @@ describe("Class Order Projection and Entitlements", () => {
 		}
 		const attachedSecond = await f.checkout.attachCart({
 			intentId: secondCreated.intent.id,
+			organizationId: f.organization.id,
+			customerId: secondCustomer.id,
 			cartReference: "gid://shopify/Cart/cart-b",
 			checkoutUrl: "https://seattle-fest.myshopify.com/cart/c/cart-b",
 		});

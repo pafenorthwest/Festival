@@ -1,17 +1,19 @@
 import { expect, test } from "bun:test";
-import { randomUUID } from "node:crypto";
 import { sql } from "bun";
 import { PostgresOrganizationRepository } from "../src/repo/postgres-organization-repository.js";
-import { initializePostgresSchema } from "../src/repo/postgres-schema.js";
+import {
+	currentPostgresFixture,
+	resetPostgresFixture,
+} from "./postgres-test-fixture.js";
 
+const currentSchema = currentPostgresFixture("class_capacity_atomic");
 const integrationTest = process.env.POSTGRES_INTEGRATION_URL ? test : test.skip;
 
 integrationTest(
 	"PostgreSQL rolls back class mutations when auditing fails and serializes capacity history",
 	async () => {
-		const schema = `capacity_atomic_${randomUUID().replaceAll("-", "")}`;
+		const schema = await currentSchema();
 		try {
-			await initializePostgresSchema(schema);
 			const repo = new PostgresOrganizationRepository(schema);
 			const org = await repo.createOrganization({
 				name: "Atomic",
@@ -165,7 +167,7 @@ integrationTest(
 				)?.capacity,
 			).toBe(second?.newCapacity);
 		} finally {
-			await sql.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+			await resetPostgresFixture(schema);
 		}
 	},
 );

@@ -4,6 +4,7 @@ import {
 	InMemoryRepertoireRepository,
 	PostgresRepertoireRepository,
 } from "../src/repertoire/index.js";
+import { withApplicationRollback } from "./postgres-application-fixture.js";
 
 describe("Repertoire Repository Layer", () => {
 	const orgA = "org-festival-a";
@@ -520,19 +521,21 @@ describe("Repertoire Repository Layer", () => {
 			"executes sync, list, claim, normalizeAndApprove, and search against PostgreSQL",
 			async () => {
 				const { sql } = await import("bun");
-				const schema = `repo_${randomUUID().replaceAll("-", "")}`;
-				const repo = new PostgresRepertoireRepository(schema);
-				await repo.ensureReady();
+				await withApplicationRollback(async (fixture) => {
+					const schema = fixture.schema;
+					const repo = fixture.repository(
+						new PostgresRepertoireRepository(schema),
+					);
+					await repo.ensureReady();
 
-				const orgId = randomUUID();
-				const festivalId = randomUUID();
-				const customerId = randomUUID();
-				const intentId = randomUUID();
-				const membershipId = randomUUID();
-				const metadataId = randomUUID();
-				const snapId = randomUUID();
+					const orgId = fixture.id("org");
+					const festivalId = randomUUID();
+					const customerId = randomUUID();
+					const intentId = randomUUID();
+					const membershipId = randomUUID();
+					const metadataId = randomUUID();
+					const snapId = randomUUID();
 
-				try {
 					await sql.unsafe(`
 						INSERT INTO ${schema}.organizations (id, name, slug) VALUES ('${orgId}', 'Org ${orgId}', 'org-${orgId}');
 						INSERT INTO ${schema}.festivals (id, organization_id, code, short_name, is_primary, name, start_date, end_date)
@@ -540,11 +543,11 @@ describe("Repertoire Repository Layer", () => {
 						INSERT INTO ${schema}.festival_customers (id, organization_id, shopify_customer_gid, created_at, updated_at)
 						VALUES ('${customerId}', '${orgId}', 'gid://shopify/Customer/${customerId}', NOW(), NOW());
 						INSERT INTO ${schema}.products (id, organization_id, product_category, entitlement_class, duration_days, shopify_product_gid, shopify_variant_gid, product_name_snapshot)
-						VALUES ('prod-${membershipId}', '${orgId}', 'membership', 'teacher_membership', 365, 'gid://shopify/Product/1', 'gid://shopify/Variant/1', 'Teacher');
+						VALUES ('prod-${membershipId}', '${orgId}', 'membership', 'teacher_membership', 365, 'gid://shopify/Product/${membershipId}', 'gid://shopify/Variant/${membershipId}', 'Teacher');
 						INSERT INTO ${schema}.membership_entitlements (id, organization_id, customer_id, entitlement_class, source, offering_id, starts_on, ends_on)
 						VALUES ('${membershipId}', '${orgId}', '${customerId}', 'teacher_membership', 'teacher_checkout', 'prod-${membershipId}', '2026-01-01', '2027-01-01');
 						INSERT INTO ${schema}.checkout_intents (id, correlation_id, organization_id, customer_id, session_id, idempotency_key, intent_type, shopify_product_gid, shopify_variant_gid, amount, currency_code, status, expires_at)
-						VALUES ('${intentId}', '${randomUUID()}', '${orgId}', '${customerId}', 'sess-1', 'idem-1', 'membership', 'gid://shopify/Product/1', 'gid://shopify/Variant/1', '10.00', 'USD', 'checkout_started', NOW() + INTERVAL '1 hour');
+						VALUES ('${intentId}', '${randomUUID()}', '${orgId}', '${customerId}', '${fixture.id("session")}', '${fixture.id("key")}', 'membership', 'gid://shopify/Product/${membershipId}', 'gid://shopify/Variant/${membershipId}', '10.00', 'USD', 'checkout_started', NOW() + INTERVAL '1 hour');
 						INSERT INTO ${schema}.registration_metadata (id, organization_id, festival_id, checkout_intent_id, teacher_membership_id, repertoire_json)
 						VALUES ('${metadataId}', '${orgId}', '${festivalId}', '${intentId}', '${membershipId}', '[]');
 						INSERT INTO ${schema}.registration_repertoire_items (id, organization_id, registration_metadata_id, title_snapshot, duration_seconds, display_order)
@@ -602,9 +605,7 @@ describe("Repertoire Repository Layer", () => {
 					});
 					expect(searchAdded).toHaveLength(1);
 					expect(searchAdded[0].id).toBe(addedWork.id);
-				} finally {
-					await sql.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
-				}
+				});
 			},
 		);
 	});

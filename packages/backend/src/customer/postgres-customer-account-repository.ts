@@ -382,9 +382,7 @@ export class PostgresCustomerAccountRepository
 			input.updatedAtIso,
 			input.profile.name ?? null,
 			input.profile.email ?? null,
-			input.profile.mailingAddress
-				? JSON.stringify(input.profile.mailingAddress)
-				: null,
+			input.profile.mailingAddress ?? null,
 			input.profile.phone ?? null,
 		];
 		const rows = (await sql.unsafe(
