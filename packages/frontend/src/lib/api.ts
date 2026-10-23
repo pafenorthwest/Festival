@@ -1573,6 +1573,7 @@ export interface StartClassCheckoutInput {
 	festivalClassId?: string;
 	childId?: string;
 	teacherId?: string;
+	instrumentId?: string;
 	pieces?: RepertoirePiece[];
 	divisionId?: string;
 	accompanistId?: string;

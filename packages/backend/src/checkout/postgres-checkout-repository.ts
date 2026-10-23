@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type {
 	ClassRegistrationMetadata,
+	ClassRegistrationSnapshot,
 	RegistrationRepertoireItem,
 	RepertoirePiece,
 } from "@festival/common";
+import { normalizeClassRegistrationSnapshot } from "@festival/common";
 import { sql } from "bun";
 import { countConfirmedClassEntitlements } from "../commerce/postgres-class-entitlement-count.js";
 import { initializePostgresSchema } from "../repo/postgres-schema.js";
@@ -393,8 +395,12 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 		accompanistMembershipId: string | null;
 		repertoireJson: RepertoirePiece[];
 		repertoireSnapshotPieces?: RepertoirePiece[];
+		registrationSnapshot?: ClassRegistrationSnapshot | null;
 	}): Promise<ClassRegistrationMetadata> {
 		await this.ensureReady();
+		const registrationSnapshot = normalizeClassRegistrationSnapshot(
+			params.registrationSnapshot,
+		);
 		const repertoireItems = repertoireItemsFromLegacyPieces(
 			params.id,
 			params.organizationId,
@@ -402,7 +408,7 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 		);
 		const rows = (await sql.begin(async (tx) => {
 			const metadataRows = (await tx.unsafe(
-				`INSERT INTO ${this.schema}.registration_metadata (id, organization_id, festival_id, checkout_intent_id, checkout_intent_line_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json) VALUES ($1,$2,$3,$4,$5,NULL,$6,$7,$8) RETURNING id, organization_id, festival_id, checkout_intent_id, checkout_intent_line_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json, created_at`,
+				`INSERT INTO ${this.schema}.registration_metadata (id, organization_id, festival_id, checkout_intent_id, checkout_intent_line_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json, registration_snapshot) VALUES ($1,$2,$3,$4,$5,NULL,$6,$7,$8,$9) RETURNING id, organization_id, festival_id, checkout_intent_id, checkout_intent_line_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json, registration_snapshot, created_at`,
 				[
 					params.id,
 					params.organizationId,
@@ -412,6 +418,7 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 					params.teacherMembershipId,
 					params.accompanistMembershipId ?? null,
 					JSON.stringify(params.repertoireJson),
+					registrationSnapshot,
 				],
 			)) as Array<Record<string, unknown>>;
 			await insertRepertoireSnapshot(tx, this.schema, repertoireItems);
@@ -476,12 +483,12 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 		const json = JSON.stringify(input.pieces);
 		if (input.accompanistMembershipId !== undefined) {
 			return (await tx.unsafe(
-				`UPDATE ${this.schema}.registration_metadata SET accompanist_membership_id = $1, repertoire_json = $2 WHERE id = $3 AND organization_id = $4 RETURNING id, organization_id, festival_id, checkout_intent_id, checkout_intent_line_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json, created_at`,
+				`UPDATE ${this.schema}.registration_metadata SET accompanist_membership_id = $1, repertoire_json = $2 WHERE id = $3 AND organization_id = $4 RETURNING id, organization_id, festival_id, checkout_intent_id, checkout_intent_line_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json, registration_snapshot, created_at`,
 				[input.accompanistMembershipId, json, target.id, target.organizationId],
 			)) as Array<Record<string, unknown>>;
 		}
 		return (await tx.unsafe(
-			`UPDATE ${this.schema}.registration_metadata SET repertoire_json = $1 WHERE id = $2 AND organization_id = $3 RETURNING id, organization_id, festival_id, checkout_intent_id, checkout_intent_line_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json, created_at`,
+			`UPDATE ${this.schema}.registration_metadata SET repertoire_json = $1 WHERE id = $2 AND organization_id = $3 RETURNING id, organization_id, festival_id, checkout_intent_id, checkout_intent_line_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json, registration_snapshot, created_at`,
 			[json, target.id, target.organizationId],
 		)) as Array<Record<string, unknown>>;
 	}
@@ -510,7 +517,7 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 	): Promise<ClassRegistrationMetadata | null> {
 		await this.ensureReady();
 		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, festival_id, checkout_intent_id, checkout_intent_line_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json, created_at FROM ${this.schema}.registration_metadata WHERE organization_id = $1 AND class_entitlement_id = $2 LIMIT 1`,
+			`SELECT id, organization_id, festival_id, checkout_intent_id, checkout_intent_line_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json, registration_snapshot, created_at FROM ${this.schema}.registration_metadata WHERE organization_id = $1 AND class_entitlement_id = $2 LIMIT 1`,
 			[organizationId, classEntitlementId],
 		)) as Array<Record<string, unknown>>;
 		if (!rows[0]) return null;

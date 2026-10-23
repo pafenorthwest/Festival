@@ -118,6 +118,16 @@ export function normalizeMaxPieces(pieces?: number): 1 | 2 | 3 {
 	return 1;
 }
 
+export function isInstrumentSelectionValid(
+	instruments: { id: string }[],
+	selectedId: string,
+): boolean {
+	return (
+		instruments.length === 0 ||
+		instruments.some((instrument) => instrument.id === selectedId)
+	);
+}
+
 export function findById<T extends { id: string }>(
 	items: T[] | undefined,
 	id: string,
@@ -150,12 +160,18 @@ export function createRegistrationSelectHandlers(
 	setTeacher: (id: string) => void,
 	setClass: (id: string) => void,
 	setAccompanist: (id: string) => void,
+	setInstrument: (id: string) => void = () => {},
 ) {
 	return {
-		onChildChange: createSelectHandler(setChild, [setClass]),
-		onDivisionChange: createSelectHandler(setDivision, [setTeacher, setClass]),
-		onTeacherChange: createSelectHandler(setTeacher, [setClass]),
-		onClassChange: createSelectHandler(setClass),
+		onChildChange: createSelectHandler(setChild, [setClass, setInstrument]),
+		onDivisionChange: createSelectHandler(setDivision, [
+			setTeacher,
+			setClass,
+			setInstrument,
+		]),
+		onTeacherChange: createSelectHandler(setTeacher, [setClass, setInstrument]),
+		onClassChange: createSelectHandler(setClass, [setInstrument]),
 		onAccompanistChange: createSelectHandler(setAccompanist),
+		onInstrumentChange: createSelectHandler(setInstrument),
 	};
 }

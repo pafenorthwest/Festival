@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import type { ClassRegistrationSnapshot } from "@festival/common";
 import {
 	CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL,
 	InMemoryCheckoutRepository,
@@ -11,6 +12,7 @@ import { ShopifyOrderProjectionService } from "../src/commerce/shopify-order-pro
 import { InMemoryCustomerAccountRepository } from "../src/customer/in-memory-customer-account-repository.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
 import { ShopifySecretKeyring } from "../src/shopify/encryption.js";
+import { ShopifyAdminApiError } from "../src/shopify/errors.js";
 import type {
 	ShopifyOrderCustomerProfile,
 	ShopifyPaidOrder,
@@ -311,6 +313,124 @@ async function delivery(
 }
 
 describe("Class Order Projection and Entitlements", () => {
+	it("links the original selection to the verified paid line and preserves it through edits, replay and reconciliation", async () => {
+		const f = await fixture();
+		const original: ClassRegistrationSnapshot = {
+			version: 1,
+			capturedAtIso: NOW.toISOString(),
+			class: {
+				id: f.classConfig.id,
+				festivalId: f.festival.id,
+				displayName: f.classConfig.displayName,
+				classSubtypeId: f.classConfig.classSubtypeId,
+				classSubtypeName: "Solo Performance",
+				minimumAge: 8,
+				maximumAge: 18,
+				price: "50.00",
+				currencyCode: "USD",
+				maximumPerformancePieces: 2,
+				performanceMinutes: 15,
+				capacity: 25,
+			},
+			division: { id: f.division.id, name: f.division.displayName },
+			instrument: { id: "violin", name: "Violin" },
+			teacher: {
+				customerId: "teacher",
+				membershipId: "teacher-membership",
+				name: "Original Teacher",
+			},
+			accompanist: {
+				customerId: "accompanist",
+				membershipId: "accompanist-membership",
+				name: "Original Accompanist",
+			},
+			repertoire: [
+				{
+					title: "Original piece",
+					composer: "Composer",
+					movement: "Variation I",
+					durationSeconds: 120,
+				},
+			],
+		};
+		await f.checkout.insertRegistrationMetadata({
+			id: "snapshot-metadata",
+			organizationId: f.organization.id,
+			festivalId: f.festival.id,
+			checkoutIntentId: f.intent.id,
+			checkoutIntentLineId: SINGLE_INTENT_LINE_ID,
+			teacherMembershipId: original.teacher.membershipId,
+			accompanistMembershipId: original.accompanist?.membershipId ?? null,
+			repertoireJson: original.repertoire,
+			registrationSnapshot: original,
+		});
+		const order = paidClassOrder(f.intent.correlationId);
+		f.orders.values.set(order.id, order);
+		const received = await delivery(
+			f.commerce,
+			f.organization.id,
+			"snapshot-paid-first",
+		);
+		expect(await f.service.processDelivery(received.id)).toBe("processed");
+		const entitlements = await f.commerce.listClassEntitlements({
+			organizationId: f.organization.id,
+		});
+		expect(entitlements).toHaveLength(1);
+		expect(entitlements[0]).toMatchObject({
+			parentCustomerId: f.customer.id,
+			childId: f.child.id,
+			checkoutIntentLineId: SINGLE_INTENT_LINE_ID,
+			shopifyOrderLineGid: order.lineItems[0].id,
+			status: "confirmed",
+		});
+		expect(
+			(
+				await f.checkout.getRegistrationMetadataByEntitlementId(
+					f.organization.id,
+					entitlements[0].id,
+				)
+			)?.registrationSnapshot,
+		).toEqual(original);
+		await f.organizations.updateFestivalClassConfiguration({
+			id: f.classConfig.id,
+			organizationId: f.organization.id,
+			festivalId: f.festival.id,
+			displayName: "Changed class",
+			capacity: 100,
+		});
+		f.organizations.setCustomerName("teacher", "Changed Teacher");
+		await f.checkout.updateRegistrationMetadata(
+			"snapshot-metadata",
+			f.organization.id,
+			{
+				pieces: [
+					{ title: "Replacement", composer: "Other", durationSeconds: 90 },
+				],
+				accompanistMembershipId: null,
+			},
+		);
+		const replay = await delivery(
+			f.commerce,
+			f.organization.id,
+			"snapshot-paid-replay",
+		);
+		expect(await f.service.processDelivery(replay.id)).toBe("skipped");
+		f.orders.listed.push(order);
+		await f.service.reconcile(f.organization.id);
+		expect(
+			await f.commerce.listClassEntitlements({
+				organizationId: f.organization.id,
+			}),
+		).toHaveLength(1);
+		const metadata = await f.checkout.getRegistrationMetadataByEntitlementId(
+			f.organization.id,
+			entitlements[0].id,
+		);
+		expect(metadata?.registrationSnapshot).toEqual(original);
+		expect(metadata?.repertoireJson[0].title).toBe("Replacement");
+		expect(metadata?.accompanistMembershipId).toBeNull();
+	});
+
 	it("successfully projects a Shopify orders/paid webhook creating a confirmed ClassEntitlement", async () => {
 		const f = await fixture();
 		const order = paidClassOrder(f.intent.correlationId);
@@ -388,6 +508,131 @@ describe("Class Order Projection and Entitlements", () => {
 		);
 		expect(finalCheck?.status).toBe("waitlisted");
 	});
+
+	it("does not project a paid order correlated to another tenant's checkout intent", async () => {
+		const f = await fixture();
+		const foreignOrganization = await f.organizations.createOrganization({
+			name: "Other Festival",
+			slug: "other-festival",
+		});
+		// Keep all other identities matching so tenant-scoped correlation is decisive.
+		const foreign = await f.checkout.createIntent({
+			organizationId: foreignOrganization.id,
+			customerId: f.customer.id,
+			sessionId: "foreign-parent-session",
+			idempotencyKey: "foreign-checkout",
+			intentType: "class_entry",
+			festivalClassId: f.classConfig.id,
+			childId: f.child.id,
+			shopifyProductGid: f.classConfig.shopifyProductGid,
+			shopifyVariantGid: f.classConfig.shopifyVariantGid,
+			amount: "50.00",
+			currencyCode: "USD",
+			expiresAtIso: "2030-01-01T00:00:00.000Z",
+			lines: f.intent.lines,
+		});
+		if (foreign.kind !== "created") throw new Error("Expected foreign intent.");
+		const order = paidClassOrder(foreign.intent.correlationId);
+		f.orders.values.set(order.id, order);
+		const received = await delivery(
+			f.commerce,
+			f.organization.id,
+			"webhook-cross-tenant-correlation",
+		);
+
+		expect(await f.service.processDelivery(received.id)).toBe("processed");
+		expect(
+			await f.commerce.recordPendingDecision({
+				organizationId: f.organization.id,
+				shopifyOrderGid: order.id,
+				updatedAtIso: NOW.toISOString(),
+			}),
+		).toMatchObject({
+			status: "needs_review",
+			reasonCode: "correlation_invalid",
+		});
+		for (const organizationId of [f.organization.id, foreignOrganization.id]) {
+			expect(
+				await f.commerce.listClassEntitlements({ organizationId }),
+			).toEqual([]);
+		}
+		expect(
+			await f.checkout.findIntentByCorrelation(
+				foreignOrganization.id,
+				foreign.intent.correlationId,
+			),
+		).toMatchObject({ status: "creating" });
+	});
+
+	for (const failureStage of ["order_read", "projection"] as const) {
+		it(`redacts sensitive ${failureStage} diagnostics and retries without duplicate registrations`, async () => {
+			const f = await fixture();
+			const order = paidClassOrder(f.intent.correlationId);
+			f.orders.values.set(order.id, order);
+			const canaries = [
+				"secret-token-canary",
+				"private-parent@example.test",
+				"private-child-canary",
+			];
+			const originalFinalize = f.commerce.finalizeDecision.bind(f.commerce);
+			if (failureStage === "order_read") {
+				f.orders.readFailure = new ShopifyAdminApiError(canaries.join(" "), {
+					requestId: `request-id\n${canaries.join(" ")}`,
+				});
+			} else {
+				f.commerce.finalizeDecision = async () => {
+					throw new Error(canaries.join(" "));
+				};
+			}
+			const webhookId = `webhook-sensitive-${failureStage}`;
+			const received = await delivery(f.commerce, f.organization.id, webhookId);
+			expect(await f.service.processDelivery(received.id)).toBe("failed");
+			const recorded = await f.commerce.recordDelivery({
+				organizationId: f.organization.id,
+				shopDomain: "seattle-fest.myshopify.com",
+				webhookId,
+				topic: "orders/paid",
+				apiVersion: "2026-07",
+				shopifyOrderGid: order.id,
+				payloadSha256: "b".repeat(64),
+				receivedAtIso: NOW.toISOString(),
+			});
+			expect(recorded).toMatchObject({
+				kind: "duplicate",
+				delivery: {
+					status: "failed",
+					failureCategory: "upstream",
+					failureStage,
+					failureCode:
+						failureStage === "order_read" ? "shopify_upstream" : "unexpected",
+				},
+			});
+			const decision = await f.commerce.recordPendingDecision({
+				organizationId: f.organization.id,
+				shopifyOrderGid: order.id,
+				updatedAtIso: NOW.toISOString(),
+			});
+			const persisted = JSON.stringify({ recorded, decision });
+			for (const canary of canaries) expect(persisted).not.toContain(canary);
+			if (recorded.kind !== "duplicate") throw new Error("Expected duplicate.");
+			expect(recorded.delivery.shopifyRequestId).toBeUndefined();
+			expect(
+				await f.commerce.listClassEntitlements({
+					organizationId: f.organization.id,
+				}),
+			).toEqual([]);
+
+			f.orders.readFailure = undefined;
+			f.commerce.finalizeDecision = originalFinalize;
+			expect(await f.service.processDelivery(received.id)).toBe("processed");
+			expect(await f.service.processDelivery(received.id)).toBe("skipped");
+			expect(
+				await f.commerce.listClassEntitlements({
+					organizationId: f.organization.id,
+				}),
+			).toMatchObject([{ status: "confirmed", checkoutIntentId: f.intent.id }]);
+		});
+	}
 
 	it("records paid-line conflicts as retryable, diagnosable persistence failures", async () => {
 		const f = await fixture();

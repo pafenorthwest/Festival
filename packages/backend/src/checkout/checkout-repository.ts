@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type {
 	ClassRegistrationMetadata,
+	ClassRegistrationSnapshot,
 	RepertoirePiece,
 } from "@festival/common";
+import { normalizeClassRegistrationSnapshot } from "@festival/common";
 import type { AppError } from "../errors/app-error.js";
 import { withInMemoryCapacityLock } from "../repo/in-memory-capacity-lock.js";
 import {
@@ -160,6 +162,7 @@ export interface CheckoutRepository {
 		accompanistMembershipId: string | null;
 		repertoireJson: RepertoirePiece[];
 		repertoireSnapshotPieces?: RepertoirePiece[];
+		registrationSnapshot?: ClassRegistrationSnapshot | null;
 	}): Promise<ClassRegistrationMetadata>;
 	linkRegistrationMetadataToEntitlement(params: {
 		checkoutIntentId?: string;
@@ -434,6 +437,7 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		accompanistMembershipId: string | null;
 		repertoireJson: RepertoirePiece[];
 		repertoireSnapshotPieces?: RepertoirePiece[];
+		registrationSnapshot?: ClassRegistrationSnapshot | null;
 	}): Promise<ClassRegistrationMetadata> {
 		const repertoireItems = repertoireItemsFromLegacyPieces(
 			params.id,
@@ -451,6 +455,9 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 			accompanistMembershipId: params.accompanistMembershipId,
 			repertoireJson: params.repertoireJson,
 			repertoireItems,
+			registrationSnapshot: structuredClone(
+				normalizeClassRegistrationSnapshot(params.registrationSnapshot),
+			),
 			createdAt: this.now(),
 		};
 		this.registrationMetadata.set(params.id, record);
@@ -458,7 +465,7 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		if (params.checkoutIntentLineId) {
 			this.registrationMetadata.set(params.checkoutIntentLineId, record);
 		}
-		return { ...record };
+		return structuredClone(record);
 	}
 
 	async linkRegistrationMetadataToEntitlement(params: {
@@ -524,7 +531,14 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 				meta.organizationId === organizationId &&
 				meta.classEntitlementId === classEntitlementId,
 		);
-		return match ? { ...match } : null;
+		return match
+			? structuredClone({
+					...match,
+					registrationSnapshot: normalizeClassRegistrationSnapshot(
+						match.registrationSnapshot,
+					),
+				})
+			: null;
 	}
 
 	async updateRegistrationMetadata(
@@ -550,7 +564,12 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 			record.organizationId,
 			input.pieces,
 		);
-		return { ...record };
+		return structuredClone({
+			...record,
+			registrationSnapshot: normalizeClassRegistrationSnapshot(
+				record.registrationSnapshot,
+			),
+		});
 	}
 
 	private outcomeFor(

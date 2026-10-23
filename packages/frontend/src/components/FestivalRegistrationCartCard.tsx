@@ -11,6 +11,7 @@ interface FestivalRegistrationCartCardProps {
 	classPrice: string | null;
 	pieces: RepertoirePiece[];
 	accompanistName: string | null;
+	instrumentName?: string | null;
 	isValid: boolean;
 	isSubmitting: boolean;
 	error: string | null;
@@ -63,6 +64,12 @@ export function FestivalRegistrationCartCard(
 					<span>Accompanist:</span>
 					<strong>{props.accompanistName ?? "None"}</strong>
 				</div>
+				<Show when={props.instrumentName}>
+					<div class="division-row-heading">
+						<span>Instrument:</span>
+						<strong>{props.instrumentName}</strong>
+					</div>
+				</Show>
 
 				<div style="margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--bullet-panel-border);">
 					<div class="division-row-heading">
