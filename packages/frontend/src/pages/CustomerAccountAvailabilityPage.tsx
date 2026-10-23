@@ -206,6 +206,7 @@ export function CustomerAccountAvailabilityPage(props: { slug: string }) {
 							<select
 								aria-label="Festival"
 								value={selectedFestivalId() ?? ""}
+								disabled={saving()}
 								onChange={(event) =>
 									void loadAvailability(event.currentTarget.value)
 								}
