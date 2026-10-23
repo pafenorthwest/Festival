@@ -683,6 +683,16 @@ export const CURRENT_ROUTE_SECURITY = [
 		path: "/api/organizations/:slug/communication/events",
 		authenticationClass: "tenant",
 	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/customer-account/availability",
+		authenticationClass: "customer",
+	},
+	{
+		method: "PUT",
+		path: "/api/organizations/:slug/customer-account/availability",
+		authenticationClass: "customer",
+	},
 ] as const satisfies readonly RouteSecurityDeclaration[];
 
 interface RegisteredRoute {

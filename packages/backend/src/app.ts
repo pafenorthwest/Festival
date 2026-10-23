@@ -61,6 +61,12 @@ import { PostgresCommunicationRepository } from "./communication/postgres-commun
 import { type AppEnv, LOCAL_API_ORIGINS, loadEnv } from "./config/env.js";
 import type { CustomerAccountRepository } from "./customer/customer-account-repository.js";
 import { CustomerAccountService } from "./customer/customer-account-service.js";
+import {
+	type CustomerAvailabilityRepository,
+	InMemoryCustomerAvailabilityRepository,
+	PostgresCustomerAvailabilityRepository,
+} from "./customer/customer-availability-repository.js";
+import { CustomerAvailabilityService } from "./customer/customer-availability-service.js";
 import { PostgresCustomerAccountRepository } from "./customer/postgres-customer-account-repository.js";
 import { DropTransferService } from "./registration/drop-transfer-service.js";
 import {
@@ -121,6 +127,8 @@ export interface CreateAppOptions {
 	shopifyIntegrationDiagnosticService?: ShopifyIntegrationDiagnosticService;
 	customerAccountRepository?: CustomerAccountRepository;
 	customerAccountService?: CustomerAccountService;
+	customerAvailabilityRepository?: CustomerAvailabilityRepository;
+	customerAvailabilityService?: CustomerAvailabilityService;
 	checkoutRepository?: CheckoutRepository;
 	membershipCheckoutService?: MembershipCheckoutService;
 	classCheckoutService?: ClassCheckoutService;
@@ -359,6 +367,26 @@ export async function createApp(options: CreateAppOptions = {}) {
 					checkoutRepository,
 				)
 			: undefined);
+	const customerAvailabilityRepository =
+		options.customerAvailabilityRepository ??
+		(env.databaseSchema
+			? new PostgresCustomerAvailabilityRepository(env.databaseSchema)
+			: new InMemoryCustomerAvailabilityRepository());
+	if (
+		customerAvailabilityRepository instanceof
+		PostgresCustomerAvailabilityRepository
+	)
+		await customerAvailabilityRepository.ensureReady();
+	const customerAvailabilityService =
+		options.customerAvailabilityService ??
+		(customerAccountRepository && customerAccountService
+			? new CustomerAvailabilityService(
+					customerAvailabilityRepository,
+					repository,
+					customerAccountRepository,
+					customerAccountService,
+				)
+			: undefined);
 	const membershipCheckoutService =
 		options.membershipCheckoutService ??
 		(secretKeyring
@@ -571,7 +599,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 		cors({
 			origin: (origin) => (allowedApiOrigins.has(origin) ? origin : undefined),
 			allowHeaders: ["Authorization", "Content-Type", "X-CSRF-Token"],
-			allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+			allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
 			credentials: true,
 		}),
 	);
@@ -589,6 +617,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 			shopifyIntegrationService,
 			shopifyMembershipProductService,
 			customerAccountService,
+			customerAvailabilityService,
 			publicMembershipProductService,
 			shopifyIntegrationDiagnosticService,
 			membershipCheckoutService,

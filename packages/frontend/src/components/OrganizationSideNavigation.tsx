@@ -1,5 +1,6 @@
 import { createSignal } from "solid-js";
 import {
+	buildOrgCustomerAccountAvailabilityPath,
 	buildOrgCustomerAccountClassesPath,
 	buildOrgCustomerAccountContactPath,
 	buildOrgCustomerAccountMembershipsPath,
@@ -74,6 +75,15 @@ export function OrganizationSideNavigation(props: { slug: string }) {
 						school
 					</span>
 					<span class="organization-side-navigation-label">Classes</span>
+				</a>
+				<a
+					href={buildOrgCustomerAccountAvailabilityPath(props.slug)}
+					aria-label="Availability"
+				>
+					<span class="material-symbols-outlined" aria-hidden="true">
+						schedule
+					</span>
+					<span class="organization-side-navigation-label">Availability</span>
 				</a>
 			</section>
 

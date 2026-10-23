@@ -58,6 +58,9 @@ test("canonical PostgreSQL schema defines the final empty-database shape only", 
 	expect(schema).not.toContain("entitlement_grants");
 	expect(schema).not.toContain("accompanist_membership_grants");
 	expect(schema).toContain("enforce_shopify_shop_ownership");
+	expect(schema).toContain(
+		"CONSTRAINT chk_customer_festival_availability_hours CHECK (jsonb_typeof(available_hours) = 'array' AND available_hours <@ '[8,9,10,11,12,13,14,15,16,17]'::jsonb)",
+	);
 	expect(schema).not.toMatch(
 		/ALTER TABLE|DROP (?:COLUMN|CONSTRAINT|INDEX)|\n\s*(?:INSERT INTO|UPDATE [A-Za-z_])/,
 	);

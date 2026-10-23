@@ -35,6 +35,12 @@ export interface AccompanistMembershipGrant {
 	createdAtIso: string;
 }
 
+export function isAccompanistMembershipGrantActive(
+	grant: Pick<AccompanistMembershipGrant, "status" | "isCurrent">,
+): boolean {
+	return grant.status === "active" && grant.isCurrent === true;
+}
+
 export function validateAccompanistContact(
 	input: unknown,
 ): AccompanistContactSnapshot {
