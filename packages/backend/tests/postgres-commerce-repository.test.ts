@@ -2,17 +2,19 @@ import { expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { sql } from "bun";
 import { PostgresMembershipCommerceRepository } from "../src/commerce/postgres-membership-commerce-repository.js";
-import { initializePostgresSchema } from "../src/repo/postgres-schema.js";
+import {
+	currentPostgresFixture,
+	resetPostgresFixture,
+} from "./postgres-test-fixture.js";
 
+const currentSchema = currentPostgresFixture("commerce_repository");
 const integrationTest = process.env.POSTGRES_INTEGRATION_URL ? test : test.skip;
 
 integrationTest(
 	"rolls back a failed multi-line finalization and safely retries concurrent replays",
 	async () => {
-		const schema = `commerce_${randomUUID().replaceAll("-", "")}`;
+		const schema = await currentSchema();
 		try {
-			await initializePostgresSchema(schema);
-
 			// Seed required fixtures
 			const orgId = randomUUID();
 			const festivalId = randomUUID();
@@ -288,7 +290,7 @@ integrationTest(
 			]);
 			expect(processedDeliveries[0]?.count).toBe(2);
 		} finally {
-			await sql.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+			await resetPostgresFixture(schema);
 		}
 	},
 );

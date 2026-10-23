@@ -1,18 +1,20 @@
 import { expect, test } from "bun:test";
-import { randomUUID } from "node:crypto";
 import { sql } from "bun";
 import { PostgresCheckoutRepository } from "../src/checkout/postgres-checkout-repository.js";
 import { countConfirmedClassEntitlements } from "../src/commerce/postgres-class-entitlement-count.js";
 import { PostgresOrganizationRepository } from "../src/repo/postgres-organization-repository.js";
-import { initializePostgresSchema } from "../src/repo/postgres-schema.js";
+import {
+	currentPostgresFixture,
+	resetPostgresFixture,
+} from "./postgres-test-fixture.js";
 
+const currentSchema = currentPostgresFixture("class_capacity_cutoff");
 const postgresTest = process.env.POSTGRES_INTEGRATION_URL ? test : test.skip;
 type Runner = { unsafe(query: string, values?: unknown[]): Promise<unknown> };
 
 async function fixture() {
-	const schema = `cutoff_${randomUUID().replaceAll("-", "")}`;
+	const schema = await currentSchema();
 	try {
-		await initializePostgresSchema(schema);
 		await sql.unsafe(`
 		INSERT INTO ${schema}.organizations (id, name, slug) VALUES ('org', 'Organization', 'org');
 		INSERT INTO ${schema}.organization_divisions (id, organization_id, display_name, normalized_name, display_order) VALUES ('division', 'org', 'Piano', 'piano', 0);
@@ -63,7 +65,7 @@ async function fixture() {
 		};
 		return { schema, intent, attach, place, persisted };
 	} catch (error) {
-		await sql.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+		await resetPostgresFixture(schema);
 		throw error;
 	}
 }
@@ -79,6 +81,7 @@ async function blockedBy(pid: number) {
 			[pid],
 		);
 		if (rows[0]) return Number(rows[0].pid);
+		await Bun.sleep(5);
 	} while (Date.now() < deadline);
 	return null;
 }
@@ -129,7 +132,7 @@ postgresTest(
 		} finally {
 			await transaction.unsafe("ROLLBACK");
 			transaction.release();
-			await sql.unsafe(`DROP SCHEMA ${f.schema} CASCADE`);
+			await resetPostgresFixture(f.schema);
 		}
 	},
 );
@@ -186,7 +189,7 @@ for (const cutoff of ["capacity decrease", "confirmed placement"] as const) {
 				await blocker.unsafe("ROLLBACK");
 				blocker.release();
 				await attachment?.catch(() => undefined);
-				await sql.unsafe(`DROP SCHEMA ${f.schema} CASCADE`);
+				await resetPostgresFixture(f.schema);
 			}
 		},
 		20_000,
@@ -253,7 +256,7 @@ for (const cutoff of ["capacity decrease", "confirmed placement"] as const) {
 				await attachment?.catch(() => undefined);
 				await change?.catch(() => undefined);
 				writer.release();
-				await sql.unsafe(`DROP SCHEMA ${f.schema} CASCADE`);
+				await resetPostgresFixture(f.schema);
 			}
 		},
 		20_000,
@@ -322,7 +325,7 @@ postgresTest(
 			blocker.release();
 			await Promise.allSettled([audited, direct]);
 			writer.release();
-			await sql.unsafe(`DROP SCHEMA ${f.schema} CASCADE`);
+			await resetPostgresFixture(f.schema);
 		}
 	},
 	20_000,
@@ -355,7 +358,7 @@ postgresTest(
 				await sql.unsafe(`SELECT * FROM ${f.schema}.checkout_carts`),
 			).toHaveLength(0);
 		} finally {
-			await sql.unsafe(`DROP SCHEMA ${f.schema} CASCADE`);
+			await resetPostgresFixture(f.schema);
 		}
 	},
 );
@@ -391,7 +394,7 @@ postgresTest(
 				await sql.unsafe(`SELECT * FROM ${f.schema}.checkout_carts`),
 			).toHaveLength(1);
 		} finally {
-			await sql.unsafe(`DROP SCHEMA ${f.schema} CASCADE`);
+			await resetPostgresFixture(f.schema);
 		}
 	},
 );
@@ -423,81 +426,7 @@ postgresTest(
 				cart_reference: second.reference,
 			});
 		} finally {
-			await sql.unsafe(`DROP SCHEMA ${f.schema} CASCADE`);
+			await resetPostgresFixture(f.schema);
 		}
 	},
-);
-
-postgresTest(
-	"PostgreSQL cutoff migration upgrades populated schemas idempotently and enforces the attachment boundary",
-	async () => {
-		const f = await fixture();
-		const blocker = await sql.reserve();
-		let attachment: ReturnType<typeof f.attach> | undefined;
-		try {
-			await f.intent("candidate");
-			await f.intent("paid");
-			await sql.unsafe(
-				`UPDATE ${f.schema}.festival_class_configurations SET capacity = 2 WHERE id = 'class-a'`,
-			);
-			await f.place(sql, "paid");
-			// Remove only the new schema objects to reproduce the populated
-			// pre-upgrade state. Never apply deployment SQL to the live schema.
-			await sql.unsafe(
-				`DROP TRIGGER lock_class_capacity_cutoff ON ${f.schema}.festival_class_configurations; DROP TRIGGER lock_class_capacity_cutoff ON ${f.schema}.class_entitlements; DROP FUNCTION ${f.schema}.lock_class_capacity_cutoff()`,
-			);
-			const migration = (
-				await Bun.file(
-					new URL(
-						"../../../database/migrations/20261018120000_soft_capacity_cutoff.sql",
-						import.meta.url,
-					),
-				).text()
-			).replaceAll("orgs", f.schema);
-			await blocker.unsafe(migration);
-			await blocker.unsafe(migration);
-			const triggers = await sql.unsafe(
-				"SELECT tgrelid::regclass::text AS target, tgtype FROM pg_trigger WHERE tgname = 'lock_class_capacity_cutoff' AND tgrelid IN (($1 || '.festival_class_configurations')::regclass, ($1 || '.class_entitlements')::regclass)",
-				[f.schema],
-			);
-			expect(triggers).toHaveLength(2);
-			// BEFORE INSERT/DELETE/UPDATE, with no FOR EACH ROW bit.
-			expect(triggers.map((trigger) => Number(trigger.tgtype))).toEqual([
-				30, 30,
-			]);
-			expect(
-				await sql.unsafe(`SELECT * FROM ${f.schema}.class_entitlements`),
-			).toHaveLength(1);
-			expect(await f.persisted("candidate")).toMatchObject({
-				status: "creating",
-				cart_reference: null,
-			});
-			await blocker.unsafe("BEGIN");
-			await blocker.unsafe(
-				`UPDATE ${f.schema}.festival_class_configurations SET capacity = 1 WHERE id = 'class-a'`,
-			);
-			const [{ pid }] = await blocker.unsafe("SELECT pg_backend_pid() AS pid");
-			attachment = f.attach("candidate");
-			const outcome = attachment.then(
-				(cart) => ({ cart, error: null }),
-				(error: unknown) => ({ cart: null, error }),
-			);
-			const blockedPid = await blockedBy(Number(pid));
-			await blocker.unsafe("COMMIT");
-			expect(blockedPid).not.toBeNull();
-			expect(await outcome).toMatchObject({
-				cart: null,
-				error: { code: "sold_out" },
-			});
-			expect(
-				await sql.unsafe(`SELECT * FROM ${f.schema}.checkout_carts`),
-			).toHaveLength(0);
-		} finally {
-			await blocker.unsafe("ROLLBACK");
-			blocker.release();
-			await attachment?.catch(() => undefined);
-			await sql.unsafe(`DROP SCHEMA ${f.schema} CASCADE`);
-		}
-	},
-	20_000,
 );

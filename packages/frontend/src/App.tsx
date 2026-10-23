@@ -20,6 +20,7 @@ import { AdminUsersPage } from "./pages/AdminUsersPage.js";
 import { BillingReconciliationPage } from "./pages/BillingReconciliationPage.js";
 import { CommunicationTemplatesPage } from "./pages/CommunicationTemplatesPage.js";
 import { CreateOrganizationPage } from "./pages/CreateOrganizationPage.js";
+import { CustomerAccountAvailabilityPage } from "./pages/CustomerAccountAvailabilityPage.js";
 import { CustomerAccountClassesPage } from "./pages/CustomerAccountClassesPage.js";
 import { CustomerAccountContactPage } from "./pages/CustomerAccountContactPage.js";
 import { CustomerAccountMembershipsPage } from "./pages/CustomerAccountMembershipsPage.js";
@@ -168,6 +169,13 @@ export default function App() {
 						</Match>
 						<Match when={app.route().kind === "org-customer-account-classes"}>
 							<CustomerAccountClassesPage
+								slug={(app.route() as { slug: string }).slug}
+							/>
+						</Match>
+						<Match
+							when={app.route().kind === "org-customer-account-availability"}
+						>
+							<CustomerAccountAvailabilityPage
 								slug={(app.route() as { slug: string }).slug}
 							/>
 						</Match>

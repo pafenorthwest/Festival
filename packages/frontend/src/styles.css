@@ -2310,3 +2310,139 @@ form.shopify-integration-card {
 			1.2fr
 		);
 }
+
+/* ==========================================================================
+   Customer Festival Availability
+   ========================================================================== */
+
+.availability-festival-banner {
+	display: grid;
+	gap: 0.2rem;
+	padding: 0.85rem 1rem;
+	border: 1px solid var(--bullet-panel-border);
+	border-radius: 12px;
+	background: rgba(255, 255, 255, 0.72);
+}
+
+.availability-festival-banner h2,
+.availability-festival-banner p {
+	margin: 0;
+}
+
+.availability-toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: space-between;
+	align-items: center;
+	gap: 0.75rem;
+}
+
+.availability-day-navigation {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.65rem;
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+
+.availability-day-indicator {
+	font-weight: 700;
+	font-size: 0.92rem;
+}
+
+.availability-subjects-list {
+	display: grid;
+	gap: 1.25rem;
+}
+
+.availability-subject-section {
+	display: grid;
+	gap: 0.85rem;
+	padding: 1rem;
+	border: 1px solid var(--bullet-panel-border);
+	border-radius: 12px;
+	background: rgba(255, 255, 255, 0.72);
+}
+
+.availability-subject-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 0.75rem;
+}
+
+.availability-subject-header h2 {
+	margin: 0;
+	font-size: 1.25rem;
+}
+
+.availability-days-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+	gap: 0.85rem;
+}
+
+.availability-day-column {
+	display: grid;
+	gap: 0.5rem;
+	align-content: start;
+}
+
+.availability-day-heading {
+	margin: 0;
+	font-size: 0.95rem;
+	color: var(--bullet-ink);
+}
+
+.availability-hours-stack {
+	display: grid;
+	gap: 0.35rem;
+}
+
+button.availability-hour-slot {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 0.5rem;
+	width: 100%;
+	padding: 0.55rem 0.75rem;
+	border-radius: 8px;
+	font-size: 0.86rem;
+	text-align: left;
+	box-shadow: none;
+	border: 1px solid var(--bullet-panel-border);
+	transition:
+		background 120ms ease,
+		border-color 120ms ease;
+}
+
+button.availability-hour-slot.is-available {
+	background: rgba(31, 122, 87, 0.14);
+	color: var(--bullet-ink);
+	border-color: var(--bullet-success);
+}
+
+button.availability-hour-slot.is-unavailable {
+	background: rgba(31, 36, 49, 0.06);
+	color: var(--bullet-soft-ink);
+	border-color: rgba(31, 36, 49, 0.16);
+}
+
+.availability-hour-state {
+	font-weight: 700;
+	font-size: 0.78rem;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+
+.availability-hour-slot.is-available .availability-hour-state {
+	color: var(--bullet-success);
+}
+
+.availability-actions {
+	display: flex;
+	justify-content: flex-start;
+	gap: 0.75rem;
+}

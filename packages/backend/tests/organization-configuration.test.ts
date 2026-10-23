@@ -123,6 +123,7 @@ describe("organization division and timezone configuration", () => {
 			divisions: [
 				{ id: brass.body.division.id, displayName: "Brass", displayOrder: 0 },
 			],
+			instruments: [],
 		});
 		const organization = await repository.findOrganizationBySlug("pafe");
 		if (!organization) throw new Error("Expected Organization.");

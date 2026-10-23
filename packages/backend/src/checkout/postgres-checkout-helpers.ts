@@ -1,8 +1,10 @@
 import type {
 	ClassRegistrationMetadata,
+	ClassRegistrationSnapshot,
 	RegistrationRepertoireItem,
 	RepertoirePiece,
 } from "@festival/common";
+import { normalizeClassRegistrationSnapshot } from "@festival/common";
 import type {
 	CheckoutCartRecord,
 	CheckoutIntentLineItemRecord,
@@ -219,6 +221,12 @@ export function registrationMetadataFromRow(
 				: String(row.accompanist_membership_id),
 		repertoireJson,
 		repertoireItems: repertoireItems ?? [],
+		registrationSnapshot: normalizeClassRegistrationSnapshot(
+			typeof row.registration_snapshot === "string"
+				? JSON.parse(row.registration_snapshot)
+				: ((row.registration_snapshot as ClassRegistrationSnapshot | null) ??
+						null),
+		),
 		createdAt: new Date(String(row.created_at)),
 	};
 }

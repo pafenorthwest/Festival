@@ -139,6 +139,7 @@ function buildCheckoutInput(
 		pieces: payload.pieces as RepertoirePiece[],
 		...opt("divisionId"),
 		...opt("accompanistId"),
+		...opt("instrumentId"),
 	};
 }
 
@@ -172,6 +173,7 @@ export async function handleClassCheckout(
 				"accompanistOption",
 				"pieces",
 				"instrument",
+				"instrumentId",
 				"festivalId",
 				"festivalShortName",
 				"organizationSlug",

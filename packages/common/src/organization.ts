@@ -50,6 +50,11 @@ export interface OrganizationDivisionListResponse {
 
 export interface PublicOrganizationDivisionListResponse {
 	divisions: PublicOrganizationDivision[];
+	instruments?: Array<{
+		id: string;
+		displayName: string;
+		displayOrder: number;
+	}>;
 }
 
 export interface OrganizationTimezoneResponse {
