@@ -1,11 +1,10 @@
 import type {
-	ClassEligibilityResult,
 	EligibilityReasonCode,
 	ProposedPurchaseLineItem,
 	RegistrationEligibleClass,
 } from "@festival/common";
-import { type Accessor, createEffect, createSignal, onCleanup } from "solid-js";
-import { evaluateRegistrationEligibility } from "../lib/api.js";
+import { type Accessor, createEffect } from "solid-js";
+import { createEligibilityEvaluation } from "./createEligibilityEvaluation.js";
 import { formatClassOption } from "./festivalRegistrationHelpers.js";
 import {
 	cartItemsToLineItemInputs,
@@ -51,87 +50,38 @@ export interface ClassOptionEligibilityState {
 export function useClassOptionEligibility(
 	options: UseClassOptionEligibilityOptions,
 ): ClassOptionEligibilityState {
-	const [isEvaluating, setIsEvaluating] = createSignal(false);
-	const [error, setError] = createSignal<string | null>(null);
-	const [results, setResults] = createSignal<
-		Map<string, ClassEligibilityResult>
-	>(new Map());
+	const { isEvaluating, error, results, evaluate } =
+		createEligibilityEvaluation(
+			options,
+			"Failed to evaluate class option eligibility.",
+		);
 
-	let currentRequestId = 0;
-
-	const resolveSlug = () =>
-		typeof options.slug === "function" ? options.slug() : options.slug;
-	const resolveFestivalSlug = () =>
-		typeof options.festivalSlug === "function"
-			? options.festivalSlug()
-			: options.festivalSlug;
-	const resolveCsrfToken = () =>
-		typeof options.csrfToken === "function"
-			? options.csrfToken()
-			: options.csrfToken;
-
-	async function performEvaluation(
+	function performEvaluation(
 		currentChildId: string,
 		classList: RegistrationEligibleClass[],
 		cartItems: RegistrationCartItem[],
 	): Promise<void> {
-		const slug = resolveSlug();
-		const festivalSlug = resolveFestivalSlug();
-		const csrfToken = resolveCsrfToken();
-
-		if (!slug || !festivalSlug || !currentChildId || classList.length === 0) {
-			setResults(new Map());
-			setError(null);
-			setIsEvaluating(false);
-			return;
-		}
-
-		const requestId = ++currentRequestId;
-		setIsEvaluating(true);
-		setError(null);
-
-		try {
-			const cartLineInputs = cartItemsToLineItemInputs(cartItems);
-			const candidateItems: ProposedPurchaseLineItem[] = classList.map((c) => ({
-				id: `candidate:${c.id}`,
-				childId: currentChildId,
-				festivalClassId: c.id,
-				isCandidate: true,
-			}));
-
-			const batchItems: ProposedPurchaseLineItem[] = [
-				...cartLineInputs,
-				...candidateItems,
-			];
-
-			const evaluator = options.evaluator ?? evaluateRegistrationEligibility;
-			const res = await evaluator(slug, festivalSlug, batchItems, csrfToken);
-
-			if (requestId !== currentRequestId) return;
-
-			const map = new Map<string, ClassEligibilityResult>();
-			for (const r of res.results) {
-				if (r.childId === currentChildId) {
-					const key = r.lineItemId?.startsWith("candidate:")
-						? r.lineItemId.slice("candidate:".length)
-						: r.festivalClassId;
-					map.set(key, r);
-				}
-			}
-			setResults(map);
-			setError(null);
-		} catch (err) {
-			if (requestId !== currentRequestId) return;
-			setError(
-				err instanceof Error
-					? err.message
-					: "Failed to evaluate class option eligibility.",
-			);
-		} finally {
-			if (requestId === currentRequestId) {
-				setIsEvaluating(false);
-			}
-		}
+		return evaluate(
+			Boolean(currentChildId && classList.length > 0),
+			() => {
+				const cartLineInputs = cartItemsToLineItemInputs(cartItems);
+				const candidateItems: ProposedPurchaseLineItem[] = classList.map(
+					(c) => ({
+						id: `candidate:${c.id}`,
+						childId: currentChildId,
+						festivalClassId: c.id,
+						isCandidate: true,
+					}),
+				);
+				return [...cartLineInputs, ...candidateItems];
+			},
+			(result) => {
+				if (result.childId !== currentChildId) return undefined;
+				return result.lineItemId?.startsWith("candidate:")
+					? result.lineItemId.slice("candidate:".length)
+					: result.festivalClassId;
+			},
+		);
 	}
 
 	createEffect(() => {
@@ -139,10 +89,6 @@ export function useClassOptionEligibility(
 		const classList = options.classes();
 		const cartItems = options.cart.items();
 		void performEvaluation(cid, classList, cartItems);
-	});
-
-	onCleanup(() => {
-		currentRequestId++;
 	});
 
 	function getOption(classId: string): ClassOptionEligibilityInfo | undefined {
