@@ -2543,3 +2543,8 @@ export function customerCheckoutRecoverySignInPath(
 	const returnTo = buildOrgCheckoutRecoveryPath(slug, token);
 	return `/api/organizations/${encodeURIComponent(slug)}/customer-auth/start?returnTo=${encodeURIComponent(returnTo)}`;
 }
+
+export {
+	getCustomerFestivalAvailability,
+	saveCustomerFestivalAvailability,
+} from "./availability-api.js";
