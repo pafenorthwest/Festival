@@ -3056,7 +3056,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				tp.approval_status,
 				tp.created_at::text,
 				tp.updated_at::text,
-				COALESCE(c.mailing_address->>'zip', c.mailing_address->>'zipCode') AS zip_code,
+				c.mailing_address->>'postalCode' AS zip_code,
 				COALESCE(
 					jsonb_agg(tpd.division_id ORDER BY tpd.division_id) FILTER (WHERE tpd.division_id IS NOT NULL),
 					'[]'::jsonb
@@ -3088,7 +3088,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				tp.approval_status,
 				tp.created_at::text,
 				tp.updated_at::text,
-				COALESCE(c.mailing_address->>'zip', c.mailing_address->>'zipCode') AS zip_code,
+				c.mailing_address->>'postalCode' AS zip_code,
 				COALESCE(
 					jsonb_agg(tpd.division_id ORDER BY tpd.division_id) FILTER (WHERE tpd.division_id IS NOT NULL),
 					'[]'::jsonb
@@ -3205,7 +3205,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				tp.approval_status,
 				tp.created_at::text,
 				tp.updated_at::text,
-				COALESCE(c.mailing_address->>'zip', c.mailing_address->>'zipCode') AS zip_code,
+				c.mailing_address->>'postalCode' AS zip_code,
 				COALESCE(
 					jsonb_agg(tpd.division_id ORDER BY tpd.division_id) FILTER (WHERE tpd.division_id IS NOT NULL),
 					'[]'::jsonb
@@ -3240,7 +3240,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				ap.updated_at::text,
 				c.phone,
 				COALESCE(identity.normalized_email, c.email) AS email,
-				COALESCE(c.mailing_address->>'zip', c.mailing_address->>'zipCode') AS zip_code,
+				c.mailing_address->>'postalCode' AS zip_code,
 				COALESCE(
 					jsonb_agg(apd.division_id ORDER BY apd.division_id) FILTER (WHERE apd.division_id IS NOT NULL),
 					'[]'::jsonb
@@ -3276,7 +3276,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				ap.updated_at::text,
 				c.phone,
 				COALESCE(identity.normalized_email, c.email) AS email,
-				COALESCE(c.mailing_address->>'zip', c.mailing_address->>'zipCode') AS zip_code,
+				c.mailing_address->>'postalCode' AS zip_code,
 				COALESCE(
 					jsonb_agg(apd.division_id ORDER BY apd.division_id) FILTER (WHERE apd.division_id IS NOT NULL),
 					'[]'::jsonb
@@ -3397,7 +3397,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				ap.updated_at::text,
 				c.phone,
 				COALESCE(identity.normalized_email, c.email) AS email,
-				COALESCE(c.mailing_address->>'zip', c.mailing_address->>'zipCode') AS zip_code,
+				c.mailing_address->>'postalCode' AS zip_code,
 				COALESCE(
 					jsonb_agg(apd.division_id ORDER BY apd.division_id) FILTER (WHERE apd.division_id IS NOT NULL),
 					'[]'::jsonb

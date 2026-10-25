@@ -1,6 +1,6 @@
 # Profile creation membership prerequisite
 
-Locked goals: `goals/profile-membership/goals.v1.md` and `goals/profile-membership/goals.v2.md`.
+Locked goals: `goals/profile-membership/goals.v1.md`, `goals/profile-membership/goals.v2.md`, and `goals/profile-membership/goals.v3.md`.
 
 Scope: service creation authorization and focused regression tests; existing profile updates preserve opt-out access.
 
@@ -39,3 +39,20 @@ Delivered behavior: unchecked required consent checkbox, strict boolean acquisit
 Follow-up verification: all 148 tests in the nine pinned backend files pass (564 assertions); common/backend builds and six-file backend Biome pass. Focused frontend tests pass (8 tests, 36 assertions); frontend typecheck, production build, three-file Biome, and whitespace checks pass. Independent review: no actionable findings, patch is correct, confidence 0.97.
 
 Canonical full frontend suite passes all 330 tests in 33 files using `bun run --cwd packages/frontend test`; pre-change commit `3c9653e` passes 328. An initial invocation from repository root produced working-directory/JSX configuration errors that also reproduced on the baseline; using the package's intended test command resolves them. No outstanding failed validation or deferred implementation.
+
+## Postal-code follow-up
+
+Scope: six teacher/accompanist profile SQL projections and stored-address regression coverage. Canonical key is `postalCode`; response key remains `zip_code`. No stored data migration or public contact exposure changes.
+
+Pinned validation:
+- `bunx biome check packages/backend/src/repo/postgres-organization-repository.ts packages/backend/tests/postgres-profile-postal-code.integration.test.ts`
+- `bun run build:common`; `bun run build:backend`
+- `bun test ./packages/backend/tests/profile-repository.test.ts ./packages/backend/tests/participant-profile-membership.test.ts ./packages/backend/tests/participant-profile-routes.test.ts ./packages/backend/tests/participant-profile-routes-security.test.ts ./packages/backend/tests/customer-account-repository.test.ts ./packages/backend/tests/postgres-schema-snapshot.test.ts`
+- With `DATABASE_URL` and `POSTGRES_INTEGRATION_URL` set to an isolated local PostgreSQL database: `bun test ./packages/backend/tests/postgres-profile-postal-code.integration.test.ts`. Each case creates/drops a unique schema and seeds a typed canonical `CustomerMailingAddress` as a JSONB object, checking the stored `postalCode` field before reading profiles.
+- `git diff --check`
+
+Regression proof on isolated PostgreSQL 17.11: the six tests fail with the old projections (expected 98101, received undefined), and all six pass with the fix (30 assertions). Each test verifies the address is stored as a JSONB object containing postalCode. Missing-address profiles continue to omit zip_code.
+
+Separate existing limitation discovered during fixture setup: Bun 1.4.2 with PostgreSQL encodes a JSON.stringify(address) parameter to `$1::jsonb` as a JSONB string; passing the object directly stores a JSONB object. The existing applyCustomerProfile writer uses the former pattern. This postal-read fix does not alter that writer or migrate malformed addresses. The integration fixture explicitly seeds the canonical object representation; no end-to-end address-saving claim is made.
+
+Final integrated verification: two-file Biome check, common/backend builds, and whitespace check pass. All 93 tests in the six pinned unit files pass (463 assertions), and all six live PostgreSQL tests pass (30 assertions). Independent review: no findings, patch is correct, confidence 0.99. The isolated PostgreSQL cluster was stopped cleanly after verification. READY TO LAND; no deferred postal-read implementation.
