@@ -349,6 +349,66 @@ describe("Participant Profiles API End-to-End", () => {
 			const fetched = await getRes.json();
 			expect(fetched.id).toBe(created.id);
 		});
+
+		for (const kind of ["teacher", "accompanist"] as const) {
+			const putProfile = (
+				app: Awaited<ReturnType<typeof setupTestApp>>["app"],
+				body: Record<string, unknown>,
+			) =>
+				app.request(`/api/customer/orgs/org-a/profiles/${kind}`, {
+					method: "PUT",
+					headers: {
+						"Content-Type": "application/json",
+						Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1`,
+						"X-CSRF-Token": "csrf-token-1",
+					},
+					body: JSON.stringify(body),
+				});
+
+			it(`returns 400 for invalid ${kind} profile payloads`, async () => {
+				const { app, divA1, divB1 } = await setupTestApp();
+				const valid = {
+					displayName: "Valid Name",
+					publicDirectoryOptIn: true,
+					divisionIds: [divA1.id],
+				};
+				const invalidBodies: Array<Record<string, unknown>> = [
+					{ ...valid, displayName: "   " },
+					{ ...valid, displayName: "x".repeat(500) },
+					{ ...valid, publicDirectoryOptIn: "yes" },
+					{ ...valid, divisionIds: "not-an-array" },
+					{ ...valid, divisionIds: [divB1.id] },
+					{ ...valid, divisionIds: ["unknown-division-id"] },
+				];
+				for (const body of invalidBodies) {
+					const res = await putProfile(app, body);
+					expect(res.status).toBe(400);
+					const json = await res.json();
+					expect(typeof json.error).toBe("string");
+				}
+			});
+
+			it(`returns generic 500 when ${kind} profile repository fails unexpectedly`, async () => {
+				const { app, repository, divA1 } = await setupTestApp();
+				const secret = "relation festival.secret_table does not exist";
+				const failing = async () => {
+					throw new Error(secret);
+				};
+				if (kind === "teacher") {
+					repository.upsertTeacherProfile = failing;
+				} else {
+					repository.upsertAccompanistProfile = failing;
+				}
+				const res = await putProfile(app, {
+					displayName: "Valid Name",
+					publicDirectoryOptIn: true,
+					divisionIds: [divA1.id],
+				});
+				expect(res.status).toBe(500);
+				const text = await res.text();
+				expect(text).not.toContain(secret);
+			});
+		}
 	});
 
 	describe("Admin Approval Endpoints", () => {

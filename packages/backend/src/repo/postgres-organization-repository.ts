@@ -2994,8 +2994,10 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			[organizationId, uniqueIds],
 		)) as Array<{ id: string }>;
 		if (validRows.length !== uniqueIds.length) {
-			throw new Error(
+			throw new AppError(
 				"One or more divisions do not belong to the organization.",
+				400,
+				"invalid_division",
 			);
 		}
 		return uniqueIds;

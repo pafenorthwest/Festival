@@ -24,6 +24,7 @@ import type {
 	TeacherProfileRecord,
 } from "@festival/common";
 import {
+	AppError,
 	assertValidEntitlementDurationDays,
 	assertValidEntitlementGrantSnapshotInput,
 	calendarDateInTimezone,
@@ -1928,8 +1929,10 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		for (const divId of uniqueIds) {
 			const div = this.divisions.get(divId);
 			if (!div || div.organizationId !== organizationId) {
-				throw new Error(
+				throw new AppError(
 					"One or more divisions do not belong to the organization.",
+					400,
+					"invalid_division",
 				);
 			}
 		}
