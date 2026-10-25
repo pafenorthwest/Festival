@@ -3217,7 +3217,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				ON tpd.teacher_profile_id = tp.id AND tpd.organization_id = tp.organization_id
 			 WHERE tp.organization_id = $1
 			 GROUP BY tp.id, tp.organization_id, tp.customer_id, tp.display_name, tp.public_directory_opt_in, tp.approval_status, tp.created_at, tp.updated_at, c.mailing_address
-			 ORDER BY tp.display_name ASC, tp.id ASC`,
+			 ORDER BY lower(tp.display_name) COLLATE "C" ASC, tp.display_name COLLATE "C" ASC, tp.id COLLATE "C" ASC`,
 			[organizationId],
 		)) as TeacherProfileRow[];
 		return rows.map((row) => mapTeacherProfileRow(row));
@@ -3411,7 +3411,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				ON apd.accompanist_profile_id = ap.id AND apd.organization_id = ap.organization_id
 			 WHERE ap.organization_id = $1
 			 GROUP BY ap.id, ap.organization_id, ap.customer_id, ap.display_name, ap.public_directory_opt_in, ap.approval_status, ap.created_at, ap.updated_at, c.phone, identity.normalized_email, c.email, c.mailing_address
-			 ORDER BY ap.display_name ASC, ap.id ASC`,
+			 ORDER BY lower(ap.display_name) COLLATE "C" ASC, ap.display_name COLLATE "C" ASC, ap.id COLLATE "C" ASC`,
 			[organizationId],
 		)) as AccompanistProfileRow[];
 		return rows.map((row) => mapAccompanistProfileRow(row));
@@ -3445,7 +3445,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				COALESCE(
 					jsonb_agg(
 						jsonb_build_object('id', od.id, 'name', od.display_name)
-						ORDER BY od.display_name, od.id
+						ORDER BY lower(od.display_name) COLLATE "C", od.display_name COLLATE "C", od.id COLLATE "C"
 					) FILTER (WHERE od.id IS NOT NULL),
 					'[]'::jsonb
 				) AS divisions
@@ -3458,7 +3458,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			   AND tp.public_directory_opt_in = TRUE
 			   AND tp.approval_status = 'approved'
 			 GROUP BY tp.id, tp.customer_id, tp.display_name
-			 ORDER BY tp.display_name ASC, tp.id ASC`,
+			 ORDER BY lower(tp.display_name) COLLATE "C" ASC, tp.display_name COLLATE "C" ASC, tp.id COLLATE "C" ASC`,
 			[organizationId],
 		)) as Array<{
 			id: string;
@@ -3514,7 +3514,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				COALESCE(
 					jsonb_agg(
 						jsonb_build_object('id', od.id, 'name', od.display_name)
-						ORDER BY od.display_name, od.id
+						ORDER BY lower(od.display_name) COLLATE "C", od.display_name COLLATE "C", od.id COLLATE "C"
 					) FILTER (WHERE od.id IS NOT NULL),
 					'[]'::jsonb
 				) AS divisions
@@ -3527,7 +3527,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			   AND ap.public_directory_opt_in = TRUE
 			   AND ap.approval_status = 'approved'
 			 GROUP BY ap.id, ap.customer_id, ap.display_name
-			 ORDER BY ap.display_name ASC, ap.id ASC`,
+			 ORDER BY lower(ap.display_name) COLLATE "C" ASC, ap.display_name COLLATE "C" ASC, ap.id COLLATE "C" ASC`,
 			[organizationId],
 		)) as Array<{
 			id: string;

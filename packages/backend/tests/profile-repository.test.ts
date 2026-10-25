@@ -74,7 +74,7 @@ describe("InMemoryOrganizationRepository - Profiles", () => {
 			expect(profile.display_name).toBe("Alice Teacher");
 			expect(profile.public_directory_opt_in).toBe(true);
 			expect(profile.approval_status).toBe("pending");
-			expect(profile.division_ids).toEqual([div1Id, div2Id]);
+			expect(profile.division_ids).toEqual([div1Id, div2Id].sort());
 			expect(profile.teacher_color).toBe(
 				getDeterministicTeacherColor("cust-teacher-1"),
 			);
@@ -381,6 +381,119 @@ describe("InMemoryOrganizationRepository - Profiles", () => {
 					"approved",
 				),
 			).toBeNull();
+		});
+	});
+
+	describe("Postgres parity", () => {
+		it("returns division_ids sorted ascending regardless of input order", async () => {
+			const input = [div2Id, div1Id];
+			const profile = await repo.upsertTeacherProfile({
+				organizationId: orgAId,
+				customerId: "cust-parity-order",
+				displayName: "Order Teacher",
+				publicDirectoryOptIn: false,
+				divisionIds: input,
+			});
+			const expected = [...input].sort();
+			expect(profile.division_ids).toEqual(expected);
+			const fetched = await repo.getTeacherProfile(orgAId, "cust-parity-order");
+			expect(fetched?.division_ids).toEqual(expected);
+		});
+
+		it("resolves accompanist contact at read time with identity email precedence", async () => {
+			repo.setCustomerContact(orgAId, {
+				customerId: "cust-parity-contact",
+				phone: "555-000-0001",
+				email: "contact@example.com",
+			});
+			const profile = await repo.upsertAccompanistProfile({
+				organizationId: orgAId,
+				customerId: "cust-parity-contact",
+				displayName: "Contact Accompanist",
+				publicDirectoryOptIn: false,
+				divisionIds: [],
+			});
+			expect(profile.email).toBe("contact@example.com");
+
+			repo.setCustomerContact(orgAId, {
+				customerId: "cust-parity-contact",
+				phone: "555-000-0002",
+				email: "contact@example.com",
+			});
+			const product = await repo.createMembershipProductRecord({
+				organizationId: orgAId,
+				entitlementClass: TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+				productNameSnapshot: "Teacher Membership",
+				durationDays: 365,
+				shopifyProductGid: "gid://shopify/Product/parity",
+				shopifyVariantGid: "gid://shopify/ProductVariant/parity",
+				isActive: true,
+			});
+			await repo.createEntitlementGrantSnapshot({
+				organizationId: orgAId,
+				customerId: "cust-parity-contact",
+				divisionId: div1Id,
+				entitlementClass: TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+				divisionNameSnapshot: "Strings",
+				paidAmount: "50.00",
+				paidCurrencyCode: "USD",
+				checkoutIntentId: "intent-parity",
+				shopifyOrderGid: "gid://shopify/Order/parity",
+				shopifyOrderLineGid: "gid://shopify/Line/parity",
+				durationDays: 365,
+				startsOn: "2026-01-01",
+				endsOn: "2027-01-01",
+				offeringId: product.id,
+				source: "shopify_order",
+				status: "active",
+				verifiedIdentityEmail: "identity@example.com",
+			});
+
+			const fetched = await repo.getAccompanistProfileById(orgAId, profile.id);
+			expect(fetched?.phone).toBe("555-000-0002");
+			expect(fetched?.email).toBe("identity@example.com");
+		});
+
+		it("sorts profile lists case-insensitively by code point with raw name and id tiebreaks", async () => {
+			for (const [customerId, displayName] of [
+				["cust-s-1", "bob"],
+				["cust-s-2", "alice"],
+				["cust-s-3", "Alice"],
+				["cust-s-4", "Carl"],
+			]) {
+				await repo.upsertTeacherProfile({
+					organizationId: orgAId,
+					customerId,
+					displayName,
+					publicDirectoryOptIn: false,
+					divisionIds: [],
+				});
+			}
+			const names = (await repo.listTeacherProfiles(orgAId)).map(
+				(p) => p.display_name,
+			);
+			expect(names).toEqual(["Alice", "alice", "bob", "Carl"]);
+		});
+
+		it("sorts directory divisions case-insensitively by code point", async () => {
+			const lower = await repo.createDivision({
+				organizationId: orgAId,
+				displayName: "piano",
+				normalizedName: "piano-lower",
+			});
+			const profile = await repo.upsertTeacherProfile({
+				organizationId: orgAId,
+				customerId: "cust-parity-divs",
+				displayName: "Division Teacher",
+				publicDirectoryOptIn: true,
+				divisionIds: [lower.id, div2Id],
+			});
+			await repo.updateTeacherProfileApproval(orgAId, profile.id, "approved");
+			const [dto] = await repo.getPublicDirectoryProfiles(orgAId);
+			expect(dto.approvedDivisions.map((d) => d.name)).toEqual([
+				"Piano",
+				"piano",
+			]);
 		});
 	});
 
@@ -1028,6 +1141,12 @@ describe("PostgresOrganizationRepository - Profile Queries", () => {
 		const accompanists = await repo.listAccompanistProfiles("org-1");
 		expect(accompanists.length).toBe(1);
 		expect(accompanists[0].display_name).toBe("Accompanist 1");
+
+		for (const call of unsafeSpy.mock.calls.slice(-2)) {
+			expect(String(call[0])).toMatch(
+				/ORDER BY lower\((tp|ap)\.display_name\) COLLATE "C" ASC, \1\.display_name COLLATE "C" ASC, \1\.id COLLATE "C" ASC/,
+			);
+		}
 	});
 
 	it("getTeacherProfileById and getAccompanistProfileById return null when not found", async () => {
