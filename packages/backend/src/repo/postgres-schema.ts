@@ -532,12 +532,16 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			UNIQUE (organization_id, customer_id),
+			UNIQUE (id, organization_id),
 			FOREIGN KEY (customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers (id, organization_id) ON DELETE CASCADE
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.teacher_profile_divisions (
-			teacher_profile_id TEXT NOT NULL REFERENCES ${safeSchema}.teacher_profiles (id) ON DELETE CASCADE,
-			division_id TEXT NOT NULL REFERENCES ${safeSchema}.organization_divisions (id) ON DELETE CASCADE,
-			PRIMARY KEY (teacher_profile_id, division_id)
+			teacher_profile_id TEXT NOT NULL,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			division_id TEXT NOT NULL,
+			PRIMARY KEY (teacher_profile_id, division_id),
+			FOREIGN KEY (teacher_profile_id, organization_id) REFERENCES ${safeSchema}.teacher_profiles (id, organization_id) ON DELETE CASCADE,
+			FOREIGN KEY (division_id, organization_id) REFERENCES ${safeSchema}.organization_divisions (id, organization_id) ON DELETE CASCADE
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.accompanist_profiles (
 			id TEXT PRIMARY KEY,
@@ -549,12 +553,16 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			UNIQUE (organization_id, customer_id),
+			UNIQUE (id, organization_id),
 			FOREIGN KEY (customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers (id, organization_id) ON DELETE CASCADE
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.accompanist_profile_divisions (
-			accompanist_profile_id TEXT NOT NULL REFERENCES ${safeSchema}.accompanist_profiles (id) ON DELETE CASCADE,
-			division_id TEXT NOT NULL REFERENCES ${safeSchema}.organization_divisions (id) ON DELETE CASCADE,
-			PRIMARY KEY (accompanist_profile_id, division_id)
+			accompanist_profile_id TEXT NOT NULL,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			division_id TEXT NOT NULL,
+			PRIMARY KEY (accompanist_profile_id, division_id),
+			FOREIGN KEY (accompanist_profile_id, organization_id) REFERENCES ${safeSchema}.accompanist_profiles (id, organization_id) ON DELETE CASCADE,
+			FOREIGN KEY (division_id, organization_id) REFERENCES ${safeSchema}.organization_divisions (id, organization_id) ON DELETE CASCADE
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.shopify_webhook_deliveries (
 			id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,

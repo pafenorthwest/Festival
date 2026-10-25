@@ -20,6 +20,32 @@ export interface CustomerProfileSessionContext {
 	requestOrigin?: string | undefined;
 }
 
+/**
+ * Validates customer-supplied profile fields, mapping shared validator
+ * failures (plain Error) to AppError 400 so they never surface as 500s.
+ */
+function parseProfileFields(body: Record<string, unknown>): {
+	displayName: string;
+	publicDirectoryOptIn: boolean;
+	divisionIds: string[];
+} {
+	try {
+		return {
+			displayName: validateDisplayName(body.displayName),
+			publicDirectoryOptIn: validatePublicDirectoryOptIn(
+				body.publicDirectoryOptIn,
+			),
+			divisionIds: validateDivisionIds(body.divisionIds),
+		};
+	} catch (error) {
+		throw new AppError(
+			error instanceof Error ? error.message : "Invalid profile.",
+			400,
+			"invalid_profile",
+		);
+	}
+}
+
 export class ParticipantProfileService {
 	constructor(
 		private readonly repository: OrganizationRepository,
@@ -71,28 +97,15 @@ export class ParticipantProfileService {
 			"Teacher profile",
 		);
 		const body = payload as Record<string, unknown>;
-		const displayName = validateDisplayName(body.displayName);
-		const publicDirectoryOptIn = validatePublicDirectoryOptIn(
-			body.publicDirectoryOptIn,
-		);
-		const divisionIds = validateDivisionIds(body.divisionIds);
-		try {
-			return await this.repository.upsertTeacherProfile({
-				organizationId: access.organizationId,
-				customerId: access.customerId,
-				displayName,
-				publicDirectoryOptIn,
-				divisionIds,
-			});
-		} catch (error) {
-			if (error instanceof AppError) throw error;
-			throw new AppError(
-				error instanceof Error
-					? error.message
-					: "Failed to save teacher profile.",
-				400,
-			);
-		}
+		const { displayName, publicDirectoryOptIn, divisionIds } =
+			parseProfileFields(body);
+		return await this.repository.upsertTeacherProfile({
+			organizationId: access.organizationId,
+			customerId: access.customerId,
+			displayName,
+			publicDirectoryOptIn,
+			divisionIds,
+		});
 	}
 
 	async getAccompanistProfile(
@@ -130,28 +143,15 @@ export class ParticipantProfileService {
 			"Accompanist profile",
 		);
 		const body = payload as Record<string, unknown>;
-		const displayName = validateDisplayName(body.displayName);
-		const publicDirectoryOptIn = validatePublicDirectoryOptIn(
-			body.publicDirectoryOptIn,
-		);
-		const divisionIds = validateDivisionIds(body.divisionIds);
-		try {
-			return await this.repository.upsertAccompanistProfile({
-				organizationId: access.organizationId,
-				customerId: access.customerId,
-				displayName,
-				publicDirectoryOptIn,
-				divisionIds,
-			});
-		} catch (error) {
-			if (error instanceof AppError) throw error;
-			throw new AppError(
-				error instanceof Error
-					? error.message
-					: "Failed to save accompanist profile.",
-				400,
-			);
-		}
+		const { displayName, publicDirectoryOptIn, divisionIds } =
+			parseProfileFields(body);
+		return await this.repository.upsertAccompanistProfile({
+			organizationId: access.organizationId,
+			customerId: access.customerId,
+			displayName,
+			publicDirectoryOptIn,
+			divisionIds,
+		});
 	}
 
 	async listTeacherProfiles(

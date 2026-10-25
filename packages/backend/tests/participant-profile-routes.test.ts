@@ -1,170 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import {
-	type AuthenticatedUser,
 	FORBIDDEN_PUBLIC_DIRECTORY_FIELDS,
 	type PublicDirectoryProfileDto,
 } from "@festival/common";
-import { createApp } from "../src/app.js";
-import type { AuthVerifier } from "../src/auth/types.js";
-import {
-	CUSTOMER_SESSION_COOKIE,
-	type CustomerAccountService,
-} from "../src/customer/customer-account-service.js";
-import { AppError } from "../src/errors/app-error.js";
-import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
-
-class FakeAuth implements AuthVerifier {
-	async verify(token: string): Promise<AuthenticatedUser> {
-		const users: Record<string, AuthenticatedUser> = {
-			"admin-org-a": {
-				uid: "uid-admin-a",
-				email: "admin-a@example.com",
-				displayName: "Admin A",
-			},
-			"admin-org-b": {
-				uid: "uid-admin-b",
-				email: "admin-b@example.com",
-				displayName: "Admin B",
-			},
-			"member-org-a": {
-				uid: "uid-member-a",
-				email: "member-a@example.com",
-				displayName: "Member A",
-			},
-		};
-		const user = users[token];
-		if (!user) throw new AppError(`Unknown token: ${token}`, 401);
-		return user;
-	}
-}
-
-class FakeCustomerAccountService {
-	public sessions = new Map<
-		string,
-		{ customerId: string; organizationId: string; csrfToken: string }
-	>();
-
-	async customerReadAccess(_slug: string, sessionId?: string) {
-		const s = sessionId ? this.sessions.get(sessionId) : undefined;
-		if (!s) {
-			throw new AppError("Customer session is invalid.", 401);
-		}
-		return { organizationId: s.organizationId, customerId: s.customerId };
-	}
-
-	async formAccess(
-		_slug: string,
-		sessionId?: string,
-		csrf?: string,
-		_origin?: string,
-	) {
-		const s = sessionId ? this.sessions.get(sessionId) : undefined;
-		if (!s) {
-			throw new AppError("Customer session is invalid.", 401);
-		}
-		if (!csrf || csrf !== s.csrfToken) {
-			throw new AppError("CSRF validation failed.", 403);
-		}
-		return { organizationId: s.organizationId, customerId: s.customerId };
-	}
-}
-
-async function setupTestApp() {
-	const repository = new InMemoryOrganizationRepository();
-	const customerAccountService = new FakeCustomerAccountService();
-
-	const orgA = await repository.createOrganization({
-		name: "Organization A",
-		slug: "org-a",
-	});
-	const orgB = await repository.createOrganization({
-		name: "Organization B",
-		slug: "org-b",
-	});
-
-	const adminA = await repository.upsertUser({
-		uid: "uid-admin-a",
-		email: "admin-a@example.com",
-		displayName: "Admin A",
-	});
-	await repository.createMembership({
-		organizationId: orgA.id,
-		userId: adminA.id,
-		role: "Admin",
-		origin: "creator",
-	});
-
-	const adminB = await repository.upsertUser({
-		uid: "uid-admin-b",
-		email: "admin-b@example.com",
-		displayName: "Admin B",
-	});
-	await repository.createMembership({
-		organizationId: orgB.id,
-		userId: adminB.id,
-		role: "Admin",
-		origin: "creator",
-	});
-
-	const memberA = await repository.upsertUser({
-		uid: "uid-member-a",
-		email: "member-a@example.com",
-		displayName: "Member A",
-	});
-	await repository.createMembership({
-		organizationId: orgA.id,
-		userId: memberA.id,
-		role: "Read Only",
-		origin: "invite",
-	});
-
-	const divA1 = await repository.createDivision({
-		organizationId: orgA.id,
-		displayName: "Piano A",
-		normalizedName: "piano-a",
-	});
-	const divA2 = await repository.createDivision({
-		organizationId: orgA.id,
-		displayName: "Strings A",
-		normalizedName: "strings-a",
-	});
-	const divB1 = await repository.createDivision({
-		organizationId: orgB.id,
-		displayName: "Piano B",
-		normalizedName: "piano-b",
-	});
-
-	// Register test customer sessions
-	customerAccountService.sessions.set("sess-cust-1", {
-		customerId: "cust-1",
-		organizationId: orgA.id,
-		csrfToken: "csrf-token-1",
-	});
-	customerAccountService.sessions.set("sess-cust-2", {
-		customerId: "cust-2",
-		organizationId: orgA.id,
-		csrfToken: "csrf-token-2",
-	});
-
-	const { app } = await createApp({
-		env: { port: 3000 },
-		repository,
-		authVerifier: new FakeAuth(),
-		customerAccountService:
-			customerAccountService as unknown as CustomerAccountService,
-	});
-
-	return {
-		app,
-		repository,
-		customerAccountService,
-		orgA,
-		orgB,
-		divA1,
-		divA2,
-		divB1,
-	};
-}
+import { CUSTOMER_SESSION_COOKIE } from "../src/customer/customer-account-service.js";
+import { setupTestApp } from "./participant-profile-test-harness.js";
 
 describe("Participant Profiles API End-to-End", () => {
 	describe("Customer Participant Profile Endpoints", () => {
@@ -349,6 +189,66 @@ describe("Participant Profiles API End-to-End", () => {
 			const fetched = await getRes.json();
 			expect(fetched.id).toBe(created.id);
 		});
+
+		for (const kind of ["teacher", "accompanist"] as const) {
+			const putProfile = (
+				app: Awaited<ReturnType<typeof setupTestApp>>["app"],
+				body: Record<string, unknown>,
+			) =>
+				app.request(`/api/customer/orgs/org-a/profiles/${kind}`, {
+					method: "PUT",
+					headers: {
+						"Content-Type": "application/json",
+						Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1`,
+						"X-CSRF-Token": "csrf-token-1",
+					},
+					body: JSON.stringify(body),
+				});
+
+			it(`returns 400 for invalid ${kind} profile payloads`, async () => {
+				const { app, divA1, divB1 } = await setupTestApp();
+				const valid = {
+					displayName: "Valid Name",
+					publicDirectoryOptIn: true,
+					divisionIds: [divA1.id],
+				};
+				const invalidBodies: Array<Record<string, unknown>> = [
+					{ ...valid, displayName: "   " },
+					{ ...valid, displayName: "x".repeat(500) },
+					{ ...valid, publicDirectoryOptIn: "yes" },
+					{ ...valid, divisionIds: "not-an-array" },
+					{ ...valid, divisionIds: [divB1.id] },
+					{ ...valid, divisionIds: ["unknown-division-id"] },
+				];
+				for (const body of invalidBodies) {
+					const res = await putProfile(app, body);
+					expect(res.status).toBe(400);
+					const json = await res.json();
+					expect(typeof json.error).toBe("string");
+				}
+			});
+
+			it(`returns generic 500 when ${kind} profile repository fails unexpectedly`, async () => {
+				const { app, repository, divA1 } = await setupTestApp();
+				const secret = "relation festival.secret_table does not exist";
+				const failing = async () => {
+					throw new Error(secret);
+				};
+				if (kind === "teacher") {
+					repository.upsertTeacherProfile = failing;
+				} else {
+					repository.upsertAccompanistProfile = failing;
+				}
+				const res = await putProfile(app, {
+					displayName: "Valid Name",
+					publicDirectoryOptIn: true,
+					divisionIds: [divA1.id],
+				});
+				expect(res.status).toBe(500);
+				const text = await res.text();
+				expect(text).not.toContain(secret);
+			});
+		}
 	});
 
 	describe("Admin Approval Endpoints", () => {
@@ -681,6 +581,51 @@ describe("Participant Profiles API End-to-End", () => {
 					expect(keys.includes(forbidden)).toBe(false);
 				}
 			}
+		});
+
+		it("removes approved teacher from public directory after display name edit", async () => {
+			const { app, divA1 } = await setupTestApp();
+			const putTeacher = (displayName: string) =>
+				app.request("/api/customer/orgs/org-a/profiles/teacher", {
+					method: "PUT",
+					headers: {
+						"Content-Type": "application/json",
+						Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1`,
+						"X-CSRF-Token": "csrf-token-1",
+					},
+					body: JSON.stringify({
+						displayName,
+						publicDirectoryOptIn: true,
+						divisionIds: [divA1.id],
+					}),
+				});
+
+			const created = await (await putTeacher("Alice Teacher")).json();
+			await app.request(
+				`/api/admin/orgs/org-a/profiles/teachers/${created.id}/approval`,
+				{
+					method: "PATCH",
+					headers: {
+						"Content-Type": "application/json",
+						Authorization: "Bearer admin-org-a",
+					},
+					body: JSON.stringify({ approvalStatus: "approved" }),
+				},
+			);
+			const before: PublicDirectoryProfileDto[] = await (
+				await app.request("/api/org-info/org-a/directory/profiles")
+			).json();
+			expect(before.map((p) => p.displayName)).toEqual(["Alice Teacher"]);
+
+			const editRes = await putTeacher("Alice Renamed");
+			expect(editRes.status).toBe(200);
+			const edited = await editRes.json();
+			expect(edited.approval_status).toBe("pending");
+
+			const after: PublicDirectoryProfileDto[] = await (
+				await app.request("/api/org-info/org-a/directory/profiles")
+			).json();
+			expect(after).toEqual([]);
 		});
 
 		it("returns 404 for nonexistent organization", async () => {

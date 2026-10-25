@@ -24,6 +24,7 @@ import type {
 	TeacherProfileRecord,
 } from "@festival/common";
 import {
+	AppError,
 	assertValidEntitlementDurationDays,
 	assertValidEntitlementGrantSnapshotInput,
 	calendarDateInTimezone,
@@ -70,6 +71,12 @@ import {
 	assertValidSubtypeDependency,
 	ShopifyShopOwnershipError,
 } from "./organization-repository.js";
+import { profileEditRequiresReapproval } from "./profile-moderation.js";
+import {
+	compareCodePoint,
+	compareDivisionsByName,
+	compareProfilesByName,
+} from "./profile-ordering.js";
 
 type StoredTeacherEntitlement = Omit<EntitlementGrantSnapshot, "status">;
 type StoredAccompanistEntitlement = Omit<
@@ -1927,12 +1934,14 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		for (const divId of uniqueIds) {
 			const div = this.divisions.get(divId);
 			if (!div || div.organizationId !== organizationId) {
-				throw new Error(
+				throw new AppError(
 					"One or more divisions do not belong to the organization.",
+					400,
+					"invalid_division",
 				);
 			}
 		}
-		return uniqueIds;
+		return uniqueIds.sort(compareCodePoint);
 	}
 
 	async getTeacherProfile(
@@ -1981,6 +1990,15 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 				public_directory_opt_in: publicDirectoryOptIn,
 				division_ids: divisionIds,
 				teacher_color: getDeterministicTeacherColor(params.customerId),
+				approval_status: profileEditRequiresReapproval(
+					{
+						displayName: existing.display_name,
+						divisionIds: existing.division_ids,
+					},
+					{ displayName, divisionIds },
+				)
+					? "pending"
+					: existing.approval_status,
 				updated_at: nowIso,
 			};
 			this.teacherProfiles.set(existing.id, updated);
@@ -2027,11 +2045,7 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 	): Promise<TeacherProfileRecord[]> {
 		return [...this.teacherProfiles.values()]
 			.filter((p) => p.organization_id === organizationId)
-			.sort(
-				(a, b) =>
-					a.display_name.localeCompare(b.display_name) ||
-					a.id.localeCompare(b.id),
-			)
+			.sort(compareProfilesByName)
 			.map((p) => ({ ...p, division_ids: [...p.division_ids] }));
 	}
 
@@ -2043,7 +2057,7 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			(p) =>
 				p.organization_id === organizationId && p.customer_id === customerId,
 		);
-		return match ? { ...match, division_ids: [...match.division_ids] } : null;
+		return match ? this.withAccompanistContact(match) : null;
 	}
 
 	async getAccompanistProfileById(
@@ -2054,7 +2068,7 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		if (!match || match.organization_id !== organizationId) {
 			return null;
 		}
-		return { ...match, division_ids: [...match.division_ids] };
+		return this.withAccompanistContact(match);
 	}
 
 	async upsertAccompanistProfile(
@@ -2073,17 +2087,6 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 				p.organization_id === params.organizationId &&
 				p.customer_id === params.customerId,
 		);
-		const contact =
-			this.customerContacts.get(
-				`${params.organizationId}:${params.customerId}`,
-			) ?? this.customerContacts.get(params.customerId);
-		const email =
-			contact?.email ??
-			this.membershipIdentityEmailsByCustomer.get(
-				`${params.organizationId}:${params.customerId}`,
-			) ??
-			null;
-		const phone = contact?.phone ?? null;
 		const nowIso = this.now().toISOString();
 
 		if (existing) {
@@ -2092,12 +2095,19 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 				display_name: displayName,
 				public_directory_opt_in: publicDirectoryOptIn,
 				division_ids: divisionIds,
+				approval_status: profileEditRequiresReapproval(
+					{
+						displayName: existing.display_name,
+						divisionIds: existing.division_ids,
+					},
+					{ displayName, divisionIds },
+				)
+					? "pending"
+					: existing.approval_status,
 				updated_at: nowIso,
-				...(phone ? { phone } : {}),
-				...(email ? { email } : {}),
 			};
 			this.accompanistProfiles.set(existing.id, updated);
-			return { ...updated, division_ids: [...updated.division_ids] };
+			return this.withAccompanistContact(updated);
 		}
 		const id = randomUUID();
 		const record: AccompanistProfileRecord = {
@@ -2110,11 +2120,9 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			division_ids: divisionIds,
 			created_at: nowIso,
 			updated_at: nowIso,
-			...(phone ? { phone } : {}),
-			...(email ? { email } : {}),
 		};
 		this.accompanistProfiles.set(id, record);
-		return { ...record, division_ids: [...record.division_ids] };
+		return this.withAccompanistContact(record);
 	}
 
 	async updateAccompanistProfileApproval(
@@ -2133,7 +2141,7 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			updated_at: this.now().toISOString(),
 		};
 		this.accompanistProfiles.set(profileId, updated);
-		return { ...updated, division_ids: [...updated.division_ids] };
+		return this.withAccompanistContact(updated);
 	}
 
 	async listAccompanistProfiles(
@@ -2141,12 +2149,28 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 	): Promise<AccompanistProfileRecord[]> {
 		return [...this.accompanistProfiles.values()]
 			.filter((p) => p.organization_id === organizationId)
-			.sort(
-				(a, b) =>
-					a.display_name.localeCompare(b.display_name) ||
-					a.id.localeCompare(b.id),
-			)
-			.map((p) => ({ ...p, division_ids: [...p.division_ids] }));
+			.sort(compareProfilesByName)
+			.map((p) => this.withAccompanistContact(p));
+	}
+
+	private withAccompanistContact(
+		profile: AccompanistProfileRecord,
+	): AccompanistProfileRecord {
+		const customerKey = `${profile.organization_id}:${profile.customer_id}`;
+		const contact =
+			this.customerContacts.get(customerKey) ??
+			this.customerContacts.get(profile.customer_id);
+		// Mirrors Postgres: COALESCE(identity.normalized_email, c.email), c.phone.
+		const email =
+			this.membershipIdentityEmailsByCustomer.get(customerKey) ??
+			contact?.email;
+		const phone = contact?.phone;
+		return {
+			...profile,
+			division_ids: [...profile.division_ids],
+			...(phone ? { phone } : {}),
+			...(email ? { email } : {}),
+		};
 	}
 
 	async getPublicDirectoryProfiles(
@@ -2171,11 +2195,7 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 					p.public_directory_opt_in &&
 					p.approval_status === "approved",
 			)
-			.sort(
-				(a, b) =>
-					a.display_name.localeCompare(b.display_name) ||
-					a.id.localeCompare(b.id),
-			);
+			.sort(compareProfilesByName);
 
 		const teachers: PublicDirectoryProfileDto[] = teacherProfiles.map((tp) => {
 			const approvedDivisions: PublicDirectoryDivisionDto[] = tp.division_ids
@@ -2184,9 +2204,7 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 					Boolean(d && d.organizationId === organizationId),
 				)
 				.map((d) => ({ id: d.id, name: d.displayName }))
-				.sort(
-					(a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id),
-				);
+				.sort(compareDivisionsByName);
 
 			return validatePublicDirectoryProfileDto({
 				displayName: tp.display_name,
@@ -2212,11 +2230,7 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 					p.public_directory_opt_in &&
 					p.approval_status === "approved",
 			)
-			.sort(
-				(a, b) =>
-					a.display_name.localeCompare(b.display_name) ||
-					a.id.localeCompare(b.id),
-			);
+			.sort(compareProfilesByName);
 
 		const accompanists: PublicDirectoryProfileDto[] = accompanistProfiles.map(
 			(ap) => {
@@ -2226,9 +2240,7 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 						Boolean(d && d.organizationId === organizationId),
 					)
 					.map((d) => ({ id: d.id, name: d.displayName }))
-					.sort(
-						(a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id),
-					);
+					.sort(compareDivisionsByName);
 
 				return validatePublicDirectoryProfileDto({
 					displayName: ap.display_name,

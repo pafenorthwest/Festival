@@ -10,13 +10,17 @@ CREATE TABLE IF NOT EXISTS orgs.teacher_profiles (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (organization_id, customer_id),
+    UNIQUE (id, organization_id),
     FOREIGN KEY (customer_id, organization_id) REFERENCES orgs.festival_customers (id, organization_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS orgs.teacher_profile_divisions (
-    teacher_profile_id TEXT NOT NULL REFERENCES orgs.teacher_profiles (id) ON DELETE CASCADE,
-    division_id TEXT NOT NULL REFERENCES orgs.organization_divisions (id) ON DELETE CASCADE,
-    PRIMARY KEY (teacher_profile_id, division_id)
+    teacher_profile_id TEXT NOT NULL,
+    organization_id TEXT NOT NULL REFERENCES orgs.organizations (id) ON DELETE CASCADE,
+    division_id TEXT NOT NULL,
+    PRIMARY KEY (teacher_profile_id, division_id),
+    FOREIGN KEY (teacher_profile_id, organization_id) REFERENCES orgs.teacher_profiles (id, organization_id) ON DELETE CASCADE,
+    FOREIGN KEY (division_id, organization_id) REFERENCES orgs.organization_divisions (id, organization_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS orgs.accompanist_profiles (
@@ -29,13 +33,17 @@ CREATE TABLE IF NOT EXISTS orgs.accompanist_profiles (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (organization_id, customer_id),
+    UNIQUE (id, organization_id),
     FOREIGN KEY (customer_id, organization_id) REFERENCES orgs.festival_customers (id, organization_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS orgs.accompanist_profile_divisions (
-    accompanist_profile_id TEXT NOT NULL REFERENCES orgs.accompanist_profiles (id) ON DELETE CASCADE,
-    division_id TEXT NOT NULL REFERENCES orgs.organization_divisions (id) ON DELETE CASCADE,
-    PRIMARY KEY (accompanist_profile_id, division_id)
+    accompanist_profile_id TEXT NOT NULL,
+    organization_id TEXT NOT NULL REFERENCES orgs.organizations (id) ON DELETE CASCADE,
+    division_id TEXT NOT NULL,
+    PRIMARY KEY (accompanist_profile_id, division_id),
+    FOREIGN KEY (accompanist_profile_id, organization_id) REFERENCES orgs.accompanist_profiles (id, organization_id) ON DELETE CASCADE,
+    FOREIGN KEY (division_id, organization_id) REFERENCES orgs.organization_divisions (id, organization_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_teacher_profiles_org

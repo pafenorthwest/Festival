@@ -74,7 +74,7 @@ describe("InMemoryOrganizationRepository - Profiles", () => {
 			expect(profile.display_name).toBe("Alice Teacher");
 			expect(profile.public_directory_opt_in).toBe(true);
 			expect(profile.approval_status).toBe("pending");
-			expect(profile.division_ids).toEqual([div1Id, div2Id]);
+			expect(profile.division_ids).toEqual([div1Id, div2Id].sort());
 			expect(profile.teacher_color).toBe(
 				getDeterministicTeacherColor("cust-teacher-1"),
 			);
@@ -86,13 +86,13 @@ describe("InMemoryOrganizationRepository - Profiles", () => {
 			expect(byCustomer).toEqual(profile);
 		});
 
-		it("updating a teacher profile preserves existing approval_status", async () => {
+		it("updating only teacher public_directory_opt_in or division order preserves approval_status", async () => {
 			const created = await repo.upsertTeacherProfile({
 				organizationId: orgAId,
 				customerId: "cust-teacher-1",
 				displayName: "Alice Initial",
 				publicDirectoryOptIn: false,
-				divisionIds: [div1Id],
+				divisionIds: [div1Id, div2Id],
 			});
 
 			const approved = await repo.updateTeacherProfileApproval(
@@ -105,16 +105,80 @@ describe("InMemoryOrganizationRepository - Profiles", () => {
 			const updated = await repo.upsertTeacherProfile({
 				organizationId: orgAId,
 				customerId: "cust-teacher-1",
+				displayName: "Alice Initial",
+				publicDirectoryOptIn: true,
+				divisionIds: [div2Id, div1Id],
+			});
+
+			expect(updated.id).toBe(created.id);
+			expect(updated.public_directory_opt_in).toBe(true);
+			expect(updated.approval_status).toBe("approved");
+		});
+
+		it("renaming an approved teacher profile resets approval_status to pending", async () => {
+			const created = await repo.upsertTeacherProfile({
+				organizationId: orgAId,
+				customerId: "cust-teacher-1",
+				displayName: "Alice Initial",
+				publicDirectoryOptIn: true,
+				divisionIds: [div1Id],
+			});
+			await repo.updateTeacherProfileApproval(orgAId, created.id, "approved");
+
+			const updated = await repo.upsertTeacherProfile({
+				organizationId: orgAId,
+				customerId: "cust-teacher-1",
 				displayName: "Alice Updated",
 				publicDirectoryOptIn: true,
-				divisionIds: [div2Id],
+				divisionIds: [div1Id],
 			});
 
 			expect(updated.id).toBe(created.id);
 			expect(updated.display_name).toBe("Alice Updated");
-			expect(updated.public_directory_opt_in).toBe(true);
-			expect(updated.approval_status).toBe("approved");
+			expect(updated.approval_status).toBe("pending");
+		});
+
+		it("changing approved teacher divisions resets approval_status to pending", async () => {
+			const created = await repo.upsertTeacherProfile({
+				organizationId: orgAId,
+				customerId: "cust-teacher-1",
+				displayName: "Alice Initial",
+				publicDirectoryOptIn: true,
+				divisionIds: [div1Id],
+			});
+			await repo.updateTeacherProfileApproval(orgAId, created.id, "approved");
+
+			const updated = await repo.upsertTeacherProfile({
+				organizationId: orgAId,
+				customerId: "cust-teacher-1",
+				displayName: "Alice Initial",
+				publicDirectoryOptIn: true,
+				divisionIds: [div2Id],
+			});
+
 			expect(updated.division_ids).toEqual([div2Id]);
+			expect(updated.approval_status).toBe("pending");
+		});
+
+		it("editing a rejected teacher profile returns it to pending", async () => {
+			const created = await repo.upsertTeacherProfile({
+				organizationId: orgAId,
+				customerId: "cust-teacher-1",
+				displayName: "Alice Initial",
+				publicDirectoryOptIn: true,
+				divisionIds: [div1Id],
+			});
+			await repo.updateTeacherProfileApproval(orgAId, created.id, "rejected");
+
+			const updated = await repo.upsertTeacherProfile({
+				organizationId: orgAId,
+				customerId: "cust-teacher-1",
+				displayName: "Alice Fixed",
+				publicDirectoryOptIn: true,
+				divisionIds: [div1Id],
+			});
+
+			expect(updated.approval_status).toBe("pending");
 		});
 
 		it("rejects upsert when division does not belong to organization", async () => {
@@ -216,13 +280,13 @@ describe("InMemoryOrganizationRepository - Profiles", () => {
 			expect(byId).toEqual(profile);
 		});
 
-		it("updating an accompanist profile preserves existing approval_status", async () => {
+		it("updating only accompanist public_directory_opt_in preserves approval_status", async () => {
 			const created = await repo.upsertAccompanistProfile({
 				organizationId: orgAId,
 				customerId: "cust-acc-1",
 				displayName: "Bob Initial",
 				publicDirectoryOptIn: false,
-				divisionIds: [],
+				divisionIds: [div1Id],
 			});
 
 			await repo.updateAccompanistProfileApproval(
@@ -234,14 +298,53 @@ describe("InMemoryOrganizationRepository - Profiles", () => {
 			const updated = await repo.upsertAccompanistProfile({
 				organizationId: orgAId,
 				customerId: "cust-acc-1",
+				displayName: "Bob Initial",
+				publicDirectoryOptIn: true,
+				divisionIds: [div1Id],
+			});
+
+			expect(updated.public_directory_opt_in).toBe(true);
+			expect(updated.approval_status).toBe("approved");
+		});
+
+		it("editing accompanist name or divisions resets approval_status to pending", async () => {
+			const created = await repo.upsertAccompanistProfile({
+				organizationId: orgAId,
+				customerId: "cust-acc-1",
+				displayName: "Bob Initial",
+				publicDirectoryOptIn: true,
+				divisionIds: [],
+			});
+			await repo.updateAccompanistProfileApproval(
+				orgAId,
+				created.id,
+				"approved",
+			);
+
+			const renamed = await repo.upsertAccompanistProfile({
+				organizationId: orgAId,
+				customerId: "cust-acc-1",
+				displayName: "Bob Updated",
+				publicDirectoryOptIn: true,
+				divisionIds: [],
+			});
+			expect(renamed.display_name).toBe("Bob Updated");
+			expect(renamed.approval_status).toBe("pending");
+
+			await repo.updateAccompanistProfileApproval(
+				orgAId,
+				created.id,
+				"rejected",
+			);
+			const redivided = await repo.upsertAccompanistProfile({
+				organizationId: orgAId,
+				customerId: "cust-acc-1",
 				displayName: "Bob Updated",
 				publicDirectoryOptIn: true,
 				divisionIds: [div2Id],
 			});
-
-			expect(updated.approval_status).toBe("approved");
-			expect(updated.display_name).toBe("Bob Updated");
-			expect(updated.division_ids).toEqual([div2Id]);
+			expect(redivided.division_ids).toEqual([div2Id]);
+			expect(redivided.approval_status).toBe("pending");
 		});
 
 		it("rejects upsert when division belongs to different organization", async () => {
@@ -278,6 +381,119 @@ describe("InMemoryOrganizationRepository - Profiles", () => {
 					"approved",
 				),
 			).toBeNull();
+		});
+	});
+
+	describe("Postgres parity", () => {
+		it("returns division_ids sorted ascending regardless of input order", async () => {
+			const input = [div2Id, div1Id];
+			const profile = await repo.upsertTeacherProfile({
+				organizationId: orgAId,
+				customerId: "cust-parity-order",
+				displayName: "Order Teacher",
+				publicDirectoryOptIn: false,
+				divisionIds: input,
+			});
+			const expected = [...input].sort();
+			expect(profile.division_ids).toEqual(expected);
+			const fetched = await repo.getTeacherProfile(orgAId, "cust-parity-order");
+			expect(fetched?.division_ids).toEqual(expected);
+		});
+
+		it("resolves accompanist contact at read time with identity email precedence", async () => {
+			repo.setCustomerContact(orgAId, {
+				customerId: "cust-parity-contact",
+				phone: "555-000-0001",
+				email: "contact@example.com",
+			});
+			const profile = await repo.upsertAccompanistProfile({
+				organizationId: orgAId,
+				customerId: "cust-parity-contact",
+				displayName: "Contact Accompanist",
+				publicDirectoryOptIn: false,
+				divisionIds: [],
+			});
+			expect(profile.email).toBe("contact@example.com");
+
+			repo.setCustomerContact(orgAId, {
+				customerId: "cust-parity-contact",
+				phone: "555-000-0002",
+				email: "contact@example.com",
+			});
+			const product = await repo.createMembershipProductRecord({
+				organizationId: orgAId,
+				entitlementClass: TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+				productNameSnapshot: "Teacher Membership",
+				durationDays: 365,
+				shopifyProductGid: "gid://shopify/Product/parity",
+				shopifyVariantGid: "gid://shopify/ProductVariant/parity",
+				isActive: true,
+			});
+			await repo.createEntitlementGrantSnapshot({
+				organizationId: orgAId,
+				customerId: "cust-parity-contact",
+				divisionId: div1Id,
+				entitlementClass: TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+				divisionNameSnapshot: "Strings",
+				paidAmount: "50.00",
+				paidCurrencyCode: "USD",
+				checkoutIntentId: "intent-parity",
+				shopifyOrderGid: "gid://shopify/Order/parity",
+				shopifyOrderLineGid: "gid://shopify/Line/parity",
+				durationDays: 365,
+				startsOn: "2026-01-01",
+				endsOn: "2027-01-01",
+				offeringId: product.id,
+				source: "shopify_order",
+				status: "active",
+				verifiedIdentityEmail: "identity@example.com",
+			});
+
+			const fetched = await repo.getAccompanistProfileById(orgAId, profile.id);
+			expect(fetched?.phone).toBe("555-000-0002");
+			expect(fetched?.email).toBe("identity@example.com");
+		});
+
+		it("sorts profile lists case-insensitively by code point with raw name and id tiebreaks", async () => {
+			for (const [customerId, displayName] of [
+				["cust-s-1", "bob"],
+				["cust-s-2", "alice"],
+				["cust-s-3", "Alice"],
+				["cust-s-4", "Carl"],
+			]) {
+				await repo.upsertTeacherProfile({
+					organizationId: orgAId,
+					customerId,
+					displayName,
+					publicDirectoryOptIn: false,
+					divisionIds: [],
+				});
+			}
+			const names = (await repo.listTeacherProfiles(orgAId)).map(
+				(p) => p.display_name,
+			);
+			expect(names).toEqual(["Alice", "alice", "bob", "Carl"]);
+		});
+
+		it("sorts directory divisions case-insensitively by code point", async () => {
+			const lower = await repo.createDivision({
+				organizationId: orgAId,
+				displayName: "piano",
+				normalizedName: "piano-lower",
+			});
+			const profile = await repo.upsertTeacherProfile({
+				organizationId: orgAId,
+				customerId: "cust-parity-divs",
+				displayName: "Division Teacher",
+				publicDirectoryOptIn: true,
+				divisionIds: [lower.id, div2Id],
+			});
+			await repo.updateTeacherProfileApproval(orgAId, profile.id, "approved");
+			const [dto] = await repo.getPublicDirectoryProfiles(orgAId);
+			expect(dto.approvedDivisions.map((d) => d.name)).toEqual([
+				"Piano",
+				"piano",
+			]);
 		});
 	});
 
@@ -647,8 +863,9 @@ describe("PostgresOrganizationRepository - Profile Queries", () => {
 		// Mock division lookup: valid division belongs to org
 		unsafeSpy.mockResolvedValueOnce([{ id: VALID_DIV_1 }]);
 
+		const divisionWrites: Array<{ query: string; params: unknown }> = [];
 		const mockTransaction = {
-			unsafe: async (query: unknown) => {
+			unsafe: async (query: unknown, params?: unknown) => {
 				if (
 					typeof query === "string" &&
 					query.includes("INSERT INTO test_schema.teacher_profiles")
@@ -659,12 +876,14 @@ describe("PostgresOrganizationRepository - Profile Queries", () => {
 					typeof query === "string" &&
 					query.includes("DELETE FROM test_schema.teacher_profile_divisions")
 				) {
+					divisionWrites.push({ query, params });
 					return [];
 				}
 				if (
 					typeof query === "string" &&
 					query.includes("INSERT INTO test_schema.teacher_profile_divisions")
 				) {
+					divisionWrites.push({ query, params });
 					return [];
 				}
 				return [];
@@ -703,7 +922,153 @@ describe("PostgresOrganizationRepository - Profile Queries", () => {
 		expect(result.display_name).toBe("Teacher New");
 		expect(result.approval_status).toBe("pending");
 		expect(result.division_ids).toEqual([VALID_DIV_1]);
+		expect(divisionWrites).toEqual([
+			{
+				query: expect.stringContaining(
+					"WHERE teacher_profile_id = $1 AND organization_id = $2",
+				),
+				params: ["prof-t-1", "org-1"],
+			},
+			{
+				query: expect.stringContaining(
+					"(teacher_profile_id, organization_id, division_id)",
+				),
+				params: ["prof-t-1", "org-1", VALID_DIV_1],
+			},
+		]);
 
+		beginSpy.mockRestore();
+	});
+
+	function mockExistingProfileTransaction(
+		table: "teacher" | "accompanist",
+		existing: { display_name: string; division_ids: string[] },
+	) {
+		const calls: Array<{ query: string; params: unknown[] }> = [];
+		const transaction = {
+			unsafe: async (query: string, params: unknown[] = []) => {
+				calls.push({ query, params });
+				if (query.includes(`FROM test_schema.${table}_profiles`)) {
+					return [{ id: "prof-1", display_name: existing.display_name }];
+				}
+				if (query.includes(`SELECT division_id FROM test_schema.${table}`)) {
+					return existing.division_ids.map((division_id) => ({
+						division_id,
+					}));
+				}
+				if (query.includes(`INSERT INTO test_schema.${table}_profiles `)) {
+					return [{ id: "prof-1" }];
+				}
+				return [];
+			},
+		};
+		const beginSpy = spyOn(sql, "begin").mockImplementation(
+			async (callback: (tx: typeof transaction) => Promise<unknown>) =>
+				callback(transaction),
+		);
+		return { calls, beginSpy };
+	}
+
+	function mockLoadedProfile(displayName: string, divisionIds: string[]) {
+		unsafeSpy.mockResolvedValueOnce([
+			{
+				id: "prof-1",
+				organization_id: "org-1",
+				customer_id: "cust-1",
+				display_name: displayName,
+				public_directory_opt_in: true,
+				approval_status: "pending",
+				created_at: "2026-01-01T00:00:00.000Z",
+				updated_at: "2026-01-01T00:00:00.000Z",
+				division_ids: divisionIds,
+			},
+		]);
+	}
+
+	function findUpsertCall(
+		calls: Array<{ query: string; params: unknown[] }>,
+		table: string,
+	) {
+		const lockIndex = calls.findIndex(
+			(c) =>
+				c.query.includes(`FROM test_schema.${table}_profiles`) &&
+				c.query.includes("FOR UPDATE"),
+		);
+		const upsertIndex = calls.findIndex((c) =>
+			c.query.includes(`INSERT INTO test_schema.${table}_profiles `),
+		);
+		return { lockIndex, upsert: calls[upsertIndex], upsertIndex };
+	}
+
+	it("upsertTeacherProfile locks existing row and resets approval when display name changes", async () => {
+		unsafeSpy.mockResolvedValueOnce([{ id: VALID_DIV_1 }]);
+		const { calls, beginSpy } = mockExistingProfileTransaction("teacher", {
+			display_name: "Old Name",
+			division_ids: [VALID_DIV_1],
+		});
+		mockLoadedProfile("New Name", [VALID_DIV_1]);
+
+		await repo.upsertTeacherProfile({
+			organizationId: "org-1",
+			customerId: "cust-1",
+			displayName: "New Name",
+			publicDirectoryOptIn: true,
+			divisionIds: [VALID_DIV_1],
+		});
+
+		const { lockIndex, upsert, upsertIndex } = findUpsertCall(calls, "teacher");
+		expect(lockIndex).toBeGreaterThanOrEqual(0);
+		expect(lockIndex).toBeLessThan(upsertIndex);
+		expect(upsert.query).toContain("approval_status = CASE WHEN $6");
+		expect(upsert.params[5]).toBe(true);
+		beginSpy.mockRestore();
+	});
+
+	it("upsertTeacherProfile preserves approval when name and division set are unchanged", async () => {
+		unsafeSpy.mockResolvedValueOnce([{ id: VALID_DIV_1 }, { id: VALID_DIV_2 }]);
+		const { calls, beginSpy } = mockExistingProfileTransaction("teacher", {
+			display_name: "Same Name",
+			division_ids: [VALID_DIV_2, VALID_DIV_1],
+		});
+		mockLoadedProfile("Same Name", [VALID_DIV_1, VALID_DIV_2]);
+
+		await repo.upsertTeacherProfile({
+			organizationId: "org-1",
+			customerId: "cust-1",
+			displayName: "Same Name",
+			publicDirectoryOptIn: false,
+			divisionIds: [VALID_DIV_1, VALID_DIV_2],
+		});
+
+		const { upsert } = findUpsertCall(calls, "teacher");
+		expect(upsert.params[5]).toBe(false);
+		beginSpy.mockRestore();
+	});
+
+	it("upsertAccompanistProfile resets approval when division set changes", async () => {
+		unsafeSpy.mockResolvedValueOnce([{ id: VALID_DIV_2 }]);
+		const { calls, beginSpy } = mockExistingProfileTransaction("accompanist", {
+			display_name: "Acc Name",
+			division_ids: [VALID_DIV_1],
+		});
+		mockLoadedProfile("Acc Name", [VALID_DIV_2]);
+
+		await repo.upsertAccompanistProfile({
+			organizationId: "org-1",
+			customerId: "cust-1",
+			displayName: "Acc Name",
+			publicDirectoryOptIn: true,
+			divisionIds: [VALID_DIV_2],
+		});
+
+		const { lockIndex, upsert, upsertIndex } = findUpsertCall(
+			calls,
+			"accompanist",
+		);
+		expect(lockIndex).toBeGreaterThanOrEqual(0);
+		expect(lockIndex).toBeLessThan(upsertIndex);
+		expect(upsert.query).toContain("approval_status = CASE WHEN $6");
+		expect(upsert.params[5]).toBe(true);
 		beginSpy.mockRestore();
 	});
 
@@ -776,6 +1141,12 @@ describe("PostgresOrganizationRepository - Profile Queries", () => {
 		const accompanists = await repo.listAccompanistProfiles("org-1");
 		expect(accompanists.length).toBe(1);
 		expect(accompanists[0].display_name).toBe("Accompanist 1");
+
+		for (const call of unsafeSpy.mock.calls.slice(-2)) {
+			expect(String(call[0])).toMatch(
+				/ORDER BY lower\((tp|ap)\.display_name\) COLLATE "C" ASC, \1\.display_name COLLATE "C" ASC, \1\.id COLLATE "C" ASC/,
+			);
+		}
 	});
 
 	it("getTeacherProfileById and getAccompanistProfileById return null when not found", async () => {

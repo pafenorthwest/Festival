@@ -79,6 +79,7 @@ import {
 	initializePostgresSchema,
 	postgresSchemaName,
 } from "./postgres-schema.js";
+import { profileEditRequiresReapproval } from "./profile-moderation.js";
 
 interface MembershipRow {
 	id: string;
@@ -2993,11 +2994,51 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			[organizationId, uniqueIds],
 		)) as Array<{ id: string }>;
 		if (validRows.length !== uniqueIds.length) {
-			throw new Error(
+			throw new AppError(
 				"One or more divisions do not belong to the organization.",
+				400,
+				"invalid_division",
 			);
 		}
 		return uniqueIds;
+	}
+
+	/**
+	 * Locks the existing profile row (if any) inside the caller's transaction
+	 * and reports whether the pending edit must reset approval to 'pending'.
+	 * Missing rows report true so a concurrent insert race stays pending.
+	 */
+	private async lockedProfileRequiresReapproval(
+		transaction: Pick<typeof sql, "unsafe">,
+		kind: "teacher" | "accompanist",
+		next: {
+			organizationId: string;
+			customerId: string;
+			displayName: string;
+			divisionIds: string[];
+		},
+	): Promise<boolean> {
+		const existingRows = (await transaction.unsafe(
+			`SELECT id, display_name FROM ${this.schema}.${kind}_profiles
+			 WHERE organization_id = $1 AND customer_id = $2
+			 FOR UPDATE`,
+			[next.organizationId, next.customerId],
+		)) as Array<{ id: string; display_name: string }>;
+		const existing = existingRows[0];
+		if (!existing) {
+			return true;
+		}
+		const divisionRows = (await transaction.unsafe(
+			`SELECT division_id FROM ${this.schema}.${kind}_profile_divisions WHERE ${kind}_profile_id = $1 AND organization_id = $2`,
+			[existing.id, next.organizationId],
+		)) as Array<{ division_id: string }>;
+		return profileEditRequiresReapproval(
+			{
+				displayName: existing.display_name,
+				divisionIds: divisionRows.map((row) => row.division_id),
+			},
+			next,
+		);
 	}
 
 	async getTeacherProfile(
@@ -3024,7 +3065,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			 LEFT JOIN ${this.schema}.festival_customers c
 				ON c.id = tp.customer_id AND c.organization_id = tp.organization_id
 			 LEFT JOIN ${this.schema}.teacher_profile_divisions tpd
-				ON tpd.teacher_profile_id = tp.id
+				ON tpd.teacher_profile_id = tp.id AND tpd.organization_id = tp.organization_id
 			 WHERE tp.organization_id = $1 AND tp.customer_id = $2
 			 GROUP BY tp.id, tp.organization_id, tp.customer_id, tp.display_name, tp.public_directory_opt_in, tp.approval_status, tp.created_at, tp.updated_at, c.mailing_address`,
 			[organizationId, customerId],
@@ -3056,7 +3097,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			 LEFT JOIN ${this.schema}.festival_customers c
 				ON c.id = tp.customer_id AND c.organization_id = tp.organization_id
 			 LEFT JOIN ${this.schema}.teacher_profile_divisions tpd
-				ON tpd.teacher_profile_id = tp.id
+				ON tpd.teacher_profile_id = tp.id AND tpd.organization_id = tp.organization_id
 			 WHERE tp.organization_id = $1 AND tp.id = $2
 			 GROUP BY tp.id, tp.organization_id, tp.customer_id, tp.display_name, tp.public_directory_opt_in, tp.approval_status, tp.created_at, tp.updated_at, c.mailing_address`,
 			[organizationId, profileId],
@@ -3079,6 +3120,11 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 
 		const generatedId = randomUUID();
 		const row = await sql.begin(async (transaction) => {
+			const requiresReapproval = await this.lockedProfileRequiresReapproval(
+				transaction,
+				"teacher",
+				{ ...params, displayName, divisionIds },
+			);
 			const upserted = (await transaction.unsafe(
 				`INSERT INTO ${this.schema}.teacher_profiles (
 					id, organization_id, customer_id, display_name, public_directory_opt_in, approval_status, created_at, updated_at
@@ -3086,6 +3132,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				 ON CONFLICT (organization_id, customer_id) DO UPDATE SET
 					display_name = EXCLUDED.display_name,
 					public_directory_opt_in = EXCLUDED.public_directory_opt_in,
+					approval_status = CASE WHEN $6::boolean THEN 'pending' ELSE ${this.schema}.teacher_profiles.approval_status END,
 					updated_at = NOW()
 				 RETURNING id`,
 				[
@@ -3094,21 +3141,22 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 					params.customerId,
 					displayName,
 					publicDirectoryOptIn,
+					requiresReapproval,
 				],
 			)) as Array<{ id: string }>;
 
 			const profileId = upserted[0].id;
 			await transaction.unsafe(
-				`DELETE FROM ${this.schema}.teacher_profile_divisions WHERE teacher_profile_id = $1`,
-				[profileId],
+				`DELETE FROM ${this.schema}.teacher_profile_divisions WHERE teacher_profile_id = $1 AND organization_id = $2`,
+				[profileId, params.organizationId],
 			);
 
 			for (const divisionId of divisionIds) {
 				await transaction.unsafe(
-					`INSERT INTO ${this.schema}.teacher_profile_divisions (teacher_profile_id, division_id)
-					 VALUES ($1, $2)
+					`INSERT INTO ${this.schema}.teacher_profile_divisions (teacher_profile_id, organization_id, division_id)
+					 VALUES ($1, $2, $3)
 					 ON CONFLICT DO NOTHING`,
-					[profileId, divisionId],
+					[profileId, params.organizationId, divisionId],
 				);
 			}
 
@@ -3166,10 +3214,10 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			 LEFT JOIN ${this.schema}.festival_customers c
 				ON c.id = tp.customer_id AND c.organization_id = tp.organization_id
 			 LEFT JOIN ${this.schema}.teacher_profile_divisions tpd
-				ON tpd.teacher_profile_id = tp.id
+				ON tpd.teacher_profile_id = tp.id AND tpd.organization_id = tp.organization_id
 			 WHERE tp.organization_id = $1
 			 GROUP BY tp.id, tp.organization_id, tp.customer_id, tp.display_name, tp.public_directory_opt_in, tp.approval_status, tp.created_at, tp.updated_at, c.mailing_address
-			 ORDER BY tp.display_name ASC, tp.id ASC`,
+			 ORDER BY lower(tp.display_name) COLLATE "C" ASC, tp.display_name COLLATE "C" ASC, tp.id COLLATE "C" ASC`,
 			[organizationId],
 		)) as TeacherProfileRow[];
 		return rows.map((row) => mapTeacherProfileRow(row));
@@ -3203,7 +3251,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			 LEFT JOIN ${this.schema}.membership_identity_emails identity
 				ON identity.organization_id = ap.organization_id AND identity.customer_id = ap.customer_id
 			 LEFT JOIN ${this.schema}.accompanist_profile_divisions apd
-				ON apd.accompanist_profile_id = ap.id
+				ON apd.accompanist_profile_id = ap.id AND apd.organization_id = ap.organization_id
 			 WHERE ap.organization_id = $1 AND ap.customer_id = $2
 			 GROUP BY ap.id, ap.organization_id, ap.customer_id, ap.display_name, ap.public_directory_opt_in, ap.approval_status, ap.created_at, ap.updated_at, c.phone, identity.normalized_email, c.email, c.mailing_address`,
 			[organizationId, customerId],
@@ -3239,7 +3287,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			 LEFT JOIN ${this.schema}.membership_identity_emails identity
 				ON identity.organization_id = ap.organization_id AND identity.customer_id = ap.customer_id
 			 LEFT JOIN ${this.schema}.accompanist_profile_divisions apd
-				ON apd.accompanist_profile_id = ap.id
+				ON apd.accompanist_profile_id = ap.id AND apd.organization_id = ap.organization_id
 			 WHERE ap.organization_id = $1 AND ap.id = $2
 			 GROUP BY ap.id, ap.organization_id, ap.customer_id, ap.display_name, ap.public_directory_opt_in, ap.approval_status, ap.created_at, ap.updated_at, c.phone, identity.normalized_email, c.email, c.mailing_address`,
 			[organizationId, profileId],
@@ -3262,6 +3310,11 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 
 		const generatedId = randomUUID();
 		const row = await sql.begin(async (transaction) => {
+			const requiresReapproval = await this.lockedProfileRequiresReapproval(
+				transaction,
+				"accompanist",
+				{ ...params, displayName, divisionIds },
+			);
 			const upserted = (await transaction.unsafe(
 				`INSERT INTO ${this.schema}.accompanist_profiles (
 					id, organization_id, customer_id, display_name, public_directory_opt_in, approval_status, created_at, updated_at
@@ -3269,6 +3322,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				 ON CONFLICT (organization_id, customer_id) DO UPDATE SET
 					display_name = EXCLUDED.display_name,
 					public_directory_opt_in = EXCLUDED.public_directory_opt_in,
+					approval_status = CASE WHEN $6::boolean THEN 'pending' ELSE ${this.schema}.accompanist_profiles.approval_status END,
 					updated_at = NOW()
 				 RETURNING id`,
 				[
@@ -3277,21 +3331,22 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 					params.customerId,
 					displayName,
 					publicDirectoryOptIn,
+					requiresReapproval,
 				],
 			)) as Array<{ id: string }>;
 
 			const profileId = upserted[0].id;
 			await transaction.unsafe(
-				`DELETE FROM ${this.schema}.accompanist_profile_divisions WHERE accompanist_profile_id = $1`,
-				[profileId],
+				`DELETE FROM ${this.schema}.accompanist_profile_divisions WHERE accompanist_profile_id = $1 AND organization_id = $2`,
+				[profileId, params.organizationId],
 			);
 
 			for (const divisionId of divisionIds) {
 				await transaction.unsafe(
-					`INSERT INTO ${this.schema}.accompanist_profile_divisions (accompanist_profile_id, division_id)
-					 VALUES ($1, $2)
+					`INSERT INTO ${this.schema}.accompanist_profile_divisions (accompanist_profile_id, organization_id, division_id)
+					 VALUES ($1, $2, $3)
 					 ON CONFLICT DO NOTHING`,
-					[profileId, divisionId],
+					[profileId, params.organizationId, divisionId],
 				);
 			}
 
@@ -3353,10 +3408,10 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			 LEFT JOIN ${this.schema}.membership_identity_emails identity
 				ON identity.organization_id = ap.organization_id AND identity.customer_id = ap.customer_id
 			 LEFT JOIN ${this.schema}.accompanist_profile_divisions apd
-				ON apd.accompanist_profile_id = ap.id
+				ON apd.accompanist_profile_id = ap.id AND apd.organization_id = ap.organization_id
 			 WHERE ap.organization_id = $1
 			 GROUP BY ap.id, ap.organization_id, ap.customer_id, ap.display_name, ap.public_directory_opt_in, ap.approval_status, ap.created_at, ap.updated_at, c.phone, identity.normalized_email, c.email, c.mailing_address
-			 ORDER BY ap.display_name ASC, ap.id ASC`,
+			 ORDER BY lower(ap.display_name) COLLATE "C" ASC, ap.display_name COLLATE "C" ASC, ap.id COLLATE "C" ASC`,
 			[organizationId],
 		)) as AccompanistProfileRow[];
 		return rows.map((row) => mapAccompanistProfileRow(row));
@@ -3390,20 +3445,20 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				COALESCE(
 					jsonb_agg(
 						jsonb_build_object('id', od.id, 'name', od.display_name)
-						ORDER BY od.display_name, od.id
+						ORDER BY lower(od.display_name) COLLATE "C", od.display_name COLLATE "C", od.id COLLATE "C"
 					) FILTER (WHERE od.id IS NOT NULL),
 					'[]'::jsonb
 				) AS divisions
 			 FROM ${this.schema}.teacher_profiles tp
 			 LEFT JOIN ${this.schema}.teacher_profile_divisions tpd
-				ON tpd.teacher_profile_id = tp.id
+				ON tpd.teacher_profile_id = tp.id AND tpd.organization_id = tp.organization_id
 			 LEFT JOIN ${this.schema}.organization_divisions od
 				ON od.id = tpd.division_id AND od.organization_id = tp.organization_id
 			 WHERE tp.organization_id = $1
 			   AND tp.public_directory_opt_in = TRUE
 			   AND tp.approval_status = 'approved'
 			 GROUP BY tp.id, tp.customer_id, tp.display_name
-			 ORDER BY tp.display_name ASC, tp.id ASC`,
+			 ORDER BY lower(tp.display_name) COLLATE "C" ASC, tp.display_name COLLATE "C" ASC, tp.id COLLATE "C" ASC`,
 			[organizationId],
 		)) as Array<{
 			id: string;
@@ -3459,20 +3514,20 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				COALESCE(
 					jsonb_agg(
 						jsonb_build_object('id', od.id, 'name', od.display_name)
-						ORDER BY od.display_name, od.id
+						ORDER BY lower(od.display_name) COLLATE "C", od.display_name COLLATE "C", od.id COLLATE "C"
 					) FILTER (WHERE od.id IS NOT NULL),
 					'[]'::jsonb
 				) AS divisions
 			 FROM ${this.schema}.accompanist_profiles ap
 			 LEFT JOIN ${this.schema}.accompanist_profile_divisions apd
-				ON apd.accompanist_profile_id = ap.id
+				ON apd.accompanist_profile_id = ap.id AND apd.organization_id = ap.organization_id
 			 LEFT JOIN ${this.schema}.organization_divisions od
 				ON od.id = apd.division_id AND od.organization_id = ap.organization_id
 			 WHERE ap.organization_id = $1
 			   AND ap.public_directory_opt_in = TRUE
 			   AND ap.approval_status = 'approved'
 			 GROUP BY ap.id, ap.customer_id, ap.display_name
-			 ORDER BY ap.display_name ASC, ap.id ASC`,
+			 ORDER BY lower(ap.display_name) COLLATE "C" ASC, ap.display_name COLLATE "C" ASC, ap.id COLLATE "C" ASC`,
 			[organizationId],
 		)) as Array<{
 			id: string;
