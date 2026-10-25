@@ -74,6 +74,30 @@ async function directoryNames(app: App): Promise<string[]> {
 
 describe("Participant profile routes: security and consent", () => {
 	for (const kind of ["teacher", "accompanist"] as const) {
+		it(`rejects ${kind} profile creation without membership`, async () => {
+			const { app, repository, orgA, divA1 } = await setupTestApp({
+				withMemberships: false,
+			});
+			const response = await customerRequest(app, `org-a/profiles/${kind}`, {
+				method: "PUT",
+				headers: sessionHeaders(),
+				body: JSON.stringify({
+					displayName: "Nonmember",
+					publicDirectoryOptIn: true,
+					divisionIds: [divA1.id],
+				}),
+			});
+			expect(response.status).toBe(403);
+			expect(await response.json()).toMatchObject({
+				code: "active_membership_required",
+			});
+			const profile =
+				kind === "teacher"
+					? await repository.getTeacherProfile(orgA.id, "cust-1")
+					: await repository.getAccompanistProfile(orgA.id, "cust-1");
+			expect(profile).toBeNull();
+		});
+
 		describe(`${kind} customer endpoints`, () => {
 			it("rejects an org-a session used against org-b URLs", async () => {
 				const { app, divB1 } = await setupTestApp();

@@ -119,8 +119,10 @@ async function seedUsers(
 	}
 }
 
-export async function setupTestApp() {
-	const repository = new InMemoryOrganizationRepository();
+export async function setupTestApp({ withMemberships = true } = {}) {
+	const repository = new InMemoryOrganizationRepository(
+		() => new Date("2026-10-25T12:00:00.000Z"),
+	);
 	const customerAccountService = new FakeCustomerAccountService(repository);
 
 	const orgA = await repository.createOrganization({
@@ -148,6 +150,55 @@ export async function setupTestApp() {
 		displayName: "Piano B",
 		normalizedName: "piano-b",
 	});
+	if (withMemberships) {
+		const product = await repository.createMembershipProductRecord({
+			organizationId: orgA.id,
+			entitlementClass: "teacher_membership",
+			productNameSnapshot: "Teacher Membership",
+			durationDays: 365,
+			shopifyProductGid: "gid://shopify/Product/profile-tests",
+			shopifyVariantGid: "gid://shopify/ProductVariant/profile-tests",
+			isActive: true,
+		});
+		for (const customerId of ["cust-1", "cust-2"]) {
+			const email = `${customerId}@example.com`;
+			await repository.createEntitlementGrantSnapshot({
+				organizationId: orgA.id,
+				customerId,
+				divisionId: divA1.id,
+				entitlementClass: "teacher_membership",
+				divisionNameSnapshot: divA1.displayName,
+				paidAmount: "50.00",
+				paidCurrencyCode: "USD",
+				checkoutIntentId: `profile-tests-${customerId}`,
+				shopifyOrderGid: `gid://shopify/Order/profile-tests-${customerId}`,
+				shopifyOrderLineGid: `gid://shopify/Line/profile-tests-${customerId}`,
+				durationDays: 365,
+				startsOn: "2026-01-01",
+				endsOn: "2027-01-01",
+				offeringId: product.id,
+				source: "shopify_order",
+				status: "active",
+				verifiedIdentityEmail: email,
+			});
+			await repository.createAccompanistMembershipGrant({
+				organizationId: orgA.id,
+				customerId,
+				normalizedEmail: email,
+				offeringNameSnapshot: "Accompanist Membership",
+				source: "accompanist_form",
+				contact: {
+					name: customerId,
+					email,
+					city: "Seattle",
+					phone: "206-555-0100",
+				},
+				divisions: [{ divisionId: divA1.id, divisionName: divA1.displayName }],
+				startsOn: "2026-01-01",
+				endsOn: "2027-01-01",
+			});
+		}
+	}
 
 	// Register test customer sessions
 	customerAccountService.sessions.set("sess-cust-1", {
