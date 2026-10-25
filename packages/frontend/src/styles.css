@@ -222,6 +222,26 @@ a {
 	background: rgba(31, 36, 49, 0.08);
 }
 
+.org-nav-item.active,
+.org-nav-item[aria-current="page"],
+.org-nav-link.active,
+.org-nav-link[aria-current="page"],
+.organization-side-navigation a.active,
+.organization-side-navigation a[aria-current="page"],
+.organization-side-navigation .org-nav-link.active,
+.organization-side-navigation .org-nav-link[aria-current="page"] {
+	background: rgba(31, 36, 49, 0.12);
+	color: var(--bullet-accent);
+	font-weight: 600;
+}
+
+.organization-side-navigation a.active:hover,
+.organization-side-navigation a[aria-current="page"]:hover,
+.organization-side-navigation a.active:focus-visible,
+.organization-side-navigation a[aria-current="page"]:focus-visible {
+	background: rgba(31, 36, 49, 0.16);
+}
+
 .organization-side-navigation.is-collapsed {
 	width: 4.25rem;
 }

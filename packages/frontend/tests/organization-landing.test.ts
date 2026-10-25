@@ -51,6 +51,16 @@ describe("public organization landing page", () => {
 		expect(styles).toContain(".organization-side-navigation.is-collapsed");
 	});
 
+	it("visually highlights active side navigation links with semantic aria-current and CSS styling", () => {
+		expect(sideNavigation).toContain("aria-current={");
+		expect(sideNavigation).toContain("active: isCurrent(");
+		expect(styles).toContain(".organization-side-navigation a.active");
+		expect(styles).toContain(
+			'.organization-side-navigation a[aria-current="page"]',
+		);
+		expect(styles).toContain("font-weight: 600;");
+	});
+
 	it("uses the shared Organization Page header for customer authentication", () => {
 		expect(customerLandingSignInPath("pafe")).toBe(
 			"/api/organizations/pafe/customer-auth/start?returnTo=%2Forg%2Fpafe",
