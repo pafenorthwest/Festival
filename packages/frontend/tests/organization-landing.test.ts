@@ -28,6 +28,9 @@ describe("public organization landing page", () => {
 		expect(sideNavigation).toContain("buildOrgCustomerAccountContactPath");
 		expect(sideNavigation).toContain("buildOrgCustomerAccountOrdersPath");
 		expect(sideNavigation).toContain("buildOrgRootPath");
+		expect(sideNavigation).toContain("buildOrgPublicDirectoryPath");
+		expect(sideNavigation).toContain('aria-label="Directory"');
+		expect(sideNavigation).toContain("org-public-directory");
 		expect(sideNavigation).toContain("Accounts");
 		expect(sideNavigation).toContain("Festival");
 	});

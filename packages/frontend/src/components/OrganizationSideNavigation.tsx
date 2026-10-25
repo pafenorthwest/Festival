@@ -1,10 +1,12 @@
 import { createSignal } from "solid-js";
 import {
+	type AppRoute,
 	buildOrgCustomerAccountAvailabilityPath,
 	buildOrgCustomerAccountClassesPath,
 	buildOrgCustomerAccountContactPath,
 	buildOrgCustomerAccountMembershipsPath,
 	buildOrgCustomerAccountOrdersPath,
+	buildOrgPublicDirectoryPath,
 	buildOrgRootPath,
 } from "../lib/routes.js";
 
@@ -15,7 +17,10 @@ function startsCollapsed() {
 	);
 }
 
-export function OrganizationSideNavigation(props: { slug: string }) {
+export function OrganizationSideNavigation(props: {
+	slug: string;
+	currentRoute?: AppRoute;
+}) {
 	const [collapsed, setCollapsed] = createSignal(startsCollapsed());
 
 	return (
@@ -94,6 +99,23 @@ export function OrganizationSideNavigation(props: { slug: string }) {
 						home
 					</span>
 					<span class="organization-side-navigation-label">Home</span>
+				</a>
+				<a
+					href={buildOrgPublicDirectoryPath(props.slug)}
+					aria-label="Directory"
+					classList={{
+						active: props.currentRoute?.kind === "org-public-directory",
+					}}
+					aria-current={
+						props.currentRoute?.kind === "org-public-directory"
+							? "page"
+							: undefined
+					}
+				>
+					<span class="material-symbols-outlined" aria-hidden="true">
+						groups
+					</span>
+					<span class="organization-side-navigation-label">Directory</span>
 				</a>
 			</section>
 		</nav>

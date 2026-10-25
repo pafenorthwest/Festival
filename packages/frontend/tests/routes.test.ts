@@ -23,6 +23,7 @@ import {
 	buildOrgCustomerAccountPath,
 	buildOrgMembershipPath,
 	buildOrgPath,
+	buildOrgPublicDirectoryPath,
 	buildOrgRootPath,
 	buildPrivacyPolicyPath,
 	isOrganizationPageRoute,
@@ -55,6 +56,14 @@ describe("route helpers", () => {
 		});
 		expect(parseRoute("/org/festival-admins")).toEqual({
 			kind: "org-root",
+			slug: "festival-admins",
+		});
+		expect(parseRoute("/org/festival-admins/directory")).toEqual({
+			kind: "org-public-directory",
+			slug: "festival-admins",
+		});
+		expect(parseRoute("/org/festival-admins/directory/")).toEqual({
+			kind: "org-public-directory",
 			slug: "festival-admins",
 		});
 		expect(parseRoute("/org/festival-admins/membership")).toEqual({
@@ -182,6 +191,9 @@ describe("route helpers", () => {
 			true,
 		);
 		expect(
+			isOrganizationPageRoute(parseRoute("/org/festival-admins/directory")),
+		).toBe(true);
+		expect(
 			isOrganizationPageRoute(parseRoute("/org/festival-admins/membership")),
 		).toBe(true);
 		expect(
@@ -256,6 +268,9 @@ describe("route helpers", () => {
 			"/org/festival-admins/festival/jun-27/register",
 		);
 		expect(buildOrgRootPath("festival-admins")).toBe("/org/festival-admins");
+		expect(buildOrgPublicDirectoryPath("festival-admins")).toBe(
+			"/org/festival-admins/directory",
+		);
 		expect(buildOrgMembershipPath("festival-admins")).toBe(
 			"/org/festival-admins/membership",
 		);

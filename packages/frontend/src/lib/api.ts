@@ -65,6 +65,7 @@ import type {
 	OrganizationMembershipListResponse,
 	OrganizationTimezoneResponse,
 	ProposedPurchaseLineItem,
+	PublicDirectoryProfileDto,
 	PublicMembershipProductsListResponse,
 	PublicOrganizationDivisionListResponse,
 	PublicOrganizationLandingResponse,
@@ -695,6 +696,17 @@ export function getAccompanistMembershipForm(slug: string) {
 export function getPublicDivisions(slug: string) {
 	return requestJson<PublicOrganizationDivisionListResponse>(
 		`/api/organizations/${encodeURIComponent(slug)}/divisions`,
+		undefined,
+		undefined,
+		"",
+	);
+}
+
+export function getPublicDirectoryProfiles(
+	orgSlug: string,
+): Promise<PublicDirectoryProfileDto[]> {
+	return requestJson<PublicDirectoryProfileDto[]>(
+		`/api/org-info/${encodeURIComponent(orgSlug)}/directory/profiles`,
 		undefined,
 		undefined,
 		"",

@@ -40,6 +40,7 @@ import { MusicReviewPage } from "./pages/MusicReviewPage.js";
 import { OrganizationChooser } from "./pages/OrganizationChooser.js";
 import { OrganizationRootPage } from "./pages/OrganizationRootPage.js";
 import { PrivacyPolicyPage } from "./pages/PrivacyPolicyPage.js";
+import { PublicDirectoryPage } from "./pages/PublicDirectoryPage.js";
 import { VolunteerRolesPage } from "./pages/VolunteerRolesPage.js";
 
 export default function App() {
@@ -63,7 +64,10 @@ export default function App() {
 				classList={{ "organization-page-layout": organizationSlug() !== null }}
 			>
 				{organizationSlug() && (
-					<OrganizationSideNavigation slug={organizationSlug() ?? ""} />
+					<OrganizationSideNavigation
+						slug={organizationSlug() ?? ""}
+						currentRoute={app.route()}
+					/>
 				)}
 				<div
 					class="application-page-content"
@@ -86,6 +90,12 @@ export default function App() {
 						</Match>
 						<Match when={app.route().kind === "org-root"}>
 							<OrganizationRootPage app={app} />
+						</Match>
+						<Match when={app.route().kind === "org-public-directory"}>
+							<PublicDirectoryPage
+								app={app}
+								slug={(app.route() as { slug: string }).slug}
+							/>
 						</Match>
 						<Match when={app.route().kind === "festival-public"}>
 							<FestivalLandingPage
