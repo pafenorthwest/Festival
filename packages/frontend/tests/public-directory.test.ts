@@ -6,7 +6,44 @@ import {
 	isOrganizationPageRoute,
 	parseRoute,
 } from "../src/lib/routes.js";
-import { sortProfilesByName } from "../src/pages/publicDirectoryHelpers.js";
+import {
+	partitionDirectoryProfiles,
+	readReadyProfiles,
+	sortProfilesByName,
+} from "../src/pages/publicDirectoryHelpers.js";
+
+type DirectoryResource = Parameters<typeof readReadyProfiles>[0];
+
+function createErroredResource(error: Error): DirectoryResource {
+	// Mimics Solid 1.9 createResource: reading an errored resource throws.
+	const read = (): never => {
+		throw error;
+	};
+	return Object.assign(read, {
+		state: "errored" as const,
+		loading: false as const,
+		error,
+		latest: undefined as never,
+	});
+}
+
+function createReadyResource(
+	value: PublicDirectoryProfileDto[],
+): DirectoryResource {
+	return Object.assign(() => value, {
+		state: "ready" as const,
+		loading: false as const,
+		error: undefined,
+		latest: value,
+	});
+}
+
+function profile(
+	displayName: string,
+	role: PublicDirectoryProfileDto["role"],
+): PublicDirectoryProfileDto {
+	return { displayName, role, approvedDivisions: [], isActiveMember: true };
+}
 
 const appSource = await Bun.file(
 	new URL("../src/App.tsx", import.meta.url),
@@ -70,6 +107,14 @@ describe("public directory routing, navigation, and API", () => {
 	it("fetches public directory profiles from GET /api/org-info/:orgSlug/directory/profiles", async () => {
 		let requestedUrl = "";
 		let requestedInit: RequestInit | undefined;
+		const payload: PublicDirectoryProfileDto[] = [
+			{
+				displayName: "Jane Doe",
+				role: "Teacher",
+				approvedDivisions: [{ id: "div-1", name: "Piano" }],
+				isActiveMember: true,
+			},
+		];
 
 		globalThis.fetch = (async (
 			input: RequestInfo | URL,
@@ -77,32 +122,16 @@ describe("public directory routing, navigation, and API", () => {
 		) => {
 			requestedUrl = typeof input === "string" ? input : input.toString();
 			requestedInit = init;
-			return new Response(
-				JSON.stringify([
-					{
-						id: "teacher-1",
-						displayName: "Jane Doe",
-						role: "Teacher",
-						approvedDivisions: [{ id: "div-1", name: "Piano" }],
-						publicDirectoryOptIn: true,
-					},
-				]),
-				{ status: 200, headers: { "Content-Type": "application/json" } },
-			);
+			return new Response(JSON.stringify(payload), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
 		}) as typeof fetch;
 
 		const profiles = await getPublicDirectoryProfiles("pafe");
 		expect(requestedUrl).toBe("/api/org-info/pafe/directory/profiles");
 		expect(requestedInit?.method).toBeUndefined();
-		expect(profiles).toEqual([
-			{
-				id: "teacher-1",
-				displayName: "Jane Doe",
-				role: "Teacher",
-				approvedDivisions: [{ id: "div-1", name: "Piano" }],
-				publicDirectoryOptIn: true,
-			},
-		]);
+		expect(profiles).toEqual(payload);
 	});
 });
 
@@ -216,14 +245,12 @@ describe("alphabetical case-insensitive sorting contract", () => {
 	it("handles duplicate names and ties deterministically without dropping entries", () => {
 		const duplicateProfiles: PublicDirectoryProfileDto[] = [
 			{
-				id: "t-1",
 				displayName: "Jane Doe",
 				role: "Teacher",
 				approvedDivisions: [],
 				isActiveMember: true,
 			},
 			{
-				id: "t-2",
 				displayName: "Jane Doe",
 				role: "Teacher",
 				approvedDivisions: [],
@@ -273,48 +300,21 @@ describe("section ordering and role filtering (Teachers first, Accompanists seco
 		);
 	});
 
-	it("filters profiles by role cleanly between Teachers and Accompanists", () => {
-		expect(publicDirectoryPageSource).toMatch(
-			/p\.role\s*===\s*["']Teacher["']/,
-		);
-		expect(publicDirectoryPageSource).toMatch(
-			/p\.role\s*===\s*["']Accompanist["']/,
-		);
-
+	it("partitions profiles by role and sorts each list", () => {
 		const mixedProfiles: PublicDirectoryProfileDto[] = [
+			profile("Zach Accompanist", "Accompanist"),
+			profile("Beth Teacher", "Teacher"),
+			profile("Adam Teacher", "Teacher"),
+			profile("Aaron Accompanist", "Accompanist"),
+			// Simulates unexpected server data with a role outside ProfileRole.
 			{
-				displayName: "Zach Accompanist",
-				role: "Accompanist",
-				approvedDivisions: [],
-			},
-			{
-				displayName: "Beth Teacher",
-				role: "Teacher",
-				approvedDivisions: [],
-			},
-			{
-				displayName: "Adam Teacher",
-				role: "Teacher",
-				approvedDivisions: [],
-			},
-			{
-				displayName: "Aaron Accompanist",
-				role: "Accompanist",
-				approvedDivisions: [],
-			},
-			{
-				displayName: "Sam Other",
+				...profile("Sam Other", "Teacher"),
 				role: "Volunteer",
-				approvedDivisions: [],
-			},
+			} as unknown as PublicDirectoryProfileDto,
 		];
 
-		const teachers = sortProfilesByName(
-			mixedProfiles.filter((p) => p.role === "Teacher"),
-		);
-		const accompanists = sortProfilesByName(
-			mixedProfiles.filter((p) => p.role === "Accompanist"),
-		);
+		const { teachers, accompanists } =
+			partitionDirectoryProfiles(mixedProfiles);
 
 		expect(teachers.map((p) => p.displayName)).toEqual([
 			"Adam Teacher",
@@ -324,6 +324,37 @@ describe("section ordering and role filtering (Teachers first, Accompanists seco
 			"Aaron Accompanist",
 			"Zach Accompanist",
 		]);
+	});
+
+	it("returns empty lists for undefined or empty input", () => {
+		expect(partitionDirectoryProfiles(undefined)).toEqual({
+			teachers: [],
+			accompanists: [],
+		});
+		expect(partitionDirectoryProfiles([])).toEqual({
+			teachers: [],
+			accompanists: [],
+		});
+	});
+
+	it("reads errored resource without throwing so error state can render", () => {
+		const errored = createErroredResource(new Error("network down"));
+		expect(() => errored()).toThrow("network down");
+		expect(readReadyProfiles(errored)).toBeUndefined();
+		expect(partitionDirectoryProfiles(readReadyProfiles(errored))).toEqual({
+			teachers: [],
+			accompanists: [],
+		});
+	});
+
+	it("reads profiles from a ready resource", () => {
+		const value: PublicDirectoryProfileDto[] = [profile("Ann", "Teacher")];
+		expect(readReadyProfiles(createReadyResource(value))).toBe(value);
+	});
+
+	it("guards resource reads in PublicDirectoryPage", () => {
+		expect(publicDirectoryPageSource).toContain("readReadyProfiles(profiles)");
+		expect(publicDirectoryPageSource).toContain("partitionDirectoryProfiles(");
 	});
 });
 

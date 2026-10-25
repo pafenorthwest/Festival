@@ -93,7 +93,6 @@ export default function App() {
 						</Match>
 						<Match when={app.route().kind === "org-public-directory"}>
 							<PublicDirectoryPage
-								app={app}
 								slug={(app.route() as { slug: string }).slug}
 							/>
 						</Match>

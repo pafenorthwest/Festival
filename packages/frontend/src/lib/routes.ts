@@ -36,8 +36,6 @@ export type AppRoute =
 	| AdminCheckoutRecoveryRoute
 	| CustomerCheckoutRecoveryRoute;
 
-export type Route = AppRoute;
-
 export type AdminCheckoutRecoveryRoute = {
 	kind: "org-admin-checkout-recovery";
 	slug: string;

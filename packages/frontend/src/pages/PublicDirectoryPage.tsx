@@ -1,9 +1,10 @@
 import type { PublicDirectoryProfileDto } from "@festival/common";
 import { createMemo, createResource, For, Show } from "solid-js";
 import { getPublicDirectoryProfiles } from "../lib/api.js";
-import { sortProfilesByName } from "./publicDirectoryHelpers.js";
-
-export { sortProfilesByName };
+import {
+	partitionDirectoryProfiles,
+	readReadyProfiles,
+} from "./publicDirectoryHelpers.js";
 
 export function DirectoryProfileCard(props: {
 	profile: PublicDirectoryProfileDto;
@@ -91,21 +92,18 @@ function DirectorySection(props: {
 	);
 }
 
-export function PublicDirectoryPage(props: { slug: string; app?: unknown }) {
+export function PublicDirectoryPage(props: { slug: string }) {
 	const [profiles, { refetch }] = createResource(
 		() => props.slug,
 		getPublicDirectoryProfiles,
 	);
 
-	const teachers = createMemo(() => {
-		const list = profiles()?.filter((p) => p.role === "Teacher") ?? [];
-		return sortProfilesByName(list);
-	});
-
-	const accompanists = createMemo(() => {
-		const list = profiles()?.filter((p) => p.role === "Accompanist") ?? [];
-		return sortProfilesByName(list);
-	});
+	const directory = createMemo(() =>
+		partitionDirectoryProfiles(readReadyProfiles(profiles)),
+	);
+	const teachers = (): PublicDirectoryProfileDto[] => directory().teachers;
+	const accompanists = (): PublicDirectoryProfileDto[] =>
+		directory().accompanists;
 
 	return (
 		<div class="public-directory-page">
