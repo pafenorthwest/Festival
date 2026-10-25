@@ -254,6 +254,10 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 												? undefined
 												: `class-subtypes-required-${festival.shortName}`
 										}
+										data-preload-path={buildFestivalAdminClassesPath(
+											currentSlug(),
+											festival.shortName,
+										)}
 										onClick={() =>
 											props.app.navigate(
 												buildFestivalAdminClassesPath(

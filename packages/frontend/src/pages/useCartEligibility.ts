@@ -1,18 +1,9 @@
-import type {
-	ClassEligibilityResult,
-	ProposedPurchaseLineItem,
-} from "@festival/common";
+import type { ClassEligibilityResult } from "@festival/common";
+import { type Accessor, createEffect, createMemo } from "solid-js";
 import {
-	type Accessor,
-	createEffect,
-	createMemo,
-	createSignal,
-	onCleanup,
-} from "solid-js";
-import {
-	type EvaluateRegistrationEligibilityResponse,
-	evaluateRegistrationEligibility,
-} from "../lib/api.js";
+	createEligibilityEvaluation,
+	type EligibilityEvaluator,
+} from "./createEligibilityEvaluation.js";
 import {
 	cartItemsToLineItemInputs,
 	type RegistrationCartItem,
@@ -23,12 +14,7 @@ export function getEligibilityKey(childId: string, classId: string): string {
 	return `${childId}:${classId}`;
 }
 
-export type CartEligibilityEvaluator = (
-	slug: string,
-	festivalSlug: string,
-	items: ProposedPurchaseLineItem[],
-	csrfToken?: string,
-) => Promise<EvaluateRegistrationEligibilityResponse>;
+export type CartEligibilityEvaluator = EligibilityEvaluator;
 
 export interface UseCartEligibilityOptions {
 	slug: string | Accessor<string>;
@@ -57,78 +43,23 @@ export interface CartEligibilityState {
 export function useCartEligibility(
 	options: UseCartEligibilityOptions,
 ): CartEligibilityState {
-	const [isEvaluating, setIsEvaluating] = createSignal(false);
-	const [error, setError] = createSignal<string | null>(null);
-	const [results, setResults] = createSignal<
-		Map<string, ClassEligibilityResult>
-	>(new Map());
+	const { isEvaluating, error, results, evaluate } =
+		createEligibilityEvaluation(
+			options,
+			"Failed to evaluate class eligibility.",
+		);
 
-	let currentRequestId = 0;
-
-	const resolveSlug = () =>
-		typeof options.slug === "function" ? options.slug() : options.slug;
-	const resolveFestivalSlug = () =>
-		typeof options.festivalSlug === "function"
-			? options.festivalSlug()
-			: options.festivalSlug;
-	const resolveCsrfToken = () =>
-		typeof options.csrfToken === "function"
-			? options.csrfToken()
-			: options.csrfToken;
-
-	async function performEvaluation(
-		items: RegistrationCartItem[],
-	): Promise<void> {
-		const slug = resolveSlug();
-		const festivalSlug = resolveFestivalSlug();
-		const csrfToken = resolveCsrfToken();
-
-		if (!slug || !festivalSlug || items.length === 0) {
-			setResults(new Map());
-			setError(null);
-			setIsEvaluating(false);
-			return;
-		}
-
-		const requestId = ++currentRequestId;
-		setIsEvaluating(true);
-		setError(null);
-
-		try {
-			const proposedItems = cartItemsToLineItemInputs(items);
-			const evaluator = options.evaluator ?? evaluateRegistrationEligibility;
-			const res = await evaluator(slug, festivalSlug, proposedItems, csrfToken);
-
-			if (requestId !== currentRequestId) return;
-
-			const map = new Map<string, ClassEligibilityResult>();
-			for (const r of res.results) {
-				map.set(getEligibilityKey(r.childId, r.festivalClassId), r);
-			}
-
-			setResults(map);
-			setError(null);
-		} catch (err) {
-			if (requestId !== currentRequestId) return;
-			setError(
-				err instanceof Error
-					? err.message
-					: "Failed to evaluate class eligibility.",
-			);
-		} finally {
-			if (requestId === currentRequestId) {
-				setIsEvaluating(false);
-			}
-		}
+	function performEvaluation(items: RegistrationCartItem[]): Promise<void> {
+		return evaluate(
+			items.length > 0,
+			() => cartItemsToLineItemInputs(items),
+			(result) => getEligibilityKey(result.childId, result.festivalClassId),
+		);
 	}
 
 	createEffect(() => {
 		const items = options.cart.items();
 		void performEvaluation(items);
-	});
-
-	onCleanup(() => {
-		currentRequestId++;
 	});
 
 	function getResult(
