@@ -1,12 +1,11 @@
 import { expect, test } from "bun:test";
-import { randomUUID } from "node:crypto";
 import { sql } from "bun";
 import {
 	type ClassEntitlementFilter,
 	PostgresClassEntitlementRepository,
 } from "../src/commerce/class-entitlement-repository.js";
 import { PostgresMembershipCommerceRepository } from "../src/commerce/postgres-membership-commerce-repository.js";
-import { initializePostgresSchema } from "../src/repo/postgres-schema.js";
+import { withApplicationRollback } from "./postgres-application-fixture.js";
 
 const integrationTest = process.env.POSTGRES_INTEGRATION_URL ? test : test.skip;
 
@@ -17,10 +16,9 @@ for (const Repository of [
 	integrationTest(
 		`${Repository.name} executes targeted entitlement filters against PostgreSQL`,
 		async () => {
-			const schema = `targeted_${randomUUID().replaceAll("-", "")}`;
-			try {
-				await initializePostgresSchema(schema);
-				for (const org of ["org", "other-org"]) {
+			await withApplicationRollback(async (fixture) => {
+				const schema = fixture.schema;
+				for (const org of [fixture.id("org"), fixture.id("other-org")]) {
 					await sql.unsafe(
 						`INSERT INTO ${schema}.organizations (id, name, slug) VALUES ($1, $1, $1)`,
 						[org],
@@ -58,7 +56,7 @@ for (const Repository of [
 						);
 					}
 					await sql.unsafe(
-						`INSERT INTO ${schema}.checkout_intents (id, correlation_id, organization_id, customer_id, session_id, idempotency_key, intent_type, shopify_product_gid, shopify_variant_gid, amount, currency_code, status, expires_at) VALUES ($1 || '-intent', $1 || '-correlation', $1, $1 || '-parent', 'session', 'key', 'class_entry', 'product', 'variant', '50.00', 'USD', 'approved', NOW() + INTERVAL '1 hour')`,
+						`INSERT INTO ${schema}.checkout_intents (id, correlation_id, organization_id, customer_id, session_id, idempotency_key, intent_type, shopify_product_gid, shopify_variant_gid, amount, currency_code, status, expires_at) VALUES ($1 || '-intent', $1 || '-correlation', $1, $1 || '-parent', $1 || '-session', $1 || '-key', 'class_entry', $1 || '-product', $1 || '-variant', '50.00', 'USD', 'approved', NOW() + INTERVAL '1 hour')`,
 						[org],
 					);
 					for (const [classId, child, status] of [
@@ -70,82 +68,114 @@ for (const Repository of [
 						["c", "a", "confirmed"],
 					]) {
 						await sql.unsafe(
-							`INSERT INTO ${schema}.class_entitlements (id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status) VALUES ($1 || '-' || $2 || $3, $1, $1 || CASE WHEN $2 = 'c' THEN '-other-festival' ELSE '-festival' END, $1 || '-class-' || $2, $1 || CASE WHEN $3 = 'c' THEN '-other-parent' ELSE '-parent' END, $1 || '-child-' || $3, $1 || '-intent', 'order', $1 || '-line-' || $2 || $3, 5000, 'USD', $4)`,
+							`INSERT INTO ${schema}.class_entitlements (id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status) VALUES ($1 || '-' || $2 || $3, $1, $1 || CASE WHEN $2 = 'c' THEN '-other-festival' ELSE '-festival' END, $1 || '-class-' || $2, $1 || CASE WHEN $3 = 'c' THEN '-other-parent' ELSE '-parent' END, $1 || '-child-' || $3, $1 || '-intent', $1 || '-order', $1 || '-line-' || $2 || $3, 5000, 'USD', $4)`,
 							[org, classId, child, status],
 						);
 					}
 				}
 
-				const repository = new Repository(schema);
+				const repository = fixture.repository(new Repository(schema));
 				const ids = async (filter: ClassEntitlementFilter) =>
 					(await repository.listClassEntitlements(filter))
 						.map((row) => row.id)
 						.sort();
-				const scope = { organizationId: "org" };
+				const scope = { organizationId: fixture.id("org") };
 				expect(await ids(scope)).toHaveLength(6);
 				expect(
-					await ids({ ...scope, festivalClassIds: ["org-class-a"] }),
-				).toEqual(["org-aa", "org-ab", "org-ac"]);
-				expect(
 					await ids({
 						...scope,
-						festivalClassIds: ["org-class-a", "org-class-b"],
+						festivalClassIds: [fixture.id("org-class-a")],
 					}),
-				).toEqual(["org-aa", "org-ab", "org-ac", "org-ba", "org-bb"]);
-				expect(await ids({ ...scope, festivalClassIds: [] })).toEqual([]);
-				expect(await ids({ ...scope, childIds: ["org-child-a"] })).toEqual([
-					"org-aa",
-					"org-ba",
-					"org-ca",
+				).toEqual([
+					fixture.id("org-aa"),
+					fixture.id("org-ab"),
+					fixture.id("org-ac"),
 				]);
-				expect(
-					await ids({ ...scope, childIds: ["org-child-a", "org-child-b"] }),
-				).toEqual(["org-aa", "org-ab", "org-ba", "org-bb", "org-ca"]);
-				expect(await ids({ ...scope, childIds: [] })).toEqual([]);
-				expect(
-					await ids({
-						...scope,
-						festivalClassIds: ["org-class-a", "org-class-b"],
-						childIds: ["org-child-b"],
-					}),
-				).toEqual(["org-ab", "org-bb"]);
 				expect(
 					await ids({
 						...scope,
 						festivalClassIds: [
-							"org-class-a",
-							"org-class-b",
-							"org-class-c",
-							"other-org-class-a",
+							fixture.id("org-class-a"),
+							fixture.id("org-class-b"),
+						],
+					}),
+				).toEqual([
+					fixture.id("org-aa"),
+					fixture.id("org-ab"),
+					fixture.id("org-ac"),
+					fixture.id("org-ba"),
+					fixture.id("org-bb"),
+				]);
+				expect(await ids({ ...scope, festivalClassIds: [] })).toEqual([]);
+				expect(
+					await ids({ ...scope, childIds: [fixture.id("org-child-a")] }),
+				).toEqual([
+					fixture.id("org-aa"),
+					fixture.id("org-ba"),
+					fixture.id("org-ca"),
+				]);
+				expect(
+					await ids({
+						...scope,
+						childIds: [fixture.id("org-child-a"), fixture.id("org-child-b")],
+					}),
+				).toEqual([
+					fixture.id("org-aa"),
+					fixture.id("org-ab"),
+					fixture.id("org-ba"),
+					fixture.id("org-bb"),
+					fixture.id("org-ca"),
+				]);
+				expect(await ids({ ...scope, childIds: [] })).toEqual([]);
+				expect(
+					await ids({
+						...scope,
+						festivalClassIds: [
+							fixture.id("org-class-a"),
+							fixture.id("org-class-b"),
+						],
+						childIds: [fixture.id("org-child-b")],
+					}),
+				).toEqual([fixture.id("org-ab"), fixture.id("org-bb")]);
+				expect(
+					await ids({
+						...scope,
+						festivalClassIds: [
+							fixture.id("org-class-a"),
+							fixture.id("org-class-b"),
+							fixture.id("org-class-c"),
+							fixture.id("other-org-class-a"),
 						],
 						childIds: [
-							"org-child-a",
-							"org-child-b",
-							"org-child-c",
-							"other-org-child-a",
+							fixture.id("org-child-a"),
+							fixture.id("org-child-b"),
+							fixture.id("org-child-c"),
+							fixture.id("other-org-child-a"),
 						],
-						festivalId: "org-festival",
-						parentCustomerId: "org-parent",
+						festivalId: fixture.id("org-festival"),
+						parentCustomerId: fixture.id("org-parent"),
 						status: "confirmed",
 					}),
-				).toEqual(["org-aa", "org-ab", "org-bb"]);
+				).toEqual([
+					fixture.id("org-aa"),
+					fixture.id("org-ab"),
+					fixture.id("org-bb"),
+				]);
 				expect(
 					await ids({
 						...scope,
-						festivalClassIds: ["org-class-a"],
-						festivalClassId: "org-class-b",
+						festivalClassIds: [fixture.id("org-class-a")],
+						festivalClassId: fixture.id("org-class-b"),
 					}),
 				).toEqual([]);
 				expect(
 					await ids({
 						...scope,
-						childIds: ["org-child-a"],
-						childId: "org-child-b",
+						childIds: [fixture.id("org-child-a")],
+						childId: fixture.id("org-child-b"),
 					}),
 				).toEqual([]);
-			} finally {
-				await sql.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
-			}
+			});
 		},
 	);
 }

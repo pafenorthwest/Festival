@@ -4,6 +4,7 @@ import type {
 	ClassCheckoutLineItemInput,
 	ClassEligibilityResult,
 	ClassEntitlement,
+	ClassRegistrationSnapshot,
 	EntitlementGrantSnapshot,
 	EvaluatePurchaseEligibilityResponse,
 	FestivalChildAgeSnapshot,
@@ -12,6 +13,7 @@ import type {
 	FestivalRecord,
 	ProposedPurchaseLineItem,
 	PurchaseEligibilityMode,
+	RegistrationCatalogValue,
 	RepertoirePiece,
 } from "@festival/common";
 import {
@@ -84,6 +86,7 @@ export interface StartClassCheckoutInput {
 	integrationVersion?: string | number;
 	teacherId?: string;
 	accompanistId?: string | null;
+	instrumentId?: string;
 	pieces?: RepertoirePiece[];
 	lineItems?: ClassCheckoutLineItemInput[];
 }
@@ -110,6 +113,8 @@ interface ValidatedLineItem {
 	normalizedPieces: RepertoirePiece[];
 	teacherEntitlementId: string;
 	accompanistEntitlementId: string | null;
+	registrationSnapshot?: ClassRegistrationSnapshot;
+	instrument: ClassRegistrationSnapshot["instrument"];
 }
 
 interface LineValidationCaches {
@@ -118,6 +123,7 @@ interface LineValidationCaches {
 	classConfigs: Map<string, FestivalClassConfiguration>;
 	teacherGrants: Map<string, EntitlementGrantSnapshot | null>;
 	accompanistGrants: Map<string, AccompanistMembershipGrant | null>;
+	instruments?: RegistrationCatalogValue[];
 }
 
 export type ClassCheckoutFailureStage =
@@ -391,6 +397,14 @@ export class ClassCheckoutService {
 			lineItems,
 			caches,
 		);
+		await this.captureRegistrationSnapshots(
+			input.organizationId,
+			validatedLines,
+			lineItems,
+			caches,
+			currencyCode,
+			currentTime.toISOString(),
+		);
 		const outcome = await this.createMultiLineIntent(
 			input,
 			validatedLines,
@@ -480,6 +494,7 @@ export class ClassCheckoutService {
 				childId: input.childId,
 				teacherId: input.teacherId,
 				accompanistId: input.accompanistId,
+				instrumentId: input.instrumentId,
 				pieces: input.pieces ?? [],
 			}) as ClassCheckoutLineItemInput,
 		];
@@ -648,12 +663,42 @@ export class ClassCheckoutService {
 				line.accompanistId,
 				ctx.caches,
 			);
+		let instrument: ClassRegistrationSnapshot["instrument"] = "unknown";
+		if (line.instrumentId !== undefined) {
+			if (typeof line.instrumentId !== "string" || !line.instrumentId.trim()) {
+				throw new AppError(
+					"Select a valid instrument.",
+					400,
+					"instrument_invalid",
+				);
+			}
+			ctx.caches.instruments ??=
+				await this.organizations.listRegistrationCatalogValues(
+					organizationId,
+					"instrument",
+					true,
+				);
+			const selected = ctx.caches.instruments.find(
+				(value) =>
+					value.id === line.instrumentId?.trim() &&
+					value.organizationId === organizationId &&
+					value.isActive,
+			);
+			if (!selected)
+				throw new AppError(
+					"Select a valid instrument.",
+					400,
+					"instrument_invalid",
+				);
+			instrument = { id: selected.id, name: selected.displayName };
+		}
 		return {
 			child,
 			classConfig,
 			normalizedPieces,
 			teacherEntitlementId,
 			accompanistEntitlementId,
+			instrument,
 		};
 	}
 
@@ -728,7 +773,7 @@ export class ClassCheckoutService {
 				amount: vl.classConfig.price,
 				currencyCode,
 				divisionId: vl.classConfig.divisionId,
-				divisionNameSnapshot: vl.classConfig.divisionId ?? null,
+				divisionNameSnapshot: vl.registrationSnapshot?.division.name ?? null,
 			}),
 		);
 		const totalAmount = calculateTotalAmount(intentLines.map((l) => l.amount));
@@ -799,7 +844,94 @@ export class ClassCheckoutService {
 				accompanistMembershipId: vl.accompanistEntitlementId,
 				repertoireJson: vl.normalizedPieces,
 				repertoireSnapshotPieces: vl.normalizedPieces,
+				registrationSnapshot: vl.registrationSnapshot,
 			});
+		}
+	}
+
+	private async captureRegistrationSnapshots(
+		organizationId: string,
+		validatedLines: ValidatedLineItem[],
+		lineItems: ClassCheckoutLineItemInput[],
+		caches: LineValidationCaches,
+		currencyCode: string,
+		capturedAtIso: string,
+	): Promise<void> {
+		const [divisions, subtypes, teacherRosters] = await Promise.all([
+			this.organizations.listDivisions(organizationId, false),
+			this.organizations.listRegistrationCatalogValues(
+				organizationId,
+				"class_subtype",
+				false,
+			),
+			Promise.all(
+				[
+					...new Set(validatedLines.map((line) => line.classConfig.divisionId)),
+				].map(
+					async (divisionId) =>
+						[
+							divisionId,
+							await this.organizations.listActiveTeachersForDivision(
+								organizationId,
+								divisionId,
+							),
+						] as const,
+				),
+			),
+		]);
+		const teachers = new Map(teacherRosters);
+		for (const [index, line] of validatedLines.entries()) {
+			const config = line.classConfig;
+			const selection = lineItems[index];
+			const teacherId = selection.teacherId.trim();
+			const accompanistId = selection.accompanistId?.trim();
+			const accompanist = accompanistId
+				? caches.accompanistGrants.get(accompanistId)
+				: null;
+			line.registrationSnapshot = {
+				version: 1,
+				capturedAtIso,
+				class: {
+					id: config.id,
+					festivalId: config.festivalId,
+					displayName: config.displayName,
+					classSubtypeId: config.classSubtypeId,
+					classSubtypeName:
+						subtypes.find((subtype) => subtype.id === config.classSubtypeId)
+							?.displayName ?? null,
+					minimumAge: config.minimumAge,
+					maximumAge: config.maximumAge,
+					price: config.price,
+					currencyCode,
+					maximumPerformancePieces: config.maximumPerformancePieces,
+					performanceMinutes: config.performanceMinutes,
+					capacity: config.capacity,
+				},
+				division: {
+					id: config.divisionId,
+					name:
+						divisions.find((division) => division.id === config.divisionId)
+							?.displayName ?? null,
+				},
+				instrument: line.instrument,
+				teacher: {
+					customerId: teacherId,
+					membershipId: line.teacherEntitlementId,
+					name:
+						teachers
+							.get(config.divisionId)
+							?.find((teacher) => teacher.id === teacherId)?.name || null,
+				},
+				accompanist:
+					accompanist && line.accompanistEntitlementId
+						? {
+								customerId: accompanist.customerId,
+								membershipId: line.accompanistEntitlementId,
+								name: accompanist.contact.name || null,
+							}
+						: null,
+				repertoire: structuredClone(line.normalizedPieces),
+			};
 		}
 	}
 

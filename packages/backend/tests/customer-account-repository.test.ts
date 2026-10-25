@@ -272,6 +272,36 @@ describe("customer account repository contract", () => {
 			consentedAtIso: new Date(Date.now() + 1000).toISOString(),
 		});
 		expect(repeated).toEqual(consent);
+		const earlierTimestamp = new Date(
+			new Date(now).getTime() - 1000,
+		).toISOString();
+		const earlierConsent = await repo.recordStaffAccessConsent({
+			customerId: customer.id,
+			organizationId: customer.organizationId,
+			privacyNoticeVersion: "notice-v1",
+			consentedAtIso: earlierTimestamp,
+		});
+		expect(earlierConsent.consentedAtIso).toBe(earlierTimestamp);
+		expect(
+			(
+				await repo.recordStaffAccessConsent({
+					customerId: customer.id,
+					organizationId: customer.organizationId,
+					privacyNoticeVersion: "notice-v1",
+					consentedAtIso: now,
+				})
+			).consentedAtIso,
+		).toBe(earlierTimestamp);
+		expect(
+			(
+				await repo.recordStaffAccessConsent({
+					customerId: customer.id,
+					organizationId: customer.organizationId,
+					privacyNoticeVersion: "notice-v2",
+					consentedAtIso: now,
+				})
+			).consentedAtIso,
+		).toBe(now);
 		expect(
 			await repo.searchConsentedCustomers(
 				customer.organizationId,

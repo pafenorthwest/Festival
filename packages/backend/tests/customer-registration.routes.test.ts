@@ -376,6 +376,7 @@ describe("Customer Registration Routes", () => {
 				festivalClassId: "class_1",
 				childId: "child_1",
 				divisionId: "div_1",
+				instrumentId: "instrument_1",
 			};
 			const headers = {
 				...AUTH,
@@ -405,6 +406,7 @@ describe("Customer Registration Routes", () => {
 				festivalClassId: "class_1",
 				childId: "child_1",
 				divisionId: "div_1",
+				instrumentId: "instrument_1",
 				festivalShortName: "spring-2026",
 				buyerAccessToken: "buyer_tok_1",
 				idempotencyKey: VALID_UUID,
@@ -465,6 +467,7 @@ describe("Customer Registration Routes", () => {
 						festivalClassId: "class_1",
 						childId: "child_1",
 						teacherId: "teacher_1",
+						instrumentId: "instrument_1",
 						pieces: [
 							{ title: "Piece 1", composer: "Bach", durationSeconds: 120 },
 						],

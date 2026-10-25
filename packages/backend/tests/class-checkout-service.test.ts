@@ -1,6 +1,7 @@
 import { describe, expect, it, mock, spyOn } from "bun:test";
 import type {
 	AccompanistMembershipGrant,
+	ClassRegistrationMetadata,
 	EntitlementGrantSnapshot,
 	FestivalRecord,
 	RepertoirePiece,
@@ -305,6 +306,250 @@ async function createFixture(options: FixtureOptions = {}) {
 }
 
 describe("ClassCheckoutService", () => {
+	it("captures an explicit unknown instrument when an existing client omits selection", async () => {
+		const f = await createFixture();
+		const insert = spyOn(f.checkout, "insertRegistrationMetadata");
+		await f.service.start(f.defaultInput);
+		expect(insert.mock.calls[0][0].registrationSnapshot?.instrument).toBe(
+			"unknown",
+		);
+	});
+
+	it("freezes the validated selection before checkout and preserves it after catalog and registration edits", async () => {
+		const f = await createFixture();
+		const instrument = await f.organizations.createRegistrationCatalogValue({
+			organizationId: f.organization.id,
+			kind: "instrument",
+			displayName: "Piano",
+			normalizedName: "piano",
+		});
+		f.organizations.setCustomerName(f.teacherId, "Original Teacher");
+		const captured: ClassRegistrationMetadata[] = [];
+		const insert = f.checkout.insertRegistrationMetadata.bind(f.checkout);
+		f.checkout.insertRegistrationMetadata = async (params) => {
+			const metadata = await insert(params);
+			captured.push(metadata);
+			return metadata;
+		};
+		const result = await f.service.start({
+			...f.defaultInput,
+			accompanistId: f.accompanistId,
+			instrumentId: instrument.id,
+			pieces: [{ ...f.defaultPieces[0], movement: "Variation II" }],
+		});
+		expect(captured).toHaveLength(1);
+		const metadata = captured[0];
+		if (!metadata.checkoutIntentLineId || !f.festival)
+			throw new Error("Expected a class checkout line and festival.");
+		const original = structuredClone(metadata.registrationSnapshot);
+		expect(original).toMatchObject({
+			version: 1,
+			capturedAtIso: f.now.toISOString(),
+			class: {
+				id: f.classConfig.id,
+				displayName: "Junior Solo Piano Level 1",
+				classSubtypeName: "Solo Piano",
+				price: "45.00",
+				currencyCode: "USD",
+				capacity: 25,
+			},
+			division: { id: f.division.id, name: "Junior Piano" },
+			instrument: { id: instrument.id, name: "Piano" },
+			teacher: {
+				customerId: f.teacherId,
+				membershipId: f.teacherEntitlement.id,
+				name: "Original Teacher",
+			},
+			accompanist: {
+				customerId: f.accompanistId,
+				membershipId: f.accompanistGrant.id,
+				name: "Sam Accompanist",
+			},
+			repertoire: [
+				{ title: f.defaultPieces[0].title, movement: "Variation II" },
+			],
+		});
+		expect(result.intent?.lines?.[0].divisionNameSnapshot).toBe("Junior Piano");
+		expect(JSON.stringify(original)).not.toMatch(
+			/shopify|buyer-token|encrypted|@example|555-555/,
+		);
+		await f.checkout.linkRegistrationMetadataToEntitlement({
+			checkoutIntentLineId: metadata.checkoutIntentLineId,
+			classEntitlementId: "paid-entitlement",
+		});
+		await f.organizations.updateFestivalClassConfiguration({
+			organizationId: f.organization.id,
+			festivalId: f.festival.id,
+			id: f.classConfig.id,
+			displayName: "Renamed class",
+			capacity: 100,
+			price: "60.00",
+		});
+		await f.organizations.updateDivision({
+			organizationId: f.organization.id,
+			divisionId: f.division.id,
+			displayName: "Renamed division",
+		});
+		f.organizations.setCustomerName(f.teacherId, "Changed Teacher");
+		await f.organizations.updateRegistrationCatalogValue({
+			organizationId: f.organization.id,
+			kind: "instrument",
+			id: instrument.id,
+			displayName: "Renamed instrument",
+		});
+		await f.checkout.updateRegistrationMetadata(
+			metadata.id,
+			f.organization.id,
+			{
+				pieces: [
+					{ title: "Replacement", composer: "Other", durationSeconds: 60 },
+				],
+				accompanistMembershipId: null,
+			},
+		);
+		const saved = await f.checkout.getRegistrationMetadataByEntitlementId(
+			f.organization.id,
+			"paid-entitlement",
+		);
+		expect(saved?.registrationSnapshot).toEqual(original);
+		expect(saved?.repertoireJson[0].title).toBe("Replacement");
+		expect(saved?.accompanistMembershipId).toBeNull();
+		// Returned nested values must not provide a mutation path into the record.
+		if (!saved?.registrationSnapshot)
+			throw new Error("Expected the original selection.");
+		saved.registrationSnapshot.class.displayName = "Mutated response";
+		expect(
+			(
+				await f.checkout.getRegistrationMetadataByEntitlementId(
+					f.organization.id,
+					"paid-entitlement",
+				)
+			)?.registrationSnapshot,
+		).toEqual(original);
+	});
+
+	it("rejects malformed, missing, inactive and cross-tenant instrument selections before creating commerce state", async () => {
+		const f = await createFixture();
+		const inactive = await f.organizations.createRegistrationCatalogValue({
+			organizationId: f.organization.id,
+			kind: "instrument",
+			displayName: "Inactive",
+			normalizedName: "inactive",
+		});
+		await f.organizations.updateRegistrationCatalogValue({
+			organizationId: f.organization.id,
+			kind: "instrument",
+			id: inactive.id,
+			isActive: false,
+		});
+		const other = await f.organizations.createOrganization({
+			name: "Other",
+			slug: "other",
+		});
+		const foreign = await f.organizations.createRegistrationCatalogValue({
+			organizationId: other.id,
+			kind: "instrument",
+			displayName: "Foreign",
+			normalizedName: "foreign",
+		});
+		const createIntent = spyOn(f.checkout, "createIntent");
+		for (const instrumentId of [
+			"",
+			" ",
+			"unknown",
+			"missing",
+			inactive.id,
+			foreign.id,
+			null,
+			42,
+			{},
+		]) {
+			await expect(
+				f.service.start({
+					...f.defaultInput,
+					instrumentId: instrumentId as string,
+				}),
+			).rejects.toMatchObject({ status: 400, code: "instrument_invalid" });
+		}
+		expect(createIntent).not.toHaveBeenCalled();
+	});
+
+	it("keeps each purchased line's original instrument, repertoire and accompanist selection separate", async () => {
+		const f = await createFixture();
+		const instrumentA = await f.organizations.createRegistrationCatalogValue({
+			organizationId: f.organization.id,
+			kind: "instrument",
+			displayName: "Piano",
+			normalizedName: "piano",
+		});
+		const instrumentB = await f.organizations.createRegistrationCatalogValue({
+			organizationId: f.organization.id,
+			kind: "instrument",
+			displayName: "Violin",
+			normalizedName: "violin",
+		});
+		const child = await f.customers.createChild({
+			organizationId: f.organization.id,
+			parentCustomerId: f.customer.id,
+			displayName: "Second child",
+		});
+		await f.customers.createChildAgeSnapshot({
+			organizationId: f.organization.id,
+			childId: child.id,
+			age: 10,
+			createdAtIso: f.now.toISOString(),
+			validUntilIso: new Date(f.now.getTime() + 30 * 86400_000).toISOString(),
+		});
+		const captured: ClassRegistrationMetadata[] = [];
+		const insert = f.checkout.insertRegistrationMetadata.bind(f.checkout);
+		f.checkout.insertRegistrationMetadata = async (params) => {
+			const record = await insert(params);
+			captured.push(record);
+			return record;
+		};
+		await f.service.start({
+			...f.defaultInput,
+			lineItems: [
+				{
+					festivalClassId: f.classConfig.id,
+					childId: f.child.id,
+					teacherId: f.teacherId,
+					instrumentId: instrumentA.id,
+					accompanistId: f.accompanistId,
+					pieces: f.defaultPieces,
+				},
+				{
+					festivalClassId: f.classConfig.id,
+					childId: child.id,
+					teacherId: f.teacherId,
+					instrumentId: instrumentB.id,
+					pieces: [
+						{
+							title: "Second work",
+							composer: "Second composer",
+							movement: "II",
+							durationSeconds: 90,
+						},
+					],
+				},
+			],
+		});
+		expect(captured).toHaveLength(2);
+		expect(captured[0].checkoutIntentLineId).not.toBe(
+			captured[1].checkoutIntentLineId,
+		);
+		expect(captured[0].registrationSnapshot).toMatchObject({
+			instrument: { id: instrumentA.id, name: "Piano" },
+			accompanist: { membershipId: f.accompanistGrant.id },
+			repertoire: [{ title: f.defaultPieces[0].title }],
+		});
+		expect(captured[1].registrationSnapshot).toMatchObject({
+			instrument: { id: instrumentB.id, name: "Violin" },
+			accompanist: null,
+			repertoire: [{ title: "Second work", movement: "II" }],
+		});
+	});
+
 	it("waits for audited capacity publication before durable cart admission", async () => {
 		const f = await createFixture();
 		await f.commerce.createClassEntitlement({

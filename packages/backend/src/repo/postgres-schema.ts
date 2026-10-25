@@ -376,6 +376,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			teacher_membership_id TEXT NOT NULL,
 			accompanist_membership_id TEXT,
 			repertoire_json JSONB NOT NULL,
+			registration_snapshot JSONB,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			CONSTRAINT registration_metadata_pkey PRIMARY KEY (id),
 			CONSTRAINT registration_metadata_id_organization_id_key UNIQUE (id, organization_id),
@@ -876,6 +877,9 @@ export async function initializePostgresSchema(schema: string): Promise<void> {
 		await transaction.unsafe(`CREATE SCHEMA IF NOT EXISTS ${safeSchema};`);
 		await transaction.unsafe(
 			`ALTER TABLE IF EXISTS ${safeSchema}.registration_metadata ADD COLUMN IF NOT EXISTS checkout_intent_line_id TEXT;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.registration_metadata ADD COLUMN IF NOT EXISTS registration_snapshot JSONB;`,
 		);
 		await transaction.unsafe(
 			`ALTER TABLE IF EXISTS ${safeSchema}.class_entitlements ADD COLUMN IF NOT EXISTS checkout_intent_line_id TEXT;`,

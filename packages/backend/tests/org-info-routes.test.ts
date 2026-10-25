@@ -46,7 +46,7 @@ async function createTestApp() {
 		repository,
 		authVerifier: new FakeAuth(),
 	});
-	return { app, organization };
+	return { app, organization, repository };
 }
 
 describe("org-info routes", () => {
@@ -127,13 +127,57 @@ describe("org-info routes", () => {
 	});
 
 	describe("GET /api/organizations/:slug/divisions (public)", () => {
+		it("returns only active instruments from this tenant with public display fields", async () => {
+			const { app, organization, repository } = await createTestApp();
+			const active = await repository.createRegistrationCatalogValue({
+				organizationId: organization.id,
+				kind: "instrument",
+				displayName: "Violin",
+				normalizedName: "violin",
+			});
+			const inactive = await repository.createRegistrationCatalogValue({
+				organizationId: organization.id,
+				kind: "instrument",
+				displayName: "Retired",
+				normalizedName: "retired",
+			});
+			await repository.updateRegistrationCatalogValue({
+				organizationId: organization.id,
+				kind: "instrument",
+				id: inactive.id,
+				isActive: false,
+			});
+			const other = await repository.createOrganization({
+				name: "Other",
+				slug: "other",
+			});
+			await repository.createRegistrationCatalogValue({
+				organizationId: other.id,
+				kind: "instrument",
+				displayName: "Other Piano",
+				normalizedName: "piano",
+			});
+			const response = await app.request("/api/organizations/pafe/divisions");
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({
+				divisions: [],
+				instruments: [
+					{
+						id: active.id,
+						displayName: "Violin",
+						displayOrder: active.displayOrder,
+					},
+				],
+			});
+		});
+
 		// listPublicDivisions returns { divisions: [] } for fresh org — 200 OK
 		it("returns 200 with an empty divisions list", async () => {
 			const { app } = await createTestApp();
 			const response = await app.request("/api/organizations/pafe/divisions");
 			expect(response.status).toBe(200);
 			const body = await response.json();
-			expect(body).toMatchObject({ divisions: [] });
+			expect(body).toEqual({ divisions: [], instruments: [] });
 		});
 	});
 

@@ -215,14 +215,14 @@ describe("PostgresCustomerAvailabilityRepository - upsertAvailability multi-row 
 			"child",
 			"child-1",
 			"2026-07-15",
-			JSON.stringify([8, 9, 10]),
+			[8, 9, 10],
 			"org-1",
 			"fest-1",
 			"cust-1",
 			"teacher",
 			"teacher-1",
 			"2026-07-16",
-			JSON.stringify([14, 15]),
+			[14, 15],
 		]);
 	});
 });

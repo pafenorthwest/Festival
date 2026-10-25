@@ -268,10 +268,21 @@ export class OrganizationService {
 		const organization =
 			await this.repository.findOrganizationBySlug(organizationSlug);
 		if (!organization) throw new AppError("Organization not found.", 404);
+		const [divisions, instruments] = await Promise.all([
+			this.repository.listDivisions(organization.id, true),
+			this.repository.listRegistrationCatalogValues(
+				organization.id,
+				"instrument",
+				true,
+			),
+		]);
 		return {
-			divisions: (
-				await this.repository.listDivisions(organization.id, true)
-			).map(({ id, displayName, displayOrder }) => ({
+			divisions: divisions.map(({ id, displayName, displayOrder }) => ({
+				id,
+				displayName,
+				displayOrder,
+			})),
+			instruments: instruments.map(({ id, displayName, displayOrder }) => ({
 				id,
 				displayName,
 				displayOrder,
