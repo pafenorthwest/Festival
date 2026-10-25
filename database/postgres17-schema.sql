@@ -68,6 +68,7 @@ CREATE TABLE orgs.accompanist_membership_entitlement_details (
 
 CREATE TABLE orgs.accompanist_profile_divisions (
     accompanist_profile_id text NOT NULL,
+    organization_id text NOT NULL,
     division_id text NOT NULL
 );
 
@@ -1196,6 +1197,7 @@ CREATE TABLE orgs.teacher_membership_entitlement_details (
 
 CREATE TABLE orgs.teacher_profile_divisions (
     teacher_profile_id text NOT NULL,
+    organization_id text NOT NULL,
     division_id text NOT NULL
 );
 
@@ -1329,6 +1331,14 @@ ALTER TABLE ONLY orgs.accompanist_membership_entitlement_details
 
 ALTER TABLE ONLY orgs.accompanist_profile_divisions
     ADD CONSTRAINT accompanist_profile_divisions_pkey PRIMARY KEY (accompanist_profile_id, division_id);
+
+
+--
+-- Name: accompanist_profiles accompanist_profiles_id_organization_id_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.accompanist_profiles
+    ADD CONSTRAINT accompanist_profiles_id_organization_id_key UNIQUE (id, organization_id);
 
 
 --
@@ -2100,6 +2110,14 @@ ALTER TABLE ONLY orgs.teacher_profile_divisions
 
 
 --
+-- Name: teacher_profiles teacher_profiles_id_organization_id_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.teacher_profiles
+    ADD CONSTRAINT teacher_profiles_id_organization_id_key UNIQUE (id, organization_id);
+
+
+--
 -- Name: teacher_profiles teacher_profiles_organization_id_customer_id_key; Type: CONSTRAINT; Schema: orgs; Owner: -
 --
 
@@ -2751,19 +2769,27 @@ ALTER TABLE ONLY orgs.accompanist_membership_entitlement_details
 
 
 --
--- Name: accompanist_profile_divisions accompanist_profile_divisions_accompanist_profile_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+-- Name: accompanist_profile_divisions accompanist_profile_divisions_accompanist_profile_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
 --
 
 ALTER TABLE ONLY orgs.accompanist_profile_divisions
-    ADD CONSTRAINT accompanist_profile_divisions_accompanist_profile_id_fkey FOREIGN KEY (accompanist_profile_id) REFERENCES orgs.accompanist_profiles(id) ON DELETE CASCADE;
+    ADD CONSTRAINT accompanist_profile_divisions_accompanist_profile_id_organization_id_fkey FOREIGN KEY (accompanist_profile_id, organization_id) REFERENCES orgs.accompanist_profiles(id, organization_id) ON DELETE CASCADE;
 
 
 --
--- Name: accompanist_profile_divisions accompanist_profile_divisions_division_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+-- Name: accompanist_profile_divisions accompanist_profile_divisions_division_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
 --
 
 ALTER TABLE ONLY orgs.accompanist_profile_divisions
-    ADD CONSTRAINT accompanist_profile_divisions_division_id_fkey FOREIGN KEY (division_id) REFERENCES orgs.organization_divisions(id) ON DELETE CASCADE;
+    ADD CONSTRAINT accompanist_profile_divisions_division_id_organization_id_fkey FOREIGN KEY (division_id, organization_id) REFERENCES orgs.organization_divisions(id, organization_id) ON DELETE CASCADE;
+
+
+--
+-- Name: accompanist_profile_divisions accompanist_profile_divisions_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.accompanist_profile_divisions
+    ADD CONSTRAINT accompanist_profile_divisions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
 
 
 --
@@ -3631,19 +3657,27 @@ ALTER TABLE ONLY orgs.teacher_membership_entitlement_details
 
 
 --
--- Name: teacher_profile_divisions teacher_profile_divisions_division_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+-- Name: teacher_profile_divisions teacher_profile_divisions_division_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
 --
 
 ALTER TABLE ONLY orgs.teacher_profile_divisions
-    ADD CONSTRAINT teacher_profile_divisions_division_id_fkey FOREIGN KEY (division_id) REFERENCES orgs.organization_divisions(id) ON DELETE CASCADE;
+    ADD CONSTRAINT teacher_profile_divisions_division_id_organization_id_fkey FOREIGN KEY (division_id, organization_id) REFERENCES orgs.organization_divisions(id, organization_id) ON DELETE CASCADE;
 
 
 --
--- Name: teacher_profile_divisions teacher_profile_divisions_teacher_profile_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+-- Name: teacher_profile_divisions teacher_profile_divisions_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
 --
 
 ALTER TABLE ONLY orgs.teacher_profile_divisions
-    ADD CONSTRAINT teacher_profile_divisions_teacher_profile_id_fkey FOREIGN KEY (teacher_profile_id) REFERENCES orgs.teacher_profiles(id) ON DELETE CASCADE;
+    ADD CONSTRAINT teacher_profile_divisions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: teacher_profile_divisions teacher_profile_divisions_teacher_profile_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.teacher_profile_divisions
+    ADD CONSTRAINT teacher_profile_divisions_teacher_profile_id_organization_id_fkey FOREIGN KEY (teacher_profile_id, organization_id) REFERENCES orgs.teacher_profiles(id, organization_id) ON DELETE CASCADE;
 
 
 --

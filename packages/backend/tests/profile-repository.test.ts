@@ -750,8 +750,9 @@ describe("PostgresOrganizationRepository - Profile Queries", () => {
 		// Mock division lookup: valid division belongs to org
 		unsafeSpy.mockResolvedValueOnce([{ id: VALID_DIV_1 }]);
 
+		const divisionWrites: Array<{ query: string; params: unknown }> = [];
 		const mockTransaction = {
-			unsafe: async (query: unknown) => {
+			unsafe: async (query: unknown, params?: unknown) => {
 				if (
 					typeof query === "string" &&
 					query.includes("INSERT INTO test_schema.teacher_profiles")
@@ -762,12 +763,14 @@ describe("PostgresOrganizationRepository - Profile Queries", () => {
 					typeof query === "string" &&
 					query.includes("DELETE FROM test_schema.teacher_profile_divisions")
 				) {
+					divisionWrites.push({ query, params });
 					return [];
 				}
 				if (
 					typeof query === "string" &&
 					query.includes("INSERT INTO test_schema.teacher_profile_divisions")
 				) {
+					divisionWrites.push({ query, params });
 					return [];
 				}
 				return [];
@@ -806,6 +809,20 @@ describe("PostgresOrganizationRepository - Profile Queries", () => {
 		expect(result.display_name).toBe("Teacher New");
 		expect(result.approval_status).toBe("pending");
 		expect(result.division_ids).toEqual([VALID_DIV_1]);
+		expect(divisionWrites).toEqual([
+			{
+				query: expect.stringContaining(
+					"WHERE teacher_profile_id = $1 AND organization_id = $2",
+				),
+				params: ["prof-t-1", "org-1"],
+			},
+			{
+				query: expect.stringContaining(
+					"(teacher_profile_id, organization_id, division_id)",
+				),
+				params: ["prof-t-1", "org-1", VALID_DIV_1],
+			},
+		]);
 
 		beginSpy.mockRestore();
 	});

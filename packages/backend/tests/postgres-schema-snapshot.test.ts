@@ -59,6 +59,20 @@ test("commits a normalized PostgreSQL 17 schema-only snapshot", async () => {
 	expect(snapshot).toContain("CREATE TABLE orgs.teacher_profile_divisions");
 	expect(snapshot).toContain("CREATE TABLE orgs.accompanist_profiles");
 	expect(snapshot).toContain("CREATE TABLE orgs.accompanist_profile_divisions");
+	for (const kind of ["teacher", "accompanist"]) {
+		expect(snapshot).toContain(
+			`ADD CONSTRAINT ${kind}_profiles_id_organization_id_key UNIQUE (id, organization_id);`,
+		);
+		expect(snapshot).toContain(
+			`ADD CONSTRAINT ${kind}_profile_divisions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;`,
+		);
+		expect(snapshot).toContain(
+			`ADD CONSTRAINT ${kind}_profile_divisions_${kind}_profile_id_organization_id_fkey FOREIGN KEY (${kind}_profile_id, organization_id) REFERENCES orgs.${kind}_profiles(id, organization_id) ON DELETE CASCADE;`,
+		);
+		expect(snapshot).toContain(
+			`ADD CONSTRAINT ${kind}_profile_divisions_division_id_organization_id_fkey FOREIGN KEY (division_id, organization_id) REFERENCES orgs.organization_divisions(id, organization_id) ON DELETE CASCADE;`,
+		);
+	}
 	expect(snapshot).toContain("idx_teacher_profiles_directory");
 	expect(snapshot).toContain("idx_accompanist_profiles_directory");
 	expect(snapshot).toContain(

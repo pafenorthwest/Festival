@@ -3029,8 +3029,8 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			return true;
 		}
 		const divisionRows = (await transaction.unsafe(
-			`SELECT division_id FROM ${this.schema}.${kind}_profile_divisions WHERE ${kind}_profile_id = $1`,
-			[existing.id],
+			`SELECT division_id FROM ${this.schema}.${kind}_profile_divisions WHERE ${kind}_profile_id = $1 AND organization_id = $2`,
+			[existing.id, next.organizationId],
 		)) as Array<{ division_id: string }>;
 		return profileEditRequiresReapproval(
 			{
@@ -3065,7 +3065,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			 LEFT JOIN ${this.schema}.festival_customers c
 				ON c.id = tp.customer_id AND c.organization_id = tp.organization_id
 			 LEFT JOIN ${this.schema}.teacher_profile_divisions tpd
-				ON tpd.teacher_profile_id = tp.id
+				ON tpd.teacher_profile_id = tp.id AND tpd.organization_id = tp.organization_id
 			 WHERE tp.organization_id = $1 AND tp.customer_id = $2
 			 GROUP BY tp.id, tp.organization_id, tp.customer_id, tp.display_name, tp.public_directory_opt_in, tp.approval_status, tp.created_at, tp.updated_at, c.mailing_address`,
 			[organizationId, customerId],
@@ -3097,7 +3097,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			 LEFT JOIN ${this.schema}.festival_customers c
 				ON c.id = tp.customer_id AND c.organization_id = tp.organization_id
 			 LEFT JOIN ${this.schema}.teacher_profile_divisions tpd
-				ON tpd.teacher_profile_id = tp.id
+				ON tpd.teacher_profile_id = tp.id AND tpd.organization_id = tp.organization_id
 			 WHERE tp.organization_id = $1 AND tp.id = $2
 			 GROUP BY tp.id, tp.organization_id, tp.customer_id, tp.display_name, tp.public_directory_opt_in, tp.approval_status, tp.created_at, tp.updated_at, c.mailing_address`,
 			[organizationId, profileId],
@@ -3147,16 +3147,16 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 
 			const profileId = upserted[0].id;
 			await transaction.unsafe(
-				`DELETE FROM ${this.schema}.teacher_profile_divisions WHERE teacher_profile_id = $1`,
-				[profileId],
+				`DELETE FROM ${this.schema}.teacher_profile_divisions WHERE teacher_profile_id = $1 AND organization_id = $2`,
+				[profileId, params.organizationId],
 			);
 
 			for (const divisionId of divisionIds) {
 				await transaction.unsafe(
-					`INSERT INTO ${this.schema}.teacher_profile_divisions (teacher_profile_id, division_id)
-					 VALUES ($1, $2)
+					`INSERT INTO ${this.schema}.teacher_profile_divisions (teacher_profile_id, organization_id, division_id)
+					 VALUES ($1, $2, $3)
 					 ON CONFLICT DO NOTHING`,
-					[profileId, divisionId],
+					[profileId, params.organizationId, divisionId],
 				);
 			}
 
@@ -3214,7 +3214,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			 LEFT JOIN ${this.schema}.festival_customers c
 				ON c.id = tp.customer_id AND c.organization_id = tp.organization_id
 			 LEFT JOIN ${this.schema}.teacher_profile_divisions tpd
-				ON tpd.teacher_profile_id = tp.id
+				ON tpd.teacher_profile_id = tp.id AND tpd.organization_id = tp.organization_id
 			 WHERE tp.organization_id = $1
 			 GROUP BY tp.id, tp.organization_id, tp.customer_id, tp.display_name, tp.public_directory_opt_in, tp.approval_status, tp.created_at, tp.updated_at, c.mailing_address
 			 ORDER BY tp.display_name ASC, tp.id ASC`,
@@ -3251,7 +3251,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			 LEFT JOIN ${this.schema}.membership_identity_emails identity
 				ON identity.organization_id = ap.organization_id AND identity.customer_id = ap.customer_id
 			 LEFT JOIN ${this.schema}.accompanist_profile_divisions apd
-				ON apd.accompanist_profile_id = ap.id
+				ON apd.accompanist_profile_id = ap.id AND apd.organization_id = ap.organization_id
 			 WHERE ap.organization_id = $1 AND ap.customer_id = $2
 			 GROUP BY ap.id, ap.organization_id, ap.customer_id, ap.display_name, ap.public_directory_opt_in, ap.approval_status, ap.created_at, ap.updated_at, c.phone, identity.normalized_email, c.email, c.mailing_address`,
 			[organizationId, customerId],
@@ -3287,7 +3287,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			 LEFT JOIN ${this.schema}.membership_identity_emails identity
 				ON identity.organization_id = ap.organization_id AND identity.customer_id = ap.customer_id
 			 LEFT JOIN ${this.schema}.accompanist_profile_divisions apd
-				ON apd.accompanist_profile_id = ap.id
+				ON apd.accompanist_profile_id = ap.id AND apd.organization_id = ap.organization_id
 			 WHERE ap.organization_id = $1 AND ap.id = $2
 			 GROUP BY ap.id, ap.organization_id, ap.customer_id, ap.display_name, ap.public_directory_opt_in, ap.approval_status, ap.created_at, ap.updated_at, c.phone, identity.normalized_email, c.email, c.mailing_address`,
 			[organizationId, profileId],
@@ -3337,16 +3337,16 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 
 			const profileId = upserted[0].id;
 			await transaction.unsafe(
-				`DELETE FROM ${this.schema}.accompanist_profile_divisions WHERE accompanist_profile_id = $1`,
-				[profileId],
+				`DELETE FROM ${this.schema}.accompanist_profile_divisions WHERE accompanist_profile_id = $1 AND organization_id = $2`,
+				[profileId, params.organizationId],
 			);
 
 			for (const divisionId of divisionIds) {
 				await transaction.unsafe(
-					`INSERT INTO ${this.schema}.accompanist_profile_divisions (accompanist_profile_id, division_id)
-					 VALUES ($1, $2)
+					`INSERT INTO ${this.schema}.accompanist_profile_divisions (accompanist_profile_id, organization_id, division_id)
+					 VALUES ($1, $2, $3)
 					 ON CONFLICT DO NOTHING`,
-					[profileId, divisionId],
+					[profileId, params.organizationId, divisionId],
 				);
 			}
 
@@ -3408,7 +3408,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			 LEFT JOIN ${this.schema}.membership_identity_emails identity
 				ON identity.organization_id = ap.organization_id AND identity.customer_id = ap.customer_id
 			 LEFT JOIN ${this.schema}.accompanist_profile_divisions apd
-				ON apd.accompanist_profile_id = ap.id
+				ON apd.accompanist_profile_id = ap.id AND apd.organization_id = ap.organization_id
 			 WHERE ap.organization_id = $1
 			 GROUP BY ap.id, ap.organization_id, ap.customer_id, ap.display_name, ap.public_directory_opt_in, ap.approval_status, ap.created_at, ap.updated_at, c.phone, identity.normalized_email, c.email, c.mailing_address
 			 ORDER BY ap.display_name ASC, ap.id ASC`,
@@ -3451,7 +3451,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				) AS divisions
 			 FROM ${this.schema}.teacher_profiles tp
 			 LEFT JOIN ${this.schema}.teacher_profile_divisions tpd
-				ON tpd.teacher_profile_id = tp.id
+				ON tpd.teacher_profile_id = tp.id AND tpd.organization_id = tp.organization_id
 			 LEFT JOIN ${this.schema}.organization_divisions od
 				ON od.id = tpd.division_id AND od.organization_id = tp.organization_id
 			 WHERE tp.organization_id = $1
@@ -3520,7 +3520,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				) AS divisions
 			 FROM ${this.schema}.accompanist_profiles ap
 			 LEFT JOIN ${this.schema}.accompanist_profile_divisions apd
-				ON apd.accompanist_profile_id = ap.id
+				ON apd.accompanist_profile_id = ap.id AND apd.organization_id = ap.organization_id
 			 LEFT JOIN ${this.schema}.organization_divisions od
 				ON od.id = apd.division_id AND od.organization_id = ap.organization_id
 			 WHERE ap.organization_id = $1
