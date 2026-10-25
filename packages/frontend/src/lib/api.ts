@@ -659,6 +659,7 @@ export function acquireAccompanistMembership(
 		city: string;
 		phone: string;
 		divisionIds: string[];
+		staffAccessConsent: boolean;
 	},
 ) {
 	return requestJson<{

@@ -15,7 +15,7 @@
 
 ## Verdict
 - Verdict: patch is correct
-- Confidence: 0.98
-- Justification: The service uses authenticated customer/organization scope and existing lifecycle-aware repositories. Regression tests cover invalid memberships and continued opt-out after lapse. Redundant fixture seeding was corrected and reviewed again. Existing contact-consent and postal-code issues are outside this fix.
+- Confidence: 0.97
+- Justification: The profile service uses authenticated customer/organization scope and existing lifecycle-aware repositories. Accompanist enrollment requires affirmative consent, checks session/CSRF/origin before recording, and awaits versioned consent persistence before acquisition. Failure prevents a grant. Required checkbox and API contract agree. Independent review found no actionable regressions. Existing grants are not retroactively assigned consent; postal-code extraction and admin DTO redesign remain outside scope.
 
 Native PowerShell checks replace Bash-only review helpers under repository execution requirements. Findings JSON and citations were inspected directly.
