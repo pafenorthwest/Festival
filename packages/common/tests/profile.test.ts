@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
+import * as profileModule from "../src/profile.js";
 import {
 	type AccompanistProfileRecord,
 	FORBIDDEN_PUBLIC_DIRECTORY_FIELDS,
-	generateTeacherColor,
 	getDeterministicTeacherColor,
 	HEX_COLOR_REGEX,
 	isCanonicalUuid,
@@ -19,7 +19,6 @@ import {
 	validatePublicDirectoryOptIn,
 	validatePublicDirectoryProfileDto,
 	validateUpdateProfileApprovalStatus,
-	validateUpdateProfileRequest,
 } from "../src/profile.js";
 
 describe("Profile Approval Status", () => {
@@ -56,10 +55,8 @@ describe("Deterministic Teacher Color Generator", () => {
 		const seed = "cust_98372648_uuid";
 		const color1 = getDeterministicTeacherColor(seed);
 		const color2 = getDeterministicTeacherColor(seed);
-		const color3 = generateTeacherColor(seed);
 
 		expect(color1).toBe(color2);
-		expect(color1).toBe(color3);
 		expect(isValidHexColor(color1)).toBe(true);
 	});
 
@@ -181,55 +178,11 @@ describe("Public Directory Opt-In Validation", () => {
 	});
 });
 
-describe("Update Profile Request Validation", () => {
-	const validDivisionId = "123e4567-e89b-12d3-a456-426614174000";
-
-	it("validates partial update payloads", () => {
-		const input = {
-			displayName: "Alice Piano",
-			publicDirectoryOptIn: true,
-			divisionIds: [validDivisionId],
-			approvalStatus: "approved",
-		};
-		const validated = validateUpdateProfileRequest(input);
-		expect(validated).toEqual({
-			displayName: "Alice Piano",
-			publicDirectoryOptIn: true,
-			divisionIds: [validDivisionId],
-			approvalStatus: "approved",
-		});
-	});
-
-	it("accepts a single field update", () => {
-		expect(
-			validateUpdateProfileRequest({ displayName: "Bob Teacher" }),
-		).toEqual({
-			displayName: "Bob Teacher",
-		});
-	});
-
-	it("rejects empty update payload", () => {
-		expect(() => validateUpdateProfileRequest({})).toThrow(
-			/must contain at least one field/,
-		);
-	});
-
-	it("rejects payload with unsupported fields", () => {
-		expect(() =>
-			validateUpdateProfileRequest({
-				displayName: "Valid Name",
-				hackField: "disallowed",
-			}),
-		).toThrow(/Unsupported field in update request: hackField/);
-	});
-
-	it("rejects invalid input types", () => {
-		expect(() => validateUpdateProfileRequest(null)).toThrow(
-			/Profile update request is invalid/,
-		);
-		expect(() => validateUpdateProfileRequest([])).toThrow(
-			/Profile update request is invalid/,
-		);
+describe("Customer profile update contract", () => {
+	it("does not export a generic update validator that accepts approvalStatus", () => {
+		const exported = Object.keys(profileModule);
+		expect(exported).not.toContain("validateUpdateProfileRequest");
+		expect(exported).not.toContain("generateTeacherColor");
 	});
 });
 

@@ -67,8 +67,6 @@ export function getDeterministicTeacherColor(
 	return palette[index];
 }
 
-export const generateTeacherColor = getDeterministicTeacherColor;
-
 export interface TeacherProfileRecord {
 	id: string;
 	organization_id: string;
@@ -137,16 +135,6 @@ export const FORBIDDEN_PUBLIC_DIRECTORY_FIELDS = [
 	"zip_code",
 ] as const;
 
-export interface UpdateProfileRequestDto {
-	displayName?: string;
-	publicDirectoryOptIn?: boolean;
-	divisionIds?: string[];
-	approvalStatus?: ProfileApprovalStatus;
-}
-
-export type UpdateTeacherProfileRequestDto = UpdateProfileRequestDto;
-export type UpdateAccompanistProfileRequestDto = UpdateProfileRequestDto;
-
 export interface UpdateProfileApprovalStatusDto {
 	approvalStatus: ProfileApprovalStatus;
 }
@@ -204,51 +192,6 @@ export function validateProfileApprovalStatus(
 		);
 	}
 	return value;
-}
-
-const ALLOWED_UPDATE_FIELDS = new Set([
-	"displayName",
-	"publicDirectoryOptIn",
-	"divisionIds",
-	"approvalStatus",
-]);
-
-export function validateUpdateProfileRequest(
-	input: unknown,
-): UpdateProfileRequestDto {
-	if (!input || typeof input !== "object" || Array.isArray(input)) {
-		throw new Error("Profile update request is invalid.");
-	}
-	const candidate = input as Record<string, unknown>;
-	for (const key of Object.keys(candidate)) {
-		if (!ALLOWED_UPDATE_FIELDS.has(key)) {
-			throw new Error(`Unsupported field in update request: ${key}.`);
-		}
-	}
-
-	const result: UpdateProfileRequestDto = {};
-	if (candidate.displayName !== undefined) {
-		result.displayName = validateDisplayName(candidate.displayName);
-	}
-	if (candidate.publicDirectoryOptIn !== undefined) {
-		result.publicDirectoryOptIn = validatePublicDirectoryOptIn(
-			candidate.publicDirectoryOptIn,
-		);
-	}
-	if (candidate.divisionIds !== undefined) {
-		result.divisionIds = validateDivisionIds(candidate.divisionIds);
-	}
-	if (candidate.approvalStatus !== undefined) {
-		result.approvalStatus = validateProfileApprovalStatus(
-			candidate.approvalStatus,
-		);
-	}
-
-	if (Object.keys(result).length === 0) {
-		throw new Error("Profile update request must contain at least one field.");
-	}
-
-	return result;
 }
 
 export function validateUpdateProfileApprovalStatus(
