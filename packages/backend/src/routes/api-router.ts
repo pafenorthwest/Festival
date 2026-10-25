@@ -17,6 +17,7 @@ import type { RegistrationChangeRepository } from "../registration/registration-
 import type { RepertoireRepository } from "../repertoire/index.js";
 import type { AccompanistMembershipService } from "../services/accompanist-membership-service.js";
 import type { OrganizationService } from "../services/organization-service.js";
+import { ParticipantProfileService } from "../services/participant-profile-service.js";
 import type { PublicMembershipProductService } from "../shopify/public-membership-product-service.js";
 import type { ShopifyIntegrationDiagnosticService } from "../shopify/shopify-integration-diagnostic-service.js";
 import type { ShopifyIntegrationService } from "../shopify/shopify-integration-service.js";
@@ -38,6 +39,7 @@ import { buildCustomerAuthRoutes } from "./customer-auth/customer-auth.routes.js
 import { buildCustomerCheckoutRecoveryRoutes } from "./customer-checkout-recovery.routes.js";
 import { buildIdentityRoutes } from "./identity/identity.routes.js";
 import { buildOrgInfoRoutes } from "./org-info/org-info.routes.js";
+import { buildParticipantProfileRoutes } from "./participant-profile/participant-profile.routes.js";
 import { buildRepertoireRoutes } from "./repertoire.routes.js";
 import { buildStaffRoutes } from "./staff/staff.routes.js";
 import { buildVolunteerRoutes } from "./volunteers.routes.js";
@@ -64,6 +66,7 @@ export interface ApiRouterOptions {
 	billingReconciliationService?: BillingReconciliationService;
 	communicationService?: CommunicationService;
 	checkoutRecoveryService?: CheckoutRecoveryService;
+	participantProfileService?: ParticipantProfileService;
 }
 
 export function buildApiRouter(
@@ -92,6 +95,7 @@ export function buildApiRouter(
 		billingReconciliationService,
 		communicationService,
 		checkoutRecoveryService: providedRecoveryService,
+		participantProfileService,
 	} = options;
 	const repository = organizationService.repository;
 
@@ -250,6 +254,17 @@ export function buildApiRouter(
 			authVerifier,
 			repository,
 			communicationService,
+		}),
+	);
+
+	router.route(
+		"/",
+		buildParticipantProfileRoutes({
+			profileService:
+				participantProfileService ??
+				new ParticipantProfileService(repository, customerAccountService),
+			authVerifier,
+			repository,
 		}),
 	);
 

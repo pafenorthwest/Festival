@@ -1,6 +1,7 @@
 import type {
 	AccompanistDivisionSelectionPolicy,
 	AccompanistMembershipGrant,
+	AccompanistProfileRecord,
 	AuthenticatedUser,
 	ClassAvailabilityStatus,
 	CreateEntitlementGrantSnapshotInput,
@@ -15,6 +16,8 @@ import type {
 	OrganizationMembershipRecord,
 	OrganizationRecord,
 	OrganizationUserRecord,
+	ProfileApprovalStatus,
+	PublicDirectoryProfileDto,
 	RegistrationAgeConfiguration,
 	RegistrationCatalogValue,
 	ShopifyCapabilityDiagnostics,
@@ -22,6 +25,7 @@ import type {
 	ShopifyVerificationStatus,
 	ShopifyWebhookFailureCategory,
 	ShopifyWebhookReadinessStatus,
+	TeacherProfileRecord,
 } from "@festival/common";
 
 export interface MembershipWithOrganization {
@@ -228,6 +232,15 @@ export interface MembershipCustomerContact {
 	phone?: string;
 	city?: string;
 }
+export interface UpsertProfileInput {
+	organizationId: string;
+	customerId: string;
+	displayName: string;
+	publicDirectoryOptIn: boolean;
+	divisionIds: string[];
+}
+export type UpsertTeacherProfileInput = UpsertProfileInput;
+export type UpsertAccompanistProfileInput = UpsertProfileInput;
 export interface OrganizationRepository {
 	ensureReady(): Promise<void>;
 	upsertUser(user: AuthenticatedUser): Promise<OrganizationUserRecord>;
@@ -508,6 +521,45 @@ export interface OrganizationRepository {
 		organizationId: string,
 		divisionId: string,
 	): Promise<Array<{ id: string; name: string }>>;
+	getTeacherProfile(
+		organizationId: string,
+		customerId: string,
+	): Promise<TeacherProfileRecord | null>;
+	getTeacherProfileById(
+		organizationId: string,
+		profileId: string,
+	): Promise<TeacherProfileRecord | null>;
+	upsertTeacherProfile(
+		params: UpsertTeacherProfileInput,
+	): Promise<TeacherProfileRecord>;
+	updateTeacherProfileApproval(
+		organizationId: string,
+		profileId: string,
+		approvalStatus: ProfileApprovalStatus,
+	): Promise<TeacherProfileRecord | null>;
+	listTeacherProfiles(organizationId: string): Promise<TeacherProfileRecord[]>;
+	getAccompanistProfile(
+		organizationId: string,
+		customerId: string,
+	): Promise<AccompanistProfileRecord | null>;
+	getAccompanistProfileById(
+		organizationId: string,
+		profileId: string,
+	): Promise<AccompanistProfileRecord | null>;
+	upsertAccompanistProfile(
+		params: UpsertAccompanistProfileInput,
+	): Promise<AccompanistProfileRecord>;
+	updateAccompanistProfileApproval(
+		organizationId: string,
+		profileId: string,
+		approvalStatus: ProfileApprovalStatus,
+	): Promise<AccompanistProfileRecord | null>;
+	listAccompanistProfiles(
+		organizationId: string,
+	): Promise<AccompanistProfileRecord[]>;
+	getPublicDirectoryProfiles(
+		organizationId: string,
+	): Promise<PublicDirectoryProfileDto[]>;
 }
 
 export function assertValidSubtypeDependency(

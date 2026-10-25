@@ -522,6 +522,40 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			entitlement_id TEXT PRIMARY KEY REFERENCES ${safeSchema}.membership_entitlements(id) ON DELETE CASCADE,
 			contact_name TEXT NOT NULL, contact_email TEXT NOT NULL, contact_city TEXT NOT NULL, contact_phone TEXT NOT NULL
 		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.teacher_profiles (
+			id TEXT PRIMARY KEY,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			customer_id TEXT NOT NULL,
+			display_name TEXT NOT NULL,
+			public_directory_opt_in BOOLEAN NOT NULL DEFAULT FALSE,
+			approval_status TEXT NOT NULL DEFAULT 'pending' CHECK (approval_status IN ('pending', 'approved', 'rejected')),
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE (organization_id, customer_id),
+			FOREIGN KEY (customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers (id, organization_id) ON DELETE CASCADE
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.teacher_profile_divisions (
+			teacher_profile_id TEXT NOT NULL REFERENCES ${safeSchema}.teacher_profiles (id) ON DELETE CASCADE,
+			division_id TEXT NOT NULL REFERENCES ${safeSchema}.organization_divisions (id) ON DELETE CASCADE,
+			PRIMARY KEY (teacher_profile_id, division_id)
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.accompanist_profiles (
+			id TEXT PRIMARY KEY,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			customer_id TEXT NOT NULL,
+			display_name TEXT NOT NULL,
+			public_directory_opt_in BOOLEAN NOT NULL DEFAULT FALSE,
+			approval_status TEXT NOT NULL DEFAULT 'pending' CHECK (approval_status IN ('pending', 'approved', 'rejected')),
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE (organization_id, customer_id),
+			FOREIGN KEY (customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers (id, organization_id) ON DELETE CASCADE
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.accompanist_profile_divisions (
+			accompanist_profile_id TEXT NOT NULL REFERENCES ${safeSchema}.accompanist_profiles (id) ON DELETE CASCADE,
+			division_id TEXT NOT NULL REFERENCES ${safeSchema}.organization_divisions (id) ON DELETE CASCADE,
+			PRIMARY KEY (accompanist_profile_id, division_id)
+		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.shopify_webhook_deliveries (
 			id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
 			shop_domain TEXT NOT NULL, webhook_id TEXT NOT NULL, topic TEXT NOT NULL CHECK (topic = 'orders/paid'),
@@ -857,6 +891,18 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		CREATE INDEX IF NOT EXISTS registration_catalog_values_required_subtype_idx ON ${safeSchema}.registration_catalog_values (organization_id, required_subtype_id);
 		CREATE INDEX IF NOT EXISTS idx_festival_class_capacity_audit_logs_org_class_created
 			ON ${safeSchema}.festival_class_capacity_audit_logs (organization_id, festival_class_id, created_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_teacher_profiles_org
+			ON ${safeSchema}.teacher_profiles (organization_id);
+		CREATE INDEX IF NOT EXISTS idx_teacher_profiles_directory
+			ON ${safeSchema}.teacher_profiles (organization_id, public_directory_opt_in, approval_status);
+		CREATE INDEX IF NOT EXISTS idx_teacher_profile_divisions_division_id
+			ON ${safeSchema}.teacher_profile_divisions (division_id);
+		CREATE INDEX IF NOT EXISTS idx_accompanist_profiles_org
+			ON ${safeSchema}.accompanist_profiles (organization_id);
+		CREATE INDEX IF NOT EXISTS idx_accompanist_profiles_directory
+			ON ${safeSchema}.accompanist_profiles (organization_id, public_directory_opt_in, approval_status);
+		CREATE INDEX IF NOT EXISTS idx_accompanist_profile_divisions_division_id
+			ON ${safeSchema}.accompanist_profile_divisions (division_id);
 	`;
 }
 

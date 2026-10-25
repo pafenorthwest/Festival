@@ -693,6 +693,51 @@ export const CURRENT_ROUTE_SECURITY = [
 		path: "/api/organizations/:slug/customer-account/availability",
 		authenticationClass: "customer",
 	},
+	{
+		method: "GET",
+		path: "/api/customer/orgs/:orgSlug/profiles/teacher",
+		authenticationClass: "customer",
+	},
+	{
+		method: "PUT",
+		path: "/api/customer/orgs/:orgSlug/profiles/teacher",
+		authenticationClass: "customer",
+	},
+	{
+		method: "GET",
+		path: "/api/customer/orgs/:orgSlug/profiles/accompanist",
+		authenticationClass: "customer",
+	},
+	{
+		method: "PUT",
+		path: "/api/customer/orgs/:orgSlug/profiles/accompanist",
+		authenticationClass: "customer",
+	},
+	{
+		method: "GET",
+		path: "/api/admin/orgs/:orgSlug/profiles/teachers",
+		authenticationClass: "admin",
+	},
+	{
+		method: "PATCH",
+		path: "/api/admin/orgs/:orgSlug/profiles/teachers/:profileId/approval",
+		authenticationClass: "admin",
+	},
+	{
+		method: "GET",
+		path: "/api/admin/orgs/:orgSlug/profiles/accompanists",
+		authenticationClass: "admin",
+	},
+	{
+		method: "PATCH",
+		path: "/api/admin/orgs/:orgSlug/profiles/accompanists/:profileId/approval",
+		authenticationClass: "admin",
+	},
+	{
+		method: "GET",
+		path: "/api/org-info/:orgSlug/directory/profiles",
+		authenticationClass: "public",
+	},
 ] as const satisfies readonly RouteSecurityDeclaration[];
 
 interface RegisteredRoute {

@@ -97,6 +97,7 @@ import { AccompanistMembershipService } from "./services/accompanist-membership-
 import { AdminClassCatalogService } from "./services/admin-class-catalog.service.js";
 import { AdminClassShopifySync } from "./services/admin-class-shopify-sync.js";
 import { OrganizationService } from "./services/organization-service.js";
+import { ParticipantProfileService } from "./services/participant-profile-service.js";
 import { ShopifyAdminApiClient } from "./shopify/admin-api-client.js";
 import { FileShopifyMutationAuditWriter } from "./shopify/admin-mutation-audit.js";
 import { ShopifySecretKeyring } from "./shopify/encryption.js";
@@ -150,6 +151,7 @@ export interface CreateAppOptions {
 	communicationRepository?: CommunicationRepository;
 	communicationService?: CommunicationService;
 	roomRepository?: RoomRepository;
+	participantProfileService?: ParticipantProfileService;
 }
 
 function privateTokenMatches(
@@ -516,6 +518,9 @@ export async function createApp(options: CreateAppOptions = {}) {
 				: undefined,
 			listings: publicMembershipProductService,
 		});
+	const participantProfileService =
+		options.participantProfileService ??
+		new ParticipantProfileService(repository, customerAccountService);
 
 	const app = new Hono();
 	const allowedApiOrigins = new Set(env.allowedApiOrigins ?? LOCAL_API_ORIGINS);
@@ -633,6 +638,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 			billingReconciliationService,
 			communicationService,
 			checkoutRecoveryService,
+			participantProfileService,
 		}),
 	);
 	app.route(
