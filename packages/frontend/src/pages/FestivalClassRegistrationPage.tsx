@@ -292,12 +292,12 @@ export function FestivalClassRegistrationPage(
 
 					<Show when={children().length === 0}>
 						<FestivalNoChildrenPanel
+							manageChildrenPath={`/org/${props.slug}/account/children`}
 							onManageChildren={() =>
 								props.app.navigate(`/org/${props.slug}/account/children`)
 							}
 						/>
 					</Show>
-
 					<Show when={children().length > 0}>
 						<div
 							class="registration-form-grid"
