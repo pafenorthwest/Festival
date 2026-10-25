@@ -70,6 +70,7 @@ import {
 	assertValidSubtypeDependency,
 	ShopifyShopOwnershipError,
 } from "./organization-repository.js";
+import { profileEditRequiresReapproval } from "./profile-moderation.js";
 
 type StoredTeacherEntitlement = Omit<EntitlementGrantSnapshot, "status">;
 type StoredAccompanistEntitlement = Omit<
@@ -1981,6 +1982,15 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 				public_directory_opt_in: publicDirectoryOptIn,
 				division_ids: divisionIds,
 				teacher_color: getDeterministicTeacherColor(params.customerId),
+				approval_status: profileEditRequiresReapproval(
+					{
+						displayName: existing.display_name,
+						divisionIds: existing.division_ids,
+					},
+					{ displayName, divisionIds },
+				)
+					? "pending"
+					: existing.approval_status,
 				updated_at: nowIso,
 			};
 			this.teacherProfiles.set(existing.id, updated);
@@ -2092,6 +2102,15 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 				display_name: displayName,
 				public_directory_opt_in: publicDirectoryOptIn,
 				division_ids: divisionIds,
+				approval_status: profileEditRequiresReapproval(
+					{
+						displayName: existing.display_name,
+						divisionIds: existing.division_ids,
+					},
+					{ displayName, divisionIds },
+				)
+					? "pending"
+					: existing.approval_status,
 				updated_at: nowIso,
 				...(phone ? { phone } : {}),
 				...(email ? { email } : {}),

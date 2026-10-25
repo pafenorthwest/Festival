@@ -683,6 +683,51 @@ describe("Participant Profiles API End-to-End", () => {
 			}
 		});
 
+		it("removes approved teacher from public directory after display name edit", async () => {
+			const { app, divA1 } = await setupTestApp();
+			const putTeacher = (displayName: string) =>
+				app.request("/api/customer/orgs/org-a/profiles/teacher", {
+					method: "PUT",
+					headers: {
+						"Content-Type": "application/json",
+						Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1`,
+						"X-CSRF-Token": "csrf-token-1",
+					},
+					body: JSON.stringify({
+						displayName,
+						publicDirectoryOptIn: true,
+						divisionIds: [divA1.id],
+					}),
+				});
+
+			const created = await (await putTeacher("Alice Teacher")).json();
+			await app.request(
+				`/api/admin/orgs/org-a/profiles/teachers/${created.id}/approval`,
+				{
+					method: "PATCH",
+					headers: {
+						"Content-Type": "application/json",
+						Authorization: "Bearer admin-org-a",
+					},
+					body: JSON.stringify({ approvalStatus: "approved" }),
+				},
+			);
+			const before: PublicDirectoryProfileDto[] = await (
+				await app.request("/api/org-info/org-a/directory/profiles")
+			).json();
+			expect(before.map((p) => p.displayName)).toEqual(["Alice Teacher"]);
+
+			const editRes = await putTeacher("Alice Renamed");
+			expect(editRes.status).toBe(200);
+			const edited = await editRes.json();
+			expect(edited.approval_status).toBe("pending");
+
+			const after: PublicDirectoryProfileDto[] = await (
+				await app.request("/api/org-info/org-a/directory/profiles")
+			).json();
+			expect(after).toEqual([]);
+		});
+
 		it("returns 404 for nonexistent organization", async () => {
 			const { app } = await setupTestApp();
 			const res = await app.request(

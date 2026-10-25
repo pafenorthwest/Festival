@@ -79,6 +79,7 @@ import {
 	initializePostgresSchema,
 	postgresSchemaName,
 } from "./postgres-schema.js";
+import { profileEditRequiresReapproval } from "./profile-moderation.js";
 
 interface MembershipRow {
 	id: string;
@@ -3000,6 +3001,44 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		return uniqueIds;
 	}
 
+	/**
+	 * Locks the existing profile row (if any) inside the caller's transaction
+	 * and reports whether the pending edit must reset approval to 'pending'.
+	 * Missing rows report true so a concurrent insert race stays pending.
+	 */
+	private async lockedProfileRequiresReapproval(
+		transaction: Pick<typeof sql, "unsafe">,
+		kind: "teacher" | "accompanist",
+		next: {
+			organizationId: string;
+			customerId: string;
+			displayName: string;
+			divisionIds: string[];
+		},
+	): Promise<boolean> {
+		const existingRows = (await transaction.unsafe(
+			`SELECT id, display_name FROM ${this.schema}.${kind}_profiles
+			 WHERE organization_id = $1 AND customer_id = $2
+			 FOR UPDATE`,
+			[next.organizationId, next.customerId],
+		)) as Array<{ id: string; display_name: string }>;
+		const existing = existingRows[0];
+		if (!existing) {
+			return true;
+		}
+		const divisionRows = (await transaction.unsafe(
+			`SELECT division_id FROM ${this.schema}.${kind}_profile_divisions WHERE ${kind}_profile_id = $1`,
+			[existing.id],
+		)) as Array<{ division_id: string }>;
+		return profileEditRequiresReapproval(
+			{
+				displayName: existing.display_name,
+				divisionIds: divisionRows.map((row) => row.division_id),
+			},
+			next,
+		);
+	}
+
 	async getTeacherProfile(
 		organizationId: string,
 		customerId: string,
@@ -3079,6 +3118,11 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 
 		const generatedId = randomUUID();
 		const row = await sql.begin(async (transaction) => {
+			const requiresReapproval = await this.lockedProfileRequiresReapproval(
+				transaction,
+				"teacher",
+				{ ...params, displayName, divisionIds },
+			);
 			const upserted = (await transaction.unsafe(
 				`INSERT INTO ${this.schema}.teacher_profiles (
 					id, organization_id, customer_id, display_name, public_directory_opt_in, approval_status, created_at, updated_at
@@ -3086,6 +3130,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				 ON CONFLICT (organization_id, customer_id) DO UPDATE SET
 					display_name = EXCLUDED.display_name,
 					public_directory_opt_in = EXCLUDED.public_directory_opt_in,
+					approval_status = CASE WHEN $6::boolean THEN 'pending' ELSE ${this.schema}.teacher_profiles.approval_status END,
 					updated_at = NOW()
 				 RETURNING id`,
 				[
@@ -3094,6 +3139,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 					params.customerId,
 					displayName,
 					publicDirectoryOptIn,
+					requiresReapproval,
 				],
 			)) as Array<{ id: string }>;
 
@@ -3262,6 +3308,11 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 
 		const generatedId = randomUUID();
 		const row = await sql.begin(async (transaction) => {
+			const requiresReapproval = await this.lockedProfileRequiresReapproval(
+				transaction,
+				"accompanist",
+				{ ...params, displayName, divisionIds },
+			);
 			const upserted = (await transaction.unsafe(
 				`INSERT INTO ${this.schema}.accompanist_profiles (
 					id, organization_id, customer_id, display_name, public_directory_opt_in, approval_status, created_at, updated_at
@@ -3269,6 +3320,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				 ON CONFLICT (organization_id, customer_id) DO UPDATE SET
 					display_name = EXCLUDED.display_name,
 					public_directory_opt_in = EXCLUDED.public_directory_opt_in,
+					approval_status = CASE WHEN $6::boolean THEN 'pending' ELSE ${this.schema}.accompanist_profiles.approval_status END,
 					updated_at = NOW()
 				 RETURNING id`,
 				[
@@ -3277,6 +3329,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 					params.customerId,
 					displayName,
 					publicDirectoryOptIn,
+					requiresReapproval,
 				],
 			)) as Array<{ id: string }>;
 
