@@ -187,6 +187,11 @@ export const PrivacyPolicyPage = lazyPage(() =>
 		default: module.PrivacyPolicyPage,
 	})),
 );
+export const PublicDirectoryPage = lazyPage(() =>
+	import("../pages/PublicDirectoryPage.js").then((module) => ({
+		default: module.PublicDirectoryPage,
+	})),
+);
 export const VolunteerRolesPage = lazyPage(() =>
 	import("../pages/VolunteerRolesPage.js").then((module) => ({
 		default: module.VolunteerRolesPage,
@@ -203,6 +208,7 @@ export const routePages = {
 	"create-org": CreateOrganizationPage,
 	invite: InviteLandingPage,
 	"org-root": OrganizationRootPage,
+	"org-public-directory": PublicDirectoryPage,
 	"festival-public": FestivalLandingPage,
 	"festival-register": FestivalClassRegistrationPage,
 	"festival-volunteers": FestivalVolunteersPage,

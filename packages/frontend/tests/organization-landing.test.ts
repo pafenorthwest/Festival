@@ -28,6 +28,9 @@ describe("public organization landing page", () => {
 		expect(sideNavigation).toContain("buildOrgCustomerAccountContactPath");
 		expect(sideNavigation).toContain("buildOrgCustomerAccountOrdersPath");
 		expect(sideNavigation).toContain("buildOrgRootPath");
+		expect(sideNavigation).toContain("buildOrgPublicDirectoryPath");
+		expect(sideNavigation).toContain('aria-label="Directory"');
+		expect(sideNavigation).toContain("org-public-directory");
 		expect(sideNavigation).toContain("Accounts");
 		expect(sideNavigation).toContain("Festival");
 	});
@@ -46,6 +49,16 @@ describe("public organization landing page", () => {
 		expect(sideNavigation).toContain('aria-label="Order History"');
 		expect(sideNavigation).toContain('aria-label="Home"');
 		expect(styles).toContain(".organization-side-navigation.is-collapsed");
+	});
+
+	it("visually highlights active side navigation links with semantic aria-current and CSS styling", () => {
+		expect(sideNavigation).toContain("aria-current={");
+		expect(sideNavigation).toContain("active: isCurrent(");
+		expect(styles).toContain(".organization-side-navigation a.active");
+		expect(styles).toContain(
+			'.organization-side-navigation a[aria-current="page"]',
+		);
+		expect(styles).toContain("font-weight: 600;");
 	});
 
 	it("uses the shared Organization Page header for customer authentication", () => {

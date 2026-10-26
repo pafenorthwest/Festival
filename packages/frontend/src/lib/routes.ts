@@ -32,6 +32,7 @@ export type AppRoute =
 	| { kind: "org-music-review"; slug: string }
 	| { kind: "org-billing"; slug: string }
 	| { kind: "org-communications"; slug: string }
+	| { kind: "org-public-directory"; slug: string }
 	| AdminCheckoutRecoveryRoute
 	| CustomerCheckoutRecoveryRoute;
 
@@ -56,6 +57,10 @@ export function buildOrgPath(slug: string): string {
 
 export function buildOrgRootPath(slug: string): string {
 	return `/org/${slug}`;
+}
+
+export function buildOrgPublicDirectoryPath(slug: string): string {
+	return `/org/${slug}/directory`;
 }
 
 export function buildOrgMembershipPath(slug: string): string {
@@ -190,6 +195,7 @@ export function isOrganizationPageRoute(route: AppRoute): boolean {
 		route.kind === "festival-register" ||
 		route.kind === "festival-volunteers" ||
 		route.kind === "org-root" ||
+		route.kind === "org-public-directory" ||
 		route.kind === "festival-public" ||
 		route.kind === "org-membership" ||
 		route.kind === "org-accompanist-membership" ||
@@ -225,6 +231,16 @@ export function parseRoute(pathname: string): AppRoute {
 	const orgRootMatch = pathname.match(/^\/org\/([^/]+)\/?$/);
 	if (orgRootMatch) {
 		return { kind: "org-root", slug: orgRootMatch[1] ?? "" };
+	}
+
+	const orgPublicDirectoryMatch = pathname.match(
+		/^\/org\/([^/]+)\/directory\/?$/,
+	);
+	if (orgPublicDirectoryMatch) {
+		return {
+			kind: "org-public-directory",
+			slug: orgPublicDirectoryMatch[1] ?? "",
+		};
 	}
 	const festivalAdminMatch = pathname.match(
 		/^\/org\/([^/]+)\/festival\/([^/]+)\/admin$/,
