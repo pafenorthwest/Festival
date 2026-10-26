@@ -446,7 +446,7 @@ describe("Participant Profiles API End-to-End", () => {
 
 	describe("Public Directory Profiles Endpoint", () => {
 		it("returns approved and opted-in profiles only with no private fields leaked", async () => {
-			const { app, divA1, repository, orgA } = await setupTestApp();
+			const { app, divA1 } = await setupTestApp();
 
 			// Create teacher 1 (opted in, approved)
 			const t1Res = await app.request(
@@ -523,36 +523,7 @@ describe("Participant Profiles API End-to-End", () => {
 				},
 			);
 
-			// Add active teacher membership for cust-1
-			const product = await repository.createMembershipProductRecord({
-				organizationId: orgA.id,
-				entitlementClass: "teacher_membership",
-				productNameSnapshot: "Teacher Membership",
-				durationDays: 365,
-				shopifyProductGid: "gid://shopify/Product/1",
-				shopifyVariantGid: "gid://shopify/ProductVariant/1",
-				isActive: true,
-			});
-
-			await repository.createEntitlementGrantSnapshot({
-				organizationId: orgA.id,
-				customerId: "cust-1",
-				divisionId: divA1.id,
-				entitlementClass: "teacher_membership",
-				divisionNameSnapshot: "Piano A",
-				paidAmount: "50.00",
-				paidCurrencyCode: "USD",
-				checkoutIntentId: "intent-1",
-				shopifyOrderGid: "gid://shopify/Order/1",
-				shopifyOrderLineGid: "gid://shopify/Line/1",
-				durationDays: 365,
-				startsOn: "2026-01-01",
-				endsOn: "2027-01-01",
-				offeringId: product.id,
-				source: "shopify_order",
-				status: "active",
-				verifiedIdentityEmail: "active@example.com",
-			});
+			// Active memberships are seeded by setupTestApp.
 
 			// Public GET (unauthenticated)
 			const publicRes = await app.request(

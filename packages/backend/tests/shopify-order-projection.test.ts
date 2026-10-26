@@ -235,6 +235,7 @@ describe("Shopify order projection", () => {
 			customerId: f.customer.id,
 			verifiedShopifyCustomerEmail: "customer@example.test",
 			payload: {
+				staffAccessConsent: true,
 				name: "Ava Piano",
 				email: "ava@example.test",
 				city: "Seattle",

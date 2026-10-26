@@ -1,5 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { customerAccompanistMembershipSignInPath } from "../src/lib/api.js";
+import {
+	acquireAccompanistMembership,
+	customerAccompanistMembershipSignInPath,
+} from "../src/lib/api.js";
 import { loadAfterCustomerSession } from "../src/pages/accompanistMembershipGate.js";
 
 const page = await Bun.file(
@@ -7,6 +10,52 @@ const page = await Bun.file(
 ).text();
 
 describe("accompanist membership authentication gate", () => {
+	it("requires an unchecked sharing consent checkbox before submission", () => {
+		expect(page).toContain(
+			"[staffAccessConsent, setStaffAccessConsent] = createSignal(false)",
+		);
+		expect(page).toContain("checked={staffAccessConsent()}");
+		expect(page).toContain(
+			"setStaffAccessConsent(event.currentTarget.checked)",
+		);
+		expect(page).toContain(
+			"if (!staffAccessConsent() || submitting()) return;",
+		);
+		expect(page).toContain("disabled={!staffAccessConsent() || submitting()}");
+		expect(page).toContain("Required to acquire this membership.");
+		expect(page).toContain('<a href="/privacy-policy">Privacy Policy</a>');
+		expect(page).toContain("staffAccessConsent: staffAccessConsent()");
+		expect(page).toContain("setStaffAccessConsent(false)");
+	});
+
+	it("sends affirmative sharing consent in the membership request", async () => {
+		const originalFetch = globalThis.fetch;
+		let requestBody: unknown;
+		globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+			requestBody = JSON.parse(String(init?.body));
+			return new Response(
+				JSON.stringify({ membership: { id: "membership-1" } }),
+				{
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				},
+			);
+		}) as typeof fetch;
+		try {
+			await acquireAccompanistMembership("festival", "csrf", {
+				name: "Ava",
+				email: "ava@example.com",
+				city: "Seattle",
+				phone: "206-555-0100",
+				divisionIds: ["division-1"],
+				staffAccessConsent: true,
+			});
+			expect(requestBody).toMatchObject({ staffAccessConsent: true });
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
 	it("does not start protected profile and form requests for an anonymous session", async () => {
 		let protectedLoads = 0;
 		const result = await loadAfterCustomerSession(

@@ -99,6 +99,29 @@ export class ParticipantProfileService {
 		const body = payload as Record<string, unknown>;
 		const { displayName, publicDirectoryOptIn, divisionIds } =
 			parseProfileFields(body);
+		const existing = await this.repository.getTeacherProfile(
+			access.organizationId,
+			access.customerId,
+		);
+		if (!existing) {
+			const grants = await this.repository.listEntitlementGrantSnapshots(
+				access.organizationId,
+				access.customerId,
+			);
+			if (
+				!grants.some(
+					(grant) =>
+						grant.entitlementClass === "teacher_membership" &&
+						grant.status === "active",
+				)
+			) {
+				throw new AppError(
+					"An active Teacher membership is required to create a profile.",
+					403,
+					"active_membership_required",
+				);
+			}
+		}
 		return await this.repository.upsertTeacherProfile({
 			organizationId: access.organizationId,
 			customerId: access.customerId,
@@ -145,6 +168,23 @@ export class ParticipantProfileService {
 		const body = payload as Record<string, unknown>;
 		const { displayName, publicDirectoryOptIn, divisionIds } =
 			parseProfileFields(body);
+		const existing = await this.repository.getAccompanistProfile(
+			access.organizationId,
+			access.customerId,
+		);
+		if (
+			!existing &&
+			!(await this.repository.findCurrentAccompanistMembershipGrant({
+				organizationId: access.organizationId,
+				customerId: access.customerId,
+			}))
+		) {
+			throw new AppError(
+				"An active Accompanist membership is required to create a profile.",
+				403,
+				"active_membership_required",
+			);
+		}
 		return await this.repository.upsertAccompanistProfile({
 			organizationId: access.organizationId,
 			customerId: access.customerId,
