@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
 	AccompanistDivisionSelectionPolicy,
 	AccompanistMembershipGrant,
+	AccompanistProfileRecord,
 	AuthenticatedUser,
 	CreateEntitlementGrantSnapshotInput,
 	EntitlementClass,
@@ -15,19 +16,30 @@ import type {
 	OrganizationMembershipRecord,
 	OrganizationRecord,
 	OrganizationUserRecord,
+	ProfileApprovalStatus,
+	PublicDirectoryDivisionDto,
+	PublicDirectoryProfileDto,
 	RegistrationAgeConfiguration,
 	RegistrationCatalogValue,
+	TeacherProfileRecord,
 } from "@festival/common";
 import {
+	AppError,
 	assertValidEntitlementDurationDays,
 	assertValidEntitlementGrantSnapshotInput,
 	calendarDateInTimezone,
 	deriveEntitlementLifecycle,
 	EMPTY_SHOPIFY_CAPABILITIES,
 	evaluateClassCapacityStatus,
+	getDeterministicTeacherColor,
 	isEntitlementClass,
 	normalizeVerifiedShopifyIdentityEmail,
 	TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+	validateDisplayName,
+	validateDivisionIds,
+	validateProfileApprovalStatus,
+	validatePublicDirectoryOptIn,
+	validatePublicDirectoryProfileDto,
 } from "@festival/common";
 import { withInMemoryCapacityLock } from "../repo/in-memory-capacity-lock.js";
 import type {
@@ -51,12 +63,20 @@ import type {
 	UpdateFestivalClassConfigurationInput,
 	UpdateShopifyVerificationInput,
 	UpdateShopifyWebhookReadinessInput,
+	UpsertAccompanistProfileInput,
 	UpsertShopifyIntegrationInput,
+	UpsertTeacherProfileInput,
 } from "./organization-repository.js";
 import {
 	assertValidSubtypeDependency,
 	ShopifyShopOwnershipError,
 } from "./organization-repository.js";
+import { profileEditRequiresReapproval } from "./profile-moderation.js";
+import {
+	compareCodePoint,
+	compareDivisionsByName,
+	compareProfilesByName,
+} from "./profile-ordering.js";
 
 type StoredTeacherEntitlement = Omit<EntitlementGrantSnapshot, "status">;
 type StoredAccompanistEntitlement = Omit<
@@ -134,6 +154,11 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 	private readonly customerContacts = new Map<
 		string,
 		MembershipCustomerContact
+	>();
+	private readonly teacherProfiles = new Map<string, TeacherProfileRecord>();
+	private readonly accompanistProfiles = new Map<
+		string,
+		AccompanistProfileRecord
 	>();
 
 	constructor(private readonly now: () => Date = () => new Date()) {}
@@ -1898,5 +1923,334 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			}
 		}
 		return result.sort((a, b) => a.name.localeCompare(b.name));
+	}
+
+	private assertValidDivisionIds(
+		organizationId: string,
+		divisionIds: string[],
+	): string[] {
+		const validated = validateDivisionIds(divisionIds);
+		const uniqueIds = [...new Set(validated)];
+		for (const divId of uniqueIds) {
+			const div = this.divisions.get(divId);
+			if (!div || div.organizationId !== organizationId) {
+				throw new AppError(
+					"One or more divisions do not belong to the organization.",
+					400,
+					"invalid_division",
+				);
+			}
+		}
+		return uniqueIds.sort(compareCodePoint);
+	}
+
+	async getTeacherProfile(
+		organizationId: string,
+		customerId: string,
+	): Promise<TeacherProfileRecord | null> {
+		const match = [...this.teacherProfiles.values()].find(
+			(p) =>
+				p.organization_id === organizationId && p.customer_id === customerId,
+		);
+		return match ? { ...match, division_ids: [...match.division_ids] } : null;
+	}
+
+	async getTeacherProfileById(
+		organizationId: string,
+		profileId: string,
+	): Promise<TeacherProfileRecord | null> {
+		const match = this.teacherProfiles.get(profileId);
+		if (!match || match.organization_id !== organizationId) {
+			return null;
+		}
+		return { ...match, division_ids: [...match.division_ids] };
+	}
+
+	async upsertTeacherProfile(
+		params: UpsertTeacherProfileInput,
+	): Promise<TeacherProfileRecord> {
+		const displayName = validateDisplayName(params.displayName);
+		const publicDirectoryOptIn = validatePublicDirectoryOptIn(
+			params.publicDirectoryOptIn,
+		);
+		const divisionIds = this.assertValidDivisionIds(
+			params.organizationId,
+			params.divisionIds,
+		);
+		const existing = [...this.teacherProfiles.values()].find(
+			(p) =>
+				p.organization_id === params.organizationId &&
+				p.customer_id === params.customerId,
+		);
+		const nowIso = this.now().toISOString();
+		if (existing) {
+			const updated: TeacherProfileRecord = {
+				...existing,
+				display_name: displayName,
+				public_directory_opt_in: publicDirectoryOptIn,
+				division_ids: divisionIds,
+				teacher_color: getDeterministicTeacherColor(params.customerId),
+				approval_status: profileEditRequiresReapproval(
+					{
+						displayName: existing.display_name,
+						divisionIds: existing.division_ids,
+					},
+					{ displayName, divisionIds },
+				)
+					? "pending"
+					: existing.approval_status,
+				updated_at: nowIso,
+			};
+			this.teacherProfiles.set(existing.id, updated);
+			return { ...updated, division_ids: [...updated.division_ids] };
+		}
+		const id = randomUUID();
+		const record: TeacherProfileRecord = {
+			id,
+			organization_id: params.organizationId,
+			customer_id: params.customerId,
+			display_name: displayName,
+			teacher_color: getDeterministicTeacherColor(params.customerId),
+			public_directory_opt_in: publicDirectoryOptIn,
+			approval_status: "pending",
+			division_ids: divisionIds,
+			created_at: nowIso,
+			updated_at: nowIso,
+		};
+		this.teacherProfiles.set(id, record);
+		return { ...record, division_ids: [...record.division_ids] };
+	}
+
+	async updateTeacherProfileApproval(
+		organizationId: string,
+		profileId: string,
+		approvalStatus: ProfileApprovalStatus,
+	): Promise<TeacherProfileRecord | null> {
+		const validStatus = validateProfileApprovalStatus(approvalStatus);
+		const match = this.teacherProfiles.get(profileId);
+		if (!match || match.organization_id !== organizationId) {
+			return null;
+		}
+		const updated: TeacherProfileRecord = {
+			...match,
+			approval_status: validStatus,
+			updated_at: this.now().toISOString(),
+		};
+		this.teacherProfiles.set(profileId, updated);
+		return { ...updated, division_ids: [...updated.division_ids] };
+	}
+
+	async listTeacherProfiles(
+		organizationId: string,
+	): Promise<TeacherProfileRecord[]> {
+		return [...this.teacherProfiles.values()]
+			.filter((p) => p.organization_id === organizationId)
+			.sort(compareProfilesByName)
+			.map((p) => ({ ...p, division_ids: [...p.division_ids] }));
+	}
+
+	async getAccompanistProfile(
+		organizationId: string,
+		customerId: string,
+	): Promise<AccompanistProfileRecord | null> {
+		const match = [...this.accompanistProfiles.values()].find(
+			(p) =>
+				p.organization_id === organizationId && p.customer_id === customerId,
+		);
+		return match ? this.withAccompanistContact(match) : null;
+	}
+
+	async getAccompanistProfileById(
+		organizationId: string,
+		profileId: string,
+	): Promise<AccompanistProfileRecord | null> {
+		const match = this.accompanistProfiles.get(profileId);
+		if (!match || match.organization_id !== organizationId) {
+			return null;
+		}
+		return this.withAccompanistContact(match);
+	}
+
+	async upsertAccompanistProfile(
+		params: UpsertAccompanistProfileInput,
+	): Promise<AccompanistProfileRecord> {
+		const displayName = validateDisplayName(params.displayName);
+		const publicDirectoryOptIn = validatePublicDirectoryOptIn(
+			params.publicDirectoryOptIn,
+		);
+		const divisionIds = this.assertValidDivisionIds(
+			params.organizationId,
+			params.divisionIds,
+		);
+		const existing = [...this.accompanistProfiles.values()].find(
+			(p) =>
+				p.organization_id === params.organizationId &&
+				p.customer_id === params.customerId,
+		);
+		const nowIso = this.now().toISOString();
+
+		if (existing) {
+			const updated: AccompanistProfileRecord = {
+				...existing,
+				display_name: displayName,
+				public_directory_opt_in: publicDirectoryOptIn,
+				division_ids: divisionIds,
+				approval_status: profileEditRequiresReapproval(
+					{
+						displayName: existing.display_name,
+						divisionIds: existing.division_ids,
+					},
+					{ displayName, divisionIds },
+				)
+					? "pending"
+					: existing.approval_status,
+				updated_at: nowIso,
+			};
+			this.accompanistProfiles.set(existing.id, updated);
+			return this.withAccompanistContact(updated);
+		}
+		const id = randomUUID();
+		const record: AccompanistProfileRecord = {
+			id,
+			organization_id: params.organizationId,
+			customer_id: params.customerId,
+			display_name: displayName,
+			public_directory_opt_in: publicDirectoryOptIn,
+			approval_status: "pending",
+			division_ids: divisionIds,
+			created_at: nowIso,
+			updated_at: nowIso,
+		};
+		this.accompanistProfiles.set(id, record);
+		return this.withAccompanistContact(record);
+	}
+
+	async updateAccompanistProfileApproval(
+		organizationId: string,
+		profileId: string,
+		approvalStatus: ProfileApprovalStatus,
+	): Promise<AccompanistProfileRecord | null> {
+		const validStatus = validateProfileApprovalStatus(approvalStatus);
+		const match = this.accompanistProfiles.get(profileId);
+		if (!match || match.organization_id !== organizationId) {
+			return null;
+		}
+		const updated: AccompanistProfileRecord = {
+			...match,
+			approval_status: validStatus,
+			updated_at: this.now().toISOString(),
+		};
+		this.accompanistProfiles.set(profileId, updated);
+		return this.withAccompanistContact(updated);
+	}
+
+	async listAccompanistProfiles(
+		organizationId: string,
+	): Promise<AccompanistProfileRecord[]> {
+		return [...this.accompanistProfiles.values()]
+			.filter((p) => p.organization_id === organizationId)
+			.sort(compareProfilesByName)
+			.map((p) => this.withAccompanistContact(p));
+	}
+
+	private withAccompanistContact(
+		profile: AccompanistProfileRecord,
+	): AccompanistProfileRecord {
+		const customerKey = `${profile.organization_id}:${profile.customer_id}`;
+		const contact =
+			this.customerContacts.get(customerKey) ??
+			this.customerContacts.get(profile.customer_id);
+		// Mirrors Postgres: COALESCE(identity.normalized_email, c.email), c.phone.
+		const email =
+			this.membershipIdentityEmailsByCustomer.get(customerKey) ??
+			contact?.email;
+		const phone = contact?.phone;
+		return {
+			...profile,
+			division_ids: [...profile.division_ids],
+			...(phone ? { phone } : {}),
+			...(email ? { email } : {}),
+		};
+	}
+
+	async getPublicDirectoryProfiles(
+		organizationId: string,
+	): Promise<PublicDirectoryProfileDto[]> {
+		const activeTeacherCustomerIds = new Set(
+			[...this.entitlementGrants.values()]
+				.filter(
+					(grant) =>
+						grant.organizationId === organizationId &&
+						grant.entitlementClass === TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+				)
+				.map((grant) => this.withTeacherLifecycle(grant))
+				.filter((grant) => grant.status === "active")
+				.map((grant) => grant.customerId),
+		);
+
+		const teacherProfiles = [...this.teacherProfiles.values()]
+			.filter(
+				(p) =>
+					p.organization_id === organizationId &&
+					p.public_directory_opt_in &&
+					p.approval_status === "approved",
+			)
+			.sort(compareProfilesByName);
+
+		const teachers: PublicDirectoryProfileDto[] = teacherProfiles.map((tp) => {
+			const approvedDivisions: PublicDirectoryDivisionDto[] = tp.division_ids
+				.map((id) => this.divisions.get(id))
+				.filter((d): d is OrganizationDivision & { normalizedName: string } =>
+					Boolean(d && d.organizationId === organizationId),
+				)
+				.map((d) => ({ id: d.id, name: d.displayName }))
+				.sort(compareDivisionsByName);
+
+			return validatePublicDirectoryProfileDto({
+				displayName: tp.display_name,
+				role: "Teacher",
+				approvedDivisions,
+				teacherColor: getDeterministicTeacherColor(tp.customer_id),
+				isActiveMember: activeTeacherCustomerIds.has(tp.customer_id),
+			});
+		});
+
+		const activeAccompanistCustomerIds = new Set(
+			[...this.accompanistMembershipGrants.values()]
+				.filter((grant) => grant.organizationId === organizationId)
+				.map((grant) => this.withAccompanistLifecycle(grant))
+				.filter((grant) => grant.status === "active")
+				.map((grant) => grant.customerId),
+		);
+
+		const accompanistProfiles = [...this.accompanistProfiles.values()]
+			.filter(
+				(p) =>
+					p.organization_id === organizationId &&
+					p.public_directory_opt_in &&
+					p.approval_status === "approved",
+			)
+			.sort(compareProfilesByName);
+
+		const accompanists: PublicDirectoryProfileDto[] = accompanistProfiles.map(
+			(ap) => {
+				const approvedDivisions: PublicDirectoryDivisionDto[] = ap.division_ids
+					.map((id) => this.divisions.get(id))
+					.filter((d): d is OrganizationDivision & { normalizedName: string } =>
+						Boolean(d && d.organizationId === organizationId),
+					)
+					.map((d) => ({ id: d.id, name: d.displayName }))
+					.sort(compareDivisionsByName);
+
+				return validatePublicDirectoryProfileDto({
+					displayName: ap.display_name,
+					role: "Accompanist",
+					approvedDivisions,
+					isActiveMember: activeAccompanistCustomerIds.has(ap.customer_id),
+				});
+			},
+		);
+
+		return [...teachers, ...accompanists];
 	}
 }

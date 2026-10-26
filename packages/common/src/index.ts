@@ -10,6 +10,7 @@ export * from "./errors.js";
 export * from "./festival-registration-window.js";
 export * from "./membership-status.js";
 export * from "./organization.js";
+export * from "./profile.js";
 export * from "./purchase-eligibility.js";
 export * from "./registration.js";
 export * from "./repertoire.js";

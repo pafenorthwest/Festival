@@ -28,6 +28,33 @@ async function setup() {
 }
 
 describe("AccompanistMembershipService", () => {
+	for (const staffAccessConsent of [undefined, false, "true", 1, null]) {
+		it(`rejects direct acquisition with consent ${String(staffAccessConsent)} without creating a grant`, async () => {
+			const { repository, organization, division, service } = await setup();
+			await expect(
+				service.acquire({
+					organizationId: organization.id,
+					organizationTimezone: "UTC",
+					customerId: "customer-1",
+					verifiedShopifyCustomerEmail: "shopper@example.com",
+					payload: {
+						name: "Ava Piano",
+						email: "ava@example.com",
+						city: "Seattle",
+						phone: "+1 206 555 0100",
+						divisionIds: [division.id],
+						staffAccessConsent,
+					},
+				}),
+			).rejects.toMatchObject({ status: 400 });
+			expect(
+				await repository.listAccompanistMembershipGrants({
+					organizationId: organization.id,
+				}),
+			).toEqual([]);
+		});
+	}
+
 	it("creates immutable current membership contact and division snapshots without checkout", async () => {
 		const { organization, division, service } = await setup();
 		const result = await service.acquire({
@@ -40,6 +67,7 @@ describe("AccompanistMembershipService", () => {
 				email: "AVA@example.com",
 				city: "Seattle",
 				phone: "+1 206 555 0100",
+				staffAccessConsent: true,
 				divisionIds: [division.id],
 			},
 		});
@@ -57,6 +85,7 @@ describe("AccompanistMembershipService", () => {
 			email: "ava@example.com",
 			city: "Seattle",
 			phone: "+1 206 555 0100",
+			staffAccessConsent: true,
 			divisionIds: [division.id],
 		};
 		await service.acquire({
@@ -89,6 +118,7 @@ describe("AccompanistMembershipService", () => {
 				email: "ava@example.com",
 				city: "Seattle",
 				phone: "+1 206 555 0100",
+				staffAccessConsent: true,
 				divisionIds: [division.id],
 			},
 		};
@@ -133,6 +163,7 @@ describe("AccompanistMembershipService", () => {
 					email: "ava@example.com",
 					city: "Seattle",
 					phone: "+1 206 555 0100",
+					staffAccessConsent: true,
 					divisionIds: [division.id],
 				},
 			}),
@@ -147,6 +178,7 @@ describe("AccompanistMembershipService", () => {
 			email: "ava@example.com",
 			city: "Seattle",
 			phone: "+1 206 555 0100",
+			staffAccessConsent: true,
 			divisionIds: [division.id],
 		};
 		await service.acquire({
@@ -198,6 +230,7 @@ describe("AccompanistMembershipService", () => {
 				email: "ava@example.com",
 				city: "Seattle",
 				phone: "+1 206 555 0100",
+				staffAccessConsent: true,
 				divisionIds: [division.id],
 			},
 		});
@@ -222,6 +255,7 @@ describe("AccompanistMembershipService", () => {
 			email: "shared-contact@example.com",
 			city: "Seattle",
 			phone: "+1 206 555 0100",
+			staffAccessConsent: true,
 			divisionIds: [division.id],
 		};
 		await service.acquire({
@@ -264,6 +298,7 @@ describe("AccompanistMembershipService", () => {
 					email: "ava@example.com",
 					city: "Seattle",
 					phone: "+1 206 555 0100",
+					staffAccessConsent: true,
 					divisionIds: [division.id],
 				},
 			}),
@@ -310,6 +345,7 @@ describe("AccompanistMembershipService", () => {
 				email: "ava@example.com",
 				city: "Seattle",
 				phone: "+1 206 555 0100",
+				staffAccessConsent: true,
 				divisionIds: [division.id],
 			},
 		});
@@ -349,6 +385,7 @@ describe("AccompanistMembershipService", () => {
 					email: "acc@example.com",
 					city: "Seattle",
 					phone: "+1 206 555 0101",
+					staffAccessConsent: true,
 					divisionIds: [division.id],
 				},
 			});

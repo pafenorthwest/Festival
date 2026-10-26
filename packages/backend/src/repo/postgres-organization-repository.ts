@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
 	AccompanistDivisionSelectionPolicy,
 	AccompanistMembershipGrant,
+	AccompanistProfileRecord,
 	AuthenticatedUser,
 	ClassAvailabilityStatus,
 	CreateEntitlementGrantSnapshotInput,
@@ -18,6 +19,9 @@ import type {
 	OrganizationRecord,
 	OrganizationRole,
 	OrganizationUserRecord,
+	ProfileApprovalStatus,
+	PublicDirectoryDivisionDto,
+	PublicDirectoryProfileDto,
 	RegistrationAgeConfiguration,
 	RegistrationCatalogValue,
 	ShopifyCapabilityDiagnostics,
@@ -25,13 +29,20 @@ import type {
 	ShopifyVerificationStatus,
 	ShopifyWebhookFailureCategory,
 	ShopifyWebhookReadinessStatus,
+	TeacherProfileRecord,
 } from "@festival/common";
 import {
 	AppError,
 	assertValidEntitlementDurationDays,
 	assertValidEntitlementGrantSnapshotInput,
 	evaluateClassCapacityStatus,
+	getDeterministicTeacherColor,
 	normalizeVerifiedShopifyIdentityEmail,
+	validateDisplayName,
+	validateDivisionIds,
+	validateProfileApprovalStatus,
+	validatePublicDirectoryOptIn,
+	validatePublicDirectoryProfileDto,
 } from "@festival/common";
 import { sql } from "bun";
 import { countConfirmedClassEntitlements } from "../commerce/postgres-class-entitlement-count.js";
@@ -55,7 +66,9 @@ import type {
 	UpdateFestivalClassConfigurationInput,
 	UpdateShopifyVerificationInput,
 	UpdateShopifyWebhookReadinessInput,
+	UpsertAccompanistProfileInput,
 	UpsertShopifyIntegrationInput,
+	UpsertTeacherProfileInput,
 } from "./organization-repository.js";
 import {
 	AccompanistMembershipConflictError,
@@ -66,6 +79,7 @@ import {
 	initializePostgresSchema,
 	postgresSchemaName,
 } from "./postgres-schema.js";
+import { profileEditRequiresReapproval } from "./profile-moderation.js";
 
 interface MembershipRow {
 	id: string;
@@ -323,6 +337,80 @@ function mapDivision(row: DivisionRow): OrganizationDivision {
 		displayOrder: row.display_order,
 		createdAtIso: row.created_at,
 		updatedAtIso: row.updated_at,
+	};
+}
+
+interface TeacherProfileRow {
+	id: string;
+	organization_id: string;
+	customer_id: string;
+	display_name: string;
+	public_directory_opt_in: boolean;
+	approval_status: ProfileApprovalStatus;
+	created_at: string;
+	updated_at: string;
+	zip_code: string | null;
+	division_ids: string[] | string;
+}
+
+interface AccompanistProfileRow {
+	id: string;
+	organization_id: string;
+	customer_id: string;
+	display_name: string;
+	public_directory_opt_in: boolean;
+	approval_status: ProfileApprovalStatus;
+	created_at: string;
+	updated_at: string;
+	phone: string | null;
+	email: string | null;
+	zip_code: string | null;
+	division_ids: string[] | string;
+}
+
+function parseDivisionIds(raw: string[] | string | null | undefined): string[] {
+	if (!raw) return [];
+	if (Array.isArray(raw)) return raw.filter(Boolean);
+	try {
+		const parsed = JSON.parse(raw);
+		return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+	} catch {
+		return [];
+	}
+}
+
+function mapTeacherProfileRow(row: TeacherProfileRow): TeacherProfileRecord {
+	return {
+		id: row.id,
+		organization_id: row.organization_id,
+		customer_id: row.customer_id,
+		display_name: row.display_name,
+		teacher_color: getDeterministicTeacherColor(row.customer_id),
+		public_directory_opt_in: row.public_directory_opt_in,
+		approval_status: row.approval_status,
+		division_ids: parseDivisionIds(row.division_ids),
+		created_at: new Date(row.created_at).toISOString(),
+		updated_at: new Date(row.updated_at).toISOString(),
+		...(row.zip_code ? { zip_code: row.zip_code } : {}),
+	};
+}
+
+function mapAccompanistProfileRow(
+	row: AccompanistProfileRow,
+): AccompanistProfileRecord {
+	return {
+		id: row.id,
+		organization_id: row.organization_id,
+		customer_id: row.customer_id,
+		display_name: row.display_name,
+		public_directory_opt_in: row.public_directory_opt_in,
+		approval_status: row.approval_status,
+		division_ids: parseDivisionIds(row.division_ids),
+		created_at: new Date(row.created_at).toISOString(),
+		updated_at: new Date(row.updated_at).toISOString(),
+		...(row.phone ? { phone: row.phone } : {}),
+		...(row.email ? { email: row.email } : {}),
+		...(row.zip_code ? { zip_code: row.zip_code } : {}),
 	};
 }
 
@@ -2890,5 +2978,588 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			[organizationId, divisionId],
 		)) as Array<{ id: string; name: string }>;
 		return rows.map((row) => ({ id: row.id, name: row.name }));
+	}
+
+	private async assertValidDivisionIds(
+		organizationId: string,
+		divisionIds: string[],
+	): Promise<string[]> {
+		const validated = validateDivisionIds(divisionIds);
+		const uniqueIds = [...new Set(validated)];
+		if (uniqueIds.length === 0) {
+			return uniqueIds;
+		}
+		const validRows = (await sql.unsafe(
+			`SELECT id FROM ${this.schema}.organization_divisions WHERE organization_id = $1 AND id = ANY($2::text[])`,
+			[organizationId, uniqueIds],
+		)) as Array<{ id: string }>;
+		if (validRows.length !== uniqueIds.length) {
+			throw new AppError(
+				"One or more divisions do not belong to the organization.",
+				400,
+				"invalid_division",
+			);
+		}
+		return uniqueIds;
+	}
+
+	/**
+	 * Locks the existing profile row (if any) inside the caller's transaction
+	 * and reports whether the pending edit must reset approval to 'pending'.
+	 * Missing rows report true so a concurrent insert race stays pending.
+	 */
+	private async lockedProfileRequiresReapproval(
+		transaction: Pick<typeof sql, "unsafe">,
+		kind: "teacher" | "accompanist",
+		next: {
+			organizationId: string;
+			customerId: string;
+			displayName: string;
+			divisionIds: string[];
+		},
+	): Promise<boolean> {
+		const existingRows = (await transaction.unsafe(
+			`SELECT id, display_name FROM ${this.schema}.${kind}_profiles
+			 WHERE organization_id = $1 AND customer_id = $2
+			 FOR UPDATE`,
+			[next.organizationId, next.customerId],
+		)) as Array<{ id: string; display_name: string }>;
+		const existing = existingRows[0];
+		if (!existing) {
+			return true;
+		}
+		const divisionRows = (await transaction.unsafe(
+			`SELECT division_id FROM ${this.schema}.${kind}_profile_divisions WHERE ${kind}_profile_id = $1 AND organization_id = $2`,
+			[existing.id, next.organizationId],
+		)) as Array<{ division_id: string }>;
+		return profileEditRequiresReapproval(
+			{
+				displayName: existing.display_name,
+				divisionIds: divisionRows.map((row) => row.division_id),
+			},
+			next,
+		);
+	}
+
+	async getTeacherProfile(
+		organizationId: string,
+		customerId: string,
+	): Promise<TeacherProfileRecord | null> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT
+				tp.id,
+				tp.organization_id,
+				tp.customer_id,
+				tp.display_name,
+				tp.public_directory_opt_in,
+				tp.approval_status,
+				tp.created_at::text,
+				tp.updated_at::text,
+				c.mailing_address->>'postalCode' AS zip_code,
+				COALESCE(
+					jsonb_agg(tpd.division_id ORDER BY tpd.division_id) FILTER (WHERE tpd.division_id IS NOT NULL),
+					'[]'::jsonb
+				) AS division_ids
+			 FROM ${this.schema}.teacher_profiles tp
+			 LEFT JOIN ${this.schema}.festival_customers c
+				ON c.id = tp.customer_id AND c.organization_id = tp.organization_id
+			 LEFT JOIN ${this.schema}.teacher_profile_divisions tpd
+				ON tpd.teacher_profile_id = tp.id AND tpd.organization_id = tp.organization_id
+			 WHERE tp.organization_id = $1 AND tp.customer_id = $2
+			 GROUP BY tp.id, tp.organization_id, tp.customer_id, tp.display_name, tp.public_directory_opt_in, tp.approval_status, tp.created_at, tp.updated_at, c.mailing_address`,
+			[organizationId, customerId],
+		)) as TeacherProfileRow[];
+		return rows[0] ? mapTeacherProfileRow(rows[0]) : null;
+	}
+
+	async getTeacherProfileById(
+		organizationId: string,
+		profileId: string,
+	): Promise<TeacherProfileRecord | null> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT
+				tp.id,
+				tp.organization_id,
+				tp.customer_id,
+				tp.display_name,
+				tp.public_directory_opt_in,
+				tp.approval_status,
+				tp.created_at::text,
+				tp.updated_at::text,
+				c.mailing_address->>'postalCode' AS zip_code,
+				COALESCE(
+					jsonb_agg(tpd.division_id ORDER BY tpd.division_id) FILTER (WHERE tpd.division_id IS NOT NULL),
+					'[]'::jsonb
+				) AS division_ids
+			 FROM ${this.schema}.teacher_profiles tp
+			 LEFT JOIN ${this.schema}.festival_customers c
+				ON c.id = tp.customer_id AND c.organization_id = tp.organization_id
+			 LEFT JOIN ${this.schema}.teacher_profile_divisions tpd
+				ON tpd.teacher_profile_id = tp.id AND tpd.organization_id = tp.organization_id
+			 WHERE tp.organization_id = $1 AND tp.id = $2
+			 GROUP BY tp.id, tp.organization_id, tp.customer_id, tp.display_name, tp.public_directory_opt_in, tp.approval_status, tp.created_at, tp.updated_at, c.mailing_address`,
+			[organizationId, profileId],
+		)) as TeacherProfileRow[];
+		return rows[0] ? mapTeacherProfileRow(rows[0]) : null;
+	}
+
+	async upsertTeacherProfile(
+		params: UpsertTeacherProfileInput,
+	): Promise<TeacherProfileRecord> {
+		await this.ensureReady();
+		const displayName = validateDisplayName(params.displayName);
+		const publicDirectoryOptIn = validatePublicDirectoryOptIn(
+			params.publicDirectoryOptIn,
+		);
+		const divisionIds = await this.assertValidDivisionIds(
+			params.organizationId,
+			params.divisionIds,
+		);
+
+		const generatedId = randomUUID();
+		const row = await sql.begin(async (transaction) => {
+			const requiresReapproval = await this.lockedProfileRequiresReapproval(
+				transaction,
+				"teacher",
+				{ ...params, displayName, divisionIds },
+			);
+			const upserted = (await transaction.unsafe(
+				`INSERT INTO ${this.schema}.teacher_profiles (
+					id, organization_id, customer_id, display_name, public_directory_opt_in, approval_status, created_at, updated_at
+				 ) VALUES ($1, $2, $3, $4, $5, 'pending', NOW(), NOW())
+				 ON CONFLICT (organization_id, customer_id) DO UPDATE SET
+					display_name = EXCLUDED.display_name,
+					public_directory_opt_in = EXCLUDED.public_directory_opt_in,
+					approval_status = CASE WHEN $6::boolean THEN 'pending' ELSE ${this.schema}.teacher_profiles.approval_status END,
+					updated_at = NOW()
+				 RETURNING id`,
+				[
+					generatedId,
+					params.organizationId,
+					params.customerId,
+					displayName,
+					publicDirectoryOptIn,
+					requiresReapproval,
+				],
+			)) as Array<{ id: string }>;
+
+			const profileId = upserted[0].id;
+			await transaction.unsafe(
+				`DELETE FROM ${this.schema}.teacher_profile_divisions WHERE teacher_profile_id = $1 AND organization_id = $2`,
+				[profileId, params.organizationId],
+			);
+
+			for (const divisionId of divisionIds) {
+				await transaction.unsafe(
+					`INSERT INTO ${this.schema}.teacher_profile_divisions (teacher_profile_id, organization_id, division_id)
+					 VALUES ($1, $2, $3)
+					 ON CONFLICT DO NOTHING`,
+					[profileId, params.organizationId, divisionId],
+				);
+			}
+
+			return upserted[0];
+		});
+
+		const result = await this.getTeacherProfileById(
+			params.organizationId,
+			row.id,
+		);
+		if (!result) {
+			throw new Error("Unable to load upserted teacher profile.");
+		}
+		return result;
+	}
+
+	async updateTeacherProfileApproval(
+		organizationId: string,
+		profileId: string,
+		approvalStatus: ProfileApprovalStatus,
+	): Promise<TeacherProfileRecord | null> {
+		await this.ensureReady();
+		const validStatus = validateProfileApprovalStatus(approvalStatus);
+		const updated = (await sql.unsafe(
+			`UPDATE ${this.schema}.teacher_profiles
+			 SET approval_status = $1, updated_at = NOW()
+			 WHERE organization_id = $2 AND id = $3
+			 RETURNING id`,
+			[validStatus, organizationId, profileId],
+		)) as Array<{ id: string }>;
+		if (!updated[0]) return null;
+		return this.getTeacherProfileById(organizationId, profileId);
+	}
+
+	async listTeacherProfiles(
+		organizationId: string,
+	): Promise<TeacherProfileRecord[]> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT
+				tp.id,
+				tp.organization_id,
+				tp.customer_id,
+				tp.display_name,
+				tp.public_directory_opt_in,
+				tp.approval_status,
+				tp.created_at::text,
+				tp.updated_at::text,
+				c.mailing_address->>'postalCode' AS zip_code,
+				COALESCE(
+					jsonb_agg(tpd.division_id ORDER BY tpd.division_id) FILTER (WHERE tpd.division_id IS NOT NULL),
+					'[]'::jsonb
+				) AS division_ids
+			 FROM ${this.schema}.teacher_profiles tp
+			 LEFT JOIN ${this.schema}.festival_customers c
+				ON c.id = tp.customer_id AND c.organization_id = tp.organization_id
+			 LEFT JOIN ${this.schema}.teacher_profile_divisions tpd
+				ON tpd.teacher_profile_id = tp.id AND tpd.organization_id = tp.organization_id
+			 WHERE tp.organization_id = $1
+			 GROUP BY tp.id, tp.organization_id, tp.customer_id, tp.display_name, tp.public_directory_opt_in, tp.approval_status, tp.created_at, tp.updated_at, c.mailing_address
+			 ORDER BY lower(tp.display_name) COLLATE "C" ASC, tp.display_name COLLATE "C" ASC, tp.id COLLATE "C" ASC`,
+			[organizationId],
+		)) as TeacherProfileRow[];
+		return rows.map((row) => mapTeacherProfileRow(row));
+	}
+
+	async getAccompanistProfile(
+		organizationId: string,
+		customerId: string,
+	): Promise<AccompanistProfileRecord | null> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT
+				ap.id,
+				ap.organization_id,
+				ap.customer_id,
+				ap.display_name,
+				ap.public_directory_opt_in,
+				ap.approval_status,
+				ap.created_at::text,
+				ap.updated_at::text,
+				c.phone,
+				COALESCE(identity.normalized_email, c.email) AS email,
+				c.mailing_address->>'postalCode' AS zip_code,
+				COALESCE(
+					jsonb_agg(apd.division_id ORDER BY apd.division_id) FILTER (WHERE apd.division_id IS NOT NULL),
+					'[]'::jsonb
+				) AS division_ids
+			 FROM ${this.schema}.accompanist_profiles ap
+			 LEFT JOIN ${this.schema}.festival_customers c
+				ON c.id = ap.customer_id AND c.organization_id = ap.organization_id
+			 LEFT JOIN ${this.schema}.membership_identity_emails identity
+				ON identity.organization_id = ap.organization_id AND identity.customer_id = ap.customer_id
+			 LEFT JOIN ${this.schema}.accompanist_profile_divisions apd
+				ON apd.accompanist_profile_id = ap.id AND apd.organization_id = ap.organization_id
+			 WHERE ap.organization_id = $1 AND ap.customer_id = $2
+			 GROUP BY ap.id, ap.organization_id, ap.customer_id, ap.display_name, ap.public_directory_opt_in, ap.approval_status, ap.created_at, ap.updated_at, c.phone, identity.normalized_email, c.email, c.mailing_address`,
+			[organizationId, customerId],
+		)) as AccompanistProfileRow[];
+		return rows[0] ? mapAccompanistProfileRow(rows[0]) : null;
+	}
+
+	async getAccompanistProfileById(
+		organizationId: string,
+		profileId: string,
+	): Promise<AccompanistProfileRecord | null> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT
+				ap.id,
+				ap.organization_id,
+				ap.customer_id,
+				ap.display_name,
+				ap.public_directory_opt_in,
+				ap.approval_status,
+				ap.created_at::text,
+				ap.updated_at::text,
+				c.phone,
+				COALESCE(identity.normalized_email, c.email) AS email,
+				c.mailing_address->>'postalCode' AS zip_code,
+				COALESCE(
+					jsonb_agg(apd.division_id ORDER BY apd.division_id) FILTER (WHERE apd.division_id IS NOT NULL),
+					'[]'::jsonb
+				) AS division_ids
+			 FROM ${this.schema}.accompanist_profiles ap
+			 LEFT JOIN ${this.schema}.festival_customers c
+				ON c.id = ap.customer_id AND c.organization_id = ap.organization_id
+			 LEFT JOIN ${this.schema}.membership_identity_emails identity
+				ON identity.organization_id = ap.organization_id AND identity.customer_id = ap.customer_id
+			 LEFT JOIN ${this.schema}.accompanist_profile_divisions apd
+				ON apd.accompanist_profile_id = ap.id AND apd.organization_id = ap.organization_id
+			 WHERE ap.organization_id = $1 AND ap.id = $2
+			 GROUP BY ap.id, ap.organization_id, ap.customer_id, ap.display_name, ap.public_directory_opt_in, ap.approval_status, ap.created_at, ap.updated_at, c.phone, identity.normalized_email, c.email, c.mailing_address`,
+			[organizationId, profileId],
+		)) as AccompanistProfileRow[];
+		return rows[0] ? mapAccompanistProfileRow(rows[0]) : null;
+	}
+
+	async upsertAccompanistProfile(
+		params: UpsertAccompanistProfileInput,
+	): Promise<AccompanistProfileRecord> {
+		await this.ensureReady();
+		const displayName = validateDisplayName(params.displayName);
+		const publicDirectoryOptIn = validatePublicDirectoryOptIn(
+			params.publicDirectoryOptIn,
+		);
+		const divisionIds = await this.assertValidDivisionIds(
+			params.organizationId,
+			params.divisionIds,
+		);
+
+		const generatedId = randomUUID();
+		const row = await sql.begin(async (transaction) => {
+			const requiresReapproval = await this.lockedProfileRequiresReapproval(
+				transaction,
+				"accompanist",
+				{ ...params, displayName, divisionIds },
+			);
+			const upserted = (await transaction.unsafe(
+				`INSERT INTO ${this.schema}.accompanist_profiles (
+					id, organization_id, customer_id, display_name, public_directory_opt_in, approval_status, created_at, updated_at
+				 ) VALUES ($1, $2, $3, $4, $5, 'pending', NOW(), NOW())
+				 ON CONFLICT (organization_id, customer_id) DO UPDATE SET
+					display_name = EXCLUDED.display_name,
+					public_directory_opt_in = EXCLUDED.public_directory_opt_in,
+					approval_status = CASE WHEN $6::boolean THEN 'pending' ELSE ${this.schema}.accompanist_profiles.approval_status END,
+					updated_at = NOW()
+				 RETURNING id`,
+				[
+					generatedId,
+					params.organizationId,
+					params.customerId,
+					displayName,
+					publicDirectoryOptIn,
+					requiresReapproval,
+				],
+			)) as Array<{ id: string }>;
+
+			const profileId = upserted[0].id;
+			await transaction.unsafe(
+				`DELETE FROM ${this.schema}.accompanist_profile_divisions WHERE accompanist_profile_id = $1 AND organization_id = $2`,
+				[profileId, params.organizationId],
+			);
+
+			for (const divisionId of divisionIds) {
+				await transaction.unsafe(
+					`INSERT INTO ${this.schema}.accompanist_profile_divisions (accompanist_profile_id, organization_id, division_id)
+					 VALUES ($1, $2, $3)
+					 ON CONFLICT DO NOTHING`,
+					[profileId, params.organizationId, divisionId],
+				);
+			}
+
+			return upserted[0];
+		});
+
+		const result = await this.getAccompanistProfileById(
+			params.organizationId,
+			row.id,
+		);
+		if (!result) {
+			throw new Error("Unable to load upserted accompanist profile.");
+		}
+		return result;
+	}
+
+	async updateAccompanistProfileApproval(
+		organizationId: string,
+		profileId: string,
+		approvalStatus: ProfileApprovalStatus,
+	): Promise<AccompanistProfileRecord | null> {
+		await this.ensureReady();
+		const validStatus = validateProfileApprovalStatus(approvalStatus);
+		const updated = (await sql.unsafe(
+			`UPDATE ${this.schema}.accompanist_profiles
+			 SET approval_status = $1, updated_at = NOW()
+			 WHERE organization_id = $2 AND id = $3
+			 RETURNING id`,
+			[validStatus, organizationId, profileId],
+		)) as Array<{ id: string }>;
+		if (!updated[0]) return null;
+		return this.getAccompanistProfileById(organizationId, profileId);
+	}
+
+	async listAccompanistProfiles(
+		organizationId: string,
+	): Promise<AccompanistProfileRecord[]> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT
+				ap.id,
+				ap.organization_id,
+				ap.customer_id,
+				ap.display_name,
+				ap.public_directory_opt_in,
+				ap.approval_status,
+				ap.created_at::text,
+				ap.updated_at::text,
+				c.phone,
+				COALESCE(identity.normalized_email, c.email) AS email,
+				c.mailing_address->>'postalCode' AS zip_code,
+				COALESCE(
+					jsonb_agg(apd.division_id ORDER BY apd.division_id) FILTER (WHERE apd.division_id IS NOT NULL),
+					'[]'::jsonb
+				) AS division_ids
+			 FROM ${this.schema}.accompanist_profiles ap
+			 LEFT JOIN ${this.schema}.festival_customers c
+				ON c.id = ap.customer_id AND c.organization_id = ap.organization_id
+			 LEFT JOIN ${this.schema}.membership_identity_emails identity
+				ON identity.organization_id = ap.organization_id AND identity.customer_id = ap.customer_id
+			 LEFT JOIN ${this.schema}.accompanist_profile_divisions apd
+				ON apd.accompanist_profile_id = ap.id AND apd.organization_id = ap.organization_id
+			 WHERE ap.organization_id = $1
+			 GROUP BY ap.id, ap.organization_id, ap.customer_id, ap.display_name, ap.public_directory_opt_in, ap.approval_status, ap.created_at, ap.updated_at, c.phone, identity.normalized_email, c.email, c.mailing_address
+			 ORDER BY lower(ap.display_name) COLLATE "C" ASC, ap.display_name COLLATE "C" ASC, ap.id COLLATE "C" ASC`,
+			[organizationId],
+		)) as AccompanistProfileRow[];
+		return rows.map((row) => mapAccompanistProfileRow(row));
+	}
+
+	async getPublicDirectoryProfiles(
+		organizationId: string,
+	): Promise<PublicDirectoryProfileDto[]> {
+		await this.ensureReady();
+
+		const activeTeacherRows = (await sql.unsafe(
+			`SELECT DISTINCT e.customer_id
+			 FROM ${this.schema}.membership_entitlements e
+			 JOIN ${this.schema}.organizations o ON o.id = e.organization_id
+			 WHERE e.organization_id = $1
+			   AND e.entitlement_class = 'teacher_membership'
+			   AND e.revoked_at IS NULL
+			   AND e.starts_on <= (NOW() AT TIME ZONE o.timezone)::date
+			   AND e.ends_on > (NOW() AT TIME ZONE o.timezone)::date`,
+			[organizationId],
+		)) as Array<{ customer_id: string }>;
+		const activeTeacherCustomerIds = new Set(
+			activeTeacherRows.map((r) => r.customer_id),
+		);
+
+		const teacherRows = (await sql.unsafe(
+			`SELECT
+				tp.id,
+				tp.customer_id,
+				tp.display_name,
+				COALESCE(
+					jsonb_agg(
+						jsonb_build_object('id', od.id, 'name', od.display_name)
+						ORDER BY lower(od.display_name) COLLATE "C", od.display_name COLLATE "C", od.id COLLATE "C"
+					) FILTER (WHERE od.id IS NOT NULL),
+					'[]'::jsonb
+				) AS divisions
+			 FROM ${this.schema}.teacher_profiles tp
+			 LEFT JOIN ${this.schema}.teacher_profile_divisions tpd
+				ON tpd.teacher_profile_id = tp.id AND tpd.organization_id = tp.organization_id
+			 LEFT JOIN ${this.schema}.organization_divisions od
+				ON od.id = tpd.division_id AND od.organization_id = tp.organization_id
+			 WHERE tp.organization_id = $1
+			   AND tp.public_directory_opt_in = TRUE
+			   AND tp.approval_status = 'approved'
+			 GROUP BY tp.id, tp.customer_id, tp.display_name
+			 ORDER BY lower(tp.display_name) COLLATE "C" ASC, tp.display_name COLLATE "C" ASC, tp.id COLLATE "C" ASC`,
+			[organizationId],
+		)) as Array<{
+			id: string;
+			customer_id: string;
+			display_name: string;
+			divisions: unknown;
+		}>;
+
+		const teachers: PublicDirectoryProfileDto[] = teacherRows.map((row) => {
+			const rawDivisions = (
+				Array.isArray(row.divisions)
+					? row.divisions
+					: typeof row.divisions === "string"
+						? JSON.parse(row.divisions)
+						: []
+			) as Array<{ id: string; name: string }>;
+			const approvedDivisions: PublicDirectoryDivisionDto[] = rawDivisions.map(
+				(div) => ({
+					id: div.id,
+					name: div.name,
+				}),
+			);
+
+			return validatePublicDirectoryProfileDto({
+				displayName: row.display_name,
+				role: "Teacher",
+				approvedDivisions,
+				teacherColor: getDeterministicTeacherColor(row.customer_id),
+				isActiveMember: activeTeacherCustomerIds.has(row.customer_id),
+			});
+		});
+
+		const activeAccompanistRows = (await sql.unsafe(
+			`SELECT DISTINCT e.customer_id
+			 FROM ${this.schema}.membership_entitlements e
+			 JOIN ${this.schema}.organizations o ON o.id = e.organization_id
+			 WHERE e.organization_id = $1
+			   AND e.entitlement_class = 'accompanist_membership'
+			   AND e.revoked_at IS NULL
+			   AND e.starts_on <= (NOW() AT TIME ZONE o.timezone)::date
+			   AND e.ends_on > (NOW() AT TIME ZONE o.timezone)::date`,
+			[organizationId],
+		)) as Array<{ customer_id: string }>;
+		const activeAccompanistCustomerIds = new Set(
+			activeAccompanistRows.map((r) => r.customer_id),
+		);
+
+		const accompanistRows = (await sql.unsafe(
+			`SELECT
+				ap.id,
+				ap.customer_id,
+				ap.display_name,
+				COALESCE(
+					jsonb_agg(
+						jsonb_build_object('id', od.id, 'name', od.display_name)
+						ORDER BY lower(od.display_name) COLLATE "C", od.display_name COLLATE "C", od.id COLLATE "C"
+					) FILTER (WHERE od.id IS NOT NULL),
+					'[]'::jsonb
+				) AS divisions
+			 FROM ${this.schema}.accompanist_profiles ap
+			 LEFT JOIN ${this.schema}.accompanist_profile_divisions apd
+				ON apd.accompanist_profile_id = ap.id AND apd.organization_id = ap.organization_id
+			 LEFT JOIN ${this.schema}.organization_divisions od
+				ON od.id = apd.division_id AND od.organization_id = ap.organization_id
+			 WHERE ap.organization_id = $1
+			   AND ap.public_directory_opt_in = TRUE
+			   AND ap.approval_status = 'approved'
+			 GROUP BY ap.id, ap.customer_id, ap.display_name
+			 ORDER BY lower(ap.display_name) COLLATE "C" ASC, ap.display_name COLLATE "C" ASC, ap.id COLLATE "C" ASC`,
+			[organizationId],
+		)) as Array<{
+			id: string;
+			customer_id: string;
+			display_name: string;
+			divisions: unknown;
+		}>;
+
+		const accompanists: PublicDirectoryProfileDto[] = accompanistRows.map(
+			(row) => {
+				const rawDivisions = (
+					Array.isArray(row.divisions)
+						? row.divisions
+						: typeof row.divisions === "string"
+							? JSON.parse(row.divisions)
+							: []
+				) as Array<{ id: string; name: string }>;
+				const approvedDivisions: PublicDirectoryDivisionDto[] =
+					rawDivisions.map((div) => ({
+						id: div.id,
+						name: div.name,
+					}));
+
+				return validatePublicDirectoryProfileDto({
+					displayName: row.display_name,
+					role: "Accompanist",
+					approvedDivisions,
+					isActiveMember: activeAccompanistCustomerIds.has(row.customer_id),
+				});
+			},
+		);
+
+		return [...teachers, ...accompanists];
 	}
 }

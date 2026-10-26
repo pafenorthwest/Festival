@@ -59,9 +59,19 @@ export class AccompanistMembershipService {
 			throw new AppError("Accompanist form is invalid.", 400);
 		}
 		const payload = input.payload as Record<string, unknown>;
-		const allowed = new Set(["name", "email", "city", "phone", "divisionIds"]);
+		const allowed = new Set([
+			"name",
+			"email",
+			"city",
+			"phone",
+			"divisionIds",
+			"staffAccessConsent",
+		]);
 		if (Object.keys(payload).some((key) => !allowed.has(key))) {
 			throw new AppError("Accompanist form contains unsupported fields.", 400);
+		}
+		if (payload.staffAccessConsent !== true) {
+			throw new AppError("Staff access consent is required.", 400);
 		}
 		let contact: AccompanistContactSnapshot;
 		try {

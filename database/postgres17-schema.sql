@@ -63,6 +63,34 @@ CREATE TABLE orgs.accompanist_membership_entitlement_details (
 
 
 --
+-- Name: accompanist_profile_divisions; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.accompanist_profile_divisions (
+    accompanist_profile_id text NOT NULL,
+    organization_id text NOT NULL,
+    division_id text NOT NULL
+);
+
+
+--
+-- Name: accompanist_profiles; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.accompanist_profiles (
+    id text NOT NULL,
+    organization_id text NOT NULL,
+    customer_id text NOT NULL,
+    display_name text NOT NULL,
+    public_directory_opt_in boolean DEFAULT false NOT NULL,
+    approval_status text DEFAULT 'pending'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT accompanist_profiles_approval_status_check CHECK ((approval_status = ANY (ARRAY['pending'::text, 'approved'::text, 'rejected'::text])))
+);
+
+
+--
 -- Name: app_user; Type: TABLE; Schema: orgs; Owner: -
 --
 
@@ -1164,6 +1192,34 @@ CREATE TABLE orgs.teacher_membership_entitlement_details (
 
 
 --
+-- Name: teacher_profile_divisions; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.teacher_profile_divisions (
+    teacher_profile_id text NOT NULL,
+    organization_id text NOT NULL,
+    division_id text NOT NULL
+);
+
+
+--
+-- Name: teacher_profiles; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.teacher_profiles (
+    id text NOT NULL,
+    organization_id text NOT NULL,
+    customer_id text NOT NULL,
+    display_name text NOT NULL,
+    public_directory_opt_in boolean DEFAULT false NOT NULL,
+    approval_status text DEFAULT 'pending'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT teacher_profiles_approval_status_check CHECK ((approval_status = ANY (ARRAY['pending'::text, 'approved'::text, 'rejected'::text])))
+);
+
+
+--
 -- Name: user_login_event; Type: TABLE; Schema: orgs; Owner: -
 --
 
@@ -1267,6 +1323,38 @@ CREATE TABLE orgs.volunteers (
 
 ALTER TABLE ONLY orgs.accompanist_membership_entitlement_details
     ADD CONSTRAINT accompanist_membership_entitlement_details_pkey PRIMARY KEY (entitlement_id);
+
+
+--
+-- Name: accompanist_profile_divisions accompanist_profile_divisions_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.accompanist_profile_divisions
+    ADD CONSTRAINT accompanist_profile_divisions_pkey PRIMARY KEY (accompanist_profile_id, division_id);
+
+
+--
+-- Name: accompanist_profiles accompanist_profiles_id_organization_id_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.accompanist_profiles
+    ADD CONSTRAINT accompanist_profiles_id_organization_id_key UNIQUE (id, organization_id);
+
+
+--
+-- Name: accompanist_profiles accompanist_profiles_organization_id_customer_id_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.accompanist_profiles
+    ADD CONSTRAINT accompanist_profiles_organization_id_customer_id_key UNIQUE (organization_id, customer_id);
+
+
+--
+-- Name: accompanist_profiles accompanist_profiles_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.accompanist_profiles
+    ADD CONSTRAINT accompanist_profiles_pkey PRIMARY KEY (id);
 
 
 --
@@ -2014,6 +2102,38 @@ ALTER TABLE ONLY orgs.teacher_membership_entitlement_details
 
 
 --
+-- Name: teacher_profile_divisions teacher_profile_divisions_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.teacher_profile_divisions
+    ADD CONSTRAINT teacher_profile_divisions_pkey PRIMARY KEY (teacher_profile_id, division_id);
+
+
+--
+-- Name: teacher_profiles teacher_profiles_id_organization_id_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.teacher_profiles
+    ADD CONSTRAINT teacher_profiles_id_organization_id_key UNIQUE (id, organization_id);
+
+
+--
+-- Name: teacher_profiles teacher_profiles_organization_id_customer_id_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.teacher_profiles
+    ADD CONSTRAINT teacher_profiles_organization_id_customer_id_key UNIQUE (organization_id, customer_id);
+
+
+--
+-- Name: teacher_profiles teacher_profiles_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.teacher_profiles
+    ADD CONSTRAINT teacher_profiles_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: user_login_event user_login_event_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
 --
 
@@ -2228,6 +2348,27 @@ CREATE INDEX idx_registration_change_logs_org_festival ON orgs.registration_chan
 
 
 --
+-- Name: idx_accompanist_profile_divisions_division_id; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_accompanist_profile_divisions_division_id ON orgs.accompanist_profile_divisions USING btree (division_id);
+
+
+--
+-- Name: idx_accompanist_profiles_directory; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_accompanist_profiles_directory ON orgs.accompanist_profiles USING btree (organization_id, public_directory_opt_in, approval_status);
+
+
+--
+-- Name: idx_accompanist_profiles_org; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_accompanist_profiles_org ON orgs.accompanist_profiles USING btree (organization_id);
+
+
+--
 -- Name: idx_app_user_email_lower; Type: INDEX; Schema: orgs; Owner: -
 --
 
@@ -2431,6 +2572,27 @@ CREATE INDEX idx_user_login_user_id ON orgs.user_login_event USING btree (user_i
 
 
 --
+-- Name: idx_teacher_profile_divisions_division_id; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_teacher_profile_divisions_division_id ON orgs.teacher_profile_divisions USING btree (division_id);
+
+
+--
+-- Name: idx_teacher_profiles_directory; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_teacher_profiles_directory ON orgs.teacher_profiles USING btree (organization_id, public_directory_opt_in, approval_status);
+
+
+--
+-- Name: idx_teacher_profiles_org; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_teacher_profiles_org ON orgs.teacher_profiles USING btree (organization_id);
+
+
+--
 -- Name: membership_entitlements_cohort_idx; Type: INDEX; Schema: orgs; Owner: -
 --
 
@@ -2604,6 +2766,46 @@ CREATE TRIGGER enforce_shopify_shop_ownership BEFORE INSERT OR UPDATE OF store_d
 
 ALTER TABLE ONLY orgs.accompanist_membership_entitlement_details
     ADD CONSTRAINT accompanist_membership_entitlement_details_entitlement_id_fkey FOREIGN KEY (entitlement_id) REFERENCES orgs.membership_entitlements(id) ON DELETE CASCADE;
+
+
+--
+-- Name: accompanist_profile_divisions accompanist_profile_divisions_accompanist_profile_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.accompanist_profile_divisions
+    ADD CONSTRAINT accompanist_profile_divisions_accompanist_profile_id_organization_id_fkey FOREIGN KEY (accompanist_profile_id, organization_id) REFERENCES orgs.accompanist_profiles(id, organization_id) ON DELETE CASCADE;
+
+
+--
+-- Name: accompanist_profile_divisions accompanist_profile_divisions_division_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.accompanist_profile_divisions
+    ADD CONSTRAINT accompanist_profile_divisions_division_id_organization_id_fkey FOREIGN KEY (division_id, organization_id) REFERENCES orgs.organization_divisions(id, organization_id) ON DELETE CASCADE;
+
+
+--
+-- Name: accompanist_profile_divisions accompanist_profile_divisions_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.accompanist_profile_divisions
+    ADD CONSTRAINT accompanist_profile_divisions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: accompanist_profiles accompanist_profiles_customer_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.accompanist_profiles
+    ADD CONSTRAINT accompanist_profiles_customer_id_organization_id_fkey FOREIGN KEY (customer_id, organization_id) REFERENCES orgs.festival_customers(id, organization_id) ON DELETE CASCADE;
+
+
+--
+-- Name: accompanist_profiles accompanist_profiles_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.accompanist_profiles
+    ADD CONSTRAINT accompanist_profiles_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
 
 
 --
@@ -3452,6 +3654,46 @@ ALTER TABLE ONLY orgs.shopify_webhook_deliveries
 
 ALTER TABLE ONLY orgs.teacher_membership_entitlement_details
     ADD CONSTRAINT teacher_membership_entitlement_details_entitlement_id_fkey FOREIGN KEY (entitlement_id) REFERENCES orgs.membership_entitlements(id) ON DELETE CASCADE;
+
+
+--
+-- Name: teacher_profile_divisions teacher_profile_divisions_division_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.teacher_profile_divisions
+    ADD CONSTRAINT teacher_profile_divisions_division_id_organization_id_fkey FOREIGN KEY (division_id, organization_id) REFERENCES orgs.organization_divisions(id, organization_id) ON DELETE CASCADE;
+
+
+--
+-- Name: teacher_profile_divisions teacher_profile_divisions_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.teacher_profile_divisions
+    ADD CONSTRAINT teacher_profile_divisions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: teacher_profile_divisions teacher_profile_divisions_teacher_profile_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.teacher_profile_divisions
+    ADD CONSTRAINT teacher_profile_divisions_teacher_profile_id_organization_id_fkey FOREIGN KEY (teacher_profile_id, organization_id) REFERENCES orgs.teacher_profiles(id, organization_id) ON DELETE CASCADE;
+
+
+--
+-- Name: teacher_profiles teacher_profiles_customer_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.teacher_profiles
+    ADD CONSTRAINT teacher_profiles_customer_id_organization_id_fkey FOREIGN KEY (customer_id, organization_id) REFERENCES orgs.festival_customers(id, organization_id) ON DELETE CASCADE;
+
+
+--
+-- Name: teacher_profiles teacher_profiles_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.teacher_profiles
+    ADD CONSTRAINT teacher_profiles_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
 
 
 --

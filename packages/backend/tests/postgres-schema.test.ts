@@ -11,6 +11,22 @@ test("canonical PostgreSQL bootstrap contains no legacy migrations or row mutati
 	);
 });
 
+test("canonical PostgreSQL schema scopes profile divisions to the profile organization", () => {
+	const schema = buildCanonicalPostgresSchemaSql("fresh_orgs");
+
+	for (const kind of ["teacher", "accompanist"]) {
+		expect(schema).toContain(
+			`CREATE TABLE IF NOT EXISTS fresh_orgs.${kind}_profile_divisions (\n\t\t\t${kind}_profile_id TEXT NOT NULL,\n\t\t\torganization_id TEXT NOT NULL REFERENCES fresh_orgs.organizations (id) ON DELETE CASCADE,`,
+		);
+		expect(schema).toContain(
+			`FOREIGN KEY (${kind}_profile_id, organization_id) REFERENCES fresh_orgs.${kind}_profiles (id, organization_id) ON DELETE CASCADE`,
+		);
+		expect(schema).toContain(
+			"FOREIGN KEY (division_id, organization_id) REFERENCES fresh_orgs.organization_divisions (id, organization_id) ON DELETE CASCADE",
+		);
+	}
+});
+
 test("canonical PostgreSQL schema rejects unsafe schema identifiers", () => {
 	expect(() => postgresSchemaName("orgs; DROP SCHEMA orgs")).toThrow(
 		"Database schema is invalid.",

@@ -1042,7 +1042,7 @@ export class CustomerAccountService {
 					: undefined,
 		};
 	}
-	/** Trusted server-side continuation after checkoutAccess has verified the session and CSRF token. */
+	/** Record affirmative membership-sharing consent after checkoutAccess or formAccess verifies the session and CSRF token. */
 	async recordCheckoutStaffAccessConsent(
 		organizationId: string,
 		customerId: string,
@@ -1661,12 +1661,25 @@ export class CustomerAccountService {
 		customerId: string,
 		actorUid: string,
 	): Promise<AdminCustomerProfileSummary> {
+		const customer = await this.findAdminCustomerProfile(
+			organizationId,
+			customerId,
+			actorUid,
+		);
+		if (!customer) throw new AppError("Customer not found.", 404);
+		return customer;
+	}
+	async findAdminCustomerProfile(
+		organizationId: string,
+		customerId: string,
+		actorUid: string,
+	): Promise<AdminCustomerProfileSummary | null> {
 		const customer = await this.repository.getConsentedCustomer(
 			organizationId,
 			customerId,
 			CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION,
 		);
-		if (!customer) throw new AppError("Customer not found.", 404);
+		if (!customer) return null;
 		await this.repository.recordCustomerProfileAccessAudit({
 			organizationId,
 			actorUid,
