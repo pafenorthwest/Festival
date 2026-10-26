@@ -196,14 +196,19 @@ export class ParticipantProfileService {
 
 	async listTeacherProfiles(
 		organizationId: string,
+		actorUid: string,
 	): Promise<TeacherProfileRecord[]> {
-		return await this.repository.listTeacherProfiles(organizationId);
+		const profiles = await this.repository.listTeacherProfiles(organizationId);
+		return await Promise.all(
+			profiles.map((profile) => this.adminTeacherProfile(profile, actorUid)),
+		);
 	}
 
 	async updateTeacherProfileApproval(
 		organizationId: string,
 		profileId: string,
 		payload: unknown,
+		actorUid: string,
 	): Promise<TeacherProfileRecord> {
 		assertAllowedFields(
 			payload,
@@ -228,19 +233,27 @@ export class ParticipantProfileService {
 		if (!updated) {
 			throw new AppError("Teacher profile not found.", 404);
 		}
-		return updated;
+		return await this.adminTeacherProfile(updated, actorUid);
 	}
 
 	async listAccompanistProfiles(
 		organizationId: string,
+		actorUid: string,
 	): Promise<AccompanistProfileRecord[]> {
-		return await this.repository.listAccompanistProfiles(organizationId);
+		const profiles =
+			await this.repository.listAccompanistProfiles(organizationId);
+		return await Promise.all(
+			profiles.map((profile) =>
+				this.adminAccompanistProfile(profile, actorUid),
+			),
+		);
 	}
 
 	async updateAccompanistProfileApproval(
 		organizationId: string,
 		profileId: string,
 		payload: unknown,
+		actorUid: string,
 	): Promise<AccompanistProfileRecord> {
 		assertAllowedFields(
 			payload,
@@ -265,7 +278,42 @@ export class ParticipantProfileService {
 		if (!updated) {
 			throw new AppError("Accompanist profile not found.", 404);
 		}
-		return updated;
+		return await this.adminAccompanistProfile(updated, actorUid);
+	}
+
+	private async adminTeacherProfile(
+		profile: TeacherProfileRecord,
+		actorUid: string,
+	): Promise<TeacherProfileRecord> {
+		const customer =
+			await this.customerAccountService?.findAdminCustomerProfile(
+				profile.organization_id,
+				profile.customer_id,
+				actorUid,
+			);
+		if (customer) return profile;
+		const { zip_code: _zipCode, ...moderationProfile } = profile;
+		return moderationProfile;
+	}
+
+	private async adminAccompanistProfile(
+		profile: AccompanistProfileRecord,
+		actorUid: string,
+	): Promise<AccompanistProfileRecord> {
+		const customer =
+			await this.customerAccountService?.findAdminCustomerProfile(
+				profile.organization_id,
+				profile.customer_id,
+				actorUid,
+			);
+		if (customer) return profile;
+		const {
+			phone: _phone,
+			email: _email,
+			zip_code: _zipCode,
+			...moderationProfile
+		} = profile;
+		return moderationProfile;
 	}
 
 	async getPublicDirectoryProfiles(
