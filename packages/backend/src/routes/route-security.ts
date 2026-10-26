@@ -659,6 +659,31 @@ export const CURRENT_ROUTE_SECURITY = [
 		authenticationClass: "admin",
 	},
 	{
+		method: "POST",
+		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/classes/:classId/waitlist",
+		authenticationClass: "customer",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/classes/:classId/waitlist/withdraw",
+		authenticationClass: "customer",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/classes/:classId/waitlist",
+		authenticationClass: "customer",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/waitlist",
+		authenticationClass: "customer",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/festivals/:festivalShortName/classes/:classId/waitlist",
+		authenticationClass: "admin",
+	},
+	{
 		method: "GET",
 		path: "/api/organizations/:slug/communication/templates",
 		authenticationClass: "tenant",
