@@ -42,6 +42,7 @@ export interface ClassOptionEligibilityState {
 	error: Accessor<string | null>;
 	getOption: (classId: string) => ClassOptionEligibilityInfo | undefined;
 	isEligible: (classId: string) => boolean;
+	isWaitlist: (classId: string | undefined) => boolean;
 	formatOption: (cls: RegistrationEligibleClass) => string;
 	selectedReason: (classId: string) => string | null;
 	recheck: () => Promise<void>;
@@ -111,6 +112,18 @@ export function useClassOptionEligibility(
 			};
 		}
 
+		if (isWaitlist(classId)) {
+			const base = formatClassOption(cls);
+			return {
+				classId,
+				isEligible: false,
+				reasonCode: "SOLD_OUT",
+				reasonText: "Waitlist",
+				badgeText: "Waitlist",
+				formattedOption: `${base} [Waitlist]`,
+			};
+		}
+
 		if (cls.isRegistrationOpen === false) {
 			const base = formatClassOption(cls);
 			return {
@@ -174,6 +187,18 @@ export function useClassOptionEligibility(
 		};
 	}
 
+	function isWaitlist(classId: string | undefined): boolean {
+		if (!classId) return false;
+		const classList = options.classes();
+		const cls = classList.find((c) => c.id === classId);
+		const serverResult = results().get(classId);
+		return (
+			cls?.availability === "waitlist" ||
+			serverResult?.availability === "waitlist" ||
+			serverResult?.reasonCode === "SOLD_OUT"
+		);
+	}
+
 	function isEligible(classId: string): boolean {
 		if (!classId) return false;
 		const opt = getOption(classId);
@@ -181,15 +206,18 @@ export function useClassOptionEligibility(
 	}
 
 	function selectedReason(classId: string): string | null {
-		if (!classId) return null;
+		if (!classId || isWaitlist(classId)) return null;
 		const opt = getOption(classId);
 		return opt && !opt.isEligible ? opt.reasonText : null;
 	}
 
 	function formatOption(cls: RegistrationEligibleClass): string {
+		const base = formatClassOption(cls);
+		if (isWaitlist(cls.id)) {
+			return `${base} [Waitlist]`;
+		}
 		const opt = getOption(cls.id);
 		if (opt) return opt.formattedOption;
-		const base = formatClassOption(cls);
 		return cls.isRegistrationOpen === false
 			? `${base} (Registration closed)`
 			: base;
@@ -200,6 +228,7 @@ export function useClassOptionEligibility(
 		error,
 		getOption,
 		isEligible,
+		isWaitlist,
 		formatOption,
 		selectedReason,
 		recheck: () =>

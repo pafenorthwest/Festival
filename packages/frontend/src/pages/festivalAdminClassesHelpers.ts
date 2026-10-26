@@ -1,3 +1,9 @@
+import type {
+	FestivalClassConfigurationDto,
+	OrganizationDivision,
+	RegistrationCatalogValue,
+} from "@festival/common";
+
 const PRICE_REGEX = /^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/;
 
 export interface FestivalClassFormDraft {
@@ -94,4 +100,97 @@ export function formatDuration(minutes: number): string {
 
 export function formatPrice(price: string): string {
 	return `$${price}`;
+}
+
+export function classToDraft(
+	c: FestivalClassConfigurationDto,
+): FestivalClassFormDraft {
+	return {
+		displayName: c.displayName,
+		divisionId: c.divisionId,
+		classSubtypeId: c.classSubtypeId,
+		price: c.price,
+		minimumAge: c.minimumAge,
+		maximumAge: c.maximumAge,
+		maximumPerformancePieces: c.maximumPerformancePieces as 1 | 2 | 3,
+		performanceMinutes: c.performanceMinutes,
+		capacity: c.capacity,
+		isActive: c.isActive,
+	};
+}
+
+export function draftToCreateInput(draft: FestivalClassFormDraft) {
+	return {
+		displayName: draft.displayName.trim(),
+		divisionId: draft.divisionId,
+		classSubtypeId: draft.classSubtypeId,
+		price: draft.price.trim(),
+		minimumAge: draft.minimumAge,
+		maximumAge: draft.maximumAge,
+		maximumPerformancePieces: draft.maximumPerformancePieces,
+		performanceMinutes: draft.performanceMinutes,
+		capacity: draft.capacity,
+		isActive: draft.isActive,
+	};
+}
+
+export function draftToUpdateInput(draft: FestivalClassFormDraft) {
+	return {
+		displayName: draft.displayName.trim(),
+		price: draft.price.trim(),
+		minimumAge: draft.minimumAge,
+		maximumAge: draft.maximumAge,
+		maximumPerformancePieces: draft.maximumPerformancePieces,
+		performanceMinutes: draft.performanceMinutes,
+		capacity: draft.capacity,
+		isActive: draft.isActive,
+	};
+}
+
+export function getDivisionName(
+	divisions: OrganizationDivision[],
+	id: string,
+): string {
+	return divisions.find((d) => d.id === id)?.displayName ?? id;
+}
+
+export function getSubtypeName(
+	subtypes: RegistrationCatalogValue[],
+	id: string,
+): string {
+	return subtypes.find((s) => s.id === id)?.displayName ?? id;
+}
+
+export function resolveErrorMessage(err: unknown, fallback: string): string {
+	return err instanceof Error ? err.message : fallback;
+}
+
+export function getModalDivisionName(
+	editing: FestivalClassConfigurationDto | null,
+	divisions: OrganizationDivision[],
+): string | undefined {
+	return editing ? getDivisionName(divisions, editing.divisionId) : undefined;
+}
+
+export function getModalSubtypeName(
+	editing: FestivalClassConfigurationDto | null,
+	subtypes: RegistrationCatalogValue[],
+): string | undefined {
+	return editing ? getSubtypeName(subtypes, editing.classSubtypeId) : undefined;
+}
+
+export function getModalInitialDraft(
+	editing: FestivalClassConfigurationDto | null,
+): FestivalClassFormDraft {
+	return editing ? classToDraft(editing) : initialClassFormDraft;
+}
+
+export function formatWaitlistTimestamp(isoDate: string): string {
+	if (!isoDate) return "N/A";
+	const d = new Date(isoDate);
+	if (Number.isNaN(d.getTime())) return isoDate;
+	return d.toLocaleString("en-US", {
+		dateStyle: "medium",
+		timeStyle: "short",
+	});
 }

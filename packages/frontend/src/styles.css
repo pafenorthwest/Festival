@@ -1389,6 +1389,11 @@ form.shopify-integration-card {
 	color: white;
 }
 
+.badge-warning {
+	background: #b45309;
+	color: white;
+}
+
 .badge-rejected {
 	background: var(--bullet-error);
 	color: white;

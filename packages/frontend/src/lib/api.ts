@@ -3,6 +3,7 @@ import type {
 	AddCatalogWorkInput,
 	AdminCustomerSearchResponse,
 	AdminCustomerSearchResult,
+	AdminWaitlistRosterEntryDto,
 	BillingAdjustment,
 	BillingAdjustmentType,
 	BillingAdjustmentValidationResult,
@@ -39,6 +40,7 @@ import type {
 	CustomerOrdersResponse,
 	CustomerProfileResponse,
 	CustomerSessionResponse,
+	CustomerWaitlistEntryDto,
 	DismissWelcomeResponse,
 	DropRegistrationInput,
 	DropRegistrationResult,
@@ -48,6 +50,7 @@ import type {
 	FestivalSummary,
 	FlagReviewInput,
 	InviteSummary,
+	JoinWaitlistInput,
 	MembershipProductsListResponse,
 	MembershipPurchaseSelectionResponse,
 	MessageChannel,
@@ -109,7 +112,10 @@ import type {
 	UpdateOrganizationTimezoneInput,
 	VolunteerAssignment,
 	VolunteerRecord,
+	WaitlistJoinResponse,
 	WaitlistPromotionResult,
+	WaitlistWithdrawResponse,
+	WithdrawWaitlistInput,
 } from "@festival/common";
 import {
 	assertValidCreateBillingAdjustmentInput,
@@ -210,6 +216,7 @@ export type {
 	AddCatalogWorkInput,
 	AdminCustomerSearchResponse,
 	AdminCustomerSearchResult,
+	AdminWaitlistRosterEntryDto,
 	BillingAdjustment,
 	BillingAdjustmentType,
 	BillingAdjustmentValidationResult,
@@ -230,11 +237,13 @@ export type {
 	CreateBillingAdjustmentInput,
 	CreateMessageTemplateInput,
 	CreditBalance,
+	CustomerWaitlistEntryDto,
 	DropRegistrationInput,
 	DropRegistrationResult,
 	DropRegistrationValidationResult,
 	EvaluatePurchaseEligibilityResponse,
 	FlagReviewInput,
+	JoinWaitlistInput,
 	MessageChannel,
 	MessageDeliveryStatus,
 	MessageEvent,
@@ -264,7 +273,10 @@ export type {
 	UpdateMessageTemplateInput,
 	VolunteerAssignment,
 	VolunteerRecord,
+	WaitlistJoinResponse,
 	WaitlistPromotionResult,
+	WaitlistWithdrawResponse,
+	WithdrawWaitlistInput,
 };
 export {
 	assertValidCreateBillingAdjustmentInput,
@@ -452,6 +464,7 @@ export function getCustomerProfile(slug: string) {
 export interface CustomerChildDto {
 	id: string;
 	displayName: string;
+	name?: string;
 	hasCurrentValidAgeSnapshot: boolean;
 }
 export function getCustomerChildren(slug: string) {
@@ -2556,6 +2569,82 @@ export function customerCheckoutRecoverySignInPath(
 ): string {
 	const returnTo = buildOrgCheckoutRecoveryPath(slug, token);
 	return `/api/organizations/${encodeURIComponent(slug)}/customer-auth/start?returnTo=${encodeURIComponent(returnTo)}`;
+}
+
+export function joinClassWaitlist(
+	slug: string,
+	festivalSlug: string,
+	classId: string,
+	csrfToken: string,
+	input: JoinWaitlistInput,
+): Promise<WaitlistJoinResponse> {
+	return requestJson<WaitlistJoinResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/classes/${encodeURIComponent(classId)}/waitlist`,
+		{
+			method: "POST",
+			headers: { "X-CSRF-Token": csrfToken },
+			body: JSON.stringify(input),
+		},
+		undefined,
+		"",
+	);
+}
+
+export function withdrawClassWaitlist(
+	slug: string,
+	festivalSlug: string,
+	classId: string,
+	csrfToken: string,
+	input: WithdrawWaitlistInput,
+): Promise<WaitlistWithdrawResponse> {
+	return requestJson<WaitlistWithdrawResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/classes/${encodeURIComponent(classId)}/waitlist/withdraw`,
+		{
+			method: "POST",
+			headers: { "X-CSRF-Token": csrfToken },
+			body: JSON.stringify(input),
+		},
+		undefined,
+		"",
+	);
+}
+
+export function listClassWaitlistEntries(
+	slug: string,
+	festivalSlug: string,
+	classId: string,
+): Promise<{ entries: CustomerWaitlistEntryDto[] }> {
+	return requestJson<{ entries: CustomerWaitlistEntryDto[] }>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/classes/${encodeURIComponent(classId)}/waitlist`,
+		undefined,
+		undefined,
+		"",
+	);
+}
+
+export function listFestivalWaitlistEntries(
+	slug: string,
+	festivalSlug: string,
+): Promise<{ entries: CustomerWaitlistEntryDto[] }> {
+	return requestJson<{ entries: CustomerWaitlistEntryDto[] }>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/waitlist`,
+		undefined,
+		undefined,
+		"",
+	);
+}
+
+export function getClassWaitlistRoster(
+	idToken: string,
+	slug: string,
+	festivalSlug: string,
+	classId: string,
+): Promise<{ roster: AdminWaitlistRosterEntryDto[] }> {
+	return requestJson<{ roster: AdminWaitlistRosterEntryDto[] }>(
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalSlug)}/classes/${encodeURIComponent(classId)}/waitlist`,
+		undefined,
+		idToken,
+	);
 }
 
 export {

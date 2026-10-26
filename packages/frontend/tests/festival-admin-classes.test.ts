@@ -1,8 +1,10 @@
 import { describe, expect, it } from "bun:test";
+import { getClassWaitlistRoster } from "../src/lib/api.js";
 import {
 	formatAgeRange,
 	formatDuration,
 	formatPrice,
+	formatWaitlistTimestamp,
 	validateAges,
 	validateCapacity,
 	validateDisplayName,
@@ -22,6 +24,9 @@ const tableComponent = await Bun.file(
 ).text();
 const modalComponent = await Bun.file(
 	new URL("../src/components/FestivalClassModal.tsx", import.meta.url),
+).text();
+const waitlistModalComponent = await Bun.file(
+	new URL("../src/components/FestivalClassWaitlistModal.tsx", import.meta.url),
 ).text();
 const app = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
 const appState = await Bun.file(
@@ -162,5 +167,81 @@ describe("Festival Admin Classes filter bar and status toggling", () => {
 	it("exposes listDivisions and updated getAdminRegistrationConfiguration from api.ts", () => {
 		expect(api).toContain("export const listDivisions = getAdminDivisions;");
 		expect(api).toContain("classSubtypes: RegistrationCatalogValue[];");
+	});
+});
+
+describe("Festival Admin Classes waitlist roster integration", () => {
+	it("exposes getClassWaitlistRoster api function that requests admin waitlist endpoint", async () => {
+		expect(api).toContain("export function getClassWaitlistRoster(");
+		const originalFetch = globalThis.fetch;
+		try {
+			let calledUrl = "";
+			let authHeader = "";
+			globalThis.fetch = (async (
+				url: string | URL | Request,
+				init?: RequestInit,
+			) => {
+				calledUrl = url.toString();
+				authHeader =
+					(init?.headers as Record<string, string>)?.Authorization ?? "";
+				return new Response(JSON.stringify({ roster: [] }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}) as typeof fetch;
+
+			const result = await getClassWaitlistRoster(
+				"mock-id-token",
+				"test-org",
+				"fest-2026",
+				"cls-777",
+			);
+			expect(calledUrl).toBe(
+				"/api/organizations/test-org/festivals/fest-2026/classes/cls-777/waitlist",
+			);
+			expect(authHeader).toBe("Bearer mock-id-token");
+			expect(result.roster).toEqual([]);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	it("supports optional onViewWaitlist in FestivalClassTable with Waitlist button", () => {
+		expect(tableComponent).toContain(
+			"onViewWaitlist?: (item: FestivalClassConfigurationDto) => void;",
+		);
+		expect(tableComponent).toContain("props.onViewWaitlist?.(classItem)");
+		expect(tableComponent).toContain("Waitlist");
+	});
+
+	it("renders FestivalClassWaitlistModal with required fields and states within 200 lines", () => {
+		expect(waitlistModalComponent).toContain("childName");
+		expect(waitlistModalComponent).toContain("parentName");
+		expect(waitlistModalComponent).toContain("parentEmail");
+		expect(waitlistModalComponent).toContain("parentPhone");
+		expect(waitlistModalComponent).toContain("joinedAt");
+		expect(waitlistModalComponent).toContain("entry.status");
+		expect(waitlistModalComponent).toContain("Loading waitlist roster...");
+		expect(waitlistModalComponent).toContain(
+			"No waitlist entries found for this class.",
+		);
+		expect(waitlistModalComponent).toContain("banner error-banner");
+		expect(formatWaitlistTimestamp("2026-10-26T22:00:00.000Z")).toBeTruthy();
+		expect(formatWaitlistTimestamp("")).toBe("N/A");
+
+		const lineCount = waitlistModalComponent.trim().split("\n").length;
+		expect(lineCount).toBeLessThanOrEqual(200);
+	});
+
+	it("wires waitlistClass signal and mounts FestivalClassWaitlistModal within 300 lines", () => {
+		expect(classesPage).toContain("waitlistClass");
+		expect(classesPage).toContain("setWaitlistClass");
+		expect(classesPage).toContain(
+			"onViewWaitlist={(item) => setWaitlistClass(item)}",
+		);
+		expect(classesPage).toContain("<FestivalClassWaitlistModal");
+
+		const lineCount = classesPage.trim().split("\n").length;
+		expect(lineCount).toBeLessThanOrEqual(300);
 	});
 });
