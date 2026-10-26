@@ -192,6 +192,7 @@ export function AccompanistMembershipPage(props: { slug: string }) {
 								type="button"
 								variant="secondary"
 								disabled={redirectingToShopify()}
+								data-preload-path={buildOrgRootPath(props.slug)}
 								onClick={cancelSignIn}
 							>
 								Cancel

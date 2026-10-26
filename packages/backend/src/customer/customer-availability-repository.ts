@@ -312,9 +312,7 @@ export class PostgresCustomerAvailabilityRepository
 
 		for (const [i, entry] of entries.entries()) {
 			const base = i * 7;
-			const hoursJson = JSON.stringify(
-				normalizeAvailableHours(entry.availableHours),
-			);
+			const availableHours = normalizeAvailableHours(entry.availableHours);
 			valueClauses.push(
 				`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}::date, $${base + 7}::jsonb, NOW())`,
 			);
@@ -325,7 +323,7 @@ export class PostgresCustomerAvailabilityRepository
 				entry.subjectType,
 				entry.subjectId,
 				entry.festivalDate,
-				hoursJson,
+				availableHours,
 			);
 		}
 

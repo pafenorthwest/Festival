@@ -5,6 +5,7 @@ import { Button } from "../components/Button.js";
 import { FestivalNoChildrenPanel } from "../components/FestivalNoChildrenPanel.js";
 import { FestivalRegistrationCartCard } from "../components/FestivalRegistrationCartCard.js";
 import { FestivalRegistrationCartView } from "../components/FestivalRegistrationCartView.js";
+import { FestivalRegistrationPerformanceOptions } from "../components/FestivalRegistrationPerformanceOptions.js";
 import { FestivalRepertoireModal } from "../components/FestivalRepertoireModal.js";
 import {
 	customerFestivalRegistrationSignInPath,
@@ -16,6 +17,7 @@ import {
 import {
 	createRegistrationSelectHandlers,
 	findById,
+	isInstrumentSelectionValid,
 	isRegistrationSelectionValid,
 	normalizeMaxPieces,
 } from "./festivalRegistrationHelpers.js";
@@ -62,6 +64,7 @@ export function FestivalClassRegistrationPage(
 	const [selectedTeacherId, setSelectedTeacherId] = createSignal("");
 	const [selectedClassId, setSelectedClassId] = createSignal("");
 	const [selectedAccompanistId, setSelectedAccompanistId] = createSignal("");
+	const [selectedInstrumentId, setSelectedInstrumentId] = createSignal("");
 	const [pieces, setPieces] = createSignal<RepertoirePiece[]>([]);
 	const { children, teachers, eligibleClasses, accompanists, loadChildren } =
 		useRegistrationOptions({
@@ -92,6 +95,9 @@ export function FestivalClassRegistrationPage(
 	const selectedTeacher = () => findById(teachers(), selectedTeacherId());
 	const selectedAccompanist = () =>
 		findById(accompanists(), selectedAccompanistId());
+	const instruments = () => divisions()?.instruments ?? [];
+	const selectedInstrument = () =>
+		findById(instruments(), selectedInstrumentId());
 	const selectedDivisionName = () =>
 		findById(divisions()?.divisions, selectedDivisionId())?.displayName ??
 		"Division";
@@ -109,8 +115,8 @@ export function FestivalClassRegistrationPage(
 		setSelectedTeacherId,
 		setSelectedClassId,
 		setSelectedAccompanistId,
+		setSelectedInstrumentId,
 	);
-
 	async function handleRefreshSnapshot(e: Event) {
 		e.preventDefault();
 		const childId = selectedChildId(),
@@ -143,7 +149,11 @@ export function FestivalClassRegistrationPage(
 			selectedTeacherId(),
 			selectedClassId(),
 			pieces(),
-		) && classOptionEligibility.isEligible(selectedClassId());
+		) &&
+		!divisions.loading &&
+		!divisions.error &&
+		isInstrumentSelectionValid(instruments(), selectedInstrumentId()) &&
+		classOptionEligibility.isEligible(selectedClassId());
 	function handleAddToCart() {
 		setCheckoutError(null);
 		const cls = selectedClass(),
@@ -166,12 +176,14 @@ export function FestivalClassRegistrationPage(
 				cls,
 				selectedAccompanist(),
 				pieces(),
+				selectedInstrument(),
 			),
 		);
 		resetClassFormSelection({
 			setSelectedClassId,
 			setPieces,
 			setSelectedAccompanistId,
+			setSelectedInstrumentId,
 		});
 	}
 	async function executeCheckout(
@@ -280,12 +292,12 @@ export function FestivalClassRegistrationPage(
 
 					<Show when={children().length === 0}>
 						<FestivalNoChildrenPanel
+							manageChildrenPath={`/org/${props.slug}/account/children`}
 							onManageChildren={() =>
 								props.app.navigate(`/org/${props.slug}/account/children`)
 							}
 						/>
 					</Show>
-
 					<Show when={children().length > 0}>
 						<div
 							class="registration-form-grid"
@@ -441,21 +453,13 @@ export function FestivalClassRegistrationPage(
 								</Show>
 
 								<Show when={selectedClass()}>
-									<label class="field">
-										<span>Accompanist</span>
-										<select
-											id="registration-accompanist"
-											name="registration-accompanist"
-											value={selectedAccompanistId()}
-											onChange={selectHandlers.onAccompanistChange}
-										>
-											<option value="">None (No accompanist needed)</option>
-											<For each={accompanists()}>
-												{(acc) => <option value={acc.id}>{acc.name}</option>}
-											</For>
-										</select>
-									</label>
-
+									<FestivalRegistrationPerformanceOptions
+										instruments={instruments()}
+										accompanists={accompanists()}
+										instrumentId={selectedInstrumentId()}
+										accompanistId={selectedAccompanistId()}
+										handlers={selectHandlers}
+									/>
 									<FestivalRegistrationCartCard
 										childName={selectedChild()?.displayName ?? null}
 										divisionName={selectedDivisionName()}
@@ -464,6 +468,7 @@ export function FestivalClassRegistrationPage(
 										classPrice={selectedClass()?.price ?? null}
 										pieces={pieces()}
 										accompanistName={selectedAccompanist()?.name ?? null}
+										instrumentName={selectedInstrument()?.displayName ?? null}
 										isValid={isReadyForCheckout()}
 										isSubmitting={isSubmittingCheckout()}
 										error={checkoutError()}

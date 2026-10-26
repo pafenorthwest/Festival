@@ -64,6 +64,44 @@ export interface ClassRegistrationRequest {
 	buyerAccessToken: string;
 }
 
+/** Original validated selection. Later registration edits never replace this record. */
+export interface ClassRegistrationSnapshot {
+	version: 1;
+	capturedAtIso: string;
+	class: {
+		id: string;
+		festivalId: string;
+		displayName: string;
+		classSubtypeId: string;
+		classSubtypeName: string | null;
+		minimumAge: number;
+		maximumAge: number;
+		price: string;
+		currencyCode: string;
+		maximumPerformancePieces: 1 | 2 | 3;
+		performanceMinutes: number;
+		capacity: number;
+	};
+	division: { id: string; name: string | null };
+	instrument: { id: string; name: string } | "unknown";
+	teacher: { customerId: string; membershipId: string; name: string | null };
+	accompanist: {
+		customerId: string;
+		membershipId: string;
+		name: string | null;
+	} | null;
+	repertoire: RepertoirePiece[];
+}
+
+/** Normalize older stored selections without inventing an absent historical snapshot. */
+export function normalizeClassRegistrationSnapshot(
+	snapshot: ClassRegistrationSnapshot | null | undefined,
+): ClassRegistrationSnapshot | null {
+	return snapshot
+		? { ...snapshot, instrument: snapshot.instrument ?? "unknown" }
+		: null;
+}
+
 export interface ClassRegistrationMetadata {
 	id: string;
 	organizationId: string;
@@ -76,6 +114,8 @@ export interface ClassRegistrationMetadata {
 	/** Legacy raw submission retained during the relational-repertoire transition. */
 	repertoireJson: RepertoirePiece[];
 	repertoireItems: RegistrationRepertoireItem[];
+	/** Null/absent on historical checkouts whose original selection was not captured. */
+	registrationSnapshot?: ClassRegistrationSnapshot | null;
 	createdAt: Date;
 }
 

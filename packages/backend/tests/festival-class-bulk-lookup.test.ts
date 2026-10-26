@@ -4,13 +4,20 @@ import { sql } from "bun";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
 import type { OrganizationRepository } from "../src/repo/organization-repository.js";
 import { PostgresOrganizationRepository } from "../src/repo/postgres-organization-repository.js";
+import { withApplicationRollback } from "./postgres-application-fixture.js";
 
-async function verifyBulkLookup(repo: OrganizationRepository) {
+async function verifyBulkLookup(
+	repo: OrganizationRepository,
+	trackOrganization: (id: string) => void = () => {},
+) {
+	const prefix = randomUUID();
 	const createScope = async (suffix: string) => {
+		suffix = `${prefix}-${suffix}`;
 		const org = await repo.createOrganization({
 			name: `Org ${suffix}`,
 			slug: `org-${suffix}`,
 		});
+		trackOrganization(org.id);
 		const festival = await repo.createFestival({
 			id: `festival-${suffix}`,
 			organizationId: org.id,
@@ -58,7 +65,7 @@ async function verifyBulkLookup(repo: OrganizationRepository) {
 	const inactive = await createClass(scope, false);
 	const outsideOrganization = await createClass(other);
 	const otherFestival = await repo.createFestival({
-		id: "other-festival",
+		id: `${prefix}-other-festival`,
 		organizationId: scope.organizationId,
 		code: "OTHER",
 		shortName: "other",
@@ -145,11 +152,12 @@ const postgresTest = process.env.POSTGRES_INTEGRATION_URL ? test : test.skip;
 postgresTest(
 	"real PostgreSQL bulk class lookup preserves the same scope and inactive-class contract",
 	async () => {
-		const schema = `bulk_classes_${randomUUID().replaceAll("-", "")}`;
-		try {
-			await verifyBulkLookup(new PostgresOrganizationRepository(schema));
-		} finally {
-			await sql.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
-		}
+		await withApplicationRollback(async (fixture) => {
+			const schema = fixture.schema;
+			await verifyBulkLookup(
+				fixture.repository(new PostgresOrganizationRepository(schema)),
+				fixture.trackOrganization,
+			);
+		});
 	},
 );

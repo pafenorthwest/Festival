@@ -222,7 +222,13 @@ export class InMemoryCustomerAccountRepository
 			consent.privacyNoticeVersion,
 		);
 		const existing = this.consents.get(key);
-		if (existing) return existing;
+		if (existing) {
+			existing.consentedAtIso = earlierIso(
+				existing.consentedAtIso,
+				consent.consentedAtIso,
+			);
+			return existing;
+		}
 		this.consents.set(key, consent);
 		return consent;
 	}
