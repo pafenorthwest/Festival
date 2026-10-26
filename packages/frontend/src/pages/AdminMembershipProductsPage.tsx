@@ -122,6 +122,11 @@ export function AdminMembershipProductsPage(
 								<Button
 									type="button"
 									variant="secondary"
+									data-preload-path={
+										props.app.route().kind === "org-admin-memberships"
+											? buildOrgAdminRosterPath(props.app.slug)
+											: undefined
+									}
 									onClick={() => {
 										const route = props.app.route();
 										if (route.kind !== "org-admin-memberships") {
@@ -245,6 +250,11 @@ export function AdminMembershipProductsPage(
 								<Button
 									type="button"
 									variant="secondary"
+									data-preload-path={
+										props.app.route().kind === "org-admin-memberships"
+											? buildOrgAdminIntegrationsPath(props.app.slug)
+											: undefined
+									}
 									onClick={() => {
 										const route = props.app.route();
 										if (route.kind !== "org-admin-memberships") {

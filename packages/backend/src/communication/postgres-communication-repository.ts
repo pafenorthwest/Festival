@@ -198,7 +198,7 @@ export class PostgresCommunicationRepository
 				version,
 				input.subject ?? null,
 				input.body,
-				JSON.stringify(variables),
+				variables,
 				input.isActive ?? true,
 			],
 		)) as TemplateRow[];
@@ -285,15 +285,7 @@ export class PostgresCommunicationRepository
 			SET subject = $1, body = $2, variables = $3::jsonb, is_active = $4, channel = $5, updated_at = NOW()
 			WHERE organization_id = $6 AND id = $7
 			RETURNING id, organization_id, template_key, channel, version, subject, body, variables, is_active, created_at::text, updated_at::text`,
-			[
-				subject,
-				body,
-				JSON.stringify(variables),
-				isActive,
-				channel,
-				organizationId,
-				current.id,
-			],
+			[subject, body, variables, isActive, channel, organizationId, current.id],
 		)) as TemplateRow[];
 
 		return mapTemplate(rows[0]);
@@ -322,7 +314,7 @@ export class PostgresCommunicationRepository
 
 	async recordEvent(input: CreateEventInput): Promise<RecordEventResult> {
 		const eventId = input.id ?? randomUUID();
-		const payloadJson = JSON.stringify(input.payload ?? {});
+		const payload = input.payload ?? {};
 		const status = input.status ?? "pending";
 
 		const insertedRows = (await sql.unsafe(
@@ -338,7 +330,7 @@ export class PostgresCommunicationRepository
 				input.organizationId,
 				input.eventType,
 				input.recipientDestination,
-				payloadJson,
+				payload,
 				input.idempotencyKey,
 				status,
 			],

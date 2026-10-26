@@ -95,7 +95,7 @@ describe("public directory routing, navigation, and API", () => {
 
 	it("wires public directory route and page component in App.tsx", () => {
 		expect(appSource).toMatch(
-			/import\s*\{\s*PublicDirectoryPage\s*\}\s*from\s*["']\.\/pages\/PublicDirectoryPage(\.js)?["']/,
+			/PublicDirectoryPage[\s\S]*?from\s*["']\.\/(?:pages\/PublicDirectoryPage|app\/lazyPages)(?:\.js)?["']/,
 		);
 		expect(appSource).toContain('app.route().kind === "org-public-directory"');
 		expect(appSource).toContain("<PublicDirectoryPage");

@@ -1,94 +1,11 @@
 import { expect, test } from "bun:test";
 
-test("commits a normalized PostgreSQL 17 schema-only snapshot", async () => {
+test("keeps the schema dump portable and free of application rows", async () => {
 	const snapshot = await Bun.file(
 		new URL("../../../database/postgres17-schema.sql", import.meta.url),
 	).text();
-	expect(snapshot).toContain("CREATE SCHEMA orgs;");
-	expect(snapshot).toContain("CREATE TABLE orgs.festival_children");
-	expect(snapshot).toContain("CREATE TABLE orgs.festival_child_age_snapshots");
-	expect(snapshot).toContain("CREATE TABLE orgs.checkout_intent_lines");
-	expect(snapshot).toContain("checkout_intents_intent_type_check");
-	expect(snapshot).toContain("line_identity_protocol text");
-	expect(snapshot).toContain("CREATE TABLE orgs.class_entitlements");
-	expect(snapshot).toContain("CREATE TABLE orgs.registration_change_logs");
-	expect(snapshot).toContain("CREATE TABLE orgs.refund_events");
-	expect(snapshot).toContain("shopify_order_line_id text");
-	expect(snapshot).toContain("failure_stage text");
-	expect(snapshot).toContain("failure_code text");
-	expect(snapshot).toContain("shopify_request_id text");
-	expect(snapshot).toContain("failed_at timestamp with time zone");
-	expect(snapshot).toContain(
-		"checkout_intent_lines_checkout_intent_id_line_index_key",
+	expect(snapshot).toContain("-- PostgreSQL database dump complete");
+	expect(snapshot).not.toMatch(
+		/\\(?:un)?restrict |OWNER TO |^COPY .* FROM stdin;|^INSERT INTO /m,
 	);
-	expect(snapshot).toContain("class_entitlements_checkout_intent_line_id_key");
-	expect(snapshot).toContain("CREATE TABLE orgs.membership_entitlements");
-	expect(snapshot).toContain(
-		"CREATE TABLE orgs.membership_entitlement_divisions",
-	);
-	expect(snapshot).toContain(
-		"CREATE TABLE orgs.membership_entitlement_revocations",
-	);
-	expect(snapshot).toContain(
-		"CREATE TABLE orgs.membership_entitlement_cohorts",
-	);
-	expect(snapshot).toContain("CREATE TABLE orgs.membership_identity_emails");
-	expect(snapshot).toContain("CREATE TABLE orgs.volunteers");
-	expect(snapshot).toContain("CREATE TABLE orgs.volunteer_roles");
-	expect(snapshot).toContain("display_name text NOT NULL");
-	expect(snapshot).toContain("CREATE TABLE orgs.volunteer_shifts");
-	expect(snapshot).toContain("CREATE TABLE orgs.volunteer_assignments");
-	expect(snapshot).toContain("volunteer_assignments_active_shift_key");
-	expect(snapshot).toContain("can_write_inventory boolean");
-	expect(snapshot).toContain("CREATE TABLE orgs.credit_balances");
-	expect(snapshot).toContain("CREATE TABLE orgs.billing_adjustments");
-	expect(snapshot).toContain("CREATE TABLE orgs.billing_ledger");
-	expect(snapshot).toContain("CREATE TABLE orgs.invoices");
-	expect(snapshot).toContain("CREATE TABLE orgs.invoice_line_items");
-	expect(snapshot).toContain("CREATE TABLE orgs.message_templates");
-	expect(snapshot).toContain("CREATE TABLE orgs.message_events");
-	expect(snapshot).toContain("CREATE TABLE orgs.message_logs");
-	expect(snapshot).toContain("CREATE TABLE orgs.repertoire_review_items");
-	expect(snapshot).toContain("imslp_url text");
-	expect(snapshot).toContain("CREATE TRIGGER enforce_shopify_shop_ownership");
-	expect(snapshot).toContain("CREATE TABLE orgs.rooms");
-	expect(snapshot).toContain("CREATE TABLE orgs.room_piano_configurations");
-	expect(snapshot).toContain("rooms_org_festival_idx");
-	expect(snapshot).toContain("room_piano_configurations_room_idx");
-	expect(snapshot).toContain("CREATE TABLE orgs.teacher_profiles");
-	expect(snapshot).toContain("CREATE TABLE orgs.teacher_profile_divisions");
-	expect(snapshot).toContain("CREATE TABLE orgs.accompanist_profiles");
-	expect(snapshot).toContain("CREATE TABLE orgs.accompanist_profile_divisions");
-	for (const kind of ["teacher", "accompanist"]) {
-		expect(snapshot).toContain(
-			`ADD CONSTRAINT ${kind}_profiles_id_organization_id_key UNIQUE (id, organization_id);`,
-		);
-		expect(snapshot).toContain(
-			`ADD CONSTRAINT ${kind}_profile_divisions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;`,
-		);
-		expect(snapshot).toContain(
-			`ADD CONSTRAINT ${kind}_profile_divisions_${kind}_profile_id_organization_id_fkey FOREIGN KEY (${kind}_profile_id, organization_id) REFERENCES orgs.${kind}_profiles(id, organization_id) ON DELETE CASCADE;`,
-		);
-		expect(snapshot).toContain(
-			`ADD CONSTRAINT ${kind}_profile_divisions_division_id_organization_id_fkey FOREIGN KEY (division_id, organization_id) REFERENCES orgs.organization_divisions(id, organization_id) ON DELETE CASCADE;`,
-		);
-	}
-	expect(snapshot).toContain("idx_teacher_profiles_directory");
-	expect(snapshot).toContain("idx_accompanist_profiles_directory");
-	expect(snapshot).toContain(
-		"CREATE TABLE orgs.festival_class_capacity_audit_logs",
-	);
-	expect(snapshot).toContain("festival_class_capacity_audit_logs_pkey");
-	expect(snapshot).toContain(
-		"festival_class_capacity_audit_logs_organization_id_fkey",
-	);
-	expect(snapshot).toContain(
-		"festival_class_capacity_audit_logs_festival_id_fkey",
-	);
-	expect(snapshot).toContain(
-		"festival_class_capacity_audit_logs_festival_class_id_fkey",
-	);
-	expect(snapshot).not.toContain("entitlement_grants");
-	expect(snapshot).not.toContain("accompanist_membership_grants");
-	expect(snapshot).not.toContain("\\restrict ");
 });

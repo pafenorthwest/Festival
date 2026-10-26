@@ -1042,7 +1042,7 @@ export class CustomerAccountService {
 					: undefined,
 		};
 	}
-	/** Trusted server-side continuation after checkoutAccess has verified the session and CSRF token. */
+	/** Record affirmative membership-sharing consent after checkoutAccess or formAccess verifies the session and CSRF token. */
 	async recordCheckoutStaffAccessConsent(
 		organizationId: string,
 		customerId: string,

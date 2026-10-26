@@ -99,6 +99,7 @@ export interface ClassCheckoutLineItemInput
 	classId?: string;
 	childId: string;
 	teacherId: string;
+	instrumentId?: string;
 	accompanistId?: string | null;
 	pieces: RepertoirePiece[];
 	isCandidate?: never;

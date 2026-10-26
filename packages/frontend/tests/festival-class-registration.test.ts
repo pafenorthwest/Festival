@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import {
 	evaluateRegistrationEligibility,
+	getPublicDivisions,
 	startClassCheckout,
 } from "../src/lib/api.js";
 import {
 	arePiecesValid,
+	createRegistrationSelectHandlers,
 	formatTotalDuration,
+	isInstrumentSelectionValid,
 	pieceDraftToRepertoirePiece,
 	validatePieceComposer,
 	validatePieceDuration,
@@ -28,6 +31,12 @@ const cartCard = await Bun.file(
 		import.meta.url,
 	),
 ).text();
+const performanceOptions = await Bun.file(
+	new URL(
+		"../src/components/FestivalRegistrationPerformanceOptions.tsx",
+		import.meta.url,
+	),
+).text();
 
 describe("Festival Class Registration routing & landing entry", () => {
 	it("points Parents audience banner to buildFestivalRegistrationPath", () => {
@@ -43,6 +52,40 @@ describe("Festival Class Registration routing & landing entry", () => {
 });
 
 describe("Repertoire validation & transformation helpers", () => {
+	it("requires an available instrument when the organization has configured options", () => {
+		const options = [{ id: "violin" }, { id: "piano" }];
+		expect(isInstrumentSelectionValid(options, "")).toBe(false);
+		expect(isInstrumentSelectionValid(options, "retired")).toBe(false);
+		expect(isInstrumentSelectionValid(options, "violin")).toBe(true);
+		expect(isInstrumentSelectionValid([], "")).toBe(true);
+	});
+
+	it("clears the instrument when changing performer, division, teacher, or class", () => {
+		let instrument = "violin";
+		const handlers = createRegistrationSelectHandlers(
+			() => {},
+			() => {},
+			() => {},
+			() => {},
+			() => {},
+			(id) => {
+				instrument = id;
+			},
+		);
+		for (const key of [
+			"onChildChange",
+			"onDivisionChange",
+			"onTeacherChange",
+			"onClassChange",
+		] as const) {
+			instrument = "violin";
+			handlers[key]({ currentTarget: { value: "changed" } } as Event & {
+				currentTarget: HTMLSelectElement;
+			});
+			expect(instrument).toBe("");
+		}
+	});
+
 	it("enforces non-blank composer and title", () => {
 		expect(validatePieceTitle("")).toBe("Title is required.");
 		expect(validatePieceTitle("  ")).toBe("Title is required.");
@@ -198,9 +241,14 @@ describe("Festival Class Registration Page workflow", () => {
 			"teacher",
 			"class",
 			"accompanist",
+			"instrument",
 		]) {
-			expect(regPage).toContain(`id="registration-${field}"`);
-			expect(regPage).toContain(`name="registration-${field}"`);
+			const source =
+				field === "instrument" || field === "accompanist"
+					? performanceOptions
+					: regPage;
+			expect(source).toContain(`id="registration-${field}"`);
+			expect(source).toContain(`name="registration-${field}"`);
 		}
 	});
 });
@@ -209,6 +257,53 @@ describe("Registration eligibility & multi-line checkout API", () => {
 	const originalFetch = globalThis.fetch;
 	afterEach(() => {
 		globalThis.fetch = originalFetch;
+	});
+
+	it("loads public instrument options and preserves catalog IDs in checkout transport", async () => {
+		const calls: { url: string; body: unknown }[] = [];
+		globalThis.fetch = (async (
+			input: RequestInfo | URL,
+			init?: RequestInit,
+		) => {
+			calls.push({
+				url: String(input),
+				body: init?.body ? JSON.parse(String(init.body)) : undefined,
+			});
+			return Response.json(
+				init?.method === "POST"
+					? {
+							checkoutUrl: "https://shop.example.test/checkout",
+							correlationId: "correlation",
+						}
+					: {
+							divisions: [],
+							instruments: [
+								{ id: "violin", displayName: "Violin", displayOrder: 0 },
+							],
+						},
+			);
+		}) as typeof fetch;
+		const options = await getPublicDivisions("music org");
+		expect(options.instruments?.[0].id).toBe("violin");
+		await startClassCheckout("music org", "spring", {
+			csrfToken: "csrf",
+			idempotencyKey: "key",
+			lineItems: [
+				{
+					childId: "child",
+					festivalClassId: "class",
+					teacherId: "teacher",
+					instrumentId: "violin",
+					pieces: [
+						{ title: "Work", composer: "Composer", durationSeconds: 60 },
+					],
+				},
+			],
+		});
+		expect(calls[0].url).toBe("/api/organizations/music%20org/divisions");
+		expect(calls[1].body).toMatchObject({
+			lineItems: [{ instrumentId: "violin" }],
+		});
 	});
 
 	it("evaluateRegistrationEligibility sends items payload and CSRF header", async () => {

@@ -24,6 +24,7 @@ export function AccompanistMembershipPage(props: { slug: string }) {
 		Array<{ id: string; displayName: string }>
 	>([]);
 	const [selected, setSelected] = createSignal<string[]>([]);
+	const [staffAccessConsent, setStaffAccessConsent] = createSignal(false);
 	const [loading, setLoading] = createSignal(true);
 	const [authenticated, setAuthenticated] = createSignal(false);
 	const [needsSignIn, setNeedsSignIn] = createSignal(false);
@@ -116,6 +117,7 @@ export function AccompanistMembershipPage(props: { slug: string }) {
 	}
 	async function submit(event: SubmitEvent) {
 		event.preventDefault();
+		if (!staffAccessConsent() || submitting()) return;
 		setError("");
 		setSubmitting(true);
 		try {
@@ -125,7 +127,9 @@ export function AccompanistMembershipPage(props: { slug: string }) {
 				city: city(),
 				phone: phone(),
 				divisionIds: selected(),
+				staffAccessConsent: staffAccessConsent(),
 			});
+			setStaffAccessConsent(false);
 			window.location.assign(
 				buildOrgCustomerAccountMembershipsPath(props.slug),
 			);
@@ -188,6 +192,7 @@ export function AccompanistMembershipPage(props: { slug: string }) {
 								type="button"
 								variant="secondary"
 								disabled={redirectingToShopify()}
+								data-preload-path={buildOrgRootPath(props.slug)}
 								onClick={cancelSignIn}
 							>
 								Cancel
@@ -246,7 +251,30 @@ export function AccompanistMembershipPage(props: { slug: string }) {
 							)}
 						</For>
 					</fieldset>
-					<Button type="submit" disabled={submitting()}>
+					<label class="membership-consent">
+						<input
+							type="checkbox"
+							checked={staffAccessConsent()}
+							disabled={submitting()}
+							required
+							aria-describedby="accompanist-consent-required"
+							onInput={(event) =>
+								setStaffAccessConsent(event.currentTarget.checked)
+							}
+						/>
+						<span>
+							Agree to sharing Shopify-provided contact details to support my
+							membership
+						</span>
+					</label>
+					<p class="muted" id="accompanist-consent-required">
+						Required to acquire this membership. See our{" "}
+						<a href="/privacy-policy">Privacy Policy</a> for details.
+					</p>
+					<Button
+						type="submit"
+						disabled={!staffAccessConsent() || submitting()}
+					>
 						{submitting() ? "Saving…" : "Activate membership"}
 					</Button>
 				</form>

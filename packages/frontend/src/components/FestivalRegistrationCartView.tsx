@@ -268,6 +268,12 @@ export function FestivalRegistrationCartView(
 															<span class="muted">Teacher: </span>
 															<strong>{item.teacherName}</strong>
 														</div>
+														<Show when={item.instrumentName}>
+															<div>
+																<span class="muted">Instrument: </span>
+																<strong>{item.instrumentName}</strong>
+															</div>
+														</Show>
 														<div>
 															<span class="muted">Accompanist: </span>
 															<strong>{item.accompanistName ?? "None"}</strong>

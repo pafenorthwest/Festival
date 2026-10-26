@@ -660,6 +660,7 @@ export function acquireAccompanistMembership(
 		city: string;
 		phone: string;
 		divisionIds: string[];
+		staffAccessConsent: boolean;
 	},
 ) {
 	return requestJson<{
@@ -1585,6 +1586,7 @@ export interface StartClassCheckoutInput {
 	festivalClassId?: string;
 	childId?: string;
 	teacherId?: string;
+	instrumentId?: string;
 	pieces?: RepertoirePiece[];
 	divisionId?: string;
 	accompanistId?: string;

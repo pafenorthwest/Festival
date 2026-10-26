@@ -1,47 +1,57 @@
-import { Match, Switch } from "solid-js";
+import {
+	createEffect,
+	ErrorBoundary,
+	Match,
+	on,
+	Suspense,
+	Switch,
+} from "solid-js";
+import {
+	AccompanistMembershipPage,
+	AdminAccompanistsPage,
+	AdminCheckoutRecoveryPage,
+	AdminDivisionsPage,
+	AdminFestivalsPage,
+	AdminHomePage,
+	AdminIntegrationsPage,
+	AdminMembershipProductsPage,
+	AdminRoomsPage,
+	AdminRosterPage,
+	AdminSettingsPage,
+	AdminUsersPage,
+	BillingReconciliationPage,
+	CommunicationTemplatesPage,
+	CreateOrganizationPage,
+	CustomerAccountAvailabilityPage,
+	CustomerAccountClassesPage,
+	CustomerAccountContactPage,
+	CustomerAccountMembershipsPage,
+	CustomerAccountOrdersPage,
+	CustomerCheckoutRecoveryPage,
+	CustomerChildrenPage,
+	FestivalAdminClassesPage,
+	FestivalAdminDashboardPage,
+	FestivalClassRegistrationPage,
+	FestivalLandingPage,
+	FestivalVolunteersPage,
+	InviteLandingPage,
+	LegacyCustomerAccountRedirect,
+	MembershipPage,
+	MusicReviewPage,
+	OrganizationRootPage,
+	PrivacyPolicyPage,
+	PublicDirectoryPage,
+	VolunteerRolesPage,
+} from "./app/lazyPages.js";
+import { preloadNavigation } from "./app/navigationPreload.js";
 import { useFestivalAppController } from "./app/useFestivalAppController.js";
 import { AppBanners } from "./components/AppBanners.js";
 import { AppHeader } from "./components/AppHeader.js";
 import { OrganizationSideNavigation } from "./components/OrganizationSideNavigation.js";
 import { SignInModal } from "./components/SignInModal.js";
 import { isOrganizationPageRoute } from "./lib/routes.js";
-import { AccompanistMembershipPage } from "./pages/AccompanistMembershipPage.js";
-import { AdminAccompanistsPage } from "./pages/AdminAccompanistsPage.js";
-import { AdminCheckoutRecoveryPage } from "./pages/AdminCheckoutRecoveryPage.js";
-import { AdminDivisionsPage } from "./pages/AdminDivisionsPage.js";
-import { AdminFestivalsPage } from "./pages/AdminFestivalsPage.js";
-import { AdminHomePage } from "./pages/AdminHomePage.js";
-import { AdminIntegrationsPage } from "./pages/AdminIntegrationsPage.js";
-import { AdminMembershipProductsPage } from "./pages/AdminMembershipProductsPage.js";
-import { AdminRoomsPage } from "./pages/AdminRoomsPage.js";
-import { AdminRosterPage } from "./pages/AdminRosterPage.js";
-import { AdminSettingsPage } from "./pages/AdminSettingsPage.js";
-import { AdminUsersPage } from "./pages/AdminUsersPage.js";
-import { BillingReconciliationPage } from "./pages/BillingReconciliationPage.js";
-import { CommunicationTemplatesPage } from "./pages/CommunicationTemplatesPage.js";
-import { CreateOrganizationPage } from "./pages/CreateOrganizationPage.js";
-import { CustomerAccountAvailabilityPage } from "./pages/CustomerAccountAvailabilityPage.js";
-import { CustomerAccountClassesPage } from "./pages/CustomerAccountClassesPage.js";
-import { CustomerAccountContactPage } from "./pages/CustomerAccountContactPage.js";
-import { CustomerAccountMembershipsPage } from "./pages/CustomerAccountMembershipsPage.js";
-import { CustomerAccountOrdersPage } from "./pages/CustomerAccountOrdersPage.js";
-import { CustomerCheckoutRecoveryPage } from "./pages/CustomerCheckoutRecoveryPage.js";
-import { CustomerChildrenPage } from "./pages/CustomerChildrenPage.js";
-import { FestivalAdminClassesPage } from "./pages/FestivalAdminClassesPage.js";
-import { FestivalAdminDashboardPage } from "./pages/FestivalAdminDashboardPage.js";
-import { FestivalClassRegistrationPage } from "./pages/FestivalClassRegistrationPage.js";
-import { FestivalLandingPage } from "./pages/FestivalLandingPage.js";
-import { FestivalVolunteersPage } from "./pages/FestivalVolunteersPage.js";
 import { HomePage } from "./pages/HomePage.js";
-import { InviteLandingPage } from "./pages/InviteLandingPage.js";
-import { LegacyCustomerAccountRedirect } from "./pages/LegacyCustomerAccountRedirect.js";
-import { MembershipPage } from "./pages/MembershipPage.js";
-import { MusicReviewPage } from "./pages/MusicReviewPage.js";
 import { OrganizationChooser } from "./pages/OrganizationChooser.js";
-import { OrganizationRootPage } from "./pages/OrganizationRootPage.js";
-import { PrivacyPolicyPage } from "./pages/PrivacyPolicyPage.js";
-import { PublicDirectoryPage } from "./pages/PublicDirectoryPage.js";
-import { VolunteerRolesPage } from "./pages/VolunteerRolesPage.js";
 
 export default function App() {
 	const app = useFestivalAppController();
@@ -54,7 +64,11 @@ export default function App() {
 	};
 
 	return (
-		<main class="shell">
+		<main
+			class="shell"
+			onPointerOver={preloadNavigation}
+			onFocusIn={preloadNavigation}
+		>
 			<AppHeader app={app} />
 			<AppBanners app={app} />
 			<OrganizationChooser app={app} />
@@ -73,185 +87,222 @@ export default function App() {
 					class="application-page-content"
 					classList={{ "admin-page-content": isAdminPage() }}
 				>
-					<Switch>
-						<Match
-							when={app.route().kind === "home" && !app.shouldShowOrgChooser()}
-						>
-							<HomePage app={app} />
-						</Match>
-						<Match when={app.route().kind === "privacy-policy"}>
-							<PrivacyPolicyPage />
-						</Match>
-						<Match when={app.route().kind === "create-org"}>
-							<CreateOrganizationPage app={app} />
-						</Match>
-						<Match when={app.route().kind === "invite"}>
-							<InviteLandingPage app={app} />
-						</Match>
-						<Match when={app.route().kind === "org-root"}>
-							<OrganizationRootPage app={app} />
-						</Match>
-						<Match when={app.route().kind === "org-public-directory"}>
-							<PublicDirectoryPage
-								slug={(app.route() as { slug: string }).slug}
-							/>
-						</Match>
-						<Match when={app.route().kind === "festival-public"}>
-							<FestivalLandingPage
-								slug={(app.route() as { slug: string }).slug}
-								festivalSlug={
-									(app.route() as { festivalSlug: string }).festivalSlug
-								}
-							/>
-						</Match>
-						<Match when={app.route().kind === "festival-register"}>
-							<FestivalClassRegistrationPage
-								app={app}
-								slug={(app.route() as { slug: string }).slug}
-								festivalSlug={
-									(app.route() as { festivalSlug: string }).festivalSlug
-								}
-							/>
-						</Match>
-						<Match when={app.route().kind === "festival-volunteers"}>
-							<FestivalVolunteersPage
-								app={app}
-								slug={(app.route() as { slug: string }).slug}
-								festivalSlug={
-									(app.route() as { festivalSlug: string }).festivalSlug
-								}
-							/>
-						</Match>
-						<Match when={app.route().kind === "festival-admin"}>
-							<FestivalAdminDashboardPage
-								app={app}
-								slug={(app.route() as { slug: string }).slug}
-								festivalSlug={
-									(app.route() as { festivalSlug: string }).festivalSlug
-								}
-							/>
-						</Match>
-						<Match when={app.route().kind === "festival-admin-classes"}>
-							<FestivalAdminClassesPage
-								app={app}
-								slug={(app.route() as { slug: string }).slug}
-								festivalSlug={
-									(app.route() as { festivalSlug: string }).festivalSlug
-								}
-							/>
-						</Match>
-						<Match when={app.route().kind === "org-membership"}>
-							<MembershipPage app={app} />
-						</Match>
-						<Match when={app.route().kind === "org-accompanist-membership"}>
-							<AccompanistMembershipPage
-								slug={(app.route() as { slug: string }).slug}
-							/>
-						</Match>
-						<Match when={app.route().kind === "org-customer-account-legacy"}>
-							<LegacyCustomerAccountRedirect
-								slug={(app.route() as { slug: string }).slug}
-							/>
-						</Match>
-						<Match
-							when={app.route().kind === "org-customer-account-memberships"}
-						>
-							<CustomerAccountMembershipsPage
-								slug={(app.route() as { slug: string }).slug}
-							/>
-						</Match>
-						<Match when={app.route().kind === "org-customer-account-contact"}>
-							<CustomerAccountContactPage
-								slug={(app.route() as { slug: string }).slug}
-							/>
-						</Match>
-						<Match when={app.route().kind === "org-customer-account-children"}>
-							<CustomerChildrenPage
-								slug={(app.route() as { slug: string }).slug}
-							/>
-						</Match>
-						<Match when={app.route().kind === "org-customer-account-orders"}>
-							<CustomerAccountOrdersPage
-								app={app}
-								slug={(app.route() as { slug: string }).slug}
-							/>
-						</Match>
-						<Match when={app.route().kind === "org-customer-account-classes"}>
-							<CustomerAccountClassesPage
-								slug={(app.route() as { slug: string }).slug}
-							/>
-						</Match>
-						<Match
-							when={app.route().kind === "org-customer-account-availability"}
-						>
-							<CustomerAccountAvailabilityPage
-								slug={(app.route() as { slug: string }).slug}
-							/>
-						</Match>
-						<Match when={app.route().kind === "org-admin"}>
-							<AdminHomePage app={app} />
-						</Match>
-						<Match when={app.route().kind === "org-admin-users"}>
-							<AdminUsersPage app={app} />
-						</Match>
-						<Match when={app.route().kind === "org-admin-integrations"}>
-							<AdminIntegrationsPage app={app} />
-						</Match>
-						<Match when={app.route().kind === "org-admin-memberships"}>
-							<AdminMembershipProductsPage app={app} />
-						</Match>
-						<Match when={app.route().kind === "org-admin-festivals"}>
-							<AdminFestivalsPage app={app} />
-						</Match>
-						<Match when={app.route().kind === "org-admin-divisions"}>
-							<AdminDivisionsPage app={app} />
-						</Match>
-						<Match when={app.route().kind === "org-admin-settings"}>
-							<AdminSettingsPage app={app} />
-						</Match>
-						<Match when={app.route().kind === "org-admin-accompanists"}>
-							<AdminAccompanistsPage app={app} />
-						</Match>
-						<Match when={app.route().kind === "org-admin-roster"}>
-							<AdminRosterPage app={app} />
-						</Match>
-						<Match when={app.route().kind === "org-admin-volunteers"}>
-							<VolunteerRolesPage
-								app={app}
-								slug={(app.route() as { slug: string }).slug}
-							/>
-						</Match>
-						<Match when={app.route().kind === "org-admin-rooms"}>
-							<AdminRoomsPage
-								app={app}
-								slug={(app.route() as { slug: string }).slug}
-							/>
-						</Match>
-						<Match when={app.route().kind === "org-music-review"}>
-							<MusicReviewPage
-								app={app}
-								slug={(app.route() as { slug: string }).slug}
-							/>
-						</Match>
-						<Match when={app.route().kind === "org-billing"}>
-							<BillingReconciliationPage
-								app={app}
-								slug={(app.route() as { slug: string }).slug}
-							/>
-						</Match>
-						<Match when={app.route().kind === "org-communications"}>
-							<CommunicationTemplatesPage
-								app={app}
-								slug={(app.route() as { slug: string }).slug}
-							/>
-						</Match>
-						<Match when={app.route().kind === "org-admin-checkout-recovery"}>
-							<AdminCheckoutRecoveryPage app={app} />
-						</Match>
-						<Match when={app.route().kind === "org-checkout-recovery"}>
-							<CustomerCheckoutRecoveryPage app={app} />
-						</Match>
-					</Switch>
+					<ErrorBoundary
+						fallback={(_error, reset) => {
+							createEffect(on(() => app.route(), reset, { defer: true }));
+							return (
+								<section class="panel flow-panel" role="alert">
+									<h2>Unable to display this page</h2>
+									<p>Please reload the page and try again.</p>
+									<button
+										type="button"
+										class="button"
+										onClick={() => window.location.reload()}
+									>
+										Reload page
+									</button>
+								</section>
+							);
+						}}
+					>
+						<Suspense fallback={<p role="status">Loading page…</p>}>
+							<Switch>
+								<Match
+									when={
+										app.route().kind === "home" && !app.shouldShowOrgChooser()
+									}
+								>
+									<HomePage app={app} />
+								</Match>
+								<Match when={app.route().kind === "privacy-policy"}>
+									<PrivacyPolicyPage />
+								</Match>
+								<Match when={app.route().kind === "create-org"}>
+									<CreateOrganizationPage app={app} />
+								</Match>
+								<Match when={app.route().kind === "invite"}>
+									<InviteLandingPage app={app} />
+								</Match>
+								<Match when={app.route().kind === "org-root"}>
+									<OrganizationRootPage app={app} />
+								</Match>
+								<Match when={app.route().kind === "org-public-directory"}>
+									<PublicDirectoryPage
+										slug={(app.route() as { slug: string }).slug}
+									/>
+								</Match>
+								<Match when={app.route().kind === "festival-public"}>
+									<FestivalLandingPage
+										slug={(app.route() as { slug: string }).slug}
+										festivalSlug={
+											(app.route() as { festivalSlug: string }).festivalSlug
+										}
+									/>
+								</Match>
+								<Match when={app.route().kind === "festival-register"}>
+									<FestivalClassRegistrationPage
+										app={app}
+										slug={(app.route() as { slug: string }).slug}
+										festivalSlug={
+											(app.route() as { festivalSlug: string }).festivalSlug
+										}
+									/>
+								</Match>
+								<Match when={app.route().kind === "festival-volunteers"}>
+									<FestivalVolunteersPage
+										app={app}
+										slug={(app.route() as { slug: string }).slug}
+										festivalSlug={
+											(app.route() as { festivalSlug: string }).festivalSlug
+										}
+									/>
+								</Match>
+								<Match when={app.route().kind === "festival-admin"}>
+									<FestivalAdminDashboardPage
+										app={app}
+										slug={(app.route() as { slug: string }).slug}
+										festivalSlug={
+											(app.route() as { festivalSlug: string }).festivalSlug
+										}
+									/>
+								</Match>
+								<Match when={app.route().kind === "festival-admin-classes"}>
+									<FestivalAdminClassesPage
+										app={app}
+										slug={(app.route() as { slug: string }).slug}
+										festivalSlug={
+											(app.route() as { festivalSlug: string }).festivalSlug
+										}
+									/>
+								</Match>
+								<Match when={app.route().kind === "org-membership"}>
+									<MembershipPage app={app} />
+								</Match>
+								<Match when={app.route().kind === "org-accompanist-membership"}>
+									<AccompanistMembershipPage
+										slug={(app.route() as { slug: string }).slug}
+									/>
+								</Match>
+								<Match
+									when={app.route().kind === "org-customer-account-legacy"}
+								>
+									<LegacyCustomerAccountRedirect
+										slug={(app.route() as { slug: string }).slug}
+									/>
+								</Match>
+								<Match
+									when={app.route().kind === "org-customer-account-memberships"}
+								>
+									<CustomerAccountMembershipsPage
+										slug={(app.route() as { slug: string }).slug}
+									/>
+								</Match>
+								<Match
+									when={app.route().kind === "org-customer-account-contact"}
+								>
+									<CustomerAccountContactPage
+										slug={(app.route() as { slug: string }).slug}
+									/>
+								</Match>
+								<Match
+									when={app.route().kind === "org-customer-account-children"}
+								>
+									<CustomerChildrenPage
+										slug={(app.route() as { slug: string }).slug}
+									/>
+								</Match>
+								<Match
+									when={app.route().kind === "org-customer-account-orders"}
+								>
+									<CustomerAccountOrdersPage
+										app={app}
+										slug={(app.route() as { slug: string }).slug}
+									/>
+								</Match>
+								<Match
+									when={app.route().kind === "org-customer-account-classes"}
+								>
+									<CustomerAccountClassesPage
+										slug={(app.route() as { slug: string }).slug}
+									/>
+								</Match>
+								<Match
+									when={
+										app.route().kind === "org-customer-account-availability"
+									}
+								>
+									<CustomerAccountAvailabilityPage
+										slug={(app.route() as { slug: string }).slug}
+									/>
+								</Match>
+								<Match when={app.route().kind === "org-admin"}>
+									<AdminHomePage app={app} />
+								</Match>
+								<Match when={app.route().kind === "org-admin-users"}>
+									<AdminUsersPage app={app} />
+								</Match>
+								<Match when={app.route().kind === "org-admin-integrations"}>
+									<AdminIntegrationsPage app={app} />
+								</Match>
+								<Match when={app.route().kind === "org-admin-memberships"}>
+									<AdminMembershipProductsPage app={app} />
+								</Match>
+								<Match when={app.route().kind === "org-admin-festivals"}>
+									<AdminFestivalsPage app={app} />
+								</Match>
+								<Match when={app.route().kind === "org-admin-divisions"}>
+									<AdminDivisionsPage app={app} />
+								</Match>
+								<Match when={app.route().kind === "org-admin-settings"}>
+									<AdminSettingsPage app={app} />
+								</Match>
+								<Match when={app.route().kind === "org-admin-accompanists"}>
+									<AdminAccompanistsPage app={app} />
+								</Match>
+								<Match when={app.route().kind === "org-admin-roster"}>
+									<AdminRosterPage app={app} />
+								</Match>
+								<Match when={app.route().kind === "org-admin-volunteers"}>
+									<VolunteerRolesPage
+										app={app}
+										slug={(app.route() as { slug: string }).slug}
+									/>
+								</Match>
+								<Match when={app.route().kind === "org-admin-rooms"}>
+									<AdminRoomsPage
+										app={app}
+										slug={(app.route() as { slug: string }).slug}
+									/>
+								</Match>
+								<Match when={app.route().kind === "org-music-review"}>
+									<MusicReviewPage
+										app={app}
+										slug={(app.route() as { slug: string }).slug}
+									/>
+								</Match>
+								<Match when={app.route().kind === "org-billing"}>
+									<BillingReconciliationPage
+										app={app}
+										slug={(app.route() as { slug: string }).slug}
+									/>
+								</Match>
+								<Match when={app.route().kind === "org-communications"}>
+									<CommunicationTemplatesPage
+										app={app}
+										slug={(app.route() as { slug: string }).slug}
+									/>
+								</Match>
+								<Match
+									when={app.route().kind === "org-admin-checkout-recovery"}
+								>
+									<AdminCheckoutRecoveryPage app={app} />
+								</Match>
+								<Match when={app.route().kind === "org-checkout-recovery"}>
+									<CustomerCheckoutRecoveryPage app={app} />
+								</Match>
+							</Switch>
+						</Suspense>
+					</ErrorBoundary>
 				</div>
 			</div>
 			<footer class="site-footer">

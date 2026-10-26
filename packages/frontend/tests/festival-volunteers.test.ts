@@ -33,8 +33,11 @@ describe("volunteer sign-in flow", () => {
 		expect(lifecycle).toContain("loadFestivals(currentRoute.slug)");
 		expect(page).toContain("props.app.hasVolunteerAdminIntent()");
 		expect(page).toContain("AccessDeniedPanel");
-		expect(page).toContain("selectedFestivalShortName");
-		expect(page).toContain("<select");
+		expect(page).toContain(
+			"useAdminFestivalSelection(() => props.app.festivals())",
+		);
+		expect(page).toContain("<FestivalSelector");
+		expect(page).toContain("onChange={setSelectedFestivalShortName}");
 		expect(page).toContain(
 			"getVolunteerRoles(token, props.slug, festivalShortName)",
 		);

@@ -274,6 +274,10 @@ export function FestivalAdminClassesPage(props: {
 					<Button
 						type="button"
 						variant="secondary"
+						data-preload-path={buildFestivalAdminPath(
+							props.slug,
+							props.festivalSlug,
+						)}
 						onClick={() =>
 							props.app.navigate(
 								buildFestivalAdminPath(props.slug, props.festivalSlug),
