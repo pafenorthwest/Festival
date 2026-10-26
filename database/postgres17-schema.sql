@@ -26,6 +26,13 @@ CREATE SCHEMA orgs;
 
 
 --
+-- Name: btree_gist; Type: EXTENSION; Schema: -; Owner: -
+--
+
+CREATE EXTENSION IF NOT EXISTS btree_gist WITH SCHEMA public;
+
+
+--
 -- Name: enforce_shopify_shop_ownership(); Type: FUNCTION; Schema: orgs; Owner: -
 --
 
@@ -600,16 +607,6 @@ ALTER TABLE ONLY orgs.membership_entitlement_revocations
 
 ALTER TABLE ONLY orgs.membership_entitlement_revocations
     ADD CONSTRAINT membership_entitlement_revocations_entitlement_id_key UNIQUE (entitlement_id);
-
-ALTER TABLE ONLY orgs.membership_entitlement_revocations
-    ADD CONSTRAINT membership_entitlement_revocations_entitlement_id_fkey FOREIGN KEY (entitlement_id) REFERENCES orgs.membership_entitlements(id) ON DELETE RESTRICT;
-
-ALTER TABLE ONLY orgs.membership_entitlement_revocations
-    ADD CONSTRAINT membership_entitlement_revocations_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
-
-ALTER TABLE ONLY orgs.membership_entitlement_revocations
-    ADD CONSTRAINT membership_entitlement_revocations_actor_user_id_fkey FOREIGN KEY (actor_user_id) REFERENCES orgs.users(id) ON DELETE RESTRICT;
-
 
 --
 -- Name: membership_entitlements; Type: TABLE; Schema: orgs; Owner: -
@@ -2628,27 +2625,6 @@ CREATE INDEX registration_catalog_values_required_subtype_idx ON orgs.registrati
 
 
 --
--- Name: idx_checkout_intent_lines_child_id; Type: INDEX; Schema: orgs; Owner: -
---
-
-CREATE INDEX idx_checkout_intent_lines_child_id ON orgs.checkout_intent_lines USING btree (child_id);
-
-
---
--- Name: idx_checkout_intent_lines_festival_class_id; Type: INDEX; Schema: orgs; Owner: -
---
-
-CREATE INDEX idx_checkout_intent_lines_festival_class_id ON orgs.checkout_intent_lines USING btree (festival_class_id);
-
-
---
--- Name: idx_checkout_intent_lines_intent_id; Type: INDEX; Schema: orgs; Owner: -
---
-
-CREATE INDEX idx_checkout_intent_lines_intent_id ON orgs.checkout_intent_lines USING btree (checkout_intent_id);
-
-
---
 -- Name: registration_metadata_checkout_intent_id_idx; Type: INDEX; Schema: orgs; Owner: -
 --
 
@@ -3033,6 +3009,30 @@ ALTER TABLE ONLY orgs.membership_entitlement_divisions
 
 
 --
+-- Name: membership_entitlement_revocations membership_entitlement_revocations_actor_user_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.membership_entitlement_revocations
+    ADD CONSTRAINT membership_entitlement_revocations_actor_user_id_fkey FOREIGN KEY (actor_user_id) REFERENCES orgs.users(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: membership_entitlement_revocations membership_entitlement_revocations_entitlement_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.membership_entitlement_revocations
+    ADD CONSTRAINT membership_entitlement_revocations_entitlement_id_fkey FOREIGN KEY (entitlement_id) REFERENCES orgs.membership_entitlements(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: membership_entitlement_revocations membership_entitlement_revocations_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.membership_entitlement_revocations
+    ADD CONSTRAINT membership_entitlement_revocations_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
 -- Name: membership_entitlements membership_entitlements_customer_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
 --
 
@@ -3401,11 +3401,11 @@ ALTER TABLE ONLY orgs.registration_repertoire_item_contributors
 
 
 --
--- Name: registration_repertoire_item_contributors registration_repertoire_item_contributors_registration_repertoire_item_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+-- Name: registration_repertoire_item_contributors registration_repertoire_item_contributors_item_org_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
 --
 
 ALTER TABLE ONLY orgs.registration_repertoire_item_contributors
-    ADD CONSTRAINT registration_repertoire_item_contributors_registration_repertoire_item_id_organization_id_fkey FOREIGN KEY (registration_repertoire_item_id, organization_id) REFERENCES orgs.registration_repertoire_items(id, organization_id) ON DELETE CASCADE;
+    ADD CONSTRAINT registration_repertoire_item_contributors_item_org_fkey FOREIGN KEY (registration_repertoire_item_id, organization_id) REFERENCES orgs.registration_repertoire_items(id, organization_id) ON DELETE CASCADE;
 
 
 --
@@ -3425,11 +3425,11 @@ ALTER TABLE ONLY orgs.registration_repertoire_items
 
 
 --
--- Name: registration_repertoire_items registration_repertoire_items_registration_metadata_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+-- Name: registration_repertoire_items registration_repertoire_items_registration_metadata_org_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
 --
 
 ALTER TABLE ONLY orgs.registration_repertoire_items
-    ADD CONSTRAINT registration_repertoire_items_registration_metadata_id_organization_id_fkey FOREIGN KEY (registration_metadata_id, organization_id) REFERENCES orgs.registration_metadata(id, organization_id) ON DELETE CASCADE;
+    ADD CONSTRAINT registration_repertoire_items_registration_metadata_org_fkey FOREIGN KEY (registration_metadata_id, organization_id) REFERENCES orgs.registration_metadata(id, organization_id) ON DELETE CASCADE;
 
 
 --
