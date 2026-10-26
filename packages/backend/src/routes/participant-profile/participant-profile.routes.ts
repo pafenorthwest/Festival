@@ -123,7 +123,10 @@ export function buildParticipantProfileRoutes(
 				c.header("Cache-Control", "no-store");
 				const tenant = getRequiredTenant(c);
 				return c.json(
-					await profileService.listTeacherProfiles(tenant.organization.id),
+					await profileService.listTeacherProfiles(
+						tenant.organization.id,
+						tenant.identity.uid,
+					),
 				);
 			} catch (error) {
 				return toJsonError(c, error);
@@ -148,6 +151,7 @@ export function buildParticipantProfileRoutes(
 						tenant.organization.id,
 						profileId,
 						payload,
+						tenant.identity.uid,
 					),
 				);
 			} catch (error) {
@@ -167,7 +171,10 @@ export function buildParticipantProfileRoutes(
 				c.header("Cache-Control", "no-store");
 				const tenant = getRequiredTenant(c);
 				return c.json(
-					await profileService.listAccompanistProfiles(tenant.organization.id),
+					await profileService.listAccompanistProfiles(
+						tenant.organization.id,
+						tenant.identity.uid,
+					),
 				);
 			} catch (error) {
 				return toJsonError(c, error);
@@ -192,6 +199,7 @@ export function buildParticipantProfileRoutes(
 						tenant.organization.id,
 						profileId,
 						payload,
+						tenant.identity.uid,
 					),
 				);
 			} catch (error) {

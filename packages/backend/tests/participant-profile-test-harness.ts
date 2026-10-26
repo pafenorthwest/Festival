@@ -1,9 +1,11 @@
 import type { AuthenticatedUser } from "@festival/common";
 import { createApp } from "../src/app.js";
 import type { AuthVerifier } from "../src/auth/types.js";
-import type { CustomerAccountService } from "../src/customer/customer-account-service.js";
+import { CustomerAccountService } from "../src/customer/customer-account-service.js";
+import { InMemoryCustomerAccountRepository } from "../src/customer/in-memory-customer-account-repository.js";
 import { AppError } from "../src/errors/app-error.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
+import { ShopifySecretKeyring } from "../src/shopify/encryption.js";
 
 class FakeAuth implements AuthVerifier {
 	async verify(token: string): Promise<AuthenticatedUser> {
@@ -40,7 +42,22 @@ class FakeCustomerAccountService {
 		{ customerId: string; organizationId: string; csrfToken: string }
 	>();
 
-	constructor(private readonly repository: InMemoryOrganizationRepository) {}
+	constructor(
+		private readonly repository: InMemoryOrganizationRepository,
+		private readonly adminCustomerAccess: CustomerAccountService,
+	) {}
+
+	findAdminCustomerProfile(
+		organizationId: string,
+		customerId: string,
+		actorUid: string,
+	) {
+		return this.adminCustomerAccess.findAdminCustomerProfile(
+			organizationId,
+			customerId,
+			actorUid,
+		);
+	}
 
 	private async session(slug: string, sessionId?: string) {
 		const org = await this.repository.findOrganizationBySlug(slug);
@@ -123,7 +140,25 @@ export async function setupTestApp({ withMemberships = true } = {}) {
 	const repository = new InMemoryOrganizationRepository(
 		() => new Date("2026-10-25T12:00:00.000Z"),
 	);
-	const customerAccountService = new FakeCustomerAccountService(repository);
+	const customerRepository = new InMemoryCustomerAccountRepository();
+	const keyring = ShopifySecretKeyring.fromEnvironment(
+		JSON.stringify({ test: Buffer.alloc(32, 7).toString("base64") }),
+		"test",
+	);
+	if (!keyring) throw new Error("Test keyring unavailable");
+	const adminCustomerAccountService = new CustomerAccountService(
+		customerRepository,
+		repository,
+		keyring,
+		{
+			publicOrigin: "https://festival.example.com",
+			now: () => new Date("2026-10-25T12:00:00.000Z"),
+		},
+	);
+	const customerAccountService = new FakeCustomerAccountService(
+		repository,
+		adminCustomerAccountService,
+	);
 
 	const orgA = await repository.createOrganization({
 		name: "Organization A",
@@ -224,6 +259,8 @@ export async function setupTestApp({ withMemberships = true } = {}) {
 		app,
 		repository,
 		customerAccountService,
+		customerRepository,
+		adminCustomerAccountService,
 		orgA,
 		orgB,
 		divA1,

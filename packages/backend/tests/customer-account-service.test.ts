@@ -1,6 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { generateKeyPairSync, sign } from "node:crypto";
-import { deriveFestivalMetadataCutoff } from "@festival/common";
+import {
+	CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION,
+	deriveFestivalMetadataCutoff,
+} from "@festival/common";
 import { InMemoryCheckoutRepository } from "../src/checkout/checkout-repository.js";
 import { InMemoryMembershipCommerceRepository } from "../src/commerce/membership-commerce-repository.js";
 import type {
@@ -643,6 +646,105 @@ describe("CustomerAccountService", () => {
 		});
 		expect(initial).not.toHaveProperty("customerId");
 		expect(JSON.stringify(initial)).not.toContain("gid://shopify/Customer");
+	});
+	it("returns null for missing or outdated Admin consent while preserving the existing 404 contract", async () => {
+		const f = await fixture();
+		const auth = await f.authenticate();
+		const session = await f.repository.getSession(auth.sessionId);
+		if (!session) throw new Error("session");
+		for (const outdatedConsent of [false, true]) {
+			if (outdatedConsent) {
+				await f.repository.recordStaffAccessConsent({
+					organizationId: f.org.id,
+					customerId: session.customerId,
+					privacyNoticeVersion: "obsolete-privacy-notice",
+					consentedAtIso: new Date().toISOString(),
+				});
+			}
+			expect(
+				await f.service.findAdminCustomerProfile(
+					f.org.id,
+					session.customerId,
+					"admin-uid",
+				),
+			).toBeNull();
+			await expect(
+				f.service.adminCustomerProfile(
+					f.org.id,
+					session.customerId,
+					"admin-uid",
+				),
+			).rejects.toMatchObject({ status: 404 });
+		}
+		expect(f.repository.profileAccessAudits).toEqual([]);
+	});
+	it("keeps consent tenant-bound and audits a successful nullable Admin profile read", async () => {
+		const f = await fixture();
+		const auth = await f.authenticate();
+		const session = await f.repository.getSession(auth.sessionId);
+		if (!session) throw new Error("session");
+		await f.repository.recordStaffAccessConsent({
+			organizationId: f.org.id,
+			customerId: session.customerId,
+			privacyNoticeVersion: CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION,
+			consentedAtIso: new Date().toISOString(),
+		});
+		expect(
+			await f.service.findAdminCustomerProfile(
+				f.other.id,
+				session.customerId,
+				"other-admin",
+			),
+		).toBeNull();
+		expect(f.repository.profileAccessAudits).toEqual([]);
+		const visible = await f.service.findAdminCustomerProfile(
+			f.org.id,
+			session.customerId,
+			"verified-admin-uid",
+		);
+		expect(visible?.customerId).toBe(session.customerId);
+		expect(f.repository.profileAccessAudits).toEqual([
+			{
+				organizationId: f.org.id,
+				actorUid: "verified-admin-uid",
+				action: "view",
+				targetCustomerId: session.customerId,
+				occurredAtIso: expect.any(String),
+			},
+		]);
+	});
+	it("does not return an Admin profile when consent lookup or access auditing fails", async () => {
+		for (const failure of ["read", "audit"] as const) {
+			const f = await fixture();
+			const auth = await f.authenticate();
+			const session = await f.repository.getSession(auth.sessionId);
+			if (!session) throw new Error("session");
+			await f.repository.recordStaffAccessConsent({
+				organizationId: f.org.id,
+				customerId: session.customerId,
+				privacyNoticeVersion: CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION,
+				consentedAtIso: new Date().toISOString(),
+			});
+			const fail = async () => {
+				throw new Error("unavailable consent boundary");
+			};
+			if (failure === "read") f.repository.getConsentedCustomer = fail;
+			else f.repository.recordCustomerProfileAccessAudit = fail;
+			await expect(
+				f.service.findAdminCustomerProfile(
+					f.org.id,
+					session.customerId,
+					"admin-uid",
+				),
+			).rejects.toThrow("unavailable consent boundary");
+			await expect(
+				f.service.adminCustomerProfile(
+					f.org.id,
+					session.customerId,
+					"admin-uid",
+				),
+			).rejects.toThrow("unavailable consent boundary");
+		}
 	});
 	it("protects Festival profile edits and gates audited Admin access on consent", async () => {
 		const f = await fixture();
