@@ -686,3 +686,271 @@ describe("AccompanistMembershipService", () => {
 		});
 	});
 });
+
+const ALL_ON_ONE_PAGE = { page: 1, pageSize: 100 };
+
+describe("AccompanistMembershipService.listEntitlementReport", () => {
+	async function seedReport() {
+		const context = await setup();
+		const { repository, organization, division, service } = context;
+		const offering = await repository.createMembershipProductRecord({
+			organizationId: organization.id,
+			entitlementClass: "teacher_membership",
+			durationDays: 365,
+			isActive: true,
+			shopifyProductGid: "gid://shopify/Product/teacher",
+			shopifyVariantGid: "gid://shopify/ProductVariant/teacher",
+			productNameSnapshot: "Annual Teacher Pass",
+		});
+		const teacherGrant = (
+			customerId: string,
+			overrides: { startsOn: string; endsOn: string; status: string },
+		) =>
+			repository.createEntitlementGrantSnapshot({
+				organizationId: organization.id,
+				customerId,
+				entitlementClass: "teacher_membership",
+				offeringId: offering.id,
+				durationDays: 365,
+				divisionId: division.id,
+				divisionNameSnapshot: division.displayName,
+				paidAmount: "75.00",
+				paidCurrencyCode: "USD",
+				checkoutIntentId: `checkout-${customerId}`,
+				shopifyOrderGid: `gid://shopify/Order/${customerId}`,
+				shopifyOrderLineGid: `gid://shopify/LineItem/${customerId}`,
+				verifiedIdentityEmail: `${customerId}@example.com`,
+				...overrides,
+			} as Parameters<typeof repository.createEntitlementGrantSnapshot>[0]);
+		await teacherGrant("cust-active", {
+			startsOn: "2026-09-12",
+			endsOn: "2027-09-12",
+			status: "active",
+		});
+		await teacherGrant("cust-expired", {
+			startsOn: "2025-01-01",
+			endsOn: "2026-01-01",
+			status: "expired",
+		});
+		await teacherGrant("cust-scheduled", {
+			startsOn: "2027-01-01",
+			endsOn: "2028-01-01",
+			status: "scheduled",
+		});
+		const revokedGrant = await teacherGrant("cust-revoked", {
+			startsOn: "2026-09-12",
+			endsOn: "2027-09-12",
+			status: "active",
+		});
+		await repository.revokeEntitlement({
+			organizationId: organization.id,
+			entitlementId: revokedGrant.id,
+			actorUserId: "admin-user",
+			reason: "Refunded",
+			revokedAtIso: "2026-09-13T00:00:00.000Z",
+		});
+		for (const [id, name] of [
+			["cust-active", "Aaron Teacher"],
+			["cust-expired", "Erin Expired"],
+			["cust-scheduled", "Sam Scheduled"],
+			["cust-revoked", "Rita Revoked"],
+		] as const) {
+			repository.setCustomerContact(organization.id, {
+				customerId: id,
+				name,
+				email: `${id}@example.com`,
+				phone: "+1 206 555 0199",
+				city: "Private City",
+			});
+		}
+		await service.acquire({
+			organizationId: organization.id,
+			organizationTimezone: "UTC",
+			customerId: "cust-accompanist",
+			verifiedShopifyCustomerEmail: "acc@example.com",
+			payload: {
+				name: "Beth Accompanist",
+				email: "acc@example.com",
+				city: "Seattle",
+				phone: "+1 206 555 0101",
+				staffAccessConsent: true,
+				divisionIds: [division.id],
+			},
+		});
+		return context;
+	}
+
+	it("lists teacher and accompanist entitlements in every lifecycle status, sorted by customer", async () => {
+		const { organization, service } = await seedReport();
+		const { entries } = await service.listEntitlementReport(
+			organization.id,
+			{},
+			ALL_ON_ONE_PAGE,
+		);
+		expect(
+			entries.map((entry) => [
+				entry.customerName,
+				entry.entitlementClass,
+				entry.status,
+			]),
+		).toEqual([
+			["Aaron Teacher", "teacher_membership", "active"],
+			["Beth Accompanist", "accompanist_membership", "active"],
+			["Erin Expired", "teacher_membership", "expired"],
+			["Rita Revoked", "teacher_membership", "revoked"],
+			["Sam Scheduled", "teacher_membership", "scheduled"],
+		]);
+		expect(entries[0]).toMatchObject({
+			offeringName: "Annual Teacher Pass",
+			source: "teacher_checkout",
+			startsOn: "2026-09-12",
+			endsOn: "2027-09-12",
+			customerEmail: "cust-active@example.com",
+		});
+		expect(entries[1]).toMatchObject({
+			offeringName: "Accompanist Membership",
+			source: "accompanist_form",
+		});
+	});
+
+	it("filters by entitlement class, status, and customer search", async () => {
+		const { organization, service } = await seedReport();
+		const names = async (
+			filters: Parameters<typeof service.listEntitlementReport>[1],
+		) =>
+			(
+				await service.listEntitlementReport(
+					organization.id,
+					filters,
+					ALL_ON_ONE_PAGE,
+				)
+			).entries.map((entry) => entry.customerName);
+		expect(await names({ entitlementClass: "accompanist_membership" })).toEqual(
+			["Beth Accompanist"],
+		);
+		expect(await names({ status: "expired" })).toEqual(["Erin Expired"]);
+		expect(await names({ search: "RITA" })).toEqual(["Rita Revoked"]);
+		expect(await names({ search: "cust-sched" })).toEqual(["Sam Scheduled"]);
+		expect(
+			await names({ entitlementClass: "teacher_membership", status: "active" }),
+		).toEqual(["Aaron Teacher"]);
+		expect(await names({ search: "no such customer" })).toEqual([]);
+	});
+
+	it("returns only the fields needed for the report and never another organization's grants", async () => {
+		const { repository, organization, service } = await seedReport();
+		const other = await repository.createOrganization({
+			name: "Other Festival",
+			slug: "other",
+		});
+		const report = await service.listEntitlementReport(
+			organization.id,
+			{},
+			ALL_ON_ONE_PAGE,
+		);
+		const { entries } = report;
+		for (const entry of entries) {
+			expect(Object.keys(entry).sort()).toEqual(
+				[
+					"customerEmail",
+					"customerName",
+					"divisions",
+					"endsOn",
+					"entitlementClass",
+					"id",
+					"offeringName",
+					"source",
+					"startsOn",
+					"status",
+				].sort(),
+			);
+		}
+		expect(JSON.stringify(report)).not.toContain("Private City");
+		expect(JSON.stringify(report)).not.toContain("555");
+		expect(
+			await service.listEntitlementReport(other.id, {}, ALL_ON_ONE_PAGE),
+		).toEqual({
+			entries: [],
+			total: 0,
+			page: 1,
+			pageSize: 100,
+			totalPages: 1,
+			divisions: [],
+		});
+	});
+
+	it("filters by division and lists every division as a filter option", async () => {
+		const { repository, organization, service } = await seedReport();
+		const voice = await repository.createDivision({
+			organizationId: organization.id,
+			displayName: "Voice",
+			normalizedName: "voice",
+		});
+		await service.acquire({
+			organizationId: organization.id,
+			organizationTimezone: "UTC",
+			customerId: "cust-singer",
+			verifiedShopifyCustomerEmail: "singer@example.com",
+			payload: {
+				name: "Vera Voice",
+				email: "singer@example.com",
+				city: "Seattle",
+				phone: "+1 206 555 0102",
+				staffAccessConsent: true,
+				divisionIds: [voice.id],
+			},
+		});
+		const voiceOnly = await service.listEntitlementReport(
+			organization.id,
+			{ divisionId: voice.id },
+			ALL_ON_ONE_PAGE,
+		);
+		expect(voiceOnly.entries.map((entry) => entry.customerName)).toEqual([
+			"Vera Voice",
+		]);
+		expect(voiceOnly.total).toBe(1);
+		// Options ignore the active filters so the dropdown never shrinks.
+		expect(voiceOnly.divisions.map((d) => d.divisionName)).toEqual([
+			"Piano",
+			"Voice",
+		]);
+		const unknown = await service.listEntitlementReport(
+			organization.id,
+			{ divisionId: "no-such-division" },
+			ALL_ON_ONE_PAGE,
+		);
+		expect(unknown.entries).toEqual([]);
+	});
+
+	it("paginates the sorted, filtered entries", async () => {
+		const { organization, service } = await seedReport();
+		const names = (page: number, filters = {}) =>
+			service
+				.listEntitlementReport(organization.id, filters, { page, pageSize: 2 })
+				.then((report) => ({
+					names: report.entries.map((entry) => entry.customerName),
+					page: report.page,
+					total: report.total,
+					totalPages: report.totalPages,
+				}));
+		expect(await names(1)).toEqual({
+			names: ["Aaron Teacher", "Beth Accompanist"],
+			page: 1,
+			total: 5,
+			totalPages: 3,
+		});
+		expect(await names(3)).toEqual({
+			names: ["Sam Scheduled"],
+			page: 3,
+			total: 5,
+			totalPages: 3,
+		});
+		expect((await names(9)).page).toBe(3);
+		expect(await names(1, { status: "expired" })).toEqual({
+			names: ["Erin Expired"],
+			page: 1,
+			total: 1,
+			totalPages: 1,
+		});
+	});
+});

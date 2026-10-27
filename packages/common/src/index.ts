@@ -5,6 +5,7 @@ export * from "./catalog.js";
 export * from "./communication.js";
 export * from "./customer-account.js";
 export * from "./domain.js";
+export * from "./entitlement-report.js";
 export * from "./entitlements.js";
 export * from "./errors.js";
 export * from "./festival-registration-window.js";

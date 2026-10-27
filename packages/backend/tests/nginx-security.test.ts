@@ -290,6 +290,7 @@ describe("repository nginx security policy", () => {
 				"organizations",
 				"invites",
 				"admin/users",
+				"admin/entitlements",
 				"admin/(?:festivals(?:/[^/]+(?:/primary|/rooms)?)?|shopify|shopify-customer-account)",
 				"admin/shopify/diagnostics",
 				"admin/membership-products",
