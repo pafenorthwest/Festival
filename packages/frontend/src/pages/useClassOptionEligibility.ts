@@ -192,6 +192,14 @@ export function useClassOptionEligibility(
 		const classList = options.classes();
 		const cls = classList.find((c) => c.id === classId);
 		const serverResult = results().get(classId);
+		if (
+			serverResult &&
+			!serverResult.eligible &&
+			serverResult.reasonCode !== "SOLD_OUT" &&
+			serverResult.availability !== "waitlist"
+		) {
+			return false;
+		}
 		return (
 			cls?.availability === "waitlist" ||
 			serverResult?.availability === "waitlist" ||

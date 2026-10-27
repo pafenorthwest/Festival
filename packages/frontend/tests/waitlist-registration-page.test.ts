@@ -37,9 +37,8 @@ describe("FestivalClassRegistrationPage waitlist contract", () => {
 			'className={selectedClass()?.displayName ?? "Class"}',
 		);
 		expect(regPageSource).toContain("childId={selectedChildId()!}");
-		expect(regPageSource).toContain(
-			'childName={selectedChild()?.name ?? "Student"}',
-		);
+		expect(regPageSource).toContain("selectedChild()?.displayName ??");
+		expect(regPageSource).toContain("selectedChild()?.name ??");
 		expect(regPageSource).toContain(
 			"isAuthenticated={Boolean(sessionProfile())}",
 		);

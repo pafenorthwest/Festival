@@ -59,6 +59,17 @@ export function FestivalWaitlistCard(props: FestivalWaitlistCardProps) {
 	});
 
 	const targetClassId = () => props.classId ?? props.festivalClassId ?? "";
+
+	createEffect(() => {
+		void props.childId;
+		void targetClassId();
+		void props.existingEntry?.id;
+		void props.existingEntry?.status;
+		setLocalError("");
+		setLocalSuccess("");
+		setConsent(false);
+	});
+
 	const isJoined = () =>
 		Boolean(props.existingEntry && props.existingEntry.status !== "withdrawn");
 	const activeError = () => props.error || localError();

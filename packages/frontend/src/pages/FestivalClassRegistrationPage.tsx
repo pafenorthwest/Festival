@@ -94,7 +94,6 @@ export function FestivalClassRegistrationPage(
 		[birthdayDraft, setBirthdayDraft] = createSignal(""),
 		[isRefreshingSnapshot, setIsRefreshingSnapshot] = createSignal(false),
 		[snapshotError, setSnapshotError] = createSignal<string | null>(null);
-
 	const { sessionProfile, currentWaitlistEntry, handleWaitlistEntryChanged } =
 		useRegistrationWaitlist({
 			slug: props.slug,
@@ -103,7 +102,6 @@ export function FestivalClassRegistrationPage(
 			selectedClassId,
 			selectedChildId,
 		});
-
 	const selectedChild = () => findById(children(), selectedChildId()),
 		selectedClass = () => findById(eligibleClasses(), selectedClassId()),
 		selectedTeacher = () => findById(teachers(), selectedTeacherId()),
@@ -512,7 +510,11 @@ export function FestivalClassRegistrationPage(
 											className={selectedClass()?.displayName ?? "Class"}
 											// biome-ignore lint/style/noNonNullAssertion: prescribed contract
 											childId={selectedChildId()!}
-											childName={selectedChild()?.name ?? "Student"}
+											childName={
+												selectedChild()?.displayName ??
+												selectedChild()?.name ??
+												"Student"
+											}
 											isAuthenticated={Boolean(sessionProfile())}
 											csrfToken={csrfToken()}
 											initialProfile={{

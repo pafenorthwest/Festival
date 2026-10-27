@@ -233,4 +233,62 @@ describe("useClassOptionEligibility - waitlist detection and formatting", () => 
 			});
 		});
 	});
+
+	it("prioritizes child-specific hard ineligibility (ALREADY_REGISTERED) over catalog waitlist availability", async () => {
+		await new Promise<void>((resolve) => {
+			createRoot(async (dispose) => {
+				const cart = createRegistrationCart();
+				const waitlistClass: RegistrationEligibleClass = {
+					...baseClass,
+					id: "class-wl-registered",
+					displayName: "Waitlist Class",
+					availability: "waitlist",
+				};
+				const [childId] = createSignal("child-1");
+				const [classes] = createSignal([waitlistClass]);
+
+				const hook = useClassOptionEligibility({
+					slug: "test-org",
+					festivalSlug: "fest-2026",
+					childId,
+					classes,
+					cart,
+					evaluator: async () => ({
+						results: [
+							{
+								childId: "child-1",
+								festivalClassId: waitlistClass.id,
+								eligible: false,
+								isEligible: false,
+								reasonCode: "ALREADY_REGISTERED",
+								message: "Child is already registered in this class.",
+							},
+						],
+					}),
+				});
+
+				await flushTicks();
+
+				expect(hook.isWaitlist(waitlistClass.id)).toBe(false);
+				expect(hook.isEligible(waitlistClass.id)).toBe(false);
+				expect(hook.formatOption(waitlistClass)).toBe(
+					"Waitlist Class · $50.00 (5–18 yrs) (Already registered)",
+				);
+				expect(hook.selectedReason(waitlistClass.id)).toBe(
+					"Already registered",
+				);
+
+				const opt = hook.getOption(waitlistClass.id);
+				expect(opt?.isEligible).toBe(false);
+				expect(opt?.reasonCode).toBe("ALREADY_REGISTERED");
+				expect(opt?.reasonText).toBe("Already registered");
+				expect(opt?.formattedOption).toBe(
+					"Waitlist Class · $50.00 (5–18 yrs) (Already registered)",
+				);
+
+				dispose();
+				resolve();
+			});
+		});
+	});
 });
