@@ -546,6 +546,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 					customerRepo: customerAccountRepository,
 					entitlementCount: (orgId: string, classId: string) =>
 						commerceRepository.countConfirmedClassEntitlements(orgId, classId),
+					entitlementRepository: commerceRepository,
 				})
 			: undefined);
 

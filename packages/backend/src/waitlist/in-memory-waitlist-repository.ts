@@ -14,6 +14,17 @@ export class InMemoryWaitlistRepository implements WaitlistRepository {
 	private entries: FestivalClassWaitlistEntry[] = [];
 	private events: FestivalClassWaitlistEvent[] = [];
 
+	async findEntryById(
+		organizationId: string,
+		waitlistEntryId: string,
+	): Promise<FestivalClassWaitlistEntry | null> {
+		const match = this.entries.find(
+			(entry) =>
+				entry.organizationId === organizationId && entry.id === waitlistEntryId,
+		);
+		return match ? { ...match } : null;
+	}
+
 	async findActiveEntry(
 		organizationId: string,
 		classId: string,

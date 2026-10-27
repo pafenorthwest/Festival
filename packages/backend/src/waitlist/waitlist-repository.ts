@@ -1,22 +1,7 @@
 import type {
 	FestivalClassWaitlistEntry,
 	FestivalClassWaitlistEvent,
-	WaitlistEntryStatus,
 } from "@festival/common";
-
-export interface FestivalClassWaitlistEntryRecord {
-	id: string;
-	organizationId: string;
-	festivalId: string;
-	festivalClassId: string;
-	parentCustomerId: string;
-	childId: string;
-	status: WaitlistEntryStatus;
-	joinedAt: string;
-	withdrawnAt?: string | null;
-	createdAt: string;
-	updatedAt: string;
-}
 
 export interface CreateOrReactivateWaitlistEntryParams {
 	organizationId: string;
@@ -38,6 +23,11 @@ export interface WithdrawWaitlistEntryResult {
 }
 
 export interface WaitlistRepository {
+	findEntryById?(
+		organizationId: string,
+		waitlistEntryId: string,
+	): Promise<FestivalClassWaitlistEntry | null>;
+
 	findActiveEntry(
 		organizationId: string,
 		classId: string,

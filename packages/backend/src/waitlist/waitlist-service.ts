@@ -1,12 +1,14 @@
 import {
 	type AdminWaitlistRosterEntryDto,
 	AppError,
+	type ClassEntitlement,
 	CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION,
 	evaluateClassCapacityStatus,
 	type FestivalClassConfiguration,
 	type FestivalClassWaitlistEntry,
 	validateJoinWaitlistInput,
 } from "@festival/common";
+import type { ClassEntitlementFilter } from "../commerce/class-entitlement-repository.js";
 import type {
 	CustomerAccountRepository,
 	FestivalCustomerRecord,
@@ -14,11 +16,23 @@ import type {
 import type { OrganizationRepository } from "../repo/organization-repository.js";
 import type { WaitlistRepository } from "./waitlist-repository.js";
 
+export interface WaitlistEntitlementQueryCapability {
+	listClassEntitlements(
+		filter: ClassEntitlementFilter,
+	): Promise<ClassEntitlement[]>;
+}
+
 export interface WaitlistServiceDependencies {
 	waitlistRepo: WaitlistRepository;
 	orgRepo: OrganizationRepository;
 	customerRepo: CustomerAccountRepository;
 	entitlementCount: (orgId: string, classId: string) => Promise<number>;
+	entitlementRepository?: WaitlistEntitlementQueryCapability;
+	hasActiveEntitlement?: (
+		orgId: string,
+		classId: string,
+		childId: string,
+	) => Promise<boolean>;
 }
 
 export interface JoinWaitlistInputParams {
@@ -37,7 +51,8 @@ export interface WithdrawWaitlistInputParams {
 	organizationId: string;
 	festivalId?: string;
 	parentCustomerId: string;
-	childId: string;
+	childId?: string;
+	waitlistEntryId?: string;
 	festivalClassId: string;
 	actorType?: "parent" | "admin";
 	actorId?: string;
@@ -203,26 +218,62 @@ export class WaitlistService {
 		orgId: string,
 		classId: string,
 	) => Promise<number>;
+	private readonly entitlementRepository?: WaitlistEntitlementQueryCapability;
+	private readonly hasActiveEntitlementFn?: (
+		orgId: string,
+		classId: string,
+		childId: string,
+	) => Promise<boolean>;
 
 	constructor(
 		depsOrRepo: WaitlistServiceDependencies | WaitlistRepository,
 		orgRepo?: OrganizationRepository,
 		customerRepo?: CustomerAccountRepository,
 		entitlementCount?: (orgId: string, classId: string) => Promise<number>,
+		entitlementRepository?: WaitlistEntitlementQueryCapability,
 	) {
 		if ("waitlistRepo" in depsOrRepo) {
 			this.waitlistRepo = depsOrRepo.waitlistRepo;
 			this.orgRepo = depsOrRepo.orgRepo;
 			this.customerRepo = depsOrRepo.customerRepo;
 			this.entitlementCount = depsOrRepo.entitlementCount;
+			this.entitlementRepository = depsOrRepo.entitlementRepository;
+			this.hasActiveEntitlementFn = depsOrRepo.hasActiveEntitlement;
 		} else if (orgRepo && customerRepo && entitlementCount) {
 			this.waitlistRepo = depsOrRepo;
 			this.orgRepo = orgRepo;
 			this.customerRepo = customerRepo;
 			this.entitlementCount = entitlementCount;
+			this.entitlementRepository = entitlementRepository;
 		} else {
 			throw new Error("Missing required WaitlistService dependencies.");
 		}
+	}
+
+	private async childHasActiveEntitlement(
+		organizationId: string,
+		festivalClassId: string,
+		childId: string,
+	): Promise<boolean> {
+		if (this.hasActiveEntitlementFn) {
+			return this.hasActiveEntitlementFn(
+				organizationId,
+				festivalClassId,
+				childId,
+			);
+		}
+		if (this.entitlementRepository) {
+			const entitlements =
+				await this.entitlementRepository.listClassEntitlements({
+					organizationId,
+					festivalClassId,
+					childId,
+				});
+			return entitlements.some(
+				(e) => e.status !== "cancelled" && e.status !== "revoked",
+			);
+		}
+		return false;
 	}
 
 	async joinWaitlist(
@@ -250,6 +301,19 @@ export class WaitlistService {
 			input.festivalClassId,
 			input.festivalId,
 		);
+
+		const isAlreadyEnrolled = await this.childHasActiveEntitlement(
+			input.organizationId,
+			classConfig.id,
+			validated.childId,
+		);
+		if (isAlreadyEnrolled) {
+			throw new AppError(
+				"Child is already enrolled in this class.",
+				409,
+				"already_enrolled",
+			);
+		}
 
 		const placedCount = await this.entitlementCount(
 			input.organizationId,
@@ -326,11 +390,54 @@ export class WaitlistService {
 			actorId,
 		);
 
+		let resolvedChildId = params.childId?.trim() || undefined;
+		const waitlistEntryId = params.waitlistEntryId?.trim() || undefined;
+
+		if (waitlistEntryId) {
+			const entryById = this.waitlistRepo.findEntryById
+				? await this.waitlistRepo.findEntryById(
+						params.organizationId,
+						waitlistEntryId,
+					)
+				: ((
+						await this.waitlistRepo.listEntriesForParent(
+							params.organizationId,
+							params.parentCustomerId,
+							undefined,
+							params.festivalClassId,
+						)
+					).find((e) => e.id === waitlistEntryId) ?? null);
+
+			if (
+				!entryById ||
+				entryById.parentCustomerId !== params.parentCustomerId ||
+				entryById.festivalClassId !== params.festivalClassId
+			) {
+				throw new AppError(
+					"Waitlist entry not found.",
+					404,
+					"waitlist_entry_not_found",
+				);
+			}
+			if (resolvedChildId && resolvedChildId !== entryById.childId) {
+				throw new AppError(
+					"Waitlist entry does not match child ID.",
+					400,
+					"child_mismatch",
+				);
+			}
+			resolvedChildId = entryById.childId;
+		}
+
+		if (!resolvedChildId) {
+			throw new AppError("Either waitlistEntryId or childId is required.", 400);
+		}
+
 		await assertChildBelongsToParent(
 			this.customerRepo,
 			params.organizationId,
 			params.parentCustomerId,
-			params.childId,
+			resolvedChildId,
 		);
 
 		const classConfig = await this.orgRepo.findFestivalClassConfigurationById(
@@ -368,7 +475,7 @@ export class WaitlistService {
 		const result = await this.waitlistRepo.withdrawEntry(
 			params.organizationId,
 			params.festivalClassId,
-			params.childId,
+			resolvedChildId,
 			params.actorType ?? "parent",
 			params.actorId ?? params.parentCustomerId,
 		);

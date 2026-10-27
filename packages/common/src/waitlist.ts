@@ -15,7 +15,7 @@ export function isWaitlistEntryStatus(
 	);
 }
 
-export type WaitlistEventType = "joined" | "withdrawn";
+export type WaitlistEventType = "joined" | "withdrawn" | "rejoined";
 
 export interface FestivalClassWaitlistEvent {
 	id: string;
@@ -23,7 +23,7 @@ export interface FestivalClassWaitlistEvent {
 	festivalId?: string;
 	festivalClassId?: string;
 	waitlistEntryId: string;
-	eventType: WaitlistEventType | string;
+	eventType: WaitlistEventType;
 	actorType?: string | null;
 	actorId?: string | null;
 	payload?: Record<string, unknown> | null;

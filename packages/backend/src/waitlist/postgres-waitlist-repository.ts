@@ -92,6 +92,18 @@ export class PostgresWaitlistRepository implements WaitlistRepository {
 		await initializePostgresSchema(this.schema);
 	}
 
+	async findEntryById(
+		organizationId: string,
+		waitlistEntryId: string,
+	): Promise<FestivalClassWaitlistEntry | null> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT * FROM ${this.schema}.festival_class_waitlist_entries WHERE organization_id = $1 AND id = $2 LIMIT 1`,
+			[organizationId, waitlistEntryId],
+		)) as WaitlistEntryRow[];
+		return rows[0] ? toEntry(rows[0]) : null;
+	}
+
 	async findActiveEntry(
 		organizationId: string,
 		classId: string,

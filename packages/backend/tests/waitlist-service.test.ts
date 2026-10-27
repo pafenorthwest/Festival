@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION } from "@festival/common";
+import { InMemoryClassEntitlementRepository } from "../src/commerce/class-entitlement-repository.js";
 import { InMemoryCustomerAccountRepository } from "../src/customer/in-memory-customer-account-repository.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
 import { InMemoryWaitlistRepository } from "../src/waitlist/in-memory-waitlist-repository.js";
@@ -200,6 +201,7 @@ describe("WaitlistService", () => {
 		const orgRepo = new InMemoryOrganizationRepository();
 		const customerRepo = new InMemoryCustomerAccountRepository();
 		const waitlistRepo = new InMemoryWaitlistRepository();
+		const entitlementRepo = new InMemoryClassEntitlementRepository();
 
 		const org = await orgRepo.createOrganization({
 			name: "Music Festival",
@@ -271,6 +273,7 @@ describe("WaitlistService", () => {
 			orgRepo,
 			customerRepo,
 			entitlementCount: async () => placedEntitlementCount,
+			entitlementRepository: entitlementRepo,
 		});
 
 		return {
@@ -282,6 +285,7 @@ describe("WaitlistService", () => {
 			orgRepo,
 			customerRepo,
 			waitlistRepo,
+			entitlementRepo,
 			service,
 			setPlacedCount: (n: number) => {
 				placedEntitlementCount = n;
@@ -362,6 +366,75 @@ describe("WaitlistService", () => {
 			).rejects.toThrow(
 				"Class has open capacity and does not require waitlist.",
 			);
+		});
+
+		it("throws 409 if child is already enrolled in the class", async () => {
+			const f = await createFixture();
+			f.setPlacedCount(2);
+
+			await f.entitlementRepo.createClassEntitlement({
+				organizationId: f.org.id,
+				festivalId: f.festival.id,
+				festivalClassId: f.classConfig.id,
+				parentCustomerId: f.parentCustomer.id,
+				childId: f.child.id,
+				checkoutIntentId: "intent-1",
+				shopifyOrderGid: "gid://shopify/Order/1",
+				shopifyOrderLineGid: "gid://shopify/LineItem/1",
+				paidAmountCents: 3000,
+				paidCurrencyCode: "CAD",
+				status: "confirmed",
+			});
+
+			await expect(
+				f.service.joinWaitlist({
+					organizationId: f.org.id,
+					festivalId: f.festival.id,
+					festivalClassId: f.classConfig.id,
+					parentCustomerId: f.parentCustomer.id,
+					childId: f.child.id,
+					parentName: "John Doe",
+					parentEmail: "john@example.com",
+					parentPhone: "555-123-4567",
+					staffAccessConsent: true,
+				}),
+			).rejects.toMatchObject({
+				message: "Child is already enrolled in this class.",
+				status: 409,
+				code: "already_enrolled",
+			});
+		});
+
+		it("allows joining waitlist if child only has a cancelled or revoked entitlement", async () => {
+			const f = await createFixture();
+			f.setPlacedCount(2);
+
+			await f.entitlementRepo.createClassEntitlement({
+				organizationId: f.org.id,
+				festivalId: f.festival.id,
+				festivalClassId: f.classConfig.id,
+				parentCustomerId: f.parentCustomer.id,
+				childId: f.child.id,
+				checkoutIntentId: "intent-1",
+				shopifyOrderGid: "gid://shopify/Order/1",
+				shopifyOrderLineGid: "gid://shopify/LineItem/1",
+				paidAmountCents: 3000,
+				paidCurrencyCode: "CAD",
+				status: "cancelled",
+			});
+
+			const result = await f.service.joinWaitlist({
+				organizationId: f.org.id,
+				festivalId: f.festival.id,
+				festivalClassId: f.classConfig.id,
+				parentCustomerId: f.parentCustomer.id,
+				childId: f.child.id,
+				parentName: "John Doe",
+				parentEmail: "john@example.com",
+				parentPhone: "555-123-4567",
+				staffAccessConsent: true,
+			});
+			expect(result.entry.status).toBe("active");
 		});
 
 		it("successfully joins waitlist when capacity is full", async () => {
@@ -464,6 +537,77 @@ describe("WaitlistService", () => {
 			).rejects.toThrow(
 				"Child not found or does not belong to parent customer.",
 			);
+		});
+
+		it("withdraws child from waitlist by waitlistEntryId without childId", async () => {
+			const f = await createFixture();
+			const joined = await f.service.joinWaitlist({
+				organizationId: f.org.id,
+				festivalId: f.festival.id,
+				festivalClassId: f.classConfig.id,
+				parentCustomerId: f.parentCustomer.id,
+				childId: f.child.id,
+				parentName: "John Doe",
+				parentEmail: "john@example.com",
+				parentPhone: "555-123-4567",
+				staffAccessConsent: true,
+			});
+
+			const withdrawal = await f.service.withdrawWaitlist({
+				organizationId: f.org.id,
+				parentCustomerId: f.parentCustomer.id,
+				waitlistEntryId: joined.entry.id,
+				festivalClassId: f.classConfig.id,
+			});
+
+			expect(withdrawal.alreadyWithdrawn).toBe(false);
+			expect(withdrawal.entry?.id).toBe(joined.entry.id);
+			expect(withdrawal.entry?.status).toBe("withdrawn");
+		});
+
+		it("throws 404 when waitlistEntryId does not exist or belongs to another parent", async () => {
+			const f = await createFixture();
+			await expect(
+				f.service.withdrawWaitlist({
+					organizationId: f.org.id,
+					parentCustomerId: f.parentCustomer.id,
+					waitlistEntryId: "non-existent-entry",
+					festivalClassId: f.classConfig.id,
+				}),
+			).rejects.toMatchObject({
+				message: "Waitlist entry not found.",
+				status: 404,
+				code: "waitlist_entry_not_found",
+			});
+		});
+
+		it("throws 400 when both waitlistEntryId and mismatched childId are passed", async () => {
+			const f = await createFixture();
+			const joined = await f.service.joinWaitlist({
+				organizationId: f.org.id,
+				festivalId: f.festival.id,
+				festivalClassId: f.classConfig.id,
+				parentCustomerId: f.parentCustomer.id,
+				childId: f.child.id,
+				parentName: "John Doe",
+				parentEmail: "john@example.com",
+				parentPhone: "555-123-4567",
+				staffAccessConsent: true,
+			});
+
+			await expect(
+				f.service.withdrawWaitlist({
+					organizationId: f.org.id,
+					parentCustomerId: f.parentCustomer.id,
+					waitlistEntryId: joined.entry.id,
+					childId: "different-child-id",
+					festivalClassId: f.classConfig.id,
+				}),
+			).rejects.toMatchObject({
+				message: "Waitlist entry does not match child ID.",
+				status: 400,
+				code: "child_mismatch",
+			});
 		});
 	});
 

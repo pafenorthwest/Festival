@@ -174,15 +174,14 @@ export function buildCustomerWaitlistRoutes(
 					);
 				}
 
-				if (!input.childId) {
-					throw new AppError("Child ID is required.", 400);
-				}
-
 				const result = await service.withdrawWaitlist({
 					organizationId: session.organizationId,
 					festivalId: festivalShortName,
 					parentCustomerId: session.customerId,
-					childId: input.childId,
+					...(input.childId ? { childId: input.childId } : {}),
+					...(input.waitlistEntryId
+						? { waitlistEntryId: input.waitlistEntryId }
+						: {}),
 					festivalClassId: classId,
 					actorType: "parent",
 					actorId: session.customerId,

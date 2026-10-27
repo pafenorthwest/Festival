@@ -95,12 +95,12 @@ describe("buildCustomerWaitlistRoutes", () => {
 				calls.withdrawWaitlist.push(params);
 				return {
 					entry: {
-						id: "entry-1",
+						id: params.waitlistEntryId ?? "entry-1",
 						organizationId: params.organizationId,
 						festivalId: params.festivalId ?? "fest-2026",
 						festivalClassId: params.festivalClassId,
 						parentCustomerId: params.parentCustomerId,
-						childId: params.childId,
+						childId: params.childId ?? "child-1",
 						status: "withdrawn",
 						joinedAt: "2026-01-01T00:00:00Z",
 						withdrawnAt: "2026-01-02T00:00:00Z",
@@ -323,7 +323,42 @@ describe("buildCustomerWaitlistRoutes", () => {
 			});
 		});
 
-		it("rejects withdrawal if childId is missing", async () => {
+		it("withdraws child from waitlist by waitlistEntryId", async () => {
+			const { app, calls } = createMockServices();
+			const res = await app.request(
+				"/organizations/my-org/customer/festivals/fest-2026/classes/class-1/waitlist/withdraw",
+				{
+					method: "POST",
+					headers: {
+						Cookie: AUTH_COOKIE,
+						"X-CSRF-Token": CSRF_TOKEN,
+						Origin: VALID_ORIGIN,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify({
+						waitlistEntryId: "entry-42",
+					}),
+				},
+			);
+			expect(res.status).toBe(200);
+			const data = (await res.json()) as {
+				entry: { id: string; status: string };
+			};
+			expect(data.entry.id).toBe("entry-42");
+			expect(data.entry.status).toBe("withdrawn");
+			expect(calls.withdrawWaitlist.length).toBe(1);
+			expect(calls.withdrawWaitlist[0]).toMatchObject({
+				organizationId: "org-1",
+				festivalId: "fest-2026",
+				festivalClassId: "class-1",
+				parentCustomerId: "customer-1",
+				waitlistEntryId: "entry-42",
+				actorType: "parent",
+				actorId: "customer-1",
+			});
+		});
+
+		it("rejects withdrawal if both waitlistEntryId and childId are missing", async () => {
 			const { app } = createMockServices();
 			const res = await app.request(
 				"/organizations/my-org/customer/festivals/fest-2026/classes/class-1/waitlist/withdraw",
