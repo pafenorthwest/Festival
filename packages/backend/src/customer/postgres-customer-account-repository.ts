@@ -556,21 +556,31 @@ export class PostgresCustomerAccountRepository
 		await this.ensureReady();
 		const id = randomUUID();
 		const createdAtIso = input.createdAtIso ?? new Date().toISOString();
-		await sql.unsafe(
-			`UPDATE ${this.schema}.festival_child_age_snapshots SET superseded_at=$3 WHERE organization_id=$1 AND child_id=$2 AND superseded_at IS NULL`,
-			[input.organizationId, input.childId, createdAtIso],
-		);
-		await sql.unsafe(
-			`INSERT INTO ${this.schema}.festival_child_age_snapshots (id,child_id,organization_id,age,created_at,valid_until) VALUES ($1,$2,$3,$4,$5,$6)`,
-			[
-				id,
-				input.childId,
-				input.organizationId,
-				input.age,
-				createdAtIso,
-				input.validUntilIso,
-			],
-		);
+		await sql.begin(async (transaction) => {
+			// Serialize snapshot replacement per child so only one concurrent writer
+			// can observe the previous active row before inserting its replacement.
+			await transaction.unsafe(
+				"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+				[
+					`child-age-snapshot:${JSON.stringify([this.schema, input.organizationId, input.childId])}`,
+				],
+			);
+			await transaction.unsafe(
+				`UPDATE ${this.schema}.festival_child_age_snapshots SET superseded_at=$3 WHERE organization_id=$1 AND child_id=$2 AND superseded_at IS NULL`,
+				[input.organizationId, input.childId, createdAtIso],
+			);
+			await transaction.unsafe(
+				`INSERT INTO ${this.schema}.festival_child_age_snapshots (id,child_id,organization_id,age,created_at,valid_until) VALUES ($1,$2,$3,$4,$5,$6)`,
+				[
+					id,
+					input.childId,
+					input.organizationId,
+					input.age,
+					createdAtIso,
+					input.validUntilIso,
+				],
+			);
+		});
 		return { ...input, id, createdAtIso };
 	}
 	async findActiveChildAgeSnapshot(
