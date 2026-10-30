@@ -240,6 +240,31 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			id TEXT PRIMARY KEY, child_id TEXT NOT NULL, organization_id TEXT NOT NULL,
 			age INTEGER NOT NULL, created_at TIMESTAMPTZ NOT NULL, valid_until TIMESTAMPTZ NOT NULL, superseded_at TIMESTAMPTZ NULL
 		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.festival_class_waitlist_entries (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			festival_id TEXT NOT NULL REFERENCES ${safeSchema}.festivals (id) ON DELETE CASCADE,
+			festival_class_id TEXT NOT NULL REFERENCES ${safeSchema}.festival_class_configurations (id) ON DELETE CASCADE,
+			parent_customer_id TEXT NOT NULL REFERENCES ${safeSchema}.festival_customers (id) ON DELETE CASCADE,
+			child_id TEXT NOT NULL REFERENCES ${safeSchema}.festival_children (id) ON DELETE CASCADE,
+			status TEXT NOT NULL CHECK (status IN ('active', 'withdrawn')),
+			joined_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+			withdrawn_at TIMESTAMPTZ,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.festival_class_waitlist_events (
+			id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			waitlist_entry_id UUID NOT NULL REFERENCES ${safeSchema}.festival_class_waitlist_entries (id) ON DELETE CASCADE,
+			festival_class_id TEXT NOT NULL REFERENCES ${safeSchema}.festival_class_configurations (id) ON DELETE CASCADE,
+			parent_customer_id TEXT NOT NULL REFERENCES ${safeSchema}.festival_customers (id) ON DELETE CASCADE,
+			child_id TEXT NOT NULL REFERENCES ${safeSchema}.festival_children (id) ON DELETE CASCADE,
+			action TEXT NOT NULL CHECK (action IN ('joined', 'withdrawn', 'rejoined')),
+			actor_type TEXT NOT NULL CHECK (actor_type IN ('parent', 'admin')),
+			actor_id TEXT NOT NULL,
+			occurred_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.customer_festival_availability (
 			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
 			festival_id TEXT NOT NULL REFERENCES ${safeSchema}.festivals (id) ON DELETE CASCADE,
@@ -912,6 +937,17 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			ON ${safeSchema}.accompanist_profiles (organization_id, public_directory_opt_in, approval_status);
 		CREATE INDEX IF NOT EXISTS idx_accompanist_profile_divisions_division_id
 			ON ${safeSchema}.accompanist_profile_divisions (division_id);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_waitlist_entries_active_unique
+			ON ${safeSchema}.festival_class_waitlist_entries (organization_id, festival_class_id, child_id)
+			WHERE status = 'active';
+		CREATE INDEX IF NOT EXISTS idx_waitlist_entries_admin_roster
+			ON ${safeSchema}.festival_class_waitlist_entries (organization_id, festival_class_id, status, joined_at);
+		CREATE INDEX IF NOT EXISTS idx_waitlist_entries_parent_lookup
+			ON ${safeSchema}.festival_class_waitlist_entries (organization_id, parent_customer_id, status);
+		CREATE INDEX IF NOT EXISTS idx_waitlist_events_entry
+			ON ${safeSchema}.festival_class_waitlist_events (organization_id, waitlist_entry_id, occurred_at);
+		CREATE INDEX IF NOT EXISTS idx_waitlist_events_class
+			ON ${safeSchema}.festival_class_waitlist_events (organization_id, festival_class_id, occurred_at);
 	`;
 }
 

@@ -32,3 +32,28 @@ test("canonical PostgreSQL schema rejects unsafe schema identifiers", () => {
 		"Database schema is invalid.",
 	);
 });
+
+test("canonical PostgreSQL schema defines waitlist tables and indexes", () => {
+	const schema = buildCanonicalPostgresSchemaSql("fresh_orgs");
+	expect(schema).toContain(
+		"CREATE TABLE IF NOT EXISTS fresh_orgs.festival_class_waitlist_entries",
+	);
+	expect(schema).toContain(
+		"CREATE TABLE IF NOT EXISTS fresh_orgs.festival_class_waitlist_events",
+	);
+	expect(schema).toContain(
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_waitlist_entries_active_unique",
+	);
+	expect(schema).toContain(
+		"CREATE INDEX IF NOT EXISTS idx_waitlist_entries_admin_roster",
+	);
+	expect(schema).toContain(
+		"CREATE INDEX IF NOT EXISTS idx_waitlist_entries_parent_lookup",
+	);
+	expect(schema).toContain(
+		"CREATE INDEX IF NOT EXISTS idx_waitlist_events_entry",
+	);
+	expect(schema).toContain(
+		"CREATE INDEX IF NOT EXISTS idx_waitlist_events_class",
+	);
+});
