@@ -57,3 +57,21 @@ test("canonical PostgreSQL schema defines waitlist tables and indexes", () => {
 		"CREATE INDEX IF NOT EXISTS idx_waitlist_events_class",
 	);
 });
+
+test("canonical PostgreSQL schema enforces tenant-scoped registration references", () => {
+	const schema = buildCanonicalPostgresSchemaSql("fresh_orgs");
+	for (const expected of [
+		"FOREIGN KEY (required_subtype_id, organization_id) REFERENCES fresh_orgs.registration_catalog_values (id, organization_id)",
+		"FOREIGN KEY (festival_id, organization_id) REFERENCES fresh_orgs.festivals (id, organization_id)",
+		"FOREIGN KEY (class_subtype_id, organization_id) REFERENCES fresh_orgs.registration_catalog_values (id, organization_id)",
+		"FOREIGN KEY (division_id, organization_id) REFERENCES fresh_orgs.organization_divisions (id, organization_id)",
+		"FOREIGN KEY (parent_customer_id, organization_id) REFERENCES fresh_orgs.festival_customers (id, organization_id)",
+		"FOREIGN KEY (child_id, organization_id) REFERENCES fresh_orgs.festival_children (id, organization_id)",
+		"FOREIGN KEY (child_id, organization_id, parent_customer_id) REFERENCES fresh_orgs.festival_children (id, organization_id, parent_customer_id)",
+		"FOREIGN KEY (festival_class_id, organization_id, festival_id) REFERENCES fresh_orgs.festival_class_configurations (id, organization_id, festival_id)",
+		"CREATE TRIGGER festival_class_configurations_validate_subtype_kind",
+		"CREATE TRIGGER registration_catalog_values_prevent_referenced_kind_change",
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_festival_child_age_snapshots_one_active",
+	])
+		expect(schema).toContain(expected);
+});

@@ -672,7 +672,7 @@ CREATE TABLE orgs.membership_entitlements (
     customer_id text NOT NULL,
     entitlement_class text NOT NULL,
     source text NOT NULL,
-    offering_id text NOT NULL,
+    offering_id text,
     starts_on date NOT NULL,
     ends_on date NOT NULL,
     revoked_at timestamp with time zone,
