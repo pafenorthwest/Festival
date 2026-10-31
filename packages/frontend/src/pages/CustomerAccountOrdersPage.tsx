@@ -292,7 +292,11 @@ export function CustomerAccountOrdersPage(props: {
 															class="badge"
 															style="margin-top: 0.25rem; display: inline-block; text-transform: capitalize;"
 														>
-															{item.entitlement.status}
+															{item.entitlement.status === "confirmed"
+																? "Placed / Confirmed"
+																: item.entitlement.status === "waitlisted"
+																	? "Waitlisted (Paid)"
+																	: item.entitlement.status}
 														</span>
 													</Show>
 												</div>

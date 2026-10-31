@@ -19,3 +19,4 @@ export * from "./room.js";
 export * from "./rules.js";
 export * from "./shopify.js";
 export * from "./volunteer.js";
+export * from "./waitlist.js";

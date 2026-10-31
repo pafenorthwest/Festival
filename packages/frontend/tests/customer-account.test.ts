@@ -192,4 +192,13 @@ describe("customer account frontend boundary", () => {
 		expect(classesPage).not.toContain("not yet confirmed");
 		expect(classesPage).toContain("if (!paidAtIso)");
 	});
+
+	it("renders placed and waitlisted badges for customer class registrations and orders", () => {
+		expect(classesPage).toContain('data-testid="placed-confirmed-badge"');
+		expect(classesPage).toContain("Placed / Confirmed");
+		expect(classesPage).toContain('data-testid="paid-waitlisted-badge"');
+		expect(classesPage).toContain("Waitlisted (Paid)");
+		expect(ordersPage).toContain("Placed / Confirmed");
+		expect(ordersPage).toContain("Waitlisted (Paid)");
+	});
 });

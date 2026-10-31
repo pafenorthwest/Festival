@@ -114,6 +114,12 @@ import {
 	InMemoryVolunteerRepository,
 	type VolunteerRepository,
 } from "./volunteers/volunteer-repository.js";
+import {
+	InMemoryWaitlistRepository,
+	PostgresWaitlistRepository,
+	type WaitlistRepository,
+	WaitlistService,
+} from "./waitlist/index.js";
 
 export interface CreateAppOptions {
 	env?: AppEnv;
@@ -152,6 +158,8 @@ export interface CreateAppOptions {
 	communicationService?: CommunicationService;
 	roomRepository?: RoomRepository;
 	participantProfileService?: ParticipantProfileService;
+	waitlistRepository?: WaitlistRepository;
+	waitlistService?: WaitlistService;
 }
 
 function privateTokenMatches(
@@ -521,6 +529,26 @@ export async function createApp(options: CreateAppOptions = {}) {
 	const participantProfileService =
 		options.participantProfileService ??
 		new ParticipantProfileService(repository, customerAccountService);
+	const waitlistRepository =
+		options.waitlistRepository ??
+		(env.databaseSchema
+			? new PostgresWaitlistRepository(env.databaseSchema)
+			: new InMemoryWaitlistRepository());
+	if (waitlistRepository instanceof PostgresWaitlistRepository) {
+		await waitlistRepository.ensureReady();
+	}
+	const waitlistService =
+		options.waitlistService ??
+		(customerAccountRepository
+			? new WaitlistService({
+					waitlistRepo: waitlistRepository,
+					orgRepo: repository,
+					customerRepo: customerAccountRepository,
+					entitlementCount: (orgId: string, classId: string) =>
+						commerceRepository.countConfirmedClassEntitlements(orgId, classId),
+					entitlementRepository: commerceRepository,
+				})
+			: undefined);
 
 	const app = new Hono();
 	const allowedApiOrigins = new Set(env.allowedApiOrigins ?? LOCAL_API_ORIGINS);
@@ -639,6 +667,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 			communicationService,
 			checkoutRecoveryService,
 			participantProfileService,
+			waitlistService,
 		}),
 	);
 	app.route(

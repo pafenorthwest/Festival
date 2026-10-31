@@ -23,10 +23,12 @@ import type { ShopifyIntegrationDiagnosticService } from "../shopify/shopify-int
 import type { ShopifyIntegrationService } from "../shopify/shopify-integration-service.js";
 import type { ShopifyMembershipProductService } from "../shopify/shopify-membership-product-service.js";
 import type { VolunteerRepository } from "../volunteers/volunteer-repository.js";
+import type { WaitlistService } from "../waitlist/waitlist-service.js";
 import { buildAdminBillingRoutes } from "./admin-billing.routes.js";
 import { buildAdminCheckoutRecoveryRoutes } from "./admin-checkout-recovery.routes.js";
 import { buildAdminOrgRoutes } from "./admin-org/admin-org.routes.js";
 import { buildAdminRegistrationRoutes } from "./admin-registration/admin-registration.routes.js";
+import { buildAdminWaitlistRoutes } from "./admin-registration/admin-waitlist.routes.js";
 import { buildAdminShopifyRoutes } from "./admin-shopify/admin-shopify.routes.js";
 import { buildCatalogRoutes } from "./catalog/catalog.routes.js";
 import { buildCommunicationRoutes } from "./communication.routes.js";
@@ -35,6 +37,7 @@ import { buildCustomerAvailabilityRoutes } from "./customer/customer-availabilit
 import { buildCustomerChildrenRoutes } from "./customer/customer-children.routes.js";
 import { buildCustomerMembershipRoutes } from "./customer/customer-membership.routes.js";
 import { buildCustomerRegistrationRoutes } from "./customer/customer-registration.routes.js";
+import { buildCustomerWaitlistRoutes } from "./customer/customer-waitlist.routes.js";
 import { buildCustomerAuthRoutes } from "./customer-auth/customer-auth.routes.js";
 import { buildCustomerCheckoutRecoveryRoutes } from "./customer-checkout-recovery.routes.js";
 import { buildIdentityRoutes } from "./identity/identity.routes.js";
@@ -67,6 +70,7 @@ export interface ApiRouterOptions {
 	communicationService?: CommunicationService;
 	checkoutRecoveryService?: CheckoutRecoveryService;
 	participantProfileService?: ParticipantProfileService;
+	waitlistService?: WaitlistService;
 }
 
 export function buildApiRouter(
@@ -96,6 +100,7 @@ export function buildApiRouter(
 		communicationService,
 		checkoutRecoveryService: providedRecoveryService,
 		participantProfileService,
+		waitlistService,
 	} = options;
 	const repository = organizationService.repository;
 
@@ -119,6 +124,14 @@ export function buildApiRouter(
 				(enableDropTransfer ?? Boolean(dropTransferService))
 					? registrationChangeRepository
 					: undefined,
+		}),
+	);
+	router.route(
+		"/",
+		buildAdminWaitlistRoutes({
+			waitlistService,
+			authVerifier,
+			repository,
 		}),
 	);
 	router.route(
@@ -195,6 +208,13 @@ export function buildApiRouter(
 			customerAccountService,
 			classCheckoutService,
 			dropTransferService,
+		}),
+	);
+	router.route(
+		"/organizations/:slug/customer",
+		buildCustomerWaitlistRoutes({
+			waitlistService,
+			customerAccountService,
 		}),
 	);
 

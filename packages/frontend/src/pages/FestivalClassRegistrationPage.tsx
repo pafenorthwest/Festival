@@ -7,6 +7,7 @@ import { FestivalRegistrationCartCard } from "../components/FestivalRegistration
 import { FestivalRegistrationCartView } from "../components/FestivalRegistrationCartView.js";
 import { FestivalRegistrationPerformanceOptions } from "../components/FestivalRegistrationPerformanceOptions.js";
 import { FestivalRepertoireModal } from "../components/FestivalRepertoireModal.js";
+import { FestivalWaitlistCard } from "../components/FestivalWaitlistCard.js";
 import {
 	customerFestivalRegistrationSignInPath,
 	getPublicDivisions,
@@ -21,7 +22,10 @@ import {
 	isRegistrationSelectionValid,
 	normalizeMaxPieces,
 } from "./festivalRegistrationHelpers.js";
-import { useRegistrationOptions } from "./festivalRegistrationHooks.js";
+import {
+	useRegistrationOptions,
+	useRegistrationWaitlist,
+} from "./festivalRegistrationHooks.js";
 import {
 	buildCartItemInput,
 	cartItemsToLineItemInputs,
@@ -42,29 +46,29 @@ export function FestivalClassRegistrationPage(
 ) {
 	const [festival] = createResource(
 		() => [props.slug, props.festivalSlug] as const,
-		([slug, festivalSlug]) => getPublicFestival(slug, festivalSlug),
+		([s, f]) => getPublicFestival(s, f),
 	);
 	const [divisions] = createResource(
 		() => props.slug,
 		(slug) => getPublicDivisions(slug),
 	);
 	const cart = createRegistrationCart();
-	const getCsrf = () => {
-		const session = props.app.customerSession();
-		return session.authenticated ? session.csrfToken : "";
-	};
+	const getCsrf = () =>
+		props.app.customerSession().authenticated
+			? props.app.customerSession().csrfToken
+			: "";
 	const eligibility = useCartEligibility({
 		slug: () => props.slug,
 		festivalSlug: () => props.festivalSlug,
 		csrfToken: getCsrf,
 		cart,
 	});
-	const [selectedChildId, setSelectedChildId] = createSignal("");
-	const [selectedDivisionId, setSelectedDivisionId] = createSignal("");
-	const [selectedTeacherId, setSelectedTeacherId] = createSignal("");
-	const [selectedClassId, setSelectedClassId] = createSignal("");
-	const [selectedAccompanistId, setSelectedAccompanistId] = createSignal("");
-	const [selectedInstrumentId, setSelectedInstrumentId] = createSignal("");
+	const [selectedChildId, setSelectedChildId] = createSignal(""),
+		[selectedDivisionId, setSelectedDivisionId] = createSignal(""),
+		[selectedTeacherId, setSelectedTeacherId] = createSignal(""),
+		[selectedClassId, setSelectedClassId] = createSignal(""),
+		[selectedAccompanistId, setSelectedAccompanistId] = createSignal(""),
+		[selectedInstrumentId, setSelectedInstrumentId] = createSignal("");
 	const [pieces, setPieces] = createSignal<RepertoirePiece[]>([]);
 	const { children, teachers, eligibleClasses, accompanists, loadChildren } =
 		useRegistrationOptions({
@@ -84,31 +88,44 @@ export function FestivalClassRegistrationPage(
 		classes: eligibleClasses,
 		cart,
 	});
-	const [isRepertoireModalOpen, setIsRepertoireModalOpen] = createSignal(false);
-	const [isSubmittingCheckout, setIsSubmittingCheckout] = createSignal(false);
-	const [checkoutError, setCheckoutError] = createSignal<string | null>(null);
-	const [birthdayDraft, setBirthdayDraft] = createSignal("");
-	const [isRefreshingSnapshot, setIsRefreshingSnapshot] = createSignal(false);
-	const [snapshotError, setSnapshotError] = createSignal<string | null>(null);
-	const selectedChild = () => findById(children(), selectedChildId());
-	const selectedClass = () => findById(eligibleClasses(), selectedClassId());
-	const selectedTeacher = () => findById(teachers(), selectedTeacherId());
-	const selectedAccompanist = () =>
-		findById(accompanists(), selectedAccompanistId());
-	const instruments = () => divisions()?.instruments ?? [];
-	const selectedInstrument = () =>
-		findById(instruments(), selectedInstrumentId());
-	const selectedDivisionName = () =>
-		findById(divisions()?.divisions, selectedDivisionId())?.displayName ??
-		"Division";
-	const isAlreadyInCart = () =>
-		cart.hasItem(selectedChildId(), selectedClassId());
-	const signInPath = () =>
-		customerFestivalRegistrationSignInPath(props.slug, props.festivalSlug);
-	const maxPieces = () =>
-		normalizeMaxPieces(selectedClass()?.maximumPerformancePieces);
-	const cartSummary = () =>
-		`Cart: ${cart.itemCount()} ${cart.itemCount() === 1 ? "class" : "classes"} (${cart.totalPriceFormatted()})`;
+	const [isRepertoireModalOpen, setIsRepertoireModalOpen] = createSignal(false),
+		[isSubmittingCheckout, setIsSubmittingCheckout] = createSignal(false),
+		[checkoutError, setCheckoutError] = createSignal<string | null>(null),
+		[birthdayDraft, setBirthdayDraft] = createSignal(""),
+		[isRefreshingSnapshot, setIsRefreshingSnapshot] = createSignal(false),
+		[snapshotError, setSnapshotError] = createSignal<string | null>(null);
+	const { sessionProfile, currentWaitlistEntry, handleWaitlistEntryChanged } =
+		useRegistrationWaitlist({
+			slug: props.slug,
+			festivalSlug: props.festivalSlug,
+			isAuthenticated: () => props.app.customerSession().authenticated,
+			selectedClassId,
+			selectedChildId,
+		});
+	const selectedChild = () => findById(children(), selectedChildId()),
+		selectedClass = () => findById(eligibleClasses(), selectedClassId()),
+		selectedTeacher = () => findById(teachers(), selectedTeacherId()),
+		selectedAccompanist = () =>
+			findById(accompanists(), selectedAccompanistId()),
+		instruments = () => divisions()?.instruments ?? [],
+		selectedInstrument = () => findById(instruments(), selectedInstrumentId()),
+		selectedDivisionName = () =>
+			findById(divisions()?.divisions, selectedDivisionId())?.displayName ??
+			"Division",
+		isAlreadyInCart = () => cart.hasItem(selectedChildId(), selectedClassId()),
+		signInPath = () =>
+			customerFestivalRegistrationSignInPath(props.slug, props.festivalSlug),
+		csrfToken = () => getCsrf(),
+		maxPieces = () =>
+			normalizeMaxPieces(selectedClass()?.maximumPerformancePieces),
+		cartSummary = () =>
+			`Cart: ${cart.itemCount()} ${cart.itemCount() === 1 ? "class" : "classes"} (${cart.totalPriceFormatted()})`;
+
+	const handleSignIn = () => {
+		if (typeof window !== "undefined" && window.location?.assign)
+			window.location.assign(signInPath());
+	};
+
 	const selectHandlers = createRegistrationSelectHandlers(
 		setSelectedChildId,
 		setSelectedDivisionId,
@@ -154,6 +171,7 @@ export function FestivalClassRegistrationPage(
 		!divisions.error &&
 		isInstrumentSelectionValid(instruments(), selectedInstrumentId()) &&
 		classOptionEligibility.isEligible(selectedClassId());
+
 	function handleAddToCart() {
 		setCheckoutError(null);
 		const cls = selectedClass(),
@@ -186,6 +204,12 @@ export function FestivalClassRegistrationPage(
 			setSelectedInstrumentId,
 		});
 	}
+	const classSelectReason = () =>
+		classOptionEligibility.selectedReason(selectedClassId()) ||
+		(eligibleClasses().length > 0 &&
+		eligibleClasses().every((c) => c.isRegistrationOpen === false)
+			? "Registration closed"
+			: null);
 	async function executeCheckout(
 		lineItems: ReturnType<typeof cartItemsToLineItemInputs>,
 	) {
@@ -199,9 +223,8 @@ export function FestivalClassRegistrationPage(
 			});
 			if (res?.checkoutUrl) {
 				cart.clearCart();
-				if (typeof window !== "undefined" && window.location?.assign) {
+				if (typeof window !== "undefined" && window.location?.assign)
 					window.location.assign(res.checkoutUrl);
-				}
 				return;
 			}
 			setCheckoutError("Checkout failed to initialize. Please try again.");
@@ -423,26 +446,17 @@ export function FestivalClassRegistrationPage(
 												{(c) => (
 													<option
 														value={c.id}
-														disabled={!classOptionEligibility.isEligible(c.id)}
+														disabled={
+															!classOptionEligibility.isEligible(c.id) &&
+															!classOptionEligibility.isWaitlist(c.id)
+														}
 													>
 														{classOptionEligibility.formatOption(c)}
 													</option>
 												)}
 											</For>
 										</select>
-										<Show
-											when={
-												classOptionEligibility.selectedReason(
-													selectedClassId(),
-												) ||
-												(eligibleClasses().length > 0 &&
-												eligibleClasses().every(
-													(c) => c.isRegistrationOpen === false,
-												)
-													? "Registration closed"
-													: null)
-											}
-										>
+										<Show when={classSelectReason()}>
 											{(reason) => (
 												<p class="field-error" role="alert">
 													{reason()}
@@ -453,30 +467,66 @@ export function FestivalClassRegistrationPage(
 								</Show>
 
 								<Show when={selectedClass()}>
-									<FestivalRegistrationPerformanceOptions
-										instruments={instruments()}
-										accompanists={accompanists()}
-										instrumentId={selectedInstrumentId()}
-										accompanistId={selectedAccompanistId()}
-										handlers={selectHandlers}
-									/>
-									<FestivalRegistrationCartCard
-										childName={selectedChild()?.displayName ?? null}
-										divisionName={selectedDivisionName()}
-										teacherName={selectedTeacher()?.name ?? null}
-										className={selectedClass()?.displayName ?? null}
-										classPrice={selectedClass()?.price ?? null}
-										pieces={pieces()}
-										accompanistName={selectedAccompanist()?.name ?? null}
-										instrumentName={selectedInstrument()?.displayName ?? null}
-										isValid={isReadyForCheckout()}
-										isSubmitting={isSubmittingCheckout()}
-										error={checkoutError()}
-										isAlreadyInCart={isAlreadyInCart()}
-										onOpenRepertoireModal={() => setIsRepertoireModalOpen(true)}
-										onAddToCart={handleAddToCart}
-										onSubmitCheckout={handleCheckout}
-									/>
+									<Show
+										when={classOptionEligibility.isWaitlist(selectedClassId())}
+										fallback={
+											<>
+												<FestivalRegistrationPerformanceOptions
+													instruments={instruments()}
+													accompanists={accompanists()}
+													instrumentId={selectedInstrumentId()}
+													accompanistId={selectedAccompanistId()}
+													handlers={selectHandlers}
+												/>
+												<FestivalRegistrationCartCard
+													childName={selectedChild()?.displayName ?? null}
+													divisionName={selectedDivisionName()}
+													teacherName={selectedTeacher()?.name ?? null}
+													className={selectedClass()?.displayName ?? null}
+													classPrice={selectedClass()?.price ?? null}
+													pieces={pieces()}
+													accompanistName={selectedAccompanist()?.name ?? null}
+													instrumentName={
+														selectedInstrument()?.displayName ?? null
+													}
+													isValid={isReadyForCheckout()}
+													isSubmitting={isSubmittingCheckout()}
+													error={checkoutError()}
+													isAlreadyInCart={isAlreadyInCart()}
+													onOpenRepertoireModal={() =>
+														setIsRepertoireModalOpen(true)
+													}
+													onAddToCart={handleAddToCart}
+													onSubmitCheckout={handleCheckout}
+												/>
+											</>
+										}
+									>
+										<FestivalWaitlistCard
+											orgSlug={props.slug}
+											festivalSlug={props.festivalSlug}
+											// biome-ignore lint/style/noNonNullAssertion: prescribed contract
+											classId={selectedClassId()!}
+											className={selectedClass()?.displayName ?? "Class"}
+											// biome-ignore lint/style/noNonNullAssertion: prescribed contract
+											childId={selectedChildId()!}
+											childName={
+												selectedChild()?.displayName ??
+												selectedChild()?.name ??
+												"Student"
+											}
+											isAuthenticated={Boolean(sessionProfile())}
+											csrfToken={csrfToken()}
+											initialProfile={{
+												name: sessionProfile()?.name ?? "",
+												email: sessionProfile()?.email ?? "",
+												phone: sessionProfile()?.phone ?? "",
+											}}
+											onSignInRequest={handleSignIn}
+											existingEntry={currentWaitlistEntry()}
+											onEntryChanged={handleWaitlistEntryChanged}
+										/>
+									</Show>
 								</Show>
 							</Show>
 						</div>

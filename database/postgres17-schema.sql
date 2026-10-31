@@ -396,6 +396,60 @@ CREATE TABLE orgs.festival_class_capacity_audit_logs (
 
 
 --
+-- Name: festival_class_waitlist_entries; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.festival_class_waitlist_entries (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    festival_id text NOT NULL,
+    festival_class_id text NOT NULL,
+    parent_customer_id text NOT NULL,
+    child_id text NOT NULL,
+    status text NOT NULL,
+    joined_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    withdrawn_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    updated_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT festival_class_waitlist_entries_status_check CHECK ((status = ANY (ARRAY['active'::text, 'withdrawn'::text])))
+);
+
+
+--
+-- Name: festival_class_waitlist_events; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.festival_class_waitlist_events (
+    id bigint NOT NULL,
+    organization_id text NOT NULL,
+    waitlist_entry_id uuid NOT NULL,
+    festival_class_id text NOT NULL,
+    parent_customer_id text NOT NULL,
+    child_id text NOT NULL,
+    action text NOT NULL,
+    actor_type text NOT NULL,
+    actor_id text NOT NULL,
+    occurred_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT festival_class_waitlist_events_action_check CHECK ((action = ANY (ARRAY['joined'::text, 'withdrawn'::text, 'rejoined'::text]))),
+    CONSTRAINT festival_class_waitlist_events_actor_type_check CHECK ((actor_type = ANY (ARRAY['parent'::text, 'admin'::text])))
+);
+
+
+--
+-- Name: festival_class_waitlist_events_id_seq; Type: SEQUENCE; Schema: orgs; Owner: -
+--
+
+ALTER TABLE orgs.festival_class_waitlist_events ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME orgs.festival_class_waitlist_events_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
 -- Name: festival_customer_profile_access_audit; Type: TABLE; Schema: orgs; Owner: -
 --
 
@@ -618,7 +672,7 @@ CREATE TABLE orgs.membership_entitlements (
     customer_id text NOT NULL,
     entitlement_class text NOT NULL,
     source text NOT NULL,
-    offering_id text NOT NULL,
+    offering_id text,
     starts_on date NOT NULL,
     ends_on date NOT NULL,
     revoked_at timestamp with time zone,
@@ -1491,6 +1545,22 @@ ALTER TABLE ONLY orgs.festival_class_configurations
 
 
 --
+-- Name: festival_class_waitlist_entries festival_class_waitlist_entries_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_class_waitlist_entries
+    ADD CONSTRAINT festival_class_waitlist_entries_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: festival_class_waitlist_events festival_class_waitlist_events_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_class_waitlist_events
+    ADD CONSTRAINT festival_class_waitlist_events_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: festival_class_configurations festival_class_configurations_shopify_product_gid_key; Type: CONSTRAINT; Schema: orgs; Owner: -
 --
 
@@ -2352,6 +2422,41 @@ CREATE INDEX idx_accompanist_profile_divisions_division_id ON orgs.accompanist_p
 
 
 --
+-- Name: idx_waitlist_entries_active_unique; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_waitlist_entries_active_unique ON orgs.festival_class_waitlist_entries USING btree (organization_id, festival_class_id, child_id) WHERE (status = 'active'::text);
+
+
+--
+-- Name: idx_waitlist_entries_admin_roster; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_waitlist_entries_admin_roster ON orgs.festival_class_waitlist_entries USING btree (organization_id, festival_class_id, status, joined_at);
+
+
+--
+-- Name: idx_waitlist_entries_parent_lookup; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_waitlist_entries_parent_lookup ON orgs.festival_class_waitlist_entries USING btree (organization_id, parent_customer_id, status);
+
+
+--
+-- Name: idx_waitlist_events_entry; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_waitlist_events_entry ON orgs.festival_class_waitlist_events USING btree (organization_id, waitlist_entry_id, occurred_at);
+
+
+--
+-- Name: idx_waitlist_events_class; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_waitlist_events_class ON orgs.festival_class_waitlist_events USING btree (organization_id, festival_class_id, occurred_at);
+
+
+--
 -- Name: idx_accompanist_profiles_directory; Type: INDEX; Schema: orgs; Owner: -
 --
 
@@ -2862,6 +2967,86 @@ ALTER TABLE ONLY orgs.festival_class_capacity_audit_logs
 
 ALTER TABLE ONLY orgs.festival_class_capacity_audit_logs
     ADD CONSTRAINT festival_class_capacity_audit_logs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: festival_class_waitlist_entries festival_class_waitlist_entries_child_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_class_waitlist_entries
+    ADD CONSTRAINT festival_class_waitlist_entries_child_id_fkey FOREIGN KEY (child_id) REFERENCES orgs.festival_children(id) ON DELETE CASCADE;
+
+
+--
+-- Name: festival_class_waitlist_entries festival_class_waitlist_entries_festival_class_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_class_waitlist_entries
+    ADD CONSTRAINT festival_class_waitlist_entries_festival_class_id_fkey FOREIGN KEY (festival_class_id) REFERENCES orgs.festival_class_configurations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: festival_class_waitlist_entries festival_class_waitlist_entries_festival_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_class_waitlist_entries
+    ADD CONSTRAINT festival_class_waitlist_entries_festival_id_fkey FOREIGN KEY (festival_id) REFERENCES orgs.festivals(id) ON DELETE CASCADE;
+
+
+--
+-- Name: festival_class_waitlist_entries festival_class_waitlist_entries_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_class_waitlist_entries
+    ADD CONSTRAINT festival_class_waitlist_entries_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: festival_class_waitlist_entries festival_class_waitlist_entries_parent_customer_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_class_waitlist_entries
+    ADD CONSTRAINT festival_class_waitlist_entries_parent_customer_id_fkey FOREIGN KEY (parent_customer_id) REFERENCES orgs.festival_customers(id) ON DELETE CASCADE;
+
+
+--
+-- Name: festival_class_waitlist_events festival_class_waitlist_events_child_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_class_waitlist_events
+    ADD CONSTRAINT festival_class_waitlist_events_child_id_fkey FOREIGN KEY (child_id) REFERENCES orgs.festival_children(id) ON DELETE CASCADE;
+
+
+--
+-- Name: festival_class_waitlist_events festival_class_waitlist_events_festival_class_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_class_waitlist_events
+    ADD CONSTRAINT festival_class_waitlist_events_festival_class_id_fkey FOREIGN KEY (festival_class_id) REFERENCES orgs.festival_class_configurations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: festival_class_waitlist_events festival_class_waitlist_events_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_class_waitlist_events
+    ADD CONSTRAINT festival_class_waitlist_events_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: festival_class_waitlist_events festival_class_waitlist_events_parent_customer_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_class_waitlist_events
+    ADD CONSTRAINT festival_class_waitlist_events_parent_customer_id_fkey FOREIGN KEY (parent_customer_id) REFERENCES orgs.festival_customers(id) ON DELETE CASCADE;
+
+
+--
+-- Name: festival_class_waitlist_events festival_class_waitlist_events_waitlist_entry_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_class_waitlist_events
+    ADD CONSTRAINT festival_class_waitlist_events_waitlist_entry_id_fkey FOREIGN KEY (waitlist_entry_id) REFERENCES orgs.festival_class_waitlist_entries(id) ON DELETE CASCADE;
 
 
 --
