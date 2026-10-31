@@ -45,6 +45,9 @@ import type {
 	DropRegistrationInput,
 	DropRegistrationResult,
 	DropRegistrationValidationResult,
+	EntitlementReportFilters,
+	EntitlementReportPageRequest,
+	EntitlementReportResponse,
 	EvaluatePurchaseEligibilityResponse,
 	FestivalClassConfigurationDto,
 	FestivalSummary,
@@ -770,6 +773,29 @@ export function getAdminMembershipProducts(idToken: string, slug: string) {
 	return requestJson<MembershipProductsListResponse>(
 		`/api/organizations/${slug}/admin/membership-products`,
 		undefined,
+		idToken,
+	);
+}
+
+export function getAdminEntitlementReport(
+	idToken: string,
+	slug: string,
+	filters: EntitlementReportFilters,
+	pageRequest: EntitlementReportPageRequest,
+	init?: { signal?: AbortSignal },
+) {
+	const params = new URLSearchParams();
+	if (filters.search) params.set("search", filters.search);
+	if (filters.entitlementClass)
+		params.set("entitlementClass", filters.entitlementClass);
+	if (filters.status) params.set("status", filters.status);
+	if (filters.divisionId) params.set("divisionId", filters.divisionId);
+	params.set("page", String(pageRequest.page));
+	params.set("pageSize", String(pageRequest.pageSize));
+	const query = params.toString();
+	return requestJson<EntitlementReportResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/entitlements?${query}`,
+		init,
 		idToken,
 	);
 }

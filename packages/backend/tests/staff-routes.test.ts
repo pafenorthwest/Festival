@@ -14,6 +14,11 @@ class FakeAuth implements AuthVerifier {
 				email: "admin@example.com",
 				displayName: "Admin",
 			},
+			chair: {
+				uid: "uid-chair",
+				email: "chair@example.com",
+				displayName: "Chair",
+			},
 			outsider: {
 				uid: "uid-outsider",
 				email: "outsider@example.com",
@@ -42,6 +47,18 @@ async function createTestApp(withAccompanistService = true) {
 		userId: user.id,
 		role: "Admin",
 		origin: "creator",
+	});
+
+	const chair = await repository.upsertUser({
+		uid: "uid-chair",
+		email: "chair@example.com",
+		displayName: "Chair",
+	});
+	await repository.createMembership({
+		organizationId: organization.id,
+		userId: chair.id,
+		role: "Division Chair",
+		origin: "invite",
 	});
 
 	const authVerifier = new FakeAuth();
@@ -100,6 +117,95 @@ describe("staff routes", () => {
 				},
 			);
 			expect(response.status).toBe(403);
+		});
+	});
+	describe("GET /organizations/:slug/admin/entitlements", () => {
+		const get = (
+			app: Hono,
+			slug: string,
+			token: string | undefined,
+			query = "",
+		) =>
+			app.request(`/organizations/${slug}/admin/entitlements${query}`, {
+				headers: token ? { Authorization: `Bearer ${token}` } : {},
+			});
+
+		it("returns the report with a no-store header for an admin", async () => {
+			const { app, organization } = await createTestApp();
+			const response = await get(app, organization.slug, "admin");
+			expect(response.status).toBe(200);
+			expect(response.headers.get("Cache-Control")).toBe("no-store");
+			expect(await response.json()).toEqual({
+				entries: [],
+				total: 0,
+				page: 1,
+				pageSize: 25,
+				totalPages: 1,
+				divisions: [],
+			});
+		});
+
+		it("accepts page, pageSize, and division filters", async () => {
+			const { app, organization } = await createTestApp();
+			const response = await get(
+				app,
+				organization.slug,
+				"admin",
+				"?page=2&pageSize=10&divisionId=d1",
+			);
+			expect(response.status).toBe(200);
+			expect(await response.json()).toMatchObject({
+				page: 1,
+				pageSize: 10,
+				total: 0,
+			});
+		});
+
+		it("rejects unauthenticated callers", async () => {
+			const { app, organization } = await createTestApp();
+			expect((await get(app, organization.slug, undefined)).status).toBe(401);
+		});
+
+		it("rejects non-admin members and non-members", async () => {
+			const { app, organization } = await createTestApp();
+			expect((await get(app, organization.slug, "chair")).status).toBe(403);
+			expect((await get(app, organization.slug, "outsider")).status).toBe(403);
+		});
+
+		it("rejects an admin of another organization", async () => {
+			const { app, repository } = await createTestApp();
+			const other = await repository.createOrganization({
+				name: "Other Festival",
+				slug: "other",
+			});
+			expect((await get(app, other.slug, "admin")).status).toBe(403);
+		});
+
+		it("rejects invalid filters", async () => {
+			const { app, organization } = await createTestApp();
+			expect(
+				(await get(app, organization.slug, "admin", "?status=bogus")).status,
+			).toBe(400);
+			expect(
+				(await get(app, organization.slug, "admin", "?entitlementClass=bogus"))
+					.status,
+			).toBe(400);
+			for (const query of [
+				"?page=0",
+				"?page=abc",
+				"?pageSize=0",
+				"?pageSize=101",
+				`?divisionId=${"x".repeat(201)}`,
+			]) {
+				expect((await get(app, organization.slug, "admin", query)).status).toBe(
+					400,
+				);
+			}
+		});
+
+		it("returns 503 when the membership service is not configured", async () => {
+			const { app, organization } = await createTestApp(false);
+			expect((await get(app, organization.slug, "admin")).status).toBe(503);
 		});
 	});
 });
