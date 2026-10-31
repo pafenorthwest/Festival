@@ -75,21 +75,21 @@ export function AdminEntitlementReportPanel(props: {
 		setLoading(true);
 		setError("");
 		try {
-			const response = await getAdminEntitlementReport({
-				idToken: await user.getIdToken(),
-				slug: route.slug,
-				filters: {
+			const response = await getAdminEntitlementReport(
+				await user.getIdToken(),
+				route.slug,
+				{
 					search: search().trim() || undefined,
 					entitlementClass: entitlementClass() || undefined,
 					status: status() || undefined,
 					divisionId: divisionId() || undefined,
 				},
-				pageRequest: {
+				{
 					page: page(),
 					pageSize: ENTITLEMENT_REPORT_DEFAULT_PAGE_SIZE,
 				},
-				init: { signal: current.signal },
-			});
+				{ signal: current.signal },
+			);
 			if (current.signal.aborted) return;
 			setEntries(response.entries);
 			setTotal(response.total);

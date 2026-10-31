@@ -1,8 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import {
-	type GetAdminEntitlementReportOptions,
-	getAdminEntitlementReport,
-} from "../src/lib/api.js";
+import { getAdminEntitlementReport } from "../src/lib/api.js";
 
 let fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
 const originalFetch = globalThis.fetch;
@@ -41,29 +38,29 @@ afterEach(() => {
 });
 
 describe("getAdminEntitlementReport API", () => {
-	it("takes an options object with <= 3 parameters", () => {
-		// Verify function signature takes 1 parameter (options)
-		expect(getAdminEntitlementReport.length).toBeLessThanOrEqual(1);
+	it("takes positional arguments", () => {
+		expect(getAdminEntitlementReport.length).toBe(5);
 	});
 
 	it("serializes filters and paging parameters correctly into query string", async () => {
 		mockFetch();
-		const options: GetAdminEntitlementReportOptions = {
-			idToken: "test-token",
-			slug: "test-org",
-			filters: {
-				search: "alice",
-				entitlementClass: "teacher_membership",
-				status: "active",
-				divisionId: "div-123",
-			},
-			pageRequest: {
-				page: 2,
-				pageSize: 10,
-			},
+		const filters = {
+			search: "alice",
+			entitlementClass: "teacher_membership" as const,
+			status: "active" as const,
+			divisionId: "div-123",
+		};
+		const pageRequest = {
+			page: 2,
+			pageSize: 10,
 		};
 
-		await getAdminEntitlementReport(options);
+		await getAdminEntitlementReport(
+			"test-token",
+			"test-org",
+			filters,
+			pageRequest,
+		);
 
 		expect(fetchCalls.length).toBe(1);
 		const call = fetchCalls[0];
@@ -80,14 +77,16 @@ describe("getAdminEntitlementReport API", () => {
 		expect(url.searchParams.get("pageSize")).toBe("10");
 	});
 
-	it("passes signal via init or directly", async () => {
+	it("passes signal via init", async () => {
 		mockFetch();
 		const controller = new AbortController();
-		await getAdminEntitlementReport({
-			idToken: "token",
-			slug: "org",
-			init: { signal: controller.signal },
-		});
+		await getAdminEntitlementReport(
+			"token",
+			"org",
+			{},
+			{ page: 1, pageSize: 25 },
+			{ signal: controller.signal },
+		);
 		expect(fetchCalls[0].init?.signal).toBe(controller.signal);
 	});
 });
@@ -112,9 +111,9 @@ describe("AdminEntitlementReportPanel contract and auth handling", () => {
 			/if\s*\([^)]*!user[^)]*\)\s*\{[\s\S]*?setLoading\(false\);/,
 		);
 
-		// Verify call site passes options object
-		expect(source).toContain("await getAdminEntitlementReport({");
-		expect(source).toContain("idToken: await user.getIdToken(),");
-		expect(source).toContain("slug: route.slug,");
+		// Verify call site passes positional arguments
+		expect(source).toContain("await getAdminEntitlementReport(");
+		expect(source).toContain("await user.getIdToken(),");
+		expect(source).toContain("route.slug,");
 	});
 });
