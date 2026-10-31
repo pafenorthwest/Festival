@@ -813,6 +813,72 @@ describe("AccompanistMembershipService.listEntitlementReport", () => {
 		});
 	});
 
+	it("falls back to customerEmail when customerName is missing or empty when sorting entries", async () => {
+		const context = await setup();
+		const { repository, organization, division, service } = context;
+		const offering = await repository.createMembershipProductRecord({
+			organizationId: organization.id,
+			entitlementClass: "teacher_membership",
+			durationDays: 365,
+			isActive: true,
+			shopifyProductGid: "gid://shopify/Product/teacher",
+			shopifyVariantGid: "gid://shopify/ProductVariant/teacher",
+			productNameSnapshot: "Annual Teacher Pass",
+		});
+		const createGrant = (customerId: string) =>
+			repository.createEntitlementGrantSnapshot({
+				organizationId: organization.id,
+				customerId,
+				entitlementClass: "teacher_membership",
+				offeringId: offering.id,
+				durationDays: 365,
+				divisionId: division.id,
+				divisionNameSnapshot: division.displayName,
+				paidAmount: "75.00",
+				paidCurrencyCode: "USD",
+				checkoutIntentId: `checkout-${customerId}`,
+				shopifyOrderGid: `gid://shopify/Order/${customerId}`,
+				shopifyOrderLineGid: `gid://shopify/LineItem/${customerId}`,
+				verifiedIdentityEmail: `${customerId}@example.com`,
+				startsOn: "2026-09-12",
+				endsOn: "2027-09-12",
+				status: "active",
+			} as Parameters<typeof repository.createEntitlementGrantSnapshot>[0]);
+
+		await createGrant("cust-b");
+		await createGrant("cust-a");
+		await createGrant("cust-c");
+
+		repository.setCustomerContact(organization.id, {
+			customerId: "cust-b",
+			name: "Bob",
+			email: "bob@example.com",
+		});
+		repository.setCustomerContact(organization.id, {
+			customerId: "cust-a",
+			name: "",
+			email: "alice@example.com",
+		});
+		repository.setCustomerContact(organization.id, {
+			customerId: "cust-c",
+			email: "charlie@example.com",
+		});
+
+		const report = await service.listEntitlementReport(
+			organization.id,
+			{},
+			ALL_ON_ONE_PAGE,
+		);
+
+		expect(
+			report.entries.map((entry) => [entry.customerName, entry.customerEmail]),
+		).toEqual([
+			[undefined, "alice@example.com"],
+			["Bob", "bob@example.com"],
+			[undefined, "charlie@example.com"],
+		]);
+	});
+
 	it("filters by entitlement class, status, and customer search", async () => {
 		const { organization, service } = await seedReport();
 		const names = async (

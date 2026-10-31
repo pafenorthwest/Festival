@@ -777,21 +777,30 @@ export function getAdminMembershipProducts(idToken: string, slug: string) {
 	);
 }
 
+export interface GetAdminEntitlementReportOptions {
+	idToken: string;
+	slug: string;
+	filters?: EntitlementReportFilters;
+	pageRequest?: EntitlementReportPageRequest;
+	init?: { signal?: AbortSignal };
+	signal?: AbortSignal;
+}
+
 export function getAdminEntitlementReport(
-	idToken: string,
-	slug: string,
-	filters: EntitlementReportFilters,
-	pageRequest: EntitlementReportPageRequest,
-	init?: { signal?: AbortSignal },
+	options: GetAdminEntitlementReportOptions,
 ) {
+	const { idToken, slug, filters = {}, pageRequest } = options;
+	const init =
+		options.init ?? (options.signal ? { signal: options.signal } : undefined);
 	const params = new URLSearchParams();
 	if (filters.search) params.set("search", filters.search);
 	if (filters.entitlementClass)
 		params.set("entitlementClass", filters.entitlementClass);
 	if (filters.status) params.set("status", filters.status);
 	if (filters.divisionId) params.set("divisionId", filters.divisionId);
-	params.set("page", String(pageRequest.page));
-	params.set("pageSize", String(pageRequest.pageSize));
+	if (pageRequest?.page != null) params.set("page", String(pageRequest.page));
+	if (pageRequest?.pageSize != null)
+		params.set("pageSize", String(pageRequest.pageSize));
 	const query = params.toString();
 	return requestJson<EntitlementReportResponse>(
 		`/api/organizations/${encodeURIComponent(slug)}/admin/entitlements?${query}`,

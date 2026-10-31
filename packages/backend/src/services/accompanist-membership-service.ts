@@ -417,7 +417,9 @@ function sortReportEntries(
 	b: EntitlementReportEntry,
 ): number {
 	return (
-		(a.customerName ?? "").localeCompare(b.customerName ?? "") ||
+		(a.customerName || a.customerEmail || "").localeCompare(
+			b.customerName || b.customerEmail || "",
+		) ||
 		a.entitlementClass.localeCompare(b.entitlementClass) ||
 		b.startsOn.localeCompare(a.startsOn) ||
 		a.id.localeCompare(b.id)

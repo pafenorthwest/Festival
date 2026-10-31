@@ -5,7 +5,14 @@ import {
 	type EntitlementReportDivisionOption,
 	type EntitlementReportEntry,
 } from "@festival/common";
-import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import {
+	createEffect,
+	createSignal,
+	For,
+	onCleanup,
+	Show,
+	untrack,
+} from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { getAdminEntitlementReport } from "../lib/api.js";
 import {
@@ -27,7 +34,7 @@ export function AdminEntitlementReportPanel(props: {
 	app: FestivalAppController;
 }) {
 	const [entries, setEntries] = createSignal<EntitlementReportEntry[]>([]);
-	const [loading, setLoading] = createSignal(true);
+	const [loading, setLoading] = createSignal(false);
 	const [error, setError] = createSignal("");
 	const [search, setSearch] = createSignal("");
 	const [entitlementClass, setEntitlementClass] = createSignal<
@@ -50,25 +57,39 @@ export function AdminEntitlementReportPanel(props: {
 	const load = async () => {
 		const route = props.app.route();
 		const user = props.app.firebaseUser();
-		if (route.kind !== "org-admin-memberships" || !user) return;
+		if (route.kind !== "org-admin-memberships") {
+			setLoading(false);
+			return;
+		}
+		if (!user) {
+			controller?.abort();
+			setEntries([]);
+			setTotal(0);
+			setTotalPages(1);
+			setLoading(false);
+			return;
+		}
 		controller?.abort();
 		const current = new AbortController();
 		controller = current;
 		setLoading(true);
 		setError("");
 		try {
-			const response = await getAdminEntitlementReport(
-				await user.getIdToken(),
-				route.slug,
-				{
+			const response = await getAdminEntitlementReport({
+				idToken: await user.getIdToken(),
+				slug: route.slug,
+				filters: {
 					search: search().trim() || undefined,
 					entitlementClass: entitlementClass() || undefined,
 					status: status() || undefined,
 					divisionId: divisionId() || undefined,
 				},
-				{ page: page(), pageSize: ENTITLEMENT_REPORT_DEFAULT_PAGE_SIZE },
-				{ signal: current.signal },
-			);
+				pageRequest: {
+					page: page(),
+					pageSize: ENTITLEMENT_REPORT_DEFAULT_PAGE_SIZE,
+				},
+				init: { signal: current.signal },
+			});
 			if (current.signal.aborted) return;
 			setEntries(response.entries);
 			setTotal(response.total);
@@ -110,7 +131,20 @@ export function AdminEntitlementReportPanel(props: {
 		void load();
 	};
 
-	onMount(() => void load());
+	createEffect(() => {
+		const route = props.app.route();
+		const user = props.app.firebaseUser();
+		if (route.kind !== "org-admin-memberships" || !user) {
+			controller?.abort();
+			setEntries([]);
+			setTotal(0);
+			setTotalPages(1);
+			setLoading(false);
+			return;
+		}
+		untrack(() => void load());
+	});
+
 	onCleanup(() => {
 		clearTimeout(debounce);
 		controller?.abort();
