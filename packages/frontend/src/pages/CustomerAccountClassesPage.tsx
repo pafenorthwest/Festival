@@ -71,6 +71,26 @@ export function CustomerAccountClassesPage(props: { slug: string }) {
 												{registration.festivalClass?.displayName ??
 													"Festival Class"}
 											</h3>
+											<Show
+												when={registration.entitlement?.status === "confirmed"}
+											>
+												<span
+													class="badge badge-success"
+													data-testid="placed-confirmed-badge"
+												>
+													Placed / Confirmed
+												</span>
+											</Show>
+											<Show
+												when={registration.entitlement?.status === "waitlisted"}
+											>
+												<span
+													class="badge badge-neutral"
+													data-testid="paid-waitlisted-badge"
+												>
+													Waitlisted (Paid)
+												</span>
+											</Show>
 											<p>
 												Performer:{" "}
 												<strong>

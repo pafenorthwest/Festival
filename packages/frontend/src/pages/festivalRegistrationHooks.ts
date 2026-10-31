@@ -1,8 +1,13 @@
-import type { RegistrationEligibleClass } from "@festival/common";
+import type {
+	CustomerWaitlistEntryDto,
+	RegistrationEligibleClass,
+} from "@festival/common";
 import { type Accessor, createEffect, createSignal } from "solid-js";
 import {
 	type CustomerChildDto,
 	getCustomerChildren,
+	getCustomerProfile,
+	listFestivalWaitlistEntries,
 	listRegistrationAccompanists,
 	listRegistrationEligibleClasses,
 	listRegistrationTeachers,
@@ -109,5 +114,75 @@ export function useRegistrationOptions(input: RegistrationOptionsInput) {
 		eligibleClasses,
 		accompanists,
 		loadChildren,
+	};
+}
+
+export interface RegistrationWaitlistInput {
+	slug: string;
+	festivalSlug: string;
+	isAuthenticated: Accessor<boolean>;
+	selectedClassId: Accessor<string>;
+	selectedChildId: Accessor<string>;
+}
+
+export function useRegistrationWaitlist(input: RegistrationWaitlistInput) {
+	const [sessionProfile, setSessionProfile] = createSignal<{
+		name?: string;
+		email?: string;
+		phone?: string;
+	} | null>(null);
+	const [waitlistEntries, setWaitlistEntries] = createSignal<
+		CustomerWaitlistEntryDto[]
+	>([]);
+
+	const currentWaitlistEntry = () => {
+		const classId = input.selectedClassId();
+		const childId = input.selectedChildId();
+		if (!classId || !childId) return null;
+		return (
+			waitlistEntries().find(
+				(e) =>
+					e.festivalClassId === classId &&
+					e.childId === childId &&
+					e.status !== "withdrawn",
+			) ?? null
+		);
+	};
+
+	const handleWaitlistEntryChanged = async () => {
+		try {
+			const res = await listFestivalWaitlistEntries(
+				input.slug,
+				input.festivalSlug,
+			);
+			setWaitlistEntries(res.entries ?? []);
+		} catch {}
+	};
+
+	createEffect(() => {
+		if (input.isAuthenticated()) {
+			setSessionProfile((prev) => prev ?? { name: "", email: "", phone: "" });
+			void getCustomerProfile(input.slug)
+				.then((res) => {
+					if (res?.profile) {
+						setSessionProfile({
+							name: res.profile.name ?? "",
+							email: res.profile.email ?? "",
+							phone: res.profile.phone ?? "",
+						});
+					}
+				})
+				.catch(() => {});
+			void handleWaitlistEntryChanged();
+		} else {
+			setSessionProfile(null);
+			setWaitlistEntries([]);
+		}
+	});
+
+	return {
+		sessionProfile,
+		currentWaitlistEntry,
+		handleWaitlistEntryChanged,
 	};
 }

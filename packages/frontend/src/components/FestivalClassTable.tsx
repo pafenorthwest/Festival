@@ -18,6 +18,7 @@ interface FestivalClassTableProps {
 	isLoading: boolean;
 	onEdit: (item: FestivalClassConfigurationDto) => void;
 	onToggleActive: (item: FestivalClassConfigurationDto) => void;
+	onViewWaitlist?: (item: FestivalClassConfigurationDto) => void;
 }
 
 export function FestivalClassTable(props: FestivalClassTableProps) {
@@ -134,6 +135,15 @@ export function FestivalClassTable(props: FestivalClassTableProps) {
 									</span>
 								</span>
 								<span class="listing-table-actions">
+									<Show when={props.onViewWaitlist}>
+										<Button
+											type="button"
+											variant="secondary"
+											onClick={() => props.onViewWaitlist?.(classItem)}
+										>
+											Waitlist
+										</Button>
+									</Show>
 									<Button
 										type="button"
 										variant="secondary"
