@@ -1469,6 +1469,71 @@ form.shopify-integration-card {
 	color: var(--bullet-soft-ink);
 }
 
+.entitlement-report-filters {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 0.75rem;
+	margin-bottom: 1rem;
+}
+
+.entitlement-report-filters > label:first-child {
+	grid-column: 1 / -1;
+}
+
+.entitlement-report-table .listing-table-header,
+.entitlement-report-table .listing-table-row {
+	grid-template-columns:
+		minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1.3fr)
+		6rem;
+}
+
+.entitlement-report-table .listing-table-row > span {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.entitlement-report-pager {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.75rem;
+	margin-top: 1rem;
+}
+
+.entitlement-report-pages {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.4rem;
+}
+
+.entitlement-report-pages button.secondary-button {
+	min-width: 2.5rem;
+	padding: 0.45rem 0.7rem;
+}
+
+.entitlement-report-pages button.secondary-button:disabled {
+	opacity: 0.45;
+}
+
+.entitlement-report-pages button.entitlement-report-page-current {
+	background: var(--bullet-ink);
+	color: #fff;
+}
+
+.entitlement-report-gap {
+	color: var(--bullet-soft-ink);
+	padding: 0 0.2rem;
+}
+
+.entitlement-report-secondary {
+	display: block;
+	color: var(--bullet-soft-ink);
+	font-size: 0.85rem;
+	overflow-wrap: anywhere;
+}
+
 .volunteer-roles-table .listing-table-header,
 .volunteer-roles-table .listing-table-row {
 	/* Fixed widths, not auto: each row is its own grid, so auto-sized
@@ -1910,6 +1975,13 @@ form.shopify-integration-card {
 	}
 }
 
+@media (max-width: 900px) {
+	.entitlement-report-table .listing-table-header,
+	.entitlement-report-table .listing-table-row {
+		grid-template-columns: 1fr;
+	}
+}
+
 @media (max-width: 720px) {
 	.organization-page-layout {
 		gap: 0.75rem;
@@ -1938,7 +2010,8 @@ form.shopify-integration-card {
 	.festival-classes-table .listing-table-header,
 	.festival-classes-table .listing-table-row,
 	.rooms-table .listing-table-header,
-	.rooms-table .listing-table-row {
+	.rooms-table .listing-table-row,
+	.entitlement-report-filters {
 		grid-template-columns: 1fr;
 	}
 

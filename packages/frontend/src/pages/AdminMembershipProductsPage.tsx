@@ -11,6 +11,7 @@ import {
 	buildOrgAdminIntegrationsPath,
 	buildOrgAdminRosterPath,
 } from "../lib/routes.js";
+import { AdminEntitlementReportPanel } from "./AdminEntitlementReportPanel.js";
 
 interface AdminMembershipProductsPageProps {
 	app: FestivalAppController;
@@ -381,6 +382,7 @@ export function AdminMembershipProductsPage(
 					</For>
 				</fieldset>
 			</section>
+			<AdminEntitlementReportPanel app={props.app} />
 		</Show>
 	);
 }

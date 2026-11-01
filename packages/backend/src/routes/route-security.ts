@@ -263,6 +263,11 @@ export const CURRENT_ROUTE_SECURITY = [
 		authenticationClass: "admin",
 	},
 	{
+		method: "GET",
+		path: "/api/organizations/:slug/admin/entitlements",
+		authenticationClass: "admin",
+	},
+	{
 		method: "DELETE",
 		path: "/api/organizations/:slug/admin/memberships/:membershipId",
 		authenticationClass: "admin",
