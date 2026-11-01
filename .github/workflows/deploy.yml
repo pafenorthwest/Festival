@@ -1,0 +1,211 @@
+name: Continuous Deployment
+
+on:
+  push:
+    branches:
+      - release
+      - 'release/v*'
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment target environment'
+        required: true
+        default: 'integration'
+        type: choice
+        options:
+          - integration
+          - staging
+          - production
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: cd-${{ github.event.inputs.environment || (startsWith(github.ref, 'refs/tags/v') && 'production' || 'integration') }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Format check
+        run: bun run format:check
+
+      - name: Build
+        run: bun run build
+
+      - name: Test
+        run: bun run test
+
+      - name: SQL parameter check
+        run: bun run check:sql
+
+  build-and-push:
+    name: Build & Push Images
+    needs: verify
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta_backend.outputs.version }}
+      target_environment: ${{ github.event.inputs.environment || (startsWith(github.ref, 'refs/tags/v') && 'production' || 'integration') }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Backend image metadata
+        id: meta_backend
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/festival-backend
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,format=short
+            type=raw,value=${{ github.sha }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - name: Extract Frontend image metadata
+        id: meta_frontend
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/festival-frontend
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,format=short
+            type=raw,value=${{ github.sha }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - name: Build and push Backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/backend.Dockerfile
+          push: true
+          tags: ${{ steps.meta_backend.outputs.tags }}
+          labels: ${{ steps.meta_backend.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push Frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/frontend.Dockerfile
+          push: true
+          tags: ${{ steps.meta_frontend.outputs.tags }}
+          labels: ${{ steps.meta_frontend.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to Target Host
+    needs: [verify, build-and-push]
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ needs.build-and-push.outputs.target_environment }}
+      url: ${{ vars.DEPLOY_PUBLIC_URL || 'https://int.artsfestival.online/' }}
+
+    steps:
+      - name: Check deployment host configuration
+        id: host_check
+        env:
+          TARGET_HOST: ${{ secrets.DEPLOY_HOST || secrets.DO_INTEGRATION_HOST }}
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY || secrets.DO_SSH_PRIVATE_KEY }}
+        run: |
+          if [ -n "$TARGET_HOST" ] && [ -n "$SSH_KEY" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping remote SSH rollout: DEPLOY_HOST / DO_INTEGRATION_HOST or SSH key secret is not configured for this environment."
+          fi
+
+      - name: Deploy to Target Host via SSH
+        if: steps.host_check.outputs.configured == 'true'
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          DEPLOY_SHA: ${{ github.sha }}
+        with:
+          host: ${{ secrets.DEPLOY_HOST || secrets.DO_INTEGRATION_HOST }}
+          username: ${{ secrets.DEPLOY_USER || secrets.DO_INTEGRATION_USER || 'webadmin' }}
+          key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY || secrets.DO_SSH_PRIVATE_KEY }}
+          passphrase: ${{ secrets.DEPLOY_SSH_PASSPHRASE || secrets.DO_SSH_PASSPHRASE }}
+          envs: DEPLOY_SHA
+          command_timeout: 30m
+          script: |
+            set -euo pipefail
+            [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+            cd /opt/Festival
+            git fetch origin "$DEPLOY_SHA"
+            git checkout --detach "$DEPLOY_SHA"
+            test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"
+            git diff --quiet
+            git diff --cached --quiet
+            bash cloud-setup/03-prepare-images.sh
+            docker compose --env-file cloud-setup/.env -f cloud-setup/compose.yml up -d --no-build --pull never
+
+  smoke-test:
+    name: Post-Deploy Health & Smoke Verification
+    needs: deploy
+    runs-on: ubuntu-latest
+    env:
+      BASE_URL: ${{ vars.DEPLOY_PUBLIC_URL || 'https://int.artsfestival.online' }}
+      TARGET_HOST: ${{ secrets.DEPLOY_HOST || secrets.DO_INTEGRATION_HOST }}
+
+    steps:
+      - name: Verify /healthz and database-backed landing endpoint
+        run: |
+          if [ -z "$TARGET_HOST" ] && [ -z "${{ vars.DEPLOY_PUBLIC_URL }}" ]; then
+            echo "Skipping remote live smoke test because no deployment target host or DEPLOY_PUBLIC_URL is configured."
+            exit 0
+          fi
+           normalized_base="${BASE_URL%/}"
+          for i in {1..12}; do
+            health_payload="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 15 "${normalized_base}/healthz" || true)"
+            if [ "$health_payload" = '{"status":"ok"}' ] \
+              && curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
+                "${normalized_base}/api/organizations/pafe/landing" \
+                --output "$RUNNER_TEMP/deploy-landing.json" \
+              && jq --exit-status \
+                '.organization.slug == "pafe" and (.organization.name | type == "string") and (.festivals | type == "array")' \
+                "$RUNNER_TEMP/deploy-landing.json" > /dev/null; then
+              echo "Health check (/healthz) and database-backed API smoke check passed on attempt $i"
+              exit 0
+            fi
+            if [ "$i" -lt 12 ]; then
+              echo "Attempt $i failed, retrying in 5s..."
+              sleep 5
+            fi
+          done
+          echo "Post-deploy smoke verification failed after 12 attempts"
+          exit 1
