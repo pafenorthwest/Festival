@@ -56,9 +56,16 @@ function readLocations(config: string): ConfigDirective[] {
 		if (nested) throw new Error("Unclosed Nginx block.");
 		return directives;
 	}
-	const servers = readBlock().filter(
-		(directive) => directive.name === "server",
-	);
+	const root = readBlock();
+	const servers = root.flatMap((directive) => {
+		if (directive.name === "server") return [directive];
+		if (directive.name === "http") {
+			return (
+				directive.children?.filter((child) => child.name === "server") ?? []
+			);
+		}
+		return [];
+	});
 	if (servers.length !== 1) throw new Error("Expected one Nginx server.");
 	return servers[0]?.children?.filter((node) => node.name === "location") ?? [];
 }
@@ -157,49 +164,108 @@ describe("repository nginx security policy", () => {
 		];
 		const isPrivate = (route: { method: string; path: string }) =>
 			declarations.get(`${route.method} ${route.path}`)?.startsWith("private-");
-		const locations = readLocations(
-			await readConfig("docker/nginx.festival.conf"),
-		);
-		expect(
-			missingPublicRoutes(
-				locations,
-				registered.filter((route) => !isPrivate(route)),
-			),
-		).toEqual([]);
 		const privateRoutes = registered.filter(isPrivate);
 		expect(
 			privateRoutes.map(({ method, path }) => `${method} ${path}`).sort(),
 		).toEqual([
+			"GET /api/internal/diagnostics",
+			"GET /api/internal/metrics",
+			"GET /api/internal/operator/status",
+			"GET /api/internal/ready",
 			"GET /health",
+			"POST /api/internal/events/shopify-orders-paid",
 			"POST /api/internal/reconcile/firebase-claims",
 			"POST /api/internal/reconcile/shopify-orders",
 		]);
-		for (const route of privateRoutes) {
-			const block = selectLocation(locations, route.path);
+		const forbiddenPrivatePaths = [
+			"/health",
+			"/internal",
+			"/internal/status",
+			"/metrics",
+			"/metrics/prometheus",
+			"/ready",
+			"/readiness",
+			"/diagnostics",
+			"/debug",
+			"/jobs",
+			"/workers",
+			"/queues",
+			"/operator",
+			"/api/internal",
+			"/api/internal/ready",
+			"/api/internal/diagnostics",
+			"/api/internal/metrics",
+			"/api/internal/operator/status",
+			"/api/internal/events/shopify-orders-paid",
+			"/api/internal/reconcile/shopify-orders",
+			"/api/internal/reconcile/firebase-claims",
+			"/api/metrics",
+			"/api/ready",
+			"/api/readiness",
+			"/api/diagnostics",
+			"/api/debug",
+			"/api/jobs",
+			"/api/workers",
+			"/api/queues",
+			"/api/operator",
+		];
+		for (const configPath of [
+			"nginx/festival.conf",
+			"docker/nginx.festival.conf",
+		]) {
+			const locations = readLocations(await readConfig(configPath));
 			expect(
-				block?.children?.some(
+				missingPublicRoutes(
+					locations,
+					registered.filter((route) => !isPrivate(route)),
+				),
+			).toEqual([]);
+			for (const route of privateRoutes) {
+				const block = selectLocation(locations, route.path);
+				expect(
+					block?.children?.some(
+						(node) => node.name === "return" && node.args[0] === "404",
+					),
+				).toBe(true);
+				for (const method of [
+					"GET",
+					"HEAD",
+					"POST",
+					"PATCH",
+					"DELETE",
+					"OPTIONS",
+				]) {
+					expect(proxiesRoute(locations, method, route.path)).toBe(false);
+				}
+			}
+			for (const forbiddenPath of forbiddenPrivatePaths) {
+				const block = selectLocation(locations, forbiddenPath);
+				expect(
+					block?.children?.some(
+						(node) => node.name === "return" && node.args[0] === "404",
+					),
+				).toBe(true);
+				for (const method of [
+					"GET",
+					"HEAD",
+					"POST",
+					"PUT",
+					"PATCH",
+					"DELETE",
+					"OPTIONS",
+				]) {
+					expect(proxiesRoute(locations, method, forbiddenPath)).toBe(false);
+				}
+			}
+			expect(proxiesRoute(locations, "GET", "/api/not-an-existing-route")).toBe(
+				false,
+			);
+			expect(
+				selectLocation(locations, "/api/not-an-existing-route")?.children?.some(
 					(node) => node.name === "return" && node.args[0] === "404",
 				),
 			).toBe(true);
-			for (const method of [
-				"GET",
-				"HEAD",
-				"POST",
-				"PATCH",
-				"DELETE",
-				"OPTIONS",
-			]) {
-				expect(proxiesRoute(locations, method, route.path)).toBe(false);
-			}
 		}
-		expect(proxiesRoute(locations, "GET", "/api/not-an-existing-route")).toBe(
-			false,
-		);
-		expect(
-			selectLocation(locations, "/api/not-an-existing-route")?.children?.some(
-				(node) => node.name === "return" && node.args[0] === "404",
-			),
-		).toBe(true);
 	});
 
 	it("detects an omitted Docker location and an omitted supported method", async () => {
@@ -334,7 +400,7 @@ describe("repository nginx security policy", () => {
 			expect(config).toContain("location /api/ { return 404; }");
 			expect(config).toContain("location = /api { return 404; }");
 			expect(config).toContain(
-				"webhooks|internal|metrics|ready|readiness|debug",
+				"webhooks|internal|metrics|ready|readiness|diagnostics|debug|jobs|workers|queues|operator",
 			);
 			expect(config).toContain("location = /health { return 404; }");
 			expect(config).toContain("location = /healthz");
