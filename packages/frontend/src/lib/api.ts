@@ -908,6 +908,26 @@ export function createMembershipProduct(
 	);
 }
 
+export function updateAdminMembershipProduct(
+	idToken: string,
+	slug: string,
+	offeringId: string,
+	input: CreateMembershipProductInput,
+) {
+	return requestJson<CreateMembershipProductResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/membership-products/${encodeURIComponent(offeringId)}`,
+		{
+			method: "POST",
+			body: JSON.stringify({
+				name: input.name,
+				description: input.description,
+				price: input.price,
+			}),
+		},
+		idToken,
+	);
+}
+
 export function dismissWelcome(idToken: string, slug: string) {
 	return requestJson<DismissWelcomeResponse>(
 		`/api/organizations/${slug}/welcome/dismiss`,

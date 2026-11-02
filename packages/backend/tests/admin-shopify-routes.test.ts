@@ -154,6 +154,12 @@ async function createTestApp(options: TestAppOptions = {}) {
 		id: "prod-new",
 		...(typeof payload === "object" && payload !== null ? payload : {}),
 	}));
+	const updateMembershipProductMock = mock(
+		async (_tenant, offeringId, payload) => ({
+			id: offeringId,
+			...(typeof payload === "object" && payload !== null ? payload : {}),
+		}),
+	);
 	const retireMembershipOfferingMock = mock(async () => ({
 		retired: true,
 	}));
@@ -175,6 +181,7 @@ async function createTestApp(options: TestAppOptions = {}) {
 				({
 					listMembershipProductsForOrganization: listMembershipProductsMock,
 					createMembershipProduct: createMembershipProductMock,
+					updateMembershipProduct: updateMembershipProductMock,
 					retireMembershipOffering: retireMembershipOfferingMock,
 					createAccompanistOffering: createAccompanistOfferingMock,
 					updateAccompanistOffering: updateAccompanistOfferingMock,
@@ -235,6 +242,7 @@ async function createTestApp(options: TestAppOptions = {}) {
 			runForTenantMock,
 			listMembershipProductsMock,
 			createMembershipProductMock,
+			updateMembershipProductMock,
 			retireMembershipOfferingMock,
 			createAccompanistOfferingMock,
 			updateAccompanistOfferingMock,
@@ -681,6 +689,103 @@ describe("admin shopify routes", () => {
 						body: JSON.stringify({
 							name: "Teacher Membership",
 							price: "35.00",
+						}),
+					},
+				);
+				expect(response.status).toBe(503);
+			});
+		});
+
+		describe("POST /organizations/:slug/admin/membership-products/:offeringId", () => {
+			it("returns 200 for valid Teacher offering update payload", async () => {
+				const { app, organization, mocks } = await createTestApp();
+				const payload = {
+					name: "Updated Teacher Membership",
+					description: "Updated description",
+					price: "85.00",
+				};
+				const response = await app.request(
+					`/organizations/${organization.slug}/admin/membership-products/offering-123`,
+					{
+						method: "POST",
+						headers: {
+							Authorization: "Bearer admin",
+							"Content-Type": "application/json",
+						},
+						body: JSON.stringify(payload),
+					},
+				);
+				expect(response.status).toBe(200);
+				const body = await response.json();
+				expect(body.membershipProduct).toMatchObject({
+					id: "offering-123",
+					name: "Updated Teacher Membership",
+					description: "Updated description",
+					price: "85.00",
+				});
+				expect(mocks.updateMembershipProductMock).toHaveBeenCalledTimes(1);
+			});
+
+			it("returns 400 when Teacher update payload contains forbidden fields", async () => {
+				const { app, organization, mocks } = await createTestApp();
+				const response = await app.request(
+					`/organizations/${organization.slug}/admin/membership-products/offering-123`,
+					{
+						method: "POST",
+						headers: {
+							Authorization: "Bearer admin",
+							"Content-Type": "application/json",
+						},
+						body: JSON.stringify({
+							name: "Updated Teacher Membership",
+							price: "85.00",
+							durationDays: 180,
+						}),
+					},
+				);
+				expect(response.status).toBe(400);
+				const body = await response.json();
+				expect(body.error).toContain(
+					"Membership product request cannot include browser-controlled fields",
+				);
+				expect(mocks.updateMembershipProductMock).not.toHaveBeenCalled();
+			});
+
+			it("returns 403 for non-admin user", async () => {
+				const { app, organization, mocks } = await createTestApp();
+				const response = await app.request(
+					`/organizations/${organization.slug}/admin/membership-products/offering-123`,
+					{
+						method: "POST",
+						headers: {
+							Authorization: "Bearer reader",
+							"Content-Type": "application/json",
+						},
+						body: JSON.stringify({
+							name: "Updated Teacher Membership",
+							price: "85.00",
+						}),
+					},
+				);
+				expect(response.status).toBe(403);
+				expect(mocks.updateMembershipProductMock).not.toHaveBeenCalled();
+			});
+
+			it("returns 503 when shopifyMembershipProductService is undefined", async () => {
+				const { app, organization } = await createTestApp({
+					shopifyMembershipProductService: null,
+				});
+				const response = await app.request(
+					`/organizations/${organization.slug}/admin/membership-products/offering-123`,
+					{
+						method: "POST",
+						headers: {
+							Authorization: "Bearer admin",
+							"Content-Type": "application/json",
+						},
+						body: JSON.stringify({
+							name: "Updated Teacher Membership",
+							price: "85.00",
 						}),
 					},
 				);
