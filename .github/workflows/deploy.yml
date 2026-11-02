@@ -24,7 +24,7 @@ permissions:
   packages: write
 
 concurrency:
-  group: cd-${{ github.event.inputs.environment || (startsWith(github.ref, 'refs/tags/v') && 'production' || 'integration') }}
+  group: cd-${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.environment) || (startsWith(github.ref, 'refs/tags/v') && 'production') || (startsWith(github.ref, 'refs/heads/release/v') && 'staging') || (github.ref == 'refs/heads/release' && 'integration') || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -64,9 +64,23 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image_tag: ${{ steps.meta_backend.outputs.version }}
-      target_environment: ${{ github.event.inputs.environment || (startsWith(github.ref, 'refs/tags/v') && 'production' || 'integration') }}
+      target_environment: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.environment) || (startsWith(github.ref, 'refs/tags/v') && 'production') || (startsWith(github.ref, 'refs/heads/release/v') && 'staging') || (github.ref == 'refs/heads/release' && 'integration') || '' }}
 
     steps:
+      - name: Validate resolved target environment
+        env:
+          TARGET_ENVIRONMENT: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.environment) || (startsWith(github.ref, 'refs/tags/v') && 'production') || (startsWith(github.ref, 'refs/heads/release/v') && 'staging') || (github.ref == 'refs/heads/release' && 'integration') || '' }}
+        run: |
+          case "$TARGET_ENVIRONMENT" in
+            integration|staging|production)
+              echo "Resolved target environment: $TARGET_ENVIRONMENT"
+              ;;
+            *)
+              echo "Error: Unable to resolve valid target_environment for event '${{ github.event_name }}' and ref '${{ github.ref }}'." >&2
+              exit 1
+              ;;
+          esac
+
       - name: Check out repository
         uses: actions/checkout@v5
         with:
@@ -134,20 +148,21 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: ${{ needs.build-and-push.outputs.target_environment }}
-      url: ${{ vars.DEPLOY_PUBLIC_URL || 'https://int.artsfestival.online/' }}
+      url: ${{ vars.DEPLOY_PUBLIC_URL }}
 
     steps:
       - name: Check deployment host configuration
         id: host_check
         env:
-          TARGET_HOST: ${{ secrets.DEPLOY_HOST || secrets.DO_INTEGRATION_HOST }}
-          SSH_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY || secrets.DO_SSH_PRIVATE_KEY }}
+          TARGET_HOST: ${{ secrets.DEPLOY_HOST }}
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          PUBLIC_URL: ${{ vars.DEPLOY_PUBLIC_URL }}
         run: |
-          if [ -n "$TARGET_HOST" ] && [ -n "$SSH_KEY" ]; then
+          if [ -n "$TARGET_HOST" ] && [ -n "$SSH_KEY" ] && [ -n "$PUBLIC_URL" ]; then
             echo "configured=true" >> "$GITHUB_OUTPUT"
           else
             echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping remote SSH rollout: DEPLOY_HOST / DO_INTEGRATION_HOST or SSH key secret is not configured for this environment."
+            echo "Skipping remote SSH rollout: DEPLOY_HOST, DEPLOY_SSH_PRIVATE_KEY, or DEPLOY_PUBLIC_URL is not configured for this environment."
           fi
 
       - name: Deploy to Target Host via SSH
@@ -156,10 +171,10 @@ jobs:
         env:
           DEPLOY_SHA: ${{ github.sha }}
         with:
-          host: ${{ secrets.DEPLOY_HOST || secrets.DO_INTEGRATION_HOST }}
-          username: ${{ secrets.DEPLOY_USER || secrets.DO_INTEGRATION_USER || 'webadmin' }}
-          key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY || secrets.DO_SSH_PRIVATE_KEY }}
-          passphrase: ${{ secrets.DEPLOY_SSH_PASSPHRASE || secrets.DO_SSH_PASSPHRASE }}
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER || 'webadmin' }}
+          key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          passphrase: ${{ secrets.DEPLOY_SSH_PASSPHRASE }}
           envs: DEPLOY_SHA
           command_timeout: 30m
           script: |
@@ -176,20 +191,26 @@ jobs:
 
   smoke-test:
     name: Post-Deploy Health & Smoke Verification
-    needs: deploy
+    needs: [build-and-push, deploy]
     runs-on: ubuntu-latest
+    environment:
+      name: ${{ needs.build-and-push.outputs.target_environment }}
     env:
-      BASE_URL: ${{ vars.DEPLOY_PUBLIC_URL || 'https://int.artsfestival.online' }}
-      TARGET_HOST: ${{ secrets.DEPLOY_HOST || secrets.DO_INTEGRATION_HOST }}
+      BASE_URL: ${{ vars.DEPLOY_PUBLIC_URL }}
+      TARGET_HOST: ${{ secrets.DEPLOY_HOST }}
 
     steps:
       - name: Verify /healthz and database-backed landing endpoint
         run: |
-          if [ -z "$TARGET_HOST" ] && [ -z "${{ vars.DEPLOY_PUBLIC_URL }}" ]; then
+          if [ -z "$TARGET_HOST" ] && [ -z "$BASE_URL" ]; then
             echo "Skipping remote live smoke test because no deployment target host or DEPLOY_PUBLIC_URL is configured."
             exit 0
           fi
-           normalized_base="${BASE_URL%/}"
+          if [ -z "$BASE_URL" ]; then
+            echo "Error: DEPLOY_PUBLIC_URL is required for smoke verification when DEPLOY_HOST is configured." >&2
+            exit 1
+          fi
+          normalized_base="${BASE_URL%/}"
           for i in {1..12}; do
             health_payload="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 15 "${normalized_base}/healthz" || true)"
             if [ "$health_payload" = '{"status":"ok"}' ] \

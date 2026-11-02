@@ -80,6 +80,29 @@ describe("Continuous Deployment & CI workflow contracts (#281)", () => {
 		expect(deployWorkflow).toContain("/api/organizations/pafe/landing");
 	});
 
+	it("maps refs explicitly to target environments without blind integration fallbacks for host secrets or public URLs", async () => {
+		const deployWorkflow = await readRepoFile(".github/workflows/deploy.yml");
+
+		expect(deployWorkflow).toContain(
+			"github.event_name == 'workflow_dispatch'",
+		);
+		expect(deployWorkflow).toContain(
+			"startsWith(github.ref, 'refs/tags/v') && 'production'",
+		);
+		expect(deployWorkflow).toContain(
+			"startsWith(github.ref, 'refs/heads/release/v') && 'staging'",
+		);
+		expect(deployWorkflow).toContain(
+			"github.ref == 'refs/heads/release' && 'integration'",
+		);
+		expect(deployWorkflow).not.toContain("DO_INTEGRATION_HOST");
+		expect(deployWorkflow).not.toContain("DO_INTEGRATION_USER");
+		expect(deployWorkflow).not.toContain("DO_SSH_PRIVATE_KEY");
+		expect(deployWorkflow).not.toContain("DO_SSH_PASSPHRASE");
+		expect(deployWorkflow).not.toContain("https://int.artsfestival.online");
+		expect(deployWorkflow).toContain("vars.DEPLOY_PUBLIC_URL");
+	});
+
 	it("preserves existing PR checks and manual integration deployment workflows", async () => {
 		const prChecks = await readRepoFile(".github/workflows/pr-checks.yml");
 		const integration = await readRepoFile(".github/workflows/integration.yml");
