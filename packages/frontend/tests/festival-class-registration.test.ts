@@ -9,6 +9,7 @@ import {
 	createRegistrationSelectHandlers,
 	formatTotalDuration,
 	isInstrumentSelectionValid,
+	isRegistrationSelectionValid,
 	pieceDraftToRepertoirePiece,
 	validatePieceComposer,
 	validatePieceDuration,
@@ -151,6 +152,202 @@ describe("Repertoire validation & transformation helpers", () => {
 				{ title: "C", composer: "D", durationSeconds: 75 },
 			]),
 		).toBe("3m 15s");
+	});
+
+	it("enforces concerto catalog work requirement when class requires a concerto (#197)", () => {
+		const child = { hasCurrentValidAgeSnapshot: true };
+		const concertoWorks = [
+			{
+				id: "work-concerto-1",
+				title: "Piano Concerto in A minor, Op. 16",
+				composerName: "Edvard Grieg",
+				classifications: ["concerto"],
+				isActive: true,
+			},
+			{
+				id: "work-sonata-1",
+				title: "Piano Sonata in C",
+				composerName: "W. A. Mozart",
+				classifications: ["sonata"],
+				isActive: true,
+			},
+		];
+
+		for (const concertoClass of [
+			{
+				maximumPerformancePieces: 1,
+				requiresConcerto: true,
+			},
+			{
+				maximumPerformancePieces: 1,
+				classSubtypeName: "Concerto",
+			},
+		]) {
+			// Free-text repertoire (no catalogWorkId) is invalid for concerto classes
+			expect(
+				(
+					isRegistrationSelectionValid as unknown as (
+						...args: unknown[]
+					) => boolean
+				)(
+					child,
+					concertoClass,
+					"div-1",
+					"teacher-1",
+					"class-concerto",
+					[
+						{
+							title: "Piano Concerto in A minor, Op. 16",
+							composer: "Edvard Grieg",
+							durationSeconds: 300,
+						},
+					],
+					concertoWorks,
+				),
+			).toBe(false);
+
+			// Non-concerto catalog work is invalid for concerto classes
+			expect(
+				(
+					isRegistrationSelectionValid as unknown as (
+						...args: unknown[]
+					) => boolean
+				)(
+					child,
+					concertoClass,
+					"div-1",
+					"teacher-1",
+					"class-concerto",
+					[
+						{
+							title: "Piano Sonata in C",
+							composer: "W. A. Mozart",
+							durationSeconds: 300,
+							catalogWorkId: "work-sonata-1",
+						},
+					],
+					concertoWorks,
+				),
+			).toBe(false);
+
+			// Concerto-classified catalog work is valid
+			expect(
+				(
+					isRegistrationSelectionValid as unknown as (
+						...args: unknown[]
+					) => boolean
+				)(
+					child,
+					concertoClass,
+					"div-1",
+					"teacher-1",
+					"class-concerto",
+					[
+						{
+							title: "Piano Concerto in A minor, Op. 16",
+							composer: "Edvard Grieg",
+							durationSeconds: 300,
+							catalogWorkId: "work-concerto-1",
+						},
+					],
+					concertoWorks,
+				),
+			).toBe(true);
+		}
+
+		// arePiecesValid with requiresConcerto = true
+		expect(
+			(arePiecesValid as unknown as (...args: unknown[]) => boolean)(
+				[
+					{
+						title: "Piano Concerto in A minor, Op. 16",
+						composer: "Edvard Grieg",
+						movement: "I. Allegro",
+						durationMinutes: 5,
+						durationSeconds: 0,
+					},
+				],
+				{ requiresConcerto: true, catalogWorks: concertoWorks },
+			),
+		).toBe(false);
+
+		expect(
+			(arePiecesValid as unknown as (...args: unknown[]) => boolean)(
+				[
+					{
+						title: "Piano Sonata in C",
+						composer: "W. A. Mozart",
+						movement: "I. Allegro",
+						durationMinutes: 5,
+						durationSeconds: 0,
+						catalogWorkId: "work-sonata-1",
+					},
+				],
+				{ requiresConcerto: true, catalogWorks: concertoWorks },
+			),
+		).toBe(false);
+
+		expect(
+			(arePiecesValid as unknown as (...args: unknown[]) => boolean)(
+				[
+					{
+						title: "Piano Concerto in A minor, Op. 16",
+						composer: "Edvard Grieg",
+						movement: "I. Allegro",
+						durationMinutes: 5,
+						durationSeconds: 0,
+						catalogWorkId: "work-concerto-1",
+					},
+				],
+				{ requiresConcerto: true, catalogWorks: concertoWorks },
+			),
+		).toBe(true);
+	});
+
+	it("continues to allow free-text repertoire without catalogWorkId when class does not require a concerto (#197)", () => {
+		const child = { hasCurrentValidAgeSnapshot: true };
+		for (const nonConcertoClass of [
+			{
+				maximumPerformancePieces: 2,
+				requiresConcerto: false,
+			},
+			{
+				maximumPerformancePieces: 2,
+				classSubtypeName: "Solo Piano",
+			},
+		]) {
+			expect(
+				isRegistrationSelectionValid(
+					child,
+					nonConcertoClass,
+					"div-1",
+					"teacher-1",
+					"class-solo",
+					[
+						{
+							title: "Clair de Lune",
+							composer: "Claude Debussy",
+							durationSeconds: 240,
+						},
+					],
+				),
+			).toBe(true);
+		}
+
+		expect(
+			(arePiecesValid as unknown as (...args: unknown[]) => boolean)(
+				[
+					{
+						title: "Clair de Lune",
+						composer: "Claude Debussy",
+						movement: "",
+						durationMinutes: 4,
+						durationSeconds: 0,
+					},
+				],
+				{ requiresConcerto: false },
+			),
+		).toBe(true);
 	});
 });
 

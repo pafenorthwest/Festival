@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
 	AccompanistMembershipGrant,
+	CanonicalWork,
 	ClassCheckoutLineItemInput,
 	ClassEligibilityResult,
 	ClassEntitlement,
@@ -17,6 +18,7 @@ import type {
 	RepertoirePiece,
 } from "@festival/common";
 import {
+	doesClassRequireConcerto,
 	evaluatePurchaseEligibility,
 	isFestivalRegistrationOpen,
 	stripCandidateMarker,
@@ -24,6 +26,7 @@ import {
 import type { MembershipCommerceRepository } from "../commerce/membership-commerce-repository.js";
 import type { CustomerAccountRepository } from "../customer/customer-account-repository.js";
 import { AppError } from "../errors/app-error.js";
+import type { RepertoireRepository } from "../repertoire/repertoire-repository.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
 import {
 	CHECKOUT_INTENT_LINE_ID_ATTRIBUTE_KEY,
@@ -43,6 +46,7 @@ import {
 	buildEligibilityRejectionError,
 	calculateTotalAmount,
 	resolveFestivalClassConfiguration,
+	resolvePieceCatalogWorks,
 	resolveTargetFestival,
 	validateAccompanistSelection,
 	validateActiveChildAgeSnapshot,
@@ -124,6 +128,8 @@ interface LineValidationCaches {
 	teacherGrants: Map<string, EntitlementGrantSnapshot | null>;
 	accompanistGrants: Map<string, AccompanistMembershipGrant | null>;
 	instruments?: RegistrationCatalogValue[];
+	subtypes?: RegistrationCatalogValue[];
+	catalogWorks?: Map<string, CanonicalWork | null>;
 }
 
 export type ClassCheckoutFailureStage =
@@ -179,6 +185,7 @@ export class ClassCheckoutService {
 		private readonly commerce?: MembershipCommerceRepository,
 		private readonly now: () => Date = () => new Date(),
 		private readonly failureLogger: ClassCheckoutFailureLogger = silentClassCheckoutFailureLogger,
+		private readonly repertoire?: RepertoireRepository,
 	) {}
 
 	async evaluateEligibility(
@@ -651,9 +658,34 @@ export class ClassCheckoutService {
 			);
 		}
 		validateChildAgeRange(activeSnapshot.age, classConfig);
+		ctx.caches.subtypes ??=
+			await this.organizations.listRegistrationCatalogValues(
+				organizationId,
+				"class_subtype",
+				false,
+			);
+		const subtype =
+			ctx.caches.subtypes.find((s) => s.id === classConfig.classSubtypeId) ??
+			null;
+		let catalogWorksById: ReadonlyMap<string, CanonicalWork | null> | undefined;
+		if (
+			this.repertoire &&
+			(doesClassRequireConcerto(classConfig, subtype) ||
+				(Array.isArray(line.pieces) &&
+					line.pieces.some((p) => Boolean(p?.catalogWorkId))))
+		) {
+			ctx.caches.catalogWorks ??= new Map();
+			catalogWorksById = await resolvePieceCatalogWorks(
+				line.pieces,
+				organizationId,
+				this.repertoire,
+				ctx.caches.catalogWorks,
+			);
+		}
 		const normalizedPieces = validateAndNormalizeRepertoirePieces(
 			line.pieces,
 			classConfig,
+			{ subtype, catalogWorksById },
 		);
 		const { teacherEntitlementId, accompanistEntitlementId } =
 			await this.validateTeacherAndAccompanist(
@@ -859,11 +891,13 @@ export class ClassCheckoutService {
 	): Promise<void> {
 		const [divisions, subtypes, teacherRosters] = await Promise.all([
 			this.organizations.listDivisions(organizationId, false),
-			this.organizations.listRegistrationCatalogValues(
-				organizationId,
-				"class_subtype",
-				false,
-			),
+			caches.subtypes
+				? Promise.resolve(caches.subtypes)
+				: this.organizations.listRegistrationCatalogValues(
+						organizationId,
+						"class_subtype",
+						false,
+					),
 			Promise.all(
 				[
 					...new Set(validatedLines.map((line) => line.classConfig.divisionId)),

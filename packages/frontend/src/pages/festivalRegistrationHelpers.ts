@@ -1,4 +1,9 @@
-import type { RepertoirePiece } from "@festival/common";
+import {
+	type CanonicalWork,
+	doesClassRequireConcerto,
+	isCatalogWorkClassifiedAsConcerto,
+	type RepertoirePiece,
+} from "@festival/common";
 
 export interface RepertoirePieceDraft {
 	title: string;
@@ -6,6 +11,7 @@ export interface RepertoirePieceDraft {
 	movement: string;
 	durationMinutes: number;
 	durationSeconds: number;
+	catalogWorkId?: string | null;
 }
 
 export function createEmptyPieceDraft(): RepertoirePieceDraft {
@@ -39,6 +45,29 @@ export function validatePieceDuration(
 	return null;
 }
 
+export function validatePieceCatalogWork(
+	piece: { catalogWorkId?: string | null },
+	options?: {
+		requiresConcerto?: boolean;
+		catalogWorks?: ReadonlyArray<
+			Pick<CanonicalWork, "id" | "classifications" | "isActive">
+		>;
+	},
+): string | null {
+	if (!options?.requiresConcerto) return null;
+	const workId = piece.catalogWorkId?.trim();
+	if (!workId) {
+		return "Concerto classes require selecting a concerto work from the catalog.";
+	}
+	if (options.catalogWorks) {
+		const work = options.catalogWorks.find((w) => w.id === workId);
+		if (!work || !isCatalogWorkClassifiedAsConcerto(work)) {
+			return "Selected catalog work must be classified as a concerto.";
+		}
+	}
+	return null;
+}
+
 export function pieceDraftToRepertoirePiece(
 	draft: RepertoirePieceDraft,
 ): RepertoirePiece {
@@ -50,6 +79,9 @@ export function pieceDraftToRepertoirePiece(
 			1,
 			Math.floor(draft.durationMinutes * 60 + draft.durationSeconds),
 		),
+		...(draft.catalogWorkId?.trim()
+			? { catalogWorkId: draft.catalogWorkId.trim() }
+			: {}),
 	};
 }
 
@@ -63,16 +95,28 @@ export function repertoirePieceToDraft(
 		movement: piece.movement ?? "",
 		durationMinutes: Math.floor(total / 60),
 		durationSeconds: total % 60,
+		...(piece.catalogWorkId !== undefined
+			? { catalogWorkId: piece.catalogWorkId }
+			: {}),
 	};
 }
 
-export function arePiecesValid(pieces: RepertoirePieceDraft[]): boolean {
+export function arePiecesValid(
+	pieces: RepertoirePieceDraft[],
+	options?: {
+		requiresConcerto?: boolean;
+		catalogWorks?: ReadonlyArray<
+			Pick<CanonicalWork, "id" | "classifications" | "isActive">
+		>;
+	},
+): boolean {
 	if (pieces.length === 0) return false;
 	return pieces.every(
 		(p) =>
 			!validatePieceTitle(p.title) &&
 			!validatePieceComposer(p.composer) &&
-			!validatePieceDuration(p.durationMinutes, p.durationSeconds),
+			!validatePieceDuration(p.durationMinutes, p.durationSeconds) &&
+			!validatePieceCatalogWork(p, options),
 	);
 }
 
@@ -89,11 +133,17 @@ export function isRegistrationSelectionValid(
 	classConfig: {
 		maximumPerformancePieces: number;
 		isRegistrationOpen?: boolean;
+		requiresConcerto?: boolean;
+		classSubtypeName?: string | null;
+		displayName?: string | null;
 	} | null,
 	divisionId: string,
 	teacherId: string,
 	classId: string,
 	pieces: RepertoirePiece[],
+	catalogWorks?: ReadonlyArray<
+		Pick<CanonicalWork, "id" | "classifications" | "isActive">
+	>,
 ): boolean {
 	if (!child?.hasCurrentValidAgeSnapshot || !classConfig) return false;
 	if (classConfig.isRegistrationOpen === false) return false;
@@ -104,11 +154,13 @@ export function isRegistrationSelectionValid(
 	) {
 		return false;
 	}
+	const requiresConcerto = doesClassRequireConcerto(classConfig);
 	return pieces.every(
 		(p) =>
 			Boolean(p.title.trim()) &&
 			Boolean(p.composer.trim()) &&
-			p.durationSeconds > 0,
+			p.durationSeconds > 0 &&
+			!validatePieceCatalogWork(p, { requiresConcerto, catalogWorks }),
 	);
 }
 

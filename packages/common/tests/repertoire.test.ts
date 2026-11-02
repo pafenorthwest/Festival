@@ -4,6 +4,8 @@ import {
 	type CanonicalContributor,
 	type CanonicalWork,
 	calculateRepertoireReviewQueueSummary,
+	doesClassRequireConcerto,
+	isCatalogWorkClassifiedAsConcerto,
 	isRepertoireReviewStatus,
 	REPERTOIRE_FLAG_REASONS,
 	REPERTOIRE_REVIEW_STATUSES,
@@ -14,6 +16,7 @@ import {
 	validateClaimReviewInput,
 	validateFlagReviewInput,
 	validateNormalizeReviewInput,
+	validateRepertoirePiece,
 	validateResolveFlagInput,
 } from "../src/index.js";
 
@@ -498,6 +501,140 @@ describe("repertoire review domain types and validation", () => {
 			};
 			expect(input.title).toBe("Prelude in C Major");
 			expect(input.composer).toBe("J.S. Bach");
+		});
+	});
+
+	describe("Concerto catalog work requirements (#197)", () => {
+		it("doesClassRequireConcerto identifies concerto classes across representations", () => {
+			expect(doesClassRequireConcerto({ requiresConcerto: true })).toBe(true);
+			expect(
+				doesClassRequireConcerto({
+					subtype: { normalizedName: "concerto", displayName: "Concerto" },
+				}),
+			).toBe(true);
+			expect(
+				doesClassRequireConcerto({
+					subtype: { displayName: "Concerto" },
+				}),
+			).toBe(true);
+			expect(
+				doesClassRequireConcerto({
+					classSubtypeName: "Concerto",
+				}),
+			).toBe(true);
+
+			expect(doesClassRequireConcerto({ requiresConcerto: false })).toBe(false);
+			expect(
+				doesClassRequireConcerto({
+					subtype: { normalizedName: "solo piano", displayName: "Solo Piano" },
+				}),
+			).toBe(false);
+			expect(
+				doesClassRequireConcerto({
+					classSubtypeName: "Solo Piano",
+				}),
+			).toBe(false);
+			expect(doesClassRequireConcerto(null)).toBe(false);
+		});
+
+		it("isCatalogWorkClassifiedAsConcerto checks active status and case-insensitive concerto classification", () => {
+			expect(
+				isCatalogWorkClassifiedAsConcerto({
+					id: "work-1",
+					title: "Piano Concerto in A minor, Op. 16",
+					classifications: ["concerto"],
+					isActive: true,
+				}),
+			).toBe(true);
+			expect(
+				isCatalogWorkClassifiedAsConcerto({
+					id: "work-2",
+					title: "Violin Concerto",
+					classifications: ["Romantic", "Concerto"],
+				}),
+			).toBe(true);
+
+			expect(
+				isCatalogWorkClassifiedAsConcerto({
+					id: "work-3",
+					title: "Unclassified Work",
+					classifications: [],
+					isActive: true,
+				}),
+			).toBe(false);
+			expect(
+				isCatalogWorkClassifiedAsConcerto({
+					id: "work-4",
+					title: "Sonata in C",
+					classifications: ["sonata"],
+					isActive: true,
+				}),
+			).toBe(false);
+			expect(
+				isCatalogWorkClassifiedAsConcerto({
+					id: "work-5",
+					title: "Inactive Concerto",
+					classifications: ["concerto"],
+					isActive: false,
+				}),
+			).toBe(false);
+			expect(isCatalogWorkClassifiedAsConcerto(null)).toBe(false);
+			expect(isCatalogWorkClassifiedAsConcerto(undefined)).toBe(false);
+		});
+
+		it("validateAddCatalogWorkInput accepts optional classifications and normalizes them", () => {
+			const result = validateAddCatalogWorkInput({
+				title: "Piano Concerto No. 2, Op. 18",
+				composer: "Sergei Rachmaninoff",
+				classifications: [" Concerto ", "Romantic"],
+			});
+			expect(result.valid).toBe(true);
+			expect(result.errors).toEqual([]);
+			expect(result.data?.classifications).toEqual(["concerto", "romantic"]);
+		});
+
+		it("validateRepertoirePiece preserves a valid catalogWorkId and rejects blank or non-string catalogWorkId", () => {
+			const errorsValid: string[] = [];
+			const validPiece = validateRepertoirePiece(
+				{
+					title: "Piano Concerto in A minor",
+					composer: "Edvard Grieg",
+					durationSeconds: 420,
+					catalogWorkId: "  work-concerto-1  ",
+				},
+				0,
+				errorsValid,
+			);
+			expect(errorsValid).toEqual([]);
+			expect(validPiece?.catalogWorkId).toBe("work-concerto-1");
+
+			const errorsBlank: string[] = [];
+			const blankPiece = validateRepertoirePiece(
+				{
+					title: "Piano Concerto in A minor",
+					composer: "Edvard Grieg",
+					durationSeconds: 420,
+					catalogWorkId: "   ",
+				},
+				0,
+				errorsBlank,
+			);
+			expect(blankPiece).toBeNull();
+			expect(errorsBlank.length).toBeGreaterThan(0);
+
+			const errorsNonString: string[] = [];
+			const nonStringPiece = validateRepertoirePiece(
+				{
+					title: "Piano Concerto in A minor",
+					composer: "Edvard Grieg",
+					durationSeconds: 420,
+					catalogWorkId: 123,
+				},
+				0,
+				errorsNonString,
+			);
+			expect(nonStringPiece).toBeNull();
+			expect(errorsNonString.length).toBeGreaterThan(0);
 		});
 	});
 });

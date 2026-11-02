@@ -528,7 +528,21 @@ export class PostgresRepertoireRepository implements RepertoireRepository {
 				rw.created_at::text,
 				rw.updated_at::text,
 				rc.id AS composer_id,
-				rc.display_name AS composer_name
+				rc.display_name AS composer_name,
+				COALESCE(
+					ARRAY(
+						SELECT rcl.normalized_name
+						FROM ${this.schema}.repertoire_work_classifications rwcl
+						JOIN ${this.schema}.repertoire_classifications rcl
+							ON rcl.id = rwcl.repertoire_classification_id
+							AND rcl.organization_id = rwcl.organization_id
+						WHERE rwcl.repertoire_work_id = rw.id
+							AND rwcl.organization_id = rw.organization_id
+							AND rcl.is_active = TRUE
+						ORDER BY rcl.normalized_name ASC
+					),
+					ARRAY[]::text[]
+				) AS classifications
 			 FROM ${this.schema}.repertoire_works rw
 			 LEFT JOIN LATERAL (
 				 SELECT rc_inner.id, rc_inner.display_name
@@ -560,10 +574,80 @@ export class PostgresRepertoireRepository implements RepertoireRepository {
 			composerId: (row.composer_id as string) || null,
 			composerName: (row.composer_name as string) || null,
 			imslpUrl: (row.imslp_url as string) || null,
+			classifications: Array.isArray(row.classifications)
+				? row.classifications.map((c) => String(c))
+				: [],
 			isActive: Boolean(row.is_active),
 			createdAtIso: (row.created_at as string) || new Date().toISOString(),
 			updatedAtIso: (row.updated_at as string) || new Date().toISOString(),
 		}));
+	}
+
+	async getCatalogWorkById(
+		organizationId: string,
+		workId: string,
+	): Promise<CanonicalWork | null> {
+		const rows = (await sql.unsafe(
+			`SELECT
+				rw.id,
+				rw.organization_id,
+				rw.display_title,
+				rw.normalized_title,
+				rw.imslp_url,
+				rw.is_active,
+				rw.created_at::text,
+				rw.updated_at::text,
+				rc.id AS composer_id,
+				rc.display_name AS composer_name,
+				COALESCE(
+					ARRAY(
+						SELECT rcl.normalized_name
+						FROM ${this.schema}.repertoire_work_classifications rwcl
+						JOIN ${this.schema}.repertoire_classifications rcl
+							ON rcl.id = rwcl.repertoire_classification_id
+							AND rcl.organization_id = rwcl.organization_id
+						WHERE rwcl.repertoire_work_id = rw.id
+							AND rwcl.organization_id = rw.organization_id
+							AND rcl.is_active = TRUE
+						ORDER BY rcl.normalized_name ASC
+					),
+					ARRAY[]::text[]
+				) AS classifications
+			 FROM ${this.schema}.repertoire_works rw
+			 LEFT JOIN LATERAL (
+				 SELECT rc_inner.id, rc_inner.display_name
+				 FROM ${this.schema}.repertoire_work_contributors rwc_inner
+				 JOIN ${this.schema}.repertoire_contributors rc_inner
+					 ON rc_inner.id = rwc_inner.repertoire_contributor_id
+				 WHERE rwc_inner.repertoire_work_id = rw.id
+				 ORDER BY CASE WHEN rwc_inner.contributor_role = 'Composer' THEN 0 ELSE 1 END, rwc_inner.position ASC
+				 LIMIT 1
+			 ) rc ON TRUE
+			 WHERE rw.organization_id = $1
+				 AND rw.id = $2
+				 AND rw.is_active = TRUE
+			 LIMIT 1`,
+			[organizationId, workId],
+		)) as Array<Record<string, unknown>>;
+
+		if (rows.length === 0) return null;
+		const row = rows[0];
+		return {
+			id: String(row.id),
+			organizationId: String(row.organization_id),
+			title: String(row.display_title),
+			displayTitle: String(row.display_title),
+			normalizedTitle: String(row.normalized_title),
+			composerId: (row.composer_id as string) || null,
+			composerName: (row.composer_name as string) || null,
+			imslpUrl: (row.imslp_url as string) || null,
+			classifications: Array.isArray(row.classifications)
+				? row.classifications.map((c) => String(c))
+				: [],
+			isActive: Boolean(row.is_active),
+			createdAtIso: (row.created_at as string) || new Date().toISOString(),
+			updatedAtIso: (row.updated_at as string) || new Date().toISOString(),
+		};
 	}
 
 	async addCatalogWork(input: AddCatalogWorkInput): Promise<CanonicalWork> {
@@ -659,6 +743,53 @@ export class PostgresRepertoireRepository implements RepertoireRepository {
 				[input.organizationId, resolvedWork.id, resolvedContributorId],
 			);
 
+			const normalizedClassifications = Array.isArray(input.classifications)
+				? [
+						...new Set(
+							input.classifications
+								.map((c) => c.trim().toLowerCase())
+								.filter(Boolean),
+						),
+					]
+				: [];
+
+			for (const normClass of normalizedClassifications) {
+				const classificationId = randomUUID();
+				const classRows = (await tx.unsafe(
+					`INSERT INTO ${this.schema}.repertoire_classifications (
+						id, organization_id, display_name, normalized_name, is_active, created_at, updated_at
+					 )
+					 VALUES ($1, $2, $3, $4, TRUE, clock_timestamp(), clock_timestamp())
+					 ON CONFLICT (organization_id, normalized_name)
+					 DO UPDATE SET is_active = TRUE, updated_at = clock_timestamp()
+					 RETURNING id`,
+					[classificationId, input.organizationId, normClass, normClass],
+				)) as Array<{ id: string }>;
+
+				const resolvedClassId = classRows[0].id;
+				await tx.unsafe(
+					`INSERT INTO ${this.schema}.repertoire_work_classifications (
+						organization_id, repertoire_work_id, repertoire_classification_id
+					 )
+					 VALUES ($1, $2, $3)
+					 ON CONFLICT (repertoire_work_id, repertoire_classification_id) DO NOTHING`,
+					[input.organizationId, resolvedWork.id, resolvedClassId],
+				);
+			}
+
+			const existingClassifications = (await tx.unsafe(
+				`SELECT rcl.normalized_name
+				 FROM ${this.schema}.repertoire_work_classifications rwcl
+				 JOIN ${this.schema}.repertoire_classifications rcl
+					 ON rcl.id = rwcl.repertoire_classification_id
+					 AND rcl.organization_id = rwcl.organization_id
+				 WHERE rwcl.repertoire_work_id = $1
+					 AND rwcl.organization_id = $2
+					 AND rcl.is_active = TRUE
+				 ORDER BY rcl.normalized_name ASC`,
+				[resolvedWork.id, input.organizationId],
+			)) as Array<{ normalized_name: string }>;
+
 			const existingContrib = (await tx.unsafe(
 				`SELECT rc.id, rc.display_name
 				 FROM ${this.schema}.repertoire_work_contributors rwc
@@ -688,6 +819,9 @@ export class PostgresRepertoireRepository implements RepertoireRepository {
 				composerId: finalComposerId,
 				composerName: finalComposerName,
 				imslpUrl: resolvedWork.imslp_url,
+				classifications: existingClassifications.map((c) =>
+					String(c.normalized_name),
+				),
 				isActive: Boolean(resolvedWork.is_active),
 				createdAtIso: String(resolvedWork.created_at),
 				updatedAtIso: String(resolvedWork.updated_at),

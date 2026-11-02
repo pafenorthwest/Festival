@@ -439,6 +439,8 @@ export interface RegistrationEligibleClass {
 	readonly displayName: string;
 	readonly divisionId: string;
 	readonly classSubtypeId: string;
+	readonly classSubtypeName?: string;
+	readonly requiresConcerto?: boolean;
 	readonly minimumAge: number;
 	readonly maximumAge: number;
 	readonly price: string;

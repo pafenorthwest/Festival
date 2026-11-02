@@ -25,6 +25,7 @@ import {
 import { InMemoryMembershipCommerceRepository } from "../src/commerce/membership-commerce-repository.js";
 import { InMemoryCustomerAccountRepository } from "../src/customer/in-memory-customer-account-repository.js";
 import { AppError } from "../src/errors/app-error.js";
+import { InMemoryRepertoireRepository } from "../src/repertoire/index.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
 
 interface FixtureOptions {
@@ -249,8 +250,13 @@ async function createFixture(options: FixtureOptions = {}) {
 
 	const commerce =
 		options.commerce ?? new InMemoryMembershipCommerceRepository();
+	const repertoire = new InMemoryRepertoireRepository();
 
-	const service = new ClassCheckoutService(
+	const service = new (
+		ClassCheckoutService as unknown as new (
+			...args: unknown[]
+		) => ClassCheckoutService
+	)(
 		organizations,
 		customers,
 		checkout,
@@ -258,6 +264,7 @@ async function createFixture(options: FixtureOptions = {}) {
 		commerce,
 		nowFn,
 		options.failureLogger,
+		repertoire,
 	);
 
 	const defaultPieces: RepertoirePiece[] = [
@@ -285,6 +292,7 @@ async function createFixture(options: FixtureOptions = {}) {
 		customers,
 		checkout,
 		commerce,
+		repertoire,
 		organization,
 		division,
 		festival,
@@ -3715,6 +3723,202 @@ describe("ClassCheckoutService", () => {
 		).rejects.toMatchObject({
 			status: 400,
 			code: "sold_out",
+		});
+	});
+
+	describe("Concerto catalog work requirement (#197)", () => {
+		it("rejects free-text repertoire when class requires a concerto", async () => {
+			const f = await createFixture();
+			const concertoSubtype =
+				await f.organizations.createRegistrationCatalogValue({
+					organizationId: f.organization.id,
+					kind: "class_subtype",
+					displayName: "Concerto",
+					normalizedName: "concerto",
+				});
+			const concertoClass =
+				await f.organizations.createFestivalClassConfiguration({
+					organizationId: f.organization.id,
+					festivalId: f.festival?.id ?? "",
+					displayName: "Junior Piano Concerto",
+					classSubtypeId: concertoSubtype.id,
+					divisionId: f.division.id,
+					minimumAge: 8,
+					maximumAge: 12,
+					price: "55.00",
+					maximumPerformancePieces: 1,
+					performanceMinutes: 15,
+					capacity: 20,
+					isActive: true,
+					shopifyProductGid: "gid://shopify/Product/101",
+					shopifyVariantGid: "gid://shopify/ProductVariant/201",
+				});
+
+			await expect(
+				f.service.start({
+					...f.defaultInput,
+					festivalClassId: concertoClass.id,
+					pieces: [
+						{
+							title: "Piano Concerto in A minor, Op. 16",
+							composer: "Edvard Grieg",
+							durationSeconds: 300,
+						},
+					],
+				}),
+			).rejects.toMatchObject({
+				status: 400,
+				code: "concerto_catalog_work_required",
+			});
+		});
+
+		it("rejects catalog work not classified as concerto or unknown catalogWorkId", async () => {
+			const f = await createFixture();
+			const concertoSubtype =
+				await f.organizations.createRegistrationCatalogValue({
+					organizationId: f.organization.id,
+					kind: "class_subtype",
+					displayName: "Concerto",
+					normalizedName: "concerto",
+				});
+			const concertoClass =
+				await f.organizations.createFestivalClassConfiguration({
+					organizationId: f.organization.id,
+					festivalId: f.festival?.id ?? "",
+					displayName: "Junior Piano Concerto",
+					classSubtypeId: concertoSubtype.id,
+					divisionId: f.division.id,
+					minimumAge: 8,
+					maximumAge: 12,
+					price: "55.00",
+					maximumPerformancePieces: 1,
+					performanceMinutes: 15,
+					capacity: 20,
+					isActive: true,
+					shopifyProductGid: "gid://shopify/Product/101",
+					shopifyVariantGid: "gid://shopify/ProductVariant/201",
+				});
+
+			f.repertoire.seedCanonicalWork({
+				id: "work-sonata",
+				organizationId: f.organization.id,
+				title: "Piano Sonata No. 16",
+				composerName: "W. A. Mozart",
+				classifications: ["sonata"],
+				isActive: true,
+			});
+
+			f.repertoire.seedCanonicalWork({
+				id: "work-unclassified",
+				organizationId: f.organization.id,
+				title: "Mystery Piece",
+				composerName: "Unknown",
+				classifications: [],
+				isActive: true,
+			});
+
+			for (const catalogWorkId of [
+				"work-sonata",
+				"work-unclassified",
+				"unknown-work-id",
+			]) {
+				await expect(
+					f.service.start({
+						...f.defaultInput,
+						idempotencyKey: `idem-${catalogWorkId}`,
+						festivalClassId: concertoClass.id,
+						pieces: [
+							{
+								title: "Piece",
+								composer: "Composer",
+								durationSeconds: 300,
+								catalogWorkId,
+							} as RepertoirePiece,
+						],
+					}),
+				).rejects.toMatchObject({
+					status: 400,
+					code: "concerto_catalog_work_required",
+				});
+			}
+		});
+
+		it("accepts a catalog work classified as concerto and persists catalogWorkId", async () => {
+			const f = await createFixture();
+			const concertoSubtype =
+				await f.organizations.createRegistrationCatalogValue({
+					organizationId: f.organization.id,
+					kind: "class_subtype",
+					displayName: "Concerto",
+					normalizedName: "concerto",
+				});
+			const concertoClass =
+				await f.organizations.createFestivalClassConfiguration({
+					organizationId: f.organization.id,
+					festivalId: f.festival?.id ?? "",
+					displayName: "Junior Piano Concerto",
+					classSubtypeId: concertoSubtype.id,
+					divisionId: f.division.id,
+					minimumAge: 8,
+					maximumAge: 12,
+					price: "55.00",
+					maximumPerformancePieces: 1,
+					performanceMinutes: 15,
+					capacity: 20,
+					isActive: true,
+					shopifyProductGid: "gid://shopify/Product/101",
+					shopifyVariantGid: "gid://shopify/ProductVariant/201",
+				});
+
+			f.repertoire.seedCanonicalWork({
+				id: "work-concerto-1",
+				organizationId: f.organization.id,
+				title: "Piano Concerto in A minor, Op. 16",
+				composerName: "Edvard Grieg",
+				classifications: ["concerto"],
+				isActive: true,
+			});
+
+			const captured: ClassRegistrationMetadata[] = [];
+			const insert = f.checkout.insertRegistrationMetadata.bind(f.checkout);
+			f.checkout.insertRegistrationMetadata = async (params) => {
+				const metadata = await insert(params);
+				captured.push(metadata);
+				return metadata;
+			};
+
+			const result = await f.service.start({
+				...f.defaultInput,
+				festivalClassId: concertoClass.id,
+				pieces: [
+					{
+						title: "Piano Concerto in A minor, Op. 16",
+						composer: "Edvard Grieg",
+						movement: "I. Allegro molto moderato",
+						durationSeconds: 300,
+						catalogWorkId: "work-concerto-1",
+					} as RepertoirePiece,
+				],
+			});
+
+			expect(result.intentId).toBeDefined();
+			expect(captured).toHaveLength(1);
+			expect(captured[0].repertoireItems[0]?.catalogWorkId).toBe(
+				"work-concerto-1",
+			);
+			expect(
+				(
+					captured[0].repertoireJson[0] as RepertoirePiece & {
+						catalogWorkId?: string | null;
+					}
+				)?.catalogWorkId,
+			).toBe("work-concerto-1");
+		});
+
+		it("continues to allow free-text repertoire without catalogWorkId on non-concerto classes", async () => {
+			const f = await createFixture();
+			const result = await f.service.start(f.defaultInput);
+			expect(result.intentId).toBeDefined();
 		});
 	});
 });

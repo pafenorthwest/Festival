@@ -1,16 +1,53 @@
-import type {
-	AccompanistMembershipGrant,
-	EntitlementGrantSnapshot,
-	FestivalChildAgeSnapshot,
-	FestivalChildRecord,
-	FestivalClassConfiguration,
-	FestivalRecord,
-	RepertoirePiece,
+import {
+	type AccompanistMembershipGrant,
+	type CanonicalWork,
+	doesClassRequireConcerto,
+	type EntitlementGrantSnapshot,
+	type FestivalChildAgeSnapshot,
+	type FestivalChildRecord,
+	type FestivalClassConfiguration,
+	type FestivalRecord,
+	isCatalogWorkClassifiedAsConcerto,
+	type RepertoirePiece,
 } from "@festival/common";
 import { AppError } from "../errors/app-error.js";
+import type { RepertoireRepository } from "../repertoire/repertoire-repository.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
 
 export const MAX_SNAPSHOT_VALIDITY_MS = 90 * 24 * 60 * 60 * 1000;
+
+export interface RepertoireValidationOptions {
+	requiresConcerto?: boolean;
+	subtype?: {
+		displayName?: string | null;
+		normalizedName?: string | null;
+	} | null;
+	catalogWorksById?: ReadonlyMap<string, CanonicalWork | null | undefined>;
+}
+
+export async function resolvePieceCatalogWorks(
+	pieces: unknown,
+	organizationId: string,
+	repertoire?: RepertoireRepository,
+	cache?: Map<string, CanonicalWork | null>,
+): Promise<Map<string, CanonicalWork | null>> {
+	const resolved = cache ?? new Map<string, CanonicalWork | null>();
+	if (!repertoire || !Array.isArray(pieces)) {
+		return resolved;
+	}
+	for (const piece of pieces) {
+		const rawId = (piece as { catalogWorkId?: unknown } | null)?.catalogWorkId;
+		const workId =
+			typeof rawId === "string" && rawId.trim() ? rawId.trim() : undefined;
+		if (workId && !resolved.has(workId)) {
+			resolved.set(
+				workId,
+				await repertoire.getCatalogWorkById(organizationId, workId),
+			);
+		}
+	}
+	return resolved;
+}
 
 export function validateRepertoirePiece(piece: unknown): void {
 	if (
@@ -38,6 +75,16 @@ export function validateRepertoirePiece(piece: unknown): void {
 		);
 	}
 	if (
+		p.catalogWorkId !== undefined &&
+		p.catalogWorkId !== null &&
+		(typeof p.catalogWorkId !== "string" || p.catalogWorkId.trim().length === 0)
+	) {
+		throw new AppError(
+			"Each repertoire piece must have a valid catalog work ID.",
+			400,
+		);
+	}
+	if (
 		typeof p.durationSeconds !== "number" ||
 		p.durationSeconds <= 0 ||
 		!Number.isSafeInteger(p.durationSeconds) ||
@@ -50,9 +97,50 @@ export function validateRepertoirePiece(piece: unknown): void {
 	}
 }
 
+function normalizeRepertoirePiece(
+	piece: RepertoirePiece,
+	requiresConcerto: boolean,
+	catalogWorksById?: ReadonlyMap<string, CanonicalWork | null | undefined>,
+): RepertoirePiece {
+	const catalogWorkId =
+		typeof piece.catalogWorkId === "string" && piece.catalogWorkId.trim()
+			? piece.catalogWorkId.trim()
+			: undefined;
+	if (requiresConcerto) {
+		if (
+			!catalogWorkId ||
+			(catalogWorksById &&
+				!isCatalogWorkClassifiedAsConcerto(catalogWorksById.get(catalogWorkId)))
+		) {
+			throw new AppError(
+				"Concerto classes require selecting a catalog work classified as a concerto.",
+				400,
+				"concerto_catalog_work_required",
+			);
+		}
+	}
+	return {
+		title: piece.title.trim(),
+		composer: piece.composer.trim(),
+		movement:
+			typeof piece.movement === "string"
+				? piece.movement.trim() || undefined
+				: undefined,
+		durationSeconds: piece.durationSeconds,
+		...(catalogWorkId ? { catalogWorkId } : {}),
+	};
+}
+
 export function validateAndNormalizeRepertoirePieces(
 	pieces: unknown,
-	classConfig: { maximumPerformancePieces: number; performanceMinutes: number },
+	classConfig: {
+		maximumPerformancePieces: number;
+		performanceMinutes: number;
+		requiresConcerto?: boolean;
+		classSubtypeName?: string | null;
+		displayName?: string | null;
+	},
+	options?: RepertoireValidationOptions,
 ): RepertoirePiece[] {
 	if (!Array.isArray(pieces) || pieces.length === 0) {
 		throw new AppError("Repertoire pieces must be a non-empty array.", 400);
@@ -66,16 +154,16 @@ export function validateAndNormalizeRepertoirePieces(
 	for (const piece of pieces) {
 		validateRepertoirePiece(piece);
 	}
+	const requiresConcerto =
+		options?.requiresConcerto ??
+		doesClassRequireConcerto(classConfig, options?.subtype);
 	const normalizedPieces: RepertoirePiece[] = pieces.map(
-		(piece: RepertoirePiece) => ({
-			title: piece.title.trim(),
-			composer: piece.composer.trim(),
-			movement:
-				typeof piece.movement === "string"
-					? piece.movement.trim() || undefined
-					: undefined,
-			durationSeconds: piece.durationSeconds,
-		}),
+		(piece: RepertoirePiece) =>
+			normalizeRepertoirePiece(
+				piece,
+				requiresConcerto,
+				options?.catalogWorksById,
+			),
 	);
 	const totalDurationMinutes =
 		normalizedPieces.reduce((sum, p) => sum + p.durationSeconds, 0) / 60;

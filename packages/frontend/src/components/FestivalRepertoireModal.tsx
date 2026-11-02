@@ -1,4 +1,4 @@
-import type { RepertoirePiece } from "@festival/common";
+import type { CanonicalWork, RepertoirePiece } from "@festival/common";
 import { createSignal, Index, Show } from "solid-js";
 import {
 	arePiecesValid,
@@ -16,6 +16,8 @@ interface FestivalRepertoireModalProps {
 	isOpen: boolean;
 	maxPieces: 1 | 2 | 3;
 	initialPieces: RepertoirePiece[];
+	requiresConcerto?: boolean;
+	catalogWorks?: CanonicalWork[];
 	onSave: (pieces: RepertoirePiece[]) => void;
 	onClose: () => void;
 }
@@ -55,7 +57,13 @@ export function FestivalRepertoireModal(props: FestivalRepertoireModalProps) {
 	function handleSave(event: Event) {
 		event.preventDefault();
 		setTouched(true);
-		if (!arePiecesValid(pieces())) return;
+		if (
+			!arePiecesValid(pieces(), {
+				requiresConcerto: props.requiresConcerto,
+				catalogWorks: props.catalogWorks,
+			})
+		)
+			return;
 		props.onSave(pieces().map(pieceDraftToRepertoirePiece));
 		props.onClose();
 	}

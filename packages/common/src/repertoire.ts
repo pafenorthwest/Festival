@@ -173,7 +173,59 @@ export interface AddCatalogWorkInput {
 	title: string;
 	composer: string;
 	imslpUrl?: string | null;
+	classifications?: string[];
 	organizationId?: string;
+}
+
+export interface ClassConcertoSubtypeInfo {
+	displayName?: string | null;
+	normalizedName?: string | null;
+}
+
+export interface ClassConcertoCheckInput {
+	requiresConcerto?: boolean;
+	classSubtypeName?: string | null;
+	displayName?: string | null;
+	subtype?: ClassConcertoSubtypeInfo | null;
+}
+
+export function isConcertoWorkClassification(classification: string): boolean {
+	return classification.trim().toLowerCase() === "concerto";
+}
+
+export function isCatalogWorkClassifiedAsConcerto(
+	work: Pick<CanonicalWork, "classifications" | "isActive"> | null | undefined,
+): boolean {
+	return Boolean(
+		work &&
+			work.isActive !== false &&
+			Array.isArray(work.classifications) &&
+			work.classifications.some(isConcertoWorkClassification),
+	);
+}
+
+export function doesClassRequireConcerto(
+	classInfo: ClassConcertoCheckInput | null | undefined,
+	subtype?: ClassConcertoSubtypeInfo | null,
+): boolean {
+	if (!classInfo) return false;
+	if (typeof classInfo.requiresConcerto === "boolean") {
+		return classInfo.requiresConcerto;
+	}
+	const resolvedSubtype = subtype !== undefined ? subtype : classInfo.subtype;
+	if (resolvedSubtype !== undefined) {
+		return (
+			resolvedSubtype?.normalizedName?.trim().toLowerCase() === "concerto" ||
+			resolvedSubtype?.displayName?.trim().toLowerCase() === "concerto"
+		);
+	}
+	if (
+		classInfo.classSubtypeName !== undefined &&
+		classInfo.classSubtypeName !== null
+	) {
+		return classInfo.classSubtypeName.trim().toLowerCase() === "concerto";
+	}
+	return /\bconcerto\b/i.test(classInfo.displayName ?? "");
 }
 
 const HTTP_URL_PATTERN = /^https?:\/\/.+/i;
@@ -430,6 +482,25 @@ export function validateAddCatalogWorkInput(
 
 	const imslpUrl = parseImslpUrl(body.imslpUrl, errors);
 	const organizationId = asTrimmed(body.organizationId) || undefined;
+	let classifications: string[] | undefined;
+	if (body.classifications !== undefined && body.classifications !== null) {
+		if (
+			!Array.isArray(body.classifications) ||
+			!body.classifications.every(
+				(c) => typeof c === "string" && c.trim().length > 0,
+			)
+		) {
+			errors.push("Classifications must be an array of non-empty strings.");
+		} else {
+			classifications = [
+				...new Set(
+					body.classifications
+						.map((c) => c.trim().toLowerCase())
+						.filter(Boolean),
+				),
+			];
+		}
+	}
 
 	if (errors.length > 0) {
 		return { valid: false, errors };
@@ -439,6 +510,7 @@ export function validateAddCatalogWorkInput(
 		title,
 		composer,
 		imslpUrl,
+		...(classifications !== undefined ? { classifications } : {}),
 		...(organizationId ? { organizationId } : {}),
 	};
 	return { valid: true, errors: [], data, request: data };

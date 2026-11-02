@@ -1,4 +1,7 @@
-import type { RepertoirePiece } from "@festival/common";
+import {
+	doesClassRequireConcerto,
+	type RepertoirePiece,
+} from "@festival/common";
 import { createResource, createSignal, For, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { Button } from "../components/Button.js";
@@ -45,31 +48,31 @@ export function FestivalClassRegistrationPage(
 	props: FestivalClassRegistrationPageProps,
 ) {
 	const [festival] = createResource(
-		() => [props.slug, props.festivalSlug] as const,
-		([s, f]) => getPublicFestival(s, f),
-	);
-	const [divisions] = createResource(
-		() => props.slug,
-		(slug) => getPublicDivisions(slug),
-	);
-	const cart = createRegistrationCart();
-	const getCsrf = () =>
-		props.app.customerSession().authenticated
-			? props.app.customerSession().csrfToken
-			: "";
-	const eligibility = useCartEligibility({
-		slug: () => props.slug,
-		festivalSlug: () => props.festivalSlug,
-		csrfToken: getCsrf,
-		cart,
-	});
+			() => [props.slug, props.festivalSlug] as const,
+			([s, f]) => getPublicFestival(s, f),
+		),
+		[divisions] = createResource(
+			() => props.slug,
+			(slug) => getPublicDivisions(slug),
+		),
+		cart = createRegistrationCart(),
+		getCsrf = () =>
+			props.app.customerSession().authenticated
+				? props.app.customerSession().csrfToken
+				: "",
+		eligibility = useCartEligibility({
+			slug: () => props.slug,
+			festivalSlug: () => props.festivalSlug,
+			csrfToken: getCsrf,
+			cart,
+		});
 	const [selectedChildId, setSelectedChildId] = createSignal(""),
 		[selectedDivisionId, setSelectedDivisionId] = createSignal(""),
 		[selectedTeacherId, setSelectedTeacherId] = createSignal(""),
 		[selectedClassId, setSelectedClassId] = createSignal(""),
 		[selectedAccompanistId, setSelectedAccompanistId] = createSignal(""),
-		[selectedInstrumentId, setSelectedInstrumentId] = createSignal("");
-	const [pieces, setPieces] = createSignal<RepertoirePiece[]>([]);
+		[selectedInstrumentId, setSelectedInstrumentId] = createSignal(""),
+		[pieces, setPieces] = createSignal<RepertoirePiece[]>([]);
 	const { children, teachers, eligibleClasses, accompanists, loadChildren } =
 		useRegistrationOptions({
 			slug: props.slug,
@@ -93,15 +96,15 @@ export function FestivalClassRegistrationPage(
 		[checkoutError, setCheckoutError] = createSignal<string | null>(null),
 		[birthdayDraft, setBirthdayDraft] = createSignal(""),
 		[isRefreshingSnapshot, setIsRefreshingSnapshot] = createSignal(false),
-		[snapshotError, setSnapshotError] = createSignal<string | null>(null);
-	const { sessionProfile, currentWaitlistEntry, handleWaitlistEntryChanged } =
-		useRegistrationWaitlist({
-			slug: props.slug,
-			festivalSlug: props.festivalSlug,
-			isAuthenticated: () => props.app.customerSession().authenticated,
-			selectedClassId,
-			selectedChildId,
-		});
+		[snapshotError, setSnapshotError] = createSignal<string | null>(null),
+		{ sessionProfile, currentWaitlistEntry, handleWaitlistEntryChanged } =
+			useRegistrationWaitlist({
+				slug: props.slug,
+				festivalSlug: props.festivalSlug,
+				isAuthenticated: () => props.app.customerSession().authenticated,
+				selectedClassId,
+				selectedChildId,
+			});
 	const selectedChild = () => findById(children(), selectedChildId()),
 		selectedClass = () => findById(eligibleClasses(), selectedClassId()),
 		selectedTeacher = () => findById(teachers(), selectedTeacherId()),
@@ -302,7 +305,6 @@ export function FestivalClassRegistrationPage(
 							</div>
 						</Show>
 					</header>
-
 					<Show when={cart.itemCount() > 0}>
 						<FestivalRegistrationCartView
 							cart={cart}
@@ -312,7 +314,6 @@ export function FestivalClassRegistrationPage(
 							onSubmitCheckout={handleCartCheckout}
 						/>
 					</Show>
-
 					<Show when={children().length === 0}>
 						<FestivalNoChildrenPanel
 							manageChildrenPath={`/org/${props.slug}/account/children`}
@@ -342,7 +343,6 @@ export function FestivalClassRegistrationPage(
 									</For>
 								</select>
 							</label>
-
 							<Show
 								when={
 									selectedChild() &&
@@ -538,6 +538,7 @@ export function FestivalClassRegistrationPage(
 						isOpen={isRepertoireModalOpen()}
 						maxPieces={maxPieces()}
 						initialPieces={pieces()}
+						requiresConcerto={doesClassRequireConcerto(selectedClass())}
 						onSave={setPieces}
 						onClose={() => setIsRepertoireModalOpen(false)}
 					/>
