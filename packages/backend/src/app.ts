@@ -564,6 +564,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 			repository,
 			commerceRepository,
 			shopifyOrderProjectionService,
+			shopifyWebhookService,
 			firebaseClaimsReconciliationService,
 			hasShopifyKeyring: Boolean(secretKeyring),
 		}),

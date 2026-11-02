@@ -8,7 +8,10 @@ import {
 import { BoundedAsyncCache } from "./bounded-async-cache.js";
 import type { MembershipCommerceRepository } from "./membership-commerce-repository.js";
 import type { ShopifyOrderProjectionService } from "./shopify-order-projection-service.js";
-import { WebhookWorkerQueue } from "./webhook-worker-queue.js";
+import {
+	WebhookWorkerQueue,
+	type WebhookWorkerQueueStats,
+} from "./webhook-worker-queue.js";
 
 export const MAX_SHOPIFY_WEBHOOK_BODY_BYTES = 64 * 1024;
 export const DEFAULT_ORG_CACHE_TTL_MS = 60_000;
@@ -183,6 +186,10 @@ export class ShopifyWebhookService {
 		return this.queue;
 	}
 
+	getStats(): WebhookWorkerQueueStats {
+		return this.queue.getStats();
+	}
+
 	drain(): Promise<void> {
 		return this.queue.drain();
 	}
@@ -196,6 +203,55 @@ export class ShopifyWebhookService {
 		fetchPendingDeliveryIds: () => Promise<string[]>,
 	): Promise<number> {
 		return this.queue.reclaimPending(fetchPendingDeliveryIds);
+	}
+
+	private async resolveVerifiedClientSecret(
+		shopDomain: string,
+		secretKeyring: ShopifySecretKeyring,
+	): Promise<{ organizationId: string; clientSecret: string } | null> {
+		const organization = await this.orgCache.getOrLoad(shopDomain, async () => {
+			const value =
+				await this.organizations.findOrganizationByShopDomain(shopDomain);
+			return {
+				value,
+				ttlMs: this.orgCacheTtlMs,
+				bytes: value ? 512 : 16,
+			};
+		});
+		if (!organization) return null;
+		const integration = await this.organizations.getShopifyIntegration(
+			organization.id,
+		);
+		if (
+			!integration ||
+			integration.verificationStatus !== "ok" ||
+			integration.verifiedShopDomain !== shopDomain
+		) {
+			return null;
+		}
+		try {
+			const cacheKey = `${organization.id}:${integration.encryptedClientSecret}`;
+			const clientSecret = await this.secretCache.getOrLoad(
+				cacheKey,
+				async () => {
+					const decrypted = secretKeyring.decrypt(
+						integration.encryptedClientSecret,
+						{
+							organizationId: organization.id,
+							purpose: SHOPIFY_CLIENT_SECRET_PURPOSE,
+						},
+					);
+					return {
+						value: decrypted,
+						ttlMs: this.secretCacheTtlMs,
+						bytes: Buffer.byteLength(decrypted),
+					};
+				},
+			);
+			return { organizationId: organization.id, clientSecret };
+		} catch {
+			return null;
+		}
 	}
 
 	async handle(context: Context): Promise<Response> {
@@ -226,57 +282,22 @@ export class ShopifyWebhookService {
 		) {
 			return new Response(null, { status: 400 });
 		}
-		const organization = await this.orgCache.getOrLoad(shopDomain, async () => {
-			const value =
-				await this.organizations.findOrganizationByShopDomain(shopDomain);
-			return {
-				value,
-				ttlMs: this.orgCacheTtlMs,
-				bytes: value ? 512 : 16,
-			};
-		});
-		if (!organization) return new Response(null, { status: 401 });
-		const integration = await this.organizations.getShopifyIntegration(
-			organization.id,
+		const verified = await this.resolveVerifiedClientSecret(
+			shopDomain,
+			secretKeyring,
 		);
 		if (
-			!integration ||
-			integration.verificationStatus !== "ok" ||
-			integration.verifiedShopDomain !== shopDomain
-		) {
-			return new Response(null, { status: 401 });
-		}
-		let clientSecret: string;
-		try {
-			const cacheKey = `${organization.id}:${integration.encryptedClientSecret}`;
-			clientSecret = await this.secretCache.getOrLoad(cacheKey, async () => {
-				const decrypted = secretKeyring.decrypt(
-					integration.encryptedClientSecret,
-					{
-						organizationId: organization.id,
-						purpose: SHOPIFY_CLIENT_SECRET_PURPOSE,
-					},
-				);
-				return {
-					value: decrypted,
-					ttlMs: this.secretCacheTtlMs,
-					bytes: Buffer.byteLength(decrypted),
-				};
-			});
-		} catch {
-			return new Response(null, { status: 401 });
-		}
-		if (
+			!verified ||
 			!verifyHmac(
 				rawBody,
-				clientSecret,
+				verified.clientSecret,
 				context.req.header("X-Shopify-Hmac-Sha256"),
 			)
 		) {
 			return new Response(null, { status: 401 });
 		}
 		const recorded = await this.commerce.recordDelivery({
-			organizationId: organization.id,
+			organizationId: verified.organizationId,
 			shopDomain,
 			webhookId,
 			topic: SHOPIFY_TOPIC,
@@ -287,7 +308,14 @@ export class ShopifyWebhookService {
 		});
 		if (recorded.kind === "conflict")
 			return new Response(null, { status: 409 });
-		if (recorded.kind === "accepted") this.scheduleFn(recorded.delivery.id);
+		if (
+			recorded.kind === "accepted" ||
+			((recorded.delivery.status === "received" ||
+				recorded.delivery.status === "failed") &&
+				!this.queue.isQueuedOrActive(recorded.delivery.id))
+		) {
+			this.scheduleFn(recorded.delivery.id);
+		}
 		return new Response(null, {
 			status: recorded.kind === "accepted" ? 202 : 200,
 		});

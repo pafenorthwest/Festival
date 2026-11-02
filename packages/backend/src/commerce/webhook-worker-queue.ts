@@ -3,6 +3,10 @@ export interface WebhookWorkerQueueStats {
 	active: number;
 	completed: number;
 	failed: number;
+	saturated: boolean;
+	rejectedCount: number;
+	pendingRecoveryCount: number;
+	recoveredCount: number;
 }
 
 export interface WebhookWorkerQueueOptions {
@@ -25,8 +29,11 @@ export class WebhookWorkerQueue {
 	private readonly handler: (deliveryId: string) => Promise<unknown> | unknown;
 	private readonly queue: string[] = [];
 	private readonly activeIds = new Set<string>();
+	private readonly pendingRecoveryIds = new Set<string>();
 	private completed = 0;
 	private failed = 0;
+	private rejectedCount = 0;
+	private recoveredCount = 0;
 	private drainResolvers: Array<() => void> = [];
 
 	constructor(options: WebhookWorkerQueueOptions);
@@ -63,13 +70,24 @@ export class WebhookWorkerQueue {
 		}
 	}
 
-	enqueue(deliveryId: string): boolean {
+	enqueue(
+		deliveryId: string,
+		options?: { retainForRecovery?: boolean },
+	): boolean {
 		if (!deliveryId || typeof deliveryId !== "string") {
 			return false;
 		}
 		if (this.queue.length >= this.maxBacklog) {
+			this.rejectedCount++;
+			if (
+				(options?.retainForRecovery ?? true) &&
+				!this.isQueuedOrActive(deliveryId)
+			) {
+				this.pendingRecoveryIds.add(deliveryId);
+			}
 			return false;
 		}
+		this.pendingRecoveryIds.delete(deliveryId);
 		this.queue.push(deliveryId);
 		this.dispatch();
 		return true;
@@ -81,7 +99,17 @@ export class WebhookWorkerQueue {
 			active: this.activeIds.size,
 			completed: this.completed,
 			failed: this.failed,
+			saturated:
+				this.queue.length >= this.maxBacklog ||
+				this.pendingRecoveryIds.size > 0,
+			rejectedCount: this.rejectedCount,
+			pendingRecoveryCount: this.pendingRecoveryIds.size,
+			recoveredCount: this.recoveredCount,
 		};
+	}
+
+	getStats(): WebhookWorkerQueueStats {
+		return this.stats();
 	}
 
 	isQueuedOrActive(deliveryId: string): boolean {
@@ -97,7 +125,7 @@ export class WebhookWorkerQueue {
 			if (this.isQueuedOrActive(id)) {
 				continue;
 			}
-			if (this.enqueue(id)) {
+			if (this.enqueue(id, { retainForRecovery: false })) {
 				reclaimed++;
 			} else {
 				break;
@@ -107,7 +135,11 @@ export class WebhookWorkerQueue {
 	}
 
 	drain(): Promise<void> {
-		if (this.queue.length === 0 && this.activeIds.size === 0) {
+		if (
+			this.queue.length === 0 &&
+			this.activeIds.size === 0 &&
+			this.pendingRecoveryIds.size === 0
+		) {
 			return Promise.resolve();
 		}
 		return new Promise<void>((resolve) => {
@@ -115,12 +147,28 @@ export class WebhookWorkerQueue {
 		});
 	}
 
+	private promotePendingRecoveries(): void {
+		while (
+			this.queue.length < this.maxBacklog &&
+			this.pendingRecoveryIds.size > 0
+		) {
+			const nextRecovery = this.pendingRecoveryIds.values().next().value;
+			if (nextRecovery === undefined) break;
+			this.pendingRecoveryIds.delete(nextRecovery);
+			if (this.isQueuedOrActive(nextRecovery)) continue;
+			this.queue.push(nextRecovery);
+			this.recoveredCount++;
+		}
+	}
+
 	private dispatch(): void {
+		this.promotePendingRecoveries();
 		while (this.activeIds.size < this.concurrency && this.queue.length > 0) {
 			const nextId = this.queue.shift();
 			if (nextId === undefined) break;
 			this.activeIds.add(nextId);
 			void this.runWorker(nextId);
+			this.promotePendingRecoveries();
 		}
 	}
 
@@ -141,6 +189,7 @@ export class WebhookWorkerQueue {
 		if (
 			this.queue.length === 0 &&
 			this.activeIds.size === 0 &&
+			this.pendingRecoveryIds.size === 0 &&
 			this.drainResolvers.length > 0
 		) {
 			const resolvers = this.drainResolvers;

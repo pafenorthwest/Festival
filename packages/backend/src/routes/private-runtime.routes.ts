@@ -4,6 +4,8 @@ import { Hono } from "hono";
 import type { FirebaseClaimsReconciliationService } from "../auth/firebase-claims-reconciliation.js";
 import type { MembershipCommerceRepository } from "../commerce/membership-commerce-repository.js";
 import type { ShopifyOrderProjectionService } from "../commerce/shopify-order-projection-service.js";
+import type { ShopifyWebhookService } from "../commerce/shopify-webhook-service.js";
+import type { WebhookWorkerQueueStats } from "../commerce/webhook-worker-queue.js";
 import type { AppEnv } from "../config/env.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
 
@@ -12,8 +14,26 @@ export interface PrivateRuntimeRoutesOptions {
 	repository: OrganizationRepository;
 	commerceRepository: MembershipCommerceRepository;
 	shopifyOrderProjectionService: ShopifyOrderProjectionService;
+	shopifyWebhookService?: Pick<ShopifyWebhookService, "getStats">;
 	firebaseClaimsReconciliationService?: FirebaseClaimsReconciliationService;
 	hasShopifyKeyring: boolean;
+}
+
+const DEFAULT_WEBHOOK_QUEUE_STATS: WebhookWorkerQueueStats = {
+	queued: 0,
+	active: 0,
+	completed: 0,
+	failed: 0,
+	saturated: false,
+	rejectedCount: 0,
+	pendingRecoveryCount: 0,
+	recoveredCount: 0,
+};
+
+function readWebhookQueueStats(
+	service: Pick<ShopifyWebhookService, "getStats"> | undefined,
+): WebhookWorkerQueueStats {
+	return service ? service.getStats() : { ...DEFAULT_WEBHOOK_QUEUE_STATS };
 }
 
 type StatusCode = 200 | 202 | 400 | 401 | 404 | 409 | 503;
@@ -299,6 +319,9 @@ export function buildPrivateRuntimeRouter(
 						trustProxyHeaders: Boolean(env.trustProxyHeaders),
 						dropTransferEnabled: Boolean(env.enableDropTransfer),
 						shopifyKeyringConfigured: hasShopifyKeyring,
+						shopifyWebhookQueue: readWebhookQueueStats(
+							options.shopifyWebhookService,
+						),
 					},
 				})
 			: jsonNoStore(c, { error: "Not found." }, 404),
@@ -318,6 +341,9 @@ export function buildPrivateRuntimeRouter(
 							firebaseClaimsReconciliationService,
 						),
 					},
+					shopifyWebhookQueue: readWebhookQueueStats(
+						options.shopifyWebhookService,
+					),
 				})
 			: jsonNoStore(c, { error: "Not found." }, 404),
 	);
@@ -333,6 +359,9 @@ export function buildPrivateRuntimeRouter(
 							env.tenantReconciliationTokens ?? {},
 						).length,
 					},
+					shopifyWebhookQueue: readWebhookQueueStats(
+						options.shopifyWebhookService,
+					),
 				})
 			: jsonNoStore(c, { error: "Not found." }, 404),
 	);

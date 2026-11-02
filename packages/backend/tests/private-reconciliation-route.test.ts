@@ -348,6 +348,19 @@ describe("private runtime readiness, diagnostics, metrics, operator, and event-b
 		const diagText = await diagRes.text();
 		expect(diagText).not.toContain("shpss_super_secret");
 		expect(diagText).not.toContain(aesKey);
+		expect(JSON.parse(diagText)).toMatchObject({
+			status: "ok",
+			diagnostics: {
+				shopifyWebhookQueue: {
+					queued: 0,
+					active: 0,
+					saturated: false,
+					rejectedCount: 0,
+					pendingRecoveryCount: 0,
+					recoveredCount: 0,
+				},
+			},
+		});
 
 		const metricsRes = await app.request("/api/internal/metrics", {
 			headers: {
@@ -361,6 +374,16 @@ describe("private runtime readiness, diagnostics, metrics, operator, and event-b
 				reconciliationConfigured: true,
 				eventBusConfigured: true,
 				firebaseClaimsReconciliationConfigured: false,
+			},
+			shopifyWebhookQueue: {
+				queued: 0,
+				active: 0,
+				completed: 0,
+				failed: 0,
+				saturated: false,
+				rejectedCount: 0,
+				pendingRecoveryCount: 0,
+				recoveredCount: 0,
 			},
 		});
 
@@ -385,6 +408,16 @@ describe("private runtime readiness, diagnostics, metrics, operator, and event-b
 				publicHealthz: "minimal",
 				privateRuntimeAuthenticated: true,
 				tenantScopedReconciliationCount: 0,
+			},
+			shopifyWebhookQueue: {
+				queued: 0,
+				active: 0,
+				completed: 0,
+				failed: 0,
+				saturated: false,
+				rejectedCount: 0,
+				pendingRecoveryCount: 0,
+				recoveredCount: 0,
 			},
 		});
 
