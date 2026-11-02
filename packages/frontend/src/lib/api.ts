@@ -3,6 +3,12 @@ import type {
 	AddCatalogWorkInput,
 	AdminCustomerSearchResponse,
 	AdminCustomerSearchResult,
+	AdminEntitlementOperationsResponse,
+	AdminEntitlementReconcileResponse,
+	AdminResolveValidationDecisionInput,
+	AdminResolveValidationDecisionResponse,
+	AdminRevokeEntitlementInput,
+	AdminRevokeEntitlementResponse,
 	AdminWaitlistRosterEntryDto,
 	BillingAdjustment,
 	BillingAdjustmentType,
@@ -801,6 +807,91 @@ export function getAdminEntitlementReport(
 	return requestJson<EntitlementReportResponse>(
 		`/api/organizations/${encodeURIComponent(slug)}/admin/entitlements?${query}`,
 		init,
+		idToken,
+	);
+}
+
+export function getAdminEntitlementOperations(
+	idToken: string,
+	slug: string,
+	init?: { signal?: AbortSignal },
+): Promise<AdminEntitlementOperationsResponse> {
+	return requestJson<AdminEntitlementOperationsResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/entitlements/operations`,
+		init,
+		idToken,
+	);
+}
+
+export function triggerAdminEntitlementReconciliation(
+	idToken: string,
+	slug: string,
+): Promise<AdminEntitlementReconcileResponse> {
+	return requestJson<AdminEntitlementReconcileResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/entitlements/reconcile`,
+		{
+			method: "POST",
+			headers: {
+				"X-CSRF-Token": idToken || "admin-csrf",
+			},
+		},
+		idToken,
+	);
+}
+
+export function declineAdminValidationDecision(
+	idToken: string,
+	slug: string,
+	decisionId: string,
+	input: AdminResolveValidationDecisionInput,
+): Promise<AdminResolveValidationDecisionResponse> {
+	return requestJson<AdminResolveValidationDecisionResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/entitlements/decisions/${encodeURIComponent(decisionId)}/decline`,
+		{
+			method: "POST",
+			headers: {
+				"X-CSRF-Token": idToken || "admin-csrf",
+			},
+			body: JSON.stringify(input),
+		},
+		idToken,
+	);
+}
+
+export function approveAdminValidationDecision(
+	idToken: string,
+	slug: string,
+	decisionId: string,
+	input: AdminResolveValidationDecisionInput,
+): Promise<AdminResolveValidationDecisionResponse> {
+	return requestJson<AdminResolveValidationDecisionResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/entitlements/decisions/${encodeURIComponent(decisionId)}/approve`,
+		{
+			method: "POST",
+			headers: {
+				"X-CSRF-Token": idToken || "admin-csrf",
+			},
+			body: JSON.stringify(input),
+		},
+		idToken,
+	);
+}
+
+export function revokeAdminEntitlement(
+	idToken: string,
+	slug: string,
+	entitlementId: string,
+	input: AdminRevokeEntitlementInput,
+): Promise<AdminRevokeEntitlementResponse> {
+	return requestJson<AdminRevokeEntitlementResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/entitlements/${encodeURIComponent(entitlementId)}/revoke`,
+		{
+			method: "POST",
+			headers: {
+				"X-CSRF-Token": idToken || "admin-csrf",
+			},
+			body: JSON.stringify(input),
+		},
 		idToken,
 	);
 }

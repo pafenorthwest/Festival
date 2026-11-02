@@ -252,6 +252,12 @@ describe("staff routes", () => {
 				pageSize: 25,
 				totalPages: 1,
 				divisions: [],
+				summaryCounts: {
+					active: 0,
+					scheduled: 0,
+					expired: 0,
+					revoked: 0,
+				},
 			});
 		});
 

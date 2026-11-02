@@ -7,10 +7,12 @@ import {
 	type EntitlementReportFilters,
 	type EntitlementReportPageRequest,
 	type EntitlementReportResponse,
+	type EntitlementSummaryCounts,
 	filterEntitlementReportEntries,
 	INITIAL_ACCOMPANIST_MEMBERSHIP_DURATION_DAYS,
 	listEntitlementReportDivisions,
 	paginateEntitlementReportEntries,
+	summarizeEntitlementCounts,
 	validateAccompanistContact,
 	validateAccompanistDivisionSelection,
 } from "@festival/common";
@@ -46,10 +48,15 @@ function calendarDaysUntil(from: string, exclusiveEnd: string): number {
 }
 
 export class AccompanistMembershipService {
+	private readonly now: () => Date;
+
 	constructor(
 		private readonly organizations: OrganizationRepository,
-		private readonly now: () => Date = () => new Date(),
-	) {}
+		now?: () => Date,
+	) {
+		this.now =
+			now ?? (organizations as { now?: () => Date }).now ?? (() => new Date());
+	}
 
 	async acquire(input: {
 		organizationId: string;
@@ -237,6 +244,19 @@ export class AccompanistMembershipService {
 			...paginateEntitlementReportEntries(matching, pageRequest),
 			divisions: listEntitlementReportDivisions(all),
 		};
+	}
+
+	async getSummaryCounts(
+		organizationId: string,
+	): Promise<EntitlementSummaryCounts> {
+		const timezone =
+			await this.organizations.getOrganizationTimezone(organizationId);
+		const today = calendarDateInTimezone(this.now().toISOString(), timezone);
+		const [accompanists, teachers] = await Promise.all([
+			this.listAccompanistReportEntries(organizationId, today),
+			this.listTeacherReportEntries(organizationId, today),
+		]);
+		return summarizeEntitlementCounts([...accompanists, ...teachers]);
 	}
 
 	private async listAccompanistReportEntries(

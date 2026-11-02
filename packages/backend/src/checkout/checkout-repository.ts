@@ -143,6 +143,14 @@ export interface CheckoutRepository {
 		organizationId: string,
 		correlationId: string,
 	): Promise<CheckoutIntentRecord | null>;
+	findIntentByCorrelationId?(
+		organizationId: string,
+		correlationId: string,
+	): Promise<CheckoutIntentRecord | null>;
+	findIntentById?(
+		organizationId: string,
+		intentId: string,
+	): Promise<CheckoutIntentRecord | null>;
 	hasProcessingIntent(
 		organizationId: string,
 		customerId: string,
@@ -405,6 +413,19 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 				value.correlationId === correlationId,
 		);
 		return intent ? { ...intent } : null;
+	}
+
+	async findIntentByCorrelationId(
+		organizationId: string,
+		correlationId: string,
+	) {
+		return this.findIntentByCorrelation(organizationId, correlationId);
+	}
+
+	async findIntentById(organizationId: string, intentId: string) {
+		const intent = this.intents.get(intentId);
+		if (!intent || intent.organizationId !== organizationId) return null;
+		return { ...intent };
 	}
 
 	async hasProcessingIntent(
