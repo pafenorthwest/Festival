@@ -121,6 +121,14 @@ export function customerMembershipViewModel(
 				tone: "active",
 				details: grantDetails(membership),
 			};
+		case "superseded":
+			return {
+				label: "Superseded",
+				description:
+					"This membership has been superseded by a renewed membership. No active membership rights are available from this grant.",
+				tone: "expired",
+				details: grantDetails(membership),
+			};
 		case "expired":
 			return {
 				label: "Expired",

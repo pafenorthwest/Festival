@@ -6,6 +6,7 @@ export const CUSTOMER_MEMBERSHIP_STATUSES = [
 	"needs_review",
 	"scheduled",
 	"active",
+	"superseded",
 	"expired",
 	"revoked",
 ] as const;

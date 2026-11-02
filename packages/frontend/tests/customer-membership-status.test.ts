@@ -31,6 +31,7 @@ describe("customer membership status presentation", () => {
 		const rejected = customerMembershipViewModel(membership("rejected"));
 		const review = customerMembershipViewModel(membership("needs_review"));
 		const scheduled = customerMembershipViewModel(membership("scheduled"));
+		const superseded = customerMembershipViewModel(membership("superseded"));
 		const revoked = customerMembershipViewModel(membership("revoked"));
 
 		expect(processing).toMatchObject({
@@ -44,10 +45,22 @@ describe("customer membership status presentation", () => {
 		expect(review.description).toContain("No active membership rights");
 		expect(scheduled).toMatchObject({ label: "Scheduled", tone: "processing" });
 		expect(scheduled.description).toContain("No active membership rights");
+		expect(superseded).toMatchObject({
+			label: "Superseded",
+			tone: "expired",
+		});
+		expect(superseded.description).toContain("No active membership rights");
 		expect(revoked).toMatchObject({ label: "Revoked", tone: "rejected" });
 		expect(revoked.description).toContain("No active membership rights");
 		expect(
-			JSON.stringify([processing, rejected, review, scheduled, revoked]),
+			JSON.stringify([
+				processing,
+				rejected,
+				review,
+				scheduled,
+				superseded,
+				revoked,
+			]),
 		).not.toContain("reasonCode");
 	});
 

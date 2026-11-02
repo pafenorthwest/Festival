@@ -286,4 +286,157 @@ describe("membership checkout service", () => {
 		).rejects.toMatchObject({ code: "checkout_retryable_upstream" });
 		expect(failures).toBe(1);
 	});
+
+	it("enforces the 30-day Teacher Membership renewal window in the Organization timezone before Shopify mutation", async () => {
+		let now = new Date("2027-07-14T23:30:00.000Z"); // 2027-07-14 in America/Los_Angeles (31 days before 2027-08-14)
+		const organizations = new InMemoryOrganizationRepository(() => now);
+		const organization = await organizations.createOrganization({
+			name: "Festival",
+			slug: "festival",
+		});
+		await organizations.updateOrganizationTimezone(
+			organization.id,
+			"America/Los_Angeles",
+		);
+		const piano = await organizations.createDivision({
+			organizationId: organization.id,
+			displayName: "Piano",
+			normalizedName: "piano",
+		});
+		const strings = await organizations.createDivision({
+			organizationId: organization.id,
+			displayName: "Strings",
+			normalizedName: "strings",
+		});
+		await organizations.upsertShopifyIntegration({
+			organizationId: organization.id,
+			storeDomain: "festival.myshopify.com",
+			clientId: "client",
+			encryptedClientSecret: "encrypted",
+		});
+		await organizations.updateShopifyVerification({
+			organizationId: organization.id,
+			verificationStatus: "ok",
+			verifiedAtIso: now.toISOString(),
+			lastTestedAtIso: now.toISOString(),
+			verifiedShopGid: "gid://shopify/Shop/1",
+			verifiedShopDomain: "festival.myshopify.com",
+			grantedScopes: ["read_products"],
+			capabilities: {
+				read_products: "granted",
+				write_products: "missing",
+				write_inventory: "missing",
+				read_orders: "missing",
+				write_orders: "disabled",
+			},
+		});
+		const offering = await organizations.createMembershipProductRecord({
+			organizationId: organization.id,
+			entitlementClass: "teacher_membership",
+			durationDays: 365,
+			isActive: true,
+			shopifyProductGid: "gid://shopify/Product/1",
+			shopifyVariantGid: "gid://shopify/ProductVariant/1",
+			productNameSnapshot: "Teacher Membership",
+		});
+		await organizations.createEntitlementGrantSnapshot({
+			organizationId: organization.id,
+			customerId: "customer-1",
+			entitlementClass: "teacher_membership",
+			offeringId: offering.id,
+			durationDays: 365,
+			divisionId: piano.id,
+			divisionNameSnapshot: piano.displayName,
+			paidAmount: "75.00",
+			paidCurrencyCode: "USD",
+			checkoutIntentId: "prior-intent",
+			shopifyOrderGid: "gid://shopify/Order/prior",
+			shopifyOrderLineGid: "gid://shopify/LineItem/prior",
+			startsOn: "2026-08-14",
+			endsOn: "2027-08-14",
+			status: "active",
+			verifiedIdentityEmail: "teacher1@example.com",
+		});
+		const catalog: ShopifyPublicCatalogClient = {
+			async readProduct() {
+				return {
+					id: "gid://shopify/Product/1",
+					title: "Teacher Membership",
+					description: "",
+					availableForSale: true,
+					variant: {
+						id: "gid://shopify/ProductVariant/1",
+						availableForSale: true,
+						price: { amount: "85.00", currencyCode: "USD" },
+					},
+				};
+			},
+		};
+		const checkout = new InMemoryCheckoutRepository();
+		let cartCreated = 0;
+		let checkoutRequests = 0;
+		const service = new MembershipCheckoutService(
+			organizations,
+			new PublicMembershipProductService(organizations, catalog),
+			checkout,
+			{
+				async createCart() {
+					cartCreated += 1;
+					return { shopifyCartId: "gid://shopify/Cart/renewal" };
+				},
+				async checkout() {
+					checkoutRequests += 1;
+					return {
+						checkoutUrl: "https://festival.myshopify.com/checkouts/renewal",
+					};
+				},
+			},
+			undefined,
+			() => now,
+		);
+		const baseInput = {
+			organizationId: organization.id,
+			organizationSlug: organization.slug,
+			customerId: "customer-1",
+			sessionId: "session-1",
+			integrationVersion: 14,
+			buyerAccessToken: "server-only",
+			offeringId: offering.id,
+			divisionId: strings.id,
+			staffAccessConsent: true,
+		};
+
+		await expect(
+			service.start({
+				...baseInput,
+				idempotencyKey: "00000000-0000-4000-8000-000000000010",
+			}),
+		).rejects.toMatchObject({
+			status: 409,
+			code: "membership_active",
+			message: "Teacher Membership already exists.",
+		});
+		expect(cartCreated).toBe(0);
+		expect(checkoutRequests).toBe(0);
+		expect(
+			await checkout.hasProcessingIntent(
+				organization.id,
+				"customer-1",
+				now.toISOString(),
+			),
+		).toBe(false);
+
+		// Exactly 30 days remaining in America/Los_Angeles (2027-07-15) allows renewal checkout
+		now = new Date("2027-07-15T15:00:00.000Z");
+		await expect(
+			service.start({
+				...baseInput,
+				idempotencyKey: "00000000-0000-4000-8000-000000000011",
+			}),
+		).resolves.toEqual({
+			checkoutUrl: "https://festival.myshopify.com/checkouts/renewal",
+		});
+		expect(cartCreated).toBe(1);
+		expect(checkoutRequests).toBe(1);
+	});
 });

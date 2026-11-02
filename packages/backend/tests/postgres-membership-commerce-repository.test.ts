@@ -27,6 +27,8 @@ describe("PostgresMembershipCommerceRepository", () => {
 		expect(value).toContain('reasonCode: "duplicate_purchase"');
 		expect(value).toContain("grantInput = undefined;");
 		expect(value).toContain("startsOn,");
+		expect(value).toContain("SET superseded_on = $3::date");
+		expect(value).not.toContain("const startsOn = entitlementRows[0].ends_on;");
 	});
 
 	it("checks scheduled entitlements within the requested class only", async () => {
