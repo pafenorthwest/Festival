@@ -2,6 +2,10 @@ import {
 	type ClassAvailabilityStatus,
 	isValidIanaTimezone,
 } from "./organization.js";
+import type {
+	RegistrationRepertoireItem,
+	RepertoirePiece,
+} from "./registration.js";
 
 export const TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS =
 	"teacher_membership" as const;
@@ -448,4 +452,52 @@ export interface RegistrationEligibleClass {
 	readonly placedCount?: number;
 	readonly availability?: ClassAvailabilityStatus;
 	readonly isRegistrationOpen?: boolean;
+}
+
+export interface CustomerClassEntitlementSummary {
+	readonly id: string;
+	readonly festivalId: string;
+	readonly festivalClassId: string;
+	readonly childId: string;
+	readonly status: ClassEntitlementStatus;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+}
+
+export interface CustomerFestivalClassSummary {
+	readonly id: string;
+	readonly festivalId: string;
+	readonly displayName: string;
+	readonly classSubtypeId: string;
+	readonly divisionId: string;
+	readonly minimumAge: number;
+	readonly maximumAge: number;
+	readonly price: string;
+	readonly maximumPerformancePieces: 1 | 2 | 3;
+	readonly performanceMinutes: number;
+	readonly capacity: number;
+	readonly isActive: boolean;
+}
+
+export interface CustomerClassRegistrationMetadataSummary {
+	readonly id: string;
+	readonly festivalId: string;
+	readonly classEntitlementId: string | null;
+	readonly teacherMembershipId: string;
+	readonly accompanistMembershipId: string | null;
+	readonly repertoireJson: RepertoirePiece[];
+	readonly repertoireItems: RegistrationRepertoireItem[];
+}
+
+export interface CustomerClassRegistrationItem {
+	readonly entitlement: CustomerClassEntitlementSummary;
+	readonly festivalClass?: CustomerFestivalClassSummary;
+	readonly child?: { id: string; name: string };
+	readonly metadata?: CustomerClassRegistrationMetadataSummary | null;
+	/** Verified Shopify payment time from the order projection; null when no matching projection exists yet. */
+	readonly paidAtIso: string | null;
+}
+
+export interface CustomerClassRegistrationsResponse {
+	readonly registrations: CustomerClassRegistrationItem[];
 }

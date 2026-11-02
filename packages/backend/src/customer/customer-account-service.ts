@@ -11,6 +11,11 @@ import type {
 	ClassEntitlement,
 	ClassRegistrationMetadata,
 	CustomerAccountSettings,
+	CustomerClassEntitlementSummary,
+	CustomerClassRegistrationItem,
+	CustomerClassRegistrationMetadataSummary,
+	CustomerClassRegistrationsResponse,
+	CustomerFestivalClassSummary,
 	CustomerOrdersResponse,
 	CustomerProfile,
 	CustomerProfileResponse,
@@ -177,17 +182,59 @@ function adminSearchResult(record: FestivalCustomerRecord) {
 	};
 }
 
-export interface CustomerClassRegistrationItem {
-	entitlement: ClassEntitlement;
-	festivalClass?: FestivalClassConfiguration;
-	child?: { id: string; name: string };
-	metadata?: ClassRegistrationMetadata | null;
-	/** Verified Shopify payment time from the order projection; null when no matching projection exists yet. */
-	paidAtIso: string | null;
+export type {
+	CustomerClassEntitlementSummary,
+	CustomerClassRegistrationItem,
+	CustomerClassRegistrationMetadataSummary,
+	CustomerClassRegistrationsResponse,
+	CustomerFestivalClassSummary,
+};
+
+function toCustomerEntitlementSummary(
+	entitlement: ClassEntitlement,
+): CustomerClassEntitlementSummary {
+	return {
+		id: entitlement.id,
+		festivalId: entitlement.festivalId,
+		festivalClassId: entitlement.festivalClassId,
+		childId: entitlement.childId,
+		status: entitlement.status,
+		createdAt: entitlement.createdAt,
+		updatedAt: entitlement.updatedAt,
+	};
 }
 
-export interface CustomerClassRegistrationsResponse {
-	registrations: CustomerClassRegistrationItem[];
+function toCustomerFestivalClassSummary(
+	festivalClass: FestivalClassConfiguration,
+): CustomerFestivalClassSummary {
+	return {
+		id: festivalClass.id,
+		festivalId: festivalClass.festivalId,
+		displayName: festivalClass.displayName,
+		classSubtypeId: festivalClass.classSubtypeId,
+		divisionId: festivalClass.divisionId,
+		minimumAge: festivalClass.minimumAge,
+		maximumAge: festivalClass.maximumAge,
+		price: festivalClass.price,
+		maximumPerformancePieces: festivalClass.maximumPerformancePieces,
+		performanceMinutes: festivalClass.performanceMinutes,
+		capacity: festivalClass.capacity,
+		isActive: festivalClass.isActive,
+	};
+}
+
+function toCustomerMetadataSummary(
+	metadata: ClassRegistrationMetadata,
+): CustomerClassRegistrationMetadataSummary {
+	return {
+		id: metadata.id,
+		festivalId: metadata.festivalId,
+		classEntitlementId: metadata.classEntitlementId,
+		teacherMembershipId: metadata.teacherMembershipId,
+		accompanistMembershipId: metadata.accompanistMembershipId,
+		repertoireJson: metadata.repertoireJson,
+		repertoireItems: metadata.repertoireItems,
+	};
 }
 
 export interface CustomerAccountServiceOptions {
@@ -1215,10 +1262,12 @@ export class CustomerAccountService {
 					entitlement.id,
 				);
 				return {
-					entitlement,
-					festivalClass,
+					entitlement: toCustomerEntitlementSummary(entitlement),
+					festivalClass: festivalClass
+						? toCustomerFestivalClassSummary(festivalClass)
+						: undefined,
 					child,
-					metadata,
+					metadata: metadata ? toCustomerMetadataSummary(metadata) : null,
 					paidAtIso: paidAtByOrderGid.get(entitlement.shopifyOrderGid) ?? null,
 				};
 			}),

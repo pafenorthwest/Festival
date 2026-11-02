@@ -36,6 +36,11 @@ import type {
 	CreateOrganizationResponse,
 	CreditBalance,
 	CustomerAccountSettingsResponse,
+	CustomerClassEntitlementSummary,
+	CustomerClassRegistrationItem,
+	CustomerClassRegistrationMetadataSummary,
+	CustomerClassRegistrationsResponse,
+	CustomerFestivalClassSummary,
 	CustomerMembershipStatusResponse,
 	CustomerOrdersResponse,
 	CustomerProfileResponse,
@@ -1714,42 +1719,13 @@ export function startClassCheckout(
 	);
 }
 
-export interface CustomerClassRegistrationItem {
-	entitlement: {
-		id: string;
-		status: string;
-		orderId?: string;
-		lineItemId?: string;
-		createdAt?: string;
-		updatedAt?: string;
-		festivalId?: string;
-		festivalSlug?: string;
-		festivalShortName?: string;
-		festivalClassId?: string;
-		divisionId?: string;
-		teacherId?: string;
-		childId?: string;
-		[key: string]: unknown;
-	};
-	festivalClass?: {
-		id: string;
-		displayName: string;
-		price?: string;
-		divisionId?: string;
-		festivalSlug?: string;
-		festivalShortName?: string;
-		[key: string]: unknown;
-	};
-	child?: { id: string; name: string };
-	metadata?: ClassRegistrationMetadata | null;
-	festivalSlug?: string;
-	festivalShortName?: string;
-	paidAtIso: string | null;
-}
-
-export interface CustomerClassRegistrationsResponse {
-	registrations: CustomerClassRegistrationItem[];
-}
+export type {
+	CustomerClassEntitlementSummary,
+	CustomerClassRegistrationItem,
+	CustomerClassRegistrationMetadataSummary,
+	CustomerClassRegistrationsResponse,
+	CustomerFestivalClassSummary,
+};
 
 export function listCustomerClassRegistrations(
 	slug: string,

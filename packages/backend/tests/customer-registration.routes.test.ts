@@ -1523,6 +1523,207 @@ describe("Customer Registration Routes", () => {
 				error: "Customer Account is unavailable.",
 			});
 		});
+
+		it("omits receipt and checkout correlation fields from both GET class-registrations routes while retaining paidAtIso and allowed DTO fields (#288)", async () => {
+			const orgRepo = new InMemoryOrganizationRepository();
+			const org = await orgRepo.createOrganization({
+				name: "Pacific Arts",
+				slug: "fest",
+			});
+			const festival = await orgRepo.createFestival({
+				id: "fest-1",
+				organizationId: org.id,
+				code: "PAFE26",
+				shortName: "spring-2026",
+				name: "Spring 2026",
+				startDate: "2026-05-15",
+				endDate: "2026-05-20",
+			});
+			const classConfig = await orgRepo.createFestivalClassConfiguration({
+				organizationId: org.id,
+				festivalId: festival.id,
+				displayName: "Piano Solo Level 1",
+				classSubtypeId: "subtype-piano",
+				divisionId: "div-1",
+				minimumAge: 5,
+				maximumAge: 18,
+				price: "40.00",
+				maximumPerformancePieces: 2,
+				performanceMinutes: 10,
+				capacity: 20,
+				isActive: true,
+				shopifyProductGid: "gid://shopify/Product/secret-prod",
+				shopifyVariantGid: "gid://shopify/ProductVariant/secret-var",
+			});
+
+			const custRepo = new InMemoryCustomerAccountRepository();
+			const checkoutRepo = new InMemoryCheckoutRepository();
+			const commerceRepo = new InMemoryMembershipCommerceRepository(
+				orgRepo,
+				checkoutRepo,
+			);
+
+			const now = new Date("2026-05-01T12:00:00.000Z");
+			const { customer } = await custRepo.createCustomerSession({
+				sessionId: "sess_1",
+				organizationId: org.id,
+				shopifyCustomerGid: "gid://shopify/Customer/100",
+				encryptedTokens: "token-1",
+				csrfToken: "csrf_1",
+				integrationVersion: 1,
+				createdAtIso: now.toISOString(),
+				lastSeenAtIso: now.toISOString(),
+				expiresAtIso: new Date(now.getTime() + 3600_000).toISOString(),
+			});
+			const child = await custRepo.createChild({
+				organizationId: org.id,
+				parentCustomerId: customer.id,
+				displayName: "Performer One",
+			});
+
+			const entitlement = await commerceRepo.createClassEntitlement({
+				organizationId: org.id,
+				festivalId: festival.id,
+				festivalClassId: classConfig.id,
+				parentCustomerId: customer.id,
+				childId: child.id,
+				checkoutIntentId: "intent-secret-1",
+				checkoutIntentLineId: "intent-line-secret-1",
+				shopifyOrderGid: "gid://shopify/Order/secret-1",
+				shopifyOrderLineGid: "gid://shopify/OrderLineItem/secret-1",
+				paidAmountCents: 4000,
+				paidCurrencyCode: "USD",
+				status: "confirmed",
+				admittedCartReference: "cart-secret-1",
+				capacityAtAllocation: 20,
+				placedCountBeforeAllocation: 5,
+			});
+
+			await commerceRepo.upsertOrderProjection({
+				organizationId: org.id,
+				shopifyOrderGid: "gid://shopify/Order/secret-1",
+				fullyPaidAtIso: "2026-05-01T10:30:00.000Z",
+				updatedAtIso: "2026-05-01T10:30:00.000Z",
+			});
+
+			const meta = await checkoutRepo.insertRegistrationMetadata({
+				id: "meta-1",
+				organizationId: org.id,
+				festivalId: festival.id,
+				checkoutIntentId: "intent-secret-1",
+				checkoutIntentLineId: "intent-line-secret-1",
+				teacherMembershipId: "teacher-mem-1",
+				accompanistMembershipId: "acc-mem-1",
+				repertoireJson: [
+					{
+						title: "Sonata in C",
+						composer: "Mozart",
+						durationSeconds: 180,
+					},
+				],
+			});
+			await checkoutRepo.linkRegistrationMetadataToEntitlement({
+				checkoutIntentId: "intent-secret-1",
+				checkoutIntentLineId: "intent-line-secret-1",
+				classEntitlementId: entitlement.id,
+			});
+
+			const realService = new (
+				await import("../src/customer/customer-account-service.js")
+			).CustomerAccountService(
+				custRepo,
+				orgRepo,
+				{} as never,
+				{
+					publicOrigin: "https://fest.example.com",
+					now: () => now,
+				},
+				commerceRepo,
+				checkoutRepo,
+			);
+			// Stub validateSession to bypass OIDC token decryption in route unit test
+			realService.validateSession = async () => ({
+				organizationId: org.id,
+				organizationSlug: org.slug,
+				customerId: customer.id,
+				sessionId: "sess_1",
+				integrationVersion: 1,
+				csrfToken: "csrf_1",
+				expiresAtIso: new Date(now.getTime() + 3600_000).toISOString(),
+			});
+
+			const app = createTestApp({ customerAccountService: realService });
+
+			for (const path of [
+				"/class-registrations",
+				"/festivals/spring-2026/registration/class-registrations",
+			]) {
+				const res = await req(app, "GET", path, AUTH);
+				expect(res.status).toBe(200);
+				const rawText = await res.clone().text();
+				expect(rawText).not.toContain("shopifyOrderGid");
+				expect(rawText).not.toContain("shopifyOrderLineGid");
+				expect(rawText).not.toContain("checkoutIntentId");
+				expect(rawText).not.toContain("checkoutIntentLineId");
+				expect(rawText).not.toContain("shopifyProductGid");
+				expect(rawText).not.toContain("shopifyVariantGid");
+				expect(rawText).not.toContain("admittedCartReference");
+				expect(rawText).not.toContain("gid://shopify/Order/secret-1");
+				expect(rawText).not.toContain("intent-secret-1");
+				expect(rawText).not.toContain("intent-line-secret-1");
+
+				const body = (await res.json()) as {
+					registrations: Array<Record<string, unknown>>;
+				};
+				expect(body.registrations).toHaveLength(1);
+				const reg = body.registrations[0];
+				expect(reg).toEqual({
+					entitlement: {
+						id: entitlement.id,
+						festivalId: festival.id,
+						festivalClassId: classConfig.id,
+						childId: child.id,
+						status: "confirmed",
+						createdAt: entitlement.createdAt,
+						updatedAt: entitlement.updatedAt,
+					},
+					festivalClass: {
+						id: classConfig.id,
+						festivalId: festival.id,
+						displayName: "Piano Solo Level 1",
+						classSubtypeId: "subtype-piano",
+						divisionId: "div-1",
+						minimumAge: 5,
+						maximumAge: 18,
+						price: "40.00",
+						maximumPerformancePieces: 2,
+						performanceMinutes: 10,
+						capacity: 20,
+						isActive: true,
+					},
+					child: {
+						id: child.id,
+						name: "Performer One",
+					},
+					metadata: {
+						id: meta.id,
+						festivalId: festival.id,
+						classEntitlementId: entitlement.id,
+						teacherMembershipId: "teacher-mem-1",
+						accompanistMembershipId: "acc-mem-1",
+						repertoireJson: [
+							{
+								title: "Sonata in C",
+								composer: "Mozart",
+								durationSeconds: 180,
+							},
+						],
+						repertoireItems: meta.repertoireItems,
+					},
+					paidAtIso: "2026-05-01T10:30:00.000Z",
+				});
+			}
+		});
 	});
 
 	describe("PATCH metadata", () => {
