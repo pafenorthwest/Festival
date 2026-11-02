@@ -24,6 +24,10 @@ export interface AppEnv {
 	customerCacheMaxEntryBytes?: number;
 	customerCacheMaxTotalBytes?: number;
 	reconciliationToken?: string;
+	tenantReconciliationTokens?: Record<string, string>;
+	runtimeToken?: string;
+	operatorToken?: string;
+	eventBusToken?: string;
 	enableDropTransfer?: boolean;
 	shopifyAdminAuditPath?: string;
 }
@@ -89,6 +93,38 @@ function parseShopifyAdminAuditPath(value: string | undefined): string {
 		);
 	}
 	return auditPath;
+}
+
+function parseTenantReconciliationTokens(
+	value: string | undefined,
+): Record<string, string> | undefined {
+	const raw = value?.trim();
+	if (!raw) return undefined;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch {
+		throw new Error(
+			"Invalid FESTIVAL_TENANT_RECONCILIATION_TOKENS_JSON: expected a JSON object.",
+		);
+	}
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+		throw new Error(
+			"Invalid FESTIVAL_TENANT_RECONCILIATION_TOKENS_JSON: expected a JSON object.",
+		);
+	}
+	const result: Record<string, string> = {};
+	for (const [orgId, token] of Object.entries(parsed)) {
+		const trimmedOrg = orgId.trim();
+		const trimmedToken = typeof token === "string" ? token.trim() : "";
+		if (!trimmedOrg || !trimmedToken) {
+			throw new Error(
+				"Invalid FESTIVAL_TENANT_RECONCILIATION_TOKENS_JSON: entries must map organizationId to non-empty token.",
+			);
+		}
+		result[trimmedOrg] = trimmedToken;
+	}
+	return result;
 }
 
 export function buildDatabaseUrl(): string {
@@ -177,6 +213,12 @@ export function loadEnv(options?: {
 			16 * 1_024 * 1_024,
 		),
 		reconciliationToken: process.env.FESTIVAL_RECONCILIATION_TOKEN?.trim(),
+		tenantReconciliationTokens: parseTenantReconciliationTokens(
+			process.env.FESTIVAL_TENANT_RECONCILIATION_TOKENS_JSON,
+		),
+		runtimeToken: process.env.FESTIVAL_RUNTIME_TOKEN?.trim(),
+		operatorToken: process.env.FESTIVAL_OPERATOR_TOKEN?.trim(),
+		eventBusToken: process.env.FESTIVAL_EVENT_BUS_TOKEN?.trim(),
 		enableDropTransfer: process.env.ENABLE_DROP_TRANSFER === "true",
 		shopifyAdminAuditPath: parseShopifyAdminAuditPath(
 			process.env.SHOPIFY_ADMIN_AUDIT_PATH,
