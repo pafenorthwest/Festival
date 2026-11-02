@@ -10,10 +10,32 @@ export const ROUTE_AUTHENTICATION_CLASSES = [
 	"customer",
 	"shopify-webhook",
 	"private-service",
+	"private-runtime",
+	"private-operator",
+	"private-event-bus",
 ] as const;
 
 export type RouteAuthenticationClass =
 	(typeof ROUTE_AUTHENTICATION_CLASSES)[number];
+
+export function isPrivateRouteAuthenticationClass(
+	authenticationClass: RouteAuthenticationClass,
+): boolean {
+	return authenticationClass.startsWith("private-");
+}
+
+function isAllowedPrivateRoutePath(path: string): boolean {
+	return path === "/health" || path.startsWith("/api/internal/");
+}
+
+function isReservedPrivateSurfacePath(path: string): boolean {
+	return (
+		path === "/health" ||
+		/^\/(?:api\/)?(?:internal|metrics|ready|readiness|diagnostics|debug|jobs|workers|queues|operator)(?:\/|$)/.test(
+			path,
+		)
+	);
+}
 
 export interface RouteSecurityDeclaration {
 	method: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -193,6 +215,31 @@ export const CURRENT_ROUTE_SECURITY = [
 		method: "POST",
 		path: "/api/internal/reconcile/firebase-claims",
 		authenticationClass: "private-service",
+	},
+	{
+		method: "GET",
+		path: "/api/internal/ready",
+		authenticationClass: "private-runtime",
+	},
+	{
+		method: "GET",
+		path: "/api/internal/diagnostics",
+		authenticationClass: "private-runtime",
+	},
+	{
+		method: "GET",
+		path: "/api/internal/metrics",
+		authenticationClass: "private-runtime",
+	},
+	{
+		method: "GET",
+		path: "/api/internal/operator/status",
+		authenticationClass: "private-operator",
+	},
+	{
+		method: "POST",
+		path: "/api/internal/events/shopify-orders-paid",
+		authenticationClass: "private-event-bus",
 	},
 	{
 		method: "GET",
@@ -794,6 +841,19 @@ export function assertRouteSecurityInventory(
 		if (declaredKeys.has(key)) {
 			throw new Error(`Duplicate route security declaration: ${key}`);
 		}
+		const isPrivateClass = isPrivateRouteAuthenticationClass(
+			declaration.authenticationClass,
+		);
+		if (isPrivateClass && !isAllowedPrivateRoutePath(declaration.path)) {
+			throw new Error(
+				`Private route boundary violation for ${key}: private authentication classes must use /health or /api/internal/*.`,
+			);
+		}
+		if (!isPrivateClass && isReservedPrivateSurfacePath(declaration.path)) {
+			throw new Error(
+				`Private route boundary violation for ${key}: reserved private runtime paths cannot use public or browser authentication classes.`,
+			);
+		}
 		declaredKeys.add(key);
 	}
 
@@ -801,7 +861,10 @@ export function assertRouteSecurityInventory(
 		routes
 			.filter(
 				(route) =>
-					!(route.method.toUpperCase() === "ALL" && route.path === "/api/*"),
+					!(
+						route.method.toUpperCase() === "ALL" &&
+						(route.path === "/api/*" || route.path === "/api/internal/*")
+					),
 			)
 			.map(routeKey),
 	);
