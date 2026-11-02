@@ -294,7 +294,7 @@ export async function createNewCheckoutIntent(params: {
 		}
 		if (outcome.kind === "active") {
 			throw new AppError(
-				"An active Teacher Membership already exists.",
+				"Teacher Membership already exists.",
 				409,
 				"membership_active",
 			);

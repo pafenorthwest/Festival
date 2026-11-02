@@ -675,13 +675,15 @@ CREATE TABLE orgs.membership_entitlements (
     offering_id text,
     starts_on date NOT NULL,
     ends_on date NOT NULL,
+    superseded_on date,
     revoked_at timestamp with time zone,
     revoked_reason text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT membership_entitlements_check CHECK ((ends_on > starts_on)),
     CONSTRAINT membership_entitlements_check1 CHECK ((((entitlement_class = 'teacher_membership'::text) AND (source = 'teacher_checkout'::text)) OR ((entitlement_class = 'accompanist_membership'::text) AND (source = 'accompanist_form'::text)))),
     CONSTRAINT membership_entitlements_entitlement_class_check CHECK ((entitlement_class = ANY (ARRAY['teacher_membership'::text, 'accompanist_membership'::text]))),
-    CONSTRAINT membership_entitlements_source_check CHECK ((source = ANY (ARRAY['teacher_checkout'::text, 'accompanist_form'::text])))
+    CONSTRAINT membership_entitlements_source_check CHECK ((source = ANY (ARRAY['teacher_checkout'::text, 'accompanist_form'::text]))),
+    CONSTRAINT membership_entitlements_superseded_on_check CHECK (((superseded_on IS NULL) OR ((superseded_on >= starts_on) AND (superseded_on <= ends_on))))
 );
 
 
@@ -1709,7 +1711,7 @@ ALTER TABLE ONLY orgs.membership_entitlement_divisions
 --
 
 ALTER TABLE ONLY orgs.membership_entitlements
-    ADD CONSTRAINT membership_entitlements_organization_id_customer_id_entitl_excl EXCLUDE USING gist (organization_id WITH =, customer_id WITH =, entitlement_class WITH =, daterange(starts_on, ends_on, '[)'::text) WITH &&) WHERE ((revoked_at IS NULL));
+    ADD CONSTRAINT membership_entitlements_organization_id_customer_id_entitl_excl EXCLUDE USING gist (organization_id WITH =, customer_id WITH =, entitlement_class WITH =, daterange(starts_on, COALESCE(superseded_on, ends_on), '[)'::text) WITH &&) WHERE ((revoked_at IS NULL));
 
 
 --

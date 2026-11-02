@@ -227,6 +227,7 @@ interface EntitlementGrantRow {
 	shopify_order_line_gid: string;
 	starts_on: string;
 	ends_on: string;
+	superseded_on?: string | null;
 	status: EntitlementGrantStatus;
 	created_at: string;
 }
@@ -491,6 +492,7 @@ function mapEntitlementGrant(
 		shopifyOrderLineGid: row.shopify_order_line_gid,
 		startsOn: row.starts_on,
 		endsOn: row.ends_on,
+		...(row.superseded_on ? { supersededOn: row.superseded_on } : {}),
 		status: row.status,
 		createdAtIso: row.created_at,
 	};
@@ -2744,6 +2746,15 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			if (!identityRows[0]) {
 				throw new Error("Shopify identity email belongs to another customer.");
 			}
+			await transaction.unsafe(
+				`UPDATE ${this.schema}.membership_entitlements SET superseded_on = $4::date WHERE organization_id = $1 AND customer_id = $2 AND entitlement_class = $3 AND revoked_at IS NULL AND superseded_on IS NULL AND starts_on <= $4::date AND ends_on > $4::date AND ends_on <= ($4::date + INTERVAL '30 days')::date`,
+				[
+					input.organizationId,
+					input.customerId,
+					input.entitlementClass,
+					input.startsOn,
+				],
+			);
 			const inserted = await transaction.unsafe(
 				`INSERT INTO ${this.schema}.membership_entitlements (id,organization_id,customer_id,entitlement_class,source,offering_id,starts_on,ends_on) SELECT $1,$2,$3,$4,'teacher_checkout',$5,$6::date,$7::date FROM ${this.schema}.products WHERE id=$5 AND organization_id=$2 AND entitlement_class=$4 RETURNING id`,
 				[
@@ -2792,7 +2803,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 	}): Promise<EntitlementGrantSnapshot | null> {
 		await this.ensureReady();
 		const rows = (await sql.unsafe(
-			`SELECT e.id,e.organization_id,e.customer_id,e.entitlement_class,e.offering_id,d.duration_days,ed.division_id,ed.division_name_snapshot,d.paid_amount,d.paid_currency_code,d.checkout_intent_id,d.shopify_order_gid,d.shopify_order_line_gid,e.starts_on::text,e.ends_on::text,'active' AS status,e.created_at FROM ${this.schema}.membership_entitlements e JOIN ${this.schema}.organizations o ON o.id=e.organization_id JOIN ${this.schema}.teacher_membership_entitlement_details d ON d.entitlement_id=e.id JOIN ${this.schema}.membership_entitlement_divisions ed ON ed.entitlement_id=e.id WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class='teacher_membership' AND ed.division_id=$3 AND e.revoked_at IS NULL AND e.starts_on <= (NOW() AT TIME ZONE o.timezone)::date AND e.ends_on > (NOW() AT TIME ZONE o.timezone)::date ORDER BY e.created_at ASC, e.id ASC LIMIT 1`,
+			`SELECT e.id,e.organization_id,e.customer_id,e.entitlement_class,e.offering_id,d.duration_days,ed.division_id,ed.division_name_snapshot,d.paid_amount,d.paid_currency_code,d.checkout_intent_id,d.shopify_order_gid,d.shopify_order_line_gid,e.starts_on::text,e.ends_on::text,e.superseded_on::text,'active' AS status,e.created_at FROM ${this.schema}.membership_entitlements e JOIN ${this.schema}.organizations o ON o.id=e.organization_id JOIN ${this.schema}.teacher_membership_entitlement_details d ON d.entitlement_id=e.id JOIN ${this.schema}.membership_entitlement_divisions ed ON ed.entitlement_id=e.id WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class='teacher_membership' AND ed.division_id=$3 AND e.revoked_at IS NULL AND (e.superseded_on IS NULL OR e.superseded_on > (NOW() AT TIME ZONE o.timezone)::date) AND e.starts_on <= (NOW() AT TIME ZONE o.timezone)::date AND e.ends_on > (NOW() AT TIME ZONE o.timezone)::date ORDER BY e.created_at ASC, e.id ASC LIMIT 1`,
 			[input.organizationId, input.customerId, input.divisionId],
 		)) as EntitlementGrantRow[];
 		return rows[0] ? mapEntitlementGrant(rows[0]) : null;
@@ -2804,7 +2815,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 	): Promise<EntitlementGrantSnapshot[]> {
 		await this.ensureReady();
 		const rows = (await sql.unsafe(
-			`SELECT e.id,e.organization_id,e.customer_id,e.entitlement_class,e.offering_id,d.duration_days,ed.division_id,ed.division_name_snapshot,d.paid_amount,d.paid_currency_code,d.checkout_intent_id,d.shopify_order_gid,d.shopify_order_line_gid,e.starts_on::text,e.ends_on::text,CASE WHEN e.revoked_at IS NOT NULL THEN 'revoked' WHEN e.starts_on > (NOW() AT TIME ZONE o.timezone)::date THEN 'scheduled' WHEN e.ends_on <= (NOW() AT TIME ZONE o.timezone)::date THEN 'expired' ELSE 'active' END AS status,e.created_at FROM ${this.schema}.membership_entitlements e JOIN ${this.schema}.organizations o ON o.id=e.organization_id JOIN ${this.schema}.teacher_membership_entitlement_details d ON d.entitlement_id=e.id JOIN ${this.schema}.membership_entitlement_divisions ed ON ed.entitlement_id=e.id WHERE e.organization_id=$1 ${customerId ? "AND e.customer_id=$2" : ""}
+			`SELECT e.id,e.organization_id,e.customer_id,e.entitlement_class,e.offering_id,d.duration_days,ed.division_id,ed.division_name_snapshot,d.paid_amount,d.paid_currency_code,d.checkout_intent_id,d.shopify_order_gid,d.shopify_order_line_gid,e.starts_on::text,e.ends_on::text,e.superseded_on::text,CASE WHEN e.revoked_at IS NOT NULL THEN 'revoked' WHEN e.superseded_on IS NOT NULL AND e.superseded_on <= (NOW() AT TIME ZONE o.timezone)::date THEN 'superseded' WHEN e.starts_on > (NOW() AT TIME ZONE o.timezone)::date THEN 'scheduled' WHEN e.ends_on <= (NOW() AT TIME ZONE o.timezone)::date THEN 'expired' ELSE 'active' END AS status,e.created_at FROM ${this.schema}.membership_entitlements e JOIN ${this.schema}.organizations o ON o.id=e.organization_id JOIN ${this.schema}.teacher_membership_entitlement_details d ON d.entitlement_id=e.id JOIN ${this.schema}.membership_entitlement_divisions ed ON ed.entitlement_id=e.id WHERE e.organization_id=$1 ${customerId ? "AND e.customer_id=$2" : ""}
 			 ORDER BY created_at ASC`,
 			customerId ? [organizationId, customerId] : [organizationId],
 		)) as EntitlementGrantRow[];
@@ -2972,6 +2983,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			   AND e.entitlement_class = 'teacher_membership'
 			   AND ed.division_id = $2
 			   AND e.revoked_at IS NULL
+			   AND (e.superseded_on IS NULL OR e.superseded_on > (NOW() AT TIME ZONE o.timezone)::date)
 			   AND e.starts_on <= (NOW() AT TIME ZONE o.timezone)::date
 			   AND e.ends_on > (NOW() AT TIME ZONE o.timezone)::date
 			 ORDER BY name, c.id`,
@@ -3429,6 +3441,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			 WHERE e.organization_id = $1
 			   AND e.entitlement_class = 'teacher_membership'
 			   AND e.revoked_at IS NULL
+			   AND (e.superseded_on IS NULL OR e.superseded_on > (NOW() AT TIME ZONE o.timezone)::date)
 			   AND e.starts_on <= (NOW() AT TIME ZONE o.timezone)::date
 			   AND e.ends_on > (NOW() AT TIME ZONE o.timezone)::date`,
 			[organizationId],

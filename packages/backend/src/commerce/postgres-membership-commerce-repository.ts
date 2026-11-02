@@ -588,15 +588,27 @@ export class PostgresMembershipCommerceRepository
 						};
 						grantInput = undefined;
 					} else {
+						let supersededEntitlementId: string | undefined;
 						const entitlementRows = (await tx.unsafe(
-							`SELECT e.ends_on::text, e.starts_on > (NOW() AT TIME ZONE o.timezone)::date AS scheduled FROM ${this.schema}.membership_entitlements e JOIN ${this.schema}.organizations o ON o.id=e.organization_id WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class=$3 AND e.revoked_at IS NULL AND e.ends_on > (NOW() AT TIME ZONE o.timezone)::date ORDER BY e.starts_on FOR UPDATE`,
+							`SELECT e.id, e.starts_on::text, e.ends_on::text, (e.starts_on > $4::date) AS scheduled, (e.ends_on > ($4::date + INTERVAL '30 days')::date) AS outside_renewal_window FROM ${this.schema}.membership_entitlements e WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class=$3 AND e.revoked_at IS NULL AND e.superseded_on IS NULL AND e.ends_on > $4::date ORDER BY e.starts_on FOR UPDATE`,
 							[
 								finalDecision.organizationId,
 								finalDecision.customerId,
 								grantInput.entitlementClass,
+								grantInput.startsOn,
 							],
-						)) as Array<{ ends_on: string; scheduled: boolean }>;
-						if (entitlementRows.some((row) => row.scheduled)) {
+						)) as Array<{
+							id: string;
+							starts_on: string;
+							ends_on: string;
+							scheduled: boolean;
+							outside_renewal_window: boolean;
+						}>;
+						if (
+							entitlementRows.some(
+								(row) => row.scheduled || row.outside_renewal_window,
+							)
+						) {
 							finalDecision = {
 								...finalDecision,
 								status: "needs_review",
@@ -604,11 +616,12 @@ export class PostgresMembershipCommerceRepository
 							};
 							grantInput = undefined;
 						} else if (entitlementRows[0]) {
-							const startsOn = entitlementRows[0].ends_on;
+							supersededEntitlementId = entitlementRows[0].id;
+							const { startsOn, durationDays } = grantInput;
 							grantInput = {
 								...grantInput,
 								startsOn,
-								endsOn: addCalendarDays(startsOn, grantInput.durationDays),
+								endsOn: addCalendarDays(startsOn, durationDays),
 							};
 						}
 						if (grantInput) {
@@ -661,11 +674,12 @@ export class PostgresMembershipCommerceRepository
 									));
 								if (!retried || retried.count !== 1) {
 									const refreshedEntitlements = (await tx.unsafe(
-										`SELECT 1 FROM ${this.schema}.membership_entitlements e JOIN ${this.schema}.organizations o ON o.id=e.organization_id WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class=$3 AND e.revoked_at IS NULL AND e.starts_on > (NOW() AT TIME ZONE o.timezone)::date LIMIT 1 FOR UPDATE`,
+										`SELECT 1 FROM ${this.schema}.membership_entitlements e JOIN ${this.schema}.organizations o ON o.id=e.organization_id WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class=$3 AND e.revoked_at IS NULL AND e.superseded_on IS NULL AND (e.starts_on > $4::date OR e.ends_on > ($4::date + INTERVAL '30 days')::date) LIMIT 1 FOR UPDATE`,
 										[
 											finalDecision.organizationId,
 											finalDecision.customerId,
 											grantInput.entitlementClass,
+											grantInput.startsOn,
 										],
 									)) as Array<Record<string, unknown>>;
 									if (!refreshedEntitlements[0]) {
@@ -681,6 +695,16 @@ export class PostgresMembershipCommerceRepository
 									grantInput = undefined;
 								}
 							}
+						}
+						if (grantInput && supersededEntitlementId) {
+							await tx.unsafe(
+								`UPDATE ${this.schema}.membership_entitlements SET superseded_on = $3::date WHERE id = $1 AND organization_id = $2 AND revoked_at IS NULL AND superseded_on IS NULL`,
+								[
+									supersededEntitlementId,
+									grantInput.organizationId,
+									grantInput.startsOn,
+								],
+							);
 						}
 					}
 				}
@@ -880,7 +904,7 @@ export class PostgresMembershipCommerceRepository
 		today: string,
 	) {
 		const rows = (await sql.unsafe(
-			`SELECT 1 FROM ${this.schema}.membership_entitlements WHERE organization_id = $1 AND customer_id = $2 AND entitlement_class = $3 AND revoked_at IS NULL AND starts_on > $4::date LIMIT 1`,
+			`SELECT 1 FROM ${this.schema}.membership_entitlements WHERE organization_id = $1 AND customer_id = $2 AND entitlement_class = $3 AND revoked_at IS NULL AND superseded_on IS NULL AND starts_on > $4::date LIMIT 1`,
 			[organizationId, customerId, entitlementClass, today],
 		)) as Array<Record<string, unknown>>;
 		return Boolean(rows[0]);
