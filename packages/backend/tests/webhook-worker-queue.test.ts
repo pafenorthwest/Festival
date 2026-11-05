@@ -41,6 +41,7 @@ describe("WebhookWorkerQueue", () => {
 			rejectedCount: 0,
 			pendingRecoveryCount: 0,
 			recoveredCount: 0,
+			recoveryOverflowCount: 0,
 		});
 		expect(q1.getStats()).toEqual(stats);
 	});
@@ -81,6 +82,7 @@ describe("WebhookWorkerQueue", () => {
 			rejectedCount: 0,
 			pendingRecoveryCount: 0,
 			recoveredCount: 0,
+			recoveryOverflowCount: 0,
 		});
 	});
 
@@ -109,6 +111,7 @@ describe("WebhookWorkerQueue", () => {
 			rejectedCount: 2,
 			pendingRecoveryCount: 1,
 			recoveredCount: 0,
+			recoveryOverflowCount: 0,
 		});
 
 		await queue.drain();
@@ -122,6 +125,53 @@ describe("WebhookWorkerQueue", () => {
 			rejectedCount: 2,
 			pendingRecoveryCount: 0,
 			recoveredCount: 1,
+			recoveryOverflowCount: 0,
+		});
+	});
+
+	it("bounds pendingRecoveryIds at maxPendingRecovery, tracks recoveryOverflowCount without counting duplicate retained IDs, and recovers retained items on drain", async () => {
+		const processed: string[] = [];
+		const queue = new WebhookWorkerQueue(
+			async (id) => {
+				await delay(30);
+				processed.push(id);
+			},
+			{ concurrency: 1, maxBacklog: 1, maxPendingRecovery: 2 },
+		);
+
+		expect(queue.enqueue("d1")).toBe(true); // active: 1, queued: 0
+		expect(queue.enqueue("d2")).toBe(true); // active: 1, queued: 1 (backlog full)
+		expect(queue.enqueue("d3")).toBe(false); // retained in pendingRecoveryIds (1/2)
+		expect(queue.enqueue("d4")).toBe(false); // retained in pendingRecoveryIds (2/2)
+		expect(queue.enqueue("d3")).toBe(false); // duplicate of retained ID -> does not increment overflow
+		expect(queue.enqueue("d5")).toBe(false); // exceeds maxPendingRecovery -> overflow 1
+		expect(queue.enqueue("d6")).toBe(false); // exceeds maxPendingRecovery -> overflow 2
+
+		expect(queue.stats()).toEqual({
+			queued: 1,
+			active: 1,
+			completed: 0,
+			failed: 0,
+			saturated: true,
+			rejectedCount: 5,
+			pendingRecoveryCount: 2,
+			recoveredCount: 0,
+			recoveryOverflowCount: 2,
+		});
+
+		await queue.drain();
+
+		expect(processed).toEqual(["d1", "d2", "d3", "d4"]);
+		expect(queue.stats()).toEqual({
+			queued: 0,
+			active: 0,
+			completed: 4,
+			failed: 0,
+			saturated: false,
+			rejectedCount: 5,
+			pendingRecoveryCount: 0,
+			recoveredCount: 2,
+			recoveryOverflowCount: 2,
 		});
 	});
 
@@ -151,6 +201,7 @@ describe("WebhookWorkerQueue", () => {
 			rejectedCount: 0,
 			pendingRecoveryCount: 0,
 			recoveredCount: 0,
+			recoveryOverflowCount: 0,
 		});
 	});
 

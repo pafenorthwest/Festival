@@ -7,12 +7,14 @@ export interface WebhookWorkerQueueStats {
 	rejectedCount: number;
 	pendingRecoveryCount: number;
 	recoveredCount: number;
+	recoveryOverflowCount: number;
 }
 
 export interface WebhookWorkerQueueOptions {
 	handler: (deliveryId: string) => Promise<unknown> | unknown;
 	concurrency?: number;
 	maxBacklog?: number;
+	maxPendingRecovery?: number;
 }
 
 export const DEFAULT_WEBHOOK_QUEUE_CONCURRENCY = 5;
@@ -26,6 +28,7 @@ function clampPositiveInt(value: number | undefined, fallback: number): number {
 export class WebhookWorkerQueue {
 	readonly concurrency: number;
 	readonly maxBacklog: number;
+	private readonly maxPendingRecovery: number;
 	private readonly handler: (deliveryId: string) => Promise<unknown> | unknown;
 	private readonly queue: string[] = [];
 	private readonly activeIds = new Set<string>();
@@ -34,6 +37,7 @@ export class WebhookWorkerQueue {
 	private failed = 0;
 	private rejectedCount = 0;
 	private recoveredCount = 0;
+	private recoveryOverflowCount = 0;
 	private drainResolvers: Array<() => void> = [];
 
 	constructor(options: WebhookWorkerQueueOptions);
@@ -57,6 +61,10 @@ export class WebhookWorkerQueue {
 				maybeOptions?.maxBacklog,
 				DEFAULT_WEBHOOK_QUEUE_MAX_BACKLOG,
 			);
+			this.maxPendingRecovery = clampPositiveInt(
+				maybeOptions?.maxPendingRecovery,
+				this.maxBacklog * 4,
+			);
 		} else {
 			this.handler = handlerOrOptions.handler;
 			this.concurrency = clampPositiveInt(
@@ -66,6 +74,10 @@ export class WebhookWorkerQueue {
 			this.maxBacklog = clampPositiveInt(
 				handlerOrOptions.maxBacklog,
 				DEFAULT_WEBHOOK_QUEUE_MAX_BACKLOG,
+			);
+			this.maxPendingRecovery = clampPositiveInt(
+				handlerOrOptions.maxPendingRecovery,
+				this.maxBacklog * 4,
 			);
 		}
 	}
@@ -83,7 +95,13 @@ export class WebhookWorkerQueue {
 				(options?.retainForRecovery ?? true) &&
 				!this.isQueuedOrActive(deliveryId)
 			) {
-				this.pendingRecoveryIds.add(deliveryId);
+				if (this.pendingRecoveryIds.has(deliveryId)) {
+					// Already retained for recovery
+				} else if (this.pendingRecoveryIds.size < this.maxPendingRecovery) {
+					this.pendingRecoveryIds.add(deliveryId);
+				} else {
+					this.recoveryOverflowCount++;
+				}
 			}
 			return false;
 		}
@@ -105,6 +123,7 @@ export class WebhookWorkerQueue {
 			rejectedCount: this.rejectedCount,
 			pendingRecoveryCount: this.pendingRecoveryIds.size,
 			recoveredCount: this.recoveredCount,
+			recoveryOverflowCount: this.recoveryOverflowCount,
 		};
 	}
 

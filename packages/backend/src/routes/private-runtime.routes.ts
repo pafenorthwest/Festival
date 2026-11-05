@@ -28,6 +28,7 @@ const DEFAULT_WEBHOOK_QUEUE_STATS: WebhookWorkerQueueStats = {
 	rejectedCount: 0,
 	pendingRecoveryCount: 0,
 	recoveredCount: 0,
+	recoveryOverflowCount: 0,
 };
 
 function readWebhookQueueStats(

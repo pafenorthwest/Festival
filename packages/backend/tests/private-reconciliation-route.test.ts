@@ -1,10 +1,12 @@
 import { describe, expect, it } from "bun:test";
+import { createHmac } from "node:crypto";
 import type { AuthenticatedUser } from "@festival/common";
 import { createApp } from "../src/app.js";
 import type { FirebaseClaimsReconciliationService } from "../src/auth/firebase-claims-reconciliation.js";
 import type { AuthVerifier } from "../src/auth/types.js";
 import { InMemoryMembershipCommerceRepository } from "../src/commerce/membership-commerce-repository.js";
 import type { ShopifyOrderProjectionService } from "../src/commerce/shopify-order-projection-service.js";
+import { ShopifyWebhookService } from "../src/commerce/shopify-webhook-service.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
 import { buildApiRouter } from "../src/routes/api-router.js";
 import {
@@ -358,6 +360,7 @@ describe("private runtime readiness, diagnostics, metrics, operator, and event-b
 					rejectedCount: 0,
 					pendingRecoveryCount: 0,
 					recoveredCount: 0,
+					recoveryOverflowCount: 0,
 				},
 			},
 		});
@@ -384,6 +387,7 @@ describe("private runtime readiness, diagnostics, metrics, operator, and event-b
 				rejectedCount: 0,
 				pendingRecoveryCount: 0,
 				recoveredCount: 0,
+				recoveryOverflowCount: 0,
 			},
 		});
 
@@ -418,6 +422,7 @@ describe("private runtime readiness, diagnostics, metrics, operator, and event-b
 				rejectedCount: 0,
 				pendingRecoveryCount: 0,
 				recoveredCount: 0,
+				recoveryOverflowCount: 0,
 			},
 		});
 
@@ -492,5 +497,150 @@ describe("private runtime readiness, diagnostics, metrics, operator, and event-b
 		});
 		expect(duplicateEvent.status).toBe(200);
 		expect(processedDeliveries).toHaveLength(1);
+	});
+
+	it("exposes live non-zero and post-drain shopifyWebhookQueue saturation and recovery stats across diagnostics, metrics, and operator status", async () => {
+		const repository = new InMemoryOrganizationRepository();
+		const org = await repository.createOrganization({ name: "F", slug: "f" });
+		const domain = "festival-org.myshopify.com";
+		const secret = "shpss_super_secret";
+		const k1 = Buffer.alloc(32, 5).toString("base64");
+		const keysJson = JSON.stringify({ k1 });
+		const secrets = ShopifySecretKeyring.fromEnvironment(keysJson, "k1");
+		if (!secrets) throw new Error("Expected keyring");
+		await repository.upsertShopifyIntegration({
+			organizationId: org.id,
+			storeDomain: domain,
+			clientId: "client-1",
+			encryptedClientSecret: secrets.encrypt(secret, {
+				organizationId: org.id,
+				purpose: "shopify-client-secret",
+			}),
+		});
+		const iso = "2026-09-01T00:00:00.000Z";
+		await repository.updateShopifyVerification({
+			organizationId: org.id,
+			verificationStatus: "ok",
+			verifiedAtIso: iso,
+			lastTestedAtIso: iso,
+			verifiedShopGid: "gid://shopify/Shop/99",
+			verifiedShopDomain: domain,
+			grantedScopes: ["read_orders"],
+			capabilities: {
+				read_products: "missing",
+				write_products: "missing",
+				write_inventory: "missing",
+				read_orders: "granted",
+				write_orders: "disabled",
+			},
+		});
+		const commerceRepository = new InMemoryMembershipCommerceRepository(
+			repository,
+		);
+		let releaseWorker = () => {};
+		const workerGate = new Promise<void>((resolve) => {
+			releaseWorker = resolve;
+		});
+		const projection = {
+			processDelivery: async () => {
+				await workerGate;
+				return "processed" as const;
+			},
+		} as unknown as ShopifyOrderProjectionService;
+		const shopifyWebhookService = new ShopifyWebhookService(
+			repository,
+			commerceRepository,
+			secrets,
+			projection,
+			() => new Date(iso),
+			undefined,
+			{ queueConcurrency: 1, queueMaxBacklog: 1, queueMaxPendingRecovery: 1 },
+		);
+		const runtimeToken = "runtime-token-000000000000000000";
+		const operatorToken = "operator-token-00000000000000000";
+		const runtimeHeaders = { "X-Festival-Runtime-Token": runtimeToken };
+		const operatorHeaders = { "X-Festival-Operator-Token": operatorToken };
+		const { app } = await createApp({
+			env: {
+				port: 3000,
+				publicOrigin: "https://festival.example",
+				festivalSecretKeysJson: keysJson,
+				festivalActiveSecretKeyId: "k1",
+				runtimeToken,
+				operatorToken,
+			},
+			repository,
+			commerceRepository,
+			authVerifier: new Auth(),
+			shopifyOrderProjectionService: projection,
+			shopifyWebhookService,
+		});
+
+		for (let i = 1; i <= 4; i++) {
+			const body = JSON.stringify({
+				admin_graphql_api_id: `gid://shopify/Order/${i}`,
+			});
+			const res = await app.request("/api/shopify/webhooks/orders-paid", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"X-Shopify-Shop-Domain": domain,
+					"X-Shopify-Topic": "orders/paid",
+					"X-Shopify-API-Version": "2026-07",
+					"X-Shopify-Webhook-Id": `11111111-1111-4111-9111-11111111111${i}`,
+					"X-Shopify-Hmac-Sha256": createHmac("sha256", secret)
+						.update(body)
+						.digest("base64"),
+				},
+				body,
+			});
+			expect(res.status).toBe(202);
+		}
+
+		const assertQueueStats = async (expected: Record<string, unknown>) => {
+			const [diag, metrics, operator] = await Promise.all([
+				app.request("/api/internal/diagnostics", { headers: runtimeHeaders }),
+				app.request("/api/internal/metrics", { headers: runtimeHeaders }),
+				app.request("/api/internal/operator/status", {
+					headers: operatorHeaders,
+				}),
+			]);
+			expect(await diag.json()).toMatchObject({
+				diagnostics: { shopifyWebhookQueue: expected },
+			});
+			expect(await metrics.json()).toMatchObject({
+				shopifyWebhookQueue: expected,
+			});
+			expect(await operator.json()).toMatchObject({
+				shopifyWebhookQueue: expected,
+			});
+		};
+
+		await assertQueueStats({
+			queued: 1,
+			active: 1,
+			completed: 0,
+			failed: 0,
+			saturated: true,
+			rejectedCount: 2,
+			pendingRecoveryCount: 1,
+			recoveredCount: 0,
+			recoveryOverflowCount: 1,
+		});
+
+		releaseWorker();
+		await shopifyWebhookService.drain();
+
+		await assertQueueStats({
+			queued: 0,
+			active: 0,
+			completed: 3,
+			failed: 0,
+			saturated: false,
+			rejectedCount: 2,
+			pendingRecoveryCount: 0,
+			recoveredCount: 1,
+			recoveryOverflowCount: 1,
+		});
 	});
 });

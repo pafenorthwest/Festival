@@ -31,6 +31,7 @@ type OrgRecord = Awaited<
 export interface ShopifyWebhookServiceOptions {
 	queueConcurrency?: number;
 	queueMaxBacklog?: number;
+	queueMaxPendingRecovery?: number;
 	orgCacheTtlMs?: number;
 	secretCacheTtlMs?: number;
 }
@@ -171,6 +172,7 @@ export class ShopifyWebhookService {
 				},
 				concurrency: options?.queueConcurrency,
 				maxBacklog: options?.queueMaxBacklog,
+				maxPendingRecovery: options?.queueMaxPendingRecovery,
 			});
 			if (typeof schedule === "function") {
 				this.scheduleFn = schedule;
