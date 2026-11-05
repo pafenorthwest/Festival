@@ -5,6 +5,8 @@ import {
 	type RepertoirePiece,
 } from "@festival/common";
 
+export { doesClassRequireConcerto };
+
 export interface RepertoirePieceDraft {
 	title: string;
 	composer: string;
@@ -45,15 +47,27 @@ export function validatePieceDuration(
 	return null;
 }
 
+export type CatalogWorkValidationOptions = {
+	requiresConcerto?: boolean;
+	catalogWorks?: ReadonlyArray<
+		Pick<CanonicalWork, "id" | "classifications" | "isActive">
+	>;
+};
+
 export function validatePieceCatalogWork(
 	piece: { catalogWorkId?: string | null },
-	options?: {
-		requiresConcerto?: boolean;
-		catalogWorks?: ReadonlyArray<
-			Pick<CanonicalWork, "id" | "classifications" | "isActive">
-		>;
-	},
+	optionsOrRequiresConcerto?: CatalogWorkValidationOptions | boolean,
+	catalogWorksArg?: ReadonlyArray<
+		Pick<CanonicalWork, "id" | "classifications" | "isActive">
+	>,
 ): string | null {
+	const options: CatalogWorkValidationOptions | undefined =
+		typeof optionsOrRequiresConcerto === "boolean"
+			? {
+					requiresConcerto: optionsOrRequiresConcerto,
+					catalogWorks: catalogWorksArg,
+				}
+			: optionsOrRequiresConcerto;
 	if (!options?.requiresConcerto) return null;
 	const workId = piece.catalogWorkId?.trim();
 	if (!workId) {
@@ -66,6 +80,55 @@ export function validatePieceCatalogWork(
 		}
 	}
 	return null;
+}
+
+export function applyCatalogWorkSelection(
+	draft: RepertoirePieceDraft,
+	workId: string,
+	catalogWorks?: ReadonlyArray<
+		Pick<CanonicalWork, "id" | "title" | "composerName">
+	>,
+): RepertoirePieceDraft {
+	const trimmedId = workId.trim();
+	if (!trimmedId) {
+		return {
+			...draft,
+			catalogWorkId: undefined,
+		};
+	}
+	const selected = catalogWorks?.find((w) => w.id === trimmedId);
+	return {
+		...draft,
+		catalogWorkId: trimmedId,
+		...(selected
+			? {
+					title: selected.title,
+					composer: selected.composerName ?? draft.composer,
+				}
+			: {}),
+	};
+}
+
+export function validatePieceDrafts(
+	pieces: readonly (RepertoirePieceDraft | RepertoirePiece)[],
+	optionsOrRequiresConcerto?: CatalogWorkValidationOptions | boolean,
+	catalogWorksArg?: ReadonlyArray<
+		Pick<CanonicalWork, "id" | "classifications" | "isActive">
+	>,
+): boolean {
+	const options: CatalogWorkValidationOptions | undefined =
+		typeof optionsOrRequiresConcerto === "boolean"
+			? {
+					requiresConcerto: optionsOrRequiresConcerto,
+					catalogWorks: catalogWorksArg,
+				}
+			: optionsOrRequiresConcerto;
+	const drafts: RepertoirePieceDraft[] = pieces.map((piece) =>
+		"durationMinutes" in piece
+			? (piece as RepertoirePieceDraft)
+			: repertoirePieceToDraft(piece),
+	);
+	return arePiecesValid(drafts, options);
 }
 
 export function pieceDraftToRepertoirePiece(

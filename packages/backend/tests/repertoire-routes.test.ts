@@ -459,16 +459,23 @@ describe("Repertoire Review Routes", () => {
 						title: "Gymnopédie No. 1",
 						composer: "Erik Satie",
 						imslpUrl: "https://imslp.org/wiki/3_Gymnop%C3%A9dies_(Satie,_Erik)",
+						classifications: ["concerto"],
 					}),
 				},
 			);
 			expect(addRes.status).toBe(201);
 			const addData = (await addRes.json()) as {
-				work: { id: string; title: string; composerName: string };
+				work: {
+					id: string;
+					title: string;
+					composerName: string;
+					classifications?: string[];
+				};
 			};
 			expect(addData.work.id).toBeDefined();
 			expect(addData.work.title).toBe("Gymnopédie No. 1");
 			expect(addData.work.composerName).toBe("Erik Satie");
+			expect(addData.work.classifications).toEqual(["concerto"]);
 
 			// Search work in catalog
 			const searchRes = await app.request(

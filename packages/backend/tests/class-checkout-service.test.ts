@@ -3920,5 +3920,115 @@ describe("ClassCheckoutService", () => {
 			const result = await f.service.start(f.defaultInput);
 			expect(result.intentId).toBeDefined();
 		});
+
+		it("rejects cross-tenant and bogus catalogWorkId on both concerto and non-concerto classes", async () => {
+			const f = await createFixture();
+			const otherOrg = await f.organizations.createOrganization({
+				name: "Other Org",
+				slug: "other-org",
+			});
+			f.repertoire.seedCanonicalWork({
+				id: "foreign-concerto-work",
+				organizationId: otherOrg.id,
+				title: "Piano Concerto in A minor, Op. 16",
+				composerName: "Edvard Grieg",
+				classifications: ["concerto"],
+				isActive: true,
+			});
+
+			const concertoSubtype =
+				await f.organizations.createRegistrationCatalogValue({
+					organizationId: f.organization.id,
+					kind: "class_subtype",
+					displayName: "Concerto",
+					normalizedName: "concerto",
+				});
+			const concertoClass =
+				await f.organizations.createFestivalClassConfiguration({
+					organizationId: f.organization.id,
+					festivalId: f.festival?.id ?? "",
+					displayName: "Junior Piano Concerto",
+					classSubtypeId: concertoSubtype.id,
+					divisionId: f.division.id,
+					minimumAge: 8,
+					maximumAge: 12,
+					price: "55.00",
+					maximumPerformancePieces: 1,
+					performanceMinutes: 15,
+					capacity: 20,
+					isActive: true,
+					shopifyProductGid: "gid://shopify/Product/101",
+					shopifyVariantGid: "gid://shopify/ProductVariant/201",
+				});
+
+			// Cross-tenant catalogWorkId on concerto class
+			await expect(
+				f.service.start({
+					...f.defaultInput,
+					idempotencyKey: "idem-cross-tenant-concerto",
+					festivalClassId: concertoClass.id,
+					pieces: [
+						{
+							title: "Piano Concerto in A minor, Op. 16",
+							composer: "Edvard Grieg",
+							durationSeconds: 300,
+							catalogWorkId: "foreign-concerto-work",
+						},
+					],
+				}),
+			).rejects.toMatchObject({
+				status: 400,
+				code: "concerto_catalog_work_required",
+			});
+
+			// Cross-tenant and bogus catalogWorkId on non-concerto class
+			for (const badWorkId of ["foreign-concerto-work", "bogus-work-id"]) {
+				await expect(
+					f.service.start({
+						...f.defaultInput,
+						idempotencyKey: `idem-non-concerto-${badWorkId}`,
+						pieces: [
+							{
+								title: "Sonatina in C Major",
+								composer: "Muzio Clementi",
+								durationSeconds: 150,
+								catalogWorkId: badWorkId,
+							},
+						],
+					}),
+				).rejects.toMatchObject({
+					status: 400,
+					code: "catalog_work_invalid",
+				});
+			}
+
+			// Fail-closed when repertoire repository is not configured on concerto class
+			const serviceWithoutRepertoire = new ClassCheckoutService(
+				f.organizations,
+				f.customers,
+				f.checkout,
+				f.storefront,
+				f.commerce,
+				() => f.now,
+			);
+			await expect(
+				serviceWithoutRepertoire.start({
+					...f.defaultInput,
+					idempotencyKey: "idem-no-repertoire-repo",
+					festivalClassId: concertoClass.id,
+					pieces: [
+						{
+							title: "Piano Concerto in A minor, Op. 16",
+							composer: "Edvard Grieg",
+							durationSeconds: 300,
+							catalogWorkId: "any-work-id",
+						},
+					],
+				}),
+			).rejects.toMatchObject({
+				status: 400,
+				code: "concerto_catalog_work_required",
+			});
+		});
 	});
 });

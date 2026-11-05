@@ -109,13 +109,22 @@ function normalizeRepertoirePiece(
 	if (requiresConcerto) {
 		if (
 			!catalogWorkId ||
-			(catalogWorksById &&
-				!isCatalogWorkClassifiedAsConcerto(catalogWorksById.get(catalogWorkId)))
+			!catalogWorksById ||
+			!isCatalogWorkClassifiedAsConcerto(catalogWorksById.get(catalogWorkId))
 		) {
 			throw new AppError(
 				"Concerto classes require selecting a catalog work classified as a concerto.",
 				400,
 				"concerto_catalog_work_required",
+			);
+		}
+	} else if (catalogWorkId) {
+		const work = catalogWorksById?.get(catalogWorkId);
+		if (!work || work.isActive === false) {
+			throw new AppError(
+				"Each repertoire piece must have a valid catalog work ID.",
+				400,
+				"catalog_work_invalid",
 			);
 		}
 	}

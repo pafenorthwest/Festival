@@ -5,13 +5,17 @@ import {
 	startClassCheckout,
 } from "../src/lib/api.js";
 import {
+	applyCatalogWorkSelection,
 	arePiecesValid,
+	createEmptyPieceDraft,
 	createRegistrationSelectHandlers,
 	formatTotalDuration,
 	isInstrumentSelectionValid,
 	isRegistrationSelectionValid,
 	pieceDraftToRepertoirePiece,
+	validatePieceCatalogWork,
 	validatePieceComposer,
+	validatePieceDrafts,
 	validatePieceDuration,
 	validatePieceTitle,
 } from "../src/pages/festivalRegistrationHelpers.js";
@@ -349,9 +353,82 @@ describe("Repertoire validation & transformation helpers", () => {
 			),
 		).toBe(true);
 	});
+
+	it("validates concerto catalog work selection and links selected work into draft fields (#197)", () => {
+		const catalogWorks = [
+			{
+				id: "work-concerto-1",
+				title: "Piano Concerto in A minor, Op. 16",
+				composerName: "Edvard Grieg",
+				classifications: ["concerto"],
+				isActive: true,
+			},
+			{
+				id: "work-sonata-1",
+				title: "Piano Sonata in C",
+				composerName: "W. A. Mozart",
+				classifications: ["sonata"],
+				isActive: true,
+			},
+		];
+
+		const emptyDraft = createEmptyPieceDraft();
+		expect(validatePieceCatalogWork(emptyDraft, true, catalogWorks)).toBe(
+			"Concerto classes require selecting a concerto work from the catalog.",
+		);
+		expect(
+			validatePieceCatalogWork(emptyDraft, false, catalogWorks),
+		).toBeNull();
+
+		const nonConcertoDraft = applyCatalogWorkSelection(
+			emptyDraft,
+			"work-sonata-1",
+			catalogWorks,
+		);
+		expect(nonConcertoDraft.catalogWorkId).toBe("work-sonata-1");
+		expect(nonConcertoDraft.title).toBe("Piano Sonata in C");
+		expect(nonConcertoDraft.composer).toBe("W. A. Mozart");
+		expect(validatePieceCatalogWork(nonConcertoDraft, true, catalogWorks)).toBe(
+			"Selected catalog work must be classified as a concerto.",
+		);
+		expect(validatePieceDrafts([nonConcertoDraft], true, catalogWorks)).toBe(
+			false,
+		);
+
+		const concertoDraft = applyCatalogWorkSelection(
+			emptyDraft,
+			"work-concerto-1",
+			catalogWorks,
+		);
+		expect(concertoDraft.catalogWorkId).toBe("work-concerto-1");
+		expect(concertoDraft.title).toBe("Piano Concerto in A minor, Op. 16");
+		expect(concertoDraft.composer).toBe("Edvard Grieg");
+		expect(
+			validatePieceCatalogWork(concertoDraft, true, catalogWorks),
+		).toBeNull();
+		expect(validatePieceDrafts([concertoDraft], true, catalogWorks)).toBe(true);
+
+		const clearedDraft = applyCatalogWorkSelection(
+			concertoDraft,
+			"",
+			catalogWorks,
+		);
+		expect(clearedDraft.catalogWorkId).toBeUndefined();
+	});
 });
 
 describe("Festival Repertoire Modal", () => {
+	it("renders concerto catalog work selector and validation feedback when requiresConcerto is true", () => {
+		expect(repertoireModal).toContain("props.requiresConcerto");
+		expect(repertoireModal).toContain("Concerto Catalog Work");
+		expect(repertoireModal).toContain(
+			"id={`repertoire-piece-${" + "index}-catalog-work`}",
+		);
+		expect(repertoireModal).toContain("handleSelectCatalogWork");
+		expect(repertoireModal).toContain("validatePieceCatalogWork(");
+		expect(regPage).toContain("catalogWorks={catalogWorks()}");
+		expect(regPage).toContain("validatePieceDrafts");
+	});
 	it("uses index-stable rows so editing a draft preserves input focus", () => {
 		expect(repertoireModal).toContain("<Index each={pieces()}>");
 		expect(repertoireModal).not.toContain("<For each={pieces()}>");

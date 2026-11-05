@@ -59,6 +59,8 @@ export interface CanonicalWork {
 	updatedAtIso?: string;
 }
 
+export type RepertoireCatalogWork = CanonicalWork;
+
 export interface RepertoireReviewItem {
 	id: string;
 	organizationId: string;

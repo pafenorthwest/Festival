@@ -1,11 +1,18 @@
-import type { CanonicalWork, RepertoirePiece } from "@festival/common";
-import { createSignal, Index, Show } from "solid-js";
 import {
+	type CanonicalWork,
+	isCatalogWorkClassifiedAsConcerto,
+	type RepertoireCatalogWork,
+	type RepertoirePiece,
+} from "@festival/common";
+import { createSignal, For, Index, Show } from "solid-js";
+import {
+	applyCatalogWorkSelection,
 	arePiecesValid,
 	createEmptyPieceDraft,
 	pieceDraftToRepertoirePiece,
 	type RepertoirePieceDraft,
 	repertoirePieceToDraft,
+	validatePieceCatalogWork,
 	validatePieceComposer,
 	validatePieceDuration,
 	validatePieceTitle,
@@ -17,7 +24,7 @@ interface FestivalRepertoireModalProps {
 	maxPieces: 1 | 2 | 3;
 	initialPieces: RepertoirePiece[];
 	requiresConcerto?: boolean;
-	catalogWorks?: CanonicalWork[];
+	catalogWorks?: readonly (CanonicalWork | RepertoireCatalogWork)[];
 	onSave: (pieces: RepertoirePiece[]) => void;
 	onClose: () => void;
 }
@@ -29,6 +36,10 @@ export function FestivalRepertoireModal(props: FestivalRepertoireModalProps) {
 			: [createEmptyPieceDraft()],
 	);
 	const [touched, setTouched] = createSignal(false);
+	const concertoCatalogWorks = () =>
+		(props.catalogWorks ?? []).filter((work) =>
+			isCatalogWorkClassifiedAsConcerto(work),
+		);
 
 	function updatePieceField<K extends keyof RepertoirePieceDraft>(
 		index: number,
@@ -38,6 +49,16 @@ export function FestivalRepertoireModal(props: FestivalRepertoireModalProps) {
 		setPieces((current) =>
 			current.map((item, i) =>
 				i === index ? { ...item, [field]: value } : item,
+			),
+		);
+	}
+
+	function handleSelectCatalogWork(index: number, workId: string) {
+		setPieces((current) =>
+			current.map((item, i) =>
+				i === index
+					? applyCatalogWorkSelection(item, workId, props.catalogWorks)
+					: item,
 			),
 		);
 	}
@@ -103,6 +124,52 @@ export function FestivalRepertoireModal(props: FestivalRepertoireModalProps) {
 											</Button>
 										</Show>
 									</div>
+
+									<Show when={props.requiresConcerto}>
+										<label
+											class="field"
+											for={`repertoire-piece-${index}-catalog-work`}
+										>
+											<span>Concerto Catalog Work</span>
+											<select
+												id={`repertoire-piece-${index}-catalog-work`}
+												name={`repertoire-piece-${index}-catalog-work`}
+												value={piece().catalogWorkId ?? ""}
+												onChange={(e) =>
+													handleSelectCatalogWork(index, e.currentTarget.value)
+												}
+											>
+												<option value="">Select a concerto work…</option>
+												<For each={concertoCatalogWorks()}>
+													{(work) => (
+														<option value={work.id}>
+															{work.composerName
+																? `${work.title} — ${work.composerName}`
+																: work.title}
+														</option>
+													)}
+												</For>
+											</select>
+											<Show
+												when={
+													touched() &&
+													validatePieceCatalogWork(
+														piece(),
+														true,
+														props.catalogWorks,
+													)
+												}
+											>
+												<p class="field-error" role="alert">
+													{validatePieceCatalogWork(
+														piece(),
+														true,
+														props.catalogWorks,
+													)}
+												</p>
+											</Show>
+										</label>
+									</Show>
 
 									<label class="field" for={`repertoire-piece-${index}-title`}>
 										<span>Title</span>

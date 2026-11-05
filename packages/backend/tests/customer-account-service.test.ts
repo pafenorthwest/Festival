@@ -1802,5 +1802,39 @@ describe("CustomerAccountService", () => {
 		expect(updated.metadata.repertoireItems[0]?.catalogWorkId).toBe(
 			"work-concerto-valid",
 		);
+
+		// 4. Cross-tenant catalogWorkId is rejected with 400
+		f.repertoire.seedCanonicalWork({
+			id: "work-other-org",
+			organizationId: f.other.id,
+			title: "Other Org Concerto",
+			composerName: "Rachmaninoff",
+			classifications: ["concerto"],
+			isActive: true,
+		});
+		await expect(
+			f.service.updateRegistrationMetadata(
+				"festival",
+				"spring-2026",
+				entitlement.id,
+				auth.sessionId,
+				csrfToken,
+				origin,
+				{
+					pieces: [
+						{
+							title: "Other Org Concerto",
+							composer: "Rachmaninoff",
+							durationSeconds: 300,
+							catalogWorkId: "work-other-org",
+						} as unknown as {
+							title: string;
+							composer: string;
+							durationSeconds: number;
+						},
+					],
+				},
+			),
+		).rejects.toMatchObject({ status: 400 });
 	});
 });

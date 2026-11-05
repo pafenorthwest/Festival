@@ -1,6 +1,7 @@
 import type {
 	CustomerWaitlistEntryDto,
 	RegistrationEligibleClass,
+	RepertoireCatalogWork,
 } from "@festival/common";
 import { type Accessor, createEffect, createSignal } from "solid-js";
 import {
@@ -11,6 +12,7 @@ import {
 	listRegistrationAccompanists,
 	listRegistrationEligibleClasses,
 	listRegistrationTeachers,
+	searchRepertoireCatalog,
 } from "../lib/api.js";
 
 export interface RegistrationOptionsInput {
@@ -34,6 +36,9 @@ export function useRegistrationOptions(input: RegistrationOptionsInput) {
 	const [accompanists, setAccompanists] = createSignal<
 		Array<{ id: string; name: string }>
 	>([]);
+	const [catalogWorks, setCatalogWorks] = createSignal<RepertoireCatalogWork[]>(
+		[],
+	);
 
 	async function loadChildren() {
 		try {
@@ -59,10 +64,20 @@ export function useRegistrationOptions(input: RegistrationOptionsInput) {
 		}
 	}
 
+	async function loadCatalogWorks() {
+		try {
+			const res = await searchRepertoireCatalog(input.slug, "");
+			setCatalogWorks(res.works);
+		} catch {
+			// Handled gracefully in UI
+		}
+	}
+
 	createEffect(() => {
 		if (input.isAuthenticated()) {
 			void loadChildren();
 			void loadAccompanists();
+			void loadCatalogWorks();
 		}
 	});
 
@@ -113,6 +128,7 @@ export function useRegistrationOptions(input: RegistrationOptionsInput) {
 		teachers,
 		eligibleClasses,
 		accompanists,
+		catalogWorks,
 		loadChildren,
 	};
 }
