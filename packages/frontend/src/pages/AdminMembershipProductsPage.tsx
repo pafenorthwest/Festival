@@ -12,6 +12,11 @@ import {
 	buildOrgAdminRosterPath,
 } from "../lib/routes.js";
 import { AdminEntitlementReportPanel } from "./AdminEntitlementReportPanel.js";
+import {
+	AdminTeacherOfferingEditForm,
+	canEditTeacherOffering,
+	TEACHER_OFFERING_UPDATED_MESSAGE,
+} from "./AdminTeacherOfferingEditForm.js";
 
 interface AdminMembershipProductsPageProps {
 	app: FestivalAppController;
@@ -32,6 +37,8 @@ export function AdminMembershipProductsPage(
 	const membershipProducts = () => props.app.membershipProducts();
 	const [retirementError, setRetirementError] = createSignal("");
 	const [retiringOfferingId, setRetiringOfferingId] = createSignal<string>();
+	const [editingOfferingId, setEditingOfferingId] = createSignal<string>();
+	const [updateStatusMessage, setUpdateStatusMessage] = createSignal("");
 	const [accompanistPolicy, setAccompanistPolicy] = createSignal<
 		"exactly_one" | "one_to_two" | "one_to_all"
 	>("exactly_one");
@@ -162,6 +169,9 @@ export function AdminMembershipProductsPage(
 								{retirementError()}
 							</p>
 						</Show>
+						<Show when={updateStatusMessage()}>
+							<p role="status">{updateStatusMessage()}</p>
+						</Show>
 
 						<Show
 							when={
@@ -179,6 +189,9 @@ export function AdminMembershipProductsPage(
 											<article class="admin-membership-item">
 												<div>
 													<strong>{membershipProduct.name}</strong>
+													<Show when={membershipProduct.description}>
+														<p class="muted">{membershipProduct.description}</p>
+													</Show>
 													<span>
 														{formatOption(membershipProduct.entitlementClass)} ·{" "}
 														{membershipProduct.durationDays} days
@@ -193,12 +206,30 @@ export function AdminMembershipProductsPage(
 													<Show when={!membershipProduct.isActive}>
 														<span>Retired</span>
 													</Show>
+													<Show
+														when={canEditTeacherOffering(membershipProduct)}
+													>
+														<Button
+															type="button"
+															variant="secondary"
+															disabled={
+																editingOfferingId() === membershipProduct.id
+															}
+															onClick={() => {
+																setUpdateStatusMessage("");
+																setEditingOfferingId(membershipProduct.id);
+															}}
+														>
+															Edit
+														</Button>
+													</Show>
 													<Show when={membershipProduct.isActive}>
 														<Button
 															type="button"
 															variant="secondary"
 															disabled={
-																retiringOfferingId() === membershipProduct.id
+																retiringOfferingId() === membershipProduct.id ||
+																editingOfferingId() === membershipProduct.id
 															}
 															onClick={() =>
 																void retireOffering(
@@ -213,6 +244,24 @@ export function AdminMembershipProductsPage(
 														</Button>
 													</Show>
 												</div>
+												<Show
+													when={
+														canEditTeacherOffering(membershipProduct) &&
+														editingOfferingId() === membershipProduct.id
+													}
+												>
+													<AdminTeacherOfferingEditForm
+														app={props.app}
+														offering={membershipProduct}
+														onClose={() => setEditingOfferingId()}
+														onSaved={() => {
+															setEditingOfferingId();
+															setUpdateStatusMessage(
+																TEACHER_OFFERING_UPDATED_MESSAGE,
+															);
+														}}
+													/>
+												</Show>
 											</article>
 										)}
 									</For>

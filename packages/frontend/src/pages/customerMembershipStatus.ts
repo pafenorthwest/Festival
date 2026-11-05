@@ -69,10 +69,16 @@ function grantDetails(
 	if (membership.startsOn) {
 		details.push({ label: "Start date", value: membership.startsOn });
 	}
-	if (membership.endsOn) {
+	if (membership.endsOn && membership.status !== "superseded") {
 		details.push({
 			label: "End date (exclusive)",
 			value: membership.endsOn,
+		});
+	}
+	if (membership.supersededOn) {
+		details.push({
+			label: "Superseded on",
+			value: membership.supersededOn,
 		});
 	}
 	return details;
@@ -119,6 +125,14 @@ export function customerMembershipViewModel(
 				label: "Active",
 				description: "This Festival Teacher Membership is active.",
 				tone: "active",
+				details: grantDetails(membership),
+			};
+		case "superseded":
+			return {
+				label: "Superseded",
+				description:
+					"This membership has been superseded by a renewed membership. No active membership rights are available from this grant.",
+				tone: "expired",
 				details: grantDetails(membership),
 			};
 		case "expired":

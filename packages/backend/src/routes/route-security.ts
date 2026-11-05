@@ -431,6 +431,11 @@ export const CURRENT_ROUTE_SECURITY = [
 	},
 	{
 		method: "POST",
+		path: "/api/organizations/:slug/admin/membership-products/:offeringId",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
 		path: "/api/organizations/:slug/admin/membership-products/:offeringId/retire",
 		authenticationClass: "admin",
 	},
