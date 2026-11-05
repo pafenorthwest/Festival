@@ -234,6 +234,8 @@ describe("Teacher Membership paid renewal order projection (#135)", () => {
 			startsOn: "2026-08-14",
 			endsOn: "2027-08-14",
 			supersededOn: "2027-07-20",
+			supersededAt: "2027-07-21T15:00:00.000Z",
+			supersededByGrantId: grants[1]?.id,
 			status: "superseded",
 		});
 		expect(grants[1]).toMatchObject({
@@ -241,7 +243,7 @@ describe("Teacher Membership paid renewal order projection (#135)", () => {
 			divisionNameSnapshot: "Strings",
 			paidAmount: "85.00",
 			startsOn: "2027-07-20",
-			endsOn: "2028-07-19",
+			endsOn: "2028-08-13",
 			status: "active",
 		});
 		expect(
@@ -274,6 +276,7 @@ describe("Teacher Membership paid renewal order projection (#135)", () => {
 				durationDays: 365,
 				startsOn: "2026-08-14",
 				endsOn: "2027-08-14",
+				supersededOn: "2027-07-20",
 			},
 			{
 				status: "active",
@@ -284,7 +287,8 @@ describe("Teacher Membership paid renewal order projection (#135)", () => {
 				paidCurrencyCode: "USD",
 				durationDays: 365,
 				startsOn: "2027-07-20",
-				endsOn: "2028-07-19",
+				endsOn: "2028-08-13",
+				supersededOn: null,
 			},
 		]);
 	});

@@ -3,8 +3,13 @@ import { InMemoryCheckoutRepository } from "../src/checkout/checkout-repository.
 import { MembershipCheckoutService } from "../src/checkout/membership-checkout-service.js";
 import { InMemoryMembershipCommerceRepository } from "../src/commerce/membership-commerce-repository.js";
 import type { AppError } from "../src/errors/app-error.js";
-import { ShopifyUserError } from "../src/shopify/errors.js";
+import { ShopifyScopeError, ShopifyUserError } from "../src/shopify/errors.js";
 import { PublicMembershipProductService } from "../src/shopify/public-membership-product-service.js";
+import {
+	assertConfirmedTeacherProductUpdate,
+	toAppError,
+	toManualReconciliationError,
+} from "../src/shopify/shopify-membership-product-helpers.js";
 import {
 	FailingUpdateProductRepository,
 	PRODUCT_GID,
@@ -96,6 +101,48 @@ describe("ShopifyMembershipProductService.updateMembershipProduct (Issue #73)", 
 		expect(client.productDetailsUpdates[0]?.description).toBe("");
 		expect(updated.description).toBe("");
 		expect(updated.price).toEqual({ amount: "0.00", currencyCode: "USD" });
+		expect(client.readProductGids).toHaveLength(1);
+	});
+
+	it("preserves existing Shopify product description when description is omitted and accepts <p>-wrapped HTML readback", async () => {
+		const { organization, offering, client, service } = await setupFixture();
+		const updated = await service.updateMembershipProduct(
+			tenantFor(organization),
+			offering.id,
+			{ name: "Teacher Membership", price: "80.00" },
+		);
+		expect(client.productDetailsUpdates[0]?.description).toBe(
+			"Annual membership for teachers.",
+		);
+		expect(updated.description).toBe("Annual membership for teachers.");
+		expect(client.readProductGids).toHaveLength(2);
+
+		client.customReadResponse = [
+			shopifyProduct({
+				title: "Teacher Membership HTML",
+				description: "<p>Updated details</p>\r\n",
+				variants: [
+					{
+						...shopifyProduct().variants[0],
+						price: { amount: "82.00", currencyCode: "USD" },
+					},
+				],
+			}),
+		];
+		const htmlConfirmed = await service.updateMembershipProduct(
+			tenantFor(organization),
+			offering.id,
+			{
+				name: "Teacher Membership HTML",
+				description: "Updated details",
+				price: "82.00",
+			},
+		);
+		expect(htmlConfirmed.name).toBe("Teacher Membership HTML");
+		expect(htmlConfirmed.price).toEqual({
+			amount: "82.00",
+			currencyCode: "USD",
+		});
 	});
 
 	it("preserves historical checkout intents, paid orders, validation decisions, and entitlement grants while using the new price for subsequent checkouts", async () => {
@@ -389,14 +436,82 @@ describe("ShopifyMembershipProductService.updateMembershipProduct (Issue #73)", 
 		} catch (error) {
 			const appError = error as AppError;
 			expect(appError.code).toBe("manual_reconciliation_required");
+			expect(appError.cause).toBeInstanceOf(Error);
+			expect((appError.cause as Error).message).toContain(
+				"database write failure",
+			);
+			expect(failingFixture.logger.errors).toEqual([
+				{
+					message:
+						"Shopify membership product update requires manual reconciliation.",
+					context: {
+						operation: "shopify.membershipProduct.reconcile",
+						offeringId: failingFixture.offering.id,
+						organizationId: failingFixture.organization.id,
+						shopifyProductGid: PRODUCT_GID,
+						shopifyVariantGid: VARIANT_GID,
+						errorName: "Error",
+						errorCode: undefined,
+					},
+				},
+			]);
 			const serialized = JSON.stringify({
 				message: appError.message,
 				details: appError.details,
 				audit: failingFixture.audit.records,
+				logs: failingFixture.logger.errors,
 			});
 			expect(serialized).not.toContain("client-secret-canary");
 			expect(serialized).not.toContain("bearer-canary");
 		}
 		expect(failingFixture.client.deletedProductGids).toHaveLength(0);
+	});
+
+	it("verifies helper contracts for status readback, dynamic scope error mapping, and manual reconciliation cause attachment", () => {
+		const dummyOffering = {
+			id: "off-1",
+			organizationId: "org-1",
+			productCategory: "membership" as const,
+			entitlementClass: "teacher_membership" as const,
+			durationDays: 365,
+			isActive: true,
+			shopifyProductGid: PRODUCT_GID,
+			shopifyVariantGid: VARIANT_GID,
+			productNameSnapshot: "Teacher Membership",
+			createdAtIso: "2026-01-01T00:00:00.000Z",
+			updatedAtIso: "2026-01-01T00:00:00.000Z",
+		};
+
+		expect(() =>
+			assertConfirmedTeacherProductUpdate(
+				shopifyProduct({
+					title: "Teacher Membership",
+					description: "Annual membership for teachers.",
+					status: "DRAFT",
+				}),
+				dummyOffering,
+				{
+					name: "Teacher Membership",
+					description: "Annual membership for teachers.",
+					price: "75.00",
+				},
+			),
+		).toThrow(
+			"Shopify membership product readback did not match the updated values.",
+		);
+
+		const mappedScopeError = toAppError(new ShopifyScopeError());
+		expect(mappedScopeError.status).toBe(409);
+		expect(mappedScopeError.message).toBe(
+			"Shopify integration is missing a required product scope. Save and verify Shopify settings after approving the required scope.",
+		);
+		expect(mappedScopeError.message).not.toContain("write_inventory");
+
+		const underlyingCause = new Error("readback failure");
+		const manualError = toManualReconciliationError(
+			dummyOffering,
+			underlyingCause,
+		);
+		expect(manualError.cause).toBe(underlyingCause);
 	});
 });

@@ -409,6 +409,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			customer_id TEXT NOT NULL, entitlement_class TEXT NOT NULL CHECK (entitlement_class IN ('teacher_membership', 'accompanist_membership')),
 			source TEXT NOT NULL CHECK (source IN ('teacher_checkout', 'accompanist_form')),
 			offering_id TEXT NULL REFERENCES ${safeSchema}.products (id), starts_on DATE NOT NULL, ends_on DATE NOT NULL, superseded_on DATE NULL,
+			superseded_at TIMESTAMPTZ NULL, superseded_by_grant_id TEXT NULL REFERENCES ${safeSchema}.membership_entitlements (id) ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED,
 			revoked_at TIMESTAMPTZ NULL, revoked_reason TEXT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			CHECK (ends_on > starts_on),
 			CHECK (superseded_on IS NULL OR (superseded_on >= starts_on AND superseded_on <= ends_on)),
@@ -1141,6 +1142,27 @@ export async function initializePostgresSchema(schema: string): Promise<void> {
 		);
 		await transaction.unsafe(
 			`ALTER TABLE IF EXISTS ${safeSchema}.festivals ADD COLUMN IF NOT EXISTS registration_closes_at TIMESTAMPTZ;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.membership_entitlements ADD COLUMN IF NOT EXISTS superseded_on date;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.membership_entitlements ADD COLUMN IF NOT EXISTS superseded_at timestamptz;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.membership_entitlements ADD COLUMN IF NOT EXISTS superseded_by_grant_id text REFERENCES ${safeSchema}.membership_entitlements(id) ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.membership_entitlements
+			 DROP CONSTRAINT IF EXISTS membership_entitlements_superseded_on_check,
+			 ADD CONSTRAINT membership_entitlements_superseded_on_check
+			 CHECK (((superseded_on IS NULL) OR ((superseded_on >= starts_on) AND (superseded_on <= ends_on))));`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.membership_entitlements
+			 DROP CONSTRAINT IF EXISTS membership_entitlements_organization_id_customer_id_entitl_excl,
+			 ADD CONSTRAINT membership_entitlements_organization_id_customer_id_entitl_excl
+			 EXCLUDE USING gist (organization_id WITH =, customer_id WITH =, entitlement_class WITH =, daterange(starts_on, COALESCE(superseded_on, ends_on), '[)'::text) WITH &&) WHERE ((revoked_at IS NULL));`,
 		);
 	});
 	initializations.set(safeSchema, initialization);

@@ -13,7 +13,10 @@ import {
 	SHOPIFY_CLIENT_SECRET_PURPOSE,
 	ShopifySecretKeyring,
 } from "../../src/shopify/encryption.js";
-import { ShopifyMembershipProductService } from "../../src/shopify/shopify-membership-product-service.js";
+import {
+	type ShopifyCleanupFailureLogger,
+	ShopifyMembershipProductService,
+} from "../../src/shopify/shopify-membership-product-service.js";
 import type {
 	ShopifyAdminOperationContext,
 	ShopifyAdminResult,
@@ -170,6 +173,20 @@ export class FakeAuditWriter implements ShopifyMutationAuditWriter {
 	}
 }
 
+export class FakeFailureLogger implements ShopifyCleanupFailureLogger {
+	readonly errors: Array<{
+		message: string;
+		context: Parameters<ShopifyCleanupFailureLogger["error"]>[1];
+	}> = [];
+
+	error(
+		message: string,
+		context: Parameters<ShopifyCleanupFailureLogger["error"]>[1],
+	): void {
+		this.errors.push({ message, context });
+	}
+}
+
 export class FailingUpdateProductRepository extends InMemoryOrganizationRepository {
 	override async updateMembershipProductRecord(
 		_input: UpdateMembershipProductRecordInput,
@@ -258,11 +275,13 @@ export async function setupFixture(
 	});
 	const client = new FakeShopifyProductClient();
 	const audit = new FakeAuditWriter();
+	const logger = new FakeFailureLogger();
 	const service = new ShopifyMembershipProductService(
 		repository,
 		keyring,
 		client,
 		audit,
+		logger,
 	);
-	return { repository, organization, offering, client, audit, service };
+	return { repository, organization, offering, client, audit, logger, service };
 }

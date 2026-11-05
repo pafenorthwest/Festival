@@ -103,6 +103,8 @@ export interface EntitlementGrantSnapshot {
 	readonly startsOn: string;
 	readonly endsOn: string;
 	readonly supersededOn?: string;
+	readonly supersededAt?: string | null;
+	readonly supersededByGrantId?: string | null;
 	readonly status: EntitlementGrantStatus;
 	readonly createdAtIso: string;
 }
@@ -121,6 +123,8 @@ export interface EntitlementLifecycleInput {
 	readonly startsOn: string;
 	readonly endsOn: string;
 	readonly supersededOn?: string;
+	readonly supersededAt?: string | null;
+	readonly supersededByGrantId?: string | null;
 	readonly revokedAtIso?: string;
 }
 
@@ -237,8 +241,12 @@ export function assertValidEntitlementGrantSnapshotInput(
 		throw new Error("Entitlement grant status is invalid.");
 	}
 	parseCalendarDate(input.endsOn);
-	const expectedEndsOn = addCalendarDays(input.startsOn, input.durationDays);
-	if (input.endsOn !== expectedEndsOn) {
+	const minEndsOn = addCalendarDays(input.startsOn, input.durationDays);
+	const maxEndsOn = addCalendarDays(
+		input.startsOn,
+		input.durationDays + TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS,
+	);
+	if (input.endsOn < minEndsOn || input.endsOn > maxEndsOn) {
 		throw new Error(
 			"Entitlement endsOn must equal startsOn plus durationDays calendar days.",
 		);

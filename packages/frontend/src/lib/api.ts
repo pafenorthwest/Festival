@@ -115,6 +115,8 @@ import type {
 	UpdateCustomerProfileInput,
 	UpdateFestivalClassInput,
 	UpdateFestivalRegistrationWindowInput,
+	UpdateMembershipProductInput,
+	UpdateMembershipProductResponse,
 	UpdateMessageTemplateInput,
 	UpdateOrganizationDivisionInput,
 	UpdateOrganizationTimezoneInput,
@@ -912,9 +914,9 @@ export function updateAdminMembershipProduct(
 	idToken: string,
 	slug: string,
 	offeringId: string,
-	input: CreateMembershipProductInput,
+	input: UpdateMembershipProductInput,
 ) {
-	return requestJson<CreateMembershipProductResponse>(
+	return requestJson<UpdateMembershipProductResponse>(
 		`/api/organizations/${encodeURIComponent(slug)}/admin/membership-products/${encodeURIComponent(offeringId)}`,
 		{
 			method: "POST",

@@ -676,6 +676,8 @@ CREATE TABLE orgs.membership_entitlements (
     starts_on date NOT NULL,
     ends_on date NOT NULL,
     superseded_on date,
+    superseded_at timestamp with time zone,
+    superseded_by_grant_id text,
     revoked_at timestamp with time zone,
     revoked_reason text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -3241,6 +3243,14 @@ ALTER TABLE ONLY orgs.membership_entitlements
 
 ALTER TABLE ONLY orgs.membership_entitlements
     ADD CONSTRAINT membership_entitlements_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: membership_entitlements membership_entitlements_superseded_by_grant_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.membership_entitlements
+    ADD CONSTRAINT membership_entitlements_superseded_by_grant_id_fkey FOREIGN KEY (superseded_by_grant_id) REFERENCES orgs.membership_entitlements(id) ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED;
 
 
 --

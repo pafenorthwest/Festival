@@ -92,6 +92,24 @@ describe("customer membership status presentation", () => {
 			{ label: "End date (exclusive)", value: "2027-08-14" },
 		]);
 		expect(expired.details).toEqual(active.details);
+
+		const supersededWithDate = customerMembershipViewModel({
+			...snapshot,
+			status: "superseded",
+			supersededOn: "2027-01-15",
+		});
+		expect(supersededWithDate.details).toEqual([
+			{ label: "Entitlement class", value: "teacher_membership" },
+			{ label: "Division", value: "Piano" },
+			{ label: "Paid price", value: "$75.00" },
+			{ label: "Duration", value: "365 days" },
+			{ label: "Start date", value: "2026-08-14" },
+			{ label: "Superseded on", value: "2027-01-15" },
+		]);
+		expect(supersededWithDate.details).not.toContainEqual({
+			label: "End date (exclusive)",
+			value: "2027-08-14",
+		});
 	});
 
 	it("formats currency with an exact fallback and never converts calendar dates", () => {

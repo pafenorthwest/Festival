@@ -563,6 +563,7 @@ export class PostgresMembershipCommerceRepository
 			}
 			let finalDecision = input.decision;
 			let grantInput = input.grant;
+			let nextEntitlementId: string | undefined;
 			if (grantInput && finalDecision.customerId) {
 				if (!grantInput.verifiedIdentityEmail) {
 					finalDecision = {
@@ -617,11 +618,16 @@ export class PostgresMembershipCommerceRepository
 							grantInput = undefined;
 						} else if (entitlementRows[0]) {
 							supersededEntitlementId = entitlementRows[0].id;
-							const { startsOn, durationDays } = grantInput;
+							const effectiveStartDate =
+								entitlementRows[0].ends_on > grantInput.startsOn
+									? entitlementRows[0].ends_on
+									: grantInput.startsOn;
 							grantInput = {
 								...grantInput,
-								startsOn,
-								endsOn: addCalendarDays(startsOn, durationDays),
+								endsOn: addCalendarDays(
+									effectiveStartDate,
+									grantInput.durationDays,
+								),
 							};
 						}
 						if (grantInput) {
@@ -674,7 +680,7 @@ export class PostgresMembershipCommerceRepository
 									));
 								if (!retried || retried.count !== 1) {
 									const refreshedEntitlements = (await tx.unsafe(
-										`SELECT 1 FROM ${this.schema}.membership_entitlements e JOIN ${this.schema}.organizations o ON o.id=e.organization_id WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class=$3 AND e.revoked_at IS NULL AND e.superseded_on IS NULL AND (e.starts_on > $4::date OR e.ends_on > ($4::date + INTERVAL '30 days')::date) LIMIT 1 FOR UPDATE`,
+										`SELECT 1 FROM ${this.schema}.membership_entitlements e WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class=$3 AND e.revoked_at IS NULL AND e.superseded_on IS NULL AND (e.starts_on > $4::date OR e.ends_on > ($4::date + INTERVAL '30 days')::date) LIMIT 1 FOR UPDATE`,
 										[
 											finalDecision.organizationId,
 											finalDecision.customerId,
@@ -696,13 +702,15 @@ export class PostgresMembershipCommerceRepository
 								}
 							}
 						}
-						if (grantInput && supersededEntitlementId) {
+						nextEntitlementId = grantInput ? randomUUID() : undefined;
+						if (grantInput && supersededEntitlementId && nextEntitlementId) {
 							await tx.unsafe(
-								`UPDATE ${this.schema}.membership_entitlements SET superseded_on = $3::date WHERE id = $1 AND organization_id = $2 AND revoked_at IS NULL AND superseded_on IS NULL`,
+								`UPDATE ${this.schema}.membership_entitlements SET superseded_on = $3::date, superseded_at = NOW(), superseded_by_grant_id = $4 WHERE id = $1 AND organization_id = $2 AND revoked_at IS NULL AND superseded_on IS NULL`,
 								[
 									supersededEntitlementId,
 									grantInput.organizationId,
 									grantInput.startsOn,
+									nextEntitlementId,
 								],
 							);
 						}
@@ -725,7 +733,7 @@ export class PostgresMembershipCommerceRepository
 			}
 			let createdGrant: EntitlementGrantSnapshot | undefined;
 			if (grantInput) {
-				const entitlementId = randomUUID();
+				const entitlementId = nextEntitlementId ?? randomUUID();
 				const entitlementRows = (await tx.unsafe(
 					`INSERT INTO ${this.schema}.membership_entitlements (id,organization_id,customer_id,entitlement_class,source,offering_id,starts_on,ends_on) SELECT $1,$2,$3,$4,'teacher_checkout',$5,$6::date,$7::date FROM ${this.schema}.products WHERE id=$5 AND organization_id=$2 AND entitlement_class=$4 RETURNING id`,
 					[

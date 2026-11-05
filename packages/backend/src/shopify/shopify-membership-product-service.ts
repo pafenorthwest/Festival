@@ -22,6 +22,7 @@ import {
 	assertConfirmedTeacherProductUpdate,
 	assertPublicationScopes,
 	assertSupportedProductShape,
+	assertVerifiedIntegration,
 	buildOperationContext,
 	resolveEditableTeacherOffering,
 	toAppError,
@@ -38,10 +39,20 @@ import type {
 export interface ShopifyCleanupFailureLogger {
 	error(
 		message: string,
-		context: {
-			operation: "shopify.membershipProduct.cleanup";
-			errorName?: string;
-		},
+		context:
+			| {
+					operation: "shopify.membershipProduct.cleanup";
+					errorName?: string;
+			  }
+			| {
+					operation: "shopify.membershipProduct.reconcile";
+					offeringId: string;
+					organizationId: string;
+					shopifyProductGid: string;
+					shopifyVariantGid: string;
+					errorName?: string;
+					errorCode?: string;
+			  },
 	): void;
 }
 
@@ -82,20 +93,35 @@ export class ShopifyMembershipProductService {
 			tenant.organization.id,
 		);
 		const offering = resolveEditableTeacherOffering(offerings, offeringId);
-		const writeContext = await this.loadOperationContext(
-			tenant,
-			"write_products",
+		const integration = await this.repository.getShopifyIntegration(
+			tenant.organization.id,
 		);
-		const readContext = await this.loadOperationContext(
-			tenant,
-			"read_products",
+		const writeContext = buildOperationContext(
+			integration,
+			this.secretKeyring,
+			{
+				organizationId: tenant.organization.id,
+				firebaseActorUid: tenant.identity.uid,
+				capability: "write_products",
+			},
 		);
+		assertVerifiedIntegration(integration, "read_products");
+		const readContext: ShopifyAdminOperationContext = {
+			...writeContext,
+			capability: "read_products",
+		};
 		let shopifyMutated = false;
 		try {
+			const description = validated.descriptionProvided
+				? (validated.description ?? "")
+				: await this.readCurrentProductDescription(
+						readContext,
+						offering.shopifyProductGid,
+					);
 			await this.lifecycleService.updateProductDetails(writeContext, {
 				productId: offering.shopifyProductGid,
 				name: validated.name,
-				description: validated.description ?? "",
+				description,
 			});
 			shopifyMutated = true;
 			await this.lifecycleService.updateVariantPrice(writeContext, {
@@ -110,7 +136,7 @@ export class ShopifyMembershipProductService {
 			const { product, variant } = assertConfirmedTeacherProductUpdate(
 				confirmedProducts[0],
 				offering,
-				validated,
+				{ ...validated, description },
 			);
 			const updated = await this.repository.updateMembershipProductRecord({
 				organizationId: tenant.organization.id,
@@ -123,7 +149,19 @@ export class ShopifyMembershipProductService {
 			return toSummary(updated, product, variant);
 		} catch (error) {
 			if (shopifyMutated) {
-				throw toManualReconciliationError(offering);
+				this.cleanupFailureLogger.error(
+					"Shopify membership product update requires manual reconciliation.",
+					{
+						operation: "shopify.membershipProduct.reconcile",
+						offeringId: offering.id,
+						organizationId: offering.organizationId,
+						shopifyProductGid: offering.shopifyProductGid,
+						shopifyVariantGid: offering.shopifyVariantGid,
+						errorName: error instanceof Error ? error.name : undefined,
+						errorCode: error instanceof AppError ? error.code : undefined,
+					},
+				);
+				throw toManualReconciliationError(offering, error);
 			}
 			throw toAppError(error);
 		}
@@ -438,6 +476,19 @@ export class ShopifyMembershipProductService {
 			firebaseActorUid: tenant.identity.uid,
 			capability,
 		});
+	}
+
+	private async readCurrentProductDescription(
+		readContext: ShopifyAdminOperationContext,
+		productGid: string,
+	): Promise<string> {
+		const { value: existingProducts } =
+			await this.shopifyClient.readProductsByGid(readContext, [productGid]);
+		const existingProduct = existingProducts[0];
+		if (!existingProduct) {
+			throw new AppError("Shopify membership product was not found.", 502);
+		}
+		return existingProduct.description ?? "";
 	}
 
 	private async setInventoryItemShipping(

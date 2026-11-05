@@ -69,10 +69,16 @@ function grantDetails(
 	if (membership.startsOn) {
 		details.push({ label: "Start date", value: membership.startsOn });
 	}
-	if (membership.endsOn) {
+	if (membership.endsOn && membership.status !== "superseded") {
 		details.push({
 			label: "End date (exclusive)",
 			value: membership.endsOn,
+		});
+	}
+	if (membership.supersededOn) {
+		details.push({
+			label: "Superseded on",
+			value: membership.supersededOn,
 		});
 	}
 	return details;

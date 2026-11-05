@@ -25,6 +25,7 @@ import type {
 } from "@festival/common";
 import {
 	AppError,
+	addCalendarDays,
 	assertValidEntitlementDurationDays,
 	assertValidEntitlementGrantSnapshotInput,
 	calendarDateInTimezone,
@@ -115,6 +116,8 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		EntitlementRevocationRecord
 	>();
 	private readonly entitlementSupersededOn = new Map<string, string>();
+	private readonly entitlementSupersededAt = new Map<string, string>();
+	private readonly entitlementSupersededByGrantId = new Map<string, string>();
 	private readonly entitlementCohortVersions = new Map<string, number>();
 	private readonly membershipIdentityEmails = new Map<string, string>();
 	private readonly membershipIdentityEmailsByCustomer = new Map<
@@ -1684,6 +1687,10 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 				grant.startsOn < input.endsOn &&
 				grant.endsOn > input.startsOn,
 		);
+		const id = randomUUID();
+		const nowIso = this.now().toISOString();
+		let effectiveEndsOn = input.endsOn;
+		let supersededPrior = false;
 		for (const prior of overlapping) {
 			if (
 				prior.startsOn <= input.startsOn &&
@@ -1692,11 +1699,23 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 					TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS
 			) {
 				this.entitlementSupersededOn.set(prior.id, input.startsOn);
+				this.entitlementSupersededAt.set(prior.id, nowIso);
+				this.entitlementSupersededByGrantId.set(prior.id, id);
+				effectiveEndsOn = addCalendarDays(prior.endsOn, input.durationDays);
+				supersededPrior = true;
 			} else {
 				throw new Error(
 					"Teacher Membership entitlement intervals may not overlap.",
 				);
 			}
+		}
+		if (
+			!supersededPrior &&
+			input.endsOn !== addCalendarDays(input.startsOn, input.durationDays)
+		) {
+			throw new Error(
+				"Entitlement endsOn must equal startsOn plus durationDays calendar days.",
+			);
 		}
 		const {
 			status: _status,
@@ -1705,7 +1724,8 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		} = input;
 		const record: StoredTeacherEntitlement = Object.freeze({
 			...snapshot,
-			id: randomUUID(),
+			endsOn: effectiveEndsOn,
+			id,
 			createdAtIso: new Date().toISOString(),
 		});
 		this.bindMembershipIdentityEmail(
@@ -1823,7 +1843,13 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 	): EntitlementGrantSnapshot {
 		const organization = this.organizations.get(grant.organizationId);
 		if (!organization) throw new Error("Organization not found.");
-		const supersededOn = this.entitlementSupersededOn.get(grant.id);
+		const supersededOn =
+			this.entitlementSupersededOn.get(grant.id) ?? grant.supersededOn;
+		const supersededAt =
+			this.entitlementSupersededAt.get(grant.id) ?? grant.supersededAt;
+		const supersededByGrantId =
+			this.entitlementSupersededByGrantId.get(grant.id) ??
+			grant.supersededByGrantId;
 		const status = this.entitlementRevocations.has(grant.id)
 			? "revoked"
 			: deriveEntitlementLifecycle(
@@ -1836,6 +1862,8 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		return {
 			...grant,
 			...(supersededOn ? { supersededOn } : {}),
+			...(supersededAt !== undefined ? { supersededAt } : {}),
+			...(supersededByGrantId !== undefined ? { supersededByGrantId } : {}),
 			status,
 		};
 	}

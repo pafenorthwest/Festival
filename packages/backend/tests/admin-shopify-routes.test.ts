@@ -771,6 +771,63 @@ describe("admin shopify routes", () => {
 				expect(mocks.updateMembershipProductMock).not.toHaveBeenCalled();
 			});
 
+			it("returns 404 when offering is unknown", async () => {
+				const { app, organization, mocks } = await createTestApp();
+				const { AppError } = await import("../src/errors/app-error.js");
+				mocks.updateMembershipProductMock.mockImplementationOnce(async () => {
+					throw new AppError("Teacher membership offering was not found.", 404);
+				});
+				const response = await app.request(
+					`/organizations/${organization.slug}/admin/membership-products/unknown-offering`,
+					{
+						method: "POST",
+						headers: {
+							Authorization: "Bearer admin",
+							"Content-Type": "application/json",
+						},
+						body: JSON.stringify({
+							name: "Updated Teacher Membership",
+							price: "85.00",
+						}),
+					},
+				);
+				expect(response.status).toBe(404);
+				const body = await response.json();
+				expect(body.error).toContain(
+					"Teacher membership offering was not found.",
+				);
+			});
+
+			it("returns 409 when offering is retired", async () => {
+				const { app, organization, mocks } = await createTestApp();
+				const { AppError } = await import("../src/errors/app-error.js");
+				mocks.updateMembershipProductMock.mockImplementationOnce(async () => {
+					throw new AppError(
+						"Retired Teacher membership offerings cannot be edited.",
+						409,
+					);
+				});
+				const response = await app.request(
+					`/organizations/${organization.slug}/admin/membership-products/retired-offering`,
+					{
+						method: "POST",
+						headers: {
+							Authorization: "Bearer admin",
+							"Content-Type": "application/json",
+						},
+						body: JSON.stringify({
+							name: "Updated Teacher Membership",
+							price: "85.00",
+						}),
+					},
+				);
+				expect(response.status).toBe(409);
+				const body = await response.json();
+				expect(body.error).toContain(
+					"Retired Teacher membership offerings cannot be edited.",
+				);
+			});
+
 			it("returns 503 when shopifyMembershipProductService is undefined", async () => {
 				const { app, organization } = await createTestApp({
 					shopifyMembershipProductService: null,

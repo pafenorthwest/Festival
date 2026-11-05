@@ -14,7 +14,27 @@ export interface AdminTeacherOfferingEditFormProps {
 	onSaved: () => void;
 }
 
-export function AdminTeacherOfferingEditForm(
+export const TEACHER_OFFERING_UPDATED_MESSAGE = "Membership offering updated.";
+
+export function canEditTeacherOffering(
+	offering: Pick<MembershipProductSummary, "isActive" | "entitlementClass">,
+): boolean {
+	return (
+		offering.isActive && offering.entitlementClass === "teacher_membership"
+	);
+}
+
+export function isTeacherOfferingPriceInvalid(
+	attempted: boolean,
+	price: string,
+): boolean {
+	const trimmed = price.trim();
+	return (
+		attempted && (!trimmed || !/^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/.test(trimmed))
+	);
+}
+
+export function createTeacherOfferingEditState(
 	props: AdminTeacherOfferingEditFormProps,
 ) {
 	const [name, setName] = createSignal(props.offering.name);
@@ -33,12 +53,10 @@ export function AdminTeacherOfferingEditForm(
 			price: price(),
 		});
 
-	const handleSubmit = async (event: SubmitEvent) => {
-		event.preventDefault();
+	const submit = async () => {
 		setAttempted(true);
 		setSaveError("");
-		const currentValidation = validation();
-		if (!currentValidation.valid) return;
+		if (!validation().valid) return;
 		const route = props.app.route();
 		const user = props.app.firebaseUser();
 		if (route.kind !== "org-admin-memberships" || !user) return;
@@ -67,11 +85,38 @@ export function AdminTeacherOfferingEditForm(
 		}
 	};
 
+	return {
+		name,
+		setName,
+		description,
+		setDescription,
+		price,
+		setPrice,
+		attempted,
+		isSaving,
+		saveError,
+		validation,
+		nameInvalid: () => attempted() && !name().trim(),
+		priceInvalid: () => isTeacherOfferingPriceInvalid(attempted(), price()),
+		submit,
+	};
+}
+
+export function AdminTeacherOfferingEditForm(
+	props: AdminTeacherOfferingEditFormProps,
+) {
+	const state = createTeacherOfferingEditState(props);
+
+	const handleSubmit = (event: SubmitEvent) => {
+		event.preventDefault();
+		void state.submit();
+	};
+
 	return (
 		<form
 			class="shopify-integration-card membership-admin-form"
 			aria-label="Edit Teacher Membership"
-			onSubmit={(event) => void handleSubmit(event)}
+			onSubmit={handleSubmit}
 		>
 			<div class="shopify-card-header">
 				<div>
@@ -85,17 +130,17 @@ export function AdminTeacherOfferingEditForm(
 				<span>Membership name</span>
 				<input
 					type="text"
-					value={name()}
-					aria-invalid={attempted() && !name().trim()}
-					onInput={(event) => setName(event.currentTarget.value)}
+					value={state.name()}
+					aria-invalid={state.nameInvalid()}
+					onInput={(event) => state.setName(event.currentTarget.value)}
 				/>
 			</label>
 			<label class="field">
 				<span>Description</span>
 				<textarea
 					rows="4"
-					value={description()}
-					onInput={(event) => setDescription(event.currentTarget.value)}
+					value={state.description()}
+					onInput={(event) => state.setDescription(event.currentTarget.value)}
 				/>
 			</label>
 			<label class="field">
@@ -103,30 +148,30 @@ export function AdminTeacherOfferingEditForm(
 				<input
 					type="text"
 					inputmode="decimal"
-					value={price()}
-					aria-invalid={attempted() && !validation().valid}
-					onInput={(event) => setPrice(event.currentTarget.value)}
+					value={state.price()}
+					aria-invalid={state.priceInvalid()}
+					onInput={(event) => state.setPrice(event.currentTarget.value)}
 				/>
 			</label>
 			<p class="muted">Teacher Membership · 365 days · Plan: Standard</p>
-			<Show when={attempted() && !validation().valid}>
+			<Show when={state.attempted() && !state.validation().valid}>
 				<p class="shopify-error-text" role="alert">
-					{validation().errors.join(" ")}
+					{state.validation().errors.join(" ")}
 				</p>
 			</Show>
-			<Show when={saveError()}>
+			<Show when={state.saveError()}>
 				<p class="shopify-error-text" role="alert">
-					{saveError()}
+					{state.saveError()}
 				</p>
 			</Show>
 			<div class="admin-membership-header-actions">
-				<Button type="submit" disabled={isSaving()}>
-					{isSaving() ? "Saving…" : "Save Changes"}
+				<Button type="submit" disabled={state.isSaving()}>
+					{state.isSaving() ? "Saving…" : "Save Changes"}
 				</Button>
 				<Button
 					type="button"
 					variant="secondary"
-					disabled={isSaving()}
+					disabled={state.isSaving()}
 					onClick={() => props.onClose()}
 				>
 					Cancel

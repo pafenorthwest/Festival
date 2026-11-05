@@ -393,6 +393,7 @@ export class CheckoutRecoveryService {
 			sourceIntent.divisionId,
 		);
 		const offering = await this.validateOffering(org.id, slug, sourceIntent);
+		await this.verifyScheduledEntitlement(org.id, customerId);
 
 		return {
 			recoveryRequest: {

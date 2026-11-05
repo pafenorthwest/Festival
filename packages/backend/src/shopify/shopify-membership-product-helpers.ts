@@ -28,6 +28,19 @@ const FIXED_OPTION_NAME = "Plan";
 const FIXED_OPTION_VALUE = "Standard";
 const ALLOWED_TEACHER_UPDATE_FIELDS = new Set(["name", "description", "price"]);
 
+export type ValidatedTeacherOfferingUpdateInput =
+	CreateMembershipProductInput & {
+		readonly descriptionProvided: boolean;
+	};
+
+function normalizeProductDescriptionForComparison(
+	value: string | undefined,
+): string {
+	const normalized = (value ?? "").replace(/\r\n/g, "\n").trim();
+	const match = /^<p>([^<>]*)<\/p>$/is.exec(normalized);
+	return match ? match[1].trim() : normalized;
+}
+
 export function isValidPrice(value: string): boolean {
 	return /^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/.test(value);
 }
@@ -38,7 +51,7 @@ export function toAppError(error: unknown): AppError {
 	}
 	if (error instanceof ShopifyScopeError) {
 		return new AppError(
-			"Shopify integration is missing a required scope. Save and verify Shopify settings after approving write_inventory.",
+			`${error.message} Save and verify Shopify settings after approving the required scope.`,
 			409,
 		);
 	}
@@ -48,8 +61,11 @@ export function toAppError(error: unknown): AppError {
 	return new AppError("Shopify membership product operation failed.", 502);
 }
 
-export function toManualReconciliationError(offering: ProductRecord): AppError {
-	return new AppError(
+export function toManualReconciliationError(
+	offering: ProductRecord,
+	cause?: unknown,
+): AppError {
+	const error = new AppError(
 		"Shopify membership product was updated, but Festival could not confirm or persist the refreshed offering. Manual reconciliation is required.",
 		502,
 		"manual_reconciliation_required",
@@ -61,6 +77,10 @@ export function toManualReconciliationError(offering: ProductRecord): AppError {
 			shopifyVariantGid: offering.shopifyVariantGid,
 		},
 	);
+	if (cause !== undefined) {
+		error.cause = cause;
+	}
+	return error;
 }
 
 export function assertSupportedProductShape(
@@ -147,7 +167,7 @@ export function toSummary(
 
 export function validateTeacherOfferingUpdateInput(
 	input: unknown,
-): CreateMembershipProductInput {
+): ValidatedTeacherOfferingUpdateInput {
 	if (!input || typeof input !== "object" || Array.isArray(input)) {
 		throw new AppError("Membership product is required.", 400);
 	}
@@ -160,11 +180,19 @@ export function validateTeacherOfferingUpdateInput(
 			400,
 		);
 	}
+	const descriptionProvided =
+		typeof input === "object" &&
+		input !== null &&
+		"description" in input &&
+		(input as Record<string, unknown>).description !== undefined;
 	const validation = validateMembershipProductInput(input);
 	if (!validation.valid) {
 		throw new AppError(validation.errors.join(" "), 400);
 	}
-	return validation.input;
+	return {
+		...validation.input,
+		descriptionProvided,
+	};
 }
 
 export function resolveEditableTeacherOffering(
@@ -206,15 +234,20 @@ export function assertConfirmedTeacherProductUpdate(
 			502,
 		);
 	}
+	const normalizedReadbackDescription =
+		normalizeProductDescriptionForComparison(product.description);
+	const normalizedExpectedDescription =
+		normalizeProductDescriptionForComparison(expected.description);
 	const readbackValidation = validateMembershipProductInput({
 		name: product.title,
-		description: product.description,
+		description: normalizedReadbackDescription,
 		price: variant.price.amount,
 	});
 	if (
 		!readbackValidation.valid ||
+		product.status !== "ACTIVE" ||
 		product.title !== expected.name ||
-		(product.description ?? "") !== (expected.description ?? "") ||
+		normalizedReadbackDescription !== normalizedExpectedDescription ||
 		Number(variant.price.amount) !== Number(expected.price)
 	) {
 		throw new AppError(

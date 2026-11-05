@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+	addCalendarDays,
 	CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION,
 	calendarDaysUntil,
 	deriveEntitlementDates,
@@ -449,6 +450,23 @@ export class ShopifyOrderProjectionService {
 				organizationTimezone: timezone,
 				durationDays: intent.durationDays,
 			});
+			const existingGrants =
+				await this.organizations.listEntitlementGrantSnapshots(
+					delivery.organizationId,
+					intent.customerId,
+				);
+			const previousActiveGrant = existingGrants.find(
+				(grant) =>
+					grant.entitlementClass === TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS &&
+					lifecycleForEntitlementRead(grant, dates.startsOn) === "active" &&
+					calendarDaysUntil(dates.startsOn, grant.endsOn) <=
+						TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS,
+			);
+			const effectiveStartDate =
+				previousActiveGrant && previousActiveGrant.endsOn > dates.startsOn
+					? previousActiveGrant.endsOn
+					: dates.startsOn;
+			const endsOn = addCalendarDays(effectiveStartDate, intent.durationDays);
 			await this.finalize(
 				delivery,
 				{
@@ -470,7 +488,7 @@ export class ShopifyOrderProjectionService {
 						shopifyOrderGid: order.id,
 						shopifyOrderLineGid: line.id,
 						startsOn: dates.startsOn,
-						endsOn: dates.endsOn,
+						endsOn,
 						status: "active",
 						verifiedIdentityEmail: identityEmail,
 					},

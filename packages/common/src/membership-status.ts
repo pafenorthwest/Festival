@@ -28,6 +28,7 @@ export interface CustomerMembershipStatusEntry {
 	durationDays?: number;
 	startsOn?: string;
 	endsOn?: string;
+	supersededOn?: string | null;
 	reasonCode?: "validation_rejected" | "validation_needs_review";
 }
 

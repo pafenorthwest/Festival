@@ -12,7 +12,11 @@ import {
 	buildOrgAdminRosterPath,
 } from "../lib/routes.js";
 import { AdminEntitlementReportPanel } from "./AdminEntitlementReportPanel.js";
-import { AdminTeacherOfferingEditForm } from "./AdminTeacherOfferingEditForm.js";
+import {
+	AdminTeacherOfferingEditForm,
+	canEditTeacherOffering,
+	TEACHER_OFFERING_UPDATED_MESSAGE,
+} from "./AdminTeacherOfferingEditForm.js";
 
 interface AdminMembershipProductsPageProps {
 	app: FestivalAppController;
@@ -203,15 +207,14 @@ export function AdminMembershipProductsPage(
 														<span>Retired</span>
 													</Show>
 													<Show
-														when={
-															membershipProduct.isActive &&
-															membershipProduct.entitlementClass ===
-																"teacher_membership"
-														}
+														when={canEditTeacherOffering(membershipProduct)}
 													>
 														<Button
 															type="button"
 															variant="secondary"
+															disabled={
+																editingOfferingId() === membershipProduct.id
+															}
 															onClick={() => {
 																setUpdateStatusMessage("");
 																setEditingOfferingId(membershipProduct.id);
@@ -225,7 +228,8 @@ export function AdminMembershipProductsPage(
 															type="button"
 															variant="secondary"
 															disabled={
-																retiringOfferingId() === membershipProduct.id
+																retiringOfferingId() === membershipProduct.id ||
+																editingOfferingId() === membershipProduct.id
 															}
 															onClick={() =>
 																void retireOffering(
@@ -242,9 +246,7 @@ export function AdminMembershipProductsPage(
 												</div>
 												<Show
 													when={
-														membershipProduct.isActive &&
-														membershipProduct.entitlementClass ===
-															"teacher_membership" &&
+														canEditTeacherOffering(membershipProduct) &&
 														editingOfferingId() === membershipProduct.id
 													}
 												>
@@ -255,7 +257,7 @@ export function AdminMembershipProductsPage(
 														onSaved={() => {
 															setEditingOfferingId();
 															setUpdateStatusMessage(
-																"Membership offering updated.",
+																TEACHER_OFFERING_UPDATED_MESSAGE,
 															);
 														}}
 													/>
