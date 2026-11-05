@@ -1,7 +1,10 @@
 import {
 	calendarDateInTimezone,
+	calendarDaysUntil,
 	TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+	TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS,
 } from "@festival/common";
+import { lifecycleForEntitlementRead } from "../commerce/entitlement-lifecycle.js";
 import type { MembershipCommerceRepository } from "../commerce/membership-commerce-repository.js";
 import { AppError } from "../errors/app-error.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
@@ -64,26 +67,7 @@ export class MembershipCheckoutService {
 		if (!division) {
 			throw new AppError("Membership division is unavailable.", 409);
 		}
-		if (this.commerce) {
-			const timezone = await this.organizations.getOrganizationTimezone(
-				input.organizationId,
-			);
-			const today = calendarDateInTimezone(this.now().toISOString(), timezone);
-			if (
-				await this.commerce.hasScheduledEntitlement(
-					input.organizationId,
-					input.customerId,
-					TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
-					today,
-				)
-			) {
-				throw new AppError(
-					"A Teacher Membership renewal is already scheduled.",
-					409,
-					"membership_active",
-				);
-			}
-		}
+		await this.verifyRenewalEligibility(input.organizationId, input.customerId);
 		if (
 			await this.checkout.hasProcessingIntent(
 				input.organizationId,
@@ -139,7 +123,7 @@ export class MembershipCheckoutService {
 			);
 		if (outcome.kind === "active")
 			throw new AppError(
-				"An active Teacher Membership already exists.",
+				"Teacher Membership already exists.",
 				409,
 				"membership_active",
 			);
@@ -187,6 +171,48 @@ export class MembershipCheckoutService {
 		}
 	}
 
+	private async verifyRenewalEligibility(
+		organizationId: string,
+		customerId: string,
+	): Promise<void> {
+		const timezone =
+			await this.organizations.getOrganizationTimezone(organizationId);
+		const today = calendarDateInTimezone(this.now().toISOString(), timezone);
+		const grants = await this.organizations.listEntitlementGrantSnapshots(
+			organizationId,
+			customerId,
+		);
+		const hasIneligibleActive = grants.some(
+			(grant) =>
+				grant.entitlementClass === TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS &&
+				lifecycleForEntitlementRead(grant, today) === "active" &&
+				calendarDaysUntil(today, grant.endsOn) >
+					TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS,
+		);
+		if (hasIneligibleActive) {
+			throw new AppError(
+				"Teacher Membership already exists.",
+				409,
+				"membership_active",
+			);
+		}
+		if (
+			this.commerce &&
+			(await this.commerce.hasScheduledEntitlement(
+				organizationId,
+				customerId,
+				TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+				today,
+			))
+		) {
+			throw new AppError(
+				"A Teacher Membership renewal is already scheduled.",
+				409,
+				"membership_active",
+			);
+		}
+	}
+
 	private async resume(
 		outcome: Exclude<CheckoutIntentOutcome, { kind: "created" }>,
 		input: {
@@ -202,7 +228,7 @@ export class MembershipCheckoutService {
 			);
 		if (outcome.kind === "active")
 			throw new AppError(
-				"An active Teacher Membership already exists.",
+				"Teacher Membership already exists.",
 				409,
 				"membership_active",
 			);

@@ -1,4 +1,3 @@
-import { timingSafeEqual } from "node:crypto";
 import { getAuth } from "firebase-admin/auth";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -91,6 +90,10 @@ import {
 } from "./rooms/room-repository.js";
 import { buildApiRouter } from "./routes/api-router.js";
 import { buildAuthRouter } from "./routes/auth-router.js";
+import {
+	buildPrivateRuntimeRouter,
+	hasForbiddenBrowserHeaders,
+} from "./routes/private-runtime.routes.js";
 import { assertRouteSecurityInventory } from "./routes/route-security.js";
 import { apiRequestSecurity } from "./security/request-security.js";
 import { AccompanistMembershipService } from "./services/accompanist-membership-service.js";
@@ -160,19 +163,6 @@ export interface CreateAppOptions {
 	participantProfileService?: ParticipantProfileService;
 	waitlistRepository?: WaitlistRepository;
 	waitlistService?: WaitlistService;
-}
-
-function privateTokenMatches(
-	provided: string | undefined,
-	expected: string | undefined,
-): boolean {
-	if (!provided || !expected) return false;
-	const actualBytes = Buffer.from(provided, "utf8");
-	const expectedBytes = Buffer.from(expected, "utf8");
-	return (
-		actualBytes.length === expectedBytes.length &&
-		timingSafeEqual(actualBytes, expectedBytes)
-	);
 }
 
 export async function createApp(options: CreateAppOptions = {}) {
@@ -554,93 +544,51 @@ export async function createApp(options: CreateAppOptions = {}) {
 
 	const app = new Hono();
 	const allowedApiOrigins = new Set(env.allowedApiOrigins ?? LOCAL_API_ORIGINS);
+	const publicCors = cors({
+		origin: (origin) => (allowedApiOrigins.has(origin) ? origin : undefined),
+		allowHeaders: ["Authorization", "Content-Type", "X-CSRF-Token"],
+		allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+		credentials: true,
+	});
+	const publicRequestSecurity = apiRequestSecurity();
+	const isNonBrowserApiSubpath = (path: string) =>
+		path === "/api/internal" ||
+		path.startsWith("/api/internal/") ||
+		path === "/api/shopify/webhooks/orders-paid";
+
 	app.post("/api/shopify/webhooks/orders-paid", (c) =>
 		shopifyWebhookService.handle(c),
 	);
-	app.post("/api/internal/reconcile/shopify-orders", async (c) => {
-		const expectedToken = env.reconciliationToken;
-		if (
-			!privateTokenMatches(
-				c.req.header("X-Festival-Reconciliation-Token"),
-				expectedToken,
-			) ||
-			c.req.header("Cookie") !== undefined ||
-			c.req.header("Authorization") !== undefined ||
-			c.req.header("Origin") !== undefined
-		) {
-			return c.json({ error: "Not found." }, 404);
-		}
-		try {
-			const body = await c.req.json();
-			if (
-				!body ||
-				typeof body !== "object" ||
-				Array.isArray(body) ||
-				Object.keys(body).length !== 1 ||
-				typeof (body as { organizationId?: unknown }).organizationId !==
-					"string" ||
-				!(body as { organizationId: string }).organizationId.trim() ||
-				(body as { organizationId: string }).organizationId.length > 256
-			) {
-				return c.json({ error: "Reconciliation request is invalid." }, 400);
-			}
-			return c.json(
-				await shopifyOrderProjectionService.reconcile(
-					(body as { organizationId: string }).organizationId,
-				),
-			);
-		} catch {
-			return c.json({ error: "Shopify order reconciliation failed." }, 503);
-		}
-	});
-	app.post("/api/internal/reconcile/firebase-claims", async (c) => {
-		const expectedToken = env.reconciliationToken;
-		if (
-			!privateTokenMatches(
-				c.req.header("X-Festival-Reconciliation-Token"),
-				expectedToken,
-			) ||
-			c.req.header("Cookie") !== undefined ||
-			c.req.header("Authorization") !== undefined ||
-			c.req.header("Origin") !== undefined
-		) {
-			return c.json({ error: "Not found." }, 404);
-		}
-		if (!firebaseClaimsReconciliationService) {
-			return c.json(
-				{ error: "Firebase claims reconciliation is unavailable." },
-				503,
-			);
-		}
-		try {
-			const body = await c.req.json();
-			if (
-				!body ||
-				typeof body !== "object" ||
-				Array.isArray(body) ||
-				Object.keys(body).length !== 0
-			) {
-				return c.json({ error: "Reconciliation request is invalid." }, 400);
-			}
-			const result = await firebaseClaimsReconciliationService.reconcile();
-			return c.json(result, result.failedCount > 0 ? 503 : 200);
-		} catch {
-			return c.json({ error: "Firebase claims reconciliation failed." }, 503);
-		}
-	});
-
-	app.use(
-		"/api/*",
-		cors({
-			origin: (origin) => (allowedApiOrigins.has(origin) ? origin : undefined),
-			allowHeaders: ["Authorization", "Content-Type", "X-CSRF-Token"],
-			allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-			credentials: true,
+	app.route(
+		"/api/internal",
+		buildPrivateRuntimeRouter({
+			env,
+			repository,
+			commerceRepository,
+			shopifyOrderProjectionService,
+			firebaseClaimsReconciliationService,
+			hasShopifyKeyring: Boolean(secretKeyring),
 		}),
 	);
-	app.use("/api/*", apiRequestSecurity());
+
+	app.use("/api/*", async (c, next) => {
+		if (isNonBrowserApiSubpath(c.req.path)) {
+			return c.json({ error: "Not found." }, 404);
+		}
+		return publicCors(c, next);
+	});
+	app.use("/api/*", async (c, next) => {
+		if (isNonBrowserApiSubpath(c.req.path)) {
+			return c.json({ error: "Not found." }, 404);
+		}
+		return publicRequestSecurity(c, next);
+	});
 
 	app.get("/health", (c) => {
+		c.header("Cache-Control", "no-store");
+		if (hasForbiddenBrowserHeaders(c)) {
+			return c.json({ error: "Not found." }, 404);
+		}
 		return c.json({ status: "ok" });
 	});
 

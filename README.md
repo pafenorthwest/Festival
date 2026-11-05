@@ -249,3 +249,12 @@ For full Docker prerequisites, environment setup, ports, teardown, and troublesh
 - `bun run check:sql` for backend SQL, schema, or PostgreSQL fixture changes
 - `bun run build`
 - `bun run test`
+
+## Continuous Deployment (CD)
+
+The repository provides an automated Continuous Deployment pipeline in [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml) alongside [`.github/workflows/integration.yml`](./.github/workflows/integration.yml) and [`.github/workflows/pr-checks.yml`](./.github/workflows/pr-checks.yml):
+
+1. **Automated Verification (`verify`)**: Triggered on pushes to `release` / `release/v*`, SemVer tags (`v*.*.*`), or manual `workflow_dispatch`. Runs `bun install --frozen-lockfile`, `bun run format:check`, `bun run build`, `bun run test`, and `bun run check:sql` on pinned Bun `1.4.2`.
+2. **Container Build & Push (`build-and-push`)**: Builds `docker/backend.Dockerfile` and `docker/frontend.Dockerfile` with Buildx GHA layer caching and pushes immutable commit-SHA and release-tagged images to GitHub Container Registry (`ghcr.io/<owner>/festival-backend` and `ghcr.io/<owner>/festival-frontend`).
+3. **Target Host Rollout (`deploy`)**: Deploys to the explicitly resolved GitHub Environment (`integration` for `refs/heads/release`, `staging` for `refs/heads/release/v*`, `production` for `refs/tags/v*`, or the selected `workflow_dispatch` environment) using environment-scoped `DEPLOY_HOST`, `DEPLOY_SSH_PRIVATE_KEY`, and `DEPLOY_PUBLIC_URL` via SSH (`cloud-setup/03-prepare-images.sh` and `docker compose --env-file cloud-setup/.env -f cloud-setup/compose.yml up -d --no-build --pull never`).
+4. **Post-Deploy Smoke Verification (`smoke-test`)**: Polls `${DEPLOY_PUBLIC_URL}/healthz` (`{"status":"ok"}`) and `${DEPLOY_PUBLIC_URL}/api/organizations/pafe/landing` with retry/backoff before marking the deployment run healthy.

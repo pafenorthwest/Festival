@@ -1578,13 +1578,14 @@ describe("CustomerAccountService", () => {
 			updatedAtIso: "2026-05-01T12:00:00.000Z",
 		});
 
-		await f.commerce.createClassEntitlement({
+		const noProjectionEntitlement = await f.commerce.createClassEntitlement({
 			organizationId: f.org.id,
 			festivalId: festival.id,
 			festivalClassId: classConfig.id,
 			parentCustomerId: customerId,
 			childId: unpaidChild.id,
 			checkoutIntentId: "intent-no-projection",
+			checkoutIntentLineId: "intent-line-no-projection",
 			shopifyOrderGid: "gid://shopify/Order/no-projection-1",
 			shopifyOrderLineGid: "gid://shopify/LineItem/no-projection-1",
 			paidAmountCents: 3000,
@@ -1600,11 +1601,16 @@ describe("CustomerAccountService", () => {
 			(r) => r.entitlement.id === paidEntitlement.id,
 		);
 		const noProjection = result.registrations.find(
-			(r) =>
-				r.entitlement.shopifyOrderGid === "gid://shopify/Order/no-projection-1",
+			(r) => r.entitlement.id === noProjectionEntitlement.id,
 		);
 		expect(paid?.paidAtIso).toBe("2026-05-01T12:00:00.000Z");
 		expect(noProjection?.paidAtIso).toBeNull();
+		for (const item of result.registrations) {
+			expect(item.entitlement).not.toHaveProperty("shopifyOrderGid");
+			expect(item.entitlement).not.toHaveProperty("shopifyOrderLineGid");
+			expect(item.entitlement).not.toHaveProperty("checkoutIntentId");
+			expect(item.entitlement).not.toHaveProperty("checkoutIntentLineId");
+		}
 	});
 
 	it("enforces concerto catalog work requirement when updating registration metadata (#197)", async () => {
