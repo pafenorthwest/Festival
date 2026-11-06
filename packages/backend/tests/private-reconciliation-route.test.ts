@@ -542,10 +542,14 @@ describe("private runtime readiness, diagnostics, metrics, operator, and event-b
 			releaseWorker = resolve;
 		});
 		const projection = {
-			processDelivery: async () => {
+			processDelivery: async (deliveryId: string) => {
 				await workerGate;
+				const claimed = await commerceRepository.claimDelivery(deliveryId);
+				if (!claimed) return "skipped" as const;
+				await commerceRepository.markDeliveryProcessed(deliveryId);
 				return "processed" as const;
 			},
+			reconcile: async () => ({ discoveredCount: 0, processedCount: 0 }),
 		} as unknown as ShopifyOrderProjectionService;
 		const shopifyWebhookService = new ShopifyWebhookService(
 			repository,
@@ -558,6 +562,7 @@ describe("private runtime readiness, diagnostics, metrics, operator, and event-b
 		);
 		const runtimeToken = "runtime-token-000000000000000000";
 		const operatorToken = "operator-token-00000000000000000";
+		const reconciliationToken = "reconcile-token-0000000000000000";
 		const runtimeHeaders = { "X-Festival-Runtime-Token": runtimeToken };
 		const operatorHeaders = { "X-Festival-Operator-Token": operatorToken };
 		const { app } = await createApp({
@@ -568,6 +573,7 @@ describe("private runtime readiness, diagnostics, metrics, operator, and event-b
 				festivalActiveSecretKeyId: "k1",
 				runtimeToken,
 				operatorToken,
+				reconciliationToken,
 			},
 			repository,
 			commerceRepository,
@@ -635,6 +641,32 @@ describe("private runtime readiness, diagnostics, metrics, operator, and event-b
 			queued: 0,
 			active: 0,
 			completed: 3,
+			failed: 0,
+			saturated: false,
+			rejectedCount: 2,
+			pendingRecoveryCount: 0,
+			recoveredCount: 1,
+			recoveryOverflowCount: 1,
+		});
+
+		const reconcileRes = await app.request(
+			"/api/internal/reconcile/shopify-orders",
+			{
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"X-Festival-Reconciliation-Token": reconciliationToken,
+				},
+				body: JSON.stringify({ organizationId: org.id }),
+			},
+		);
+		expect(reconcileRes.status).toBe(200);
+		await shopifyWebhookService.drain();
+
+		await assertQueueStats({
+			queued: 0,
+			active: 0,
+			completed: 4,
 			failed: 0,
 			saturated: false,
 			rejectedCount: 2,

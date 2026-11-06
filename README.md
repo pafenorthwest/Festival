@@ -185,6 +185,17 @@ For example, an operator-owned cron entry may invoke that command daily from a
 deployment directory with its production environment loaded. The command targets
 the service-token-protected `/api/internal/reconcile/shopify-orders` backend path;
 nginx intentionally default-denies that path, so do not expose it publicly.
+When the in-memory `WebhookWorkerQueue` exceeds `maxBacklog` (default `5000`),
+accepted delivery IDs are retained in a bounded recovery set up to
+`maxPendingRecovery` (default `4 * maxBacklog` = `20000`) and promoted
+automatically as workers drain; any excess deliveries beyond `maxPendingRecovery`
+increment `recoveryOverflowCount` (exposed with `queued`, `active`, `completed`,
+`failed`, `saturated`, `rejectedCount`, `pendingRecoveryCount`, and
+`recoveredCount` under `shopifyWebhookQueue` on `/api/internal/diagnostics`,
+`/api/internal/metrics`, and `/api/internal/operator/status`) and remain durable
+until `/api/internal/reconcile/shopify-orders` runs (making the configured
+reconciliation schedule the worst-case recovery latency during a sustained
+outage).
 
 Production order access requires Shopify protected-customer-data configuration
 or approval in addition to the Headless permission. For Custom distribution,

@@ -16,20 +16,25 @@ describe("WebhookWorkerQueue", () => {
 		});
 		expect(q1.concurrency).toBe(DEFAULT_WEBHOOK_QUEUE_CONCURRENCY);
 		expect(q1.maxBacklog).toBe(DEFAULT_WEBHOOK_QUEUE_MAX_BACKLOG);
+		expect(q1.maxPendingRecovery).toBe(DEFAULT_WEBHOOK_QUEUE_MAX_BACKLOG * 4);
 
 		const q2 = new WebhookWorkerQueue(async () => {}, {
 			concurrency: -10,
 			maxBacklog: 0,
+			maxPendingRecovery: 0,
 		});
 		expect(q2.concurrency).toBe(1);
 		expect(q2.maxBacklog).toBe(1);
+		expect(q2.maxPendingRecovery).toBe(1);
 
 		const q3 = new WebhookWorkerQueue(async () => {}, {
 			concurrency: 3.8,
 			maxBacklog: 12.1,
+			maxPendingRecovery: 19.9,
 		});
 		expect(q3.concurrency).toBe(3);
 		expect(q3.maxBacklog).toBe(12);
+		expect(q3.maxPendingRecovery).toBe(19);
 
 		const stats = q1.stats();
 		expect(stats).toEqual({

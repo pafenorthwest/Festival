@@ -14,7 +14,8 @@ export interface PrivateRuntimeRoutesOptions {
 	repository: OrganizationRepository;
 	commerceRepository: MembershipCommerceRepository;
 	shopifyOrderProjectionService: ShopifyOrderProjectionService;
-	shopifyWebhookService?: Pick<ShopifyWebhookService, "getStats">;
+	shopifyWebhookService?: Pick<ShopifyWebhookService, "getStats"> &
+		Partial<Pick<ShopifyWebhookService, "reclaimOrganizationPending">>;
 	firebaseClaimsReconciliationService?: FirebaseClaimsReconciliationService;
 	hasShopifyKeyring: boolean;
 }
@@ -172,10 +173,9 @@ async function handleShopifyReconcile(
 		if (!authorizeShopifyReconciliation(c, options.env, orgId)) {
 			return jsonNoStore(c, { error: "Not found." }, 404);
 		}
-		return jsonNoStore(
-			c,
-			await options.shopifyOrderProjectionService.reconcile(orgId),
-		);
+		const result = await options.shopifyOrderProjectionService.reconcile(orgId);
+		await options.shopifyWebhookService?.reclaimOrganizationPending?.(orgId);
+		return jsonNoStore(c, result);
 	} catch {
 		return jsonNoStore(
 			c,

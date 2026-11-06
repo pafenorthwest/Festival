@@ -207,6 +207,24 @@ export class ShopifyWebhookService {
 		return this.queue.reclaimPending(fetchPendingDeliveryIds);
 	}
 
+	reclaimOrganizationPending(
+		organizationId: string,
+		limit = this.queue.maxBacklog,
+		leaseMs = 15 * 60 * 1_000,
+	): Promise<number> {
+		const staleBeforeIso = new Date(
+			this.now().getTime() - leaseMs,
+		).toISOString();
+		return this.reclaimPending(async () => {
+			const pending = await this.commerce.listReclaimableDeliveries(
+				organizationId,
+				limit,
+				staleBeforeIso,
+			);
+			return pending.map((delivery) => delivery.id);
+		});
+	}
+
 	private async resolveVerifiedClientSecret(
 		shopDomain: string,
 		secretKeyring: ShopifySecretKeyring,

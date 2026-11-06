@@ -28,7 +28,7 @@ function clampPositiveInt(value: number | undefined, fallback: number): number {
 export class WebhookWorkerQueue {
 	readonly concurrency: number;
 	readonly maxBacklog: number;
-	private readonly maxPendingRecovery: number;
+	readonly maxPendingRecovery: number;
 	private readonly handler: (deliveryId: string) => Promise<unknown> | unknown;
 	private readonly queue: string[] = [];
 	private readonly activeIds = new Set<string>();

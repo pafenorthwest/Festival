@@ -563,14 +563,10 @@ describe("Shopify paid-order webhook ingress", () => {
 			"gid://shopify/Order/6",
 		]);
 
-		const reclaimed = await f.service.reclaimPending(async () => {
-			const pending = await f.commerce.listReclaimableDeliveries(
-				f.organization.id,
-				10,
-				"2026-08-28T18:05:00.000Z",
-			);
-			return pending.map((d) => d.id);
-		});
+		const reclaimed = await f.service.reclaimOrganizationPending(
+			f.organization.id,
+			10,
+		);
 		expect(reclaimed).toBe(2);
 		await f.service.drain();
 
