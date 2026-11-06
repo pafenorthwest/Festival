@@ -3,12 +3,18 @@ export interface WebhookWorkerQueueStats {
 	active: number;
 	completed: number;
 	failed: number;
+	saturated: boolean;
+	rejectedCount: number;
+	pendingRecoveryCount: number;
+	recoveredCount: number;
+	recoveryOverflowCount: number;
 }
 
 export interface WebhookWorkerQueueOptions {
 	handler: (deliveryId: string) => Promise<unknown> | unknown;
 	concurrency?: number;
 	maxBacklog?: number;
+	maxPendingRecovery?: number;
 }
 
 export const DEFAULT_WEBHOOK_QUEUE_CONCURRENCY = 5;
@@ -22,11 +28,16 @@ function clampPositiveInt(value: number | undefined, fallback: number): number {
 export class WebhookWorkerQueue {
 	readonly concurrency: number;
 	readonly maxBacklog: number;
+	readonly maxPendingRecovery: number;
 	private readonly handler: (deliveryId: string) => Promise<unknown> | unknown;
 	private readonly queue: string[] = [];
 	private readonly activeIds = new Set<string>();
+	private readonly pendingRecoveryIds = new Set<string>();
 	private completed = 0;
 	private failed = 0;
+	private rejectedCount = 0;
+	private recoveredCount = 0;
+	private recoveryOverflowCount = 0;
 	private drainResolvers: Array<() => void> = [];
 
 	constructor(options: WebhookWorkerQueueOptions);
@@ -50,6 +61,10 @@ export class WebhookWorkerQueue {
 				maybeOptions?.maxBacklog,
 				DEFAULT_WEBHOOK_QUEUE_MAX_BACKLOG,
 			);
+			this.maxPendingRecovery = clampPositiveInt(
+				maybeOptions?.maxPendingRecovery,
+				this.maxBacklog * 4,
+			);
 		} else {
 			this.handler = handlerOrOptions.handler;
 			this.concurrency = clampPositiveInt(
@@ -60,16 +75,37 @@ export class WebhookWorkerQueue {
 				handlerOrOptions.maxBacklog,
 				DEFAULT_WEBHOOK_QUEUE_MAX_BACKLOG,
 			);
+			this.maxPendingRecovery = clampPositiveInt(
+				handlerOrOptions.maxPendingRecovery,
+				this.maxBacklog * 4,
+			);
 		}
 	}
 
-	enqueue(deliveryId: string): boolean {
+	enqueue(
+		deliveryId: string,
+		options?: { retainForRecovery?: boolean },
+	): boolean {
 		if (!deliveryId || typeof deliveryId !== "string") {
 			return false;
 		}
 		if (this.queue.length >= this.maxBacklog) {
+			this.rejectedCount++;
+			if (
+				(options?.retainForRecovery ?? true) &&
+				!this.isQueuedOrActive(deliveryId)
+			) {
+				if (this.pendingRecoveryIds.has(deliveryId)) {
+					// Already retained for recovery
+				} else if (this.pendingRecoveryIds.size < this.maxPendingRecovery) {
+					this.pendingRecoveryIds.add(deliveryId);
+				} else {
+					this.recoveryOverflowCount++;
+				}
+			}
 			return false;
 		}
+		this.pendingRecoveryIds.delete(deliveryId);
 		this.queue.push(deliveryId);
 		this.dispatch();
 		return true;
@@ -81,7 +117,18 @@ export class WebhookWorkerQueue {
 			active: this.activeIds.size,
 			completed: this.completed,
 			failed: this.failed,
+			saturated:
+				this.queue.length >= this.maxBacklog ||
+				this.pendingRecoveryIds.size > 0,
+			rejectedCount: this.rejectedCount,
+			pendingRecoveryCount: this.pendingRecoveryIds.size,
+			recoveredCount: this.recoveredCount,
+			recoveryOverflowCount: this.recoveryOverflowCount,
 		};
+	}
+
+	getStats(): WebhookWorkerQueueStats {
+		return this.stats();
 	}
 
 	isQueuedOrActive(deliveryId: string): boolean {
@@ -97,7 +144,7 @@ export class WebhookWorkerQueue {
 			if (this.isQueuedOrActive(id)) {
 				continue;
 			}
-			if (this.enqueue(id)) {
+			if (this.enqueue(id, { retainForRecovery: false })) {
 				reclaimed++;
 			} else {
 				break;
@@ -107,7 +154,11 @@ export class WebhookWorkerQueue {
 	}
 
 	drain(): Promise<void> {
-		if (this.queue.length === 0 && this.activeIds.size === 0) {
+		if (
+			this.queue.length === 0 &&
+			this.activeIds.size === 0 &&
+			this.pendingRecoveryIds.size === 0
+		) {
 			return Promise.resolve();
 		}
 		return new Promise<void>((resolve) => {
@@ -115,12 +166,28 @@ export class WebhookWorkerQueue {
 		});
 	}
 
+	private promotePendingRecoveries(): void {
+		while (
+			this.queue.length < this.maxBacklog &&
+			this.pendingRecoveryIds.size > 0
+		) {
+			const nextRecovery = this.pendingRecoveryIds.values().next().value;
+			if (nextRecovery === undefined) break;
+			this.pendingRecoveryIds.delete(nextRecovery);
+			if (this.isQueuedOrActive(nextRecovery)) continue;
+			this.queue.push(nextRecovery);
+			this.recoveredCount++;
+		}
+	}
+
 	private dispatch(): void {
+		this.promotePendingRecoveries();
 		while (this.activeIds.size < this.concurrency && this.queue.length > 0) {
 			const nextId = this.queue.shift();
 			if (nextId === undefined) break;
 			this.activeIds.add(nextId);
 			void this.runWorker(nextId);
+			this.promotePendingRecoveries();
 		}
 	}
 
@@ -141,6 +208,7 @@ export class WebhookWorkerQueue {
 		if (
 			this.queue.length === 0 &&
 			this.activeIds.size === 0 &&
+			this.pendingRecoveryIds.size === 0 &&
 			this.drainResolvers.length > 0
 		) {
 			const resolvers = this.drainResolvers;

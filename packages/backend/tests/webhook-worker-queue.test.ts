@@ -16,20 +16,25 @@ describe("WebhookWorkerQueue", () => {
 		});
 		expect(q1.concurrency).toBe(DEFAULT_WEBHOOK_QUEUE_CONCURRENCY);
 		expect(q1.maxBacklog).toBe(DEFAULT_WEBHOOK_QUEUE_MAX_BACKLOG);
+		expect(q1.maxPendingRecovery).toBe(DEFAULT_WEBHOOK_QUEUE_MAX_BACKLOG * 4);
 
 		const q2 = new WebhookWorkerQueue(async () => {}, {
 			concurrency: -10,
 			maxBacklog: 0,
+			maxPendingRecovery: 0,
 		});
 		expect(q2.concurrency).toBe(1);
 		expect(q2.maxBacklog).toBe(1);
+		expect(q2.maxPendingRecovery).toBe(1);
 
 		const q3 = new WebhookWorkerQueue(async () => {}, {
 			concurrency: 3.8,
 			maxBacklog: 12.1,
+			maxPendingRecovery: 19.9,
 		});
 		expect(q3.concurrency).toBe(3);
 		expect(q3.maxBacklog).toBe(12);
+		expect(q3.maxPendingRecovery).toBe(19);
 
 		const stats = q1.stats();
 		expect(stats).toEqual({
@@ -37,7 +42,13 @@ describe("WebhookWorkerQueue", () => {
 			active: 0,
 			completed: 0,
 			failed: 0,
+			saturated: false,
+			rejectedCount: 0,
+			pendingRecoveryCount: 0,
+			recoveredCount: 0,
+			recoveryOverflowCount: 0,
 		});
+		expect(q1.getStats()).toEqual(stats);
 	});
 
 	it("respects concurrency limit and processes all jobs", async () => {
@@ -72,13 +83,20 @@ describe("WebhookWorkerQueue", () => {
 			active: 0,
 			completed: 6,
 			failed: 0,
+			saturated: false,
+			rejectedCount: 0,
+			pendingRecoveryCount: 0,
+			recoveredCount: 0,
+			recoveryOverflowCount: 0,
 		});
 	});
 
-	it("enforces maxBacklog and rejects further enqueues when full", async () => {
+	it("enforces maxBacklog, tracks saturation telemetry, and automatically recovers rejected deliveries when capacity frees up", async () => {
+		const processed: string[] = [];
 		const queue = new WebhookWorkerQueue(
-			async () => {
-				await delay(50);
+			async (id) => {
+				await delay(30);
+				processed.push(id);
 			},
 			{ concurrency: 1, maxBacklog: 2 },
 		);
@@ -87,13 +105,79 @@ describe("WebhookWorkerQueue", () => {
 		expect(queue.enqueue("d1")).toBe(true); // active: 1, queued: 0
 		expect(queue.enqueue("d2")).toBe(true); // active: 1, queued: 1
 		expect(queue.enqueue("d3")).toBe(true); // active: 1, queued: 2 (full)
-		expect(queue.enqueue("d4")).toBe(false); // rejected because queued == maxBacklog
+		expect(queue.stats().saturated).toBe(true);
+		expect(queue.enqueue("d4")).toBe(false); // rejected because queued == maxBacklog -> retained for recovery
+		expect(queue.enqueue("d4")).toBe(false); // duplicate rejected delivery is deduplicated in recovery set
 
-		expect(queue.stats().queued).toBe(2);
-		expect(queue.stats().active).toBe(1);
+		expect(queue.stats()).toMatchObject({
+			queued: 2,
+			active: 1,
+			saturated: true,
+			rejectedCount: 2,
+			pendingRecoveryCount: 1,
+			recoveredCount: 0,
+			recoveryOverflowCount: 0,
+		});
 
 		await queue.drain();
-		expect(queue.stats().completed).toBe(3);
+		expect(processed).toEqual(["d1", "d2", "d3", "d4"]);
+		expect(queue.stats()).toEqual({
+			queued: 0,
+			active: 0,
+			completed: 4,
+			failed: 0,
+			saturated: false,
+			rejectedCount: 2,
+			pendingRecoveryCount: 0,
+			recoveredCount: 1,
+			recoveryOverflowCount: 0,
+		});
+	});
+
+	it("bounds pendingRecoveryIds at maxPendingRecovery, tracks recoveryOverflowCount without counting duplicate retained IDs, and recovers retained items on drain", async () => {
+		const processed: string[] = [];
+		const queue = new WebhookWorkerQueue(
+			async (id) => {
+				await delay(30);
+				processed.push(id);
+			},
+			{ concurrency: 1, maxBacklog: 1, maxPendingRecovery: 2 },
+		);
+
+		expect(queue.enqueue("d1")).toBe(true); // active: 1, queued: 0
+		expect(queue.enqueue("d2")).toBe(true); // active: 1, queued: 1 (backlog full)
+		expect(queue.enqueue("d3")).toBe(false); // retained in pendingRecoveryIds (1/2)
+		expect(queue.enqueue("d4")).toBe(false); // retained in pendingRecoveryIds (2/2)
+		expect(queue.enqueue("d3")).toBe(false); // duplicate of retained ID -> does not increment overflow
+		expect(queue.enqueue("d5")).toBe(false); // exceeds maxPendingRecovery -> overflow 1
+		expect(queue.enqueue("d6")).toBe(false); // exceeds maxPendingRecovery -> overflow 2
+
+		expect(queue.stats()).toEqual({
+			queued: 1,
+			active: 1,
+			completed: 0,
+			failed: 0,
+			saturated: true,
+			rejectedCount: 5,
+			pendingRecoveryCount: 2,
+			recoveredCount: 0,
+			recoveryOverflowCount: 2,
+		});
+
+		await queue.drain();
+
+		expect(processed).toEqual(["d1", "d2", "d3", "d4"]);
+		expect(queue.stats()).toEqual({
+			queued: 0,
+			active: 0,
+			completed: 4,
+			failed: 0,
+			saturated: false,
+			rejectedCount: 5,
+			pendingRecoveryCount: 0,
+			recoveredCount: 2,
+			recoveryOverflowCount: 2,
+		});
 	});
 
 	it("handles worker failure without crashing queue and continues processing", async () => {
@@ -118,6 +202,11 @@ describe("WebhookWorkerQueue", () => {
 			active: 0,
 			completed: 2,
 			failed: 1,
+			saturated: false,
+			rejectedCount: 0,
+			pendingRecoveryCount: 0,
+			recoveredCount: 0,
+			recoveryOverflowCount: 0,
 		});
 	});
 

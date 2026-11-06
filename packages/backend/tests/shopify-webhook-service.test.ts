@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { Hono } from "hono";
 import { InMemoryMembershipCommerceRepository } from "../src/commerce/membership-commerce-repository.js";
 import type { ShopifyOrderProjectionService } from "../src/commerce/shopify-order-projection-service.js";
@@ -22,9 +22,11 @@ function keyring() {
 async function fixture(options?: {
 	now?: () => Date;
 	schedule?: (deliveryId: string) => void;
+	useDefaultQueue?: boolean;
 	projection?: ShopifyOrderProjectionService;
 	queueConcurrency?: number;
 	queueMaxBacklog?: number;
+	queueMaxPendingRecovery?: number;
 }) {
 	const organizations = new InMemoryOrganizationRepository();
 	const organization = await organizations.createOrganization({
@@ -65,15 +67,26 @@ async function fixture(options?: {
 		secrets,
 		options?.projection,
 		options?.now ?? (() => new Date("2026-08-28T18:00:00.000Z")),
-		options?.schedule ?? ((deliveryId) => scheduled.push(deliveryId)),
+		options?.useDefaultQueue
+			? undefined
+			: (options?.schedule ?? ((deliveryId) => scheduled.push(deliveryId))),
 		{
 			queueConcurrency: options?.queueConcurrency,
 			queueMaxBacklog: options?.queueMaxBacklog,
+			queueMaxPendingRecovery: options?.queueMaxPendingRecovery,
 		},
 	);
 	const app = new Hono();
 	app.post("/api/shopify/webhooks/orders-paid", (c) => service.handle(c));
-	return { app, commerce, organizations, scheduled, secrets, service };
+	return {
+		app,
+		commerce,
+		organization,
+		organizations,
+		scheduled,
+		secrets,
+		service,
+	};
 }
 
 function requestHeaders(body: string, overrides: Record<string, string> = {}) {
@@ -436,25 +449,327 @@ describe("Shopify paid-order webhook ingress", () => {
 			body: b3,
 		});
 		expect(r3.status).toBe(202);
-		expect(service.getQueue().stats().queued).toBe(1);
+		expect(service.getStats()).toMatchObject({
+			queued: 1,
+			active: 1,
+			saturated: true,
+			rejectedCount: 1,
+			pendingRecoveryCount: 1,
+			recoveredCount: 0,
+			recoveryOverflowCount: 0,
+		});
 
-		// Release blocked workers and drain
+		// Release blocked workers and drain — saturated delivery 3 is automatically recovered without waiting for periodic reconciliation
 		shouldWait = false;
 		await service.drain();
 
-		// Now reclaim pending from DB
-		const reclaimed = await service.reclaimPending(async () => {
-			const pending = await commerce.listReclaimableDeliveries(
-				organization.id,
-				10,
-				new Date("2026-08-28T19:00:00.000Z").toISOString(),
-			);
-			return pending.map((d) => d.id);
+		expect(processed).toHaveLength(3);
+		expect(service.getStats()).toMatchObject({
+			queued: 0,
+			active: 0,
+			completed: 3,
+			failed: 0,
+			saturated: false,
+			rejectedCount: 1,
+			pendingRecoveryCount: 0,
+			recoveredCount: 1,
+			recoveryOverflowCount: 0,
 		});
-		expect(reclaimed).toBe(1);
+	});
 
-		await service.drain();
+	it("bounds pendingRecoveryIds under burst exceeding maxBacklog + maxPendingRecovery and reconciles overflow deliveries from durable storage", async () => {
+		const processed: string[] = [];
+		let shouldWait = true;
+		let f!: Awaited<ReturnType<typeof fixture>>;
+		f = await fixture({
+			useDefaultQueue: true,
+			queueConcurrency: 1,
+			queueMaxBacklog: 1,
+			queueMaxPendingRecovery: 2,
+			projection: {
+				processDelivery: async (deliveryId: string) => {
+					while (shouldWait) {
+						await new Promise((r) => setTimeout(r, 10));
+					}
+					const claimed = await f.commerce.claimDelivery(deliveryId);
+					if (!claimed) return "skipped" as const;
+					await f.commerce.markDeliveryProcessed(deliveryId);
+					processed.push(claimed.shopifyOrderGid);
+					return "processed" as const;
+				},
+			} as unknown as ShopifyOrderProjectionService,
+		});
 
-		expect(service.getQueue().stats().completed).toBe(3);
+		for (let i = 1; i <= 6; i++) {
+			const body = JSON.stringify({
+				admin_graphql_api_id: `gid://shopify/Order/${i}`,
+			});
+			const digit = String(i);
+			const res = await f.app.request("/api/shopify/webhooks/orders-paid", {
+				method: "POST",
+				headers: requestHeaders(body, {
+					"X-Shopify-Webhook-Id": `${digit.repeat(8)}-${digit.repeat(4)}-4${digit.repeat(3)}-9${digit.repeat(3)}-${digit.repeat(12)}`,
+				}),
+				body,
+			});
+			expect(res.status).toBe(202);
+		}
+
+		expect(f.service.getStats()).toEqual({
+			queued: 1,
+			active: 1,
+			completed: 0,
+			failed: 0,
+			saturated: true,
+			rejectedCount: 4,
+			pendingRecoveryCount: 2,
+			recoveredCount: 0,
+			recoveryOverflowCount: 2,
+		});
+
+		shouldWait = false;
+		await f.service.drain();
+
+		expect(processed).toEqual([
+			"gid://shopify/Order/1",
+			"gid://shopify/Order/2",
+			"gid://shopify/Order/3",
+			"gid://shopify/Order/4",
+		]);
+		expect(f.service.getStats()).toEqual({
+			queued: 0,
+			active: 0,
+			completed: 4,
+			failed: 0,
+			saturated: false,
+			rejectedCount: 4,
+			pendingRecoveryCount: 0,
+			recoveredCount: 2,
+			recoveryOverflowCount: 2,
+		});
+
+		const remainingBeforeReclaim = await f.commerce.listReclaimableDeliveries(
+			f.organization.id,
+			10,
+			"2026-08-28T18:05:00.000Z",
+		);
+		expect(remainingBeforeReclaim).toHaveLength(2);
+		expect(remainingBeforeReclaim.map((d) => d.status)).toEqual([
+			"received",
+			"received",
+		]);
+		expect(remainingBeforeReclaim.map((d) => d.shopifyOrderGid)).toEqual([
+			"gid://shopify/Order/5",
+			"gid://shopify/Order/6",
+		]);
+
+		const reclaimed = await f.service.reclaimOrganizationPending(
+			f.organization.id,
+			10,
+		);
+		expect(reclaimed).toBe(2);
+		await f.service.drain();
+
+		expect(processed).toEqual([
+			"gid://shopify/Order/1",
+			"gid://shopify/Order/2",
+			"gid://shopify/Order/3",
+			"gid://shopify/Order/4",
+			"gid://shopify/Order/5",
+			"gid://shopify/Order/6",
+		]);
+		expect(f.service.getStats().completed).toBe(6);
+		const remainingAfterReclaim = await f.commerce.listReclaimableDeliveries(
+			f.organization.id,
+			10,
+			"2026-08-28T18:05:00.000Z",
+		);
+		expect(remainingAfterReclaim).toHaveLength(0);
+	});
+
+	it("schedules recovery when a duplicate webhook arrives for an unscheduled or failed delivery while keeping processed, active, and queued duplicates idempotent", async () => {
+		const processed: string[] = [];
+		let shouldBlockWorker = false;
+		let f!: Awaited<ReturnType<typeof fixture>>;
+		f = await fixture({
+			useDefaultQueue: true,
+			queueConcurrency: 1,
+			queueMaxBacklog: 4,
+			projection: {
+				processDelivery: async (deliveryId: string) => {
+					while (shouldBlockWorker) {
+						await new Promise((r) => setTimeout(r, 10));
+					}
+					const claimed = await f.commerce.claimDelivery(deliveryId);
+					if (!claimed) return "skipped" as const;
+					await f.commerce.markDeliveryProcessed(deliveryId);
+					processed.push(claimed.shopifyOrderGid);
+					return "processed" as const;
+				},
+			} as unknown as ShopifyOrderProjectionService,
+		});
+
+		const body = JSON.stringify({
+			admin_graphql_api_id: "gid://shopify/Order/99",
+		});
+		const headers = requestHeaders(body, {
+			"X-Shopify-Webhook-Id": "99999999-9999-4999-9999-999999999999",
+		});
+
+		// Pre-record delivery in DB as "received" (simulating prior unscheduled persistence)
+		const preRecorded = await f.commerce.recordDelivery({
+			organizationId: f.organization.id,
+			shopDomain: "festival.myshopify.com",
+			webhookId: "99999999-9999-4999-9999-999999999999",
+			topic: "orders/paid",
+			apiVersion: "2026-07",
+			shopifyOrderGid: "gid://shopify/Order/99",
+			payloadSha256: createHash("sha256").update(body).digest("hex"),
+			receivedAtIso: "2026-08-28T18:00:00.000Z",
+		});
+		expect(preRecorded.kind).toBe("accepted");
+
+		// Duplicate webhook arrives while delivery is still status === "received" and unscheduled
+		const dupUnscheduled = await f.app.request(
+			"/api/shopify/webhooks/orders-paid",
+			{
+				method: "POST",
+				headers,
+				body,
+			},
+		);
+		expect(dupUnscheduled.status).toBe(200);
+		await f.service.drain();
+		expect(processed).toEqual(["gid://shopify/Order/99"]);
+
+		// Subsequent duplicate webhook after processing remains strictly idempotent (not re-processed)
+		const dupProcessed = await f.app.request(
+			"/api/shopify/webhooks/orders-paid",
+			{
+				method: "POST",
+				headers,
+				body,
+			},
+		);
+		expect(dupProcessed.status).toBe(200);
+		await f.service.drain();
+		expect(processed).toEqual(["gid://shopify/Order/99"]);
+
+		// (a) Persisting a delivery in the "failed" state and sending a duplicate webhook reschedules and processes it once
+		const failedBody = JSON.stringify({
+			admin_graphql_api_id: "gid://shopify/Order/100",
+		});
+		const failedHeaders = requestHeaders(failedBody, {
+			"X-Shopify-Webhook-Id": "aaaaaaaa-aaaa-4aaa-9aaa-aaaaaaaaaaaa",
+		});
+		const failedRecord = await f.commerce.recordDelivery({
+			organizationId: f.organization.id,
+			shopDomain: "festival.myshopify.com",
+			webhookId: "aaaaaaaa-aaaa-4aaa-9aaa-aaaaaaaaaaaa",
+			topic: "orders/paid",
+			apiVersion: "2026-07",
+			shopifyOrderGid: "gid://shopify/Order/100",
+			payloadSha256: createHash("sha256").update(failedBody).digest("hex"),
+			receivedAtIso: "2026-08-28T18:00:00.000Z",
+		});
+		expect(failedRecord.kind).toBe("accepted");
+		if (failedRecord.kind !== "accepted") throw new Error("Expected accepted");
+		await f.commerce.markDeliveryFailed(failedRecord.delivery.id, {
+			category: "upstream",
+			stage: "order_read",
+			code: "shopify_upstream",
+			failedAtIso: "2026-08-28T18:00:05.000Z",
+		});
+
+		const dupFailed = await f.app.request("/api/shopify/webhooks/orders-paid", {
+			method: "POST",
+			headers: failedHeaders,
+			body: failedBody,
+		});
+		expect(dupFailed.status).toBe(200);
+		await f.service.drain();
+		expect(processed).toEqual([
+			"gid://shopify/Order/99",
+			"gid://shopify/Order/100",
+		]);
+		const reclaimableAfterFailedRecovery =
+			await f.commerce.listReclaimableDeliveries(
+				f.organization.id,
+				10,
+				"2026-08-28T18:05:00.000Z",
+			);
+		expect(reclaimableAfterFailedRecovery).toHaveLength(0);
+
+		// (b) Sending duplicate webhooks while a delivery is currently active or queued is deduplicated by isQueuedOrActive
+		shouldBlockWorker = true;
+		const activeBody = JSON.stringify({
+			admin_graphql_api_id: "gid://shopify/Order/101",
+		});
+		const activeHeaders = requestHeaders(activeBody, {
+			"X-Shopify-Webhook-Id": "bbbbbbbb-bbbb-4bbb-9bbb-bbbbbbbbbbbb",
+		});
+		const queuedBody = JSON.stringify({
+			admin_graphql_api_id: "gid://shopify/Order/102",
+		});
+		const queuedHeaders = requestHeaders(queuedBody, {
+			"X-Shopify-Webhook-Id": "cccccccc-cccc-4ccc-9ccc-cccccccccccc",
+		});
+
+		const firstActive = await f.app.request(
+			"/api/shopify/webhooks/orders-paid",
+			{
+				method: "POST",
+				headers: activeHeaders,
+				body: activeBody,
+			},
+		);
+		expect(firstActive.status).toBe(202);
+
+		const firstQueued = await f.app.request(
+			"/api/shopify/webhooks/orders-paid",
+			{
+				method: "POST",
+				headers: queuedHeaders,
+				body: queuedBody,
+			},
+		);
+		expect(firstQueued.status).toBe(202);
+
+		expect(f.service.getStats()).toMatchObject({
+			active: 1,
+			queued: 1,
+			rejectedCount: 0,
+		});
+
+		// Duplicate of active delivery and duplicate of queued delivery while worker is blocked
+		const dupActive = await f.app.request("/api/shopify/webhooks/orders-paid", {
+			method: "POST",
+			headers: activeHeaders,
+			body: activeBody,
+		});
+		expect(dupActive.status).toBe(200);
+
+		const dupQueued = await f.app.request("/api/shopify/webhooks/orders-paid", {
+			method: "POST",
+			headers: queuedHeaders,
+			body: queuedBody,
+		});
+		expect(dupQueued.status).toBe(200);
+
+		expect(f.service.getStats()).toMatchObject({
+			active: 1,
+			queued: 1,
+			rejectedCount: 0,
+		});
+
+		shouldBlockWorker = false;
+		await f.service.drain();
+
+		expect(processed).toEqual([
+			"gid://shopify/Order/99",
+			"gid://shopify/Order/100",
+			"gid://shopify/Order/101",
+			"gid://shopify/Order/102",
+		]);
 	});
 });
