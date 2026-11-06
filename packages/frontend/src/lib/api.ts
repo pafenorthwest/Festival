@@ -115,6 +115,8 @@ import type {
 	UpdateCustomerProfileInput,
 	UpdateFestivalClassInput,
 	UpdateFestivalRegistrationWindowInput,
+	UpdateMembershipProductInput,
+	UpdateMembershipProductResponse,
 	UpdateMessageTemplateInput,
 	UpdateOrganizationDivisionInput,
 	UpdateOrganizationTimezoneInput,
@@ -903,6 +905,26 @@ export function createMembershipProduct(
 		{
 			method: "POST",
 			body: JSON.stringify(input),
+		},
+		idToken,
+	);
+}
+
+export function updateAdminMembershipProduct(
+	idToken: string,
+	slug: string,
+	offeringId: string,
+	input: UpdateMembershipProductInput,
+) {
+	return requestJson<UpdateMembershipProductResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/membership-products/${encodeURIComponent(offeringId)}`,
+		{
+			method: "POST",
+			body: JSON.stringify({
+				name: input.name,
+				description: input.description,
+				price: input.price,
+			}),
 		},
 		idToken,
 	);

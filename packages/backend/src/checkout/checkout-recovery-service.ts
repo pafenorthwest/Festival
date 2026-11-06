@@ -1,8 +1,11 @@
 import { createHash } from "node:crypto";
 import {
 	calendarDateInTimezone,
+	calendarDaysUntil,
 	TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+	TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS,
 } from "@festival/common";
+import { lifecycleForEntitlementRead } from "../commerce/entitlement-lifecycle.js";
 import type { MembershipCommerceRepository } from "../commerce/membership-commerce-repository.js";
 import { AppError } from "../errors/app-error.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
@@ -312,10 +315,29 @@ export class CheckoutRecoveryService {
 		organizationId: string,
 		customerId: string,
 	): Promise<void> {
-		if (!this.commerceRepository) return;
 		const timezone =
 			await this.organizationRepository.getOrganizationTimezone(organizationId);
 		const today = calendarDateInTimezone(this.now().toISOString(), timezone);
+		const grants =
+			await this.organizationRepository.listEntitlementGrantSnapshots(
+				organizationId,
+				customerId,
+			);
+		const hasIneligibleActive = grants.some(
+			(grant) =>
+				grant.entitlementClass === TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS &&
+				lifecycleForEntitlementRead(grant, today) === "active" &&
+				calendarDaysUntil(today, grant.endsOn) >
+					TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS,
+		);
+		if (hasIneligibleActive) {
+			throw new AppError(
+				"Teacher Membership already exists.",
+				409,
+				"membership_active",
+			);
+		}
+		if (!this.commerceRepository) return;
 		if (
 			await this.commerceRepository.hasScheduledEntitlement(
 				organizationId,
@@ -371,6 +393,7 @@ export class CheckoutRecoveryService {
 			sourceIntent.divisionId,
 		);
 		const offering = await this.validateOffering(org.id, slug, sourceIntent);
+		await this.verifyScheduledEntitlement(org.id, customerId);
 
 		return {
 			recoveryRequest: {

@@ -31,6 +31,7 @@ describe("customer membership status presentation", () => {
 		const rejected = customerMembershipViewModel(membership("rejected"));
 		const review = customerMembershipViewModel(membership("needs_review"));
 		const scheduled = customerMembershipViewModel(membership("scheduled"));
+		const superseded = customerMembershipViewModel(membership("superseded"));
 		const revoked = customerMembershipViewModel(membership("revoked"));
 
 		expect(processing).toMatchObject({
@@ -44,10 +45,22 @@ describe("customer membership status presentation", () => {
 		expect(review.description).toContain("No active membership rights");
 		expect(scheduled).toMatchObject({ label: "Scheduled", tone: "processing" });
 		expect(scheduled.description).toContain("No active membership rights");
+		expect(superseded).toMatchObject({
+			label: "Superseded",
+			tone: "expired",
+		});
+		expect(superseded.description).toContain("No active membership rights");
 		expect(revoked).toMatchObject({ label: "Revoked", tone: "rejected" });
 		expect(revoked.description).toContain("No active membership rights");
 		expect(
-			JSON.stringify([processing, rejected, review, scheduled, revoked]),
+			JSON.stringify([
+				processing,
+				rejected,
+				review,
+				scheduled,
+				superseded,
+				revoked,
+			]),
 		).not.toContain("reasonCode");
 	});
 
@@ -79,6 +92,24 @@ describe("customer membership status presentation", () => {
 			{ label: "End date (exclusive)", value: "2027-08-14" },
 		]);
 		expect(expired.details).toEqual(active.details);
+
+		const supersededWithDate = customerMembershipViewModel({
+			...snapshot,
+			status: "superseded",
+			supersededOn: "2027-01-15",
+		});
+		expect(supersededWithDate.details).toEqual([
+			{ label: "Entitlement class", value: "teacher_membership" },
+			{ label: "Division", value: "Piano" },
+			{ label: "Paid price", value: "$75.00" },
+			{ label: "Duration", value: "365 days" },
+			{ label: "Start date", value: "2026-08-14" },
+			{ label: "Superseded on", value: "2027-01-15" },
+		]);
+		expect(supersededWithDate.details).not.toContainEqual({
+			label: "End date (exclusive)",
+			value: "2027-08-14",
+		});
 	});
 
 	it("formats currency with an exact fallback and never converts calendar dates", () => {

@@ -25,9 +25,11 @@ import type {
 } from "@festival/common";
 import {
 	AppError,
+	addCalendarDays,
 	assertValidEntitlementDurationDays,
 	assertValidEntitlementGrantSnapshotInput,
 	calendarDateInTimezone,
+	calendarDaysUntil,
 	deriveEntitlementLifecycle,
 	EMPTY_SHOPIFY_CAPABILITIES,
 	evaluateClassCapacityStatus,
@@ -35,6 +37,7 @@ import {
 	isEntitlementClass,
 	normalizeVerifiedShopifyIdentityEmail,
 	TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+	TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS,
 	validateDisplayName,
 	validateDivisionIds,
 	validateProfileApprovalStatus,
@@ -112,6 +115,9 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		string,
 		EntitlementRevocationRecord
 	>();
+	private readonly entitlementSupersededOn = new Map<string, string>();
+	private readonly entitlementSupersededAt = new Map<string, string>();
+	private readonly entitlementSupersededByGrantId = new Map<string, string>();
 	private readonly entitlementCohortVersions = new Map<string, number>();
 	private readonly membershipIdentityEmails = new Map<string, string>();
 	private readonly membershipIdentityEmailsByCustomer = new Map<
@@ -1671,6 +1677,46 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		) {
 			throw new Error("Entitlement grant correlation is already recorded.");
 		}
+		const overlapping = [...this.entitlementGrants.values()].filter(
+			(grant) =>
+				grant.organizationId === input.organizationId &&
+				grant.customerId === input.customerId &&
+				grant.entitlementClass === input.entitlementClass &&
+				!this.entitlementRevocations.has(grant.id) &&
+				!this.entitlementSupersededOn.has(grant.id) &&
+				grant.startsOn < input.endsOn &&
+				grant.endsOn > input.startsOn,
+		);
+		const id = randomUUID();
+		const nowIso = this.now().toISOString();
+		let effectiveEndsOn = input.endsOn;
+		let supersededPrior = false;
+		for (const prior of overlapping) {
+			if (
+				prior.startsOn <= input.startsOn &&
+				prior.endsOn > input.startsOn &&
+				calendarDaysUntil(input.startsOn, prior.endsOn) <=
+					TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS
+			) {
+				this.entitlementSupersededOn.set(prior.id, input.startsOn);
+				this.entitlementSupersededAt.set(prior.id, nowIso);
+				this.entitlementSupersededByGrantId.set(prior.id, id);
+				effectiveEndsOn = addCalendarDays(prior.endsOn, input.durationDays);
+				supersededPrior = true;
+			} else {
+				throw new Error(
+					"Teacher Membership entitlement intervals may not overlap.",
+				);
+			}
+		}
+		if (
+			!supersededPrior &&
+			input.endsOn !== addCalendarDays(input.startsOn, input.durationDays)
+		) {
+			throw new Error(
+				"Entitlement endsOn must equal startsOn plus durationDays calendar days.",
+			);
+		}
 		const {
 			status: _status,
 			verifiedIdentityEmail: _verifiedIdentityEmail,
@@ -1678,7 +1724,8 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		} = input;
 		const record: StoredTeacherEntitlement = Object.freeze({
 			...snapshot,
-			id: randomUUID(),
+			endsOn: effectiveEndsOn,
+			id,
 			createdAtIso: new Date().toISOString(),
 		});
 		this.bindMembershipIdentityEmail(
@@ -1796,16 +1843,29 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 	): EntitlementGrantSnapshot {
 		const organization = this.organizations.get(grant.organizationId);
 		if (!organization) throw new Error("Organization not found.");
+		const supersededOn =
+			this.entitlementSupersededOn.get(grant.id) ?? grant.supersededOn;
+		const supersededAt =
+			this.entitlementSupersededAt.get(grant.id) ?? grant.supersededAt;
+		const supersededByGrantId =
+			this.entitlementSupersededByGrantId.get(grant.id) ??
+			grant.supersededByGrantId;
 		const status = this.entitlementRevocations.has(grant.id)
 			? "revoked"
 			: deriveEntitlementLifecycle(
-					grant,
+					{ ...grant, ...(supersededOn ? { supersededOn } : {}) },
 					calendarDateInTimezone(
 						this.now().toISOString(),
 						organization.timezone,
 					),
 				);
-		return { ...grant, status };
+		return {
+			...grant,
+			...(supersededOn ? { supersededOn } : {}),
+			...(supersededAt !== undefined ? { supersededAt } : {}),
+			...(supersededByGrantId !== undefined ? { supersededByGrantId } : {}),
+			status,
+		};
 	}
 
 	private advanceEntitlementCohort(

@@ -378,6 +378,7 @@ describe("Shopify order projection", () => {
 					durationDays: 365,
 					startsOn: "2026-08-28",
 					endsOn: "2027-08-28",
+					supersededOn: null,
 				},
 			],
 		});
