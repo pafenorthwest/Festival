@@ -1097,29 +1097,43 @@ export async function initializePostgresSchema(schema: string): Promise<void> {
 		await transaction.unsafe(
 			`ALTER TABLE IF EXISTS ${safeSchema}.registration_catalog_values ADD COLUMN IF NOT EXISTS required_subtype_id TEXT;`,
 		);
-		// The immutable v0.0.0 SQL dump creates these parent tables without the
-		// composite keys needed by tables introduced in the current schema. Add
-		// the keys before CREATE TABLE IF NOT EXISTS reaches those new tables.
+		// Older schemas may lack the composite keys these parent tables need.
+		// Add the keys before creating new tables that reference them.
 		await transaction.unsafe(
 			`DO $reference_keys$
+			DECLARE
+				reference_key RECORD;
+				parent_table REGCLASS;
 			BEGIN
-				IF to_regclass('${safeSchema}.registration_catalog_values') IS NOT NULL THEN
-					EXECUTE 'CREATE UNIQUE INDEX IF NOT EXISTS registration_catalog_values_id_organization_key ON ${safeSchema}.registration_catalog_values (id, organization_id)';
-				END IF;
-				IF to_regclass('${safeSchema}.festival_children') IS NOT NULL THEN
-					EXECUTE 'CREATE UNIQUE INDEX IF NOT EXISTS festival_children_id_organization_key ON ${safeSchema}.festival_children (id, organization_id)';
-					EXECUTE 'CREATE UNIQUE INDEX IF NOT EXISTS festival_children_id_organization_parent_key ON ${safeSchema}.festival_children (id, organization_id, parent_customer_id)';
-				END IF;
-				IF to_regclass('${safeSchema}.festival_class_configurations') IS NOT NULL THEN
-					EXECUTE 'CREATE UNIQUE INDEX IF NOT EXISTS festival_class_configurations_id_organization_key ON ${safeSchema}.festival_class_configurations (id, organization_id)';
-					EXECUTE 'CREATE UNIQUE INDEX IF NOT EXISTS festival_class_configurations_id_organization_festival_key ON ${safeSchema}.festival_class_configurations (id, organization_id, festival_id)';
-				END IF;
-				IF to_regclass('${safeSchema}.festival_class_waitlist_entries') IS NOT NULL THEN
-					EXECUTE 'CREATE UNIQUE INDEX IF NOT EXISTS festival_class_waitlist_entries_reference_key ON ${safeSchema}.festival_class_waitlist_entries (id, organization_id, festival_class_id, parent_customer_id, child_id)';
-				END IF;
-				IF to_regclass('${safeSchema}.checkout_intents') IS NOT NULL THEN
-					EXECUTE 'CREATE UNIQUE INDEX IF NOT EXISTS checkout_intents_id_organization_key ON ${safeSchema}.checkout_intents (id, organization_id)';
-				END IF;
+				FOR reference_key IN
+					SELECT * FROM (VALUES
+						('registration_catalog_values', 'registration_catalog_values_id_organization_key', ARRAY['id', 'organization_id']),
+						('festival_children', 'festival_children_id_organization_key', ARRAY['id', 'organization_id']),
+						('festival_children', 'festival_children_id_organization_parent_key', ARRAY['id', 'organization_id', 'parent_customer_id']),
+						('festival_class_configurations', 'festival_class_configurations_id_organization_key', ARRAY['id', 'organization_id']),
+						('festival_class_configurations', 'festival_class_configurations_id_organization_festival_key', ARRAY['id', 'organization_id', 'festival_id']),
+						('festival_class_waitlist_entries', 'festival_class_waitlist_entries_reference_key', ARRAY['id', 'organization_id', 'festival_class_id', 'parent_customer_id', 'child_id']),
+						('checkout_intents', 'checkout_intents_id_organization_key', ARRAY['id', 'organization_id'])
+					) AS keys(table_name, index_name, column_names)
+				LOOP
+					parent_table := to_regclass('${safeSchema}.' || reference_key.table_name);
+					IF parent_table IS NOT NULL AND NOT EXISTS (
+						SELECT 1 FROM pg_index idx
+						WHERE idx.indrelid = parent_table
+						  AND idx.indisunique AND idx.indisvalid AND idx.indimmediate
+						  AND idx.indpred IS NULL AND idx.indexprs IS NULL
+						  AND idx.indnkeyatts = cardinality(reference_key.column_names)
+						  AND reference_key.column_names <@ ARRAY(
+							SELECT att.attname::text
+							FROM unnest(idx.indkey) WITH ORDINALITY AS key_column(attnum, position)
+							JOIN pg_attribute att ON att.attrelid = idx.indrelid AND att.attnum = key_column.attnum
+							WHERE key_column.position <= idx.indnkeyatts
+						  )
+					) THEN
+						EXECUTE format('CREATE UNIQUE INDEX IF NOT EXISTS %I ON %s (%s)',
+							reference_key.index_name, parent_table, array_to_string(reference_key.column_names, ', '));
+					END IF;
+				END LOOP;
 			END $reference_keys$;`,
 		);
 		await transaction.unsafe(

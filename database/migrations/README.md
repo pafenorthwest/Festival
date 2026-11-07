@@ -1,19 +1,23 @@
 # PostgreSQL Migration Protocol
 
-## Immutable Baseline
+## Current schema snapshot
 
-`database/postgres17-schema.sql` serves as the canonical v0.0.0 baseline. It represents the complete and consolidated empty-database schema definition for application bootstrapping and testing.
+[`database/postgres17-schema.sql`](../postgres17-schema.sql) is a generated,
+schema-only PostgreSQL 17 snapshot of an empty database after running the full
+[`initializePostgresSchema`](../../packages/backend/src/repo/postgres-schema.ts)
+runtime initializer for `orgs`. Refresh it from a freshly initialized database
+when the runtime schema changes. It contains the schema needed to bootstrap a
+fresh database, without application data.
 
-## Sequential Versioned Migrations
+## Versioned migrations
 
-All future schema changes following v0.0.0 will be placed in `database/migrations/` using sequential, timestamped naming:
+Keep one-shot upgrade scripts for existing databases in this directory using
+timestamped filenames.
 
 ```
 YYYYMMDDHHMMSS_<description>.sql
 ```
 
-Migrations in this directory are one-shot scripts designed for deployment against existing populated databases.
-
-## Interim Migrations Retirement
-
-All pre-release interim migrations (dated September–October 2026) were retired and removed as part of the v0.0.0 schema consolidation.
+Apply the migrations needed to bring an existing database up to date. A fresh
+database restored from the current snapshot or created by the current runtime
+initializer already has the corresponding schema changes.

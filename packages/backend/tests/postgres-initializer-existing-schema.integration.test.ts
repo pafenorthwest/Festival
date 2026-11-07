@@ -1,7 +1,10 @@
 import { afterAll, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { sql } from "bun";
-import { initializePostgresSchema } from "../src/repo/postgres-schema.js";
+import {
+	buildCanonicalPostgresSchemaSql,
+	initializePostgresSchema,
+} from "../src/repo/postgres-schema.js";
 
 const schema = `it_initializer_${randomUUID().replaceAll("-", "")}`;
 const integrationTest = process.env.POSTGRES_INTEGRATION_URL ? test : test.skip;
@@ -73,5 +76,33 @@ integrationTest(
 			subtypes: `${schema}.festival_class_subtypes`,
 			recovery_requests: `${schema}.checkout_recovery_requests`,
 		});
+	},
+);
+
+integrationTest(
+	"preserves existing reference indexes when initializing a current schema",
+	async () => {
+		const restoredSchema = `it_restored_${randomUUID().replaceAll("-", "")}`;
+		const referenceIndexes = () => sql`
+			SELECT tablename, indexname, indexdef
+			FROM pg_indexes
+			WHERE schemaname = ${restoredSchema}
+			  AND tablename IN (
+				  'registration_catalog_values', 'festival_children',
+				  'festival_class_configurations', 'festival_class_waitlist_entries',
+				  'checkout_intents'
+			  )
+			ORDER BY tablename, indexname
+		`;
+
+		await sql.unsafe(`CREATE SCHEMA ${restoredSchema}`);
+		try {
+			await sql.unsafe(buildCanonicalPostgresSchemaSql(restoredSchema));
+			const originalIndexes = await referenceIndexes();
+			await initializePostgresSchema(restoredSchema);
+			expect(await referenceIndexes()).toEqual(originalIndexes);
+		} finally {
+			await sql.unsafe(`DROP SCHEMA ${restoredSchema} CASCADE`);
+		}
 	},
 );
