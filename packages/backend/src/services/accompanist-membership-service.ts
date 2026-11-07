@@ -3,7 +3,16 @@ import {
 	type AccompanistMembershipGrant,
 	addCalendarDays,
 	calendarDateInTimezone,
+	type EntitlementReportEntry,
+	type EntitlementReportFilters,
+	type EntitlementReportPageRequest,
+	type EntitlementReportResponse,
+	type EntitlementSummaryCounts,
+	filterEntitlementReportEntries,
 	INITIAL_ACCOMPANIST_MEMBERSHIP_DURATION_DAYS,
+	listEntitlementReportDivisions,
+	paginateEntitlementReportEntries,
+	summarizeEntitlementCounts,
 	validateAccompanistContact,
 	validateAccompanistDivisionSelection,
 } from "@festival/common";
@@ -39,10 +48,15 @@ function calendarDaysUntil(from: string, exclusiveEnd: string): number {
 }
 
 export class AccompanistMembershipService {
+	private readonly now: () => Date;
+
 	constructor(
 		private readonly organizations: OrganizationRepository,
-		private readonly now: () => Date = () => new Date(),
-	) {}
+		now?: () => Date,
+	) {
+		this.now =
+			now ?? (organizations as { now?: () => Date }).now ?? (() => new Date());
+	}
 
 	async acquire(input: {
 		organizationId: string;
@@ -59,9 +73,19 @@ export class AccompanistMembershipService {
 			throw new AppError("Accompanist form is invalid.", 400);
 		}
 		const payload = input.payload as Record<string, unknown>;
-		const allowed = new Set(["name", "email", "city", "phone", "divisionIds"]);
+		const allowed = new Set([
+			"name",
+			"email",
+			"city",
+			"phone",
+			"divisionIds",
+			"staffAccessConsent",
+		]);
 		if (Object.keys(payload).some((key) => !allowed.has(key))) {
 			throw new AppError("Accompanist form contains unsupported fields.", 400);
+		}
+		if (payload.staffAccessConsent !== true) {
+			throw new AppError("Staff access consent is required.", 400);
 		}
 		let contact: AccompanistContactSnapshot;
 		try {
@@ -200,6 +224,102 @@ export class AccompanistMembershipService {
 		return { roster, accompanists };
 	}
 
+	async listEntitlementReport(
+		organizationId: string,
+		filters: EntitlementReportFilters,
+		pageRequest: EntitlementReportPageRequest,
+	): Promise<EntitlementReportResponse> {
+		const timezone =
+			await this.organizations.getOrganizationTimezone(organizationId);
+		const today = calendarDateInTimezone(this.now().toISOString(), timezone);
+		const [accompanists, teachers] = await Promise.all([
+			this.listAccompanistReportEntries(organizationId, today),
+			this.listTeacherReportEntries(organizationId, today),
+		]);
+		const all = [...accompanists, ...teachers];
+		const matching = filterEntitlementReportEntries(all, filters).sort(
+			sortReportEntries,
+		);
+		return {
+			...paginateEntitlementReportEntries(matching, pageRequest),
+			divisions: listEntitlementReportDivisions(all),
+		};
+	}
+
+	async getSummaryCounts(
+		organizationId: string,
+	): Promise<EntitlementSummaryCounts> {
+		const timezone =
+			await this.organizations.getOrganizationTimezone(organizationId);
+		const today = calendarDateInTimezone(this.now().toISOString(), timezone);
+		const [accompanists, teachers] = await Promise.all([
+			this.listAccompanistReportEntries(organizationId, today),
+			this.listTeacherReportEntries(organizationId, today),
+		]);
+		return summarizeEntitlementCounts([...accompanists, ...teachers]);
+	}
+
+	private async listAccompanistReportEntries(
+		organizationId: string,
+		today: string,
+	): Promise<EntitlementReportEntry[]> {
+		const grants = await this.organizations.listAccompanistMembershipGrants({
+			organizationId,
+		});
+		return grants.map((grant) => ({
+			id: grant.id,
+			entitlementClass: "accompanist_membership",
+			customerName: grant.contact.name,
+			customerEmail: grant.contact.email,
+			offeringName: grant.offeringNameSnapshot,
+			divisions: grant.divisions.map((division) => ({ ...division })),
+			startsOn: grant.startsOn,
+			endsOn: grant.endsOn,
+			source: grant.source,
+			status: lifecycleForEntitlementRead(grant, today),
+		}));
+	}
+
+	private async listTeacherReportEntries(
+		organizationId: string,
+		today: string,
+	): Promise<EntitlementReportEntry[]> {
+		const grants = (
+			await this.organizations.listEntitlementGrantSnapshots(organizationId)
+		).filter((grant) => grant.entitlementClass === "teacher_membership");
+		if (grants.length === 0) return [];
+		const [contacts, products] = await Promise.all([
+			this.organizations.findMembershipCustomerContacts(organizationId, [
+				...new Set(grants.map((grant) => grant.customerId)),
+			]),
+			this.organizations.listMembershipProductRecords(organizationId),
+		]);
+		const productNames = new Map(
+			products.map((product) => [product.id, product.productNameSnapshot]),
+		);
+		return grants.map((grant) => {
+			const contact = contacts.get(grant.customerId);
+			return {
+				id: grant.id,
+				entitlementClass: "teacher_membership",
+				customerName: contact?.name,
+				customerEmail: contact?.email,
+				offeringName:
+					productNames.get(grant.offeringId) ?? "Teacher Membership",
+				divisions: [
+					{
+						divisionId: grant.divisionId,
+						divisionName: grant.divisionNameSnapshot,
+					},
+				],
+				startsOn: grant.startsOn,
+				endsOn: grant.endsOn,
+				source: "teacher_checkout",
+				status: lifecycleForEntitlementRead(grant, today),
+			};
+		});
+	}
+
 	private async listActiveAccompanistEntries(
 		organizationId: string,
 		today: string,
@@ -310,4 +430,18 @@ function sortRosterEntries(
 	const nameCompare = (a.name ?? "").localeCompare(b.name ?? "");
 	if (nameCompare !== 0) return nameCompare;
 	return a.membershipType.localeCompare(b.membershipType);
+}
+
+function sortReportEntries(
+	a: EntitlementReportEntry,
+	b: EntitlementReportEntry,
+): number {
+	return (
+		(a.customerName || a.customerEmail || "").localeCompare(
+			b.customerName || b.customerEmail || "",
+		) ||
+		a.entitlementClass.localeCompare(b.entitlementClass) ||
+		b.startsOn.localeCompare(a.startsOn) ||
+		a.id.localeCompare(b.id)
+	);
 }

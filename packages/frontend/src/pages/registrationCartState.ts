@@ -21,6 +21,8 @@ export interface RegistrationCartItem {
 	priceCents: number;
 	accompanistId?: string | null;
 	accompanistName?: string | null;
+	instrumentId?: string;
+	instrumentName?: string;
 	pieces: RepertoirePiece[];
 }
 
@@ -45,12 +47,14 @@ export interface ClassFormResetTarget {
 	setSelectedClassId: (id: string) => void;
 	setPieces: (pieces: RepertoirePiece[]) => void;
 	setSelectedAccompanistId: (id: string) => void;
+	setSelectedInstrumentId?: (id: string) => void;
 }
 
 export function resetClassFormSelection(target: ClassFormResetTarget): void {
 	target.setSelectedClassId("");
 	target.setPieces([]);
 	target.setSelectedAccompanistId("");
+	target.setSelectedInstrumentId?.("");
 }
 
 export function buildCartItemInput(
@@ -68,6 +72,7 @@ export function buildCartItemInput(
 	},
 	accompanist: { id: string; name: string } | null,
 	pieces: RepertoirePiece[],
+	instrument?: { id: string; displayName: string } | null,
 ): AddRegistrationCartItemInput {
 	return {
 		childId: child.id,
@@ -85,6 +90,9 @@ export function buildCartItemInput(
 		accompanistId: accompanist?.id || null,
 		accompanistName: accompanist?.name ?? null,
 		pieces: [...pieces],
+		...(instrument
+			? { instrumentId: instrument.id, instrumentName: instrument.displayName }
+			: {}),
 	};
 }
 
@@ -97,6 +105,7 @@ export function cartItemsToLineItemInputs(
 		festivalClassId: item.classId,
 		teacherId: item.teacherId,
 		accompanistId: item.accompanistId || null,
+		...(item.instrumentId ? { instrumentId: item.instrumentId } : {}),
 		pieces: item.pieces.map((piece) => ({
 			title: piece.title,
 			composer: piece.composer,

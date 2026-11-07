@@ -1,15 +1,9 @@
-import {
-	createMemo,
-	createResource,
-	createSignal,
-	For,
-	onCleanup,
-	Show,
-} from "solid-js";
+import { createMemo, createResource, createSignal, For, Show } from "solid-js";
 import { formatScheduleDate } from "../app/appFormatting.js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { AccessDeniedPanel } from "../components/AccessDeniedPanel.js";
 import { Button } from "../components/Button.js";
+import { FestivalSelector } from "../components/FestivalSelector.js";
 import {
 	type CreateVolunteerRoleInput,
 	type CreateVolunteerShiftInput,
@@ -23,7 +17,7 @@ import {
 	updateVolunteerRole,
 	updateVolunteerShift,
 } from "../lib/api.js";
-import { subscribeToAuthChanges } from "../lib/firebase-auth.js";
+import { useAdminFestivalSelection } from "./useAdminFestivalSelection.js";
 
 interface VolunteerRolesPageProps {
 	app: FestivalAppController;
@@ -47,24 +41,8 @@ const emptyShiftDraft: CreateVolunteerShiftInput = {
 };
 
 export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
-	const [idToken, setIdToken] = createSignal<string | null>(null);
-	const [selectedFestivalShortName, setSelectedFestivalShortName] =
-		createSignal("");
-	const selectedFestival = createMemo(() => {
-		const festivals = props.app.festivals();
-		return (
-			festivals.find(
-				(festival) => festival.shortName === selectedFestivalShortName(),
-			) ??
-			festivals.find((festival) => festival.isPrimary) ??
-			festivals[0]
-		);
-	});
-
-	const unsubscribe = subscribeToAuthChanges(async (user) => {
-		setIdToken(user ? await user.getIdToken() : null);
-	});
-	onCleanup(unsubscribe);
+	const { idToken, selectedFestival, setSelectedFestivalShortName } =
+		useAdminFestivalSelection(() => props.app.festivals());
 
 	const [roles, { refetch: refetchRoles }] = createResource(
 		() => {
@@ -341,21 +319,11 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 					when={selectedFestival()}
 					fallback={<p>No festivals have been created yet.</p>}
 				>
-					<label class="field">
-						<span>Festival</span>
-						<select
-							value={selectedFestival()?.shortName ?? ""}
-							onChange={(event) =>
-								setSelectedFestivalShortName(event.currentTarget.value)
-							}
-						>
-							<For each={props.app.festivals()}>
-								{(festival) => (
-									<option value={festival.shortName}>{festival.name}</option>
-								)}
-							</For>
-						</select>
-					</label>
+					<FestivalSelector
+						festivals={props.app.festivals()}
+						value={selectedFestival()?.shortName ?? ""}
+						onChange={setSelectedFestivalShortName}
+					/>
 					<Show when={roles.loading}>
 						<p>Loading roles…</p>
 					</Show>

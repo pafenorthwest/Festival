@@ -134,6 +134,8 @@ export function createFestivalAppState() {
 		name: "",
 		startDate: "",
 		endDate: "",
+		registrationOpensAt: "",
+		registrationClosesAt: "",
 	});
 	const [membershipProductDraft, setMembershipProductDraft] =
 		createSignal<MembershipProductDraft>({
@@ -412,6 +414,8 @@ export function createFestivalAppState() {
 			name: "",
 			startDate: "",
 			endDate: "",
+			registrationOpensAt: "",
+			registrationClosesAt: "",
 		});
 		setMembershipProductDraft({
 			name: "",

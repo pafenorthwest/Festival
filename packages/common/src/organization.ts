@@ -50,6 +50,11 @@ export interface OrganizationDivisionListResponse {
 
 export interface PublicOrganizationDivisionListResponse {
 	divisions: PublicOrganizationDivision[];
+	instruments?: Array<{
+		id: string;
+		displayName: string;
+		displayOrder: number;
+	}>;
 }
 
 export interface OrganizationTimezoneResponse {
@@ -71,6 +76,45 @@ export interface RegistrationAgeConfiguration {
 	organizationId: string;
 	registrationAgeDate: string;
 	updatedAtIso: string;
+}
+
+export const DEFAULT_FESTIVAL_CLASS_CAPACITY = 100;
+
+export type ClassAvailabilityStatus = "open" | "waitlist";
+
+export interface ClassCapacityStatus {
+	capacity: number;
+	placedCount: number;
+	remainingSpots: number;
+	isOverCapacity: boolean;
+	availability: ClassAvailabilityStatus;
+}
+
+export function evaluateClassCapacityStatus(
+	capacity: number,
+	placedCount: number,
+): ClassCapacityStatus {
+	return {
+		capacity,
+		placedCount,
+		remainingSpots: Math.max(0, capacity - placedCount),
+		isOverCapacity: placedCount > capacity,
+		availability: placedCount >= capacity ? "waitlist" : "open",
+	};
+}
+
+export interface FestivalClassCapacityAuditRecord {
+	id: string;
+	organizationId: string;
+	festivalId: string;
+	festivalClassId: string;
+	actorUid: string | null;
+	action: "class_created" | "capacity_updated";
+	previousCapacity: number | null;
+	newCapacity: number;
+	placedCountAtChange: number;
+	availabilityAfterChange: ClassAvailabilityStatus;
+	createdAtIso: string;
 }
 
 export interface FestivalClassConfiguration {
@@ -262,6 +306,8 @@ export interface FestivalRecord {
 	name: string;
 	startDate: string;
 	endDate: string;
+	registrationOpensAt?: string | null;
+	registrationClosesAt?: string | null;
 	createdAtIso: string;
 }
 
@@ -273,6 +319,8 @@ export interface FestivalSummary {
 	name: string;
 	startDate: string;
 	endDate: string;
+	registrationOpensAt?: string | null;
+	registrationClosesAt?: string | null;
 	createdAtIso: string;
 }
 
@@ -334,6 +382,8 @@ export interface CreateFestivalInput {
 	name: string;
 	startDate: string;
 	endDate: string;
+	registrationOpensAt?: string | null;
+	registrationClosesAt?: string | null;
 }
 
 export interface CreateFestivalResponse {
@@ -638,3 +688,5 @@ export function deriveFestivalMetadataCutoff(
 	const cutoffDateStr = subtractCalendarDays(startDate, 42);
 	return getStartOfDayInTimezone(cutoffDateStr, timezone);
 }
+
+export * from "./festival-registration-window.js";

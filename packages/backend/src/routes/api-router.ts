@@ -6,36 +6,47 @@ import { BillingReconciliationService } from "../billing/billing-reconciliation-
 import { InMemoryBillingRepository } from "../billing/billing-repository.js";
 import { InMemoryCheckoutRecoveryRepository } from "../checkout/checkout-recovery-repository.js";
 import { CheckoutRecoveryService } from "../checkout/checkout-recovery-service.js";
+import type { CheckoutRepository } from "../checkout/checkout-repository.js";
 import type { ClassCheckoutService } from "../checkout/class-checkout-service.js";
 import type { MembershipCheckoutService } from "../checkout/membership-checkout-service.js";
+import type { MembershipCommerceRepository } from "../commerce/membership-commerce-repository.js";
 import type { MembershipStatusService } from "../commerce/membership-status-service.js";
+import type { ShopifyOrderProjectionService } from "../commerce/shopify-order-projection-service.js";
 import type { CommunicationService } from "../communication/communication-service.js";
 import type { CustomerAccountService } from "../customer/customer-account-service.js";
+import type { CustomerAvailabilityService } from "../customer/customer-availability-service.js";
 import type { DropTransferService } from "../registration/drop-transfer-service.js";
 import type { RegistrationChangeRepository } from "../registration/registration-change-repository.js";
 import type { RepertoireRepository } from "../repertoire/index.js";
 import type { AccompanistMembershipService } from "../services/accompanist-membership-service.js";
 import type { OrganizationService } from "../services/organization-service.js";
+import { ParticipantProfileService } from "../services/participant-profile-service.js";
 import type { PublicMembershipProductService } from "../shopify/public-membership-product-service.js";
 import type { ShopifyIntegrationDiagnosticService } from "../shopify/shopify-integration-diagnostic-service.js";
 import type { ShopifyIntegrationService } from "../shopify/shopify-integration-service.js";
 import type { ShopifyMembershipProductService } from "../shopify/shopify-membership-product-service.js";
 import type { VolunteerRepository } from "../volunteers/volunteer-repository.js";
+import type { WaitlistService } from "../waitlist/waitlist-service.js";
 import { buildAdminBillingRoutes } from "./admin-billing.routes.js";
 import { buildAdminCheckoutRecoveryRoutes } from "./admin-checkout-recovery.routes.js";
+import { buildAdminEntitlementsRoutes } from "./admin-entitlements.routes.js";
 import { buildAdminOrgRoutes } from "./admin-org/admin-org.routes.js";
 import { buildAdminRegistrationRoutes } from "./admin-registration/admin-registration.routes.js";
+import { buildAdminWaitlistRoutes } from "./admin-registration/admin-waitlist.routes.js";
 import { buildAdminShopifyRoutes } from "./admin-shopify/admin-shopify.routes.js";
 import { buildCatalogRoutes } from "./catalog/catalog.routes.js";
 import { buildCommunicationRoutes } from "./communication.routes.js";
 import { buildCustomerRoutes } from "./customer/customer.routes.js";
+import { buildCustomerAvailabilityRoutes } from "./customer/customer-availability.routes.js";
 import { buildCustomerChildrenRoutes } from "./customer/customer-children.routes.js";
 import { buildCustomerMembershipRoutes } from "./customer/customer-membership.routes.js";
 import { buildCustomerRegistrationRoutes } from "./customer/customer-registration.routes.js";
+import { buildCustomerWaitlistRoutes } from "./customer/customer-waitlist.routes.js";
 import { buildCustomerAuthRoutes } from "./customer-auth/customer-auth.routes.js";
 import { buildCustomerCheckoutRecoveryRoutes } from "./customer-checkout-recovery.routes.js";
 import { buildIdentityRoutes } from "./identity/identity.routes.js";
 import { buildOrgInfoRoutes } from "./org-info/org-info.routes.js";
+import { buildParticipantProfileRoutes } from "./participant-profile/participant-profile.routes.js";
 import { buildRepertoireRoutes } from "./repertoire.routes.js";
 import { buildStaffRoutes } from "./staff/staff.routes.js";
 import { buildVolunteerRoutes } from "./volunteers.routes.js";
@@ -46,11 +57,15 @@ export interface ApiRouterOptions {
 	shopifyIntegrationService?: ShopifyIntegrationService;
 	shopifyMembershipProductService?: ShopifyMembershipProductService;
 	customerAccountService?: CustomerAccountService;
+	customerAvailabilityService?: CustomerAvailabilityService;
 	publicMembershipProductService?: PublicMembershipProductService;
 	shopifyIntegrationDiagnosticService?: ShopifyIntegrationDiagnosticService;
 	membershipCheckoutService?: MembershipCheckoutService;
 	membershipStatusService?: MembershipStatusService;
 	accompanistMembershipService?: AccompanistMembershipService;
+	commerceRepository?: MembershipCommerceRepository;
+	checkoutRepository?: CheckoutRepository;
+	shopifyOrderProjectionService?: ShopifyOrderProjectionService;
 	volunteerRepository?: VolunteerRepository;
 	classCheckoutService?: ClassCheckoutService;
 	customClaimsWriter?: CustomClaimsWriter;
@@ -61,6 +76,8 @@ export interface ApiRouterOptions {
 	billingReconciliationService?: BillingReconciliationService;
 	communicationService?: CommunicationService;
 	checkoutRecoveryService?: CheckoutRecoveryService;
+	participantProfileService?: ParticipantProfileService;
+	waitlistService?: WaitlistService;
 }
 
 export function buildApiRouter(
@@ -73,11 +90,15 @@ export function buildApiRouter(
 		shopifyIntegrationService,
 		shopifyMembershipProductService,
 		customerAccountService,
+		customerAvailabilityService,
 		publicMembershipProductService,
 		shopifyIntegrationDiagnosticService,
 		membershipCheckoutService,
 		membershipStatusService,
 		accompanistMembershipService,
+		commerceRepository,
+		checkoutRepository,
+		shopifyOrderProjectionService,
 		volunteerRepository,
 		classCheckoutService,
 		customClaimsWriter,
@@ -88,6 +109,8 @@ export function buildApiRouter(
 		billingReconciliationService,
 		communicationService,
 		checkoutRecoveryService: providedRecoveryService,
+		participantProfileService,
+		waitlistService,
 	} = options;
 	const repository = organizationService.repository;
 
@@ -115,6 +138,14 @@ export function buildApiRouter(
 	);
 	router.route(
 		"/",
+		buildAdminWaitlistRoutes({
+			waitlistService,
+			authVerifier,
+			repository,
+		}),
+	);
+	router.route(
+		"/",
 		buildAdminShopifyRoutes({
 			authVerifier,
 			organizationService,
@@ -122,6 +153,17 @@ export function buildApiRouter(
 			shopifyIntegrationDiagnosticService,
 			shopifyMembershipProductService,
 			customerAccountService,
+		}),
+	);
+	router.route(
+		"/",
+		buildAdminEntitlementsRoutes({
+			authVerifier,
+			repository,
+			accompanistMembershipService,
+			commerceRepository,
+			checkoutRepository,
+			shopifyOrderProjectionService,
 		}),
 	);
 	const recoveryService =
@@ -157,7 +199,13 @@ export function buildApiRouter(
 
 	router.route(
 		"/organizations/:slug/customer",
-		buildCustomerRoutes({ customerAccountService }),
+		buildCustomerRoutes({
+			customerAccountService,
+		}),
+	);
+	router.route(
+		"/organizations/:slug/customer-account",
+		buildCustomerAvailabilityRoutes({ customerAvailabilityService }),
 	);
 	router.route(
 		"/organizations/:slug/customer",
@@ -181,6 +229,13 @@ export function buildApiRouter(
 			customerAccountService,
 			classCheckoutService,
 			dropTransferService,
+		}),
+	);
+	router.route(
+		"/organizations/:slug/customer",
+		buildCustomerWaitlistRoutes({
+			waitlistService,
+			customerAccountService,
 		}),
 	);
 
@@ -240,6 +295,17 @@ export function buildApiRouter(
 			authVerifier,
 			repository,
 			communicationService,
+		}),
+	);
+
+	router.route(
+		"/",
+		buildParticipantProfileRoutes({
+			profileService:
+				participantProfileService ??
+				new ParticipantProfileService(repository, customerAccountService),
+			authVerifier,
+			repository,
 		}),
 	);
 

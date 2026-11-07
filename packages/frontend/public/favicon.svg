@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Festival">
+  <rect width="64" height="64" rx="14" fill="#303240" />
+  <path d="M30 40V18c7 0 12 3 14 9" fill="none" stroke="#b6872c" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+  <ellipse cx="23" cy="43" rx="8" ry="5.5" transform="rotate(-22 23 43)" fill="#b6872c" />
+</svg>

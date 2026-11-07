@@ -7,6 +7,7 @@ export function jsonError(c: Context, error: unknown) {
 		return c.json({
 			error: error.message,
 			...(error.code ? { code: error.code } : {}),
+			...(error.details ? { ...error.details, details: error.details } : {}),
 		});
 	}
 

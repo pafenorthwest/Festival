@@ -28,6 +28,33 @@ async function setup() {
 }
 
 describe("AccompanistMembershipService", () => {
+	for (const staffAccessConsent of [undefined, false, "true", 1, null]) {
+		it(`rejects direct acquisition with consent ${String(staffAccessConsent)} without creating a grant`, async () => {
+			const { repository, organization, division, service } = await setup();
+			await expect(
+				service.acquire({
+					organizationId: organization.id,
+					organizationTimezone: "UTC",
+					customerId: "customer-1",
+					verifiedShopifyCustomerEmail: "shopper@example.com",
+					payload: {
+						name: "Ava Piano",
+						email: "ava@example.com",
+						city: "Seattle",
+						phone: "+1 206 555 0100",
+						divisionIds: [division.id],
+						staffAccessConsent,
+					},
+				}),
+			).rejects.toMatchObject({ status: 400 });
+			expect(
+				await repository.listAccompanistMembershipGrants({
+					organizationId: organization.id,
+				}),
+			).toEqual([]);
+		});
+	}
+
 	it("creates immutable current membership contact and division snapshots without checkout", async () => {
 		const { organization, division, service } = await setup();
 		const result = await service.acquire({
@@ -40,6 +67,7 @@ describe("AccompanistMembershipService", () => {
 				email: "AVA@example.com",
 				city: "Seattle",
 				phone: "+1 206 555 0100",
+				staffAccessConsent: true,
 				divisionIds: [division.id],
 			},
 		});
@@ -57,6 +85,7 @@ describe("AccompanistMembershipService", () => {
 			email: "ava@example.com",
 			city: "Seattle",
 			phone: "+1 206 555 0100",
+			staffAccessConsent: true,
 			divisionIds: [division.id],
 		};
 		await service.acquire({
@@ -89,6 +118,7 @@ describe("AccompanistMembershipService", () => {
 				email: "ava@example.com",
 				city: "Seattle",
 				phone: "+1 206 555 0100",
+				staffAccessConsent: true,
 				divisionIds: [division.id],
 			},
 		};
@@ -133,6 +163,7 @@ describe("AccompanistMembershipService", () => {
 					email: "ava@example.com",
 					city: "Seattle",
 					phone: "+1 206 555 0100",
+					staffAccessConsent: true,
 					divisionIds: [division.id],
 				},
 			}),
@@ -147,6 +178,7 @@ describe("AccompanistMembershipService", () => {
 			email: "ava@example.com",
 			city: "Seattle",
 			phone: "+1 206 555 0100",
+			staffAccessConsent: true,
 			divisionIds: [division.id],
 		};
 		await service.acquire({
@@ -198,6 +230,7 @@ describe("AccompanistMembershipService", () => {
 				email: "ava@example.com",
 				city: "Seattle",
 				phone: "+1 206 555 0100",
+				staffAccessConsent: true,
 				divisionIds: [division.id],
 			},
 		});
@@ -222,6 +255,7 @@ describe("AccompanistMembershipService", () => {
 			email: "shared-contact@example.com",
 			city: "Seattle",
 			phone: "+1 206 555 0100",
+			staffAccessConsent: true,
 			divisionIds: [division.id],
 		};
 		await service.acquire({
@@ -264,6 +298,7 @@ describe("AccompanistMembershipService", () => {
 					email: "ava@example.com",
 					city: "Seattle",
 					phone: "+1 206 555 0100",
+					staffAccessConsent: true,
 					divisionIds: [division.id],
 				},
 			}),
@@ -310,6 +345,7 @@ describe("AccompanistMembershipService", () => {
 				email: "ava@example.com",
 				city: "Seattle",
 				phone: "+1 206 555 0100",
+				staffAccessConsent: true,
 				divisionIds: [division.id],
 			},
 		});
@@ -349,6 +385,7 @@ describe("AccompanistMembershipService", () => {
 					email: "acc@example.com",
 					city: "Seattle",
 					phone: "+1 206 555 0101",
+					staffAccessConsent: true,
 					divisionIds: [division.id],
 				},
 			});
@@ -647,5 +684,510 @@ describe("AccompanistMembershipService", () => {
 			const { roster } = await service.listCurrentRoster(organization.id);
 			expect(roster).toEqual([]);
 		});
+	});
+});
+
+const ALL_ON_ONE_PAGE = { page: 1, pageSize: 100 };
+
+describe("AccompanistMembershipService.listEntitlementReport", () => {
+	async function seedReport() {
+		const context = await setup();
+		const { repository, organization, division, service } = context;
+		const offering = await repository.createMembershipProductRecord({
+			organizationId: organization.id,
+			entitlementClass: "teacher_membership",
+			durationDays: 365,
+			isActive: true,
+			shopifyProductGid: "gid://shopify/Product/teacher",
+			shopifyVariantGid: "gid://shopify/ProductVariant/teacher",
+			productNameSnapshot: "Annual Teacher Pass",
+		});
+		const teacherGrant = (
+			customerId: string,
+			overrides: { startsOn: string; endsOn: string; status: string },
+		) =>
+			repository.createEntitlementGrantSnapshot({
+				organizationId: organization.id,
+				customerId,
+				entitlementClass: "teacher_membership",
+				offeringId: offering.id,
+				durationDays: 365,
+				divisionId: division.id,
+				divisionNameSnapshot: division.displayName,
+				paidAmount: "75.00",
+				paidCurrencyCode: "USD",
+				checkoutIntentId: `checkout-${customerId}`,
+				shopifyOrderGid: `gid://shopify/Order/${customerId}`,
+				shopifyOrderLineGid: `gid://shopify/LineItem/${customerId}`,
+				verifiedIdentityEmail: `${customerId}@example.com`,
+				...overrides,
+			} as Parameters<typeof repository.createEntitlementGrantSnapshot>[0]);
+		await teacherGrant("cust-active", {
+			startsOn: "2026-09-12",
+			endsOn: "2027-09-12",
+			status: "active",
+		});
+		await teacherGrant("cust-expired", {
+			startsOn: "2025-01-01",
+			endsOn: "2026-01-01",
+			status: "expired",
+		});
+		await teacherGrant("cust-scheduled", {
+			startsOn: "2027-01-01",
+			endsOn: "2028-01-01",
+			status: "scheduled",
+		});
+		const revokedGrant = await teacherGrant("cust-revoked", {
+			startsOn: "2026-09-12",
+			endsOn: "2027-09-12",
+			status: "active",
+		});
+		await repository.revokeEntitlement({
+			organizationId: organization.id,
+			entitlementId: revokedGrant.id,
+			actorUserId: "admin-user",
+			reason: "Refunded",
+			revokedAtIso: "2026-09-13T00:00:00.000Z",
+		});
+		for (const [id, name] of [
+			["cust-active", "Aaron Teacher"],
+			["cust-expired", "Erin Expired"],
+			["cust-scheduled", "Sam Scheduled"],
+			["cust-revoked", "Rita Revoked"],
+		] as const) {
+			repository.setCustomerContact(organization.id, {
+				customerId: id,
+				name,
+				email: `${id}@example.com`,
+				phone: "+1 206 555 0199",
+				city: "Private City",
+			});
+		}
+		await service.acquire({
+			organizationId: organization.id,
+			organizationTimezone: "UTC",
+			customerId: "cust-accompanist",
+			verifiedShopifyCustomerEmail: "acc@example.com",
+			payload: {
+				name: "Beth Accompanist",
+				email: "acc@example.com",
+				city: "Seattle",
+				phone: "+1 206 555 0101",
+				staffAccessConsent: true,
+				divisionIds: [division.id],
+			},
+		});
+		return context;
+	}
+
+	it("lists teacher and accompanist entitlements in every lifecycle status, sorted by customer", async () => {
+		const { organization, service } = await seedReport();
+		const { entries } = await service.listEntitlementReport(
+			organization.id,
+			{},
+			ALL_ON_ONE_PAGE,
+		);
+		expect(
+			entries.map((entry) => [
+				entry.customerName,
+				entry.entitlementClass,
+				entry.status,
+			]),
+		).toEqual([
+			["Aaron Teacher", "teacher_membership", "active"],
+			["Beth Accompanist", "accompanist_membership", "active"],
+			["Erin Expired", "teacher_membership", "expired"],
+			["Rita Revoked", "teacher_membership", "revoked"],
+			["Sam Scheduled", "teacher_membership", "scheduled"],
+		]);
+		expect(entries[0]).toMatchObject({
+			offeringName: "Annual Teacher Pass",
+			source: "teacher_checkout",
+			startsOn: "2026-09-12",
+			endsOn: "2027-09-12",
+			customerEmail: "cust-active@example.com",
+		});
+		expect(entries[1]).toMatchObject({
+			offeringName: "Accompanist Membership",
+			source: "accompanist_form",
+		});
+	});
+
+	it("falls back to customerEmail when customerName is missing or empty when sorting entries", async () => {
+		const context = await setup();
+		const { repository, organization, division, service } = context;
+		const offering = await repository.createMembershipProductRecord({
+			organizationId: organization.id,
+			entitlementClass: "teacher_membership",
+			durationDays: 365,
+			isActive: true,
+			shopifyProductGid: "gid://shopify/Product/teacher",
+			shopifyVariantGid: "gid://shopify/ProductVariant/teacher",
+			productNameSnapshot: "Annual Teacher Pass",
+		});
+		const createGrant = (customerId: string) =>
+			repository.createEntitlementGrantSnapshot({
+				organizationId: organization.id,
+				customerId,
+				entitlementClass: "teacher_membership",
+				offeringId: offering.id,
+				durationDays: 365,
+				divisionId: division.id,
+				divisionNameSnapshot: division.displayName,
+				paidAmount: "75.00",
+				paidCurrencyCode: "USD",
+				checkoutIntentId: `checkout-${customerId}`,
+				shopifyOrderGid: `gid://shopify/Order/${customerId}`,
+				shopifyOrderLineGid: `gid://shopify/LineItem/${customerId}`,
+				verifiedIdentityEmail: `${customerId}@example.com`,
+				startsOn: "2026-09-12",
+				endsOn: "2027-09-12",
+				status: "active",
+			} as Parameters<typeof repository.createEntitlementGrantSnapshot>[0]);
+
+		await createGrant("cust-b");
+		await createGrant("cust-a");
+		await createGrant("cust-c");
+
+		repository.setCustomerContact(organization.id, {
+			customerId: "cust-b",
+			name: "Bob",
+			email: "bob@example.com",
+		});
+		repository.setCustomerContact(organization.id, {
+			customerId: "cust-a",
+			name: "",
+			email: "alice@example.com",
+		});
+		repository.setCustomerContact(organization.id, {
+			customerId: "cust-c",
+			email: "charlie@example.com",
+		});
+
+		const report = await service.listEntitlementReport(
+			organization.id,
+			{},
+			ALL_ON_ONE_PAGE,
+		);
+
+		expect(
+			report.entries.map((entry) => [entry.customerName, entry.customerEmail]),
+		).toEqual([
+			[undefined, "alice@example.com"],
+			["Bob", "bob@example.com"],
+			[undefined, "charlie@example.com"],
+		]);
+	});
+
+	it("filters by entitlement class, status, and customer search", async () => {
+		const { organization, service } = await seedReport();
+		const names = async (
+			filters: Parameters<typeof service.listEntitlementReport>[1],
+		) =>
+			(
+				await service.listEntitlementReport(
+					organization.id,
+					filters,
+					ALL_ON_ONE_PAGE,
+				)
+			).entries.map((entry) => entry.customerName);
+		expect(await names({ entitlementClass: "accompanist_membership" })).toEqual(
+			["Beth Accompanist"],
+		);
+		expect(await names({ status: "expired" })).toEqual(["Erin Expired"]);
+		expect(await names({ search: "RITA" })).toEqual(["Rita Revoked"]);
+		expect(await names({ search: "cust-sched" })).toEqual(["Sam Scheduled"]);
+		expect(
+			await names({ entitlementClass: "teacher_membership", status: "active" }),
+		).toEqual(["Aaron Teacher"]);
+		expect(await names({ search: "no such customer" })).toEqual([]);
+	});
+
+	it("returns only the fields needed for the report and never another organization's grants", async () => {
+		const { repository, organization, service } = await seedReport();
+		const other = await repository.createOrganization({
+			name: "Other Festival",
+			slug: "other",
+		});
+		const report = await service.listEntitlementReport(
+			organization.id,
+			{},
+			ALL_ON_ONE_PAGE,
+		);
+		const { entries } = report;
+		for (const entry of entries) {
+			expect(Object.keys(entry).sort()).toEqual(
+				[
+					"customerEmail",
+					"customerName",
+					"divisions",
+					"endsOn",
+					"entitlementClass",
+					"id",
+					"offeringName",
+					"source",
+					"startsOn",
+					"status",
+				].sort(),
+			);
+		}
+		expect(JSON.stringify(report)).not.toContain("Private City");
+		expect(JSON.stringify(report)).not.toContain("555");
+		expect(
+			await service.listEntitlementReport(other.id, {}, ALL_ON_ONE_PAGE),
+		).toEqual({
+			entries: [],
+			total: 0,
+			page: 1,
+			pageSize: 100,
+			totalPages: 1,
+			divisions: [],
+		});
+	});
+
+	it("filters by division and lists every division as a filter option", async () => {
+		const { repository, organization, service } = await seedReport();
+		const voice = await repository.createDivision({
+			organizationId: organization.id,
+			displayName: "Voice",
+			normalizedName: "voice",
+		});
+		await service.acquire({
+			organizationId: organization.id,
+			organizationTimezone: "UTC",
+			customerId: "cust-singer",
+			verifiedShopifyCustomerEmail: "singer@example.com",
+			payload: {
+				name: "Vera Voice",
+				email: "singer@example.com",
+				city: "Seattle",
+				phone: "+1 206 555 0102",
+				staffAccessConsent: true,
+				divisionIds: [voice.id],
+			},
+		});
+		const voiceOnly = await service.listEntitlementReport(
+			organization.id,
+			{ divisionId: voice.id },
+			ALL_ON_ONE_PAGE,
+		);
+		expect(voiceOnly.entries.map((entry) => entry.customerName)).toEqual([
+			"Vera Voice",
+		]);
+		expect(voiceOnly.total).toBe(1);
+		// Options ignore the active filters so the dropdown never shrinks.
+		expect(voiceOnly.divisions.map((d) => d.divisionName)).toEqual([
+			"Piano",
+			"Voice",
+		]);
+		const unknown = await service.listEntitlementReport(
+			organization.id,
+			{ divisionId: "no-such-division" },
+			ALL_ON_ONE_PAGE,
+		);
+		expect(unknown.entries).toEqual([]);
+	});
+
+	it("paginates the sorted, filtered entries", async () => {
+		const { organization, service } = await seedReport();
+		const names = (page: number, filters = {}) =>
+			service
+				.listEntitlementReport(organization.id, filters, { page, pageSize: 2 })
+				.then((report) => ({
+					names: report.entries.map((entry) => entry.customerName),
+					page: report.page,
+					total: report.total,
+					totalPages: report.totalPages,
+				}));
+		expect(await names(1)).toEqual({
+			names: ["Aaron Teacher", "Beth Accompanist"],
+			page: 1,
+			total: 5,
+			totalPages: 3,
+		});
+		expect(await names(3)).toEqual({
+			names: ["Sam Scheduled"],
+			page: 3,
+			total: 5,
+			totalPages: 3,
+		});
+		expect((await names(9)).page).toBe(3);
+		expect(await names(1, { status: "expired" })).toEqual({
+			names: ["Erin Expired"],
+			page: 1,
+			total: 1,
+			totalPages: 1,
+		});
+	});
+
+	it("matches customer search by customerEmail in memory", async () => {
+		const { organization, service } = await seedReport();
+		const reportTeacher = await service.listEntitlementReport(
+			organization.id,
+			{ search: "CUST-ACTIVE@EXAMPLE.COM" },
+			ALL_ON_ONE_PAGE,
+		);
+		expect(reportTeacher.entries).toHaveLength(1);
+		expect(reportTeacher.entries[0]).toMatchObject({
+			customerName: "Aaron Teacher",
+			customerEmail: "cust-active@example.com",
+		});
+
+		const reportAcc = await service.listEntitlementReport(
+			organization.id,
+			{ search: "acc@" },
+			ALL_ON_ONE_PAGE,
+		);
+		expect(reportAcc.entries).toHaveLength(1);
+		expect(reportAcc.entries[0]).toMatchObject({
+			customerName: "Beth Accompanist",
+			customerEmail: "acc@example.com",
+		});
+	});
+
+	it("correctly matches division filters for accompanist assigned to multiple divisions", async () => {
+		const context = await setup();
+		const { repository, organization, division: piano, service } = context;
+		const strings = await repository.createDivision({
+			organizationId: organization.id,
+			displayName: "Strings",
+			normalizedName: "strings",
+		});
+		const voice = await repository.createDivision({
+			organizationId: organization.id,
+			displayName: "Voice",
+			normalizedName: "voice",
+		});
+
+		await repository.createAccompanistMembershipGrant({
+			organizationId: organization.id,
+			customerId: "cust-multi-div",
+			source: "accompanist_form",
+			offeringNameSnapshot: "Accompanist Membership",
+			startsOn: "2026-09-12",
+			endsOn: "2027-09-12",
+			contact: {
+				name: "Morgan Multi",
+				email: "multi@example.com",
+				city: "Portland",
+				phone: "+1 503 555 0199",
+			},
+			divisions: [
+				{ divisionId: piano.id, divisionName: piano.displayName },
+				{ divisionId: strings.id, divisionName: strings.displayName },
+			],
+			normalizedEmail: "multi@example.com",
+		});
+
+		const pianoReport = await service.listEntitlementReport(
+			organization.id,
+			{ divisionId: piano.id },
+			ALL_ON_ONE_PAGE,
+		);
+		expect(pianoReport.entries).toHaveLength(1);
+		expect(pianoReport.entries[0].customerName).toBe("Morgan Multi");
+		expect(pianoReport.entries[0].divisions).toEqual([
+			{ divisionId: piano.id, divisionName: "Piano" },
+			{ divisionId: strings.id, divisionName: "Strings" },
+		]);
+
+		const stringsReport = await service.listEntitlementReport(
+			organization.id,
+			{ divisionId: strings.id },
+			ALL_ON_ONE_PAGE,
+		);
+		expect(stringsReport.entries).toHaveLength(1);
+		expect(stringsReport.entries[0].customerName).toBe("Morgan Multi");
+
+		const voiceReport = await service.listEntitlementReport(
+			organization.id,
+			{ divisionId: voice.id },
+			ALL_ON_ONE_PAGE,
+		);
+		expect(voiceReport.entries).toHaveLength(0);
+	});
+
+	it("derives non-active lifecycle states (expired, revoked, scheduled) for accompanist grants", async () => {
+		const context = await setup();
+		const { repository, organization, division, service } = context;
+
+		const createGrant = (
+			customerId: string,
+			name: string,
+			startsOn: string,
+			endsOn: string,
+		) =>
+			repository.createAccompanistMembershipGrant({
+				organizationId: organization.id,
+				customerId,
+				source: "accompanist_form",
+				offeringNameSnapshot: "Accompanist Membership",
+				startsOn,
+				endsOn,
+				contact: {
+					name,
+					email: `${customerId}@example.com`,
+					city: "Seattle",
+					phone: "+1 206 555 0100",
+				},
+				divisions: [
+					{
+						divisionId: division.id,
+						divisionName: division.displayName,
+					},
+				],
+				normalizedEmail: `${customerId}@example.com`,
+			});
+
+		await createGrant("acc-exp", "Evan Expired", "2024-01-01", "2025-01-01");
+		await createGrant(
+			"acc-sch",
+			"Samantha Scheduled",
+			"2027-01-01",
+			"2028-01-01",
+		);
+		const activeGrant = await createGrant(
+			"acc-rev",
+			"Rachel Revoked",
+			"2026-09-12",
+			"2027-09-12",
+		);
+
+		await repository.revokeEntitlement({
+			organizationId: organization.id,
+			entitlementId: activeGrant.id,
+			actorUserId: "admin-user",
+			reason: "Withdrawn",
+			revokedAtIso: "2026-09-13T00:00:00.000Z",
+		});
+
+		const full = await service.listEntitlementReport(
+			organization.id,
+			{},
+			ALL_ON_ONE_PAGE,
+		);
+		expect(full.entries.map((e) => [e.customerName, e.status])).toEqual([
+			["Evan Expired", "expired"],
+			["Rachel Revoked", "revoked"],
+			["Samantha Scheduled", "scheduled"],
+		]);
+
+		const expiredOnly = await service.listEntitlementReport(
+			organization.id,
+			{ status: "expired" },
+			ALL_ON_ONE_PAGE,
+		);
+		expect(expiredOnly.entries.map((e) => e.customerName)).toEqual([
+			"Evan Expired",
+		]);
+
+		const revokedOnly = await service.listEntitlementReport(
+			organization.id,
+			{ status: "revoked" },
+			ALL_ON_ONE_PAGE,
+		);
+		expect(revokedOnly.entries.map((e) => e.customerName)).toEqual([
+			"Rachel Revoked",
+		]);
 	});
 });

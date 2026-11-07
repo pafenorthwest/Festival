@@ -73,6 +73,10 @@ export function FestivalAdminDashboardPage(props: {
 						<button
 							type="button"
 							class="admin-workflow-card"
+							data-preload-path={buildFestivalAdminClassesPath(
+								props.slug,
+								props.festivalSlug,
+							)}
 							onClick={() =>
 								props.app.navigate(
 									buildFestivalAdminClassesPath(props.slug, props.festivalSlug),
@@ -85,6 +89,7 @@ export function FestivalAdminDashboardPage(props: {
 						<button
 							type="button"
 							class="admin-workflow-card"
+							data-preload-path={buildOrgMusicReviewPath(props.slug)}
 							onClick={() =>
 								props.app.navigate(buildOrgMusicReviewPath(props.slug))
 							}
@@ -95,6 +100,7 @@ export function FestivalAdminDashboardPage(props: {
 						<button
 							type="button"
 							class="admin-workflow-card"
+							data-preload-path={buildOrgBillingPath(props.slug)}
 							onClick={() =>
 								props.app.navigate(buildOrgBillingPath(props.slug))
 							}
@@ -107,6 +113,7 @@ export function FestivalAdminDashboardPage(props: {
 						<button
 							type="button"
 							class="admin-workflow-card"
+							data-preload-path={buildOrgCommunicationsPath(props.slug)}
 							onClick={() =>
 								props.app.navigate(buildOrgCommunicationsPath(props.slug))
 							}

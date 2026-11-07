@@ -17,6 +17,8 @@ export interface FestivalDraft {
 	name: string;
 	startDate: string;
 	endDate: string;
+	registrationOpensAt?: string;
+	registrationClosesAt?: string;
 }
 
 export interface ShopifyDraft {

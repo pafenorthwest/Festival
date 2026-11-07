@@ -16,6 +16,8 @@ export type AppRoute =
 	| { kind: "org-customer-account-contact"; slug: string }
 	| { kind: "org-customer-account-children"; slug: string }
 	| { kind: "org-customer-account-orders"; slug: string }
+	| { kind: "org-customer-account-classes"; slug: string }
+	| { kind: "org-customer-account-availability"; slug: string }
 	| { kind: "org-admin"; slug: string }
 	| { kind: "org-admin-users"; slug: string }
 	| { kind: "org-admin-integrations"; slug: string }
@@ -30,6 +32,7 @@ export type AppRoute =
 	| { kind: "org-music-review"; slug: string }
 	| { kind: "org-billing"; slug: string }
 	| { kind: "org-communications"; slug: string }
+	| { kind: "org-public-directory"; slug: string }
 	| AdminCheckoutRecoveryRoute
 	| CustomerCheckoutRecoveryRoute;
 
@@ -54,6 +57,10 @@ export function buildOrgPath(slug: string): string {
 
 export function buildOrgRootPath(slug: string): string {
 	return `/org/${slug}`;
+}
+
+export function buildOrgPublicDirectoryPath(slug: string): string {
+	return `/org/${slug}/directory`;
 }
 
 export function buildOrgMembershipPath(slug: string): string {
@@ -109,6 +116,14 @@ export function buildOrgCustomerAccountChildrenPath(slug: string): string {
 
 export function buildOrgCustomerAccountOrdersPath(slug: string): string {
 	return `/org/${slug}/account/orders`;
+}
+
+export function buildOrgCustomerAccountClassesPath(slug: string): string {
+	return `/org/${slug}/account/classes`;
+}
+
+export function buildOrgCustomerAccountAvailabilityPath(slug: string): string {
+	return `/org/${slug}/account/availability`;
 }
 
 export function buildOrgAdminUsersPath(slug: string): string {
@@ -180,6 +195,7 @@ export function isOrganizationPageRoute(route: AppRoute): boolean {
 		route.kind === "festival-register" ||
 		route.kind === "festival-volunteers" ||
 		route.kind === "org-root" ||
+		route.kind === "org-public-directory" ||
 		route.kind === "festival-public" ||
 		route.kind === "org-membership" ||
 		route.kind === "org-accompanist-membership" ||
@@ -188,6 +204,8 @@ export function isOrganizationPageRoute(route: AppRoute): boolean {
 		route.kind === "org-customer-account-contact" ||
 		route.kind === "org-customer-account-children" ||
 		route.kind === "org-customer-account-orders" ||
+		route.kind === "org-customer-account-classes" ||
+		route.kind === "org-customer-account-availability" ||
 		route.kind === "org-checkout-recovery"
 	);
 }
@@ -213,6 +231,16 @@ export function parseRoute(pathname: string): AppRoute {
 	const orgRootMatch = pathname.match(/^\/org\/([^/]+)\/?$/);
 	if (orgRootMatch) {
 		return { kind: "org-root", slug: orgRootMatch[1] ?? "" };
+	}
+
+	const orgPublicDirectoryMatch = pathname.match(
+		/^\/org\/([^/]+)\/directory\/?$/,
+	);
+	if (orgPublicDirectoryMatch) {
+		return {
+			kind: "org-public-directory",
+			slug: orgPublicDirectoryMatch[1] ?? "",
+		};
 	}
 	const festivalAdminMatch = pathname.match(
 		/^\/org\/([^/]+)\/festival\/([^/]+)\/admin$/,
@@ -306,6 +334,24 @@ export function parseRoute(pathname: string): AppRoute {
 		return {
 			kind: "org-customer-account-orders",
 			slug: customerAccountOrdersMatch[1] ?? "",
+		};
+
+	const customerAccountClassesMatch = pathname.match(
+		/^\/org\/([^/]+)\/account\/classes$/,
+	);
+	if (customerAccountClassesMatch)
+		return {
+			kind: "org-customer-account-classes",
+			slug: customerAccountClassesMatch[1] ?? "",
+		};
+
+	const customerAccountAvailabilityMatch = pathname.match(
+		/^\/(?:organizations|org)\/([^/]+)\/account\/availability\/?$/,
+	);
+	if (customerAccountAvailabilityMatch)
+		return {
+			kind: "org-customer-account-availability",
+			slug: customerAccountAvailabilityMatch[1] ?? "",
 		};
 
 	const orgAdminMatch = pathname.match(/^\/org\/([^/]+)\/admin$/);

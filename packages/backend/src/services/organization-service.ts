@@ -10,6 +10,7 @@ import {
 	type CreateOrganizationDivisionInput,
 	type CreateOrganizationInput,
 	type CreateOrganizationResponse,
+	DEFAULT_FESTIVAL_CLASS_CAPACITY,
 	type DismissWelcomeResponse,
 	deriveDisplayName,
 	divisionNameUniquenessKey,
@@ -31,17 +32,20 @@ import {
 	type ReorderOrganizationDivisionsInput,
 	type SessionMembership,
 	type SessionResponse,
+	type UpdateFestivalRegistrationWindowInput,
 	type UpdateOrganizationDivisionInput,
 	type UpdateOrganizationTimezoneInput,
 	validateCreateRoomInput,
 	validateDivisionName,
 	validateFestivalDates,
 	validateFestivalName,
+	validateFestivalRegistrationWindow,
 	validateOrganizationName,
 	validateOrganizationShortName,
 	validateRegistrationAgeDate,
 } from "@festival/common";
 import type { TenantContext } from "../auth/tenant-context.js";
+import type { MembershipCommerceRepository } from "../commerce/membership-commerce-repository.js";
 import { AppError } from "../errors/app-error.js";
 import type {
 	CreateFestivalClassConfigurationInput,
@@ -51,6 +55,10 @@ import type {
 } from "../repo/organization-repository.js";
 import type { RoomRepository } from "../rooms/room-repository.js";
 import type { AdminClassCatalogService } from "./admin-class-catalog.service.js";
+import {
+	validateCreateClassInput,
+	validateUpdateClassInput,
+} from "./admin-class-catalog-validation.js";
 
 function toSessionMembership(
 	record: MembershipWithOrganization,
@@ -93,6 +101,8 @@ function toFestivalSummary(record: FestivalRecord): FestivalSummary {
 		name: record.name,
 		startDate: record.startDate,
 		endDate: record.endDate,
+		registrationOpensAt: record.registrationOpensAt ?? null,
+		registrationClosesAt: record.registrationClosesAt ?? null,
 		createdAtIso: record.createdAtIso,
 	};
 }
@@ -132,6 +142,10 @@ export class OrganizationService {
 		private readonly adminClassCatalogService?: AdminClassCatalogService,
 		private readonly options?: { enableDropTransfer?: boolean },
 		private readonly roomRepository?: RoomRepository,
+		private readonly commerce?: Pick<
+			MembershipCommerceRepository,
+			"countConfirmedClassEntitlements"
+		>,
 	) {}
 
 	async getSession(identity?: AuthenticatedUser): Promise<SessionResponse> {
@@ -254,10 +268,21 @@ export class OrganizationService {
 		const organization =
 			await this.repository.findOrganizationBySlug(organizationSlug);
 		if (!organization) throw new AppError("Organization not found.", 404);
+		const [divisions, instruments] = await Promise.all([
+			this.repository.listDivisions(organization.id, true),
+			this.repository.listRegistrationCatalogValues(
+				organization.id,
+				"instrument",
+				true,
+			),
+		]);
 		return {
-			divisions: (
-				await this.repository.listDivisions(organization.id, true)
-			).map(({ id, displayName, displayOrder }) => ({
+			divisions: divisions.map(({ id, displayName, displayOrder }) => ({
+				id,
+				displayName,
+				displayOrder,
+			})),
+			instruments: instruments.map(({ id, displayName, displayOrder }) => ({
 				id,
 				displayName,
 				displayOrder,
@@ -745,6 +770,12 @@ export class OrganizationService {
 		};
 	}
 
+	private async requireOrganizationById(
+		organizationId: string,
+	): Promise<OrganizationRecord | null> {
+		return this.repository.findOrganizationById(organizationId);
+	}
+
 	async createFestivalForTenant(
 		tenant: TenantContext,
 		input: CreateFestivalInput,
@@ -759,6 +790,24 @@ export class OrganizationService {
 		];
 		if (errors.length > 0) {
 			throw new AppError(errors.join(" "), 400);
+		}
+
+		const organization =
+			(await this.requireOrganizationById(tenant.organization.id)) ??
+			tenant.organization;
+		const windowValidation = validateFestivalRegistrationWindow(
+			{
+				registrationOpensAt: input.registrationOpensAt,
+				registrationClosesAt: input.registrationClosesAt,
+			},
+			organization.timezone,
+		);
+		if (!windowValidation.isValid) {
+			throw new AppError(
+				windowValidation.errors[0] ?? "Registration window is invalid.",
+				400,
+				"invalid_registration_window",
+			);
 		}
 
 		const existingFestival = await this.repository.findFestivalByName(
@@ -786,11 +835,60 @@ export class OrganizationService {
 			name: nameValidation.normalized,
 			startDate: dateValidation.startDate,
 			endDate: dateValidation.endDate,
+			registrationOpensAt: windowValidation.opensAtIso,
+			registrationClosesAt: windowValidation.closesAtIso,
 		});
 
 		return {
 			festival: toFestivalSummary(festival),
 		};
+	}
+
+	async updateFestivalRegistrationWindowForTenant(
+		tenant: TenantContext,
+		festivalShortName: string,
+		input: UpdateFestivalRegistrationWindowInput,
+	): Promise<CreateFestivalResponse> {
+		if (!input || typeof input !== "object" || Array.isArray(input)) {
+			throw new AppError(
+				"Registration window update payload is required.",
+				400,
+				"invalid_registration_window",
+			);
+		}
+		const festival = await this.repository.findFestivalByShortName(
+			tenant.organization.id,
+			festivalShortName,
+		);
+		if (!festival) throw new AppError("Festival not found.", 404);
+
+		const organization =
+			(await this.requireOrganizationById(tenant.organization.id)) ??
+			tenant.organization;
+		const validation = validateFestivalRegistrationWindow(
+			{
+				registrationOpensAt: input.registrationOpensAt,
+				registrationClosesAt: input.registrationClosesAt,
+			},
+			organization.timezone,
+		);
+		if (!validation.isValid) {
+			throw new AppError(
+				validation.errors[0] ?? "Registration window is invalid.",
+				400,
+				"invalid_registration_window",
+			);
+		}
+
+		const updated = await this.repository.updateFestivalRegistrationWindow(
+			tenant.organization.id,
+			festival.id,
+			{
+				registrationOpensAt: validation.opensAtIso,
+				registrationClosesAt: validation.closesAtIso,
+			},
+		);
+		return { festival: toFestivalSummary(updated) };
 	}
 
 	async getPrimaryFestivalPath(
@@ -1013,26 +1111,40 @@ export class OrganizationService {
 		);
 		if (!festival) throw new AppError("Festival not found.", 404);
 
-		if (input.divisionId) {
+		const validated = validateCreateClassInput(input);
+
+		if (validated.divisionId) {
 			const divisions = await this.repository.listDivisions(organization.id);
-			const exists = divisions.some((d) => d.id === input.divisionId);
+			const exists = divisions.some((d) => d.id === validated.divisionId);
 			if (!exists) throw new AppError("Division not found.", 404);
 		}
 
-		if (input.classSubtypeId) {
+		if (validated.classSubtypeId) {
 			const subtypes = await this.repository.listFestivalClassSubtypes(
 				organization.id,
 				festival.id,
 			);
-			const exists = subtypes.some((s) => s.id === input.classSubtypeId);
+			const exists = subtypes.some((s) => s.id === validated.classSubtypeId);
 			if (!exists) throw new AppError("Class subtype not found.", 404);
 		}
 
-		return this.repository.createFestivalClassConfiguration({
-			...input,
-			organizationId: organization.id,
-			festivalId: festival.id,
-		});
+		const created =
+			await this.repository.createFestivalClassConfigurationWithCapacityAudit(
+				{
+					...input,
+					...validated,
+					organizationId: organization.id,
+					festivalId: festival.id,
+					maximumPerformancePieces: validated.maximumPerformancePieces ?? 1,
+					capacity: validated.capacity ?? DEFAULT_FESTIVAL_CLASS_CAPACITY,
+					shopifyProductGid:
+						validated.shopifyProductGid ?? input.shopifyProductGid,
+					shopifyVariantGid:
+						validated.shopifyVariantGid ?? input.shopifyVariantGid,
+				},
+				actorUid,
+			);
+		return created;
 	}
 
 	async updateFestivalClass(
@@ -1064,21 +1176,44 @@ export class OrganizationService {
 		);
 		if (!festival) throw new AppError("Festival not found.", 404);
 
-		if (
-			"divisionId" in (input as object) ||
-			"classSubtypeId" in (input as object) ||
-			"festivalId" in (input as object)
-		) {
-			throw new AppError("Division and class subtype are immutable.", 400);
+		const validated = validateUpdateClassInput(input);
+		const existing = await this.repository.findFestivalClassConfigurationById(
+			organization.id,
+			festival.id,
+			classId,
+		);
+		if (!existing) {
+			throw new AppError("Festival class configuration not found.", 404);
+		}
+		const effectiveMin = validated.minimumAge ?? existing.minimumAge;
+		const effectiveMax = validated.maximumAge ?? existing.maximumAge;
+		if (effectiveMax < effectiveMin) {
+			throw new AppError(
+				"Maximum age must be greater than or equal to minimum age.",
+				400,
+			);
 		}
 
 		try {
-			return await this.repository.updateFestivalClassConfiguration({
-				...input,
-				id: classId,
-				organizationId: organization.id,
-				festivalId: festival.id,
-			});
+			const commerce = this.commerce;
+			const updated =
+				await this.repository.updateFestivalClassConfigurationWithCapacityAudit(
+					{
+						...validated,
+						id: classId,
+						organizationId: organization.id,
+						festivalId: festival.id,
+					},
+					actorUid,
+					commerce
+						? () =>
+								commerce.countConfirmedClassEntitlements(
+									organization.id,
+									classId,
+								)
+						: undefined,
+				);
+			return updated;
 		} catch (error) {
 			if (
 				error instanceof Error &&

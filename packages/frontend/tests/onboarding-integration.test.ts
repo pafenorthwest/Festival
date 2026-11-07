@@ -68,6 +68,7 @@ async function readFrontendSource(): Promise<string> {
 		"src/components/AppBanners.tsx",
 		"src/components/Button.tsx",
 		"src/components/CustomerAccountAdminCard.tsx",
+		"src/components/FestivalRegistrationWindowEditor.tsx",
 		"src/components/AppHeader.tsx",
 		"src/components/SignInModal.tsx",
 		"src/lib/api.ts",

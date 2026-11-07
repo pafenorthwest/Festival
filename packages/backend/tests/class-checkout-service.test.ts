@@ -1,6 +1,7 @@
 import { describe, expect, it, mock, spyOn } from "bun:test";
 import type {
 	AccompanistMembershipGrant,
+	ClassRegistrationMetadata,
 	EntitlementGrantSnapshot,
 	FestivalRecord,
 	RepertoirePiece,
@@ -24,6 +25,7 @@ import {
 import { InMemoryMembershipCommerceRepository } from "../src/commerce/membership-commerce-repository.js";
 import { InMemoryCustomerAccountRepository } from "../src/customer/in-memory-customer-account-repository.js";
 import { AppError } from "../src/errors/app-error.js";
+import { InMemoryRepertoireRepository } from "../src/repertoire/index.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
 
 interface FixtureOptions {
@@ -35,6 +37,8 @@ interface FixtureOptions {
 	snapshotValidDays?: number;
 	snapshotCreatedDaysAgo?: number;
 	isPrimaryFestival?: boolean;
+	registrationOpensAt?: string | null;
+	registrationClosesAt?: string | null;
 	maximumPerformancePieces?: number;
 	performanceMinutes?: number;
 	storeDomain?: string;
@@ -64,9 +68,9 @@ async function createFixture(options: FixtureOptions = {}) {
 	const now = options.now ?? new Date("2026-09-21T12:00:00.000Z");
 	const nowFn = () => now;
 
-	const organizations = new InMemoryOrganizationRepository();
+	const organizations = new InMemoryOrganizationRepository(nowFn);
 	const customers = new InMemoryCustomerAccountRepository();
-	const checkout = new InMemoryCheckoutRepository();
+	const checkout = new InMemoryCheckoutRepository(nowFn);
 
 	const organization = await organizations.createOrganization({
 		name: "Pacific Northwest Music Festival",
@@ -116,6 +120,14 @@ async function createFixture(options: FixtureOptions = {}) {
 			name: "PNW Festival 2026",
 			startDate: "2026-11-01",
 			endDate: "2026-11-10",
+			registrationOpensAt:
+				options.registrationOpensAt !== undefined
+					? options.registrationOpensAt
+					: "2026-01-01T00:00:00.000Z",
+			registrationClosesAt:
+				options.registrationClosesAt !== undefined
+					? options.registrationClosesAt
+					: "2027-12-31T23:59:59.999Z",
 		});
 		await organizations.setPrimaryFestival(organization.id, festival.id);
 
@@ -238,8 +250,13 @@ async function createFixture(options: FixtureOptions = {}) {
 
 	const commerce =
 		options.commerce ?? new InMemoryMembershipCommerceRepository();
+	const repertoire = new InMemoryRepertoireRepository();
 
-	const service = new ClassCheckoutService(
+	const service = new (
+		ClassCheckoutService as unknown as new (
+			...args: unknown[]
+		) => ClassCheckoutService
+	)(
 		organizations,
 		customers,
 		checkout,
@@ -247,6 +264,7 @@ async function createFixture(options: FixtureOptions = {}) {
 		commerce,
 		nowFn,
 		options.failureLogger,
+		repertoire,
 	);
 
 	const defaultPieces: RepertoirePiece[] = [
@@ -274,6 +292,7 @@ async function createFixture(options: FixtureOptions = {}) {
 		customers,
 		checkout,
 		commerce,
+		repertoire,
 		organization,
 		division,
 		festival,
@@ -295,6 +314,311 @@ async function createFixture(options: FixtureOptions = {}) {
 }
 
 describe("ClassCheckoutService", () => {
+	it("captures an explicit unknown instrument when an existing client omits selection", async () => {
+		const f = await createFixture();
+		const insert = spyOn(f.checkout, "insertRegistrationMetadata");
+		await f.service.start(f.defaultInput);
+		expect(insert.mock.calls[0][0].registrationSnapshot?.instrument).toBe(
+			"unknown",
+		);
+	});
+
+	it("freezes the validated selection before checkout and preserves it after catalog and registration edits", async () => {
+		const f = await createFixture();
+		const instrument = await f.organizations.createRegistrationCatalogValue({
+			organizationId: f.organization.id,
+			kind: "instrument",
+			displayName: "Piano",
+			normalizedName: "piano",
+		});
+		f.organizations.setCustomerName(f.teacherId, "Original Teacher");
+		const captured: ClassRegistrationMetadata[] = [];
+		const insert = f.checkout.insertRegistrationMetadata.bind(f.checkout);
+		f.checkout.insertRegistrationMetadata = async (params) => {
+			const metadata = await insert(params);
+			captured.push(metadata);
+			return metadata;
+		};
+		const result = await f.service.start({
+			...f.defaultInput,
+			accompanistId: f.accompanistId,
+			instrumentId: instrument.id,
+			pieces: [{ ...f.defaultPieces[0], movement: "Variation II" }],
+		});
+		expect(captured).toHaveLength(1);
+		const metadata = captured[0];
+		if (!metadata.checkoutIntentLineId || !f.festival)
+			throw new Error("Expected a class checkout line and festival.");
+		const original = structuredClone(metadata.registrationSnapshot);
+		expect(original).toMatchObject({
+			version: 1,
+			capturedAtIso: f.now.toISOString(),
+			class: {
+				id: f.classConfig.id,
+				displayName: "Junior Solo Piano Level 1",
+				classSubtypeName: "Solo Piano",
+				price: "45.00",
+				currencyCode: "USD",
+				capacity: 25,
+			},
+			division: { id: f.division.id, name: "Junior Piano" },
+			instrument: { id: instrument.id, name: "Piano" },
+			teacher: {
+				customerId: f.teacherId,
+				membershipId: f.teacherEntitlement.id,
+				name: "Original Teacher",
+			},
+			accompanist: {
+				customerId: f.accompanistId,
+				membershipId: f.accompanistGrant.id,
+				name: "Sam Accompanist",
+			},
+			repertoire: [
+				{ title: f.defaultPieces[0].title, movement: "Variation II" },
+			],
+		});
+		expect(result.intent?.lines?.[0].divisionNameSnapshot).toBe("Junior Piano");
+		expect(JSON.stringify(original)).not.toMatch(
+			/shopify|buyer-token|encrypted|@example|555-555/,
+		);
+		await f.checkout.linkRegistrationMetadataToEntitlement({
+			checkoutIntentLineId: metadata.checkoutIntentLineId,
+			classEntitlementId: "paid-entitlement",
+		});
+		await f.organizations.updateFestivalClassConfiguration({
+			organizationId: f.organization.id,
+			festivalId: f.festival.id,
+			id: f.classConfig.id,
+			displayName: "Renamed class",
+			capacity: 100,
+			price: "60.00",
+		});
+		await f.organizations.updateDivision({
+			organizationId: f.organization.id,
+			divisionId: f.division.id,
+			displayName: "Renamed division",
+		});
+		f.organizations.setCustomerName(f.teacherId, "Changed Teacher");
+		await f.organizations.updateRegistrationCatalogValue({
+			organizationId: f.organization.id,
+			kind: "instrument",
+			id: instrument.id,
+			displayName: "Renamed instrument",
+		});
+		await f.checkout.updateRegistrationMetadata(
+			metadata.id,
+			f.organization.id,
+			{
+				pieces: [
+					{ title: "Replacement", composer: "Other", durationSeconds: 60 },
+				],
+				accompanistMembershipId: null,
+			},
+		);
+		const saved = await f.checkout.getRegistrationMetadataByEntitlementId(
+			f.organization.id,
+			"paid-entitlement",
+		);
+		expect(saved?.registrationSnapshot).toEqual(original);
+		expect(saved?.repertoireJson[0].title).toBe("Replacement");
+		expect(saved?.accompanistMembershipId).toBeNull();
+		// Returned nested values must not provide a mutation path into the record.
+		if (!saved?.registrationSnapshot)
+			throw new Error("Expected the original selection.");
+		saved.registrationSnapshot.class.displayName = "Mutated response";
+		expect(
+			(
+				await f.checkout.getRegistrationMetadataByEntitlementId(
+					f.organization.id,
+					"paid-entitlement",
+				)
+			)?.registrationSnapshot,
+		).toEqual(original);
+	});
+
+	it("rejects malformed, missing, inactive and cross-tenant instrument selections before creating commerce state", async () => {
+		const f = await createFixture();
+		const inactive = await f.organizations.createRegistrationCatalogValue({
+			organizationId: f.organization.id,
+			kind: "instrument",
+			displayName: "Inactive",
+			normalizedName: "inactive",
+		});
+		await f.organizations.updateRegistrationCatalogValue({
+			organizationId: f.organization.id,
+			kind: "instrument",
+			id: inactive.id,
+			isActive: false,
+		});
+		const other = await f.organizations.createOrganization({
+			name: "Other",
+			slug: "other",
+		});
+		const foreign = await f.organizations.createRegistrationCatalogValue({
+			organizationId: other.id,
+			kind: "instrument",
+			displayName: "Foreign",
+			normalizedName: "foreign",
+		});
+		const createIntent = spyOn(f.checkout, "createIntent");
+		for (const instrumentId of [
+			"",
+			" ",
+			"unknown",
+			"missing",
+			inactive.id,
+			foreign.id,
+			null,
+			42,
+			{},
+		]) {
+			await expect(
+				f.service.start({
+					...f.defaultInput,
+					instrumentId: instrumentId as string,
+				}),
+			).rejects.toMatchObject({ status: 400, code: "instrument_invalid" });
+		}
+		expect(createIntent).not.toHaveBeenCalled();
+	});
+
+	it("keeps each purchased line's original instrument, repertoire and accompanist selection separate", async () => {
+		const f = await createFixture();
+		const instrumentA = await f.organizations.createRegistrationCatalogValue({
+			organizationId: f.organization.id,
+			kind: "instrument",
+			displayName: "Piano",
+			normalizedName: "piano",
+		});
+		const instrumentB = await f.organizations.createRegistrationCatalogValue({
+			organizationId: f.organization.id,
+			kind: "instrument",
+			displayName: "Violin",
+			normalizedName: "violin",
+		});
+		const child = await f.customers.createChild({
+			organizationId: f.organization.id,
+			parentCustomerId: f.customer.id,
+			displayName: "Second child",
+		});
+		await f.customers.createChildAgeSnapshot({
+			organizationId: f.organization.id,
+			childId: child.id,
+			age: 10,
+			createdAtIso: f.now.toISOString(),
+			validUntilIso: new Date(f.now.getTime() + 30 * 86400_000).toISOString(),
+		});
+		const captured: ClassRegistrationMetadata[] = [];
+		const insert = f.checkout.insertRegistrationMetadata.bind(f.checkout);
+		f.checkout.insertRegistrationMetadata = async (params) => {
+			const record = await insert(params);
+			captured.push(record);
+			return record;
+		};
+		await f.service.start({
+			...f.defaultInput,
+			lineItems: [
+				{
+					festivalClassId: f.classConfig.id,
+					childId: f.child.id,
+					teacherId: f.teacherId,
+					instrumentId: instrumentA.id,
+					accompanistId: f.accompanistId,
+					pieces: f.defaultPieces,
+				},
+				{
+					festivalClassId: f.classConfig.id,
+					childId: child.id,
+					teacherId: f.teacherId,
+					instrumentId: instrumentB.id,
+					pieces: [
+						{
+							title: "Second work",
+							composer: "Second composer",
+							movement: "II",
+							durationSeconds: 90,
+						},
+					],
+				},
+			],
+		});
+		expect(captured).toHaveLength(2);
+		expect(captured[0].checkoutIntentLineId).not.toBe(
+			captured[1].checkoutIntentLineId,
+		);
+		expect(captured[0].registrationSnapshot).toMatchObject({
+			instrument: { id: instrumentA.id, name: "Piano" },
+			accompanist: { membershipId: f.accompanistGrant.id },
+			repertoire: [{ title: f.defaultPieces[0].title }],
+		});
+		expect(captured[1].registrationSnapshot).toMatchObject({
+			instrument: { id: instrumentB.id, name: "Violin" },
+			accompanist: null,
+			repertoire: [{ title: "Second work", movement: "II" }],
+		});
+	});
+
+	it("waits for audited capacity publication before durable cart admission", async () => {
+		const f = await createFixture();
+		await f.commerce.createClassEntitlement({
+			organizationId: f.organization.id,
+			festivalId: f.festival?.id ?? "",
+			festivalClassId: f.classConfig.id,
+			parentCustomerId: "other",
+			childId: "other",
+			checkoutIntentId: "paid",
+			shopifyOrderGid: "paid",
+			shopifyOrderLineGid: "paid-line",
+			paidAmountCents: 4500,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const original = f.checkout.markIntentReady.bind(f.checkout);
+		let update: Promise<unknown> | undefined;
+		f.checkout.markIntentReady = async (input) => {
+			update =
+				f.organizations.updateFestivalClassConfigurationWithCapacityAudit(
+					{
+						organizationId: f.organization.id,
+						festivalId: f.festival?.id ?? "",
+						id: f.classConfig.id,
+						capacity: 1,
+					},
+					"admin",
+					async () => {
+						entered.resolve();
+						await release.promise;
+						return 1;
+					},
+				);
+			await entered.promise;
+			const attached = original(input);
+			void attached.catch(() => undefined);
+			try {
+				await new Promise<void>((resolve) => setImmediate(resolve));
+				expect(
+					(
+						await f.organizations.findFestivalClassConfigurationById(
+							f.organization.id,
+							f.festival?.id ?? "",
+							f.classConfig.id,
+						)
+					)?.capacity,
+				).toBe(25);
+			} finally {
+				release.resolve();
+			}
+			await update;
+			return attached;
+		};
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			code: "sold_out",
+		});
+		await update;
+	});
+
 	it("successfully creates a checkout intent for a valid parent and eligible child", async () => {
 		const f = await createFixture({
 			classMinAge: 8,
@@ -536,13 +860,81 @@ describe("ClassCheckoutService", () => {
 
 	it("successfully checks out with explicit festivalShortName", async () => {
 		const f = await createFixture();
+		const lookup = spyOn(f.organizations, "findActiveFestivalClassByShortName");
+		const listFestivals = spyOn(f.organizations, "listFestivals");
 
 		const result = await f.service.start({
 			...f.defaultInput,
-			festivalShortName: "pnw2026",
+			festivalShortName: " PNW2026 ",
 		});
 
 		expect(result.checkoutUrl).toBeDefined();
+		expect(lookup).toHaveBeenCalledTimes(1);
+		expect(lookup).toHaveBeenCalledWith(
+			f.organization.id,
+			"PNW2026",
+			f.classConfig.id,
+			undefined,
+		);
+		// Eligibility and the final cart window guard refresh the festival; class resolution does not scan festivals.
+		expect(listFestivals).toHaveBeenCalledTimes(2);
+	});
+
+	it("returns 404 for an inactive class on the named festival checkout", async () => {
+		const f = await createFixture({ isClassActive: false });
+		await expect(
+			f.service.start({ ...f.defaultInput, festivalShortName: "pnw2026" }),
+		).rejects.toMatchObject({
+			status: 404,
+			message: "Festival class configuration not found.",
+		});
+	});
+
+	it("returns 404 when festival ID conflicts with the named festival", async () => {
+		const f = await createFixture();
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				festivalShortName: "pnw2026",
+				festivalId: "other-festival",
+			}),
+		).rejects.toMatchObject({ status: 404 });
+	});
+
+	it("returns 404 for a cross-tenant class on the named festival checkout", async () => {
+		const f = await createFixture();
+		const org2 = await f.organizations.createOrganization({
+			name: "Other",
+			slug: "other",
+		});
+		const fest2 = await f.organizations.createFestival({
+			id: "fest-other-org",
+			organizationId: org2.id,
+			code: "PNW2026",
+			shortName: "pnw2026",
+			name: "Other festival",
+			startDate: "2026-11-01",
+			endDate: "2026-11-10",
+		});
+		const otherClass = await f.organizations.createFestivalClassConfiguration({
+			organizationId: org2.id,
+			festivalId: fest2.id,
+			displayName: "Other class",
+			classSubtypeId: f.classConfig.classSubtypeId,
+			divisionId: f.division.id,
+			minimumAge: 8,
+			maximumAge: 12,
+			price: "50.00",
+			maximumPerformancePieces: 2,
+			performanceMinutes: 10,
+		});
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				festivalShortName: "pnw2026",
+				festivalClassId: otherClass.id,
+			}),
+		).rejects.toMatchObject({ status: 404 });
 	});
 
 	it("successfully checks out with explicit festivalId for non-primary festival", async () => {
@@ -556,6 +948,8 @@ describe("ClassCheckoutService", () => {
 			name: "PNW Festival 2027",
 			startDate: "2027-11-01",
 			endDate: "2027-11-10",
+			registrationOpensAt: "2026-01-01T00:00:00.000Z",
+			registrationClosesAt: "2027-12-31T23:59:59.999Z",
 		});
 
 		const subtype = await f.organizations.createRegistrationCatalogValue({
@@ -682,7 +1076,7 @@ describe("ClassCheckoutService", () => {
 		});
 	});
 
-	it("fails with 400 when requested festivalShortName targets a festival and class belongs to primary festival", async () => {
+	it("returns 404 when requested festivalShortName targets another festival", async () => {
 		const f = await createFixture();
 
 		await f.organizations.createFestival({
@@ -702,9 +1096,8 @@ describe("ClassCheckoutService", () => {
 				festivalClassId: f.classConfig.id,
 			}),
 		).rejects.toMatchObject({
-			status: 400,
-			message:
-				"Festival class configuration does not belong to the active festival.",
+			status: 404,
+			message: "Festival class configuration not found.",
 		});
 	});
 
@@ -1466,9 +1859,14 @@ describe("ClassCheckoutService", () => {
 			return { shopifyCartId: "gid://shopify/Cart/multi-cart-1" };
 		};
 		const insertMetadataSpy = spyOn(f.checkout, "insertRegistrationMetadata");
+		const scopedLookup = spyOn(
+			f.organizations,
+			"findActiveFestivalClassByShortName",
+		);
 
 		const result = await f.service.start({
 			organizationId: f.organization.id,
+			festivalShortName: "pnw2026",
 			customerId: f.customer.id,
 			sessionId: f.session.sessionId,
 			idempotencyKey: "22222222-3333-4444-5555-666666666666",
@@ -1497,6 +1895,7 @@ describe("ClassCheckoutService", () => {
 
 		expect(result.checkoutUrl).toBe(`https://${f.storeDomain}/checkouts/c123`);
 		expect(result.intent?.lines).toHaveLength(2);
+		expect(scopedLookup).toHaveBeenCalledTimes(2);
 		expect(result.intent?.amount).toBe("100.00");
 
 		const [line1, line2] = result.intent?.lines ?? [];
@@ -1537,6 +1936,63 @@ describe("ClassCheckoutService", () => {
 			2,
 			expect.objectContaining({ checkoutIntentLineId: line2.id }),
 		);
+	});
+
+	it("rejects named multi-line checkout when normalized short names match different festivals", async () => {
+		const f = await createFixture();
+		const otherFestival = await f.organizations.createFestival({
+			id: "fest-short-name-collision",
+			organizationId: f.organization.id,
+			code: "PNW2026ALT",
+			shortName: " PNW2026 ",
+			name: "Other PNW Festival 2026",
+			startDate: "2026-12-01",
+			endDate: "2026-12-10",
+		});
+		const otherClass = await f.organizations.createFestivalClassConfiguration({
+			organizationId: f.organization.id,
+			festivalId: otherFestival.id,
+			displayName: "Other Junior Solo Piano",
+			classSubtypeId: f.classConfig.classSubtypeId,
+			divisionId: f.division.id,
+			minimumAge: 8,
+			maximumAge: 12,
+			price: "45.00",
+			maximumPerformancePieces: 2,
+			performanceMinutes: 10,
+			capacity: 25,
+			isActive: true,
+		});
+		const createIntent = spyOn(f.checkout, "createIntent");
+		const createCart = spyOn(f.storefront, "createCart");
+		const insertMetadata = spyOn(f.checkout, "insertRegistrationMetadata");
+
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				festivalShortName: "pnw2026",
+				lineItems: [
+					{
+						festivalClassId: f.classConfig.id,
+						childId: f.child.id,
+						teacherId: f.teacherId,
+						pieces: f.defaultPieces,
+					},
+					{
+						festivalClassId: otherClass.id,
+						childId: f.child.id,
+						teacherId: f.teacherId,
+						pieces: f.defaultPieces,
+					},
+				],
+			}),
+		).rejects.toMatchObject({
+			status: 404,
+			message: "Festival class configuration not found.",
+		});
+		expect(createIntent).not.toHaveBeenCalled();
+		expect(createCart).not.toHaveBeenCalled();
+		expect(insertMetadata).not.toHaveBeenCalled();
 	});
 
 	it("rejects multi-line checkout when lineItems is empty with 400", async () => {
@@ -2243,5 +2699,1336 @@ describe("ClassCheckoutService", () => {
 		expect(result.intent?.lines).toHaveLength(2);
 		expect(result.intent?.lines?.[0].festivalClassId).toBe(soloClass.id);
 		expect(result.intent?.lines?.[1].festivalClassId).toBe(concertoClass.id);
+	});
+
+	it("start() and evaluateEligibility() never call broad list methods", async () => {
+		const f = await createFixture();
+		const listChildrenSpy = spyOn(
+			f.customers,
+			"listChildren",
+		).mockRejectedValue(new Error("listChildren should not be called"));
+		const listChildAgeSnapshotsSpy = spyOn(
+			f.customers,
+			"listChildAgeSnapshots",
+		).mockRejectedValue(
+			new Error("listChildAgeSnapshots should not be called"),
+		);
+		const listEntitlementGrantSnapshotsSpy = spyOn(
+			f.organizations,
+			"listEntitlementGrantSnapshots",
+		).mockRejectedValue(
+			new Error("listEntitlementGrantSnapshots should not be called"),
+		);
+		const listAccompanistMembershipGrantsSpy = spyOn(
+			f.organizations,
+			"listAccompanistMembershipGrants",
+		).mockRejectedValue(
+			new Error("listAccompanistMembershipGrants should not be called"),
+		);
+		const listFestivalClassConfigurationsSpy = spyOn(
+			f.organizations,
+			"listFestivalClassConfigurations",
+		).mockRejectedValue(
+			new Error("listFestivalClassConfigurations should not be called"),
+		);
+
+		const eligibility = await f.service.evaluateEligibility({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			festivalId: f.festival?.id ?? "",
+			items: [
+				{
+					childId: f.child.id,
+					festivalClassId: f.classConfig.id,
+				},
+			],
+		});
+		expect(eligibility.isEligible).toBe(true);
+
+		const startResult = await f.service.start({
+			...f.defaultInput,
+			accompanistId: f.accompanistId,
+		});
+		expect(startResult.checkoutUrl).toBeDefined();
+
+		expect(listChildrenSpy).not.toHaveBeenCalled();
+		expect(listChildAgeSnapshotsSpy).not.toHaveBeenCalled();
+		expect(listEntitlementGrantSnapshotsSpy).not.toHaveBeenCalled();
+		expect(listAccompanistMembershipGrantsSpy).not.toHaveBeenCalled();
+		expect(listFestivalClassConfigurationsSpy).not.toHaveBeenCalled();
+	});
+
+	it("loads 25 advisory candidates with one targeted class query and preserves duplicate results", async () => {
+		const f = await createFixture();
+		const festivalId = f.festival?.id ?? "";
+		const template = await f.organizations.findFestivalClassConfigurationById(
+			f.organization.id,
+			festivalId,
+			f.classConfig.id,
+		);
+		if (!template) throw new Error("Fixture class not found.");
+		const {
+			id: _id,
+			createdAtIso: _createdAt,
+			updatedAtIso: _updatedAt,
+			...input
+		} = template;
+		const classIds = [f.classConfig.id];
+		for (let index = 1; index < 25; index++) {
+			const config = await f.organizations.createFestivalClassConfiguration({
+				...input,
+				displayName: `Candidate ${index}`,
+			});
+			classIds.push(config.id);
+		}
+		const individualLookup = spyOn(
+			f.organizations,
+			"findFestivalClassConfigurationById",
+		);
+		const bulkLookup = spyOn(
+			f.organizations,
+			"findFestivalClassConfigurationsByIds",
+		);
+		const items = classIds.map((festivalClassId) => ({
+			childId: f.child.id,
+			festivalClassId,
+			isCandidate: true,
+		}));
+		const response = await f.service.evaluateEligibility({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			festivalId,
+			items,
+		});
+		expect(response.results).toHaveLength(25);
+		expect(
+			response.results.every((result) => result.reasonCode === "AVAILABLE"),
+		).toBe(true);
+		expect(bulkLookup).toHaveBeenCalledTimes(1);
+		expect(bulkLookup).toHaveBeenCalledWith(
+			f.organization.id,
+			festivalId,
+			classIds,
+		);
+		expect(individualLookup).not.toHaveBeenCalled();
+
+		bulkLookup.mockClear();
+		const duplicate = await f.service.evaluateEligibility({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			festivalId,
+			items: [items[0], items[0]].map(
+				({ isCandidate: _candidate, ...item }) => item,
+			),
+		});
+		expect(duplicate.results.map((result) => result.reasonCode)).toEqual([
+			"AVAILABLE",
+			"ALREADY_REGISTERED",
+		]);
+		expect(bulkLookup).toHaveBeenCalledTimes(1);
+		expect(bulkLookup).toHaveBeenCalledWith(f.organization.id, festivalId, [
+			classIds[0],
+		]);
+	});
+
+	it("multi-line start() deduplicates child, age snapshot, teacher grant, accompanist grant, and class configuration lookups across lines and checkEligibility", async () => {
+		const f = await createFixture();
+		const festivalId = f.festival?.id ?? "";
+		const secondSubtype = await f.organizations.createRegistrationCatalogValue({
+			organizationId: f.organization.id,
+			kind: "class_subtype",
+			displayName: "Duet Piano",
+			normalizedName: "duet piano",
+		});
+		const secondClass = await f.organizations.createFestivalClassConfiguration({
+			organizationId: f.organization.id,
+			festivalId,
+			displayName: "Junior Duet Piano Level 1",
+			classSubtypeId: secondSubtype.id,
+			divisionId: f.division.id,
+			minimumAge: 8,
+			maximumAge: 12,
+			price: "55.00",
+			maximumPerformancePieces: 2,
+			performanceMinutes: 10,
+			capacity: 25,
+			isActive: true,
+			shopifyProductGid: "gid://shopify/Product/111",
+			shopifyVariantGid: "gid://shopify/ProductVariant/211",
+		});
+
+		const findChildSpy = spyOn(f.customers, "findChild");
+		const findActiveChildAgeSnapshotSpy = spyOn(
+			f.customers,
+			"findActiveChildAgeSnapshot",
+		);
+		const findActiveTeacherEntitlementGrantSpy = spyOn(
+			f.organizations,
+			"findActiveTeacherEntitlementGrant",
+		);
+		const findCurrentAccompanistMembershipGrantSpy = spyOn(
+			f.organizations,
+			"findCurrentAccompanistMembershipGrant",
+		);
+		const findFestivalClassConfigurationByIdSpy = spyOn(
+			f.organizations,
+			"findFestivalClassConfigurationById",
+		);
+		const bulkClassLookup = spyOn(
+			f.organizations,
+			"findFestivalClassConfigurationsByIds",
+		);
+
+		const result = await f.service.start({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			sessionId: f.session.sessionId,
+			idempotencyKey: "99999999-aaaa-bbbb-cccc-dddddddddddd",
+			buyerAccessToken: "buyer-token-test",
+			lineItems: [
+				{
+					festivalClassId: f.classConfig.id,
+					childId: f.child.id,
+					teacherId: f.teacherId,
+					accompanistId: f.accompanistId,
+					pieces: f.defaultPieces,
+				},
+				{
+					festivalClassId: secondClass.id,
+					childId: f.child.id,
+					teacherId: f.teacherId,
+					accompanistId: f.accompanistId,
+					pieces: f.defaultPieces,
+				},
+			],
+		});
+
+		expect(result.checkoutUrl).toBeDefined();
+		expect(findChildSpy).toHaveBeenCalledTimes(1);
+		expect(findActiveChildAgeSnapshotSpy).toHaveBeenCalledTimes(1);
+		expect(findActiveTeacherEntitlementGrantSpy).toHaveBeenCalledTimes(1);
+		expect(findCurrentAccompanistMembershipGrantSpy).toHaveBeenCalledTimes(1);
+		expect(findFestivalClassConfigurationByIdSpy).toHaveBeenCalledTimes(2);
+		expect(bulkClassLookup).toHaveBeenCalledTimes(1);
+		expect(bulkClassLookup).toHaveBeenCalledWith(
+			f.organization.id,
+			festivalId,
+			[f.classConfig.id, secondClass.id],
+		);
+	});
+
+	it("start() deterministically selects earliest active teacher grant and preserves teacherEntitlementId in registration metadata", async () => {
+		const f = await createFixture();
+		const internalGrants = (
+			f.organizations as unknown as {
+				entitlementGrants: Map<string, EntitlementGrantSnapshot>;
+			}
+		).entitlementGrants;
+		internalGrants.clear();
+		internalGrants.set("teacher-grant-later", {
+			...f.teacherEntitlement,
+			id: "teacher-grant-later",
+			createdAtIso: "2026-02-01T00:00:00.000Z",
+		});
+		internalGrants.set("teacher-grant-earliest-b", {
+			...f.teacherEntitlement,
+			id: "teacher-grant-earliest-b",
+			createdAtIso: "2026-01-10T00:00:00.000Z",
+		});
+		internalGrants.set("teacher-grant-earliest-a", {
+			...f.teacherEntitlement,
+			id: "teacher-grant-earliest-a",
+			createdAtIso: "2026-01-10T00:00:00.000Z",
+		});
+
+		const insertMetadataSpy = spyOn(f.checkout, "insertRegistrationMetadata");
+
+		const result = await f.service.start({
+			...f.defaultInput,
+			idempotencyKey: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		});
+
+		expect(result.checkoutUrl).toBeDefined();
+		expect(insertMetadataSpy).toHaveBeenCalledTimes(1);
+		expect(insertMetadataSpy.mock.calls[0]?.[0].teacherMembershipId).toBe(
+			"teacher-grant-earliest-a",
+		);
+	});
+
+	it("satisfies prerequisite via targeted child entitlement lookup and triggers sold_out across all customers in target class", async () => {
+		const f = await createFixture();
+		const festivalId = f.festival?.id ?? "";
+		const prerequisiteSubtype =
+			await f.organizations.createRegistrationCatalogValue({
+				organizationId: f.organization.id,
+				kind: "class_subtype",
+				displayName: "Qualifying Solo",
+				normalizedName: "qualifying solo",
+			});
+		const dependentSubtype =
+			await f.organizations.createRegistrationCatalogValue({
+				organizationId: f.organization.id,
+				kind: "class_subtype",
+				displayName: "Masterclass Showcase",
+				normalizedName: "masterclass showcase",
+				requiredSubtypeId: prerequisiteSubtype.id,
+			});
+		const prerequisiteClass =
+			await f.organizations.createFestivalClassConfiguration({
+				organizationId: f.organization.id,
+				festivalId,
+				displayName: "Qualifying Solo Class",
+				classSubtypeId: prerequisiteSubtype.id,
+				divisionId: f.division.id,
+				minimumAge: 8,
+				maximumAge: 12,
+				price: "40.00",
+				maximumPerformancePieces: 1,
+				performanceMinutes: 10,
+				capacity: 10,
+				isActive: true,
+				shopifyProductGid: "gid://shopify/Product/112",
+				shopifyVariantGid: "gid://shopify/ProductVariant/212",
+			});
+		const masterclassClass =
+			await f.organizations.createFestivalClassConfiguration({
+				organizationId: f.organization.id,
+				festivalId,
+				displayName: "Masterclass Showcase Class",
+				classSubtypeId: dependentSubtype.id,
+				divisionId: f.division.id,
+				minimumAge: 8,
+				maximumAge: 12,
+				price: "65.00",
+				maximumPerformancePieces: 1,
+				performanceMinutes: 15,
+				capacity: 1,
+				isActive: true,
+				shopifyProductGid: "gid://shopify/Product/113",
+				shopifyVariantGid: "gid://shopify/ProductVariant/213",
+			});
+
+		await f.commerce.createClassEntitlement({
+			organizationId: f.organization.id,
+			festivalId,
+			festivalClassId: prerequisiteClass.id,
+			parentCustomerId: f.customer.id,
+			childId: f.child.id,
+			checkoutIntentId: "prereq-intent-1",
+			shopifyOrderGid: "gid://shopify/Order/prereq-1",
+			shopifyOrderLineGid: "gid://shopify/OrderLineItem/prereq-1",
+			paidAmountCents: 4000,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+
+		await f.organizations.updateFestivalClassConfiguration({
+			id: prerequisiteClass.id,
+			organizationId: f.organization.id,
+			festivalId,
+			isActive: false,
+		});
+		const {
+			id: _id,
+			createdAtIso: _createdAt,
+			updatedAtIso: _updatedAt,
+			...historicalConfig
+		} = prerequisiteClass;
+		const secondPrerequisiteClass =
+			await f.organizations.createFestivalClassConfiguration({
+				...historicalConfig,
+				displayName: "Another Qualifying Solo",
+				isActive: false,
+			});
+		for (const [index, festivalClassId] of [
+			prerequisiteClass.id,
+			secondPrerequisiteClass.id,
+		].entries()) {
+			await f.commerce.createClassEntitlement({
+				organizationId: f.organization.id,
+				festivalId,
+				festivalClassId,
+				parentCustomerId: f.customer.id,
+				childId: f.child.id,
+				checkoutIntentId: `additional-prereq-${index}`,
+				shopifyOrderGid: `gid://shopify/Order/additional-prereq-${index}`,
+				shopifyOrderLineGid: `gid://shopify/OrderLineItem/additional-prereq-${index}`,
+				paidAmountCents: 4000,
+				paidCurrencyCode: "USD",
+				status: "confirmed",
+			});
+		}
+
+		const listEntitlementsSpy = spyOn(f.commerce, "listClassEntitlements");
+		const findClassesByIdsSpy = spyOn(
+			f.organizations,
+			"findFestivalClassConfigurationsByIds",
+		);
+
+		const eligibleEval = await f.service.evaluateEligibility({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			festivalId,
+			items: [
+				{
+					childId: f.child.id,
+					festivalClassId: masterclassClass.id,
+				},
+			],
+		});
+		expect(eligibleEval.isEligible).toBe(true);
+		expect(eligibleEval.results[0].reasonCode).toBe("AVAILABLE");
+		expect(listEntitlementsSpy).toHaveBeenCalledWith({
+			organizationId: f.organization.id,
+			festivalId,
+			festivalClassIds: [masterclassClass.id],
+		});
+		expect(listEntitlementsSpy).toHaveBeenCalledWith({
+			organizationId: f.organization.id,
+			festivalId,
+			childIds: [f.child.id],
+		});
+		expect(findClassesByIdsSpy).toHaveBeenCalledTimes(2);
+		expect(findClassesByIdsSpy).toHaveBeenNthCalledWith(
+			2,
+			f.organization.id,
+			festivalId,
+			[prerequisiteClass.id, secondPrerequisiteClass.id],
+		);
+
+		await f.commerce.createClassEntitlement({
+			organizationId: f.organization.id,
+			festivalId,
+			festivalClassId: masterclassClass.id,
+			parentCustomerId: "other-parent-customer",
+			childId: "other-child-id",
+			checkoutIntentId: "other-intent-1",
+			shopifyOrderGid: "gid://shopify/Order/other-1",
+			shopifyOrderLineGid: "gid://shopify/OrderLineItem/other-1",
+			paidAmountCents: 6500,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+
+		const soldOutEval = await f.service.evaluateEligibility({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			festivalId,
+			items: [
+				{
+					childId: f.child.id,
+					festivalClassId: masterclassClass.id,
+				},
+			],
+		});
+		expect(soldOutEval.isEligible).toBe(false);
+		expect(soldOutEval.results[0].reasonCode).toBe("SOLD_OUT");
+
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				idempotencyKey: "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+				festivalClassId: masterclassClass.id,
+			}),
+		).rejects.toMatchObject({
+			status: 400,
+			code: "sold_out",
+		});
+	});
+
+	it("rejects whole multi-line cart when mixed Open and Waitlist classes are submitted (#145 + #284)", async () => {
+		const f = await createFixture();
+		const festivalId = f.festival?.id ?? "";
+		const secondSubtype = await f.organizations.createRegistrationCatalogValue({
+			organizationId: f.organization.id,
+			kind: "class_subtype",
+			displayName: "Waitlist Solo",
+			normalizedName: "waitlist solo",
+		});
+		const waitlistClass =
+			await f.organizations.createFestivalClassConfiguration({
+				organizationId: f.organization.id,
+				festivalId,
+				displayName: "Junior Waitlist Piano",
+				classSubtypeId: secondSubtype.id,
+				divisionId: f.division.id,
+				minimumAge: 8,
+				maximumAge: 12,
+				price: "55.00",
+				maximumPerformancePieces: 2,
+				performanceMinutes: 10,
+				capacity: 1,
+				isActive: true,
+				shopifyProductGid: "gid://shopify/Product/284-1",
+				shopifyVariantGid: "gid://shopify/ProductVariant/284-1",
+			});
+
+		await f.commerce.createClassEntitlement({
+			organizationId: f.organization.id,
+			festivalId,
+			festivalClassId: waitlistClass.id,
+			parentCustomerId: "other-parent-customer",
+			childId: "other-child-id",
+			checkoutIntentId: "other-intent-waitlist",
+			shopifyOrderGid: "gid://shopify/Order/other-waitlist",
+			shopifyOrderLineGid: "gid://shopify/OrderLineItem/other-waitlist",
+			paidAmountCents: 5500,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+
+		const createCartSpy = spyOn(f.storefront, "createCart");
+		const createIntentSpy = spyOn(f.checkout, "createIntent");
+		const idempotencyKey = "cccccccc-dddd-4eee-8fff-000000000001";
+
+		let thrownError: unknown;
+		try {
+			await f.service.start({
+				organizationId: f.organization.id,
+				customerId: f.customer.id,
+				sessionId: f.session.sessionId,
+				idempotencyKey,
+				buyerAccessToken: "buyer-token-test",
+				lineItems: [
+					{
+						festivalClassId: f.classConfig.id,
+						childId: f.child.id,
+						teacherId: f.teacherId,
+						pieces: f.defaultPieces,
+					},
+					{
+						festivalClassId: waitlistClass.id,
+						childId: f.child.id,
+						teacherId: f.teacherId,
+						pieces: f.defaultPieces,
+					},
+				],
+			});
+		} catch (error) {
+			thrownError = error;
+		}
+
+		expect(createIntentSpy).not.toHaveBeenCalled();
+		expect(createCartSpy).not.toHaveBeenCalled();
+		expect(thrownError).toBeInstanceOf(AppError);
+		const appErr = thrownError as AppError;
+		expect(appErr.status).toBe(400);
+		expect(appErr.code).toBe("sold_out");
+		expect(appErr.details).toMatchObject({
+			waitlistedClassIds: [waitlistClass.id],
+			failures: [
+				{
+					childId: f.child.id,
+					festivalClassId: waitlistClass.id,
+					reasonCode: "SOLD_OUT",
+					availability: "waitlist",
+					capacity: 1,
+					placedCount: 1,
+				},
+			],
+		});
+
+		const outcome = await f.checkout.getOutcome({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			sessionId: f.session.sessionId,
+			idempotencyKey,
+		});
+		expect(outcome).toBeNull();
+	});
+
+	it("aborts at post-cartCreate cutpoint when concurrent placement reaches capacity while createCart is in flight (#284)", async () => {
+		const f = await createFixture();
+		const festivalId = f.festival?.id ?? "";
+		const raceSubtype = await f.organizations.createRegistrationCatalogValue({
+			organizationId: f.organization.id,
+			kind: "class_subtype",
+			displayName: "Race Solo",
+			normalizedName: "race solo",
+		});
+		const raceClass = await f.organizations.createFestivalClassConfiguration({
+			organizationId: f.organization.id,
+			festivalId,
+			displayName: "Race Piano Class",
+			classSubtypeId: raceSubtype.id,
+			divisionId: f.division.id,
+			minimumAge: 8,
+			maximumAge: 12,
+			price: "50.00",
+			maximumPerformancePieces: 2,
+			performanceMinutes: 10,
+			capacity: 2,
+			isActive: true,
+			shopifyProductGid: "gid://shopify/Product/284-race-1",
+			shopifyVariantGid: "gid://shopify/ProductVariant/284-race-1",
+		});
+
+		await f.commerce.createClassEntitlement({
+			organizationId: f.organization.id,
+			festivalId,
+			festivalClassId: raceClass.id,
+			parentCustomerId: "parent-1",
+			childId: "child-1",
+			checkoutIntentId: "intent-placed-1",
+			shopifyOrderGid: "gid://shopify/Order/placed-1",
+			shopifyOrderLineGid: "gid://shopify/OrderLineItem/placed-1",
+			paidAmountCents: 5000,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+
+		f.storefront.createCart = async () => {
+			await f.commerce.createClassEntitlement({
+				organizationId: f.organization.id,
+				festivalId,
+				festivalClassId: raceClass.id,
+				parentCustomerId: "parent-2",
+				childId: "child-2",
+				checkoutIntentId: "intent-placed-2",
+				shopifyOrderGid: "gid://shopify/Order/placed-2",
+				shopifyOrderLineGid: "gid://shopify/OrderLineItem/placed-2",
+				paidAmountCents: 5000,
+				paidCurrencyCode: "USD",
+				status: "confirmed",
+			});
+			return { shopifyCartId: "gid://shopify/Cart/race-cart-1" };
+		};
+
+		const checkoutUrlSpy = spyOn(f.storefront, "checkout");
+		const idempotencyKey = "dddddddd-eeee-4fff-8000-000000000002";
+
+		let thrownError: unknown;
+		try {
+			await f.service.start({
+				...f.defaultInput,
+				idempotencyKey,
+				festivalClassId: raceClass.id,
+			});
+		} catch (error) {
+			thrownError = error;
+		}
+
+		expect(checkoutUrlSpy).not.toHaveBeenCalled();
+		expect(
+			(f.checkout as unknown as { carts: Map<string, unknown> }).carts.size,
+		).toBe(0);
+		expect(thrownError).toBeInstanceOf(AppError);
+		const appErr = thrownError as AppError;
+		expect(appErr.status).toBe(400);
+		expect(appErr.code).toBe("sold_out");
+		expect(appErr.message).toMatch(/capacity|sold_out|waitlist/i);
+		expect(appErr.details).toMatchObject({
+			waitlistedClassIds: [raceClass.id],
+			failures: [
+				{
+					childId: f.child.id,
+					festivalClassId: raceClass.id,
+					reasonCode: "SOLD_OUT",
+					availability: "waitlist",
+					capacity: 2,
+					placedCount: 2,
+				},
+			],
+		});
+
+		const intents = (
+			f.checkout as unknown as {
+				intents: Map<string, { status: string; cartReference: string | null }>;
+			}
+		).intents;
+		const createdIntent = [...intents.values()][0];
+		expect(createdIntent?.status).toBe("failed");
+		expect(createdIntent?.cartReference).toBeNull();
+	});
+
+	it("aborts at post-cartCreate cutpoint when Admin decreases capacity to placedCount while createCart is in flight (#284)", async () => {
+		const f = await createFixture();
+		const festivalId = f.festival?.id ?? "";
+		const adminSubtype = await f.organizations.createRegistrationCatalogValue({
+			organizationId: f.organization.id,
+			kind: "class_subtype",
+			displayName: "Admin Cap Solo",
+			normalizedName: "admin cap solo",
+		});
+		const adminClass = await f.organizations.createFestivalClassConfiguration({
+			organizationId: f.organization.id,
+			festivalId,
+			displayName: "Admin Capacity Piano Class",
+			classSubtypeId: adminSubtype.id,
+			divisionId: f.division.id,
+			minimumAge: 8,
+			maximumAge: 12,
+			price: "50.00",
+			maximumPerformancePieces: 2,
+			performanceMinutes: 10,
+			capacity: 2,
+			isActive: true,
+			shopifyProductGid: "gid://shopify/Product/284-admin-1",
+			shopifyVariantGid: "gid://shopify/ProductVariant/284-admin-1",
+		});
+
+		await f.commerce.createClassEntitlement({
+			organizationId: f.organization.id,
+			festivalId,
+			festivalClassId: adminClass.id,
+			parentCustomerId: "parent-1",
+			childId: "child-1",
+			checkoutIntentId: "intent-admin-placed-1",
+			shopifyOrderGid: "gid://shopify/Order/admin-placed-1",
+			shopifyOrderLineGid: "gid://shopify/OrderLineItem/admin-placed-1",
+			paidAmountCents: 5000,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+
+		f.storefront.createCart = async () => {
+			await f.organizations.updateFestivalClassConfiguration({
+				organizationId: f.organization.id,
+				festivalId,
+				id: adminClass.id,
+				capacity: 1,
+			});
+			return { shopifyCartId: "gid://shopify/Cart/admin-race-cart" };
+		};
+
+		const checkoutUrlSpy = spyOn(f.storefront, "checkout");
+		const idempotencyKey = "eeeeeeee-ffff-4000-8111-000000000003";
+
+		let thrownError: unknown;
+		try {
+			await f.service.start({
+				...f.defaultInput,
+				idempotencyKey,
+				festivalClassId: adminClass.id,
+			});
+		} catch (error) {
+			thrownError = error;
+		}
+
+		expect(checkoutUrlSpy).not.toHaveBeenCalled();
+		expect(
+			(f.checkout as unknown as { carts: Map<string, unknown> }).carts.size,
+		).toBe(0);
+		expect(thrownError).toBeInstanceOf(AppError);
+		const appErr = thrownError as AppError;
+		expect(appErr.status).toBe(400);
+		expect(appErr.code).toBe("sold_out");
+		expect(appErr.message).toMatch(/capacity|sold_out|waitlist/i);
+		expect(appErr.details).toMatchObject({
+			waitlistedClassIds: [adminClass.id],
+			failures: [
+				{
+					childId: f.child.id,
+					festivalClassId: adminClass.id,
+					reasonCode: "SOLD_OUT",
+					availability: "waitlist",
+					capacity: 1,
+					placedCount: 1,
+				},
+			],
+		});
+
+		const intents = (
+			f.checkout as unknown as {
+				intents: Map<string, { status: string; cartReference: string | null }>;
+			}
+		).intents;
+		const createdIntent = [...intents.values()][0];
+		expect(createdIntent?.status).toBe("failed");
+		expect(createdIntent?.cartReference).toBeNull();
+	});
+
+	for (const cutoffChange of [
+		"capacity decrease",
+		"confirmed placement",
+	] as const) {
+		it(`rejects ${cutoffChange} after the final advisory check but before durable attachment (#284)`, async () => {
+			const f = await createFixture();
+			await f.commerce.createClassEntitlement({
+				organizationId: f.organization.id,
+				festivalId: f.festival?.id ?? "",
+				festivalClassId: f.classConfig.id,
+				parentCustomerId: "baseline-parent",
+				childId: "baseline-child",
+				checkoutIntentId: "baseline-intent",
+				shopifyOrderGid: "gid://shopify/Order/baseline",
+				shopifyOrderLineGid: "gid://shopify/OrderLineItem/baseline",
+				paidAmountCents: 4500,
+				paidCurrencyCode: "USD",
+				status: "confirmed",
+			});
+			await f.organizations.updateFestivalClassConfiguration({
+				organizationId: f.organization.id,
+				festivalId: f.festival?.id ?? "",
+				id: f.classConfig.id,
+				capacity: 2,
+			});
+			const original = f.checkout.markIntentReady.bind(f.checkout);
+			f.checkout.markIntentReady = async (input) => {
+				// This is the old gap: Shopify creation and the final service read
+				// have completed, but there is no durable cart reference yet.
+				if (cutoffChange === "capacity decrease") {
+					await f.organizations.updateFestivalClassConfiguration({
+						organizationId: f.organization.id,
+						festivalId: f.festival?.id ?? "",
+						id: f.classConfig.id,
+						capacity: 1,
+					});
+				} else {
+					await f.commerce.createClassEntitlement({
+						organizationId: f.organization.id,
+						festivalId: f.festival?.id ?? "",
+						festivalClassId: f.classConfig.id,
+						parentCustomerId: "other-parent",
+						childId: "other-child",
+						checkoutIntentId: "paid-intent",
+						shopifyOrderGid: "gid://shopify/Order/late-placement",
+						shopifyOrderLineGid: "gid://shopify/OrderLineItem/late-placement",
+						paidAmountCents: 4500,
+						paidCurrencyCode: "USD",
+						status: "confirmed",
+					});
+				}
+				return original(input);
+			};
+			const checkoutUrl = spyOn(f.storefront, "checkout");
+			await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+				code: "sold_out",
+			});
+			expect(checkoutUrl).not.toHaveBeenCalled();
+			const intents = (
+				f.checkout as unknown as {
+					intents: Map<
+						string,
+						{ status: string; cartReference: string | null }
+					>;
+				}
+			).intents;
+			expect([...intents.values()]).toHaveLength(1);
+			expect([...intents.values()][0]).toMatchObject({
+				status: "failed",
+				cartReference: null,
+			});
+		});
+	}
+
+	it("resumes grandfathered attached cart after class reaches capacity while blocking new checkouts (#145 + #284)", async () => {
+		const f = await createFixture();
+		const festivalId = f.festival?.id ?? "";
+		const gfSubtype = await f.organizations.createRegistrationCatalogValue({
+			organizationId: f.organization.id,
+			kind: "class_subtype",
+			displayName: "Grandfathered Solo",
+			normalizedName: "grandfathered solo",
+		});
+		const gfClass = await f.organizations.createFestivalClassConfiguration({
+			organizationId: f.organization.id,
+			festivalId,
+			displayName: "Grandfathered Piano Class",
+			classSubtypeId: gfSubtype.id,
+			divisionId: f.division.id,
+			minimumAge: 8,
+			maximumAge: 12,
+			price: "50.00",
+			maximumPerformancePieces: 2,
+			performanceMinutes: 10,
+			capacity: 2,
+			isActive: true,
+			shopifyProductGid: "gid://shopify/Product/284-gf-1",
+			shopifyVariantGid: "gid://shopify/ProductVariant/284-gf-1",
+		});
+
+		await f.commerce.createClassEntitlement({
+			organizationId: f.organization.id,
+			festivalId,
+			festivalClassId: gfClass.id,
+			parentCustomerId: "parent-1",
+			childId: "child-1",
+			checkoutIntentId: "intent-gf-placed-1",
+			shopifyOrderGid: "gid://shopify/Order/gf-placed-1",
+			shopifyOrderLineGid: "gid://shopify/OrderLineItem/gf-placed-1",
+			paidAmountCents: 5000,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+
+		const grandfatheredKey = "ffffffff-0000-4111-8222-000000000004";
+		const initialResult = await f.service.start({
+			...f.defaultInput,
+			idempotencyKey: grandfatheredKey,
+			festivalClassId: gfClass.id,
+		});
+		expect(initialResult.checkoutUrl).toBe(
+			`https://${f.storeDomain}/checkouts/c123`,
+		);
+
+		// Class now reaches 2/2 capacity (waitlist)
+		await f.commerce.createClassEntitlement({
+			organizationId: f.organization.id,
+			festivalId,
+			festivalClassId: gfClass.id,
+			parentCustomerId: "parent-2",
+			childId: "child-2",
+			checkoutIntentId: "intent-gf-placed-2",
+			shopifyOrderGid: "gid://shopify/Order/gf-placed-2",
+			shopifyOrderLineGid: "gid://shopify/OrderLineItem/gf-placed-2",
+			paidAmountCents: 5000,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+
+		const createCartSpy = spyOn(f.storefront, "createCart");
+		const replayedResult = await f.service.start({
+			...f.defaultInput,
+			idempotencyKey: grandfatheredKey,
+			festivalClassId: gfClass.id,
+		});
+		expect(replayedResult.checkoutUrl).toBe(initialResult.checkoutUrl);
+		expect(replayedResult.intentId).toBe(initialResult.intentId);
+		expect(replayedResult.correlationId).toBe(initialResult.correlationId);
+		expect(createCartSpy).not.toHaveBeenCalled();
+
+		// A new customer attempting a fresh checkout on the now-waitlisted class is blocked
+		const { customer: customer2, session: session2 } =
+			await f.customers.createCustomerSession({
+				sessionId: "session-parent-2",
+				organizationId: f.organization.id,
+				shopifyCustomerGid: "gid://shopify/Customer/998",
+				encryptedTokens: "encrypted-token-2",
+				csrfToken: "csrf-token-2",
+				integrationVersion: 1,
+				createdAtIso: f.now.toISOString(),
+				lastSeenAtIso: f.now.toISOString(),
+				expiresAtIso: new Date(f.now.getTime() + 8 * 3600_000).toISOString(),
+			});
+		const child2 = await f.customers.createChild({
+			organizationId: f.organization.id,
+			parentCustomerId: customer2.id,
+			displayName: "New Performer",
+		});
+		await f.customers.createChildAgeSnapshot({
+			organizationId: f.organization.id,
+			childId: child2.id,
+			age: 10,
+			validUntilIso: new Date(
+				f.now.getTime() + 90 * 24 * 3600_000,
+			).toISOString(),
+			createdAtIso: f.now.toISOString(),
+		});
+
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				customerId: customer2.id,
+				sessionId: session2.sessionId,
+				childId: child2.id,
+				idempotencyKey: "11111111-0000-4111-8222-000000000005",
+				festivalClassId: gfClass.id,
+			}),
+		).rejects.toMatchObject({
+			status: 400,
+			code: "sold_out",
+		});
+	});
+
+	it("never grandfathers a bare/failed intent when class subsequently reaches capacity (#284)", async () => {
+		const f = await createFixture();
+		const festivalId = f.festival?.id ?? "";
+		const bareSubtype = await f.organizations.createRegistrationCatalogValue({
+			organizationId: f.organization.id,
+			kind: "class_subtype",
+			displayName: "Bare Intent Solo",
+			normalizedName: "bare intent solo",
+		});
+		const bareClass = await f.organizations.createFestivalClassConfiguration({
+			organizationId: f.organization.id,
+			festivalId,
+			displayName: "Bare Intent Piano Class",
+			classSubtypeId: bareSubtype.id,
+			divisionId: f.division.id,
+			minimumAge: 8,
+			maximumAge: 12,
+			price: "50.00",
+			maximumPerformancePieces: 2,
+			performanceMinutes: 10,
+			capacity: 1,
+			isActive: true,
+			shopifyProductGid: "gid://shopify/Product/284-bare-1",
+			shopifyVariantGid: "gid://shopify/ProductVariant/284-bare-1",
+		});
+
+		f.storefront.createCart = async () => {
+			throw new Error("Shopify cartCreate temporary failure");
+		};
+
+		const failedKey = "22222222-0000-4111-8222-000000000006";
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				idempotencyKey: failedKey,
+				festivalClassId: bareClass.id,
+			}),
+		).rejects.toMatchObject({
+			status: 503,
+			code: "checkout_retryable_upstream",
+		});
+
+		const intents = (
+			f.checkout as unknown as {
+				intents: Map<string, { status: string; cartReference: string | null }>;
+			}
+		).intents;
+		const failedIntent = [...intents.values()][0];
+		expect(failedIntent?.status).toBe("failed");
+		expect(failedIntent?.cartReference).toBeNull();
+
+		// Class now reaches capacity (1/1)
+		await f.commerce.createClassEntitlement({
+			organizationId: f.organization.id,
+			festivalId,
+			festivalClassId: bareClass.id,
+			parentCustomerId: "other-parent",
+			childId: "other-child",
+			checkoutIntentId: "intent-bare-other",
+			shopifyOrderGid: "gid://shopify/Order/bare-other",
+			shopifyOrderLineGid: "gid://shopify/OrderLineItem/bare-other",
+			paidAmountCents: 5000,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+
+		f.storefront.createCart = async () => ({
+			shopifyCartId: "gid://shopify/Cart/should-not-be-created",
+		});
+
+		// Retrying with the old key fails as terminal failure (never resumes)
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				idempotencyKey: failedKey,
+				festivalClassId: bareClass.id,
+			}),
+		).rejects.toMatchObject({
+			status: 409,
+			code: "checkout_terminal_failure",
+		});
+
+		// Retrying with a new key is blocked by the Waitlist gate
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				idempotencyKey: "33333333-0000-4111-8222-000000000007",
+				festivalClassId: bareClass.id,
+			}),
+		).rejects.toMatchObject({
+			status: 400,
+			code: "sold_out",
+		});
+	});
+
+	describe("Concerto catalog work requirement (#197)", () => {
+		it("rejects free-text repertoire when class requires a concerto", async () => {
+			const f = await createFixture();
+			const concertoSubtype =
+				await f.organizations.createRegistrationCatalogValue({
+					organizationId: f.organization.id,
+					kind: "class_subtype",
+					displayName: "Concerto",
+					normalizedName: "concerto",
+				});
+			const concertoClass =
+				await f.organizations.createFestivalClassConfiguration({
+					organizationId: f.organization.id,
+					festivalId: f.festival?.id ?? "",
+					displayName: "Junior Piano Concerto",
+					classSubtypeId: concertoSubtype.id,
+					divisionId: f.division.id,
+					minimumAge: 8,
+					maximumAge: 12,
+					price: "55.00",
+					maximumPerformancePieces: 1,
+					performanceMinutes: 15,
+					capacity: 20,
+					isActive: true,
+					shopifyProductGid: "gid://shopify/Product/101",
+					shopifyVariantGid: "gid://shopify/ProductVariant/201",
+				});
+
+			await expect(
+				f.service.start({
+					...f.defaultInput,
+					festivalClassId: concertoClass.id,
+					pieces: [
+						{
+							title: "Piano Concerto in A minor, Op. 16",
+							composer: "Edvard Grieg",
+							durationSeconds: 300,
+						},
+					],
+				}),
+			).rejects.toMatchObject({
+				status: 400,
+				code: "concerto_catalog_work_required",
+			});
+		});
+
+		it("rejects catalog work not classified as concerto or unknown catalogWorkId", async () => {
+			const f = await createFixture();
+			const concertoSubtype =
+				await f.organizations.createRegistrationCatalogValue({
+					organizationId: f.organization.id,
+					kind: "class_subtype",
+					displayName: "Concerto",
+					normalizedName: "concerto",
+				});
+			const concertoClass =
+				await f.organizations.createFestivalClassConfiguration({
+					organizationId: f.organization.id,
+					festivalId: f.festival?.id ?? "",
+					displayName: "Junior Piano Concerto",
+					classSubtypeId: concertoSubtype.id,
+					divisionId: f.division.id,
+					minimumAge: 8,
+					maximumAge: 12,
+					price: "55.00",
+					maximumPerformancePieces: 1,
+					performanceMinutes: 15,
+					capacity: 20,
+					isActive: true,
+					shopifyProductGid: "gid://shopify/Product/101",
+					shopifyVariantGid: "gid://shopify/ProductVariant/201",
+				});
+
+			f.repertoire.seedCanonicalWork({
+				id: "work-sonata",
+				organizationId: f.organization.id,
+				title: "Piano Sonata No. 16",
+				composerName: "W. A. Mozart",
+				classifications: ["sonata"],
+				isActive: true,
+			});
+
+			f.repertoire.seedCanonicalWork({
+				id: "work-unclassified",
+				organizationId: f.organization.id,
+				title: "Mystery Piece",
+				composerName: "Unknown",
+				classifications: [],
+				isActive: true,
+			});
+
+			for (const catalogWorkId of [
+				"work-sonata",
+				"work-unclassified",
+				"unknown-work-id",
+			]) {
+				await expect(
+					f.service.start({
+						...f.defaultInput,
+						idempotencyKey: `idem-${catalogWorkId}`,
+						festivalClassId: concertoClass.id,
+						pieces: [
+							{
+								title: "Piece",
+								composer: "Composer",
+								durationSeconds: 300,
+								catalogWorkId,
+							} as RepertoirePiece,
+						],
+					}),
+				).rejects.toMatchObject({
+					status: 400,
+					code: "concerto_catalog_work_required",
+				});
+			}
+		});
+
+		it("accepts a catalog work classified as concerto and persists catalogWorkId", async () => {
+			const f = await createFixture();
+			const concertoSubtype =
+				await f.organizations.createRegistrationCatalogValue({
+					organizationId: f.organization.id,
+					kind: "class_subtype",
+					displayName: "Concerto",
+					normalizedName: "concerto",
+				});
+			const concertoClass =
+				await f.organizations.createFestivalClassConfiguration({
+					organizationId: f.organization.id,
+					festivalId: f.festival?.id ?? "",
+					displayName: "Junior Piano Concerto",
+					classSubtypeId: concertoSubtype.id,
+					divisionId: f.division.id,
+					minimumAge: 8,
+					maximumAge: 12,
+					price: "55.00",
+					maximumPerformancePieces: 1,
+					performanceMinutes: 15,
+					capacity: 20,
+					isActive: true,
+					shopifyProductGid: "gid://shopify/Product/101",
+					shopifyVariantGid: "gid://shopify/ProductVariant/201",
+				});
+
+			f.repertoire.seedCanonicalWork({
+				id: "work-concerto-1",
+				organizationId: f.organization.id,
+				title: "Piano Concerto in A minor, Op. 16",
+				composerName: "Edvard Grieg",
+				classifications: ["concerto"],
+				isActive: true,
+			});
+
+			const captured: ClassRegistrationMetadata[] = [];
+			const insert = f.checkout.insertRegistrationMetadata.bind(f.checkout);
+			f.checkout.insertRegistrationMetadata = async (params) => {
+				const metadata = await insert(params);
+				captured.push(metadata);
+				return metadata;
+			};
+
+			const result = await f.service.start({
+				...f.defaultInput,
+				festivalClassId: concertoClass.id,
+				pieces: [
+					{
+						title: "Piano Concerto in A minor, Op. 16",
+						composer: "Edvard Grieg",
+						movement: "I. Allegro molto moderato",
+						durationSeconds: 300,
+						catalogWorkId: "work-concerto-1",
+					} as RepertoirePiece,
+				],
+			});
+
+			expect(result.intentId).toBeDefined();
+			expect(captured).toHaveLength(1);
+			expect(captured[0].repertoireItems[0]?.catalogWorkId).toBe(
+				"work-concerto-1",
+			);
+			expect(
+				(
+					captured[0].repertoireJson[0] as RepertoirePiece & {
+						catalogWorkId?: string | null;
+					}
+				)?.catalogWorkId,
+			).toBe("work-concerto-1");
+		});
+
+		it("continues to allow free-text repertoire without catalogWorkId on non-concerto classes", async () => {
+			const f = await createFixture();
+			const result = await f.service.start(f.defaultInput);
+			expect(result.intentId).toBeDefined();
+		});
+
+		it("rejects cross-tenant and bogus catalogWorkId on both concerto and non-concerto classes", async () => {
+			const f = await createFixture();
+			const otherOrg = await f.organizations.createOrganization({
+				name: "Other Org",
+				slug: "other-org",
+			});
+			f.repertoire.seedCanonicalWork({
+				id: "foreign-concerto-work",
+				organizationId: otherOrg.id,
+				title: "Piano Concerto in A minor, Op. 16",
+				composerName: "Edvard Grieg",
+				classifications: ["concerto"],
+				isActive: true,
+			});
+
+			const concertoSubtype =
+				await f.organizations.createRegistrationCatalogValue({
+					organizationId: f.organization.id,
+					kind: "class_subtype",
+					displayName: "Concerto",
+					normalizedName: "concerto",
+				});
+			const concertoClass =
+				await f.organizations.createFestivalClassConfiguration({
+					organizationId: f.organization.id,
+					festivalId: f.festival?.id ?? "",
+					displayName: "Junior Piano Concerto",
+					classSubtypeId: concertoSubtype.id,
+					divisionId: f.division.id,
+					minimumAge: 8,
+					maximumAge: 12,
+					price: "55.00",
+					maximumPerformancePieces: 1,
+					performanceMinutes: 15,
+					capacity: 20,
+					isActive: true,
+					shopifyProductGid: "gid://shopify/Product/101",
+					shopifyVariantGid: "gid://shopify/ProductVariant/201",
+				});
+
+			// Cross-tenant catalogWorkId on concerto class
+			await expect(
+				f.service.start({
+					...f.defaultInput,
+					idempotencyKey: "idem-cross-tenant-concerto",
+					festivalClassId: concertoClass.id,
+					pieces: [
+						{
+							title: "Piano Concerto in A minor, Op. 16",
+							composer: "Edvard Grieg",
+							durationSeconds: 300,
+							catalogWorkId: "foreign-concerto-work",
+						},
+					],
+				}),
+			).rejects.toMatchObject({
+				status: 400,
+				code: "concerto_catalog_work_required",
+			});
+
+			// Cross-tenant and bogus catalogWorkId on non-concerto class
+			for (const badWorkId of ["foreign-concerto-work", "bogus-work-id"]) {
+				await expect(
+					f.service.start({
+						...f.defaultInput,
+						idempotencyKey: `idem-non-concerto-${badWorkId}`,
+						pieces: [
+							{
+								title: "Sonatina in C Major",
+								composer: "Muzio Clementi",
+								durationSeconds: 150,
+								catalogWorkId: badWorkId,
+							},
+						],
+					}),
+				).rejects.toMatchObject({
+					status: 400,
+					code: "catalog_work_invalid",
+				});
+			}
+
+			// Fail-closed when repertoire repository is not configured on concerto class
+			const serviceWithoutRepertoire = new ClassCheckoutService(
+				f.organizations,
+				f.customers,
+				f.checkout,
+				f.storefront,
+				f.commerce,
+				() => f.now,
+			);
+			await expect(
+				serviceWithoutRepertoire.start({
+					...f.defaultInput,
+					idempotencyKey: "idem-no-repertoire-repo",
+					festivalClassId: concertoClass.id,
+					pieces: [
+						{
+							title: "Piano Concerto in A minor, Op. 16",
+							composer: "Edvard Grieg",
+							durationSeconds: 300,
+							catalogWorkId: "any-work-id",
+						},
+					],
+				}),
+			).rejects.toMatchObject({
+				status: 400,
+				code: "concerto_catalog_work_required",
+			});
+		});
 	});
 });

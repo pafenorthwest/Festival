@@ -5,12 +5,36 @@ import {
 	SHOPIFY_CLIENT_SECRET_PURPOSE,
 	type ShopifySecretKeyring,
 } from "../shopify/encryption.js";
+import { BoundedAsyncCache } from "./bounded-async-cache.js";
 import type { MembershipCommerceRepository } from "./membership-commerce-repository.js";
 import type { ShopifyOrderProjectionService } from "./shopify-order-projection-service.js";
+import {
+	WebhookWorkerQueue,
+	type WebhookWorkerQueueStats,
+} from "./webhook-worker-queue.js";
 
 export const MAX_SHOPIFY_WEBHOOK_BODY_BYTES = 64 * 1024;
+export const DEFAULT_ORG_CACHE_TTL_MS = 60_000;
+export const DEFAULT_SECRET_CACHE_TTL_MS = 60_000;
+const DEFAULT_CACHE_MAX_ENTRIES = 1_000;
+const DEFAULT_ORG_CACHE_MAX_BYTES = 10 * 1024 * 1024;
+const DEFAULT_SECRET_CACHE_MAX_BYTES = 4 * 1024 * 1024;
+const DEFAULT_SECRET_ENTRY_MAX_BYTES = 4 * 1024;
+const DEFAULT_ORG_ENTRY_MAX_BYTES = 64 * 1024;
 const SHOPIFY_TOPIC = "orders/paid";
 const SHOPIFY_API_VERSION = "2026-07";
+
+type OrgRecord = Awaited<
+	ReturnType<OrganizationRepository["findOrganizationByShopDomain"]>
+>;
+
+export interface ShopifyWebhookServiceOptions {
+	queueConcurrency?: number;
+	queueMaxBacklog?: number;
+	queueMaxPendingRecovery?: number;
+	orgCacheTtlMs?: number;
+	secretCacheTtlMs?: number;
+}
 
 function canonicalShopDomain(value: string | undefined): string | undefined {
 	const normalized = value?.trim().toLowerCase();
@@ -102,18 +126,153 @@ async function readRawBody(request: Request): Promise<Buffer | undefined> {
 }
 
 export class ShopifyWebhookService {
+	private readonly queue: WebhookWorkerQueue;
+	private readonly scheduleFn: (deliveryId: string) => void;
+	private readonly orgCache: BoundedAsyncCache<string, OrgRecord>;
+	private readonly secretCache: BoundedAsyncCache<string, string>;
+	private readonly orgCacheTtlMs: number;
+	private readonly secretCacheTtlMs: number;
+
 	constructor(
 		private readonly organizations: OrganizationRepository,
 		private readonly commerce: MembershipCommerceRepository,
 		private readonly secretKeyring: ShopifySecretKeyring | undefined,
 		private readonly projection: ShopifyOrderProjectionService | undefined,
 		private readonly now: () => Date = () => new Date(),
-		private readonly schedule: (deliveryId: string) => void = (deliveryId) => {
-			queueMicrotask(() => {
-				void this.projection?.processDelivery(deliveryId);
+		schedule?: ((deliveryId: string) => void) | WebhookWorkerQueue,
+		options?: ShopifyWebhookServiceOptions,
+	) {
+		this.orgCacheTtlMs = options?.orgCacheTtlMs ?? DEFAULT_ORG_CACHE_TTL_MS;
+		this.secretCacheTtlMs =
+			options?.secretCacheTtlMs ?? DEFAULT_SECRET_CACHE_TTL_MS;
+
+		this.orgCache = new BoundedAsyncCache({
+			maxEntries: DEFAULT_CACHE_MAX_ENTRIES,
+			maxEntryBytes: DEFAULT_ORG_ENTRY_MAX_BYTES,
+			maxTotalBytes: DEFAULT_ORG_CACHE_MAX_BYTES,
+			now: () => this.now().getTime(),
+		});
+
+		this.secretCache = new BoundedAsyncCache({
+			maxEntries: DEFAULT_CACHE_MAX_ENTRIES,
+			maxEntryBytes: DEFAULT_SECRET_ENTRY_MAX_BYTES,
+			maxTotalBytes: DEFAULT_SECRET_CACHE_MAX_BYTES,
+			now: () => this.now().getTime(),
+		});
+
+		if (schedule instanceof WebhookWorkerQueue) {
+			this.queue = schedule;
+			this.scheduleFn = (deliveryId) => {
+				this.queue.enqueue(deliveryId);
+			};
+		} else {
+			this.queue = new WebhookWorkerQueue({
+				handler: async (deliveryId) => {
+					await this.projection?.processDelivery(deliveryId);
+				},
+				concurrency: options?.queueConcurrency,
+				maxBacklog: options?.queueMaxBacklog,
+				maxPendingRecovery: options?.queueMaxPendingRecovery,
 			});
-		},
-	) {}
+			if (typeof schedule === "function") {
+				this.scheduleFn = schedule;
+			} else {
+				this.scheduleFn = (deliveryId) => {
+					this.queue.enqueue(deliveryId);
+				};
+			}
+		}
+	}
+
+	getQueue(): WebhookWorkerQueue {
+		return this.queue;
+	}
+
+	getStats(): WebhookWorkerQueueStats {
+		return this.queue.getStats();
+	}
+
+	drain(): Promise<void> {
+		return this.queue.drain();
+	}
+
+	clearCaches(): void {
+		this.orgCache.deleteWhere(() => true);
+		this.secretCache.deleteWhere(() => true);
+	}
+
+	reclaimPending(
+		fetchPendingDeliveryIds: () => Promise<string[]>,
+	): Promise<number> {
+		return this.queue.reclaimPending(fetchPendingDeliveryIds);
+	}
+
+	reclaimOrganizationPending(
+		organizationId: string,
+		limit = this.queue.maxBacklog,
+		leaseMs = 15 * 60 * 1_000,
+	): Promise<number> {
+		const staleBeforeIso = new Date(
+			this.now().getTime() - leaseMs,
+		).toISOString();
+		return this.reclaimPending(async () => {
+			const pending = await this.commerce.listReclaimableDeliveries(
+				organizationId,
+				limit,
+				staleBeforeIso,
+			);
+			return pending.map((delivery) => delivery.id);
+		});
+	}
+
+	private async resolveVerifiedClientSecret(
+		shopDomain: string,
+		secretKeyring: ShopifySecretKeyring,
+	): Promise<{ organizationId: string; clientSecret: string } | null> {
+		const organization = await this.orgCache.getOrLoad(shopDomain, async () => {
+			const value =
+				await this.organizations.findOrganizationByShopDomain(shopDomain);
+			return {
+				value,
+				ttlMs: this.orgCacheTtlMs,
+				bytes: value ? 512 : 16,
+			};
+		});
+		if (!organization) return null;
+		const integration = await this.organizations.getShopifyIntegration(
+			organization.id,
+		);
+		if (
+			!integration ||
+			integration.verificationStatus !== "ok" ||
+			integration.verifiedShopDomain !== shopDomain
+		) {
+			return null;
+		}
+		try {
+			const cacheKey = `${organization.id}:${integration.encryptedClientSecret}`;
+			const clientSecret = await this.secretCache.getOrLoad(
+				cacheKey,
+				async () => {
+					const decrypted = secretKeyring.decrypt(
+						integration.encryptedClientSecret,
+						{
+							organizationId: organization.id,
+							purpose: SHOPIFY_CLIENT_SECRET_PURPOSE,
+						},
+					);
+					return {
+						value: decrypted,
+						ttlMs: this.secretCacheTtlMs,
+						bytes: Buffer.byteLength(decrypted),
+					};
+				},
+			);
+			return { organizationId: organization.id, clientSecret };
+		} catch {
+			return null;
+		}
+	}
 
 	async handle(context: Context): Promise<Response> {
 		if (
@@ -132,52 +291,33 @@ export class ShopifyWebhookService {
 		const topic = context.req.header("X-Shopify-Topic");
 		const apiVersion = context.req.header("X-Shopify-API-Version");
 		const orderGid = orderGidFromPayload(rawBody);
+		const secretKeyring = this.secretKeyring;
 		if (
 			!shopDomain ||
 			!validWebhookId(webhookId) ||
 			topic !== SHOPIFY_TOPIC ||
 			apiVersion !== SHOPIFY_API_VERSION ||
 			!orderGid ||
-			!this.secretKeyring
+			!secretKeyring
 		) {
 			return new Response(null, { status: 400 });
 		}
-		const organization =
-			await this.organizations.findOrganizationByShopDomain(shopDomain);
-		if (!organization) return new Response(null, { status: 401 });
-		const integration = await this.organizations.getShopifyIntegration(
-			organization.id,
+		const verified = await this.resolveVerifiedClientSecret(
+			shopDomain,
+			secretKeyring,
 		);
 		if (
-			!integration ||
-			integration.verificationStatus !== "ok" ||
-			integration.verifiedShopDomain !== shopDomain
-		) {
-			return new Response(null, { status: 401 });
-		}
-		let clientSecret: string;
-		try {
-			clientSecret = this.secretKeyring.decrypt(
-				integration.encryptedClientSecret,
-				{
-					organizationId: organization.id,
-					purpose: SHOPIFY_CLIENT_SECRET_PURPOSE,
-				},
-			);
-		} catch {
-			return new Response(null, { status: 401 });
-		}
-		if (
+			!verified ||
 			!verifyHmac(
 				rawBody,
-				clientSecret,
+				verified.clientSecret,
 				context.req.header("X-Shopify-Hmac-Sha256"),
 			)
 		) {
 			return new Response(null, { status: 401 });
 		}
 		const recorded = await this.commerce.recordDelivery({
-			organizationId: organization.id,
+			organizationId: verified.organizationId,
 			shopDomain,
 			webhookId,
 			topic: SHOPIFY_TOPIC,
@@ -188,7 +328,14 @@ export class ShopifyWebhookService {
 		});
 		if (recorded.kind === "conflict")
 			return new Response(null, { status: 409 });
-		if (recorded.kind === "accepted") this.schedule(recorded.delivery.id);
+		if (
+			recorded.kind === "accepted" ||
+			((recorded.delivery.status === "received" ||
+				recorded.delivery.status === "failed") &&
+				!this.queue.isQueuedOrActive(recorded.delivery.id))
+		) {
+			this.scheduleFn(recorded.delivery.id);
+		}
 		return new Response(null, {
 			status: recorded.kind === "accepted" ? 202 : 200,
 		});

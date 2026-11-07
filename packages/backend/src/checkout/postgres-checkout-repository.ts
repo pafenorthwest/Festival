@@ -1,10 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type {
 	ClassRegistrationMetadata,
+	ClassRegistrationSnapshot,
 	RegistrationRepertoireItem,
 	RepertoirePiece,
 } from "@festival/common";
+import { normalizeClassRegistrationSnapshot } from "@festival/common";
 import { sql } from "bun";
+import { countConfirmedClassEntitlements } from "../commerce/postgres-class-entitlement-count.js";
 import { initializePostgresSchema } from "../repo/postgres-schema.js";
 import { buildIntentLineRecords } from "./checkout-line-helpers.js";
 import type {
@@ -19,6 +22,7 @@ import {
 	CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL,
 	repertoireItemsFromLegacyPieces,
 } from "./checkout-repository.js";
+import { verifyPostCartCreateCapacityCutoff } from "./class-checkout-helpers.js";
 import {
 	cartFromRow,
 	insertRepertoireSnapshot,
@@ -64,7 +68,7 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 			]);
 			if (record.entitlementClass) {
 				const activeGrant = (await tx.unsafe(
-					`SELECT 1 FROM ${this.schema}.membership_entitlements grants JOIN ${this.schema}.organizations organization ON organization.id = grants.organization_id WHERE grants.organization_id = $1 AND grants.customer_id = $2 AND grants.entitlement_class = $3 AND grants.revoked_at IS NULL AND grants.starts_on > (NOW() AT TIME ZONE organization.timezone)::date LIMIT 1`,
+					`SELECT 1 FROM ${this.schema}.membership_entitlements grants JOIN ${this.schema}.organizations organization ON organization.id = grants.organization_id WHERE grants.organization_id = $1 AND grants.customer_id = $2 AND grants.entitlement_class = $3 AND grants.revoked_at IS NULL AND grants.superseded_on IS NULL AND (grants.starts_on > (NOW() AT TIME ZONE organization.timezone)::date OR grants.ends_on > ((NOW() AT TIME ZONE organization.timezone)::date + INTERVAL '30 days')::date) LIMIT 1`,
 					[record.organizationId, record.customerId, record.entitlementClass],
 				)) as Array<Record<string, unknown>>;
 				if (activeGrant[0]) return { kind: "active" as const };
@@ -176,11 +180,59 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 	) {
 		const reference = randomUUID();
 		const rows = await sql.begin(async (tx) => {
+			// This lock is also acquired before capacity and entitlement writes.
+			// Hold it only for the database admission/attachment transaction.
+			await tx.unsafe("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+				`${this.schema}:class-capacity-cutoff`,
+			]);
 			const intents = (await tx.unsafe(
-				`SELECT id FROM ${this.schema}.checkout_intents WHERE id = $1 AND status = 'creating' FOR UPDATE`,
-				[input.intentId],
+				`SELECT id, intent_type, festival_class_id, child_id FROM ${this.schema}.checkout_intents WHERE id = $1 AND organization_id = $2 AND status = 'creating' FOR UPDATE`,
+				[input.intentId, input.organizationId],
 			)) as Array<Record<string, unknown>>;
 			if (!intents[0]) throw new Error("Checkout intent cannot accept a cart.");
+			if (intents[0].intent_type === "class_entry") {
+				const lineRows = (await tx.unsafe(
+					`SELECT festival_class_id, child_id FROM ${this.schema}.checkout_intent_lines WHERE checkout_intent_id = $1 AND line_type = 'class_entry' ORDER BY line_index ASC`,
+					[input.intentId],
+				)) as Array<Record<string, unknown>>;
+				const lines = (lineRows.length ? lineRows : [intents[0]]).map(
+					(row) => ({
+						festivalClassId: String(row.festival_class_id),
+						childId: String(row.child_id),
+					}),
+				);
+				const classIds = [
+					...new Set(lines.map((line) => line.festivalClassId)),
+				];
+				const configRows = (await tx.unsafe(
+					`SELECT id, organization_id, festival_id, capacity, is_active FROM ${this.schema}.festival_class_configurations WHERE organization_id = $1 AND id = ANY($2::text[])`,
+					[input.organizationId, sql.array(classIds, "text")],
+				)) as Array<Record<string, unknown>>;
+				const configs = configRows.map((row) => ({
+					id: String(row.id),
+					organizationId: String(row.organization_id),
+					festivalId: String(row.festival_id),
+					capacity: Number(row.capacity),
+					isActive: Boolean(row.is_active),
+				}));
+				const failure = await verifyPostCartCreateCapacityCutoff({
+					organizationId: input.organizationId,
+					festivalId: configs[0]?.festivalId ?? "",
+					lines,
+					organizations: {
+						findFestivalClassConfigurationsByIds: async () => configs,
+					},
+					countConfirmedEntitlements: (organizationId, classId) =>
+						countConfirmedClassEntitlements(
+							tx,
+							this.schema,
+							organizationId,
+							classId,
+						),
+				});
+				if (failure) throw failure;
+			}
+
 			await tx.unsafe(
 				`INSERT INTO ${this.schema}.checkout_carts (reference, shopify_cart_id, organization_id, customer_id, session_id, integration_version, status, expires_at) VALUES ($1,$2,$3,$4,$5,$6,'ready',$7)`,
 				[
@@ -211,6 +263,13 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 			createdAtIso: new Date().toISOString(),
 		};
 	}
+	async markIntentReady(
+		input: Omit<CheckoutCartRecord, "reference" | "createdAtIso" | "status"> & {
+			intentId: string;
+		},
+	) {
+		return this.attachCart(input);
+	}
 	async markCheckoutStarted(intentId: string) {
 		await sql.begin(async (tx) => {
 			const rows = (await tx.unsafe(
@@ -239,6 +298,14 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 			}
 		});
 	}
+	async markIntentFailed(input: {
+		organizationId?: string;
+		intentId: string;
+		failureCode?: string;
+		failureMessage?: string;
+	}) {
+		await this.markFailed(input.intentId);
+	}
 	async getCart(
 		reference: string,
 		organizationId: string,
@@ -255,6 +322,22 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 		const rows = (await sql.unsafe(
 			`SELECT id, correlation_id, organization_id, customer_id, session_id, idempotency_key, intent_type, offering_id, entitlement_class, duration_days, festival_class_id, child_id, shopify_product_gid, shopify_variant_gid, policy_version, division_id, division_name_snapshot, staff_access_consent, amount, currency_code, line_identity_protocol, cart_reference, status, expires_at::text, created_at::text FROM ${this.schema}.checkout_intents WHERE organization_id = $1 AND correlation_id = $2`,
 			[organizationId, correlationId],
+		)) as Array<Record<string, unknown>>;
+		if (!rows[0]) return null;
+		const intent = this.intent(rows[0]);
+		intent.lines = await this.getIntentLines(sql, intent.id);
+		return intent;
+	}
+	async findIntentByCorrelationId(
+		organizationId: string,
+		correlationId: string,
+	) {
+		return this.findIntentByCorrelation(organizationId, correlationId);
+	}
+	async findIntentById(organizationId: string, intentId: string) {
+		const rows = (await sql.unsafe(
+			`SELECT id, correlation_id, organization_id, customer_id, session_id, idempotency_key, intent_type, offering_id, entitlement_class, duration_days, festival_class_id, child_id, shopify_product_gid, shopify_variant_gid, policy_version, division_id, division_name_snapshot, staff_access_consent, amount, currency_code, line_identity_protocol, cart_reference, status, expires_at::text, created_at::text FROM ${this.schema}.checkout_intents WHERE organization_id = $1 AND id = $2`,
+			[organizationId, intentId],
 		)) as Array<Record<string, unknown>>;
 		if (!rows[0]) return null;
 		const intent = this.intent(rows[0]);
@@ -328,8 +411,12 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 		accompanistMembershipId: string | null;
 		repertoireJson: RepertoirePiece[];
 		repertoireSnapshotPieces?: RepertoirePiece[];
+		registrationSnapshot?: ClassRegistrationSnapshot | null;
 	}): Promise<ClassRegistrationMetadata> {
 		await this.ensureReady();
+		const registrationSnapshot = normalizeClassRegistrationSnapshot(
+			params.registrationSnapshot,
+		);
 		const repertoireItems = repertoireItemsFromLegacyPieces(
 			params.id,
 			params.organizationId,
@@ -337,7 +424,7 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 		);
 		const rows = (await sql.begin(async (tx) => {
 			const metadataRows = (await tx.unsafe(
-				`INSERT INTO ${this.schema}.registration_metadata (id, organization_id, festival_id, checkout_intent_id, checkout_intent_line_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json) VALUES ($1,$2,$3,$4,$5,NULL,$6,$7,$8) RETURNING id, organization_id, festival_id, checkout_intent_id, checkout_intent_line_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json, created_at`,
+				`INSERT INTO ${this.schema}.registration_metadata (id, organization_id, festival_id, checkout_intent_id, checkout_intent_line_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json, registration_snapshot) VALUES ($1,$2,$3,$4,$5,NULL,$6,$7,$8,$9) RETURNING id, organization_id, festival_id, checkout_intent_id, checkout_intent_line_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json, registration_snapshot, created_at`,
 				[
 					params.id,
 					params.organizationId,
@@ -346,7 +433,8 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 					params.checkoutIntentLineId ?? null,
 					params.teacherMembershipId,
 					params.accompanistMembershipId ?? null,
-					JSON.stringify(params.repertoireJson),
+					params.repertoireJson,
+					registrationSnapshot,
 				],
 			)) as Array<Record<string, unknown>>;
 			await insertRepertoireSnapshot(tx, this.schema, repertoireItems);
@@ -408,16 +496,21 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 			pieces: RepertoirePiece[];
 		},
 	) {
-		const json = JSON.stringify(input.pieces);
+		const pieces = input.pieces;
 		if (input.accompanistMembershipId !== undefined) {
 			return (await tx.unsafe(
-				`UPDATE ${this.schema}.registration_metadata SET accompanist_membership_id = $1, repertoire_json = $2 WHERE id = $3 AND organization_id = $4 RETURNING id, organization_id, festival_id, checkout_intent_id, checkout_intent_line_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json, created_at`,
-				[input.accompanistMembershipId, json, target.id, target.organizationId],
+				`UPDATE ${this.schema}.registration_metadata SET accompanist_membership_id = $1, repertoire_json = $2 WHERE id = $3 AND organization_id = $4 RETURNING id, organization_id, festival_id, checkout_intent_id, checkout_intent_line_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json, registration_snapshot, created_at`,
+				[
+					input.accompanistMembershipId,
+					pieces,
+					target.id,
+					target.organizationId,
+				],
 			)) as Array<Record<string, unknown>>;
 		}
 		return (await tx.unsafe(
-			`UPDATE ${this.schema}.registration_metadata SET repertoire_json = $1 WHERE id = $2 AND organization_id = $3 RETURNING id, organization_id, festival_id, checkout_intent_id, checkout_intent_line_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json, created_at`,
-			[json, target.id, target.organizationId],
+			`UPDATE ${this.schema}.registration_metadata SET repertoire_json = $1 WHERE id = $2 AND organization_id = $3 RETURNING id, organization_id, festival_id, checkout_intent_id, checkout_intent_line_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json, registration_snapshot, created_at`,
+			[pieces, target.id, target.organizationId],
 		)) as Array<Record<string, unknown>>;
 	}
 	async linkRegistrationMetadataToEntitlement(params: {
@@ -445,7 +538,7 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 	): Promise<ClassRegistrationMetadata | null> {
 		await this.ensureReady();
 		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, festival_id, checkout_intent_id, checkout_intent_line_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json, created_at FROM ${this.schema}.registration_metadata WHERE organization_id = $1 AND class_entitlement_id = $2 LIMIT 1`,
+			`SELECT id, organization_id, festival_id, checkout_intent_id, checkout_intent_line_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json, registration_snapshot, created_at FROM ${this.schema}.registration_metadata WHERE organization_id = $1 AND class_entitlement_id = $2 LIMIT 1`,
 			[organizationId, classEntitlementId],
 		)) as Array<Record<string, unknown>>;
 		if (!rows[0]) return null;

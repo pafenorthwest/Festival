@@ -199,11 +199,29 @@ export function buildCustomerMembershipRoutes({
 				c.req.header("X-CSRF-Token"),
 				resolveRequestOrigin(c),
 			);
+			let payload: unknown;
+			try {
+				payload = await c.req.json();
+			} catch {
+				throw new AppError("Accompanist form is invalid.", 400);
+			}
+			assertAllowedFields(
+				payload,
+				["name", "email", "city", "phone", "divisionIds", "staffAccessConsent"],
+				"Accompanist form",
+			);
+			if ((payload as Record<string, unknown>).staffAccessConsent !== true) {
+				throw new AppError("Staff access consent is required.", 400);
+			}
+			await customerAccountService.recordCheckoutStaffAccessConsent(
+				access.organizationId,
+				access.customerId,
+			);
 			c.header("Cache-Control", "no-store");
 			return c.json(
 				await accompanistMembershipService.acquire({
 					...access,
-					payload: await c.req.json(),
+					payload,
 				}),
 			);
 		} catch (error) {

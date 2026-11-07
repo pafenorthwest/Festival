@@ -3,6 +3,13 @@ import type {
 	AddCatalogWorkInput,
 	AdminCustomerSearchResponse,
 	AdminCustomerSearchResult,
+	AdminEntitlementOperationsResponse,
+	AdminEntitlementReconcileResponse,
+	AdminResolveValidationDecisionInput,
+	AdminResolveValidationDecisionResponse,
+	AdminRevokeEntitlementInput,
+	AdminRevokeEntitlementResponse,
+	AdminWaitlistRosterEntryDto,
 	BillingAdjustment,
 	BillingAdjustmentType,
 	BillingAdjustmentValidationResult,
@@ -35,19 +42,29 @@ import type {
 	CreateOrganizationResponse,
 	CreditBalance,
 	CustomerAccountSettingsResponse,
+	CustomerClassEntitlementSummary,
+	CustomerClassRegistrationItem,
+	CustomerClassRegistrationMetadataSummary,
+	CustomerClassRegistrationsResponse,
+	CustomerFestivalClassSummary,
 	CustomerMembershipStatusResponse,
 	CustomerOrdersResponse,
 	CustomerProfileResponse,
 	CustomerSessionResponse,
+	CustomerWaitlistEntryDto,
 	DismissWelcomeResponse,
 	DropRegistrationInput,
 	DropRegistrationResult,
 	DropRegistrationValidationResult,
+	EntitlementReportFilters,
+	EntitlementReportPageRequest,
+	EntitlementReportResponse,
 	EvaluatePurchaseEligibilityResponse,
 	FestivalClassConfigurationDto,
 	FestivalSummary,
 	FlagReviewInput,
 	InviteSummary,
+	JoinWaitlistInput,
 	MembershipProductsListResponse,
 	MembershipPurchaseSelectionResponse,
 	MessageChannel,
@@ -65,6 +82,7 @@ import type {
 	OrganizationMembershipListResponse,
 	OrganizationTimezoneResponse,
 	ProposedPurchaseLineItem,
+	PublicDirectoryProfileDto,
 	PublicMembershipProductsListResponse,
 	PublicOrganizationDivisionListResponse,
 	PublicOrganizationLandingResponse,
@@ -102,12 +120,18 @@ import type {
 	TriggerMessageEventInput,
 	UpdateCustomerProfileInput,
 	UpdateFestivalClassInput,
+	UpdateFestivalRegistrationWindowInput,
+	UpdateMembershipProductInput,
+	UpdateMembershipProductResponse,
 	UpdateMessageTemplateInput,
 	UpdateOrganizationDivisionInput,
 	UpdateOrganizationTimezoneInput,
 	VolunteerAssignment,
 	VolunteerRecord,
+	WaitlistJoinResponse,
 	WaitlistPromotionResult,
+	WaitlistWithdrawResponse,
+	WithdrawWaitlistInput,
 } from "@festival/common";
 import {
 	assertValidCreateBillingAdjustmentInput,
@@ -208,6 +232,7 @@ export type {
 	AddCatalogWorkInput,
 	AdminCustomerSearchResponse,
 	AdminCustomerSearchResult,
+	AdminWaitlistRosterEntryDto,
 	BillingAdjustment,
 	BillingAdjustmentType,
 	BillingAdjustmentValidationResult,
@@ -228,11 +253,13 @@ export type {
 	CreateBillingAdjustmentInput,
 	CreateMessageTemplateInput,
 	CreditBalance,
+	CustomerWaitlistEntryDto,
 	DropRegistrationInput,
 	DropRegistrationResult,
 	DropRegistrationValidationResult,
 	EvaluatePurchaseEligibilityResponse,
 	FlagReviewInput,
+	JoinWaitlistInput,
 	MessageChannel,
 	MessageDeliveryStatus,
 	MessageEvent,
@@ -262,7 +289,10 @@ export type {
 	UpdateMessageTemplateInput,
 	VolunteerAssignment,
 	VolunteerRecord,
+	WaitlistJoinResponse,
 	WaitlistPromotionResult,
+	WaitlistWithdrawResponse,
+	WithdrawWaitlistInput,
 };
 export {
 	assertValidCreateBillingAdjustmentInput,
@@ -450,6 +480,7 @@ export function getCustomerProfile(slug: string) {
 export interface CustomerChildDto {
 	id: string;
 	displayName: string;
+	name?: string;
 	hasCurrentValidAgeSnapshot: boolean;
 }
 export function getCustomerChildren(slug: string) {
@@ -658,6 +689,7 @@ export function acquireAccompanistMembership(
 		city: string;
 		phone: string;
 		divisionIds: string[];
+		staffAccessConsent: boolean;
 	},
 ) {
 	return requestJson<{
@@ -694,6 +726,17 @@ export function getAccompanistMembershipForm(slug: string) {
 export function getPublicDivisions(slug: string) {
 	return requestJson<PublicOrganizationDivisionListResponse>(
 		`/api/organizations/${encodeURIComponent(slug)}/divisions`,
+		undefined,
+		undefined,
+		"",
+	);
+}
+
+export function getPublicDirectoryProfiles(
+	orgSlug: string,
+): Promise<PublicDirectoryProfileDto[]> {
+	return requestJson<PublicDirectoryProfileDto[]>(
+		`/api/org-info/${encodeURIComponent(orgSlug)}/directory/profiles`,
 		undefined,
 		undefined,
 		"",
@@ -743,6 +786,114 @@ export function getAdminMembershipProducts(idToken: string, slug: string) {
 	return requestJson<MembershipProductsListResponse>(
 		`/api/organizations/${slug}/admin/membership-products`,
 		undefined,
+		idToken,
+	);
+}
+
+export function getAdminEntitlementReport(
+	idToken: string,
+	slug: string,
+	filters: EntitlementReportFilters,
+	pageRequest: EntitlementReportPageRequest,
+	init?: { signal?: AbortSignal },
+) {
+	const params = new URLSearchParams();
+	if (filters.search) params.set("search", filters.search);
+	if (filters.entitlementClass)
+		params.set("entitlementClass", filters.entitlementClass);
+	if (filters.status) params.set("status", filters.status);
+	if (filters.divisionId) params.set("divisionId", filters.divisionId);
+	params.set("page", String(pageRequest.page));
+	params.set("pageSize", String(pageRequest.pageSize));
+	const query = params.toString();
+	return requestJson<EntitlementReportResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/entitlements?${query}`,
+		init,
+		idToken,
+	);
+}
+
+export function getAdminEntitlementOperations(
+	idToken: string,
+	slug: string,
+	init?: { signal?: AbortSignal },
+): Promise<AdminEntitlementOperationsResponse> {
+	return requestJson<AdminEntitlementOperationsResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/entitlements/operations`,
+		init,
+		idToken,
+	);
+}
+
+export function triggerAdminEntitlementReconciliation(
+	idToken: string,
+	slug: string,
+): Promise<AdminEntitlementReconcileResponse> {
+	return requestJson<AdminEntitlementReconcileResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/entitlements/reconcile`,
+		{
+			method: "POST",
+			headers: {
+				"X-CSRF-Token": idToken || "admin-csrf",
+			},
+		},
+		idToken,
+	);
+}
+
+export function declineAdminValidationDecision(
+	idToken: string,
+	slug: string,
+	decisionId: string,
+	input: AdminResolveValidationDecisionInput,
+): Promise<AdminResolveValidationDecisionResponse> {
+	return requestJson<AdminResolveValidationDecisionResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/entitlements/decisions/${encodeURIComponent(decisionId)}/decline`,
+		{
+			method: "POST",
+			headers: {
+				"X-CSRF-Token": idToken || "admin-csrf",
+			},
+			body: JSON.stringify(input),
+		},
+		idToken,
+	);
+}
+
+export function approveAdminValidationDecision(
+	idToken: string,
+	slug: string,
+	decisionId: string,
+	input: AdminResolveValidationDecisionInput,
+): Promise<AdminResolveValidationDecisionResponse> {
+	return requestJson<AdminResolveValidationDecisionResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/entitlements/decisions/${encodeURIComponent(decisionId)}/approve`,
+		{
+			method: "POST",
+			headers: {
+				"X-CSRF-Token": idToken || "admin-csrf",
+			},
+			body: JSON.stringify(input),
+		},
+		idToken,
+	);
+}
+
+export function revokeAdminEntitlement(
+	idToken: string,
+	slug: string,
+	entitlementId: string,
+	input: AdminRevokeEntitlementInput,
+): Promise<AdminRevokeEntitlementResponse> {
+	return requestJson<AdminRevokeEntitlementResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/entitlements/${encodeURIComponent(entitlementId)}/revoke`,
+		{
+			method: "POST",
+			headers: {
+				"X-CSRF-Token": idToken || "admin-csrf",
+			},
+			body: JSON.stringify(input),
+		},
 		idToken,
 	);
 }
@@ -850,6 +1001,26 @@ export function createMembershipProduct(
 	);
 }
 
+export function updateAdminMembershipProduct(
+	idToken: string,
+	slug: string,
+	offeringId: string,
+	input: UpdateMembershipProductInput,
+) {
+	return requestJson<UpdateMembershipProductResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/membership-products/${encodeURIComponent(offeringId)}`,
+		{
+			method: "POST",
+			body: JSON.stringify({
+				name: input.name,
+				description: input.description,
+				price: input.price,
+			}),
+		},
+		idToken,
+	);
+}
+
 export function dismissWelcome(idToken: string, slug: string) {
 	return requestJson<DismissWelcomeResponse>(
 		`/api/organizations/${slug}/welcome/dismiss`,
@@ -927,6 +1098,22 @@ export function setPrimaryFestival(
 	return requestJson<CreateFestivalResponse>(
 		`/api/organizations/${encodeURIComponent(slug)}/admin/festivals/${encodeURIComponent(festivalShortName)}/primary`,
 		{ method: "POST" },
+		idToken,
+	);
+}
+
+export function updateFestivalRegistrationWindow(
+	idToken: string,
+	slug: string,
+	festivalShortName: string,
+	input: UpdateFestivalRegistrationWindowInput,
+) {
+	return requestJson<CreateFestivalResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/festivals/${encodeURIComponent(festivalShortName)}/registration-window`,
+		{
+			method: "PUT",
+			body: JSON.stringify(input),
+		},
 		idToken,
 	);
 }
@@ -1478,6 +1665,20 @@ export function listRegistrationEligibleClasses(
 	);
 }
 
+export function searchRegistrationConcertoCatalog(
+	slug: string,
+	festivalSlug: string,
+	query: string,
+): Promise<{ works: CanonicalWork[] }> {
+	const params = new URLSearchParams({ q: query });
+	return requestJson<{ works: CanonicalWork[] }>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/registration/concerto-catalog?${params.toString()}`,
+		undefined,
+		undefined,
+		"",
+	);
+}
+
 export function listRegistrationAccompanists(
 	slug: string,
 	festivalSlug: string,
@@ -1556,6 +1757,7 @@ export interface StartClassCheckoutInput {
 	festivalClassId?: string;
 	childId?: string;
 	teacherId?: string;
+	instrumentId?: string;
 	pieces?: RepertoirePiece[];
 	divisionId?: string;
 	accompanistId?: string;
@@ -1644,41 +1846,13 @@ export function startClassCheckout(
 	);
 }
 
-export interface CustomerClassRegistrationItem {
-	entitlement: {
-		id: string;
-		status: string;
-		orderId?: string;
-		lineItemId?: string;
-		createdAt?: string;
-		updatedAt?: string;
-		festivalId?: string;
-		festivalSlug?: string;
-		festivalShortName?: string;
-		festivalClassId?: string;
-		divisionId?: string;
-		teacherId?: string;
-		childId?: string;
-		[key: string]: unknown;
-	};
-	festivalClass?: {
-		id: string;
-		displayName: string;
-		price?: string;
-		divisionId?: string;
-		festivalSlug?: string;
-		festivalShortName?: string;
-		[key: string]: unknown;
-	};
-	child?: { id: string; name: string };
-	metadata?: ClassRegistrationMetadata | null;
-	festivalSlug?: string;
-	festivalShortName?: string;
-}
-
-export interface CustomerClassRegistrationsResponse {
-	registrations: CustomerClassRegistrationItem[];
-}
+export type {
+	CustomerClassEntitlementSummary,
+	CustomerClassRegistrationItem,
+	CustomerClassRegistrationMetadataSummary,
+	CustomerClassRegistrationsResponse,
+	CustomerFestivalClassSummary,
+};
 
 export function listCustomerClassRegistrations(
 	slug: string,
@@ -2525,3 +2699,84 @@ export function customerCheckoutRecoverySignInPath(
 	const returnTo = buildOrgCheckoutRecoveryPath(slug, token);
 	return `/api/organizations/${encodeURIComponent(slug)}/customer-auth/start?returnTo=${encodeURIComponent(returnTo)}`;
 }
+
+export function joinClassWaitlist(
+	slug: string,
+	festivalSlug: string,
+	classId: string,
+	csrfToken: string,
+	input: JoinWaitlistInput,
+): Promise<WaitlistJoinResponse> {
+	return requestJson<WaitlistJoinResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/classes/${encodeURIComponent(classId)}/waitlist`,
+		{
+			method: "POST",
+			headers: { "X-CSRF-Token": csrfToken },
+			body: JSON.stringify(input),
+		},
+		undefined,
+		"",
+	);
+}
+
+export function withdrawClassWaitlist(
+	slug: string,
+	festivalSlug: string,
+	classId: string,
+	csrfToken: string,
+	input: WithdrawWaitlistInput,
+): Promise<WaitlistWithdrawResponse> {
+	return requestJson<WaitlistWithdrawResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/classes/${encodeURIComponent(classId)}/waitlist/withdraw`,
+		{
+			method: "POST",
+			headers: { "X-CSRF-Token": csrfToken },
+			body: JSON.stringify(input),
+		},
+		undefined,
+		"",
+	);
+}
+
+export function listClassWaitlistEntries(
+	slug: string,
+	festivalSlug: string,
+	classId: string,
+): Promise<{ entries: CustomerWaitlistEntryDto[] }> {
+	return requestJson<{ entries: CustomerWaitlistEntryDto[] }>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/classes/${encodeURIComponent(classId)}/waitlist`,
+		undefined,
+		undefined,
+		"",
+	);
+}
+
+export function listFestivalWaitlistEntries(
+	slug: string,
+	festivalSlug: string,
+): Promise<{ entries: CustomerWaitlistEntryDto[] }> {
+	return requestJson<{ entries: CustomerWaitlistEntryDto[] }>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/waitlist`,
+		undefined,
+		undefined,
+		"",
+	);
+}
+
+export function getClassWaitlistRoster(
+	idToken: string,
+	slug: string,
+	festivalSlug: string,
+	classId: string,
+): Promise<{ roster: AdminWaitlistRosterEntryDto[] }> {
+	return requestJson<{ roster: AdminWaitlistRosterEntryDto[] }>(
+		`/api/organizations/${encodeURIComponent(slug)}/festivals/${encodeURIComponent(festivalSlug)}/classes/${encodeURIComponent(classId)}/waitlist`,
+		undefined,
+		idToken,
+	);
+}
+
+export {
+	getCustomerFestivalAvailability,
+	saveCustomerFestivalAvailability,
+} from "./availability-api.js";

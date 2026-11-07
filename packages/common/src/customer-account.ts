@@ -90,8 +90,8 @@ export interface AdminCustomerSearchResponse {
 
 const PROFILE_TEXT_LIMIT = 255;
 const PROFILE_ADDRESS_LIMIT = 512;
-const PROFILE_PHONE_PATTERN = /^\+?[0-9][0-9 ().-]{5,30}$/;
-const PROFILE_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export const PROFILE_PHONE_PATTERN = /^\+?[0-9][0-9 ().-]{5,30}$/;
+export const PROFILE_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function requiredText(
 	value: unknown,

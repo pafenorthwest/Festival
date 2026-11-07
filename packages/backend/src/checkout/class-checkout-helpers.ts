@@ -1,13 +1,53 @@
-import type {
-	FestivalChildAgeSnapshot,
-	FestivalClassConfiguration,
-	FestivalRecord,
-	RepertoirePiece,
+import {
+	type AccompanistMembershipGrant,
+	type CanonicalWork,
+	doesClassRequireConcerto,
+	type EntitlementGrantSnapshot,
+	type FestivalChildAgeSnapshot,
+	type FestivalChildRecord,
+	type FestivalClassConfiguration,
+	type FestivalRecord,
+	isCatalogWorkClassifiedAsConcerto,
+	type RepertoirePiece,
 } from "@festival/common";
 import { AppError } from "../errors/app-error.js";
+import type { RepertoireRepository } from "../repertoire/repertoire-repository.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
 
 export const MAX_SNAPSHOT_VALIDITY_MS = 90 * 24 * 60 * 60 * 1000;
+
+export interface RepertoireValidationOptions {
+	requiresConcerto?: boolean;
+	subtype?: {
+		displayName?: string | null;
+		normalizedName?: string | null;
+	} | null;
+	catalogWorksById?: ReadonlyMap<string, CanonicalWork | null | undefined>;
+}
+
+export async function resolvePieceCatalogWorks(
+	pieces: unknown,
+	organizationId: string,
+	repertoire?: RepertoireRepository,
+	cache?: Map<string, CanonicalWork | null>,
+): Promise<Map<string, CanonicalWork | null>> {
+	const resolved = cache ?? new Map<string, CanonicalWork | null>();
+	if (!repertoire || !Array.isArray(pieces)) {
+		return resolved;
+	}
+	for (const piece of pieces) {
+		const rawId = (piece as { catalogWorkId?: unknown } | null)?.catalogWorkId;
+		const workId =
+			typeof rawId === "string" && rawId.trim() ? rawId.trim() : undefined;
+		if (workId && !resolved.has(workId)) {
+			resolved.set(
+				workId,
+				await repertoire.getCatalogWorkById(organizationId, workId),
+			);
+		}
+	}
+	return resolved;
+}
 
 export function validateRepertoirePiece(piece: unknown): void {
 	if (
@@ -35,6 +75,16 @@ export function validateRepertoirePiece(piece: unknown): void {
 		);
 	}
 	if (
+		p.catalogWorkId !== undefined &&
+		p.catalogWorkId !== null &&
+		(typeof p.catalogWorkId !== "string" || p.catalogWorkId.trim().length === 0)
+	) {
+		throw new AppError(
+			"Each repertoire piece must have a valid catalog work ID.",
+			400,
+		);
+	}
+	if (
 		typeof p.durationSeconds !== "number" ||
 		p.durationSeconds <= 0 ||
 		!Number.isSafeInteger(p.durationSeconds) ||
@@ -47,9 +97,59 @@ export function validateRepertoirePiece(piece: unknown): void {
 	}
 }
 
+function normalizeRepertoirePiece(
+	piece: RepertoirePiece,
+	requiresConcerto: boolean,
+	catalogWorksById?: ReadonlyMap<string, CanonicalWork | null | undefined>,
+): RepertoirePiece {
+	const catalogWorkId =
+		typeof piece.catalogWorkId === "string" && piece.catalogWorkId.trim()
+			? piece.catalogWorkId.trim()
+			: undefined;
+	if (requiresConcerto) {
+		if (
+			!catalogWorkId ||
+			!catalogWorksById ||
+			!isCatalogWorkClassifiedAsConcerto(catalogWorksById.get(catalogWorkId))
+		) {
+			throw new AppError(
+				"Concerto classes require selecting a catalog work classified as a concerto.",
+				400,
+				"concerto_catalog_work_required",
+			);
+		}
+	} else if (catalogWorkId) {
+		const work = catalogWorksById?.get(catalogWorkId);
+		if (!work || work.isActive === false) {
+			throw new AppError(
+				"Each repertoire piece must have a valid catalog work ID.",
+				400,
+				"catalog_work_invalid",
+			);
+		}
+	}
+	return {
+		title: piece.title.trim(),
+		composer: piece.composer.trim(),
+		movement:
+			typeof piece.movement === "string"
+				? piece.movement.trim() || undefined
+				: undefined,
+		durationSeconds: piece.durationSeconds,
+		...(catalogWorkId ? { catalogWorkId } : {}),
+	};
+}
+
 export function validateAndNormalizeRepertoirePieces(
 	pieces: unknown,
-	classConfig: { maximumPerformancePieces: number; performanceMinutes: number },
+	classConfig: {
+		maximumPerformancePieces: number;
+		performanceMinutes: number;
+		requiresConcerto?: boolean;
+		classSubtypeName?: string | null;
+		displayName?: string | null;
+	},
+	options?: RepertoireValidationOptions,
 ): RepertoirePiece[] {
 	if (!Array.isArray(pieces) || pieces.length === 0) {
 		throw new AppError("Repertoire pieces must be a non-empty array.", 400);
@@ -63,16 +163,16 @@ export function validateAndNormalizeRepertoirePieces(
 	for (const piece of pieces) {
 		validateRepertoirePiece(piece);
 	}
+	const requiresConcerto =
+		options?.requiresConcerto ??
+		doesClassRequireConcerto(classConfig, options?.subtype);
 	const normalizedPieces: RepertoirePiece[] = pieces.map(
-		(piece: RepertoirePiece) => ({
-			title: piece.title.trim(),
-			composer: piece.composer.trim(),
-			movement:
-				typeof piece.movement === "string"
-					? piece.movement.trim() || undefined
-					: undefined,
-			durationSeconds: piece.durationSeconds,
-		}),
+		(piece: RepertoirePiece) =>
+			normalizeRepertoirePiece(
+				piece,
+				requiresConcerto,
+				options?.catalogWorksById,
+			),
 	);
 	const totalDurationMinutes =
 		normalizedPieces.reduce((sum, p) => sum + p.durationSeconds, 0) / 60;
@@ -85,11 +185,41 @@ export function validateAndNormalizeRepertoirePieces(
 	return normalizedPieces;
 }
 
+export function validateChildOwnership(
+	childOrChildren:
+		| FestivalChildRecord
+		| null
+		| undefined
+		| FestivalChildRecord[],
+	childId?: string,
+	parentCustomerId?: string,
+): FestivalChildRecord {
+	const child = Array.isArray(childOrChildren)
+		? childOrChildren.find((item) => item.id === childId)
+		: childOrChildren;
+	if (
+		!child ||
+		(childId !== undefined && child.id !== childId) ||
+		(parentCustomerId !== undefined &&
+			child.parentCustomerId !== parentCustomerId)
+	) {
+		throw new AppError(
+			"Child not found or does not belong to parent customer.",
+			404,
+		);
+	}
+	return child;
+}
+
 export function validateActiveChildAgeSnapshot(
-	snapshots: FestivalChildAgeSnapshot[],
+	snapshots: FestivalChildAgeSnapshot[] | FestivalChildAgeSnapshot | null,
 	currentTime: Date,
 ): FestivalChildAgeSnapshot {
-	const activeSnapshot = snapshots.find((item) => !item.supersededAtIso);
+	const activeSnapshot = Array.isArray(snapshots)
+		? snapshots.find((item) => !item.supersededAtIso)
+		: snapshots && !snapshots.supersededAtIso
+			? snapshots
+			: undefined;
 	if (!activeSnapshot) {
 		throw new AppError("Child does not have an active age snapshot.", 400);
 	}
@@ -112,6 +242,76 @@ export function validateChildAgeRange(
 			400,
 		);
 	}
+}
+
+export function validateTeacherEntitlement(
+	grantOrGrants:
+		| EntitlementGrantSnapshot
+		| null
+		| undefined
+		| EntitlementGrantSnapshot[],
+	divisionId: string,
+	teacherId?: string,
+): EntitlementGrantSnapshot {
+	if (teacherId !== undefined && !teacherId.trim()) {
+		throw new AppError("Teacher ID is required.", 400);
+	}
+	const activeGrant = Array.isArray(grantOrGrants)
+		? grantOrGrants.find(
+				(grant) =>
+					grant.entitlementClass === "teacher_membership" &&
+					grant.divisionId === divisionId &&
+					grant.status === "active",
+			)
+		: grantOrGrants &&
+				grantOrGrants.entitlementClass === "teacher_membership" &&
+				grantOrGrants.divisionId === divisionId &&
+				grantOrGrants.status === "active"
+			? grantOrGrants
+			: undefined;
+	if (!activeGrant) {
+		throw new AppError(
+			"Selected teacher does not have an active membership for this division.",
+			400,
+		);
+	}
+	return activeGrant;
+}
+
+export function validateAccompanistSelection(
+	grantOrGrants:
+		| AccompanistMembershipGrant
+		| null
+		| undefined
+		| AccompanistMembershipGrant[],
+	accompanistId?: string | null,
+	accompanimentRequired?: boolean,
+): string | null {
+	const trimmedId = accompanistId?.trim();
+	if (!trimmedId) {
+		if (accompanimentRequired) {
+			throw new AppError(
+				"Accompanist selection is required when accompaniment is required for this class.",
+				400,
+			);
+		}
+		return null;
+	}
+	const activeGrant = Array.isArray(grantOrGrants)
+		? grantOrGrants.find(
+				(grant) => grant.status === "active" || grant.isCurrent === true,
+			)
+		: grantOrGrants &&
+				(grantOrGrants.status === "active" || grantOrGrants.isCurrent === true)
+			? grantOrGrants
+			: undefined;
+	if (!activeGrant) {
+		throw new AppError(
+			"Selected accompanist does not have an active membership.",
+			400,
+		);
+	}
+	return activeGrant.id;
 }
 
 export function resolveTargetFestival(
@@ -149,33 +349,27 @@ export async function resolveFestivalClassConfiguration(
 	input: {
 		organizationId: string;
 		targetFestival: FestivalRecord;
-		festivals: FestivalRecord[];
+		festivals?: FestivalRecord[];
 		festivalClassId: string;
 		divisionId?: string;
 	},
 ): Promise<FestivalClassConfiguration> {
-	const classConfigs = await organizations.listFestivalClassConfigurations(
+	const classConfig = await organizations.findFestivalClassConfigurationById(
 		input.organizationId,
 		input.targetFestival.id,
-		false,
-	);
-	const classConfig = classConfigs.find(
-		(item) => item.id === input.festivalClassId,
+		input.festivalClassId,
 	);
 	if (!classConfig) {
-		for (const otherFest of input.festivals) {
-			if (otherFest.id === input.targetFestival.id) continue;
-			const otherConfigs = await organizations.listFestivalClassConfigurations(
+		const otherFestivalClass =
+			await organizations.findFestivalClassConfigurationById(
 				input.organizationId,
-				otherFest.id,
-				false,
+				input.festivalClassId,
 			);
-			if (otherConfigs.some((item) => item.id === input.festivalClassId)) {
-				throw new AppError(
-					"Festival class configuration does not belong to the active festival.",
-					400,
-				);
-			}
+		if (otherFestivalClass) {
+			throw new AppError(
+				"Festival class configuration does not belong to the active festival.",
+				400,
+			);
 		}
 		throw new AppError("Festival class configuration not found.", 404);
 	}
@@ -243,4 +437,158 @@ export function calculateTotalAmount(
 		totalCents += cents;
 	}
 	return (totalCents / 100).toFixed(2);
+}
+
+export interface ClassCheckoutFailureLineDetail {
+	childId: string;
+	festivalClassId: string;
+	reasonCode: string;
+	availability?: "open" | "waitlist";
+	reason?: string;
+	message?: string;
+	capacity?: number;
+	placedCount?: number;
+	lineItemId?: string;
+}
+
+export function buildEligibilityRejectionError(
+	results: ReadonlyArray<{
+		childId: string;
+		festivalClassId: string;
+		isEligible: boolean;
+		reasonCode: string;
+		message?: string;
+		availability?: "open" | "waitlist";
+		capacity?: number;
+		placedCount?: number;
+		lineItemId?: string;
+	}>,
+): AppError {
+	const failedResults = results.filter((r) => !r.isEligible);
+	const failures: ClassCheckoutFailureLineDetail[] = failedResults.map((r) => ({
+		childId: r.childId,
+		festivalClassId: r.festivalClassId,
+		reasonCode: r.reasonCode,
+		...(r.availability !== undefined ? { availability: r.availability } : {}),
+		...(r.message !== undefined
+			? { reason: r.message, message: r.message }
+			: {}),
+		...(r.capacity !== undefined ? { capacity: r.capacity } : {}),
+		...(r.placedCount !== undefined ? { placedCount: r.placedCount } : {}),
+		...(r.lineItemId !== undefined ? { lineItemId: r.lineItemId } : {}),
+	}));
+	const waitlistedClassIds = [
+		...new Set(
+			failures
+				.filter(
+					(f) => f.reasonCode === "SOLD_OUT" || f.availability === "waitlist",
+				)
+				.map((f) => f.festivalClassId),
+		),
+	];
+	const primaryFailure =
+		failedResults.find((r) => r.reasonCode === "REGISTRATION_CLOSED") ??
+		failedResults.find((r) => r.reasonCode === "SOLD_OUT") ??
+		failedResults[0];
+	const message =
+		primaryFailure?.reasonCode === "SOLD_OUT"
+			? (primaryFailure.message ??
+				"Class is at capacity and in waitlist availability.")
+			: (primaryFailure?.message ?? "Class registration is not eligible.");
+	const code = primaryFailure?.reasonCode?.toLowerCase() ?? "ineligible";
+	return new AppError(message, 400, code, {
+		failures,
+		waitlistedClassIds,
+	});
+}
+
+export async function verifyPostCartCreateCapacityCutoff(params: {
+	organizationId: string;
+	festivalId: string;
+	lines: ReadonlyArray<{ childId: string; festivalClassId: string }>;
+	organizations: {
+		findFestivalClassConfigurationsByIds(
+			organizationId: string,
+			festivalId: string,
+			classIds: string[],
+		): Promise<
+			Array<{
+				id: string;
+				organizationId: string;
+				festivalId: string;
+				isActive: boolean;
+				capacity: number;
+			}>
+		>;
+	};
+	countConfirmedEntitlements?: (
+		organizationId: string,
+		festivalClassId: string,
+	) => Promise<number>;
+}): Promise<AppError | null> {
+	const distinctClassIds = [
+		...new Set(params.lines.map((l) => l.festivalClassId)),
+	];
+	const failures: ClassCheckoutFailureLineDetail[] = [];
+
+	const configs =
+		await params.organizations.findFestivalClassConfigurationsByIds(
+			params.organizationId,
+			params.festivalId,
+			distinctClassIds,
+		);
+	const classMap = new Map(configs.map((c) => [c.id, c]));
+
+	for (const classId of distinctClassIds) {
+		const freshClass = classMap.get(classId) ?? null;
+		const placedCount = params.countConfirmedEntitlements
+			? await params.countConfirmedEntitlements(params.organizationId, classId)
+			: 0;
+		const matchingLines = params.lines.filter(
+			(l) => l.festivalClassId === classId,
+		);
+
+		if (
+			!freshClass?.isActive ||
+			freshClass.organizationId !== params.organizationId ||
+			freshClass.festivalId !== params.festivalId ||
+			freshClass.capacity <= 0 ||
+			placedCount >= freshClass.capacity
+		) {
+			const capacity = freshClass?.capacity ?? 0;
+			const reason = !freshClass?.isActive
+				? "Class is no longer available and is in waitlist state."
+				: "Class has reached capacity and is now on the waitlist.";
+			for (const line of matchingLines) {
+				failures.push({
+					childId: line.childId,
+					festivalClassId: classId,
+					reasonCode: "SOLD_OUT",
+					availability: "waitlist",
+					reason,
+					message: reason,
+					capacity,
+					placedCount,
+				});
+			}
+		}
+	}
+
+	if (failures.length === 0) {
+		return null;
+	}
+
+	const waitlistedClassIds = [
+		...new Set(failures.map((f) => f.festivalClassId)),
+	];
+	return new AppError(
+		failures[0]?.message ??
+			"Class is at capacity and in waitlist availability.",
+		400,
+		"sold_out",
+		{
+			failures,
+			waitlistedClassIds,
+		},
+	);
 }

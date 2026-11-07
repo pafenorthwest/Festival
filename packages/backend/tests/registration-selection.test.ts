@@ -7,6 +7,7 @@ import {
 	CustomerAccountService,
 } from "../src/customer/customer-account-service.js";
 import { InMemoryCustomerAccountRepository } from "../src/customer/in-memory-customer-account-repository.js";
+import { InMemoryRepertoireRepository } from "../src/repertoire/repertoire-repository.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
 import {
 	SHOPIFY_CUSTOMER_CLIENT_SECRET_PURPOSE,
@@ -64,9 +65,12 @@ async function createSelectionFixture() {
 		shortName: "spring-2026",
 		startsOn: "2026-06-01",
 		endsOn: "2026-06-10",
+		registrationOpensAt: "2026-01-01T00:00:00.000Z",
+		registrationClosesAt: "2026-12-31T23:59:59.999Z",
 		status: "draft",
 	});
 
+	const repertoire = new InMemoryRepertoireRepository();
 	const service = new CustomerAccountService(
 		repository,
 		organizations,
@@ -74,6 +78,7 @@ async function createSelectionFixture() {
 		{
 			publicOrigin: "https://festival.example.com",
 			now,
+			repertoire,
 		},
 	);
 
@@ -174,6 +179,7 @@ async function createSelectionFixture() {
 		organizations,
 		repository,
 		keyring,
+		repertoire,
 		service,
 		org,
 		otherOrg,
@@ -190,6 +196,51 @@ async function createSelectionFixture() {
 }
 
 describe("Registration Selection APIs (#143)", () => {
+	it("searches the customer's concerto catalog before limiting results", async () => {
+		const f = await createSelectionFixture();
+		const parent = await f.createParentSession();
+		const { app } = await createApp({
+			env: { port: 3000, trustProxyHeaders: false },
+			repository: f.organizations,
+			authVerifier: new MockAuthVerifier(),
+			customerAccountService: f.service,
+		});
+		for (let index = 0; index < 20; index++) {
+			await f.repertoire.addCatalogWork({
+				organizationId: f.org.id,
+				title: `A Sonata ${index}`,
+				composerName: "Test Composer",
+				classifications: ["sonata"],
+			});
+		}
+		await f.repertoire.addCatalogWork({
+			organizationId: f.otherOrg.id,
+			title: "Other Concerto",
+			composerName: "Test Composer",
+			classifications: ["concerto"],
+		});
+		const concerto = await f.repertoire.addCatalogWork({
+			organizationId: f.org.id,
+			title: "Z Concerto",
+			composerName: "Test Composer",
+			classifications: ["Concerto"],
+		});
+
+		const path = `/api/organizations/${f.org.slug}/customer/festivals/${f.festival.shortName}/registration/concerto-catalog`;
+		expect((await app.request(path)).status).toBe(401);
+		const headers = {
+			Cookie: `${CUSTOMER_SESSION_COOKIE}=${parent.sessionId}`,
+		};
+		const response = await app.request(`${path}?q=Composer`, { headers });
+		expect(response.status).toBe(200);
+		const { works } = (await response.json()) as {
+			works: Array<{ id: string }>;
+		};
+		expect(works.map((work) => work.id)).toEqual([concerto.id]);
+		const noMatch = await app.request(`${path}?q=missing`, { headers });
+		expect(await noMatch.json()).toEqual({ works: [] });
+	});
+
 	it("rejects unauthenticated requests and invalid sessions", async () => {
 		const f = await createSelectionFixture();
 

@@ -18,6 +18,7 @@ export function OrganizationChooser(props: OrganizationChooserProps) {
 							<button
 								type="button"
 								class="organization-choice"
+								data-preload-path={buildOrgPath(membership.organizationSlug)}
 								onClick={() =>
 									props.app.navigate(buildOrgPath(membership.organizationSlug))
 								}

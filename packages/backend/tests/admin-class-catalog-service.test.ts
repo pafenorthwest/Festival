@@ -255,6 +255,7 @@ async function setupFixture(live = false) {
 		keyring,
 		shopifyClient,
 		auditWriter,
+		sync,
 		service,
 		input,
 		createValid: (o?: Partial<CreateFestivalClassInput>) =>
@@ -612,7 +613,7 @@ describe("Validation & Invariants", () => {
 	it("cleans up Shopify product when database insert fails in createClass", async () => {
 		const { repo, org, festival, shopifyClient, service, input } =
 			await setupFixture(true);
-		repo.createFestivalClassConfiguration = async () => {
+		repo.createFestivalClassConfigurationWithCapacityAudit = async () => {
 			throw new Error("DB persistence failed");
 		};
 
@@ -620,6 +621,202 @@ describe("Validation & Invariants", () => {
 			service.createClass(org.slug, festival.shortName, input()),
 		).rejects.toThrow("DB persistence failed");
 		expect(shopifyClient.deletedProductGids).toContain(PROD_GID);
+	});
+});
+
+describe("Capacity Policy & Audit Trail", () => {
+	it("discards a staged audit record if the audit writer appends then fails", async () => {
+		const { repo, org, createValid, update, getSaved } = await setupFixture();
+		const created = await createValid();
+		const recordAudit = repo.recordFestivalClassCapacityAudit;
+		repo.recordFestivalClassCapacityAudit = async function (input) {
+			await recordAudit.call(this, input);
+			throw new Error("Audit completion failed");
+		};
+		await expect(update(created.id, { capacity: 10 })).rejects.toThrow(
+			"Audit completion failed",
+		);
+		expect(await getSaved(created.id)).toEqual(created);
+		expect(
+			await repo.listFestivalClassCapacityAudits(org.id, created.id),
+		).toHaveLength(1);
+	});
+	it("rolls back class creation on capacity audit failure before cleaning up Shopify", async () => {
+		const { repo, org, festival, createValid, shopifyClient } =
+			await setupFixture(true);
+		const recordAudit = repo.recordFestivalClassCapacityAudit;
+		repo.recordFestivalClassCapacityAudit = async () => {
+			throw new Error("Capacity audit unavailable");
+		};
+		await expect(createValid()).rejects.toThrow("Capacity audit unavailable");
+		expect(
+			await repo.listFestivalClassConfigurations(org.id, festival.id, false),
+		).toEqual([]);
+		expect(shopifyClient.deletedProductGids).toEqual([PROD_GID]);
+		repo.recordFestivalClassCapacityAudit = recordAudit;
+		const retried = await createValid();
+		expect(
+			await repo.listFestivalClassConfigurations(org.id, festival.id, false),
+		).toHaveLength(1);
+		expect(
+			await repo.listFestivalClassCapacityAudits(org.id, retried.id),
+		).toMatchObject([
+			{ action: "class_created", previousCapacity: null, newCapacity: 25 },
+		]);
+	});
+
+	it("rolls back all class fields when capacity auditing fails and audits a safe retry", async () => {
+		const { repo, org, createValid, update, getSaved } = await setupFixture();
+		const created = await createValid({ capacity: 25 });
+		const recordAudit = repo.recordFestivalClassCapacityAudit;
+		repo.recordFestivalClassCapacityAudit = async () => {
+			throw new Error("Capacity audit unavailable");
+		};
+		await expect(
+			update(created.id, { capacity: 10, displayName: "Changed" }),
+		).rejects.toThrow("Capacity audit unavailable");
+		expect(await getSaved(created.id)).toEqual(created);
+		expect(
+			await repo.listFestivalClassCapacityAudits(org.id, created.id),
+		).toHaveLength(1);
+		repo.recordFestivalClassCapacityAudit = recordAudit;
+		await update(created.id, { capacity: 10, displayName: "Changed" });
+		expect(await getSaved(created.id)).toMatchObject({
+			capacity: 10,
+			displayName: "Changed",
+		});
+		const audits = await repo.listFestivalClassCapacityAudits(
+			org.id,
+			created.id,
+		);
+		expect(audits).toHaveLength(2);
+		expect(
+			audits.find((audit) => audit.action === "capacity_updated"),
+		).toMatchObject({ previousCapacity: 25, newCapacity: 10 });
+		await update(created.id, { capacity: 10 });
+		expect(
+			await repo.listFestivalClassCapacityAudits(org.id, created.id),
+		).toHaveLength(2);
+	});
+	it("defaults capacity to 100 on create and records class_created audit entry", async () => {
+		const { org, festival, service, input } = await setupFixture();
+		const raw = input();
+		delete (raw as { capacity?: number }).capacity;
+
+		const created = await service.createClass(
+			org.slug,
+			festival.shortName,
+			raw,
+			"admin-uid-1",
+		);
+		expect(created.capacity).toBe(100);
+
+		const audits = await service.listClassCapacityAudits(
+			org.slug,
+			festival.shortName,
+			created.id,
+		);
+		expect(audits).toHaveLength(1);
+		expect(audits[0]).toMatchObject({
+			organizationId: org.id,
+			festivalId: festival.id,
+			festivalClassId: created.id,
+			actorUid: "admin-uid-1",
+			action: "class_created",
+			previousCapacity: null,
+			newCapacity: 100,
+			placedCountAtChange: 0,
+			availabilityAfterChange: "open",
+		});
+	});
+
+	it("rejects capacity <= 0 on create and update", async () => {
+		const { createValid, update } = await setupFixture();
+		await expect(createValid({ capacity: 0 })).rejects.toMatchObject({
+			status: 400,
+			message: "Capacity must be greater than 0.",
+		});
+		await expect(createValid({ capacity: -5 })).rejects.toMatchObject({
+			status: 400,
+			message: "Capacity must be greater than 0.",
+		});
+
+		const created = await createValid({ capacity: 10 });
+		await expect(update(created.id, { capacity: 0 })).rejects.toMatchObject({
+			status: 400,
+			message: "Capacity must be greater than 0.",
+		});
+	});
+
+	it("records capacity_updated audit and preserves confirmed placements when capacity is lowered below placed count", async () => {
+		const { repo, org, festival, sync, input } = await setupFixture();
+		const commerce = {
+			placedCount: 3,
+			async countConfirmedClassEntitlements() {
+				return this.placedCount;
+			},
+		};
+		const serviceWithCommerce = new AdminClassCatalogService(
+			repo,
+			sync,
+			commerce,
+		);
+		const created = await serviceWithCommerce.createClass(
+			org.slug,
+			festival.shortName,
+			input({ capacity: 5 }),
+			"admin-1",
+		);
+
+		const beforeStatus = await serviceWithCommerce.getClassCapacityStatus(
+			org.slug,
+			festival.shortName,
+			created.id,
+		);
+		expect(beforeStatus).toEqual({
+			capacity: 5,
+			placedCount: 3,
+			remainingSpots: 2,
+			isOverCapacity: false,
+			availability: "open",
+		});
+
+		const updated = await serviceWithCommerce.updateClass(
+			org.slug,
+			festival.shortName,
+			created.id,
+			{ capacity: 2 },
+			"admin-2",
+		);
+		expect(updated.capacity).toBe(2);
+
+		const afterStatus = await serviceWithCommerce.getClassCapacityStatus(
+			org.slug,
+			festival.shortName,
+			created.id,
+		);
+		expect(afterStatus).toEqual({
+			capacity: 2,
+			placedCount: 3,
+			remainingSpots: 0,
+			isOverCapacity: true,
+			availability: "waitlist",
+		});
+
+		const audits = await serviceWithCommerce.listClassCapacityAudits(
+			org.slug,
+			festival.shortName,
+			created.id,
+		);
+		expect(audits).toHaveLength(2);
+		expect(audits[0]).toMatchObject({
+			action: "capacity_updated",
+			actorUid: "admin-2",
+			previousCapacity: 5,
+			newCapacity: 2,
+			placedCountAtChange: 3,
+			availabilityAfterChange: "waitlist",
+		});
 	});
 });
 

@@ -2,10 +2,12 @@ import { randomUUID } from "node:crypto";
 import type {
 	AccompanistDivisionSelectionPolicy,
 	AccompanistMembershipGrant,
+	AccompanistProfileRecord,
 	AuthenticatedUser,
 	CreateEntitlementGrantSnapshotInput,
 	EntitlementClass,
 	EntitlementGrantSnapshot,
+	FestivalClassCapacityAuditRecord,
 	FestivalClassConfiguration,
 	FestivalRecord,
 	OrganizationAdminUserEntry,
@@ -14,23 +16,40 @@ import type {
 	OrganizationMembershipRecord,
 	OrganizationRecord,
 	OrganizationUserRecord,
+	ProfileApprovalStatus,
+	PublicDirectoryDivisionDto,
+	PublicDirectoryProfileDto,
 	RegistrationAgeConfiguration,
 	RegistrationCatalogValue,
+	TeacherProfileRecord,
 } from "@festival/common";
 import {
+	AppError,
+	addCalendarDays,
 	assertValidEntitlementDurationDays,
 	assertValidEntitlementGrantSnapshotInput,
 	calendarDateInTimezone,
+	calendarDaysUntil,
 	deriveEntitlementLifecycle,
 	EMPTY_SHOPIFY_CAPABILITIES,
+	evaluateClassCapacityStatus,
+	getDeterministicTeacherColor,
 	isEntitlementClass,
 	normalizeVerifiedShopifyIdentityEmail,
 	TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+	TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS,
+	validateDisplayName,
+	validateDivisionIds,
+	validateProfileApprovalStatus,
+	validatePublicDirectoryOptIn,
+	validatePublicDirectoryProfileDto,
 } from "@festival/common";
+import { withInMemoryCapacityLock } from "../repo/in-memory-capacity-lock.js";
 import type {
 	AccompanistDivisionPolicyHistoryRecord,
 	AccompanistDivisionPolicyRecord,
 	CreateAccompanistMembershipGrantInput,
+	CreateFestivalClassCapacityAuditInput,
 	CreateFestivalClassConfigurationInput,
 	CreateFestivalRecordInput,
 	CreateInviteRecordInput,
@@ -47,12 +66,20 @@ import type {
 	UpdateFestivalClassConfigurationInput,
 	UpdateShopifyVerificationInput,
 	UpdateShopifyWebhookReadinessInput,
+	UpsertAccompanistProfileInput,
 	UpsertShopifyIntegrationInput,
+	UpsertTeacherProfileInput,
 } from "./organization-repository.js";
 import {
 	assertValidSubtypeDependency,
 	ShopifyShopOwnershipError,
 } from "./organization-repository.js";
+import { profileEditRequiresReapproval } from "./profile-moderation.js";
+import {
+	compareCodePoint,
+	compareDivisionsByName,
+	compareProfilesByName,
+} from "./profile-ordering.js";
 
 type StoredTeacherEntitlement = Omit<EntitlementGrantSnapshot, "status">;
 type StoredAccompanistEntitlement = Omit<
@@ -88,6 +115,9 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		string,
 		EntitlementRevocationRecord
 	>();
+	private readonly entitlementSupersededOn = new Map<string, string>();
+	private readonly entitlementSupersededAt = new Map<string, string>();
+	private readonly entitlementSupersededByGrantId = new Map<string, string>();
 	private readonly entitlementCohortVersions = new Map<string, number>();
 	private readonly membershipIdentityEmails = new Map<string, string>();
 	private readonly membershipIdentityEmailsByCustomer = new Map<
@@ -125,12 +155,19 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		string,
 		FestivalClassConfiguration
 	>();
+	private readonly festivalClassCapacityAudits: FestivalClassCapacityAuditRecord[] =
+		[];
 	private readonly customerContacts = new Map<
 		string,
 		MembershipCustomerContact
 	>();
+	private readonly teacherProfiles = new Map<string, TeacherProfileRecord>();
+	private readonly accompanistProfiles = new Map<
+		string,
+		AccompanistProfileRecord
+	>();
 
-	constructor(private readonly now: () => Date = () => new Date()) {}
+	constructor(readonly now: () => Date = () => new Date()) {}
 
 	async ensureReady(): Promise<void> {}
 
@@ -601,6 +638,8 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			name: input.name,
 			startDate: input.startDate,
 			endDate: input.endDate,
+			registrationOpensAt: input.registrationOpensAt ?? null,
+			registrationClosesAt: input.registrationClosesAt ?? null,
 			createdAtIso: new Date().toISOString(),
 		};
 
@@ -649,6 +688,27 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 				});
 		}
 		return { ...selected, isPrimary: true };
+	}
+
+	async updateFestivalRegistrationWindow(
+		organizationId: string,
+		festivalId: string,
+		input: {
+			registrationOpensAt: string | null;
+			registrationClosesAt: string | null;
+		},
+	): Promise<FestivalRecord> {
+		const existing = this.festivals.get(festivalId);
+		if (!existing || existing.organizationId !== organizationId) {
+			throw new Error("Festival not found.");
+		}
+		const updated: FestivalRecord = {
+			...existing,
+			registrationOpensAt: input.registrationOpensAt,
+			registrationClosesAt: input.registrationClosesAt,
+		};
+		this.festivals.set(festivalId, updated);
+		return { ...updated };
 	}
 
 	async dismissWelcome(
@@ -1013,6 +1073,33 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		return this.withAccompanistLifecycle(grant);
 	}
 
+	async findCurrentAccompanistMembershipGrant(input: {
+		organizationId: string;
+		customerId: string;
+	}): Promise<AccompanistMembershipGrant | null> {
+		const grants = [...this.accompanistMembershipGrants.values()]
+			.filter(
+				(grant) =>
+					grant.organizationId === input.organizationId &&
+					grant.customerId === input.customerId,
+			)
+			.sort(
+				(a, b) =>
+					a.createdAtIso.localeCompare(b.createdAtIso) ||
+					a.id.localeCompare(b.id),
+			)
+			.map((grant) => this.withAccompanistLifecycle(grant))
+			.filter((grant) => grant.isCurrent);
+		const match = grants[0];
+		return match
+			? {
+					...match,
+					contact: { ...match.contact },
+					divisions: match.divisions.map((division) => ({ ...division })),
+				}
+			: null;
+	}
+
 	async listAccompanistMembershipGrants(input: {
 		organizationId: string;
 		customerId?: string;
@@ -1264,9 +1351,88 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		return this.listRegistrationCatalogValues(organizationId, kind);
 	}
 
+	private stageClassCapacityWrite(): InMemoryOrganizationRepository {
+		// Publish only the affected record and its audits after all writes succeed.
+		const staged = Object.create(this) as InMemoryOrganizationRepository;
+		Object.defineProperties(staged, {
+			festivalClassConfigurations: {
+				value: new Map(this.festivalClassConfigurations),
+			},
+			festivalClassCapacityAudits: { value: [] },
+		});
+		return staged;
+	}
+
+	async createFestivalClassConfigurationWithCapacityAudit(
+		input: CreateFestivalClassConfigurationInput,
+		actorUid?: string,
+	): Promise<FestivalClassConfiguration> {
+		return withInMemoryCapacityLock(async () => {
+			const staged = this.stageClassCapacityWrite();
+			const created = staged.createFestivalClassConfigurationUnlocked(input);
+			await staged.recordFestivalClassCapacityAudit({
+				organizationId: input.organizationId,
+				festivalId: input.festivalId,
+				festivalClassId: created.id,
+				actorUid,
+				previousCapacity: null,
+				newCapacity: created.capacity,
+				placedCountAtChange: 0,
+				action: "class_created",
+			});
+			this.festivalClassConfigurations.set(created.id, created);
+			this.festivalClassCapacityAudits.push(
+				...staged.festivalClassCapacityAudits,
+			);
+			return { ...created };
+		});
+	}
+
+	async updateFestivalClassConfigurationWithCapacityAudit(
+		input: UpdateFestivalClassConfigurationInput,
+		actorUid?: string,
+		countPlaced?: () => Promise<number>,
+	): Promise<FestivalClassConfiguration> {
+		return withInMemoryCapacityLock(async () => {
+			const previous = this.festivalClassConfigurations.get(input.id);
+			const staged = this.stageClassCapacityWrite();
+			const updated = staged.updateFestivalClassConfigurationUnlocked(input);
+			if (updated.capacity !== previous?.capacity) {
+				await staged.recordFestivalClassCapacityAudit({
+					organizationId: input.organizationId,
+					festivalId: input.festivalId,
+					festivalClassId: input.id,
+					actorUid,
+					previousCapacity: previous?.capacity,
+					newCapacity: updated.capacity,
+					placedCountAtChange: countPlaced ? await countPlaced() : 0,
+					action: "capacity_updated",
+				});
+			}
+			if (this.festivalClassConfigurations.get(input.id) !== previous) {
+				throw new Error(
+					"Festival class configuration changed concurrently. Please retry.",
+				);
+			}
+			this.festivalClassConfigurations.set(updated.id, updated);
+			this.festivalClassCapacityAudits.push(
+				...staged.festivalClassCapacityAudits,
+			);
+			return { ...updated };
+		});
+	}
+
 	async createFestivalClassConfiguration(
 		input: CreateFestivalClassConfigurationInput,
 	): Promise<FestivalClassConfiguration> {
+		return withInMemoryCapacityLock(() =>
+			this.createFestivalClassConfigurationUnlocked(input),
+		);
+	}
+
+	private createFestivalClassConfigurationUnlocked(
+		input: CreateFestivalClassConfigurationInput,
+	): FestivalClassConfiguration {
 		if (
 			!this.organizations.has(input.organizationId) ||
 			!this.festivals.has(input.festivalId)
@@ -1287,6 +1453,14 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 	async updateFestivalClassConfiguration(
 		input: UpdateFestivalClassConfigurationInput,
 	): Promise<FestivalClassConfiguration> {
+		return withInMemoryCapacityLock(() =>
+			this.updateFestivalClassConfigurationUnlocked(input),
+		);
+	}
+
+	private updateFestivalClassConfigurationUnlocked(
+		input: UpdateFestivalClassConfigurationInput,
+	): FestivalClassConfiguration {
 		const current = this.festivalClassConfigurations.get(input.id);
 		if (
 			!current ||
@@ -1315,6 +1489,24 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		};
 		this.festivalClassConfigurations.set(updated.id, updated);
 		return { ...updated };
+	}
+
+	async findFestivalClassConfigurationsByIds(
+		organizationId: string,
+		festivalId: string,
+		classIds: string[],
+	): Promise<FestivalClassConfiguration[]> {
+		const records: FestivalClassConfiguration[] = [];
+		for (const classId of new Set(classIds)) {
+			const record = this.festivalClassConfigurations.get(classId);
+			if (
+				record?.organizationId === organizationId &&
+				record.festivalId === festivalId
+			) {
+				records.push({ ...record });
+			}
+		}
+		return records;
 	}
 
 	findFestivalClassConfigurationById(
@@ -1351,6 +1543,29 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		return { ...record };
 	}
 
+	async findActiveFestivalClassByShortName(
+		organizationId: string,
+		festivalShortName: string,
+		classId: string,
+		festivalId?: string,
+	): Promise<FestivalClassConfiguration | null> {
+		const record = this.festivalClassConfigurations.get(classId);
+		const festival = record && this.festivals.get(record.festivalId);
+		if (
+			!record ||
+			!festival ||
+			record.organizationId !== organizationId ||
+			festival.organizationId !== organizationId ||
+			!record.isActive ||
+			festival.shortName.trim().toLowerCase() !==
+				festivalShortName.trim().toLowerCase() ||
+			(festivalId?.trim() && festival.id !== festivalId.trim())
+		) {
+			return null;
+		}
+		return { ...record };
+	}
+
 	async listFestivalClassConfigurations(
 		organizationId: string,
 		festivalId: string,
@@ -1363,6 +1578,50 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 					record.festivalId === festivalId &&
 					(!activeOnly || record.isActive),
 			)
+			.map((record) => ({ ...record }));
+	}
+
+	async recordFestivalClassCapacityAudit(
+		input: CreateFestivalClassCapacityAuditInput,
+	): Promise<FestivalClassCapacityAuditRecord> {
+		const previousCapacity = input.previousCapacity ?? null;
+		const record: FestivalClassCapacityAuditRecord = {
+			id: input.id ?? randomUUID(),
+			organizationId: input.organizationId,
+			festivalId: input.festivalId,
+			festivalClassId: input.festivalClassId,
+			actorUid: input.actorUid ?? null,
+			action:
+				input.action ??
+				(previousCapacity === null ? "class_created" : "capacity_updated"),
+			previousCapacity,
+			newCapacity: input.newCapacity,
+			placedCountAtChange: input.placedCountAtChange,
+			availabilityAfterChange:
+				input.availabilityAfterChange ??
+				evaluateClassCapacityStatus(
+					input.newCapacity,
+					input.placedCountAtChange,
+				).availability,
+			createdAtIso: input.createdAtIso ?? this.now().toISOString(),
+		};
+		this.festivalClassCapacityAudits.push(record);
+		return { ...record };
+	}
+
+	async listFestivalClassCapacityAudits(
+		organizationId: string,
+		festivalClassId: string,
+	): Promise<FestivalClassCapacityAuditRecord[]> {
+		return this.festivalClassCapacityAudits
+			.filter(
+				(record) =>
+					record.organizationId === organizationId &&
+					record.festivalClassId === festivalClassId,
+			)
+			.slice()
+			.reverse()
+			.sort((a, b) => b.createdAtIso.localeCompare(a.createdAtIso))
 			.map((record) => ({ ...record }));
 	}
 
@@ -1418,6 +1677,46 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		) {
 			throw new Error("Entitlement grant correlation is already recorded.");
 		}
+		const overlapping = [...this.entitlementGrants.values()].filter(
+			(grant) =>
+				grant.organizationId === input.organizationId &&
+				grant.customerId === input.customerId &&
+				grant.entitlementClass === input.entitlementClass &&
+				!this.entitlementRevocations.has(grant.id) &&
+				!this.entitlementSupersededOn.has(grant.id) &&
+				grant.startsOn < input.endsOn &&
+				grant.endsOn > input.startsOn,
+		);
+		const id = randomUUID();
+		const nowIso = this.now().toISOString();
+		let effectiveEndsOn = input.endsOn;
+		let supersededPrior = false;
+		for (const prior of overlapping) {
+			if (
+				prior.startsOn <= input.startsOn &&
+				prior.endsOn > input.startsOn &&
+				calendarDaysUntil(input.startsOn, prior.endsOn) <=
+					TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS
+			) {
+				this.entitlementSupersededOn.set(prior.id, input.startsOn);
+				this.entitlementSupersededAt.set(prior.id, nowIso);
+				this.entitlementSupersededByGrantId.set(prior.id, id);
+				effectiveEndsOn = addCalendarDays(prior.endsOn, input.durationDays);
+				supersededPrior = true;
+			} else {
+				throw new Error(
+					"Teacher Membership entitlement intervals may not overlap.",
+				);
+			}
+		}
+		if (
+			!supersededPrior &&
+			input.endsOn !== addCalendarDays(input.startsOn, input.durationDays)
+		) {
+			throw new Error(
+				"Entitlement endsOn must equal startsOn plus durationDays calendar days.",
+			);
+		}
 		const {
 			status: _status,
 			verifiedIdentityEmail: _verifiedIdentityEmail,
@@ -1425,7 +1724,8 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		} = input;
 		const record: StoredTeacherEntitlement = Object.freeze({
 			...snapshot,
-			id: randomUUID(),
+			endsOn: effectiveEndsOn,
+			id,
 			createdAtIso: new Date().toISOString(),
 		});
 		this.bindMembershipIdentityEmail(
@@ -1440,6 +1740,30 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			record.entitlementClass,
 		);
 		return this.withTeacherLifecycle(record);
+	}
+
+	async findActiveTeacherEntitlementGrant(input: {
+		organizationId: string;
+		customerId: string;
+		divisionId: string;
+	}): Promise<EntitlementGrantSnapshot | null> {
+		return (
+			[...this.entitlementGrants.values()]
+				.filter(
+					(grant) =>
+						grant.organizationId === input.organizationId &&
+						grant.customerId === input.customerId &&
+						grant.entitlementClass === TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS &&
+						grant.divisionId === input.divisionId,
+				)
+				.sort(
+					(a, b) =>
+						a.createdAtIso.localeCompare(b.createdAtIso) ||
+						a.id.localeCompare(b.id),
+				)
+				.map((grant) => this.withTeacherLifecycle(grant))
+				.find((grant) => grant.status === "active") ?? null
+		);
 	}
 
 	async listEntitlementGrantSnapshots(
@@ -1463,27 +1787,44 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		reason: string;
 		revokedAtIso: string;
 	}) {
+		const teacher = this.entitlementGrants.get(input.entitlementId);
+		const accompanist = this.accompanistMembershipGrants.get(
+			input.entitlementId,
+		);
+		const target =
+			teacher?.organizationId === input.organizationId
+				? {
+						entitlementClass: teacher.entitlementClass,
+						customerId: teacher.customerId,
+						startsOn: teacher.startsOn,
+						endsOn: teacher.endsOn,
+					}
+				: accompanist?.organizationId === input.organizationId
+					? {
+							entitlementClass: "accompanist_membership" as const,
+							customerId: accompanist.customerId,
+							startsOn: accompanist.startsOn,
+							endsOn: accompanist.endsOn,
+						}
+					: null;
+		if (!target) {
+			throw new AppError("Entitlement was not found.", 404);
+		}
 		const existing = this.entitlementRevocations.get(input.entitlementId);
 		if (existing) return { revocation: existing, existing: true };
-		const teacher = this.entitlementGrants.get(input.entitlementId);
-		let entitlementClass: EntitlementClass;
-		let customerId: string;
-		if (teacher?.organizationId === input.organizationId) {
-			entitlementClass = teacher.entitlementClass;
-			customerId = teacher.customerId;
-		} else {
-			const accompanist = this.accompanistMembershipGrants.get(
-				input.entitlementId,
-			);
-			if (!accompanist || accompanist.organizationId !== input.organizationId)
-				throw new Error("Entitlement was not found.");
-			entitlementClass = "accompanist_membership";
-			customerId = accompanist.customerId;
+		const organization = this.organizations.get(input.organizationId);
+		if (!organization) throw new AppError("Organization not found.", 404);
+		const lifecycle = deriveEntitlementLifecycle(
+			target,
+			calendarDateInTimezone(this.now().toISOString(), organization.timezone),
+		);
+		if (lifecycle === "expired") {
+			throw new AppError("Expired entitlements cannot be revoked.", 409);
 		}
 		this.advanceEntitlementCohort(
 			input.organizationId,
-			customerId,
-			entitlementClass,
+			target.customerId,
+			target.entitlementClass,
 		);
 		const revocation: EntitlementRevocationRecord = {
 			id: randomUUID(),
@@ -1519,16 +1860,29 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 	): EntitlementGrantSnapshot {
 		const organization = this.organizations.get(grant.organizationId);
 		if (!organization) throw new Error("Organization not found.");
+		const supersededOn =
+			this.entitlementSupersededOn.get(grant.id) ?? grant.supersededOn;
+		const supersededAt =
+			this.entitlementSupersededAt.get(grant.id) ?? grant.supersededAt;
+		const supersededByGrantId =
+			this.entitlementSupersededByGrantId.get(grant.id) ??
+			grant.supersededByGrantId;
 		const status = this.entitlementRevocations.has(grant.id)
 			? "revoked"
 			: deriveEntitlementLifecycle(
-					grant,
+					{ ...grant, ...(supersededOn ? { supersededOn } : {}) },
 					calendarDateInTimezone(
 						this.now().toISOString(),
 						organization.timezone,
 					),
 				);
-		return { ...grant, status };
+		return {
+			...grant,
+			...(supersededOn ? { supersededOn } : {}),
+			...(supersededAt !== undefined ? { supersededAt } : {}),
+			...(supersededByGrantId !== undefined ? { supersededByGrantId } : {}),
+			status,
+		};
 	}
 
 	private advanceEntitlementCohort(
@@ -1646,5 +2000,334 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			}
 		}
 		return result.sort((a, b) => a.name.localeCompare(b.name));
+	}
+
+	private assertValidDivisionIds(
+		organizationId: string,
+		divisionIds: string[],
+	): string[] {
+		const validated = validateDivisionIds(divisionIds);
+		const uniqueIds = [...new Set(validated)];
+		for (const divId of uniqueIds) {
+			const div = this.divisions.get(divId);
+			if (!div || div.organizationId !== organizationId) {
+				throw new AppError(
+					"One or more divisions do not belong to the organization.",
+					400,
+					"invalid_division",
+				);
+			}
+		}
+		return uniqueIds.sort(compareCodePoint);
+	}
+
+	async getTeacherProfile(
+		organizationId: string,
+		customerId: string,
+	): Promise<TeacherProfileRecord | null> {
+		const match = [...this.teacherProfiles.values()].find(
+			(p) =>
+				p.organization_id === organizationId && p.customer_id === customerId,
+		);
+		return match ? { ...match, division_ids: [...match.division_ids] } : null;
+	}
+
+	async getTeacherProfileById(
+		organizationId: string,
+		profileId: string,
+	): Promise<TeacherProfileRecord | null> {
+		const match = this.teacherProfiles.get(profileId);
+		if (!match || match.organization_id !== organizationId) {
+			return null;
+		}
+		return { ...match, division_ids: [...match.division_ids] };
+	}
+
+	async upsertTeacherProfile(
+		params: UpsertTeacherProfileInput,
+	): Promise<TeacherProfileRecord> {
+		const displayName = validateDisplayName(params.displayName);
+		const publicDirectoryOptIn = validatePublicDirectoryOptIn(
+			params.publicDirectoryOptIn,
+		);
+		const divisionIds = this.assertValidDivisionIds(
+			params.organizationId,
+			params.divisionIds,
+		);
+		const existing = [...this.teacherProfiles.values()].find(
+			(p) =>
+				p.organization_id === params.organizationId &&
+				p.customer_id === params.customerId,
+		);
+		const nowIso = this.now().toISOString();
+		if (existing) {
+			const updated: TeacherProfileRecord = {
+				...existing,
+				display_name: displayName,
+				public_directory_opt_in: publicDirectoryOptIn,
+				division_ids: divisionIds,
+				teacher_color: getDeterministicTeacherColor(params.customerId),
+				approval_status: profileEditRequiresReapproval(
+					{
+						displayName: existing.display_name,
+						divisionIds: existing.division_ids,
+					},
+					{ displayName, divisionIds },
+				)
+					? "pending"
+					: existing.approval_status,
+				updated_at: nowIso,
+			};
+			this.teacherProfiles.set(existing.id, updated);
+			return { ...updated, division_ids: [...updated.division_ids] };
+		}
+		const id = randomUUID();
+		const record: TeacherProfileRecord = {
+			id,
+			organization_id: params.organizationId,
+			customer_id: params.customerId,
+			display_name: displayName,
+			teacher_color: getDeterministicTeacherColor(params.customerId),
+			public_directory_opt_in: publicDirectoryOptIn,
+			approval_status: "pending",
+			division_ids: divisionIds,
+			created_at: nowIso,
+			updated_at: nowIso,
+		};
+		this.teacherProfiles.set(id, record);
+		return { ...record, division_ids: [...record.division_ids] };
+	}
+
+	async updateTeacherProfileApproval(
+		organizationId: string,
+		profileId: string,
+		approvalStatus: ProfileApprovalStatus,
+	): Promise<TeacherProfileRecord | null> {
+		const validStatus = validateProfileApprovalStatus(approvalStatus);
+		const match = this.teacherProfiles.get(profileId);
+		if (!match || match.organization_id !== organizationId) {
+			return null;
+		}
+		const updated: TeacherProfileRecord = {
+			...match,
+			approval_status: validStatus,
+			updated_at: this.now().toISOString(),
+		};
+		this.teacherProfiles.set(profileId, updated);
+		return { ...updated, division_ids: [...updated.division_ids] };
+	}
+
+	async listTeacherProfiles(
+		organizationId: string,
+	): Promise<TeacherProfileRecord[]> {
+		return [...this.teacherProfiles.values()]
+			.filter((p) => p.organization_id === organizationId)
+			.sort(compareProfilesByName)
+			.map((p) => ({ ...p, division_ids: [...p.division_ids] }));
+	}
+
+	async getAccompanistProfile(
+		organizationId: string,
+		customerId: string,
+	): Promise<AccompanistProfileRecord | null> {
+		const match = [...this.accompanistProfiles.values()].find(
+			(p) =>
+				p.organization_id === organizationId && p.customer_id === customerId,
+		);
+		return match ? this.withAccompanistContact(match) : null;
+	}
+
+	async getAccompanistProfileById(
+		organizationId: string,
+		profileId: string,
+	): Promise<AccompanistProfileRecord | null> {
+		const match = this.accompanistProfiles.get(profileId);
+		if (!match || match.organization_id !== organizationId) {
+			return null;
+		}
+		return this.withAccompanistContact(match);
+	}
+
+	async upsertAccompanistProfile(
+		params: UpsertAccompanistProfileInput,
+	): Promise<AccompanistProfileRecord> {
+		const displayName = validateDisplayName(params.displayName);
+		const publicDirectoryOptIn = validatePublicDirectoryOptIn(
+			params.publicDirectoryOptIn,
+		);
+		const divisionIds = this.assertValidDivisionIds(
+			params.organizationId,
+			params.divisionIds,
+		);
+		const existing = [...this.accompanistProfiles.values()].find(
+			(p) =>
+				p.organization_id === params.organizationId &&
+				p.customer_id === params.customerId,
+		);
+		const nowIso = this.now().toISOString();
+
+		if (existing) {
+			const updated: AccompanistProfileRecord = {
+				...existing,
+				display_name: displayName,
+				public_directory_opt_in: publicDirectoryOptIn,
+				division_ids: divisionIds,
+				approval_status: profileEditRequiresReapproval(
+					{
+						displayName: existing.display_name,
+						divisionIds: existing.division_ids,
+					},
+					{ displayName, divisionIds },
+				)
+					? "pending"
+					: existing.approval_status,
+				updated_at: nowIso,
+			};
+			this.accompanistProfiles.set(existing.id, updated);
+			return this.withAccompanistContact(updated);
+		}
+		const id = randomUUID();
+		const record: AccompanistProfileRecord = {
+			id,
+			organization_id: params.organizationId,
+			customer_id: params.customerId,
+			display_name: displayName,
+			public_directory_opt_in: publicDirectoryOptIn,
+			approval_status: "pending",
+			division_ids: divisionIds,
+			created_at: nowIso,
+			updated_at: nowIso,
+		};
+		this.accompanistProfiles.set(id, record);
+		return this.withAccompanistContact(record);
+	}
+
+	async updateAccompanistProfileApproval(
+		organizationId: string,
+		profileId: string,
+		approvalStatus: ProfileApprovalStatus,
+	): Promise<AccompanistProfileRecord | null> {
+		const validStatus = validateProfileApprovalStatus(approvalStatus);
+		const match = this.accompanistProfiles.get(profileId);
+		if (!match || match.organization_id !== organizationId) {
+			return null;
+		}
+		const updated: AccompanistProfileRecord = {
+			...match,
+			approval_status: validStatus,
+			updated_at: this.now().toISOString(),
+		};
+		this.accompanistProfiles.set(profileId, updated);
+		return this.withAccompanistContact(updated);
+	}
+
+	async listAccompanistProfiles(
+		organizationId: string,
+	): Promise<AccompanistProfileRecord[]> {
+		return [...this.accompanistProfiles.values()]
+			.filter((p) => p.organization_id === organizationId)
+			.sort(compareProfilesByName)
+			.map((p) => this.withAccompanistContact(p));
+	}
+
+	private withAccompanistContact(
+		profile: AccompanistProfileRecord,
+	): AccompanistProfileRecord {
+		const customerKey = `${profile.organization_id}:${profile.customer_id}`;
+		const contact =
+			this.customerContacts.get(customerKey) ??
+			this.customerContacts.get(profile.customer_id);
+		// Mirrors Postgres: COALESCE(identity.normalized_email, c.email), c.phone.
+		const email =
+			this.membershipIdentityEmailsByCustomer.get(customerKey) ??
+			contact?.email;
+		const phone = contact?.phone;
+		return {
+			...profile,
+			division_ids: [...profile.division_ids],
+			...(phone ? { phone } : {}),
+			...(email ? { email } : {}),
+		};
+	}
+
+	async getPublicDirectoryProfiles(
+		organizationId: string,
+	): Promise<PublicDirectoryProfileDto[]> {
+		const activeTeacherCustomerIds = new Set(
+			[...this.entitlementGrants.values()]
+				.filter(
+					(grant) =>
+						grant.organizationId === organizationId &&
+						grant.entitlementClass === TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+				)
+				.map((grant) => this.withTeacherLifecycle(grant))
+				.filter((grant) => grant.status === "active")
+				.map((grant) => grant.customerId),
+		);
+
+		const teacherProfiles = [...this.teacherProfiles.values()]
+			.filter(
+				(p) =>
+					p.organization_id === organizationId &&
+					p.public_directory_opt_in &&
+					p.approval_status === "approved",
+			)
+			.sort(compareProfilesByName);
+
+		const teachers: PublicDirectoryProfileDto[] = teacherProfiles.map((tp) => {
+			const approvedDivisions: PublicDirectoryDivisionDto[] = tp.division_ids
+				.map((id) => this.divisions.get(id))
+				.filter((d): d is OrganizationDivision & { normalizedName: string } =>
+					Boolean(d && d.organizationId === organizationId),
+				)
+				.map((d) => ({ id: d.id, name: d.displayName }))
+				.sort(compareDivisionsByName);
+
+			return validatePublicDirectoryProfileDto({
+				displayName: tp.display_name,
+				role: "Teacher",
+				approvedDivisions,
+				teacherColor: getDeterministicTeacherColor(tp.customer_id),
+				isActiveMember: activeTeacherCustomerIds.has(tp.customer_id),
+			});
+		});
+
+		const activeAccompanistCustomerIds = new Set(
+			[...this.accompanistMembershipGrants.values()]
+				.filter((grant) => grant.organizationId === organizationId)
+				.map((grant) => this.withAccompanistLifecycle(grant))
+				.filter((grant) => grant.status === "active")
+				.map((grant) => grant.customerId),
+		);
+
+		const accompanistProfiles = [...this.accompanistProfiles.values()]
+			.filter(
+				(p) =>
+					p.organization_id === organizationId &&
+					p.public_directory_opt_in &&
+					p.approval_status === "approved",
+			)
+			.sort(compareProfilesByName);
+
+		const accompanists: PublicDirectoryProfileDto[] = accompanistProfiles.map(
+			(ap) => {
+				const approvedDivisions: PublicDirectoryDivisionDto[] = ap.division_ids
+					.map((id) => this.divisions.get(id))
+					.filter((d): d is OrganizationDivision & { normalizedName: string } =>
+						Boolean(d && d.organizationId === organizationId),
+					)
+					.map((d) => ({ id: d.id, name: d.displayName }))
+					.sort(compareDivisionsByName);
+
+				return validatePublicDirectoryProfileDto({
+					displayName: ap.display_name,
+					role: "Accompanist",
+					approvedDivisions,
+					isActiveMember: activeAccompanistCustomerIds.has(ap.customer_id),
+				});
+			},
+		);
+
+		return [...teachers, ...accompanists];
 	}
 }

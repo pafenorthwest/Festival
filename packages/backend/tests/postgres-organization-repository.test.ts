@@ -163,6 +163,61 @@ describe("PostgresOrganizationRepository", () => {
 		});
 	});
 
+	describe("findActiveFestivalClassByShortName", () => {
+		it("resolves an active class and festival in one scoped query", async () => {
+			const repo = new PostgresOrganizationRepository("test_schema");
+			const readySpy = spyOn(repo, "ensureReady").mockResolvedValue();
+			const unsafeSpy = spyOn(sql, "unsafe").mockResolvedValueOnce([mockRow]);
+			try {
+				const result = await repo.findActiveFestivalClassByShortName(
+					"org-1",
+					" PNW2026 ",
+					"class-1",
+					"fest-1",
+				);
+				expect(result).toEqual(expectedClassConfig);
+				expect(unsafeSpy).toHaveBeenCalledTimes(1);
+				const [query, params] = unsafeSpy.mock.calls[0] as [string, unknown[]];
+				expect(query).toContain("INNER JOIN test_schema.festivals f");
+				expect(query).toContain("c.organization_id = $1");
+				expect(query).toContain(
+					"LOWER(BTRIM(f.short_name)) = LOWER(BTRIM($2))",
+				);
+				expect(query).toContain("c.id = $3 AND c.is_active");
+				expect(query).toContain("f.id = $4");
+				expect(params).toEqual(["org-1", " PNW2026 ", "class-1", "fest-1"]);
+			} finally {
+				unsafeSpy.mockRestore();
+				readySpy.mockRestore();
+			}
+		});
+
+		it("returns null when no active scoped class matches", async () => {
+			const repo = new PostgresOrganizationRepository("test_schema");
+			const readySpy = spyOn(repo, "ensureReady").mockResolvedValue();
+			const unsafeSpy = spyOn(sql, "unsafe").mockResolvedValueOnce([]);
+			try {
+				expect(
+					await repo.findActiveFestivalClassByShortName(
+						"org-1",
+						"pnw2026",
+						"missing",
+					),
+				).toBeNull();
+				expect(unsafeSpy).toHaveBeenCalledTimes(1);
+				expect(unsafeSpy.mock.calls[0]?.[1]).toEqual([
+					"org-1",
+					"pnw2026",
+					"missing",
+					null,
+				]);
+			} finally {
+				unsafeSpy.mockRestore();
+				readySpy.mockRestore();
+			}
+		});
+	});
+
 	describe("updateFestivalClassConfiguration", () => {
 		let repo: PostgresOrganizationRepository;
 		let unsafeSpy: ReturnType<typeof spyOn>;
@@ -461,6 +516,575 @@ describe("PostgresOrganizationRepository", () => {
 				.catch((e) => e);
 
 			expect(error).toBe(unexpectedError);
+		});
+	});
+
+	describe("findActiveTeacherEntitlementGrant and findCurrentAccompanistMembershipGrant", () => {
+		let repo: PostgresOrganizationRepository;
+		let unsafeSpy: ReturnType<typeof spyOn>;
+
+		beforeEach(() => {
+			repo = new PostgresOrganizationRepository("test_schema");
+			spyOn(repo, "ensureReady").mockResolvedValue();
+			unsafeSpy = spyOn(sql, "unsafe");
+		});
+
+		afterEach(() => {
+			unsafeSpy.mockRestore();
+		});
+
+		it("findActiveTeacherEntitlementGrant queries with division, active lifecycle, and deterministic ORDER BY created_at ASC, id ASC LIMIT 1", async () => {
+			const dbRow = {
+				id: "grant-1",
+				organization_id: "org-1",
+				customer_id: "teacher-1",
+				entitlement_class: "teacher_membership",
+				offering_id: "offering-1",
+				duration_days: 365,
+				division_id: "div-1",
+				division_name_snapshot: "Junior Piano",
+				paid_amount: "50.00",
+				paid_currency_code: "USD",
+				checkout_intent_id: "intent-1",
+				shopify_order_gid: "gid://shopify/Order/1",
+				shopify_order_line_gid: "gid://shopify/LineItem/1",
+				starts_on: "2026-01-01",
+				ends_on: "2027-01-01",
+				status: "active",
+				created_at: "2026-01-01T00:00:00.000Z",
+			};
+			unsafeSpy.mockResolvedValueOnce([dbRow]);
+
+			const result = await repo.findActiveTeacherEntitlementGrant({
+				organizationId: "org-1",
+				customerId: "teacher-1",
+				divisionId: "div-1",
+			});
+
+			expect(result).toEqual({
+				id: "grant-1",
+				organizationId: "org-1",
+				customerId: "teacher-1",
+				entitlementClass: "teacher_membership",
+				offeringId: "offering-1",
+				durationDays: 365,
+				divisionId: "div-1",
+				divisionNameSnapshot: "Junior Piano",
+				paidAmount: "50.00",
+				paidCurrencyCode: "USD",
+				checkoutIntentId: "intent-1",
+				shopifyOrderGid: "gid://shopify/Order/1",
+				shopifyOrderLineGid: "gid://shopify/LineItem/1",
+				startsOn: "2026-01-01",
+				endsOn: "2027-01-01",
+				status: "active",
+				createdAtIso: "2026-01-01T00:00:00.000Z",
+			});
+			expect(unsafeSpy).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class='teacher_membership' AND ed.division_id=$3 AND e.revoked_at IS NULL AND (e.superseded_on IS NULL OR e.superseded_on > (NOW() AT TIME ZONE o.timezone)::date) AND e.starts_on <= (NOW() AT TIME ZONE o.timezone)::date AND e.ends_on > (NOW() AT TIME ZONE o.timezone)::date ORDER BY e.created_at ASC, e.id ASC LIMIT 1",
+				),
+				["org-1", "teacher-1", "div-1"],
+			);
+		});
+
+		it("findActiveTeacherEntitlementGrant returns null when no active grant matches", async () => {
+			unsafeSpy.mockResolvedValueOnce([]);
+			const result = await repo.findActiveTeacherEntitlementGrant({
+				organizationId: "org-1",
+				customerId: "teacher-1",
+				divisionId: "div-missing",
+			});
+			expect(result).toBeNull();
+		});
+
+		it("findCurrentAccompanistMembershipGrant queries with active lifecycle and deterministic ORDER BY e.created_at ASC, e.id ASC LIMIT 1", async () => {
+			const dbRow = {
+				id: "acc-grant-1",
+				organization_id: "org-1",
+				customer_id: "acc-1",
+				normalized_email: "acc@example.com",
+				offering_id: "offering-acc",
+				offering_name_snapshot: "Accompanist Membership",
+				source: "accompanist_form",
+				contact_name: "Sam Acc",
+				contact_email: "acc@example.com",
+				contact_city: "Seattle",
+				contact_phone: "555-0100",
+				divisions: [{ divisionId: "div-1", divisionName: "Junior Piano" }],
+				starts_on: "2026-01-01",
+				ends_on: "2027-01-01",
+				status: "active",
+				is_current: true,
+				created_at: "2026-01-01T00:00:00.000Z",
+			};
+			unsafeSpy.mockResolvedValueOnce([dbRow]);
+
+			const result = await repo.findCurrentAccompanistMembershipGrant({
+				organizationId: "org-1",
+				customerId: "acc-1",
+			});
+
+			expect(result).toEqual({
+				id: "acc-grant-1",
+				organizationId: "org-1",
+				customerId: "acc-1",
+				normalizedEmail: "acc@example.com",
+				offeringId: "offering-acc",
+				offeringNameSnapshot: "Accompanist Membership",
+				source: "accompanist_form",
+				contact: {
+					name: "Sam Acc",
+					email: "acc@example.com",
+					city: "Seattle",
+					phone: "555-0100",
+				},
+				divisions: [{ divisionId: "div-1", divisionName: "Junior Piano" }],
+				startsOn: "2026-01-01",
+				endsOn: "2027-01-01",
+				status: "active",
+				isCurrent: true,
+				createdAtIso: "2026-01-01T00:00:00.000Z",
+			});
+			expect(unsafeSpy).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class='accompanist_membership' AND e.revoked_at IS NULL AND e.starts_on <= (NOW() AT TIME ZONE o.timezone)::date AND e.ends_on > (NOW() AT TIME ZONE o.timezone)::date",
+				),
+				["org-1", "acc-1"],
+			);
+			expect(unsafeSpy).toHaveBeenCalledWith(
+				expect.stringContaining("ORDER BY e.created_at ASC, e.id ASC LIMIT 1"),
+				["org-1", "acc-1"],
+			);
+		});
+
+		it("findCurrentAccompanistMembershipGrant returns null when no current grant matches", async () => {
+			unsafeSpy.mockResolvedValueOnce([]);
+			const result = await repo.findCurrentAccompanistMembershipGrant({
+				organizationId: "org-1",
+				customerId: "acc-missing",
+			});
+			expect(result).toBeNull();
+		});
+	});
+
+	describe("Festival class capacity audit logs", () => {
+		let repo: PostgresOrganizationRepository;
+		let unsafeSpy: ReturnType<typeof spyOn>;
+
+		beforeEach(() => {
+			repo = new PostgresOrganizationRepository("test_schema");
+			spyOn(repo, "ensureReady").mockResolvedValue();
+			unsafeSpy = spyOn(sql, "unsafe");
+		});
+
+		afterEach(() => {
+			unsafeSpy.mockRestore();
+		});
+
+		it("records class_created and capacity_updated audit entries with derived defaults", async () => {
+			unsafeSpy.mockResolvedValueOnce([
+				{
+					id: "audit-1",
+					organization_id: "org-1",
+					festival_id: "fest-1",
+					festival_class_id: "class-1",
+					actor_uid: "admin-1",
+					action: "class_created",
+					previous_capacity: null,
+					new_capacity: 100,
+					placed_count_at_change: 0,
+					availability_after_change: "open",
+					created_at: "2026-01-01T00:00:00.000Z",
+				},
+			]);
+
+			const createdAudit = await repo.recordFestivalClassCapacityAudit({
+				id: "audit-1",
+				organizationId: "org-1",
+				festivalId: "fest-1",
+				festivalClassId: "class-1",
+				actorUid: "admin-1",
+				previousCapacity: null,
+				newCapacity: 100,
+				placedCountAtChange: 0,
+				createdAtIso: "2026-01-01T00:00:00.000Z",
+			});
+
+			expect(createdAudit).toEqual({
+				id: "audit-1",
+				organizationId: "org-1",
+				festivalId: "fest-1",
+				festivalClassId: "class-1",
+				actorUid: "admin-1",
+				action: "class_created",
+				previousCapacity: null,
+				newCapacity: 100,
+				placedCountAtChange: 0,
+				availabilityAfterChange: "open",
+				createdAtIso: "2026-01-01T00:00:00.000Z",
+			});
+			expect(unsafeSpy).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"INSERT INTO test_schema.festival_class_capacity_audit_logs",
+				),
+				[
+					"audit-1",
+					"org-1",
+					"fest-1",
+					"class-1",
+					"admin-1",
+					"class_created",
+					null,
+					100,
+					0,
+					"open",
+					"2026-01-01T00:00:00.000Z",
+				],
+			);
+
+			unsafeSpy.mockResolvedValueOnce([
+				{
+					id: "audit-2",
+					organization_id: "org-1",
+					festival_id: "fest-1",
+					festival_class_id: "class-1",
+					actor_uid: null,
+					action: "capacity_updated",
+					previous_capacity: 100,
+					new_capacity: 2,
+					placed_count_at_change: 2,
+					availability_after_change: "waitlist",
+					created_at: "2026-01-02T00:00:00.000Z",
+				},
+			]);
+
+			const updatedAudit = await repo.recordFestivalClassCapacityAudit({
+				id: "audit-2",
+				organizationId: "org-1",
+				festivalId: "fest-1",
+				festivalClassId: "class-1",
+				previousCapacity: 100,
+				newCapacity: 2,
+				placedCountAtChange: 2,
+			});
+
+			expect(updatedAudit).toEqual({
+				id: "audit-2",
+				organizationId: "org-1",
+				festivalId: "fest-1",
+				festivalClassId: "class-1",
+				actorUid: null,
+				action: "capacity_updated",
+				previousCapacity: 100,
+				newCapacity: 2,
+				placedCountAtChange: 2,
+				availabilityAfterChange: "waitlist",
+				createdAtIso: "2026-01-02T00:00:00.000Z",
+			});
+		});
+
+		it("lists capacity audit entries ordered by created_at DESC, id DESC", async () => {
+			unsafeSpy.mockResolvedValueOnce([
+				{
+					id: "audit-2",
+					organization_id: "org-1",
+					festival_id: "fest-1",
+					festival_class_id: "class-1",
+					actor_uid: "admin-1",
+					action: "capacity_updated",
+					previous_capacity: 100,
+					new_capacity: 50,
+					placed_count_at_change: 10,
+					availability_after_change: "open",
+					created_at: "2026-01-02T00:00:00.000Z",
+				},
+			]);
+
+			const audits = await repo.listFestivalClassCapacityAudits(
+				"org-1",
+				"class-1",
+			);
+
+			expect(audits).toEqual([
+				{
+					id: "audit-2",
+					organizationId: "org-1",
+					festivalId: "fest-1",
+					festivalClassId: "class-1",
+					actorUid: "admin-1",
+					action: "capacity_updated",
+					previousCapacity: 100,
+					newCapacity: 50,
+					placedCountAtChange: 10,
+					availabilityAfterChange: "open",
+					createdAtIso: "2026-01-02T00:00:00.000Z",
+				},
+			]);
+			expect(unsafeSpy).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"FROM test_schema.festival_class_capacity_audit_logs WHERE organization_id = $1 AND festival_class_id = $2 ORDER BY created_at DESC, id DESC",
+				),
+				["org-1", "class-1"],
+			);
+		});
+	});
+
+	describe("updateFestivalRegistrationWindow", () => {
+		let repo: PostgresOrganizationRepository;
+		let unsafeSpy: ReturnType<typeof spyOn>;
+
+		beforeEach(() => {
+			repo = new PostgresOrganizationRepository("test_schema");
+			spyOn(repo, "ensureReady").mockResolvedValue();
+			unsafeSpy = spyOn(sql, "unsafe");
+		});
+
+		afterEach(() => {
+			unsafeSpy.mockRestore();
+		});
+
+		it("updates registration_opens_at and registration_closes_at and maps Date/string/null", async () => {
+			unsafeSpy.mockResolvedValueOnce([
+				{
+					id: "fest-1",
+					organization_id: "org-1",
+					code: "abc123",
+					short_name: "spring-27",
+					is_primary: true,
+					name: "Spring Festival",
+					start_date: "2027-06-10",
+					end_date: "2027-06-12",
+					registration_opens_at: new Date("2027-03-01T00:00:00.000Z"),
+					registration_closes_at: "2027-05-01T23:59:59.999Z",
+					created_at: "2027-01-01T00:00:00.000Z",
+				},
+			]);
+
+			const result = await repo.updateFestivalRegistrationWindow(
+				"org-1",
+				"fest-1",
+				{
+					registrationOpensAt: "2027-03-01T00:00:00.000Z",
+					registrationClosesAt: "2027-05-01T23:59:59.999Z",
+				},
+			);
+
+			expect(result).toEqual({
+				id: "fest-1",
+				organizationId: "org-1",
+				code: "abc123",
+				shortName: "spring-27",
+				isPrimary: true,
+				name: "Spring Festival",
+				startDate: "2027-06-10",
+				endDate: "2027-06-12",
+				registrationOpensAt: "2027-03-01T00:00:00.000Z",
+				registrationClosesAt: "2027-05-01T23:59:59.999Z",
+				createdAtIso: "2027-01-01T00:00:00.000Z",
+			});
+			expect(unsafeSpy).toHaveBeenCalledWith(
+				expect.stringContaining("SET registration_opens_at = $3"),
+				[
+					"org-1",
+					"fest-1",
+					"2027-03-01T00:00:00.000Z",
+					"2027-05-01T23:59:59.999Z",
+				],
+			);
+		});
+
+		it("throws when festival is not found", async () => {
+			unsafeSpy.mockResolvedValueOnce([]);
+
+			await expect(
+				repo.updateFestivalRegistrationWindow("org-1", "missing", {
+					registrationOpensAt: null,
+					registrationClosesAt: null,
+				}),
+			).rejects.toThrow("Festival not found.");
+		});
+	});
+
+	describe("teacher membership entitlement supersession and overlap handling", () => {
+		let repo: PostgresOrganizationRepository;
+		let unsafeSpy: ReturnType<typeof spyOn>;
+		let beginSpy: ReturnType<typeof spyOn>;
+
+		const validGrantInput = {
+			organizationId: "org-1",
+			customerId: "teacher-1",
+			verifiedIdentityEmail: "teacher@example.com",
+			entitlementClass: "teacher_membership" as const,
+			offeringId: "offering-1",
+			durationDays: 365,
+			divisionId: "div-1",
+			divisionNameSnapshot: "Junior Piano",
+			paidAmount: "50.00",
+			paidCurrencyCode: "USD",
+			checkoutIntentId: "intent-1",
+			shopifyOrderGid: "gid://shopify/Order/1",
+			shopifyOrderLineGid: "gid://shopify/LineItem/1",
+			startsOn: "2026-12-15",
+			endsOn: "2027-12-15",
+			status: "active" as const,
+		};
+
+		beforeEach(() => {
+			repo = new PostgresOrganizationRepository("test_schema");
+			spyOn(repo, "ensureReady").mockResolvedValue();
+			unsafeSpy = spyOn(sql, "unsafe");
+			beginSpy = spyOn(sql, "begin").mockImplementation(((
+				cb: (tx: { unsafe: typeof sql.unsafe }) => unknown,
+			) =>
+				cb({
+					unsafe: unsafeSpy as unknown as typeof sql.unsafe,
+				})) as unknown as typeof sql.begin);
+		});
+
+		afterEach(() => {
+			beginSpy.mockRestore();
+			unsafeSpy.mockRestore();
+		});
+
+		it("createEntitlementGrantSnapshot sets superseded_on on renewal-window grant and inserts new grant", async () => {
+			unsafeSpy
+				.mockResolvedValueOnce([{ customer_id: "teacher-1" }])
+				.mockResolvedValueOnce([{ ends_on: "2027-01-01" }])
+				.mockResolvedValueOnce([{ id: "grant-new" }])
+				.mockResolvedValueOnce([])
+				.mockResolvedValueOnce([]);
+
+			const created =
+				await repo.createEntitlementGrantSnapshot(validGrantInput);
+
+			expect(created.organizationId).toBe("org-1");
+			expect(created.startsOn).toBe("2026-12-15");
+			expect(created.endsOn).toBe("2028-01-01");
+			expect(unsafeSpy).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"UPDATE test_schema.membership_entitlements SET superseded_on = $4::date, superseded_at = NOW(), superseded_by_grant_id = $5 WHERE organization_id = $1 AND customer_id = $2 AND entitlement_class = $3 AND revoked_at IS NULL AND superseded_on IS NULL AND starts_on <= $4::date AND ends_on > $4::date AND ends_on <= ($4::date + INTERVAL '30 days')::date",
+				),
+				["org-1", "teacher-1", "teacher_membership", "2026-12-15", created.id],
+			);
+			expect(unsafeSpy).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"INSERT INTO test_schema.membership_entitlements",
+				),
+				[
+					created.id,
+					"org-1",
+					"teacher-1",
+					"teacher_membership",
+					"offering-1",
+					"2026-12-15",
+					"2028-01-01",
+				],
+			);
+		});
+
+		it("createEntitlementGrantSnapshot translates exclusion constraint violation (23P01) into overlap error", async () => {
+			unsafeSpy
+				.mockResolvedValueOnce([{ customer_id: "teacher-1" }])
+				.mockResolvedValueOnce([])
+				.mockRejectedValueOnce({ code: "23P01" });
+
+			await expect(
+				repo.createEntitlementGrantSnapshot(validGrantInput),
+			).rejects.toThrow(
+				"Teacher Membership entitlement intervals may not overlap.",
+			);
+		});
+
+		it("listEntitlementGrantSnapshots maps superseded_on and status", async () => {
+			unsafeSpy.mockResolvedValueOnce([
+				{
+					id: "grant-old",
+					organization_id: "org-1",
+					customer_id: "teacher-1",
+					entitlement_class: "teacher_membership",
+					offering_id: "offering-1",
+					duration_days: 365,
+					division_id: "div-1",
+					division_name_snapshot: "Junior Piano",
+					paid_amount: "50.00",
+					paid_currency_code: "USD",
+					checkout_intent_id: "intent-old",
+					shopify_order_gid: "gid://shopify/Order/1",
+					shopify_order_line_gid: "gid://shopify/LineItem/1",
+					starts_on: "2026-01-01",
+					ends_on: "2027-01-01",
+					superseded_on: "2026-12-15",
+					superseded_at: "2026-12-15T12:00:00.000Z",
+					superseded_by_grant_id: "grant-new",
+					status: "active",
+					created_at: "2026-01-01T00:00:00.000Z",
+				},
+			]);
+
+			const grants = await repo.listEntitlementGrantSnapshots(
+				"org-1",
+				"teacher-1",
+			);
+
+			expect(grants).toEqual([
+				{
+					id: "grant-old",
+					organizationId: "org-1",
+					customerId: "teacher-1",
+					entitlementClass: "teacher_membership",
+					offeringId: "offering-1",
+					durationDays: 365,
+					divisionId: "div-1",
+					divisionNameSnapshot: "Junior Piano",
+					paidAmount: "50.00",
+					paidCurrencyCode: "USD",
+					checkoutIntentId: "intent-old",
+					shopifyOrderGid: "gid://shopify/Order/1",
+					shopifyOrderLineGid: "gid://shopify/LineItem/1",
+					startsOn: "2026-01-01",
+					endsOn: "2027-01-01",
+					supersededOn: "2026-12-15",
+					supersededAt: "2026-12-15T12:00:00.000Z",
+					supersededByGrantId: "grant-new",
+					status: "active",
+					createdAtIso: "2026-01-01T00:00:00.000Z",
+				},
+			]);
+			expect(unsafeSpy).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"WHEN e.superseded_on IS NOT NULL AND e.superseded_on <= (NOW() AT TIME ZONE o.timezone)::date THEN 'superseded'",
+				),
+				["org-1", "teacher-1"],
+			);
+		});
+
+		it("listActiveTeachersForDivision and getPublicDirectoryProfiles filter out superseded grants", async () => {
+			unsafeSpy.mockResolvedValueOnce([{ id: "teacher-1", name: "Teacher 1" }]);
+			const teachers = await repo.listActiveTeachersForDivision(
+				"org-1",
+				"div-1",
+			);
+			expect(teachers).toEqual([{ id: "teacher-1", name: "Teacher 1" }]);
+			expect(unsafeSpy).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"AND (e.superseded_on IS NULL OR e.superseded_on > (NOW() AT TIME ZONE o.timezone)::date)",
+				),
+				["org-1", "div-1"],
+			);
+
+			unsafeSpy
+				.mockResolvedValueOnce([{ customer_id: "teacher-1" }])
+				.mockResolvedValueOnce([])
+				.mockResolvedValueOnce([])
+				.mockResolvedValueOnce([]);
+			await repo.getPublicDirectoryProfiles("org-1");
+			expect(unsafeSpy).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"AND (e.superseded_on IS NULL OR e.superseded_on > (NOW() AT TIME ZONE o.timezone)::date)",
+				),
+				["org-1"],
+			);
 		});
 	});
 });

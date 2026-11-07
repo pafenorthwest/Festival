@@ -429,6 +429,7 @@ export function buildRepertoireRoutes(
 					title: validation.data.title,
 					composerName: validation.data.composer,
 					imslpUrl: validation.data.imslpUrl,
+					classifications: validation.data.classifications,
 				});
 				c.status(201);
 				return c.json({ work });

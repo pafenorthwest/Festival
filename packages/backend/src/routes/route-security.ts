@@ -10,13 +10,35 @@ export const ROUTE_AUTHENTICATION_CLASSES = [
 	"customer",
 	"shopify-webhook",
 	"private-service",
+	"private-runtime",
+	"private-operator",
+	"private-event-bus",
 ] as const;
 
 export type RouteAuthenticationClass =
 	(typeof ROUTE_AUTHENTICATION_CLASSES)[number];
 
+export function isPrivateRouteAuthenticationClass(
+	authenticationClass: RouteAuthenticationClass,
+): boolean {
+	return authenticationClass.startsWith("private-");
+}
+
+function isAllowedPrivateRoutePath(path: string): boolean {
+	return path === "/health" || path.startsWith("/api/internal/");
+}
+
+function isReservedPrivateSurfacePath(path: string): boolean {
+	return (
+		path === "/health" ||
+		/^\/(?:api\/)?(?:internal|metrics|ready|readiness|diagnostics|debug|jobs|workers|queues|operator)(?:\/|$)/.test(
+			path,
+		)
+	);
+}
+
 export interface RouteSecurityDeclaration {
-	method: "GET" | "HEAD" | "POST" | "PATCH" | "DELETE";
+	method: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE";
 	path: string;
 	authenticationClass: RouteAuthenticationClass;
 }
@@ -52,6 +74,26 @@ export const CURRENT_ROUTE_SECURITY = [
 	{
 		method: "POST",
 		path: "/api/organizations/:slug/admin/entitlements/:entitlementId/revoke",
+		authenticationClass: "admin",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/admin/entitlements/operations",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/entitlements/reconcile",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/entitlements/decisions/:decisionId/decline",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/entitlements/decisions/:decisionId/approve",
 		authenticationClass: "admin",
 	},
 	{
@@ -176,6 +218,11 @@ export const CURRENT_ROUTE_SECURITY = [
 	},
 	{
 		method: "GET",
+		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/registration/concerto-catalog",
+		authenticationClass: "customer",
+	},
+	{
+		method: "GET",
 		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/registration/accompanists",
 		authenticationClass: "customer",
 	},
@@ -193,6 +240,31 @@ export const CURRENT_ROUTE_SECURITY = [
 		method: "POST",
 		path: "/api/internal/reconcile/firebase-claims",
 		authenticationClass: "private-service",
+	},
+	{
+		method: "GET",
+		path: "/api/internal/ready",
+		authenticationClass: "private-runtime",
+	},
+	{
+		method: "GET",
+		path: "/api/internal/diagnostics",
+		authenticationClass: "private-runtime",
+	},
+	{
+		method: "GET",
+		path: "/api/internal/metrics",
+		authenticationClass: "private-runtime",
+	},
+	{
+		method: "GET",
+		path: "/api/internal/operator/status",
+		authenticationClass: "private-operator",
+	},
+	{
+		method: "POST",
+		path: "/api/internal/events/shopify-orders-paid",
+		authenticationClass: "private-event-bus",
 	},
 	{
 		method: "GET",
@@ -263,6 +335,11 @@ export const CURRENT_ROUTE_SECURITY = [
 		authenticationClass: "admin",
 	},
 	{
+		method: "GET",
+		path: "/api/organizations/:slug/admin/entitlements",
+		authenticationClass: "admin",
+	},
+	{
 		method: "DELETE",
 		path: "/api/organizations/:slug/admin/memberships/:membershipId",
 		authenticationClass: "admin",
@@ -290,6 +367,16 @@ export const CURRENT_ROUTE_SECURITY = [
 	{
 		method: "GET",
 		path: "/api/organizations/:slug/admin/festivals/:festivalShortName",
+		authenticationClass: "admin",
+	},
+	{
+		method: "PUT",
+		path: "/api/organizations/:slug/admin/festivals/:festivalShortName/registration-window",
+		authenticationClass: "admin",
+	},
+	{
+		method: "PATCH",
+		path: "/api/organizations/:slug/admin/festivals/:festivalShortName/registration-window",
 		authenticationClass: "admin",
 	},
 	{
@@ -365,6 +452,11 @@ export const CURRENT_ROUTE_SECURITY = [
 	{
 		method: "POST",
 		path: "/api/organizations/:slug/admin/membership-products",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/membership-products/:offeringId",
 		authenticationClass: "admin",
 	},
 	{
@@ -649,6 +741,31 @@ export const CURRENT_ROUTE_SECURITY = [
 		authenticationClass: "admin",
 	},
 	{
+		method: "POST",
+		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/classes/:classId/waitlist",
+		authenticationClass: "customer",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/classes/:classId/waitlist/withdraw",
+		authenticationClass: "customer",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/classes/:classId/waitlist",
+		authenticationClass: "customer",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/waitlist",
+		authenticationClass: "customer",
+	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/festivals/:festivalShortName/classes/:classId/waitlist",
+		authenticationClass: "admin",
+	},
+	{
 		method: "GET",
 		path: "/api/organizations/:slug/communication/templates",
 		authenticationClass: "tenant",
@@ -673,6 +790,61 @@ export const CURRENT_ROUTE_SECURITY = [
 		path: "/api/organizations/:slug/communication/events",
 		authenticationClass: "tenant",
 	},
+	{
+		method: "GET",
+		path: "/api/organizations/:slug/customer-account/availability",
+		authenticationClass: "customer",
+	},
+	{
+		method: "PUT",
+		path: "/api/organizations/:slug/customer-account/availability",
+		authenticationClass: "customer",
+	},
+	{
+		method: "GET",
+		path: "/api/customer/orgs/:orgSlug/profiles/teacher",
+		authenticationClass: "customer",
+	},
+	{
+		method: "PUT",
+		path: "/api/customer/orgs/:orgSlug/profiles/teacher",
+		authenticationClass: "customer",
+	},
+	{
+		method: "GET",
+		path: "/api/customer/orgs/:orgSlug/profiles/accompanist",
+		authenticationClass: "customer",
+	},
+	{
+		method: "PUT",
+		path: "/api/customer/orgs/:orgSlug/profiles/accompanist",
+		authenticationClass: "customer",
+	},
+	{
+		method: "GET",
+		path: "/api/admin/orgs/:orgSlug/profiles/teachers",
+		authenticationClass: "admin",
+	},
+	{
+		method: "PATCH",
+		path: "/api/admin/orgs/:orgSlug/profiles/teachers/:profileId/approval",
+		authenticationClass: "admin",
+	},
+	{
+		method: "GET",
+		path: "/api/admin/orgs/:orgSlug/profiles/accompanists",
+		authenticationClass: "admin",
+	},
+	{
+		method: "PATCH",
+		path: "/api/admin/orgs/:orgSlug/profiles/accompanists/:profileId/approval",
+		authenticationClass: "admin",
+	},
+	{
+		method: "GET",
+		path: "/api/org-info/:orgSlug/directory/profiles",
+		authenticationClass: "public",
+	},
 ] as const satisfies readonly RouteSecurityDeclaration[];
 
 interface RegisteredRoute {
@@ -694,6 +866,19 @@ export function assertRouteSecurityInventory(
 		if (declaredKeys.has(key)) {
 			throw new Error(`Duplicate route security declaration: ${key}`);
 		}
+		const isPrivateClass = isPrivateRouteAuthenticationClass(
+			declaration.authenticationClass,
+		);
+		if (isPrivateClass && !isAllowedPrivateRoutePath(declaration.path)) {
+			throw new Error(
+				`Private route boundary violation for ${key}: private authentication classes must use /health or /api/internal/*.`,
+			);
+		}
+		if (!isPrivateClass && isReservedPrivateSurfacePath(declaration.path)) {
+			throw new Error(
+				`Private route boundary violation for ${key}: reserved private runtime paths cannot use public or browser authentication classes.`,
+			);
+		}
 		declaredKeys.add(key);
 	}
 
@@ -701,7 +886,10 @@ export function assertRouteSecurityInventory(
 		routes
 			.filter(
 				(route) =>
-					!(route.method.toUpperCase() === "ALL" && route.path === "/api/*"),
+					!(
+						route.method.toUpperCase() === "ALL" &&
+						(route.path === "/api/*" || route.path === "/api/internal/*")
+					),
 			)
 			.map(routeKey),
 	);

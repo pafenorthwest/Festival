@@ -1,4 +1,10 @@
-import type { FestivalClassConfiguration } from "@festival/common";
+import {
+	type ClassCapacityStatus,
+	DEFAULT_FESTIVAL_CLASS_CAPACITY,
+	evaluateClassCapacityStatus,
+	type FestivalClassCapacityAuditRecord,
+	type FestivalClassConfiguration,
+} from "@festival/common";
 import { AppError } from "../errors/app-error.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
 import type { UpdateFestivalClassInput } from "./admin-class-catalog-types.js";
@@ -7,6 +13,13 @@ import {
 	validateUpdateClassInput,
 } from "./admin-class-catalog-validation.js";
 import type { AdminClassShopifySync } from "./admin-class-shopify-sync.js";
+
+export interface ClassCapacityCommerceSource {
+	countConfirmedClassEntitlements(
+		organizationId: string,
+		festivalClassId: string,
+	): Promise<number>;
+}
 
 async function resolveFestival(
 	repo: OrganizationRepository,
@@ -85,6 +98,7 @@ export class AdminClassCatalogService {
 	constructor(
 		readonly repository: OrganizationRepository,
 		readonly shopifySync: AdminClassShopifySync,
+		private readonly commerce?: ClassCapacityCommerceSource,
 	) {}
 
 	async listClasses(
@@ -130,15 +144,20 @@ export class AdminClassCatalogService {
 			actorUid,
 		);
 		try {
-			return await this.repository.createFestivalClassConfiguration({
-				...input,
-				organizationId: org.id,
-				festivalId: festival.id,
-				maximumPerformancePieces: input.maximumPerformancePieces ?? 1,
-				capacity: input.capacity ?? 100,
-				shopifyProductGid: gids.shopifyProductGid,
-				shopifyVariantGid: gids.shopifyVariantGid,
-			});
+			const created =
+				await this.repository.createFestivalClassConfigurationWithCapacityAudit(
+					{
+						...input,
+						organizationId: org.id,
+						festivalId: festival.id,
+						maximumPerformancePieces: input.maximumPerformancePieces ?? 1,
+						capacity: input.capacity ?? DEFAULT_FESTIVAL_CLASS_CAPACITY,
+						shopifyProductGid: gids.shopifyProductGid,
+						shopifyVariantGid: gids.shopifyVariantGid,
+					},
+					actorUid,
+				);
+			return created;
 		} catch (error) {
 			await this.shopifySync.tryCleanupProductGid(
 				org.id,
@@ -183,12 +202,57 @@ export class AdminClassCatalogService {
 			input,
 			actorUid,
 		);
-		return this.repository.updateFestivalClassConfiguration({
-			...input,
-			id: classId,
-			organizationId: org.id,
-			festivalId: festival.id,
-		});
+		const commerce = this.commerce;
+		const updated =
+			await this.repository.updateFestivalClassConfigurationWithCapacityAudit(
+				{
+					...input,
+					id: classId,
+					organizationId: org.id,
+					festivalId: festival.id,
+				},
+				actorUid,
+				commerce
+					? () => commerce.countConfirmedClassEntitlements(org.id, classId)
+					: undefined,
+			);
+		return updated;
+	}
+
+	async getClassCapacityStatus(
+		orgSlug: string,
+		festivalShortName: string,
+		classId: string,
+	): Promise<ClassCapacityStatus> {
+		const { org, festival } = await resolveFestival(
+			this.repository,
+			orgSlug,
+			festivalShortName,
+		);
+		const existing = await findExistingClass(
+			this.repository,
+			org.id,
+			festival.id,
+			classId,
+		);
+		const placedCount = this.commerce
+			? await this.commerce.countConfirmedClassEntitlements(org.id, classId)
+			: 0;
+		return evaluateClassCapacityStatus(existing.capacity, placedCount);
+	}
+
+	async listClassCapacityAudits(
+		orgSlug: string,
+		festivalShortName: string,
+		classId: string,
+	): Promise<FestivalClassCapacityAuditRecord[]> {
+		const { org, festival } = await resolveFestival(
+			this.repository,
+			orgSlug,
+			festivalShortName,
+		);
+		await findExistingClass(this.repository, org.id, festival.id, classId);
+		return this.repository.listFestivalClassCapacityAudits(org.id, classId);
 	}
 
 	async deactivateClass(

@@ -1,7 +1,10 @@
 import type {
 	ClassEntitlement,
 	ClassEntitlementStatus,
+	RegistrationEligibleClass,
 } from "./entitlements.js";
+
+export type { RegistrationEligibleClass };
 
 export interface RepertoirePiece {
 	title: string;
@@ -10,6 +13,7 @@ export interface RepertoirePiece {
 	/** Positive whole seconds. */
 	durationSeconds: number;
 	durationMinutes?: number;
+	catalogWorkId?: string | null;
 }
 
 /** Roles supported by an organization-owned repertoire catalog. */
@@ -61,6 +65,44 @@ export interface ClassRegistrationRequest {
 	buyerAccessToken: string;
 }
 
+/** Original validated selection. Later registration edits never replace this record. */
+export interface ClassRegistrationSnapshot {
+	version: 1;
+	capturedAtIso: string;
+	class: {
+		id: string;
+		festivalId: string;
+		displayName: string;
+		classSubtypeId: string;
+		classSubtypeName: string | null;
+		minimumAge: number;
+		maximumAge: number;
+		price: string;
+		currencyCode: string;
+		maximumPerformancePieces: 1 | 2 | 3;
+		performanceMinutes: number;
+		capacity: number;
+	};
+	division: { id: string; name: string | null };
+	instrument: { id: string; name: string } | "unknown";
+	teacher: { customerId: string; membershipId: string; name: string | null };
+	accompanist: {
+		customerId: string;
+		membershipId: string;
+		name: string | null;
+	} | null;
+	repertoire: RepertoirePiece[];
+}
+
+/** Normalize older stored selections without inventing an absent historical snapshot. */
+export function normalizeClassRegistrationSnapshot(
+	snapshot: ClassRegistrationSnapshot | null | undefined,
+): ClassRegistrationSnapshot | null {
+	return snapshot
+		? { ...snapshot, instrument: snapshot.instrument ?? "unknown" }
+		: null;
+}
+
 export interface ClassRegistrationMetadata {
 	id: string;
 	organizationId: string;
@@ -73,6 +115,8 @@ export interface ClassRegistrationMetadata {
 	/** Legacy raw submission retained during the relational-repertoire transition. */
 	repertoireJson: RepertoirePiece[];
 	repertoireItems: RegistrationRepertoireItem[];
+	/** Null/absent on historical checkouts whose original selection was not captured. */
+	registrationSnapshot?: ClassRegistrationSnapshot | null;
 	createdAt: Date;
 }
 
@@ -333,10 +377,10 @@ function parseInteger(
 	return value;
 }
 
-function validateRepertoirePiece(
+export function validateRepertoirePiece(
 	item: unknown,
-	index: number,
-	errors: string[],
+	index = 0,
+	errors: string[] = [],
 ): RepertoirePiece | null {
 	const piece = asObject(item);
 	if (!piece) {
@@ -347,6 +391,7 @@ function validateRepertoirePiece(
 	const composer = asTrimmed(piece.composer);
 	const movement = asTrimmed(piece.movement) || null;
 	const durationSeconds = piece.durationSeconds;
+	let catalogWorkId: string | undefined;
 
 	if (!title) errors.push(`Piece at index ${index} requires a title.`);
 	if (!composer) errors.push(`Piece at index ${index} requires a composer.`);
@@ -359,6 +404,16 @@ function validateRepertoirePiece(
 			`Piece at index ${index} durationSeconds must be a positive integer.`,
 		);
 	}
+	if (piece.catalogWorkId !== undefined && piece.catalogWorkId !== null) {
+		if (
+			typeof piece.catalogWorkId !== "string" ||
+			piece.catalogWorkId.trim().length === 0
+		) {
+			errors.push("Each repertoire piece must have a valid catalog work ID.");
+		} else {
+			catalogWorkId = piece.catalogWorkId.trim();
+		}
+	}
 
 	if (errors.length > 0) return null;
 	return {
@@ -366,6 +421,7 @@ function validateRepertoirePiece(
 		composer,
 		...(movement ? { movement } : {}),
 		durationSeconds: durationSeconds as number,
+		...(catalogWorkId ? { catalogWorkId } : {}),
 	};
 }
 

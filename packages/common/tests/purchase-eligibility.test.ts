@@ -6,8 +6,12 @@ import type {
 	RegistrationCatalogValue,
 } from "../src/index.js";
 import {
+	countPlacedEntitlementsForClass,
+	DEFAULT_FESTIVAL_CLASS_CAPACITY,
+	evaluateClassCapacityStatus,
 	evaluatePurchaseEligibility,
 	isEligibilityReasonCode,
+	isPlacedEntitlement,
 } from "../src/index.js";
 
 const ORG_ID = "org-1";
@@ -399,6 +403,60 @@ describe("evaluatePurchaseEligibility", () => {
 
 		expect(res.isEligible).toBe(false);
 		expect(res.results[0].reasonCode).toBe("SOLD_OUT");
+		expect(res.results[0].availability).toBe("waitlist");
+		expect(res.results[0].capacity).toBe(1);
+		expect(res.results[0].placedCount).toBe(1);
+	});
+
+	it("enriches open and waitlist items with availability, capacity, and placedCount metadata", () => {
+		const openClass = createClass("class-open", SUBTYPE_SOLO, {
+			capacity: 2,
+		});
+		const waitlistClass = createClass("class-waitlist", SUBTYPE_SOLO, {
+			capacity: 1,
+		});
+		const existingOpen = createEntitlement(
+			"class-open",
+			"child-other-1",
+			"confirmed",
+		);
+		const existingWaitlist = createEntitlement(
+			"class-waitlist",
+			"child-other-2",
+			"confirmed",
+		);
+
+		const res = evaluatePurchaseEligibility({
+			organizationId: ORG_ID,
+			festivalId: FESTIVAL_ID,
+			items: [
+				{ childId: "child-1", festivalClassId: "class-open" },
+				{ childId: "child-1", festivalClassId: "class-waitlist" },
+			],
+			classes: [openClass, waitlistClass],
+			subtypes: defaultSubtypes,
+			activeEntitlements: [existingOpen, existingWaitlist],
+		});
+
+		expect(res.isEligible).toBe(false);
+		expect(res.results[0]).toMatchObject({
+			childId: "child-1",
+			festivalClassId: "class-open",
+			isEligible: true,
+			reasonCode: "AVAILABLE",
+			availability: "open",
+			capacity: 2,
+			placedCount: 1,
+		});
+		expect(res.results[1]).toMatchObject({
+			childId: "child-1",
+			festivalClassId: "class-waitlist",
+			isEligible: false,
+			reasonCode: "SOLD_OUT",
+			availability: "waitlist",
+			capacity: 1,
+			placedCount: 1,
+		});
 	});
 
 	it("accepts classes and subtypes passed as Maps or Arrays", () => {
@@ -492,5 +550,80 @@ describe("evaluatePurchaseEligibility", () => {
 		expect(res.results[0].satisfiedPrerequisites?.[0].satisfiedBy).toBe(
 			"entitlement",
 		);
+	});
+
+	it("counts only confirmed entitlements toward capacity and ignores waitlisted, cancelled, or revoked", () => {
+		const smallClass = createClass("class-small", SUBTYPE_SOLO, {
+			capacity: 1,
+		});
+		const waitlisted = createEntitlement(
+			"class-small",
+			"child-waitlisted",
+			"waitlisted",
+		);
+		const cancelled = createEntitlement(
+			"class-small",
+			"child-cancelled",
+			"cancelled",
+		);
+		const revoked = createEntitlement(
+			"class-small",
+			"child-revoked",
+			"revoked",
+		);
+
+		const res = evaluatePurchaseEligibility({
+			organizationId: ORG_ID,
+			festivalId: FESTIVAL_ID,
+			items: [{ childId: "child-1", festivalClassId: "class-small" }],
+			classes: [smallClass],
+			subtypes: defaultSubtypes,
+			activeEntitlements: [waitlisted, cancelled, revoked],
+		});
+
+		expect(res.isEligible).toBe(true);
+		expect(res.results[0].reasonCode).toBe("AVAILABLE");
+		expect(
+			countPlacedEntitlementsForClass(
+				[
+					waitlisted,
+					cancelled,
+					revoked,
+					createEntitlement("class-small", "child-confirmed", "confirmed"),
+				],
+				ORG_ID,
+				FESTIVAL_ID,
+				"class-small",
+			),
+		).toBe(1);
+		expect(isPlacedEntitlement("confirmed")).toBe(true);
+		expect(isPlacedEntitlement("waitlisted")).toBe(false);
+		expect(isPlacedEntitlement("cancelled")).toBe(false);
+		expect(isPlacedEntitlement("revoked")).toBe(false);
+	});
+
+	it("evaluates class capacity status across open, exact capacity, and over-capacity states", () => {
+		expect(DEFAULT_FESTIVAL_CLASS_CAPACITY).toBe(100);
+		expect(evaluateClassCapacityStatus(10, 4)).toEqual({
+			capacity: 10,
+			placedCount: 4,
+			remainingSpots: 6,
+			isOverCapacity: false,
+			availability: "open",
+		});
+		expect(evaluateClassCapacityStatus(10, 10)).toEqual({
+			capacity: 10,
+			placedCount: 10,
+			remainingSpots: 0,
+			isOverCapacity: false,
+			availability: "waitlist",
+		});
+		expect(evaluateClassCapacityStatus(10, 12)).toEqual({
+			capacity: 10,
+			placedCount: 12,
+			remainingSpots: 0,
+			isOverCapacity: true,
+			availability: "waitlist",
+		});
 	});
 });

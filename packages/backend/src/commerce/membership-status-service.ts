@@ -81,6 +81,7 @@ export class MembershipStatusService {
 				durationDays: grant.durationDays,
 				startsOn: grant.startsOn,
 				endsOn: grant.endsOn,
+				supersededOn: grant.supersededOn ?? null,
 			}),
 		);
 		const accompanistEntitlements: CustomerMembershipStatusEntry[] =

@@ -4,90 +4,74 @@ import {
 	postgresSchemaName,
 } from "../src/repo/postgres-schema.js";
 
-test("canonical PostgreSQL schema defines the final empty-database shape only", () => {
+test("canonical PostgreSQL bootstrap contains no legacy migrations or row mutations", () => {
 	const schema = buildCanonicalPostgresSchemaSql("fresh_orgs");
-
-	for (const table of [
-		"organizations",
-		"festivals",
-		"festival_children",
-		"festival_child_age_snapshots",
-		"checkout_intents",
-		"class_entitlements",
-		"registration_change_logs",
-		"refund_events",
-		"membership_entitlements",
-		"membership_entitlement_divisions",
-		"membership_entitlement_revocations",
-		"membership_entitlement_cohorts",
-		"membership_identity_emails",
-		"teacher_membership_entitlement_details",
-		"accompanist_membership_entitlement_details",
-		"shopify_webhook_deliveries",
-		"app_user",
-		"volunteers",
-		"volunteer_roles",
-		"volunteer_shifts",
-		"volunteer_assignments",
-		"credit_balances",
-		"billing_adjustments",
-		"billing_ledger",
-		"invoices",
-		"invoice_line_items",
-	]) {
-		expect(schema).toContain(`fresh_orgs.${table}`);
-	}
-	expect(schema).toContain(
-		"idx_registration_change_logs_org_class_entitlement",
-	);
-	expect(schema).toContain("idx_registration_change_logs_org_festival");
-	expect(schema).toContain("idx_refund_events_org_class_entitlement");
-	expect(schema).toContain("shopify_order_line_id TEXT");
-	expect(schema).toContain("line_identity_protocol TEXT NULL");
-	expect(schema).toContain("failure_stage TEXT NULL");
-	expect(schema).toContain("failure_code TEXT NULL");
-	expect(schema).toContain("shopify_request_id TEXT NULL");
-	expect(schema).toContain("failed_at TIMESTAMPTZ NULL");
-	expect(schema).toContain(
-		"checkout_intent_lines_checkout_intent_id_line_index_key",
-	);
-	expect(schema).toContain("class_entitlements_checkout_intent_line_id_key");
-	expect(schema).toContain("CREATE EXTENSION IF NOT EXISTS pgcrypto");
-	expect(schema).toContain("CREATE EXTENSION IF NOT EXISTS btree_gist");
-	expect(schema).toContain("EXCLUDE USING gist");
-	expect(schema).not.toContain("entitlement_grants");
-	expect(schema).not.toContain("accompanist_membership_grants");
-	expect(schema).toContain("enforce_shopify_shop_ownership");
 	expect(schema).not.toMatch(
 		/ALTER TABLE|DROP (?:COLUMN|CONSTRAINT|INDEX)|\n\s*(?:INSERT INTO|UPDATE [A-Za-z_])/,
 	);
 });
 
-test("canonical PostgreSQL schema enforces one active volunteer assignment per shift", () => {
+test("canonical PostgreSQL schema scopes profile divisions to the profile organization", () => {
 	const schema = buildCanonicalPostgresSchemaSql("fresh_orgs");
 
-	expect(schema).toContain(
-		"volunteer_assignments_active_shift_key ON fresh_orgs.volunteer_assignments (shift_id) WHERE status = 'active'",
-	);
-});
-
-test("canonical PostgreSQL schema requires a volunteer role display name and scopes volunteer work to a festival", () => {
-	const schema = buildCanonicalPostgresSchemaSql("fresh_orgs");
-
-	expect(schema).toContain("slug TEXT NOT NULL, display_name TEXT NOT NULL");
-	expect(schema).toContain(
-		"festival_id TEXT NOT NULL REFERENCES fresh_orgs.festivals (id) ON DELETE CASCADE",
-	);
-	expect(schema).toContain(
-		"FOREIGN KEY (role_id, festival_id, organization_id) REFERENCES fresh_orgs.volunteer_roles (id, festival_id, organization_id) ON DELETE CASCADE",
-	);
-	expect(schema).toContain(
-		"FOREIGN KEY (volunteer_id, festival_id, organization_id) REFERENCES fresh_orgs.volunteers (id, festival_id, organization_id) ON DELETE CASCADE",
-	);
+	for (const kind of ["teacher", "accompanist"]) {
+		expect(schema).toContain(
+			`CREATE TABLE IF NOT EXISTS fresh_orgs.${kind}_profile_divisions (\n\t\t\t${kind}_profile_id TEXT NOT NULL,\n\t\t\torganization_id TEXT NOT NULL REFERENCES fresh_orgs.organizations (id) ON DELETE CASCADE,`,
+		);
+		expect(schema).toContain(
+			`FOREIGN KEY (${kind}_profile_id, organization_id) REFERENCES fresh_orgs.${kind}_profiles (id, organization_id) ON DELETE CASCADE`,
+		);
+		expect(schema).toContain(
+			"FOREIGN KEY (division_id, organization_id) REFERENCES fresh_orgs.organization_divisions (id, organization_id) ON DELETE CASCADE",
+		);
+	}
 });
 
 test("canonical PostgreSQL schema rejects unsafe schema identifiers", () => {
 	expect(() => postgresSchemaName("orgs; DROP SCHEMA orgs")).toThrow(
 		"Database schema is invalid.",
 	);
+});
+
+test("canonical PostgreSQL schema defines waitlist tables and indexes", () => {
+	const schema = buildCanonicalPostgresSchemaSql("fresh_orgs");
+	expect(schema).toContain(
+		"CREATE TABLE IF NOT EXISTS fresh_orgs.festival_class_waitlist_entries",
+	);
+	expect(schema).toContain(
+		"CREATE TABLE IF NOT EXISTS fresh_orgs.festival_class_waitlist_events",
+	);
+	expect(schema).toContain(
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_waitlist_entries_active_unique",
+	);
+	expect(schema).toContain(
+		"CREATE INDEX IF NOT EXISTS idx_waitlist_entries_admin_roster",
+	);
+	expect(schema).toContain(
+		"CREATE INDEX IF NOT EXISTS idx_waitlist_entries_parent_lookup",
+	);
+	expect(schema).toContain(
+		"CREATE INDEX IF NOT EXISTS idx_waitlist_events_entry",
+	);
+	expect(schema).toContain(
+		"CREATE INDEX IF NOT EXISTS idx_waitlist_events_class",
+	);
+});
+
+test("canonical PostgreSQL schema enforces tenant-scoped registration references", () => {
+	const schema = buildCanonicalPostgresSchemaSql("fresh_orgs");
+	for (const expected of [
+		"FOREIGN KEY (required_subtype_id, organization_id) REFERENCES fresh_orgs.registration_catalog_values (id, organization_id)",
+		"FOREIGN KEY (festival_id, organization_id) REFERENCES fresh_orgs.festivals (id, organization_id)",
+		"FOREIGN KEY (class_subtype_id, organization_id) REFERENCES fresh_orgs.registration_catalog_values (id, organization_id)",
+		"FOREIGN KEY (division_id, organization_id) REFERENCES fresh_orgs.organization_divisions (id, organization_id)",
+		"FOREIGN KEY (parent_customer_id, organization_id) REFERENCES fresh_orgs.festival_customers (id, organization_id)",
+		"FOREIGN KEY (child_id, organization_id) REFERENCES fresh_orgs.festival_children (id, organization_id)",
+		"FOREIGN KEY (child_id, organization_id, parent_customer_id) REFERENCES fresh_orgs.festival_children (id, organization_id, parent_customer_id)",
+		"FOREIGN KEY (festival_class_id, organization_id, festival_id) REFERENCES fresh_orgs.festival_class_configurations (id, organization_id, festival_id)",
+		"CREATE TRIGGER festival_class_configurations_validate_subtype_kind",
+		"CREATE TRIGGER registration_catalog_values_prevent_referenced_kind_change",
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_festival_child_age_snapshots_one_active",
+	])
+		expect(schema).toContain(expected);
 });

@@ -76,6 +76,8 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			name TEXT NOT NULL,
 			start_date DATE NOT NULL,
 			end_date DATE NOT NULL,
+			registration_opens_at TIMESTAMPTZ NULL,
+			registration_closes_at TIMESTAMPTZ NULL,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			UNIQUE (id, organization_id)
 		);
@@ -150,9 +152,11 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			display_name TEXT NOT NULL, normalized_name TEXT NOT NULL,
 			is_active BOOLEAN NOT NULL DEFAULT TRUE,
 			display_order INTEGER NOT NULL CHECK (display_order >= 0),
-			required_subtype_id TEXT NULL REFERENCES ${safeSchema}.registration_catalog_values (id) ON DELETE SET NULL,
+			required_subtype_id TEXT NULL,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			UNIQUE (organization_id, kind, normalized_name), UNIQUE (organization_id, kind, display_order),
+			UNIQUE (id, organization_id),
+			FOREIGN KEY (required_subtype_id, organization_id) REFERENCES ${safeSchema}.registration_catalog_values (id, organization_id) ON DELETE SET NULL (required_subtype_id),
 			CHECK (required_subtype_id IS NULL OR required_subtype_id <> id)
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.festival_class_configurations (
@@ -168,14 +172,33 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			is_active BOOLEAN NOT NULL DEFAULT TRUE,
 			shopify_product_gid TEXT NOT NULL UNIQUE, shopify_variant_gid TEXT NOT NULL UNIQUE,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			CHECK (minimum_age >= 0 AND maximum_age >= minimum_age AND maximum_performance_pieces IN (1, 2, 3) AND performance_minutes > 0 AND capacity > 0)
+			CHECK (minimum_age >= 0 AND maximum_age >= minimum_age AND maximum_performance_pieces IN (1, 2, 3) AND performance_minutes > 0 AND capacity > 0),
+			UNIQUE (id, organization_id), UNIQUE (id, organization_id, festival_id),
+			FOREIGN KEY (festival_id, organization_id) REFERENCES ${safeSchema}.festivals (id, organization_id) ON DELETE RESTRICT,
+			FOREIGN KEY (class_subtype_id, organization_id) REFERENCES ${safeSchema}.registration_catalog_values (id, organization_id) ON DELETE RESTRICT,
+			FOREIGN KEY (division_id, organization_id) REFERENCES ${safeSchema}.organization_divisions (id, organization_id) ON DELETE RESTRICT
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.festival_class_capacity_audit_logs (
+			id TEXT PRIMARY KEY,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			festival_id TEXT NOT NULL REFERENCES ${safeSchema}.festivals (id) ON DELETE CASCADE,
+			festival_class_id TEXT NOT NULL REFERENCES ${safeSchema}.festival_class_configurations (id) ON DELETE CASCADE,
+			actor_uid TEXT NULL,
+			action TEXT NOT NULL CHECK (action IN ('class_created', 'capacity_updated')),
+			previous_capacity INTEGER NULL CHECK (previous_capacity IS NULL OR previous_capacity > 0),
+			new_capacity INTEGER NOT NULL CHECK (new_capacity > 0),
+			placed_count_at_change INTEGER NOT NULL CHECK (placed_count_at_change >= 0),
+			availability_after_change TEXT NOT NULL CHECK (availability_after_change IN ('open', 'waitlist')),
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			FOREIGN KEY (festival_class_id, organization_id, festival_id) REFERENCES ${safeSchema}.festival_class_configurations (id, organization_id, festival_id) ON DELETE CASCADE
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.festival_class_subtypes (
 			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
 			festival_id TEXT NOT NULL REFERENCES ${safeSchema}.festivals (id) ON DELETE CASCADE,
 			class_subtype_id TEXT NOT NULL REFERENCES ${safeSchema}.registration_catalog_values (id) ON DELETE RESTRICT,
 			PRIMARY KEY (festival_id, class_subtype_id),
-			FOREIGN KEY (festival_id, organization_id) REFERENCES ${safeSchema}.festivals (id, organization_id) ON DELETE CASCADE
+			FOREIGN KEY (festival_id, organization_id) REFERENCES ${safeSchema}.festivals (id, organization_id) ON DELETE CASCADE,
+			FOREIGN KEY (class_subtype_id, organization_id) REFERENCES ${safeSchema}.registration_catalog_values (id, organization_id) ON DELETE RESTRICT
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.festival_customers (
 			id TEXT PRIMARY KEY,
@@ -219,11 +242,60 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.festival_children (
 			id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, parent_customer_id TEXT NOT NULL,
-			display_name TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL
+			display_name TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL,
+			UNIQUE (id, organization_id), UNIQUE (id, organization_id, parent_customer_id),
+			FOREIGN KEY (organization_id) REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			FOREIGN KEY (parent_customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers (id, organization_id) ON DELETE CASCADE
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.festival_child_age_snapshots (
 			id TEXT PRIMARY KEY, child_id TEXT NOT NULL, organization_id TEXT NOT NULL,
-			age INTEGER NOT NULL, created_at TIMESTAMPTZ NOT NULL, valid_until TIMESTAMPTZ NOT NULL, superseded_at TIMESTAMPTZ NULL
+			age INTEGER NOT NULL, created_at TIMESTAMPTZ NOT NULL, valid_until TIMESTAMPTZ NOT NULL, superseded_at TIMESTAMPTZ NULL,
+			FOREIGN KEY (child_id, organization_id) REFERENCES ${safeSchema}.festival_children (id, organization_id) ON DELETE CASCADE
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.festival_class_waitlist_entries (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			festival_id TEXT NOT NULL REFERENCES ${safeSchema}.festivals (id) ON DELETE CASCADE,
+			festival_class_id TEXT NOT NULL REFERENCES ${safeSchema}.festival_class_configurations (id) ON DELETE CASCADE,
+			parent_customer_id TEXT NOT NULL REFERENCES ${safeSchema}.festival_customers (id) ON DELETE CASCADE,
+			child_id TEXT NOT NULL REFERENCES ${safeSchema}.festival_children (id) ON DELETE CASCADE,
+			status TEXT NOT NULL CHECK (status IN ('active', 'withdrawn')),
+			joined_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+			withdrawn_at TIMESTAMPTZ,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+			UNIQUE (id, organization_id, festival_class_id, parent_customer_id, child_id),
+			FOREIGN KEY (festival_class_id, organization_id, festival_id) REFERENCES ${safeSchema}.festival_class_configurations (id, organization_id, festival_id) ON DELETE CASCADE,
+			FOREIGN KEY (parent_customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers (id, organization_id) ON DELETE CASCADE,
+			FOREIGN KEY (child_id, organization_id, parent_customer_id) REFERENCES ${safeSchema}.festival_children (id, organization_id, parent_customer_id) ON DELETE CASCADE
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.festival_class_waitlist_events (
+			id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			waitlist_entry_id UUID NOT NULL REFERENCES ${safeSchema}.festival_class_waitlist_entries (id) ON DELETE CASCADE,
+			festival_class_id TEXT NOT NULL REFERENCES ${safeSchema}.festival_class_configurations (id) ON DELETE CASCADE,
+			parent_customer_id TEXT NOT NULL REFERENCES ${safeSchema}.festival_customers (id) ON DELETE CASCADE,
+			child_id TEXT NOT NULL REFERENCES ${safeSchema}.festival_children (id) ON DELETE CASCADE,
+			action TEXT NOT NULL CHECK (action IN ('joined', 'withdrawn', 'rejoined')),
+			actor_type TEXT NOT NULL CHECK (actor_type IN ('parent', 'admin')),
+			actor_id TEXT NOT NULL,
+			occurred_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+			FOREIGN KEY (waitlist_entry_id, organization_id, festival_class_id, parent_customer_id, child_id)
+				REFERENCES ${safeSchema}.festival_class_waitlist_entries (id, organization_id, festival_class_id, parent_customer_id, child_id) ON DELETE CASCADE
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.customer_festival_availability (
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			festival_id TEXT NOT NULL REFERENCES ${safeSchema}.festivals (id) ON DELETE CASCADE,
+			customer_id TEXT NOT NULL,
+			subject_type TEXT NOT NULL CHECK (subject_type IN ('accompanist', 'child')),
+			subject_id TEXT NOT NULL,
+			festival_date DATE NOT NULL,
+			available_hours JSONB NOT NULL DEFAULT '[]'::jsonb,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (organization_id, festival_id, subject_type, subject_id, festival_date),
+			FOREIGN KEY (festival_id, organization_id) REFERENCES ${safeSchema}.festivals (id, organization_id) ON DELETE CASCADE,
+			FOREIGN KEY (customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers (id, organization_id) ON DELETE CASCADE,
+			CONSTRAINT chk_customer_festival_availability_hours CHECK (jsonb_typeof(available_hours) = 'array' AND available_hours <@ '[8,9,10,11,12,13,14,15,16,17]'::jsonb)
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.checkout_carts (
 			reference TEXT PRIMARY KEY, shopify_cart_id TEXT NOT NULL,
@@ -245,7 +317,10 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			amount TEXT NOT NULL, currency_code TEXT NOT NULL, line_identity_protocol TEXT NULL,
 			cart_reference TEXT NULL REFERENCES ${safeSchema}.checkout_carts (reference),
 			status TEXT NOT NULL CHECK (status IN ('creating', 'ready', 'checkout_started', 'failed', 'expired', 'superseded', 'approved', 'rejected', 'needs_review')),
-			expires_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			expires_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE (id, organization_id),
+			FOREIGN KEY (festival_class_id, organization_id) REFERENCES ${safeSchema}.festival_class_configurations (id, organization_id) ON DELETE RESTRICT,
+			FOREIGN KEY (child_id, organization_id) REFERENCES ${safeSchema}.festival_children (id, organization_id) ON DELETE RESTRICT
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.checkout_intent_lines (
 			id TEXT PRIMARY KEY,
@@ -273,7 +348,8 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			requested_by_actor_uid TEXT NOT NULL,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			expires_at TIMESTAMPTZ NOT NULL,
-			consumed_at TIMESTAMPTZ NULL
+			consumed_at TIMESTAMPTZ NULL,
+			FOREIGN KEY (source_checkout_intent_id, organization_id) REFERENCES ${safeSchema}.checkout_intents (id, organization_id) ON DELETE CASCADE
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.class_entitlements (
 			id TEXT PRIMARY KEY,
@@ -289,9 +365,15 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			paid_amount_cents INTEGER NOT NULL CHECK (paid_amount_cents >= 0),
 			paid_currency_code TEXT NOT NULL CHECK (paid_currency_code ~ '^[A-Z]{3}$'),
 			status TEXT NOT NULL CHECK (status IN ('confirmed', 'waitlisted', 'cancelled', 'revoked')),
+			admitted_cart_reference TEXT NULL,
+			capacity_at_allocation INTEGER NULL,
+			placed_count_before_allocation INTEGER NULL,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			FOREIGN KEY (parent_customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers(id, organization_id) ON DELETE RESTRICT
+			FOREIGN KEY (parent_customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers(id, organization_id) ON DELETE RESTRICT,
+			FOREIGN KEY (festival_class_id, organization_id, festival_id) REFERENCES ${safeSchema}.festival_class_configurations(id, organization_id, festival_id) ON DELETE RESTRICT,
+			FOREIGN KEY (child_id, organization_id, parent_customer_id) REFERENCES ${safeSchema}.festival_children(id, organization_id, parent_customer_id) ON DELETE RESTRICT,
+			FOREIGN KEY (checkout_intent_id, organization_id) REFERENCES ${safeSchema}.checkout_intents(id, organization_id) ON DELETE RESTRICT
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.registration_change_logs (
 			id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
@@ -326,12 +408,14 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
 			customer_id TEXT NOT NULL, entitlement_class TEXT NOT NULL CHECK (entitlement_class IN ('teacher_membership', 'accompanist_membership')),
 			source TEXT NOT NULL CHECK (source IN ('teacher_checkout', 'accompanist_form')),
-			offering_id TEXT NULL REFERENCES ${safeSchema}.products (id), starts_on DATE NOT NULL, ends_on DATE NOT NULL,
+			offering_id TEXT NULL REFERENCES ${safeSchema}.products (id), starts_on DATE NOT NULL, ends_on DATE NOT NULL, superseded_on DATE NULL,
+			superseded_at TIMESTAMPTZ NULL, superseded_by_grant_id TEXT NULL REFERENCES ${safeSchema}.membership_entitlements (id) ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED,
 			revoked_at TIMESTAMPTZ NULL, revoked_reason TEXT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			CHECK (ends_on > starts_on),
+			CHECK (superseded_on IS NULL OR (superseded_on >= starts_on AND superseded_on <= ends_on)),
 			CHECK ((entitlement_class = 'teacher_membership' AND source = 'teacher_checkout') OR (entitlement_class = 'accompanist_membership' AND source = 'accompanist_form')),
 			FOREIGN KEY (customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers(id, organization_id) ON DELETE CASCADE,
-			EXCLUDE USING gist (organization_id WITH =, customer_id WITH =, entitlement_class WITH =, daterange(starts_on, ends_on, '[)') WITH &&) WHERE (revoked_at IS NULL)
+			EXCLUDE USING gist (organization_id WITH =, customer_id WITH =, entitlement_class WITH =, daterange(starts_on, COALESCE(superseded_on, ends_on), '[)') WITH &&) WHERE (revoked_at IS NULL)
 		);
 		-- Write-hot during the initial registration surge; avoid blocking DDL on this table.
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.registration_metadata (
@@ -344,6 +428,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			teacher_membership_id TEXT NOT NULL,
 			accompanist_membership_id TEXT,
 			repertoire_json JSONB NOT NULL,
+			registration_snapshot JSONB,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			CONSTRAINT registration_metadata_pkey PRIMARY KEY (id),
 			CONSTRAINT registration_metadata_id_organization_id_key UNIQUE (id, organization_id),
@@ -490,6 +575,48 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			entitlement_id TEXT PRIMARY KEY REFERENCES ${safeSchema}.membership_entitlements(id) ON DELETE CASCADE,
 			contact_name TEXT NOT NULL, contact_email TEXT NOT NULL, contact_city TEXT NOT NULL, contact_phone TEXT NOT NULL
 		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.teacher_profiles (
+			id TEXT PRIMARY KEY,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			customer_id TEXT NOT NULL,
+			display_name TEXT NOT NULL,
+			public_directory_opt_in BOOLEAN NOT NULL DEFAULT FALSE,
+			approval_status TEXT NOT NULL DEFAULT 'pending' CHECK (approval_status IN ('pending', 'approved', 'rejected')),
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE (organization_id, customer_id),
+			UNIQUE (id, organization_id),
+			FOREIGN KEY (customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers (id, organization_id) ON DELETE CASCADE
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.teacher_profile_divisions (
+			teacher_profile_id TEXT NOT NULL,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			division_id TEXT NOT NULL,
+			PRIMARY KEY (teacher_profile_id, division_id),
+			FOREIGN KEY (teacher_profile_id, organization_id) REFERENCES ${safeSchema}.teacher_profiles (id, organization_id) ON DELETE CASCADE,
+			FOREIGN KEY (division_id, organization_id) REFERENCES ${safeSchema}.organization_divisions (id, organization_id) ON DELETE CASCADE
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.accompanist_profiles (
+			id TEXT PRIMARY KEY,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			customer_id TEXT NOT NULL,
+			display_name TEXT NOT NULL,
+			public_directory_opt_in BOOLEAN NOT NULL DEFAULT FALSE,
+			approval_status TEXT NOT NULL DEFAULT 'pending' CHECK (approval_status IN ('pending', 'approved', 'rejected')),
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE (organization_id, customer_id),
+			UNIQUE (id, organization_id),
+			FOREIGN KEY (customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers (id, organization_id) ON DELETE CASCADE
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.accompanist_profile_divisions (
+			accompanist_profile_id TEXT NOT NULL,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			division_id TEXT NOT NULL,
+			PRIMARY KEY (accompanist_profile_id, division_id),
+			FOREIGN KEY (accompanist_profile_id, organization_id) REFERENCES ${safeSchema}.accompanist_profiles (id, organization_id) ON DELETE CASCADE,
+			FOREIGN KEY (division_id, organization_id) REFERENCES ${safeSchema}.organization_divisions (id, organization_id) ON DELETE CASCADE
+		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.shopify_webhook_deliveries (
 			id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
 			shop_domain TEXT NOT NULL, webhook_id TEXT NOT NULL, topic TEXT NOT NULL CHECK (topic = 'orders/paid'),
@@ -518,6 +645,17 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			reason_code TEXT NULL CHECK (reason_code IS NULL OR reason_code IN ('correlation_missing', 'correlation_invalid', 'intent_expired', 'order_not_paid', 'payment_incomplete', 'payment_mismatch', 'customer_mismatch', 'offering_mismatch', 'division_invalid', 'duplicate_purchase', 'policy_mismatch', 'upstream_invalid')),
 			created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL,
 			UNIQUE (organization_id, shopify_order_gid), UNIQUE (organization_id, shopify_order_line_gid)
+		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.membership_validation_decision_audits (
+			id TEXT PRIMARY KEY,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			decision_id TEXT NOT NULL REFERENCES ${safeSchema}.membership_validation_decisions (id) ON DELETE RESTRICT,
+			prior_status TEXT NOT NULL CHECK (prior_status IN ('pending_validation', 'needs_review')),
+			final_status TEXT NOT NULL CHECK (final_status IN ('approved', 'rejected')),
+			actor_user_id TEXT NOT NULL REFERENCES ${safeSchema}.users (id) ON DELETE RESTRICT,
+			note TEXT NOT NULL CHECK (LENGTH(note) BETWEEN 1 AND 500),
+			resolved_at TIMESTAMPTZ NOT NULL,
+			UNIQUE (decision_id)
 		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.membership_reconciliation_runs (
 			id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
@@ -690,6 +828,80 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 		);
 
+		CREATE OR REPLACE FUNCTION ${safeSchema}.validate_catalog_subtype_reference()
+		RETURNS TRIGGER AS $$
+		DECLARE
+			target_id TEXT;
+			target_kind TEXT;
+		BEGIN
+			IF TG_TABLE_NAME = 'registration_catalog_values' THEN
+				target_id := NEW.required_subtype_id;
+			ELSE
+				target_id := NEW.class_subtype_id;
+			END IF;
+			IF target_id IS NULL THEN RETURN NEW; END IF;
+			SELECT kind INTO target_kind
+			FROM ${safeSchema}.registration_catalog_values
+			WHERE id = target_id AND organization_id = NEW.organization_id
+			FOR SHARE;
+			IF target_kind IS DISTINCT FROM 'class_subtype' THEN
+				RAISE EXCEPTION 'Registration subtype reference must point to a class_subtype value'
+					USING ERRCODE = '23503';
+			END IF;
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql;
+		CREATE OR REPLACE FUNCTION ${safeSchema}.prevent_referenced_catalog_kind_change()
+		RETURNS TRIGGER AS $$
+		BEGIN
+			IF NEW.kind IS DISTINCT FROM OLD.kind AND (
+				EXISTS (SELECT 1 FROM ${safeSchema}.registration_catalog_values v WHERE v.organization_id = OLD.organization_id AND v.required_subtype_id = OLD.id)
+				OR EXISTS (SELECT 1 FROM ${safeSchema}.festival_class_configurations c WHERE c.organization_id = OLD.organization_id AND c.class_subtype_id = OLD.id)
+				OR EXISTS (SELECT 1 FROM ${safeSchema}.festival_class_subtypes s WHERE s.organization_id = OLD.organization_id AND s.class_subtype_id = OLD.id)
+			) THEN
+				RAISE EXCEPTION 'Cannot change the kind of a referenced registration catalog value'
+					USING ERRCODE = '23503';
+			END IF;
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql;
+		DO $catalog_type_triggers$
+		BEGIN
+			IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'registration_catalog_values_validate_required_subtype' AND tgrelid = '${safeSchema}.registration_catalog_values'::regclass) THEN
+				CREATE TRIGGER registration_catalog_values_validate_required_subtype BEFORE INSERT OR UPDATE OF required_subtype_id, organization_id ON ${safeSchema}.registration_catalog_values FOR EACH ROW EXECUTE FUNCTION ${safeSchema}.validate_catalog_subtype_reference();
+			END IF;
+			IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'festival_class_configurations_validate_subtype_kind' AND tgrelid = '${safeSchema}.festival_class_configurations'::regclass) THEN
+				CREATE TRIGGER festival_class_configurations_validate_subtype_kind BEFORE INSERT OR UPDATE OF class_subtype_id, organization_id ON ${safeSchema}.festival_class_configurations FOR EACH ROW EXECUTE FUNCTION ${safeSchema}.validate_catalog_subtype_reference();
+			END IF;
+			IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'festival_class_subtypes_validate_subtype_kind' AND tgrelid = '${safeSchema}.festival_class_subtypes'::regclass) THEN
+				CREATE TRIGGER festival_class_subtypes_validate_subtype_kind BEFORE INSERT OR UPDATE OF class_subtype_id, organization_id ON ${safeSchema}.festival_class_subtypes FOR EACH ROW EXECUTE FUNCTION ${safeSchema}.validate_catalog_subtype_reference();
+			END IF;
+			IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'registration_catalog_values_prevent_referenced_kind_change' AND tgrelid = '${safeSchema}.registration_catalog_values'::regclass) THEN
+				CREATE TRIGGER registration_catalog_values_prevent_referenced_kind_change BEFORE UPDATE OF kind ON ${safeSchema}.registration_catalog_values FOR EACH ROW EXECUTE FUNCTION ${safeSchema}.prevent_referenced_catalog_kind_change();
+			END IF;
+		END $catalog_type_triggers$;
+
+        -- Admission is a soft cutoff, not a reservation. Serialize only the
+        -- final count/read and attachment with count/capacity mutations.
+        -- BEFORE STATEMENT takes the lock before row locks, including direct SQL
+        -- and multi-line fulfillment, avoiding inconsistent lock ordering.
+        CREATE OR REPLACE FUNCTION ${safeSchema}.lock_class_capacity_cutoff()
+        RETURNS TRIGGER AS $$
+        BEGIN
+            PERFORM pg_advisory_xact_lock(hashtextextended('${safeSchema}:class-capacity-cutoff', 0));
+            RETURN NULL;
+        END;
+        $$ LANGUAGE plpgsql;
+        DO $capacity_triggers$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'lock_class_capacity_cutoff' AND tgrelid = '${safeSchema}.festival_class_configurations'::regclass) THEN
+                CREATE TRIGGER lock_class_capacity_cutoff BEFORE INSERT OR UPDATE OR DELETE ON ${safeSchema}.festival_class_configurations FOR EACH STATEMENT EXECUTE FUNCTION ${safeSchema}.lock_class_capacity_cutoff();
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'lock_class_capacity_cutoff' AND tgrelid = '${safeSchema}.class_entitlements'::regclass) THEN
+                CREATE TRIGGER lock_class_capacity_cutoff BEFORE INSERT OR UPDATE OR DELETE ON ${safeSchema}.class_entitlements FOR EACH STATEMENT EXECUTE FUNCTION ${safeSchema}.lock_class_capacity_cutoff();
+            END IF;
+        END $capacity_triggers$;
+
 		CREATE OR REPLACE FUNCTION ${safeSchema}.enforce_shopify_shop_ownership()
 		RETURNS TRIGGER AS $$
 		BEGIN
@@ -731,6 +943,9 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		CREATE INDEX IF NOT EXISTS idx_festival_customers_org_email ON ${safeSchema}.festival_customers(organization_id,LOWER(email));
 		CREATE INDEX IF NOT EXISTS idx_festival_customers_org_phone ON ${safeSchema}.festival_customers(organization_id,phone);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_festival_children_parent_name ON ${safeSchema}.festival_children(organization_id, parent_customer_id, LOWER(display_name));
+		CREATE INDEX IF NOT EXISTS idx_festival_child_age_snapshots_org_child_active ON ${safeSchema}.festival_child_age_snapshots (organization_id, child_id, created_at DESC) WHERE superseded_at IS NULL;
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_festival_child_age_snapshots_one_active ON ${safeSchema}.festival_child_age_snapshots (organization_id, child_id) WHERE superseded_at IS NULL;
+		CREATE INDEX IF NOT EXISTS idx_customer_festival_availability_org_festival_customer ON ${safeSchema}.customer_festival_availability (organization_id, festival_id, customer_id);
 		CREATE UNIQUE INDEX IF NOT EXISTS checkout_intents_scope_key ON ${safeSchema}.checkout_intents(organization_id, customer_id, session_id, idempotency_key);
 		CREATE INDEX IF NOT EXISTS idx_recovery_requests_org_cust ON ${safeSchema}.checkout_recovery_requests (organization_id, customer_id);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_recovery_requests_token_hash ON ${safeSchema}.checkout_recovery_requests (token_hash);
@@ -799,6 +1014,33 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		CREATE INDEX IF NOT EXISTS idx_message_logs_org_event
 			ON ${safeSchema}.message_logs (organization_id, event_id);
 		CREATE INDEX IF NOT EXISTS registration_catalog_values_required_subtype_idx ON ${safeSchema}.registration_catalog_values (organization_id, required_subtype_id);
+		CREATE INDEX IF NOT EXISTS idx_festival_class_capacity_audit_logs_org_class_created
+			ON ${safeSchema}.festival_class_capacity_audit_logs (organization_id, festival_class_id, created_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_teacher_profiles_org
+			ON ${safeSchema}.teacher_profiles (organization_id);
+		CREATE INDEX IF NOT EXISTS idx_teacher_profiles_directory
+			ON ${safeSchema}.teacher_profiles (organization_id, public_directory_opt_in, approval_status);
+		CREATE INDEX IF NOT EXISTS idx_teacher_profile_divisions_division_id
+			ON ${safeSchema}.teacher_profile_divisions (division_id);
+		CREATE INDEX IF NOT EXISTS idx_accompanist_profiles_org
+			ON ${safeSchema}.accompanist_profiles (organization_id);
+		CREATE INDEX IF NOT EXISTS idx_accompanist_profiles_directory
+			ON ${safeSchema}.accompanist_profiles (organization_id, public_directory_opt_in, approval_status);
+		CREATE INDEX IF NOT EXISTS idx_accompanist_profile_divisions_division_id
+			ON ${safeSchema}.accompanist_profile_divisions (division_id);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_waitlist_entries_active_unique
+			ON ${safeSchema}.festival_class_waitlist_entries (organization_id, festival_class_id, child_id)
+			WHERE status = 'active';
+		CREATE INDEX IF NOT EXISTS idx_waitlist_entries_admin_roster
+			ON ${safeSchema}.festival_class_waitlist_entries (organization_id, festival_class_id, status, joined_at);
+		CREATE INDEX IF NOT EXISTS idx_waitlist_entries_parent_lookup
+			ON ${safeSchema}.festival_class_waitlist_entries (organization_id, parent_customer_id, status);
+		CREATE INDEX IF NOT EXISTS idx_waitlist_events_entry
+			ON ${safeSchema}.festival_class_waitlist_events (organization_id, waitlist_entry_id, occurred_at);
+		CREATE INDEX IF NOT EXISTS idx_waitlist_events_class
+			ON ${safeSchema}.festival_class_waitlist_events (organization_id, festival_class_id, occurred_at);
+		CREATE INDEX IF NOT EXISTS membership_validation_decision_audits_org_idx
+			ON ${safeSchema}.membership_validation_decision_audits (organization_id, resolved_at DESC);
 	`;
 }
 
@@ -820,7 +1062,19 @@ export async function initializePostgresSchema(schema: string): Promise<void> {
 			`ALTER TABLE IF EXISTS ${safeSchema}.registration_metadata ADD COLUMN IF NOT EXISTS checkout_intent_line_id TEXT;`,
 		);
 		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.registration_metadata ADD COLUMN IF NOT EXISTS registration_snapshot JSONB;`,
+		);
+		await transaction.unsafe(
 			`ALTER TABLE IF EXISTS ${safeSchema}.class_entitlements ADD COLUMN IF NOT EXISTS checkout_intent_line_id TEXT;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.class_entitlements ADD COLUMN IF NOT EXISTS admitted_cart_reference TEXT;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.class_entitlements ADD COLUMN IF NOT EXISTS capacity_at_allocation INTEGER;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.class_entitlements ADD COLUMN IF NOT EXISTS placed_count_before_allocation INTEGER;`,
 		);
 		await transaction.unsafe(
 			`ALTER TABLE IF EXISTS ${safeSchema}.checkout_intents ADD COLUMN IF NOT EXISTS line_identity_protocol TEXT;`,
@@ -843,6 +1097,45 @@ export async function initializePostgresSchema(schema: string): Promise<void> {
 		await transaction.unsafe(
 			`ALTER TABLE IF EXISTS ${safeSchema}.registration_catalog_values ADD COLUMN IF NOT EXISTS required_subtype_id TEXT;`,
 		);
+		// Older schemas may lack the composite keys these parent tables need.
+		// Add the keys before creating new tables that reference them.
+		await transaction.unsafe(
+			`DO $reference_keys$
+			DECLARE
+				reference_key RECORD;
+				parent_table REGCLASS;
+			BEGIN
+				FOR reference_key IN
+					SELECT * FROM (VALUES
+						('registration_catalog_values', 'registration_catalog_values_id_organization_key', ARRAY['id', 'organization_id']),
+						('festival_children', 'festival_children_id_organization_key', ARRAY['id', 'organization_id']),
+						('festival_children', 'festival_children_id_organization_parent_key', ARRAY['id', 'organization_id', 'parent_customer_id']),
+						('festival_class_configurations', 'festival_class_configurations_id_organization_key', ARRAY['id', 'organization_id']),
+						('festival_class_configurations', 'festival_class_configurations_id_organization_festival_key', ARRAY['id', 'organization_id', 'festival_id']),
+						('festival_class_waitlist_entries', 'festival_class_waitlist_entries_reference_key', ARRAY['id', 'organization_id', 'festival_class_id', 'parent_customer_id', 'child_id']),
+						('checkout_intents', 'checkout_intents_id_organization_key', ARRAY['id', 'organization_id'])
+					) AS keys(table_name, index_name, column_names)
+				LOOP
+					parent_table := to_regclass('${safeSchema}.' || reference_key.table_name);
+					IF parent_table IS NOT NULL AND NOT EXISTS (
+						SELECT 1 FROM pg_index idx
+						WHERE idx.indrelid = parent_table
+						  AND idx.indisunique AND idx.indisvalid AND idx.indimmediate
+						  AND idx.indpred IS NULL AND idx.indexprs IS NULL
+						  AND idx.indnkeyatts = cardinality(reference_key.column_names)
+						  AND reference_key.column_names <@ ARRAY(
+							SELECT att.attname::text
+							FROM unnest(idx.indkey) WITH ORDINALITY AS key_column(attnum, position)
+							JOIN pg_attribute att ON att.attrelid = idx.indrelid AND att.attnum = key_column.attnum
+							WHERE key_column.position <= idx.indnkeyatts
+						  )
+					) THEN
+						EXECUTE format('CREATE UNIQUE INDEX IF NOT EXISTS %I ON %s (%s)',
+							reference_key.index_name, parent_table, array_to_string(reference_key.column_names, ', '));
+					END IF;
+				END LOOP;
+			END $reference_keys$;`,
+		);
 		await transaction.unsafe(
 			`DROP INDEX IF EXISTS ${safeSchema}.registration_metadata_checkout_intent_id_unique;`,
 		);
@@ -852,6 +1145,51 @@ export async function initializePostgresSchema(schema: string): Promise<void> {
 		);
 		await transaction.unsafe(
 			`ALTER TABLE IF EXISTS ${safeSchema}.repertoire_works ADD COLUMN IF NOT EXISTS imslp_url TEXT;`,
+		);
+		await transaction.unsafe(
+			`DO $$
+			BEGIN
+				IF to_regclass('${safeSchema}.customer_festival_availability') IS NOT NULL AND NOT EXISTS (
+					SELECT 1
+					FROM pg_constraint con
+					JOIN pg_class rel ON rel.oid = con.conrelid
+					JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+					WHERE nsp.nspname = '${safeSchema}'
+					  AND rel.relname = 'customer_festival_availability'
+					  AND con.conname = 'chk_customer_festival_availability_hours'
+				) THEN
+					ALTER TABLE ${safeSchema}.customer_festival_availability
+					ADD CONSTRAINT chk_customer_festival_availability_hours
+					CHECK (jsonb_typeof(available_hours) = 'array' AND available_hours <@ '[8,9,10,11,12,13,14,15,16,17]'::jsonb);
+				END IF;
+			END $$;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.festivals ADD COLUMN IF NOT EXISTS registration_opens_at TIMESTAMPTZ;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.festivals ADD COLUMN IF NOT EXISTS registration_closes_at TIMESTAMPTZ;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.membership_entitlements ADD COLUMN IF NOT EXISTS superseded_on date;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.membership_entitlements ADD COLUMN IF NOT EXISTS superseded_at timestamptz;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.membership_entitlements ADD COLUMN IF NOT EXISTS superseded_by_grant_id text REFERENCES ${safeSchema}.membership_entitlements(id) ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED;`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.membership_entitlements
+			 DROP CONSTRAINT IF EXISTS membership_entitlements_superseded_on_check,
+			 ADD CONSTRAINT membership_entitlements_superseded_on_check
+			 CHECK (((superseded_on IS NULL) OR ((superseded_on >= starts_on) AND (superseded_on <= ends_on))));`,
+		);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.membership_entitlements
+			 DROP CONSTRAINT IF EXISTS membership_entitlements_organization_id_customer_id_entitl_excl,
+			 ADD CONSTRAINT membership_entitlements_organization_id_customer_id_entitl_excl
+			 EXCLUDE USING gist (organization_id WITH =, customer_id WITH =, entitlement_class WITH =, daterange(starts_on, COALESCE(superseded_on, ends_on), '[)'::text) WITH &&) WHERE ((revoked_at IS NULL));`,
 		);
 	});
 	initializations.set(safeSchema, initialization);

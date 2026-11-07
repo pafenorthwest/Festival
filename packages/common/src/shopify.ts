@@ -204,6 +204,8 @@ export interface CreateMembershipProductInput {
 	price: string;
 }
 
+export type UpdateMembershipProductInput = CreateMembershipProductInput;
+
 export interface MembershipProductSummary {
 	id: string;
 	name: string;
@@ -222,6 +224,8 @@ export interface MembershipProductSummary {
 export interface CreateMembershipProductResponse {
 	membershipProduct: MembershipProductSummary;
 }
+
+export type UpdateMembershipProductResponse = CreateMembershipProductResponse;
 
 export interface MembershipProductsListResponse {
 	organization: {

@@ -1208,7 +1208,95 @@ describe("organization routes", () => {
 			name: "Spring Festival (West)",
 			startDate: "2027-06-10",
 			endDate: "2027-06-12",
+			registrationOpensAt: null,
+			registrationClosesAt: null,
 		});
+
+		const putWindowResponse = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/festivals/jun-27/registration-window",
+				withAuth("admin", {
+					method: "PUT",
+					body: JSON.stringify({
+						registrationOpensAt: "2027-03-01",
+						registrationClosesAt: "2027-05-01",
+					}),
+				}),
+			),
+		);
+		expect(putWindowResponse.status).toBe(200);
+		await expect(putWindowResponse.json()).resolves.toMatchObject({
+			festival: {
+				shortName: "jun-27",
+				registrationOpensAt: "2027-03-01T00:00:00.000Z",
+				registrationClosesAt: "2027-05-01T23:59:59.999Z",
+			},
+		});
+
+		const invalidWindowResponse = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/festivals/jun-27/registration-window",
+				withAuth("admin", {
+					method: "PATCH",
+					body: JSON.stringify({
+						registrationOpensAt: "2027-05-02T00:00:00.000Z",
+						registrationClosesAt: "2027-05-01T00:00:00.000Z",
+					}),
+				}),
+			),
+		);
+		expect(invalidWindowResponse.status).toBe(400);
+		await expect(invalidWindowResponse.json()).resolves.toMatchObject({
+			code: "invalid_registration_window",
+		});
+
+		const createWithWindowResponse = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/festivals",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						name: "Autumn Festival (East)",
+						shortName: "oct-27",
+						startDate: "2027-10-10",
+						endDate: "2027-10-12",
+						registrationOpensAt: "2027-07-01T09:00",
+						registrationClosesAt: "2027-09-15T17:00",
+					}),
+				}),
+			),
+		);
+		expect(createWithWindowResponse.status).toBe(201);
+		await expect(createWithWindowResponse.json()).resolves.toMatchObject({
+			festival: {
+				shortName: "oct-27",
+				registrationOpensAt: "2027-07-01T09:00:00.000Z",
+				registrationClosesAt: "2027-09-15T17:00:00.000Z",
+			},
+		});
+
+		const createWithInvalidWindowResponse = await app.fetch(
+			new Request(
+				"http://test/api/organizations/pafe/admin/festivals",
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						name: "Invalid Window Festival",
+						shortName: "nov-27",
+						startDate: "2027-11-10",
+						endDate: "2027-11-12",
+						registrationOpensAt: "2027-08-01T09:00",
+						registrationClosesAt: null,
+					}),
+				}),
+			),
+		);
+		expect(createWithInvalidWindowResponse.status).toBe(400);
+		await expect(createWithInvalidWindowResponse.json()).resolves.toMatchObject(
+			{
+				code: "invalid_registration_window",
+			},
+		);
 	});
 
 	it("keeps class subtypes isolated to their festival", async () => {

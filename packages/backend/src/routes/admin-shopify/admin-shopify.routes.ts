@@ -115,9 +115,17 @@ export function buildAdminShopifyRoutes(
 				const payload = await c.req.json();
 				assertAllowedFields(
 					payload,
-					["reason"],
+					["confirmed", "reason"],
 					"Entitlement revocation request",
 				);
+				if (
+					payload &&
+					typeof payload === "object" &&
+					"confirmed" in payload &&
+					(payload as { confirmed?: unknown }).confirmed !== true
+				) {
+					throw new AppError("Revocation confirmation is required.", 400);
+				}
 				const reason =
 					payload && typeof payload === "object"
 						? (payload as { reason?: unknown }).reason
@@ -129,13 +137,16 @@ export function buildAdminShopifyRoutes(
 				)
 					throw new AppError("A revocation reason is required.", 400);
 				const tenant = getRequiredTenant(c);
+				const nowFn =
+					(repository as { now?: () => Date }).now ?? (() => new Date());
+				c.header("Cache-Control", "no-store");
 				return c.json(
 					await repository.revokeEntitlement({
 						organizationId: tenant.organization.id,
 						entitlementId: c.req.param("entitlementId"),
 						actorUserId: tenant.user.id,
 						reason: reason.trim(),
-						revokedAtIso: new Date().toISOString(),
+						revokedAtIso: nowFn().toISOString(),
 					}),
 				);
 			} catch (error) {
@@ -359,6 +370,32 @@ export function buildAdminShopifyRoutes(
 					);
 				c.status(201);
 				return c.json({ membershipProduct });
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.post(
+		"/organizations/:slug/admin/membership-products/:offeringId",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				if (!shopifyMembershipProductService) {
+					throw new AppError("Shopify integration is not configured.", 503);
+				}
+				const payload = await c.req.json();
+				assertNoForbiddenMembershipProductFields(payload);
+				return c.json({
+					membershipProduct:
+						await shopifyMembershipProductService.updateMembershipProduct(
+							getRequiredTenant(c),
+							c.req.param("offeringId"),
+							payload,
+						),
+				});
 			} catch (error) {
 				return toJsonError(c, error);
 			}

@@ -25,9 +25,11 @@ describe("admin volunteer role and shift management", () => {
 
 	it("defaults to the primary festival and permits selecting another festival", async () => {
 		const page = await read("../src/pages/VolunteerRolesPage.tsx");
+		const selection = await read("../src/pages/useAdminFestivalSelection.ts");
 
-		expect(page).toContain("selectedFestivalShortName");
-		expect(page).toContain("festival.isPrimary");
+		expect(page).toContain("useAdminFestivalSelection");
+		expect(page).toContain("<FestivalSelector");
+		expect(selection).toContain("festival.isPrimary");
 		expect(page).toContain("No festivals have been created yet.");
 	});
 

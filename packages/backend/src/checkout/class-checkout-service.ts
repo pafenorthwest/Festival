@@ -1,21 +1,32 @@
 import { randomUUID } from "node:crypto";
 import type {
+	AccompanistMembershipGrant,
+	CanonicalWork,
 	ClassCheckoutLineItemInput,
+	ClassEligibilityResult,
+	ClassEntitlement,
+	ClassRegistrationSnapshot,
+	EntitlementGrantSnapshot,
 	EvaluatePurchaseEligibilityResponse,
+	FestivalChildAgeSnapshot,
 	FestivalChildRecord,
 	FestivalClassConfiguration,
 	FestivalRecord,
 	ProposedPurchaseLineItem,
 	PurchaseEligibilityMode,
+	RegistrationCatalogValue,
 	RepertoirePiece,
 } from "@festival/common";
 import {
+	doesClassRequireConcerto,
 	evaluatePurchaseEligibility,
+	isFestivalRegistrationOpen,
 	stripCandidateMarker,
 } from "@festival/common";
 import type { MembershipCommerceRepository } from "../commerce/membership-commerce-repository.js";
 import type { CustomerAccountRepository } from "../customer/customer-account-repository.js";
 import { AppError } from "../errors/app-error.js";
+import type { RepertoireRepository } from "../repertoire/repertoire-repository.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
 import {
 	CHECKOUT_INTENT_LINE_ID_ATTRIBUTE_KEY,
@@ -32,12 +43,18 @@ import type {
 } from "./checkout-repository.js";
 import { CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL } from "./checkout-repository.js";
 import {
+	buildEligibilityRejectionError,
 	calculateTotalAmount,
 	resolveFestivalClassConfiguration,
+	resolvePieceCatalogWorks,
 	resolveTargetFestival,
+	validateAccompanistSelection,
 	validateActiveChildAgeSnapshot,
 	validateAndNormalizeRepertoirePieces,
 	validateChildAgeRange,
+	validateChildOwnership,
+	validateTeacherEntitlement,
+	verifyPostCartCreateCapacityCutoff,
 } from "./class-checkout-helpers.js";
 
 export interface ClassCheckoutStorefront {
@@ -73,6 +90,7 @@ export interface StartClassCheckoutInput {
 	integrationVersion?: string | number;
 	teacherId?: string;
 	accompanistId?: string | null;
+	instrumentId?: string;
 	pieces?: RepertoirePiece[];
 	lineItems?: ClassCheckoutLineItemInput[];
 }
@@ -99,10 +117,24 @@ interface ValidatedLineItem {
 	normalizedPieces: RepertoirePiece[];
 	teacherEntitlementId: string;
 	accompanistEntitlementId: string | null;
+	registrationSnapshot?: ClassRegistrationSnapshot;
+	instrument: ClassRegistrationSnapshot["instrument"];
+}
+
+interface LineValidationCaches {
+	children: Map<string, FestivalChildRecord | null>;
+	ageSnapshots: Map<string, FestivalChildAgeSnapshot | null>;
+	classConfigs: Map<string, FestivalClassConfiguration>;
+	teacherGrants: Map<string, EntitlementGrantSnapshot | null>;
+	accompanistGrants: Map<string, AccompanistMembershipGrant | null>;
+	instruments?: RegistrationCatalogValue[];
+	subtypes?: RegistrationCatalogValue[];
+	catalogWorks?: Map<string, CanonicalWork | null>;
 }
 
 export type ClassCheckoutFailureStage =
 	| "registration_metadata"
+	| "registration_window"
 	| "load_integration"
 	| "create_cart"
 	| "attach_cart"
@@ -153,47 +185,82 @@ export class ClassCheckoutService {
 		private readonly commerce?: MembershipCommerceRepository,
 		private readonly now: () => Date = () => new Date(),
 		private readonly failureLogger: ClassCheckoutFailureLogger = silentClassCheckoutFailureLogger,
+		private readonly repertoire?: RepertoireRepository,
 	) {}
 
 	async evaluateEligibility(
 		input: EvaluatePurchaseEligibilityInput,
+		preloaded?: {
+			targetFestival?: FestivalRecord;
+			children?: Map<string, FestivalChildRecord | null>;
+			classes?: Map<string, FestivalClassConfiguration>;
+		},
 	): Promise<EvaluatePurchaseEligibilityResponse> {
 		if (!input.customerId?.trim()) {
 			throw new AppError("Customer ID is required.", 400);
 		}
-		const children = await this.customers.listChildren(
-			input.organizationId,
-			input.customerId,
-		);
-		const ownedChildIds = new Set(children.map((c) => c.id));
-		for (const item of input.items) {
-			if (!ownedChildIds.has(item.childId)) {
+		const uniqueChildIds = [
+			...new Set(input.items.map((item) => item.childId)),
+		];
+		for (const childId of uniqueChildIds) {
+			const child = preloaded?.children?.has(childId)
+				? (preloaded.children.get(childId) ?? null)
+				: await this.customers.findChild(
+						input.organizationId,
+						input.customerId,
+						childId,
+					);
+			if (!child) {
 				throw new AppError("Child not found.", 404);
 			}
 		}
 
-		const festivals = await this.organizations.listFestivals(
-			input.organizationId,
+		const targetFestival =
+			preloaded?.targetFestival ??
+			resolveTargetFestival(
+				await this.organizations.listFestivals(input.organizationId),
+				{
+					festivalId: input.festivalId,
+					festivalShortName: input.festivalShortName,
+				},
+			);
+
+		const classes = new Map<string, FestivalClassConfiguration>(
+			preloaded?.classes,
 		);
-		const targetFestival = resolveTargetFestival(festivals, {
-			festivalId: input.festivalId,
-			festivalShortName: input.festivalShortName,
+		const uniqueClassIds = [
+			...new Set(input.items.map((item) => item.festivalClassId)),
+		];
+		const missingClassIds = uniqueClassIds.filter((id) => !classes.has(id));
+		if (missingClassIds.length > 0) {
+			const configs =
+				await this.organizations.findFestivalClassConfigurationsByIds(
+					input.organizationId,
+					targetFestival.id,
+					missingClassIds,
+				);
+			for (const cfg of configs) classes.set(cfg.id, cfg);
+		}
+
+		const activeEntitlements = await this.loadTargetedEntitlements({
+			organizationId: input.organizationId,
+			festivalId: targetFestival.id,
+			uniqueClassIds,
+			uniqueChildIds,
+			classes,
 		});
-		const classes = await this.organizations.listFestivalClassConfigurations(
-			input.organizationId,
-			targetFestival.id,
-			false,
+		const [subtypes, timezone] = await Promise.all([
+			this.organizations.listRegistrationCatalogValues(
+				input.organizationId,
+				"class_subtype",
+			),
+			this.organizations.getOrganizationTimezone(input.organizationId),
+		]);
+		const isRegistrationOpen = isFestivalRegistrationOpen(
+			targetFestival,
+			this.now(),
+			timezone,
 		);
-		const subtypes = await this.organizations.listRegistrationCatalogValues(
-			input.organizationId,
-			"class_subtype",
-		);
-		const activeEntitlements = this.commerce
-			? await this.commerce.listClassEntitlements({
-					organizationId: input.organizationId,
-					festivalId: targetFestival.id,
-				})
-			: [];
 		return evaluatePurchaseEligibility({
 			organizationId: input.organizationId,
 			festivalId: targetFestival.id,
@@ -201,8 +268,57 @@ export class ClassCheckoutService {
 			classes,
 			subtypes,
 			activeEntitlements,
+			isRegistrationOpen,
 			mode: input.mode ?? "cart",
 		});
+	}
+
+	private async loadTargetedEntitlements(input: {
+		organizationId: string;
+		festivalId: string;
+		uniqueClassIds: string[];
+		uniqueChildIds: string[];
+		classes: Map<string, FestivalClassConfiguration>;
+	}): Promise<ClassEntitlement[]> {
+		if (!this.commerce) return [];
+		const [entitlementsByClass, entitlementsByChild] = await Promise.all([
+			input.uniqueClassIds.length > 0
+				? this.commerce.listClassEntitlements({
+						organizationId: input.organizationId,
+						festivalId: input.festivalId,
+						festivalClassIds: input.uniqueClassIds,
+					})
+				: Promise.resolve([]),
+			input.uniqueChildIds.length > 0
+				? this.commerce.listClassEntitlements({
+						organizationId: input.organizationId,
+						festivalId: input.festivalId,
+						childIds: input.uniqueChildIds,
+					})
+				: Promise.resolve([]),
+		]);
+		const merged = new Map<string, ClassEntitlement>();
+		for (const ent of entitlementsByClass) merged.set(ent.id, ent);
+		const prerequisiteClassIds = new Set<string>();
+		for (const ent of entitlementsByChild) {
+			merged.set(ent.id, ent);
+			if (
+				ent.status === "confirmed" &&
+				!input.classes.has(ent.festivalClassId)
+			) {
+				prerequisiteClassIds.add(ent.festivalClassId);
+			}
+		}
+		if (prerequisiteClassIds.size > 0) {
+			const configs =
+				await this.organizations.findFestivalClassConfigurationsByIds(
+					input.organizationId,
+					input.festivalId,
+					[...prerequisiteClassIds],
+				);
+			for (const cfg of configs) input.classes.set(cfg.id, cfg);
+		}
+		return [...merged.values()];
 	}
 
 	async start(input: StartClassCheckoutInput): Promise<ClassCheckoutResult> {
@@ -221,35 +337,45 @@ export class ClassCheckoutService {
 			if (existing.kind === "ready") return this.resume(existing, input);
 			this.handleOutcome(existing);
 		}
-		const festivals = await this.organizations.listFestivals(
-			input.organizationId,
-		);
-		const targetFestival = resolveTargetFestival(festivals, {
-			festivalId: input.festivalId,
-			festivalShortName: input.festivalShortName,
-		});
+		const namedFestival = input.festivalShortName?.trim();
+		const festivals = namedFestival
+			? []
+			: await this.organizations.listFestivals(input.organizationId);
+		const targetFestival = namedFestival
+			? undefined
+			: resolveTargetFestival(festivals, { festivalId: input.festivalId });
 		const lineItems = this.normalizeLineItems(input);
-		const children = await this.customers.listChildren(
-			input.organizationId,
-			input.customerId,
-		);
+		const caches: LineValidationCaches = {
+			children: new Map(),
+			ageSnapshots: new Map(),
+			classConfigs: new Map(),
+			teacherGrants: new Map(),
+			accompanistGrants: new Map(),
+		};
 		const validatedLines: ValidatedLineItem[] = [];
 		for (const line of lineItems) {
 			const vl = await this.validateLine(input.organizationId, line, {
+				customerId: input.customerId,
 				targetFestival,
 				festivals,
-				children,
+				festivalShortName: namedFestival,
+				festivalId: input.festivalId,
 				currentTime,
 				divisionId: lineItems.length === 1 ? input.divisionId : undefined,
+				caches,
 			});
 			validatedLines.push(vl);
 		}
-		await this.checkEligibility(
-			input.organizationId,
-			input.customerId,
-			targetFestival.id,
-			lineItems,
-		);
+		const targetFestivalId =
+			targetFestival?.id ?? validatedLines[0].classConfig.festivalId;
+		if (
+			namedFestival &&
+			validatedLines.some(
+				(line) => line.classConfig.festivalId !== targetFestivalId,
+			)
+		) {
+			throw new AppError("Festival class configuration not found.", 404);
+		}
 		if (
 			await this.checkout.hasProcessingIntent(
 				input.organizationId,
@@ -271,6 +397,21 @@ export class ClassCheckoutService {
 		const expiresAtIso = new Date(
 			currentTime.getTime() + 30 * 60_000,
 		).toISOString();
+		const eligibilityResults = await this.checkEligibility(
+			input.organizationId,
+			input.customerId,
+			targetFestivalId,
+			lineItems,
+			caches,
+		);
+		await this.captureRegistrationSnapshots(
+			input.organizationId,
+			validatedLines,
+			lineItems,
+			caches,
+			currencyCode,
+			currentTime.toISOString(),
+		);
 		const outcome = await this.createMultiLineIntent(
 			input,
 			validatedLines,
@@ -284,7 +425,8 @@ export class ClassCheckoutService {
 
 		return this.executeStorefrontCheckout(
 			input,
-			targetFestival,
+			targetFestivalId,
+			eligibilityResults,
 			outcome.intent,
 			validatedLines,
 			currencyCode,
@@ -359,6 +501,7 @@ export class ClassCheckoutService {
 				childId: input.childId,
 				teacherId: input.teacherId,
 				accompanistId: input.accompanistId,
+				instrumentId: input.instrumentId,
 				pieces: input.pieces ?? [],
 			}) as ClassCheckoutLineItemInput,
 		];
@@ -366,49 +509,56 @@ export class ClassCheckoutService {
 
 	private async validateTeacherAndAccompanist(
 		organizationId: string,
-		divisionId: string,
+		classConfig: FestivalClassConfiguration,
 		teacherId: string,
-		accompanistId?: string | null,
+		accompanistId: string | null | undefined,
+		caches: LineValidationCaches,
 	): Promise<{
 		teacherEntitlementId: string;
 		accompanistEntitlementId: string | null;
 	}> {
-		const teacherGrants =
-			await this.organizations.listEntitlementGrantSnapshots(
-				organizationId,
-				teacherId.trim(),
-			);
-		const activeTeacherGrant = teacherGrants.find(
-			(grant) =>
-				grant.entitlementClass === "teacher_membership" &&
-				grant.divisionId === divisionId &&
-				grant.status === "active",
-		);
-		if (!activeTeacherGrant) {
-			throw new AppError(
-				"Selected teacher does not have an active membership for this division.",
-				400,
+		const normalizedTeacherId = teacherId.trim();
+		const teacherCacheKey = `${normalizedTeacherId}\u0000${classConfig.divisionId}`;
+		if (!caches.teacherGrants.has(teacherCacheKey)) {
+			caches.teacherGrants.set(
+				teacherCacheKey,
+				await this.organizations.findActiveTeacherEntitlementGrant({
+					organizationId,
+					customerId: normalizedTeacherId,
+					divisionId: classConfig.divisionId,
+				}),
 			);
 		}
-		let accompanistEntitlementId: string | null = null;
-		if (accompanistId?.trim()) {
-			const accompanistGrants =
-				await this.organizations.listAccompanistMembershipGrants({
-					organizationId,
-					customerId: accompanistId.trim(),
-					currentOnly: true,
-				});
-			const activeAccompanistGrant = accompanistGrants.find(
-				(grant) => grant.status === "active" || grant.isCurrent === true,
-			);
-			if (!activeAccompanistGrant) {
-				throw new AppError(
-					"Selected accompanist does not have an active membership.",
-					400,
+		const activeTeacherGrant = validateTeacherEntitlement(
+			caches.teacherGrants.get(teacherCacheKey),
+			classConfig.divisionId,
+			normalizedTeacherId,
+		);
+
+		const normalizedAccompanistId = accompanistId?.trim();
+		const accompanimentRequired = Boolean(
+			(classConfig as { accompanimentRequired?: boolean })
+				.accompanimentRequired,
+		);
+		let accompanistGrant: AccompanistMembershipGrant | null | undefined;
+		if (normalizedAccompanistId) {
+			if (!caches.accompanistGrants.has(normalizedAccompanistId)) {
+				caches.accompanistGrants.set(
+					normalizedAccompanistId,
+					await this.organizations.findCurrentAccompanistMembershipGrant({
+						organizationId,
+						customerId: normalizedAccompanistId,
+					}),
 				);
 			}
-			accompanistEntitlementId = activeAccompanistGrant.id;
+			accompanistGrant = caches.accompanistGrants.get(normalizedAccompanistId);
 		}
+		const accompanistEntitlementId = validateAccompanistSelection(
+			accompanistGrant,
+			normalizedAccompanistId,
+			accompanimentRequired,
+		);
+
 		return {
 			teacherEntitlementId: activeTeacherGrant.id,
 			accompanistEntitlementId,
@@ -419,11 +569,14 @@ export class ClassCheckoutService {
 		organizationId: string,
 		line: ClassCheckoutLineItemInput,
 		ctx: {
-			targetFestival: FestivalRecord;
+			customerId: string;
+			targetFestival?: FestivalRecord;
 			festivals: FestivalRecord[];
-			children: FestivalChildRecord[];
+			festivalShortName?: string;
+			festivalId?: string;
 			currentTime: Date;
 			divisionId?: string;
+			caches: LineValidationCaches;
 		},
 	): Promise<ValidatedLineItem> {
 		if (!line.festivalClassId?.trim()) {
@@ -435,50 +588,149 @@ export class ClassCheckoutService {
 		if (!line.teacherId?.trim()) {
 			throw new AppError("Teacher ID is required.", 400);
 		}
-		const child = ctx.children.find((c) => c.id === line.childId);
-		if (!child) {
-			throw new AppError(
-				"Child not found or does not belong to parent customer.",
-				404,
+		if (!ctx.caches.children.has(line.childId)) {
+			ctx.caches.children.set(
+				line.childId,
+				await this.customers.findChild(
+					organizationId,
+					ctx.customerId,
+					line.childId,
+				),
 			);
 		}
-		const snapshots = await this.customers.listChildAgeSnapshots(
-			organizationId,
+		const child = validateChildOwnership(
+			ctx.caches.children.get(line.childId),
 			line.childId,
+			ctx.customerId,
 		);
+		if (!ctx.caches.ageSnapshots.has(line.childId)) {
+			ctx.caches.ageSnapshots.set(
+				line.childId,
+				await this.customers.findActiveChildAgeSnapshot(
+					organizationId,
+					line.childId,
+				),
+			);
+		}
 		const activeSnapshot = validateActiveChildAgeSnapshot(
-			snapshots,
+			ctx.caches.ageSnapshots.get(line.childId) ?? null,
 			ctx.currentTime,
 		);
-		const classConfig = await resolveFestivalClassConfiguration(
-			this.organizations,
-			{
-				organizationId,
-				targetFestival: ctx.targetFestival,
-				festivals: ctx.festivals,
-				festivalClassId: line.festivalClassId,
-				divisionId:
-					(line as { divisionId?: string }).divisionId ?? ctx.divisionId,
-			},
-		);
+		const requestedDivisionId =
+			(line as { divisionId?: string }).divisionId ?? ctx.divisionId;
+		let classConfig: FestivalClassConfiguration | null | undefined =
+			ctx.caches.classConfigs.get(line.festivalClassId);
+		if (!classConfig) {
+			if (ctx.festivalShortName) {
+				classConfig =
+					await this.organizations.findActiveFestivalClassByShortName(
+						organizationId,
+						ctx.festivalShortName,
+						line.festivalClassId,
+						ctx.festivalId,
+					);
+			} else if (ctx.targetFestival) {
+				classConfig = await resolveFestivalClassConfiguration(
+					this.organizations,
+					{
+						organizationId,
+						targetFestival: ctx.targetFestival,
+						festivals: ctx.festivals,
+						festivalClassId: line.festivalClassId,
+						divisionId: requestedDivisionId,
+					},
+				);
+			} else {
+				throw new AppError("Active festival not found.", 404);
+			}
+			if (!classConfig) {
+				throw new AppError("Festival class configuration not found.", 404);
+			}
+			ctx.caches.classConfigs.set(line.festivalClassId, classConfig);
+		}
+		if (
+			requestedDivisionId !== undefined &&
+			requestedDivisionId !== classConfig.divisionId
+		) {
+			throw new AppError(
+				"Selected class does not belong to the requested division.",
+				400,
+			);
+		}
 		validateChildAgeRange(activeSnapshot.age, classConfig);
+		ctx.caches.subtypes ??=
+			await this.organizations.listRegistrationCatalogValues(
+				organizationId,
+				"class_subtype",
+				false,
+			);
+		const subtype =
+			ctx.caches.subtypes.find((s) => s.id === classConfig.classSubtypeId) ??
+			null;
+		let catalogWorksById: ReadonlyMap<string, CanonicalWork | null> | undefined;
+		if (
+			this.repertoire &&
+			(doesClassRequireConcerto(classConfig, subtype) ||
+				(Array.isArray(line.pieces) &&
+					line.pieces.some((p) => Boolean(p?.catalogWorkId))))
+		) {
+			ctx.caches.catalogWorks ??= new Map();
+			catalogWorksById = await resolvePieceCatalogWorks(
+				line.pieces,
+				organizationId,
+				this.repertoire,
+				ctx.caches.catalogWorks,
+			);
+		}
 		const normalizedPieces = validateAndNormalizeRepertoirePieces(
 			line.pieces,
 			classConfig,
+			{ subtype, catalogWorksById },
 		);
 		const { teacherEntitlementId, accompanistEntitlementId } =
 			await this.validateTeacherAndAccompanist(
 				organizationId,
-				classConfig.divisionId,
+				classConfig,
 				line.teacherId,
 				line.accompanistId,
+				ctx.caches,
 			);
+		let instrument: ClassRegistrationSnapshot["instrument"] = "unknown";
+		if (line.instrumentId !== undefined) {
+			if (typeof line.instrumentId !== "string" || !line.instrumentId.trim()) {
+				throw new AppError(
+					"Select a valid instrument.",
+					400,
+					"instrument_invalid",
+				);
+			}
+			ctx.caches.instruments ??=
+				await this.organizations.listRegistrationCatalogValues(
+					organizationId,
+					"instrument",
+					true,
+				);
+			const selected = ctx.caches.instruments.find(
+				(value) =>
+					value.id === line.instrumentId?.trim() &&
+					value.organizationId === organizationId &&
+					value.isActive,
+			);
+			if (!selected)
+				throw new AppError(
+					"Select a valid instrument.",
+					400,
+					"instrument_invalid",
+				);
+			instrument = { id: selected.id, name: selected.displayName };
+		}
 		return {
 			child,
 			classConfig,
 			normalizedPieces,
 			teacherEntitlementId,
 			accompanistEntitlementId,
+			instrument,
 		};
 	}
 
@@ -487,25 +739,51 @@ export class ClassCheckoutService {
 		customerId: string,
 		festivalId: string,
 		lineItems: ClassCheckoutLineItemInput[],
-	): Promise<void> {
-		const eligibility = await this.evaluateEligibility({
-			organizationId,
-			customerId,
-			festivalId,
-			items: lineItems.map(
-				(item) => stripCandidateMarker(item) as ClassCheckoutLineItemInput,
-			),
-			mode: "cart",
-		});
+		caches: LineValidationCaches,
+	): Promise<ClassEligibilityResult[]> {
+		const eligibility = await this.evaluateEligibility(
+			{
+				organizationId,
+				customerId,
+				festivalId,
+				items: lineItems.map(
+					(item) => stripCandidateMarker(item) as ClassCheckoutLineItemInput,
+				),
+				mode: "cart",
+			},
+			{
+				children: caches.children,
+				classes: caches.classConfigs,
+			},
+		);
 		if (
 			!eligibility.isEligible ||
 			eligibility.results.some((r) => !r.isEligible)
 		) {
-			const failure = eligibility.results.find((r) => !r.isEligible);
-			throw new AppError(
-				failure?.message ?? "Class registration is not eligible.",
-				400,
-				failure?.reasonCode?.toLowerCase(),
+			throw buildEligibilityRejectionError(eligibility.results);
+		}
+		return eligibility.results;
+	}
+
+	private async requireRegistrationOpen(
+		organizationId: string,
+		festivalId: string,
+		eligibilityResults: readonly ClassEligibilityResult[],
+	): Promise<void> {
+		const [festivals, timezone] = await Promise.all([
+			this.organizations.listFestivals(organizationId),
+			this.organizations.getOrganizationTimezone(organizationId),
+		]);
+		const festival = resolveTargetFestival(festivals, { festivalId });
+		if (!isFestivalRegistrationOpen(festival, this.now(), timezone)) {
+			throw buildEligibilityRejectionError(
+				eligibilityResults.map((result) => ({
+					...result,
+					eligible: false,
+					isEligible: false,
+					reasonCode: "REGISTRATION_CLOSED",
+					message: "Registration is closed for this festival.",
+				})),
 			);
 		}
 	}
@@ -527,7 +805,7 @@ export class ClassCheckoutService {
 				amount: vl.classConfig.price,
 				currencyCode,
 				divisionId: vl.classConfig.divisionId,
-				divisionNameSnapshot: vl.classConfig.divisionId ?? null,
+				divisionNameSnapshot: vl.registrationSnapshot?.division.name ?? null,
 			}),
 		);
 		const totalAmount = calculateTotalAmount(intentLines.map((l) => l.amount));
@@ -598,12 +876,103 @@ export class ClassCheckoutService {
 				accompanistMembershipId: vl.accompanistEntitlementId,
 				repertoireJson: vl.normalizedPieces,
 				repertoireSnapshotPieces: vl.normalizedPieces,
+				registrationSnapshot: vl.registrationSnapshot,
 			});
+		}
+	}
+
+	private async captureRegistrationSnapshots(
+		organizationId: string,
+		validatedLines: ValidatedLineItem[],
+		lineItems: ClassCheckoutLineItemInput[],
+		caches: LineValidationCaches,
+		currencyCode: string,
+		capturedAtIso: string,
+	): Promise<void> {
+		const [divisions, subtypes, teacherRosters] = await Promise.all([
+			this.organizations.listDivisions(organizationId, false),
+			caches.subtypes
+				? Promise.resolve(caches.subtypes)
+				: this.organizations.listRegistrationCatalogValues(
+						organizationId,
+						"class_subtype",
+						false,
+					),
+			Promise.all(
+				[
+					...new Set(validatedLines.map((line) => line.classConfig.divisionId)),
+				].map(
+					async (divisionId) =>
+						[
+							divisionId,
+							await this.organizations.listActiveTeachersForDivision(
+								organizationId,
+								divisionId,
+							),
+						] as const,
+				),
+			),
+		]);
+		const teachers = new Map(teacherRosters);
+		for (const [index, line] of validatedLines.entries()) {
+			const config = line.classConfig;
+			const selection = lineItems[index];
+			const teacherId = selection.teacherId.trim();
+			const accompanistId = selection.accompanistId?.trim();
+			const accompanist = accompanistId
+				? caches.accompanistGrants.get(accompanistId)
+				: null;
+			line.registrationSnapshot = {
+				version: 1,
+				capturedAtIso,
+				class: {
+					id: config.id,
+					festivalId: config.festivalId,
+					displayName: config.displayName,
+					classSubtypeId: config.classSubtypeId,
+					classSubtypeName:
+						subtypes.find((subtype) => subtype.id === config.classSubtypeId)
+							?.displayName ?? null,
+					minimumAge: config.minimumAge,
+					maximumAge: config.maximumAge,
+					price: config.price,
+					currencyCode,
+					maximumPerformancePieces: config.maximumPerformancePieces,
+					performanceMinutes: config.performanceMinutes,
+					capacity: config.capacity,
+				},
+				division: {
+					id: config.divisionId,
+					name:
+						divisions.find((division) => division.id === config.divisionId)
+							?.displayName ?? null,
+				},
+				instrument: line.instrument,
+				teacher: {
+					customerId: teacherId,
+					membershipId: line.teacherEntitlementId,
+					name:
+						teachers
+							.get(config.divisionId)
+							?.find((teacher) => teacher.id === teacherId)?.name || null,
+				},
+				accompanist:
+					accompanist && line.accompanistEntitlementId
+						? {
+								customerId: accompanist.customerId,
+								membershipId: line.accompanistEntitlementId,
+								name: accompanist.contact.name || null,
+							}
+						: null,
+				repertoire: structuredClone(line.normalizedPieces),
+			};
 		}
 	}
 
 	private async createAndVerifyCart(params: {
 		input: StartClassCheckoutInput;
+		festivalId: string;
+		eligibilityResults: readonly ClassEligibilityResult[];
 		intent: CheckoutIntentRecord;
 		validatedLines: ValidatedLineItem[];
 		intentLines: readonly CheckoutIntentLineItemRecord[];
@@ -614,6 +983,7 @@ export class ClassCheckoutService {
 	}): Promise<ClassCheckoutResult> {
 		const {
 			input,
+			festivalId,
 			intent,
 			validatedLines,
 			intentLines,
@@ -642,6 +1012,12 @@ export class ClassCheckoutService {
 			};
 		});
 
+		setStage("registration_window");
+		await this.requireRegistrationOpen(
+			input.organizationId,
+			festivalId,
+			params.eligibilityResults,
+		);
 		setStage("create_cart");
 		const cartResponse = await this.storefront.createCart({
 			organizationId: input.organizationId,
@@ -652,13 +1028,29 @@ export class ClassCheckoutService {
 			currencyCode,
 		});
 
+		setStage("attach_cart");
+		const capacityCheck = () =>
+			verifyPostCartCreateCapacityCutoff({
+				organizationId: input.organizationId,
+				festivalId,
+				lines: validatedLines.map((vl) => ({
+					childId: vl.child.id,
+					festivalClassId: vl.classConfig.id,
+				})),
+				organizations: this.organizations,
+				countConfirmedEntitlements: this.commerce
+					? (orgId, classId) =>
+							this.commerce?.countConfirmedClassEntitlements(orgId, classId) ??
+							Promise.resolve(0)
+					: undefined,
+			});
 		const integrationVersion =
 			typeof input.integrationVersion === "number"
 				? input.integrationVersion
 				: Number(input.integrationVersion) || params.defaultIntegrationVersion;
 
-		setStage("attach_cart");
-		const cart = await this.checkout.attachCart({
+		const attachCartInput = {
+			capacityCheck,
 			intentId: intent.id,
 			shopifyCartId: cartResponse.shopifyCartId,
 			organizationId: input.organizationId,
@@ -666,7 +1058,27 @@ export class ClassCheckoutService {
 			sessionId: input.sessionId,
 			integrationVersion,
 			expiresAtIso,
-		});
+		};
+		let cart: CheckoutCartRecord;
+		try {
+			cart = this.checkout.markIntentReady
+				? await this.checkout.markIntentReady(attachCartInput)
+				: await this.checkout.attachCart(attachCartInput);
+		} catch (error) {
+			if (error instanceof AppError && error.code === "sold_out") {
+				if (this.checkout.markIntentFailed) {
+					await this.checkout.markIntentFailed({
+						organizationId: input.organizationId,
+						intentId: intent.id,
+						failureCode: "sold_out",
+						failureMessage: error.message,
+					});
+				} else {
+					await this.checkout.markFailed(intent.id);
+				}
+			}
+			throw error;
+		}
 
 		setStage("mark_checkout_started");
 		await this.checkout.markCheckoutStarted(intent.id);
@@ -700,7 +1112,8 @@ export class ClassCheckoutService {
 
 	private async executeStorefrontCheckout(
 		input: StartClassCheckoutInput,
-		targetFestival: FestivalRecord,
+		festivalId: string,
+		eligibilityResults: readonly ClassEligibilityResult[],
 		intent: CheckoutIntentRecord,
 		validatedLines: ValidatedLineItem[],
 		currencyCode: string,
@@ -724,13 +1137,15 @@ export class ClassCheckoutService {
 			);
 			await this.insertAllRegistrationMetadata(
 				input.organizationId,
-				targetFestival.id,
+				festivalId,
 				intent,
 				validatedLines,
 				intentLines,
 			);
 			return await this.createAndVerifyCart({
 				input,
+				festivalId,
+				eligibilityResults,
 				intent,
 				validatedLines,
 				intentLines,
@@ -742,6 +1157,13 @@ export class ClassCheckoutService {
 				},
 			});
 		} catch (error) {
+			if (
+				error instanceof AppError &&
+				error.status === 400 &&
+				error.code !== "registration_closed"
+			) {
+				throw error;
+			}
 			return this.reportAndMarkFailed({
 				stage,
 				organizationId: input.organizationId,
@@ -823,7 +1245,10 @@ export class ClassCheckoutService {
 			});
 			throw checkoutFailureError(markFailedError);
 		}
-		throw checkoutFailureError(params.error);
+		throw params.error instanceof AppError &&
+			params.error.code === "registration_closed"
+			? params.error
+			: checkoutFailureError(params.error);
 	}
 
 	private logFailure(params: {

@@ -26,6 +26,7 @@ function createFakeServices() {
 		recordConsent: [],
 		startCheckout: [],
 		acquireAccompanist: [],
+		order: [],
 	};
 
 	const customerAccountService = {
@@ -50,6 +51,7 @@ function createFakeServices() {
 			customerId: string,
 		) => {
 			calls.recordConsent.push({ organizationId, customerId });
+			calls.order.push("recordConsent");
 		},
 		customerReadAccess: async (_slug: string, cookie?: string) => {
 			if (!cookie) throw new AppError("Customer session is invalid.", 401);
@@ -58,10 +60,12 @@ function createFakeServices() {
 		formAccess: async (
 			_slug: string,
 			cookie?: string,
-			_csrf?: string,
+			csrf?: string,
 			_origin?: string,
 		) => {
 			if (!cookie) throw new AppError("Customer session is invalid.", 401);
+			if (csrf !== "csrf_token")
+				throw new AppError("CSRF validation failed.", 403);
 			return { organizationId: "org_1", customerId: "cust_1" };
 		},
 	} as unknown as CustomerAccountService;
@@ -90,6 +94,7 @@ function createFakeServices() {
 	const accompanistMembershipService = {
 		acquire: async (input: unknown) => {
 			calls.acquireAccompanist.push(input);
+			calls.order.push("acquireAccompanist");
 			return { acquired: true };
 		},
 	} as unknown as AccompanistMembershipService;
@@ -295,7 +300,7 @@ describe("Customer Membership Routes", () => {
 			"X-CSRF-Token": "csrf_token",
 			Origin: "https://example.com",
 		};
-		const payload = { divisionIds: ["div_1"] };
+		const payload = { divisionIds: ["div_1"], staffAccessConsent: true };
 
 		it("handles valid session and CSRF to acquire", async () => {
 			const services = createFakeServices();
@@ -310,12 +315,92 @@ describe("Customer Membership Routes", () => {
 			expect(res.status).toBe(200);
 			expect(res.headers.get("Cache-Control")).toBe("no-store");
 			expect(await res.json()).toEqual({ acquired: true });
+			expect(services.calls.order).toEqual([
+				"recordConsent",
+				"acquireAccompanist",
+			]);
+			expect(services.calls.recordConsent).toEqual([
+				{ organizationId: "org_1", customerId: "cust_1" },
+			]);
 			expect(services.calls.acquireAccompanist[0]).toEqual({
 				organizationId: "org_1",
 				customerId: "cust_1",
 				payload,
 			});
 		});
+
+		for (const consent of [undefined, false, "true", 1, null]) {
+			it(`rejects consent ${String(consent)} without recording or acquisition`, async () => {
+				const services = createFakeServices();
+				const response = await req(
+					createTestApp(services),
+					"POST",
+					"/accompanist-membership",
+					validHeaders,
+					JSON.stringify({ ...payload, staffAccessConsent: consent }),
+				);
+				expect(response.status).toBe(400);
+				expect(services.calls.recordConsent).toEqual([]);
+				expect(services.calls.acquireAccompanist).toEqual([]);
+			});
+		}
+
+		for (const invalid of [
+			"{",
+			"null",
+			"[]",
+			JSON.stringify({ ...payload, customerId: "forged" }),
+		]) {
+			it(`rejects invalid payload ${invalid} before recording consent`, async () => {
+				const services = createFakeServices();
+				const response = await req(
+					createTestApp(services),
+					"POST",
+					"/accompanist-membership",
+					validHeaders,
+					invalid,
+				);
+				expect(response.status).toBe(400);
+				expect(services.calls.recordConsent).toEqual([]);
+				expect(services.calls.acquireAccompanist).toEqual([]);
+			});
+		}
+
+		it("does not acquire membership if consent persistence fails", async () => {
+			const services = createFakeServices();
+			services.customerAccountService.recordCheckoutStaffAccessConsent =
+				async () => {
+					throw new AppError("Consent unavailable.", 503);
+				};
+			const response = await req(
+				createTestApp(services),
+				"POST",
+				"/accompanist-membership",
+				validHeaders,
+				JSON.stringify(payload),
+			);
+			expect(response.status).toBe(503);
+			expect(services.calls.acquireAccompanist).toEqual([]);
+		});
+
+		for (const headers of [
+			{ ...JSON_HDR, "X-CSRF-Token": "csrf_token" },
+			{ ...AUTH, ...JSON_HDR },
+		]) {
+			it("requires session and CSRF before recording consent", async () => {
+				const services = createFakeServices();
+				const response = await req(
+					createTestApp(services),
+					"POST",
+					"/accompanist-membership",
+					headers,
+					JSON.stringify(payload),
+				);
+				expect([401, 403]).toContain(response.status);
+				expect(services.calls.recordConsent).toEqual([]);
+				expect(services.calls.acquireAccompanist).toEqual([]);
+			});
+		}
 
 		it("returns 503 when service is missing", async () => {
 			const app = createTestApp({});

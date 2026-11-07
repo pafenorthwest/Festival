@@ -3,6 +3,7 @@ import type {
 	ClassEntitlementStatus,
 } from "./entitlements.js";
 import type {
+	ClassAvailabilityStatus,
 	FestivalClassConfiguration,
 	RegistrationCatalogValue,
 } from "./organization.js";
@@ -58,11 +59,16 @@ export interface ClassEligibilityResult {
 	isEligible: boolean;
 	reasonCode: EligibilityReasonCode;
 	message?: string;
+	availability?: ClassAvailabilityStatus;
+	capacity?: number;
+	placedCount?: number;
 	dependencyDescriptor?: SubtypeDependencyDescriptor;
 	missingPrerequisite?: SubtypeDependencyDescriptor;
 	satisfiedPrerequisites?: SubtypeDependencyDescriptor[];
 	lineItemId?: string;
 }
+
+export type PurchaseEligibilityItemResult = ClassEligibilityResult;
 
 export type PurchaseEligibilityMode = "cart" | "advisory";
 
@@ -93,6 +99,7 @@ export interface ClassCheckoutLineItemInput
 	classId?: string;
 	childId: string;
 	teacherId: string;
+	instrumentId?: string;
 	accompanistId?: string | null;
 	pieces: RepertoirePiece[];
 	isCandidate?: never;
@@ -146,6 +153,25 @@ function normalizeSubtypes(
 
 function isActiveEntitlement(status: ClassEntitlementStatus): boolean {
 	return status !== "cancelled" && status !== "revoked";
+}
+
+export function isPlacedEntitlement(status: ClassEntitlementStatus): boolean {
+	return status === "confirmed";
+}
+
+export function countPlacedEntitlementsForClass(
+	entitlements: readonly ClassEntitlement[],
+	organizationId: string,
+	festivalId: string,
+	festivalClassId: string,
+): number {
+	return entitlements.filter(
+		(e) =>
+			e.organizationId === organizationId &&
+			e.festivalId === festivalId &&
+			e.festivalClassId === festivalClassId &&
+			isPlacedEntitlement(e.status),
+	).length;
 }
 
 function matchesDivisionAndAge(
@@ -271,26 +297,48 @@ function checkDuplicateRegistration(
 	return null;
 }
 
+function getClassCapacityMetadata(
+	targetClass: FestivalClassConfiguration,
+	ctx: EvaluationContext,
+): {
+	availability: ClassAvailabilityStatus;
+	capacity: number;
+	placedCount: number;
+} | null {
+	if (targetClass.capacity === undefined || targetClass.capacity === null) {
+		return null;
+	}
+	const activeCount = ctx.activeEntitlements.filter(
+		(e) =>
+			e.festivalClassId === targetClass.id && isPlacedEntitlement(e.status),
+	).length;
+	return {
+		availability:
+			targetClass.capacity <= 0 || activeCount >= targetClass.capacity
+				? "waitlist"
+				: "open",
+		capacity: targetClass.capacity,
+		placedCount: activeCount,
+	};
+}
+
 function checkCapacitySoldOut(
 	targetClass: FestivalClassConfiguration,
 	item: ProposedPurchaseLineItem,
 	itemIndex: number,
 	ctx: EvaluationContext,
 ): ClassEligibilityResult | null {
-	if (targetClass.capacity === undefined || targetClass.capacity === null) {
+	const capacityMetadata = getClassCapacityMetadata(targetClass, ctx);
+	if (!capacityMetadata) {
 		return null;
 	}
-	const activeCount = ctx.activeEntitlements.filter(
-		(e) =>
-			e.festivalClassId === targetClass.id && isActiveEntitlement(e.status),
-	).length;
 	const itemsAheadCount = ctx.items
 		.slice(0, itemIndex)
 		.filter((prev) => prev.festivalClassId === targetClass.id).length;
 
 	if (
 		targetClass.capacity <= 0 ||
-		activeCount + itemsAheadCount >= targetClass.capacity
+		capacityMetadata.placedCount + itemsAheadCount >= targetClass.capacity
 	) {
 		return {
 			childId: item.childId,
@@ -299,6 +347,9 @@ function checkCapacitySoldOut(
 			isEligible: false,
 			reasonCode: "SOLD_OUT",
 			message: "Class capacity is full.",
+			availability: "waitlist",
+			capacity: capacityMetadata.capacity,
+			placedCount: capacityMetadata.placedCount,
 			...(item.id ? { lineItemId: item.id } : {}),
 		};
 	}
@@ -310,6 +361,17 @@ function evaluateItemEligibility(
 	itemIndex: number,
 	ctx: EvaluationContext,
 ): ClassEligibilityResult {
+	const targetClass = ctx.classesMap.get(item.festivalClassId);
+	const isTargetValid = Boolean(
+		targetClass?.isActive &&
+			targetClass.organizationId === ctx.organizationId &&
+			targetClass.festivalId === ctx.festivalId,
+	);
+	const capacityMetadata =
+		isTargetValid && targetClass
+			? getClassCapacityMetadata(targetClass, ctx)
+			: null;
+
 	if (!ctx.isRegistrationOpen) {
 		return {
 			childId: item.childId,
@@ -318,16 +380,12 @@ function evaluateItemEligibility(
 			isEligible: false,
 			reasonCode: "REGISTRATION_CLOSED",
 			message: "Registration is closed for this festival.",
+			...(capacityMetadata ?? {}),
 			...(item.id ? { lineItemId: item.id } : {}),
 		};
 	}
 
-	const targetClass = ctx.classesMap.get(item.festivalClassId);
-	if (
-		!targetClass?.isActive ||
-		targetClass.organizationId !== ctx.organizationId ||
-		targetClass.festivalId !== ctx.festivalId
-	) {
+	if (!isTargetValid || !targetClass) {
 		return {
 			childId: item.childId,
 			festivalClassId: item.festivalClassId,
@@ -340,7 +398,11 @@ function evaluateItemEligibility(
 	}
 
 	const duplicateResult = checkDuplicateRegistration(item, itemIndex, ctx);
-	if (duplicateResult) return duplicateResult;
+	if (duplicateResult) {
+		return capacityMetadata
+			? { ...duplicateResult, ...capacityMetadata }
+			: duplicateResult;
+	}
 
 	const subtype = ctx.subtypesMap.get(targetClass.classSubtypeId);
 	const requiredSubtypeId = subtype?.requiredSubtypeId?.trim();
@@ -374,6 +436,7 @@ function evaluateItemEligibility(
 				isEligible: false,
 				reasonCode: "MISSING_PREREQUISITE",
 				message: `Missing prerequisite: class requires subtype "${descriptor.requiredSubtypeName ?? requiredSubtypeId}" in the same division and age group.`,
+				...(capacityMetadata ?? {}),
 				dependencyDescriptor: descriptor,
 				missingPrerequisite: descriptor,
 				...(item.id ? { lineItemId: item.id } : {}),
@@ -427,6 +490,7 @@ function evaluateItemEligibility(
 		isEligible: true,
 		reasonCode: "AVAILABLE",
 		message: "Class is available for registration.",
+		...(capacityMetadata ?? {}),
 		...(dependencyDescriptor ? { dependencyDescriptor } : {}),
 		...(satisfiedPrerequisites && satisfiedPrerequisites.length > 0
 			? { satisfiedPrerequisites }

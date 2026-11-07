@@ -14,19 +14,23 @@ import {
 	isClassEntitlementStatus,
 } from "@festival/common";
 import { sql } from "bun";
+import { AppError } from "../errors/app-error.js";
 import { initializePostgresSchema } from "../repo/postgres-schema.js";
 import type { ClassEntitlementFilter } from "./class-entitlement-repository.js";
 import type {
 	MembershipCommerceRepository,
+	MembershipDecisionAuditRecord,
 	MembershipDecisionStatus,
 	MembershipReasonCode,
 	MembershipReconciliationRun,
 	MembershipValidationDecision,
+	ResolveDecisionManuallyInput,
 	ShopifyOrderProjection,
 	ShopifyOrderProjectionInput,
 	ShopifyWebhookDelivery,
 } from "./membership-commerce-repository.js";
 import { PaidLineConflictError } from "./membership-commerce-repository.js";
+import { countConfirmedClassEntitlements } from "./postgres-class-entitlement-count.js";
 
 function schemaName(value: string) {
 	if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(value))
@@ -137,6 +141,21 @@ function classEntitlementFromRow(
 		paidAmountCents: Number(row.paid_amount_cents),
 		paidCurrencyCode: String(row.paid_currency_code),
 		status: row.status as ClassEntitlementStatus,
+		admittedCartReference:
+			row.admitted_cart_reference !== null &&
+			row.admitted_cart_reference !== undefined
+				? String(row.admitted_cart_reference)
+				: null,
+		capacityAtAllocation:
+			row.capacity_at_allocation !== null &&
+			row.capacity_at_allocation !== undefined
+				? Number(row.capacity_at_allocation)
+				: null,
+		placedCountBeforeAllocation:
+			row.placed_count_before_allocation !== null &&
+			row.placed_count_before_allocation !== undefined
+				? Number(row.placed_count_before_allocation)
+				: null,
 		createdAt: String(row.created_at),
 		updatedAt: String(row.updated_at),
 	};
@@ -324,6 +343,33 @@ export class PostgresMembershipCommerceRepository
 		};
 	}
 
+	async listOrderProjectionsByGids(
+		organizationId: string,
+		shopifyOrderGids: readonly string[],
+	): Promise<ShopifyOrderProjection[]> {
+		if (shopifyOrderGids.length === 0) return [];
+		const rows = (await sql.unsafe(
+			`SELECT organization_id, shopify_order_gid, shopify_customer_gid, correlation_id, fully_paid_at::text, currency_code, created_at::text, updated_at::text FROM ${this.schema}.shopify_order_projections WHERE organization_id = $1 AND shopify_order_gid = ANY($2)`,
+			[organizationId, sql.array([...shopifyOrderGids], "text")],
+		)) as Array<Record<string, unknown>>;
+		return rows.map((row) => ({
+			organizationId: String(row.organization_id),
+			shopifyOrderGid: String(row.shopify_order_gid),
+			shopifyCustomerGid:
+				row.shopify_customer_gid === null
+					? undefined
+					: String(row.shopify_customer_gid),
+			correlationId:
+				row.correlation_id === null ? undefined : String(row.correlation_id),
+			fullyPaidAtIso:
+				row.fully_paid_at === null ? undefined : String(row.fully_paid_at),
+			currencyCode:
+				row.currency_code === null ? undefined : String(row.currency_code),
+			createdAtIso: String(row.created_at),
+			updatedAtIso: String(row.updated_at),
+		}));
+	}
+
 	async recordPendingDecision(input: {
 		organizationId: string;
 		shopifyOrderGid: string;
@@ -423,6 +469,13 @@ export class PostgresMembershipCommerceRepository
 			);
 		}
 		return sql.begin(async (tx) => {
+			// Acquire admission serialization before any fulfillment row locks.
+			if (classEntitlementInputs.length > 0) {
+				await tx.unsafe(
+					"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+					[`${this.schema}:class-capacity-cutoff`],
+				);
+			}
 			if (input.decision.checkoutIntentId) {
 				await tx.unsafe(
 					"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
@@ -448,7 +501,7 @@ export class PostgresMembershipCommerceRepository
 				const existingClasses = await Promise.all(
 					classEntitlementInputs.map(async (classEntitlement) => {
 						const rows = (await tx.unsafe(
-							`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text
+							`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text
 							FROM ${this.schema}.class_entitlements
 							WHERE organization_id = $1 AND shopify_order_line_gid = $2
 							FOR UPDATE`,
@@ -513,6 +566,7 @@ export class PostgresMembershipCommerceRepository
 			}
 			let finalDecision = input.decision;
 			let grantInput = input.grant;
+			let nextEntitlementId: string | undefined;
 			if (grantInput && finalDecision.customerId) {
 				if (!grantInput.verifiedIdentityEmail) {
 					finalDecision = {
@@ -538,15 +592,27 @@ export class PostgresMembershipCommerceRepository
 						};
 						grantInput = undefined;
 					} else {
+						let supersededEntitlementId: string | undefined;
 						const entitlementRows = (await tx.unsafe(
-							`SELECT e.ends_on::text, e.starts_on > (NOW() AT TIME ZONE o.timezone)::date AS scheduled FROM ${this.schema}.membership_entitlements e JOIN ${this.schema}.organizations o ON o.id=e.organization_id WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class=$3 AND e.revoked_at IS NULL AND e.ends_on > (NOW() AT TIME ZONE o.timezone)::date ORDER BY e.starts_on FOR UPDATE`,
+							`SELECT e.id, e.starts_on::text, e.ends_on::text, (e.starts_on > $4::date) AS scheduled, (e.ends_on > ($4::date + INTERVAL '30 days')::date) AS outside_renewal_window FROM ${this.schema}.membership_entitlements e WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class=$3 AND e.revoked_at IS NULL AND e.superseded_on IS NULL AND e.ends_on > $4::date ORDER BY e.starts_on FOR UPDATE`,
 							[
 								finalDecision.organizationId,
 								finalDecision.customerId,
 								grantInput.entitlementClass,
+								grantInput.startsOn,
 							],
-						)) as Array<{ ends_on: string; scheduled: boolean }>;
-						if (entitlementRows.some((row) => row.scheduled)) {
+						)) as Array<{
+							id: string;
+							starts_on: string;
+							ends_on: string;
+							scheduled: boolean;
+							outside_renewal_window: boolean;
+						}>;
+						if (
+							entitlementRows.some(
+								(row) => row.scheduled || row.outside_renewal_window,
+							)
+						) {
 							finalDecision = {
 								...finalDecision,
 								status: "needs_review",
@@ -554,11 +620,17 @@ export class PostgresMembershipCommerceRepository
 							};
 							grantInput = undefined;
 						} else if (entitlementRows[0]) {
-							const startsOn = entitlementRows[0].ends_on;
+							supersededEntitlementId = entitlementRows[0].id;
+							const effectiveStartDate =
+								entitlementRows[0].ends_on > grantInput.startsOn
+									? entitlementRows[0].ends_on
+									: grantInput.startsOn;
 							grantInput = {
 								...grantInput,
-								startsOn,
-								endsOn: addCalendarDays(startsOn, grantInput.durationDays),
+								endsOn: addCalendarDays(
+									effectiveStartDate,
+									grantInput.durationDays,
+								),
 							};
 						}
 						if (grantInput) {
@@ -611,11 +683,12 @@ export class PostgresMembershipCommerceRepository
 									));
 								if (!retried || retried.count !== 1) {
 									const refreshedEntitlements = (await tx.unsafe(
-										`SELECT 1 FROM ${this.schema}.membership_entitlements e JOIN ${this.schema}.organizations o ON o.id=e.organization_id WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class=$3 AND e.revoked_at IS NULL AND e.starts_on > (NOW() AT TIME ZONE o.timezone)::date LIMIT 1 FOR UPDATE`,
+										`SELECT 1 FROM ${this.schema}.membership_entitlements e WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class=$3 AND e.revoked_at IS NULL AND e.superseded_on IS NULL AND (e.starts_on > $4::date OR e.ends_on > ($4::date + INTERVAL '30 days')::date) LIMIT 1 FOR UPDATE`,
 										[
 											finalDecision.organizationId,
 											finalDecision.customerId,
 											grantInput.entitlementClass,
+											grantInput.startsOn,
 										],
 									)) as Array<Record<string, unknown>>;
 									if (!refreshedEntitlements[0]) {
@@ -631,6 +704,18 @@ export class PostgresMembershipCommerceRepository
 									grantInput = undefined;
 								}
 							}
+						}
+						nextEntitlementId = grantInput ? randomUUID() : undefined;
+						if (grantInput && supersededEntitlementId && nextEntitlementId) {
+							await tx.unsafe(
+								`UPDATE ${this.schema}.membership_entitlements SET superseded_on = $3::date, superseded_at = NOW(), superseded_by_grant_id = $4 WHERE id = $1 AND organization_id = $2 AND revoked_at IS NULL AND superseded_on IS NULL`,
+								[
+									supersededEntitlementId,
+									grantInput.organizationId,
+									grantInput.startsOn,
+									nextEntitlementId,
+								],
+							);
 						}
 					}
 				}
@@ -651,7 +736,7 @@ export class PostgresMembershipCommerceRepository
 			}
 			let createdGrant: EntitlementGrantSnapshot | undefined;
 			if (grantInput) {
-				const entitlementId = randomUUID();
+				const entitlementId = nextEntitlementId ?? randomUUID();
 				const entitlementRows = (await tx.unsafe(
 					`INSERT INTO ${this.schema}.membership_entitlements (id,organization_id,customer_id,entitlement_class,source,offering_id,starts_on,ends_on) SELECT $1,$2,$3,$4,'teacher_checkout',$5,$6::date,$7::date FROM ${this.schema}.products WHERE id=$5 AND organization_id=$2 AND entitlement_class=$4 RETURNING id`,
 					[
@@ -698,10 +783,10 @@ export class PostgresMembershipCommerceRepository
 				const entitlementId = classEntitlementInput.id ?? randomUUID();
 				const insertedEntitlementRows = (await tx.unsafe(
 					`INSERT INTO ${this.schema}.class_entitlements (
-						id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at, updated_at
-					) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW(),NOW())
+						id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at, updated_at
+					) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW(),NOW())
 					ON CONFLICT (organization_id, shopify_order_line_gid) DO NOTHING
-					RETURNING id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text`,
+					RETURNING id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text`,
 					[
 						entitlementId,
 						classEntitlementInput.organizationId,
@@ -716,6 +801,9 @@ export class PostgresMembershipCommerceRepository
 						classEntitlementInput.paidAmountCents,
 						classEntitlementInput.paidCurrencyCode,
 						classEntitlementInput.status ?? "confirmed",
+						classEntitlementInput.admittedCartReference ?? null,
+						classEntitlementInput.capacityAtAllocation ?? null,
+						classEntitlementInput.placedCountBeforeAllocation ?? null,
 					],
 				)) as Array<Record<string, unknown>>;
 				let createdClassEntitlement = insertedEntitlementRows[0]
@@ -723,7 +811,7 @@ export class PostgresMembershipCommerceRepository
 					: undefined;
 				if (!createdClassEntitlement) {
 					const existingEntitlementRows = (await tx.unsafe(
-						`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text
+						`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text
 						FROM ${this.schema}.class_entitlements
 						WHERE organization_id = $1 AND shopify_order_line_gid = $2
 						FOR UPDATE`,
@@ -827,7 +915,7 @@ export class PostgresMembershipCommerceRepository
 		today: string,
 	) {
 		const rows = (await sql.unsafe(
-			`SELECT 1 FROM ${this.schema}.membership_entitlements WHERE organization_id = $1 AND customer_id = $2 AND entitlement_class = $3 AND revoked_at IS NULL AND starts_on > $4::date LIMIT 1`,
+			`SELECT 1 FROM ${this.schema}.membership_entitlements WHERE organization_id = $1 AND customer_id = $2 AND entitlement_class = $3 AND revoked_at IS NULL AND superseded_on IS NULL AND starts_on > $4::date LIMIT 1`,
 			[organizationId, customerId, entitlementClass, today],
 		)) as Array<Record<string, unknown>>;
 		return Boolean(rows[0]);
@@ -862,6 +950,197 @@ export class PostgresMembershipCommerceRepository
 		return reconciliationRun(rows[0]);
 	}
 
+	async listReconciliationRuns(organizationId: string, limit = 10) {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT id, organization_id, status, discovered_count, processed_count, started_at::text, finished_at::text, failure_category FROM ${this.schema}.membership_reconciliation_runs WHERE organization_id = $1 ORDER BY finished_at DESC, id DESC LIMIT $2`,
+			[organizationId, limit],
+		)) as Array<Record<string, unknown>>;
+		return rows.map(reconciliationRun);
+	}
+
+	async listUnresolvedDecisions(organizationId: string) {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT id, organization_id, customer_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, status, reason_code, created_at::text, updated_at::text FROM ${this.schema}.membership_validation_decisions WHERE organization_id = $1 AND status IN ('pending_validation', 'needs_review') ORDER BY updated_at DESC, id DESC`,
+			[organizationId],
+		)) as Array<Record<string, unknown>>;
+		return rows.map(decision);
+	}
+
+	async getDecisionById(organizationId: string, decisionId: string) {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT id, organization_id, customer_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, status, reason_code, created_at::text, updated_at::text FROM ${this.schema}.membership_validation_decisions WHERE organization_id = $1 AND id = $2 LIMIT 1`,
+			[organizationId, decisionId],
+		)) as Array<Record<string, unknown>>;
+		return rows[0] ? decision(rows[0]) : null;
+	}
+
+	async getDecisionAudit(organizationId: string, decisionId: string) {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT id, organization_id, decision_id, prior_status, final_status, actor_user_id, note, resolved_at::text FROM ${this.schema}.membership_validation_decision_audits WHERE organization_id = $1 AND decision_id = $2 LIMIT 1`,
+			[organizationId, decisionId],
+		)) as Array<Record<string, unknown>>;
+		if (!rows[0]) return null;
+		const row = rows[0];
+		return {
+			id: String(row.id),
+			organizationId: String(row.organization_id),
+			decisionId: String(row.decision_id),
+			priorStatus: row.prior_status as "pending_validation" | "needs_review",
+			finalStatus: row.final_status as "approved" | "rejected",
+			actorUserId: String(row.actor_user_id),
+			note: String(row.note),
+			resolvedAtIso: String(row.resolved_at),
+		};
+	}
+
+	async resolveDecisionManually(input: ResolveDecisionManuallyInput) {
+		await this.ensureReady();
+		return sql.begin(async (tx) => {
+			const rows = (await tx.unsafe(
+				`SELECT id, organization_id, customer_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, status, reason_code, created_at::text, updated_at::text FROM ${this.schema}.membership_validation_decisions WHERE organization_id = $1 AND id = $2 FOR UPDATE`,
+				[input.organizationId, input.decisionId],
+			)) as Array<Record<string, unknown>>;
+			if (!rows[0]) {
+				throw new AppError("Validation decision was not found.", 404);
+			}
+			const existing = decision(rows[0]);
+			if (
+				existing.status !== "pending_validation" &&
+				existing.status !== "needs_review"
+			) {
+				throw new AppError("Validation decision is already resolved.", 409);
+			}
+			const priorStatus = existing.status;
+			let createdGrant: EntitlementGrantSnapshot | undefined;
+			if (input.finalStatus === "approved") {
+				if (!input.grant) {
+					throw new AppError("Approved decision requires a grant.", 422);
+				}
+				assertValidEntitlementGrantSnapshotInput(input.grant);
+				const grantInput = input.grant;
+				const entitlementId = randomUUID();
+				await tx.unsafe(
+					`INSERT INTO ${this.schema}.membership_identity_emails (organization_id, normalized_email, customer_id) VALUES ($1,$2,$3) ON CONFLICT (organization_id, normalized_email) DO UPDATE SET customer_id = EXCLUDED.customer_id WHERE ${this.schema}.membership_identity_emails.customer_id = EXCLUDED.customer_id`,
+					[
+						grantInput.organizationId,
+						grantInput.verifiedIdentityEmail ?? "",
+						grantInput.customerId,
+					],
+				);
+				await tx.unsafe(
+					`INSERT INTO ${this.schema}.membership_entitlements (id,organization_id,customer_id,entitlement_class,source,offering_id,starts_on,ends_on) SELECT $1,$2,$3,$4,'teacher_checkout',$5,$6::date,$7::date FROM ${this.schema}.products WHERE id=$5 AND organization_id=$2 AND entitlement_class=$4`,
+					[
+						entitlementId,
+						grantInput.organizationId,
+						grantInput.customerId,
+						grantInput.entitlementClass,
+						grantInput.offeringId,
+						grantInput.startsOn,
+						grantInput.endsOn,
+					],
+				);
+				await tx.unsafe(
+					`INSERT INTO ${this.schema}.membership_entitlement_divisions (entitlement_id,organization_id,division_id,division_name_snapshot) VALUES ($1,$2,$3,$4)`,
+					[
+						entitlementId,
+						grantInput.organizationId,
+						grantInput.divisionId,
+						grantInput.divisionNameSnapshot,
+					],
+				);
+				await tx.unsafe(
+					`INSERT INTO ${this.schema}.teacher_membership_entitlement_details (entitlement_id,checkout_intent_id,shopify_order_gid,shopify_order_line_gid,paid_amount,paid_currency_code,duration_days) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+					[
+						entitlementId,
+						grantInput.checkoutIntentId,
+						grantInput.shopifyOrderGid,
+						grantInput.shopifyOrderLineGid,
+						grantInput.paidAmount,
+						grantInput.paidCurrencyCode,
+						grantInput.durationDays,
+					],
+				);
+				createdGrant = {
+					...grantInput,
+					id: entitlementId,
+					createdAtIso: input.resolvedAtIso,
+				};
+			}
+			if (input.projection) {
+				await tx.unsafe(
+					`INSERT INTO ${this.schema}.shopify_order_projections (organization_id, shopify_order_gid, shopify_customer_gid, correlation_id, fully_paid_at, currency_code, created_at, updated_at) VALUES ($1,$2,$3,$4,$5::timestamptz,$6,$7::timestamptz,$7::timestamptz) ON CONFLICT (organization_id, shopify_order_gid) DO UPDATE SET shopify_customer_gid = EXCLUDED.shopify_customer_gid, correlation_id = EXCLUDED.correlation_id, fully_paid_at = EXCLUDED.fully_paid_at, currency_code = EXCLUDED.currency_code, updated_at = EXCLUDED.updated_at`,
+					[
+						input.projection.organizationId,
+						input.projection.shopifyOrderGid,
+						input.projection.shopifyCustomerGid ?? null,
+						input.projection.correlationId ?? null,
+						input.projection.fullyPaidAtIso ?? null,
+						input.projection.currencyCode ?? null,
+						input.projection.updatedAtIso,
+					],
+				);
+			}
+			const customerId = input.customerId ?? existing.customerId ?? null;
+			const checkoutIntentId =
+				input.checkoutIntentId ?? existing.checkoutIntentId ?? null;
+			const shopifyOrderLineGid =
+				input.shopifyOrderLineGid ?? existing.shopifyOrderLineGid ?? null;
+			const reasonCode =
+				input.finalStatus === "approved" ? null : (existing.reasonCode ?? null);
+			const updatedRows = (await tx.unsafe(
+				`UPDATE ${this.schema}.membership_validation_decisions SET customer_id = $2, checkout_intent_id = $3, shopify_order_line_gid = $4, status = $5, reason_code = $6, updated_at = $7::timestamptz WHERE id = $1 RETURNING id, organization_id, customer_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, status, reason_code, created_at::text, updated_at::text`,
+				[
+					existing.id,
+					customerId,
+					checkoutIntentId,
+					shopifyOrderLineGid,
+					input.finalStatus,
+					reasonCode,
+					input.resolvedAtIso,
+				],
+			)) as Array<Record<string, unknown>>;
+			if (checkoutIntentId) {
+				await tx.unsafe(
+					`UPDATE ${this.schema}.checkout_intents SET status = $1 WHERE id = $2 AND organization_id = $3`,
+					[input.finalStatus, checkoutIntentId, input.organizationId],
+				);
+			}
+			const auditId = randomUUID();
+			await tx.unsafe(
+				`INSERT INTO ${this.schema}.membership_validation_decision_audits (id, organization_id, decision_id, prior_status, final_status, actor_user_id, note, resolved_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::timestamptz)`,
+				[
+					auditId,
+					input.organizationId,
+					existing.id,
+					priorStatus,
+					input.finalStatus,
+					input.actorUserId,
+					input.note,
+					input.resolvedAtIso,
+				],
+			);
+			const audit: MembershipDecisionAuditRecord = {
+				id: auditId,
+				organizationId: input.organizationId,
+				decisionId: existing.id,
+				priorStatus,
+				finalStatus: input.finalStatus,
+				actorUserId: input.actorUserId,
+				note: input.note,
+				resolvedAtIso: input.resolvedAtIso,
+			};
+			return {
+				decision: decision(updatedRows[0]),
+				grant: createdGrant,
+				audit,
+			};
+		});
+	}
+
 	async createClassEntitlement(
 		input: CreateClassEntitlementInput,
 	): Promise<ClassEntitlement> {
@@ -870,10 +1149,10 @@ export class PostgresMembershipCommerceRepository
 		const id = input.id ?? randomUUID();
 		const rows = (await sql.unsafe(
 			`INSERT INTO ${this.schema}.class_entitlements (
-				id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at, updated_at
-			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW(),NOW())
+				id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at, updated_at
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW(),NOW())
 			ON CONFLICT (organization_id, shopify_order_line_gid) DO NOTHING
-			RETURNING id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text`,
+			RETURNING id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text`,
 			[
 				id,
 				input.organizationId,
@@ -888,6 +1167,9 @@ export class PostgresMembershipCommerceRepository
 				input.paidAmountCents,
 				input.paidCurrencyCode,
 				input.status ?? "confirmed",
+				input.admittedCartReference ?? null,
+				input.capacityAtAllocation ?? null,
+				input.placedCountBeforeAllocation ?? null,
 			],
 		)) as Array<Record<string, unknown>>;
 		if (rows[0]) return classEntitlementFromRow(rows[0]);
@@ -907,7 +1189,7 @@ export class PostgresMembershipCommerceRepository
 	): Promise<ClassEntitlement | null> {
 		await this.ensureReady();
 		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text
+			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text
 			FROM ${this.schema}.class_entitlements
 			WHERE organization_id = $1 AND id = $2`,
 			[organizationId, id],
@@ -933,6 +1215,10 @@ export class PostgresMembershipCommerceRepository
 			params.push(filter.festivalClassId);
 			conditions.push(`festival_class_id = $${params.length}`);
 		}
+		if (filter.festivalClassIds) {
+			params.push(sql.array(filter.festivalClassIds, "text"));
+			conditions.push(`festival_class_id = ANY($${params.length}::text[])`);
+		}
 		if (filter.parentCustomerId) {
 			params.push(filter.parentCustomerId);
 			conditions.push(`parent_customer_id = $${params.length}`);
@@ -941,6 +1227,10 @@ export class PostgresMembershipCommerceRepository
 			params.push(filter.childId);
 			conditions.push(`child_id = $${params.length}`);
 		}
+		if (filter.childIds) {
+			params.push(sql.array(filter.childIds, "text"));
+			conditions.push(`child_id = ANY($${params.length}::text[])`);
+		}
 		if (filter.status) {
 			params.push(filter.status);
 			conditions.push(`status = $${params.length}`);
@@ -948,7 +1238,7 @@ export class PostgresMembershipCommerceRepository
 		const whereClause =
 			conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text
+			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text
 			FROM ${this.schema}.class_entitlements
 			${whereClause}
 			ORDER BY created_at DESC`,
@@ -963,7 +1253,7 @@ export class PostgresMembershipCommerceRepository
 	): Promise<ClassEntitlement | null> {
 		await this.ensureReady();
 		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text
+			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text
 			FROM ${this.schema}.class_entitlements
 			WHERE organization_id = $1 AND shopify_order_line_gid = $2`,
 			[organizationId, shopifyOrderLineGid],
@@ -977,12 +1267,25 @@ export class PostgresMembershipCommerceRepository
 	): Promise<ClassEntitlement | null> {
 		await this.ensureReady();
 		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text
+			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text
 			FROM ${this.schema}.class_entitlements
 			WHERE organization_id = $1 AND checkout_intent_id = $2`,
 			[organizationId, checkoutIntentId],
 		)) as Array<Record<string, unknown>>;
 		return rows[0] ? classEntitlementFromRow(rows[0]) : null;
+	}
+
+	async countConfirmedClassEntitlements(
+		organizationId: string,
+		festivalClassId: string,
+	): Promise<number> {
+		await this.ensureReady();
+		return countConfirmedClassEntitlements(
+			sql,
+			this.schema,
+			organizationId,
+			festivalClassId,
+		);
 	}
 
 	async updateClassEntitlementStatus(
@@ -998,7 +1301,7 @@ export class PostgresMembershipCommerceRepository
 			`UPDATE ${this.schema}.class_entitlements
 			SET status = $3, updated_at = NOW()
 			WHERE organization_id = $1 AND id = $2
-			RETURNING id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, created_at::text, updated_at::text`,
+			RETURNING id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text`,
 			[organizationId, id, status],
 		)) as Array<Record<string, unknown>>;
 		return rows[0] ? classEntitlementFromRow(rows[0]) : null;

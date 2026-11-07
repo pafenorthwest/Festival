@@ -1,8 +1,10 @@
 import type {
 	ClassRegistrationMetadata,
+	ClassRegistrationSnapshot,
 	RegistrationRepertoireItem,
 	RepertoirePiece,
 } from "@festival/common";
+import { normalizeClassRegistrationSnapshot } from "@festival/common";
 import type {
 	CheckoutCartRecord,
 	CheckoutIntentLineItemRecord,
@@ -143,11 +145,12 @@ async function insertRepertoireItems(
 	for (const item of items) {
 		await tx.unsafe(
 			`INSERT INTO ${schema}.registration_repertoire_items (id, organization_id, registration_metadata_id, repertoire_work_id, title_snapshot, performed_movement_text, duration_seconds, display_order)
-			 VALUES ($1, $2, $3, NULL, $4, $5, $6, $7)`,
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 			[
 				item.id,
 				item.organizationId,
 				item.registrationMetadataId,
+				item.catalogWorkId ?? null,
 				item.titleSnapshot,
 				item.performedMovementText,
 				item.durationSeconds,
@@ -219,6 +222,12 @@ export function registrationMetadataFromRow(
 				: String(row.accompanist_membership_id),
 		repertoireJson,
 		repertoireItems: repertoireItems ?? [],
+		registrationSnapshot: normalizeClassRegistrationSnapshot(
+			typeof row.registration_snapshot === "string"
+				? JSON.parse(row.registration_snapshot)
+				: ((row.registration_snapshot as ClassRegistrationSnapshot | null) ??
+						null),
+		),
 		createdAt: new Date(String(row.created_at)),
 	};
 }

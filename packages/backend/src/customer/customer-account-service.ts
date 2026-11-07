@@ -8,9 +8,15 @@ import {
 import type {
 	AdminCustomerProfileSummary,
 	AdminCustomerSearchResponse,
+	CanonicalWork,
 	ClassEntitlement,
 	ClassRegistrationMetadata,
 	CustomerAccountSettings,
+	CustomerClassEntitlementSummary,
+	CustomerClassRegistrationItem,
+	CustomerClassRegistrationMetadataSummary,
+	CustomerClassRegistrationsResponse,
+	CustomerFestivalClassSummary,
 	CustomerOrdersResponse,
 	CustomerProfile,
 	CustomerProfileResponse,
@@ -29,13 +35,22 @@ import {
 	CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION,
 	calendarDateInTimezone,
 	deriveFestivalMetadataCutoff,
+	doesClassRequireConcerto,
+	evaluateClassCapacityStatus,
+	isAccompanistMembershipGrantActive,
+	isFestivalRegistrationOpen,
 	validateCustomerAccountSettings,
 	validateCustomerProfileInput,
 } from "@festival/common";
 import type { CheckoutRepository } from "../checkout/checkout-repository.js";
+import {
+	resolvePieceCatalogWorks,
+	validateAndNormalizeRepertoirePieces,
+} from "../checkout/class-checkout-helpers.js";
 import { lifecycleForEntitlementRead } from "../commerce/entitlement-lifecycle.js";
 import type { MembershipCommerceRepository } from "../commerce/membership-commerce-repository.js";
 import { AppError } from "../errors/app-error.js";
+import type { RepertoireRepository } from "../repertoire/repertoire-repository.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
 import {
 	SHOPIFY_CUSTOMER_CLIENT_SECRET_PURPOSE,
@@ -174,15 +189,59 @@ function adminSearchResult(record: FestivalCustomerRecord) {
 	};
 }
 
-export interface CustomerClassRegistrationItem {
-	entitlement: ClassEntitlement;
-	festivalClass?: FestivalClassConfiguration;
-	child?: { id: string; name: string };
-	metadata?: ClassRegistrationMetadata | null;
+export type {
+	CustomerClassEntitlementSummary,
+	CustomerClassRegistrationItem,
+	CustomerClassRegistrationMetadataSummary,
+	CustomerClassRegistrationsResponse,
+	CustomerFestivalClassSummary,
+};
+
+function toCustomerEntitlementSummary(
+	entitlement: ClassEntitlement,
+): CustomerClassEntitlementSummary {
+	return {
+		id: entitlement.id,
+		festivalId: entitlement.festivalId,
+		festivalClassId: entitlement.festivalClassId,
+		childId: entitlement.childId,
+		status: entitlement.status,
+		createdAt: entitlement.createdAt,
+		updatedAt: entitlement.updatedAt,
+	};
 }
 
-export interface CustomerClassRegistrationsResponse {
-	registrations: CustomerClassRegistrationItem[];
+function toCustomerFestivalClassSummary(
+	festivalClass: FestivalClassConfiguration,
+): CustomerFestivalClassSummary {
+	return {
+		id: festivalClass.id,
+		festivalId: festivalClass.festivalId,
+		displayName: festivalClass.displayName,
+		classSubtypeId: festivalClass.classSubtypeId,
+		divisionId: festivalClass.divisionId,
+		minimumAge: festivalClass.minimumAge,
+		maximumAge: festivalClass.maximumAge,
+		price: festivalClass.price,
+		maximumPerformancePieces: festivalClass.maximumPerformancePieces,
+		performanceMinutes: festivalClass.performanceMinutes,
+		capacity: festivalClass.capacity,
+		isActive: festivalClass.isActive,
+	};
+}
+
+function toCustomerMetadataSummary(
+	metadata: ClassRegistrationMetadata,
+): CustomerClassRegistrationMetadataSummary {
+	return {
+		id: metadata.id,
+		festivalId: metadata.festivalId,
+		classEntitlementId: metadata.classEntitlementId,
+		teacherMembershipId: metadata.teacherMembershipId,
+		accompanistMembershipId: metadata.accompanistMembershipId,
+		repertoireJson: metadata.repertoireJson,
+		repertoireItems: metadata.repertoireItems,
+	};
 }
 
 export interface CustomerAccountServiceOptions {
@@ -199,6 +258,7 @@ export interface CustomerAccountServiceOptions {
 	jwksCacheTtlMs?: number;
 	jwksCacheMaxTotalBytes?: number;
 	cacheMaxEntryBytes?: number;
+	repertoire?: RepertoireRepository;
 }
 
 export class CustomerAccountService {
@@ -215,6 +275,7 @@ export class CustomerAccountService {
 		{ oidc: Discovery; api: ApiDiscovery }
 	>;
 	private jwksCache: BoundedAsyncCache<string, readonly JsonRecord[]>;
+	private readonly repertoire?: RepertoireRepository;
 	private get customers(): CustomerAccountRepository {
 		return this.repository;
 	}
@@ -226,7 +287,9 @@ export class CustomerAccountService {
 		options: CustomerAccountServiceOptions,
 		private readonly commerce?: MembershipCommerceRepository,
 		private readonly checkout?: CheckoutRepository,
+		repertoire?: RepertoireRepository,
 	) {
+		this.repertoire = repertoire ?? options.repertoire;
 		const origin = new URL(options.publicOrigin);
 		if (
 			!/^https:$/.test(origin.protocol) &&
@@ -1037,7 +1100,7 @@ export class CustomerAccountService {
 					: undefined,
 		};
 	}
-	/** Trusted server-side continuation after checkoutAccess has verified the session and CSRF token. */
+	/** Record affirmative membership-sharing consent after checkoutAccess or formAccess verifies the session and CSRF token. */
 	async recordCheckoutStaffAccessConsent(
 		organizationId: string,
 		customerId: string,
@@ -1155,6 +1218,21 @@ export class CustomerAccountService {
 			festivalId: festival?.id,
 		});
 
+		const projections = await this.commerce.listOrderProjectionsByGids(
+			session.organizationId,
+			[
+				...new Set(
+					entitlements.map((entitlement) => entitlement.shopifyOrderGid),
+				),
+			],
+		);
+		const paidAtByOrderGid = new Map(
+			projections.map((projection) => [
+				projection.shopifyOrderGid,
+				projection.fullyPaidAtIso ?? null,
+			]),
+		);
+
 		const classConfigCache = new Map<
 			string,
 			Map<string, FestivalClassConfiguration>
@@ -1195,10 +1273,13 @@ export class CustomerAccountService {
 					entitlement.id,
 				);
 				return {
-					entitlement,
-					festivalClass,
+					entitlement: toCustomerEntitlementSummary(entitlement),
+					festivalClass: festivalClass
+						? toCustomerFestivalClassSummary(festivalClass)
+						: undefined,
 					child,
-					metadata,
+					metadata: metadata ? toCustomerMetadataSummary(metadata) : null,
+					paidAtIso: paidAtByOrderGid.get(entitlement.shopifyOrderGid) ?? null,
 				};
 			}),
 		);
@@ -1256,72 +1337,25 @@ export class CustomerAccountService {
 		return config;
 	}
 
-	private validatePieceItem(piece: unknown): RepertoirePiece {
-		const item = piece as Record<string, unknown> | null;
-		if (!item || typeof item.title !== "string" || !item.title.trim()) {
-			throw new AppError("Each repertoire piece must have a valid title.", 400);
-		}
-		if (typeof item.composer !== "string" || !item.composer.trim()) {
-			throw new AppError(
-				"Each repertoire piece must have a valid composer.",
-				400,
-			);
-		}
-		if (
-			item.movement !== undefined &&
-			item.movement !== null &&
-			typeof item.movement !== "string"
-		) {
-			throw new AppError(
-				"Each repertoire piece must have a valid movement.",
-				400,
-			);
-		}
-		if (
-			typeof item.durationSeconds !== "number" ||
-			item.durationSeconds <= 0 ||
-			!Number.isSafeInteger(item.durationSeconds) ||
-			item.durationSeconds > 2_147_483_647
-		) {
-			throw new AppError(
-				"Each repertoire piece must have a positive whole-number duration in seconds.",
-				400,
-			);
-		}
-		return {
-			title: item.title.trim(),
-			composer: item.composer.trim(),
-			movement:
-				typeof item.movement === "string"
-					? item.movement.trim() || undefined
-					: undefined,
-			durationSeconds: item.durationSeconds,
-		};
-	}
-
-	private validateRegistrationPieces(
+	private async validateRegistrationPieces(
+		organizationId: string,
 		pieces: unknown,
 		classConfig: FestivalClassConfiguration,
-	): RepertoirePiece[] {
-		if (!Array.isArray(pieces) || pieces.length === 0) {
-			throw new AppError("Repertoire pieces must be a non-empty array.", 400);
-		}
-		if (pieces.length > classConfig.maximumPerformancePieces) {
-			throw new AppError(
-				`Number of pieces (${pieces.length}) exceeds the maximum allowed (${classConfig.maximumPerformancePieces}).`,
-				400,
-			);
-		}
-		const normalized = pieces.map((p) => this.validatePieceItem(p));
-		const totalMinutes =
-			normalized.reduce((s, p) => s + p.durationSeconds, 0) / 60;
-		if (totalMinutes > classConfig.performanceMinutes) {
-			throw new AppError(
-				`Total performance duration (${totalMinutes} minutes) exceeds the maximum allowed of ${classConfig.performanceMinutes} minutes.`,
-				400,
-			);
-		}
-		return normalized;
+	): Promise<RepertoirePiece[]> {
+		const subtypes = await this.organizations.listRegistrationCatalogValues(
+			organizationId,
+			"class_subtype",
+			false,
+		);
+		const subtype =
+			subtypes.find((s) => s.id === classConfig.classSubtypeId) ?? null;
+		const catalogWorksById = this.repertoire
+			? await resolvePieceCatalogWorks(pieces, organizationId, this.repertoire)
+			: undefined;
+		return validateAndNormalizeRepertoirePieces(pieces, classConfig, {
+			subtype,
+			catalogWorksById,
+		});
 	}
 
 	private async validateRegistrationAccompanist(
@@ -1352,7 +1386,7 @@ export class CustomerAccountService {
 		const active = grants.find(
 			(g) =>
 				(g.id === trimmed || g.customerId === trimmed) &&
-				(g.status === "active" || g.isCurrent === true),
+				isAccompanistMembershipGrantActive(g),
 		);
 		if (!active) {
 			throw new AppError(
@@ -1427,7 +1461,11 @@ export class CustomerAccountService {
 			entitlement.festivalClassId,
 		);
 		const payload = this.parseRegistrationMetadataInput(input);
-		const pieces = this.validateRegistrationPieces(payload.pieces, classConfig);
+		const pieces = await this.validateRegistrationPieces(
+			access.organizationId,
+			payload.pieces,
+			classConfig,
+		);
 		const rawAcc =
 			payload.accompanistMembershipId !== undefined
 				? payload.accompanistMembershipId
@@ -1640,12 +1678,25 @@ export class CustomerAccountService {
 		customerId: string,
 		actorUid: string,
 	): Promise<AdminCustomerProfileSummary> {
+		const customer = await this.findAdminCustomerProfile(
+			organizationId,
+			customerId,
+			actorUid,
+		);
+		if (!customer) throw new AppError("Customer not found.", 404);
+		return customer;
+	}
+	async findAdminCustomerProfile(
+		organizationId: string,
+		customerId: string,
+		actorUid: string,
+	): Promise<AdminCustomerProfileSummary | null> {
 		const customer = await this.repository.getConsentedCustomer(
 			organizationId,
 			customerId,
 			CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION,
 		);
-		if (!customer) throw new AppError("Customer not found.", 404);
+		if (!customer) return null;
 		await this.repository.recordCustomerProfileAccessAudit({
 			organizationId,
 			actorUid,
@@ -1911,6 +1962,24 @@ export class CustomerAccountService {
 		};
 	}
 
+	async searchRegistrationConcertoCatalog(
+		slug: string,
+		festivalShortName: string,
+		sessionId: string | undefined,
+		query: string,
+	): Promise<{ works: CanonicalWork[] }> {
+		const { organizationId } = await this.customerReadAccess(slug, sessionId);
+		await this.requireFestival(organizationId, festivalShortName);
+		if (!this.repertoire)
+			throw new AppError("Repertoire catalog is unavailable.", 503);
+		const works = await this.repertoire.searchCatalogWorks({
+			organizationId,
+			query,
+			concertoOnly: true,
+		});
+		return { works };
+	}
+
 	async listRegistrationEligibleClasses(
 		slug: string,
 		festivalShortName: string,
@@ -1946,10 +2015,24 @@ export class CustomerAccountService {
 			);
 		}
 
-		const classes = await this.organizations.listFestivalClassConfigurations(
-			access.organizationId,
-			festival.id,
-			true,
+		const [classes, timezone, subtypes] = await Promise.all([
+			this.organizations.listFestivalClassConfigurations(
+				access.organizationId,
+				festival.id,
+				true,
+			),
+			this.organizations.getOrganizationTimezone(access.organizationId),
+			this.organizations.listRegistrationCatalogValues(
+				access.organizationId,
+				"class_subtype",
+				false,
+			),
+		]);
+		const subtypeById = new Map(subtypes.map((s) => [s.id, s]));
+		const isRegistrationOpen = isFestivalRegistrationOpen(
+			festival,
+			this.now(),
+			timezone,
 		);
 		const eligible = classes.filter(
 			(c) =>
@@ -1959,18 +2042,41 @@ export class CustomerAccountService {
 		);
 
 		return {
-			classes: eligible.map((item) => ({
-				id: item.id,
-				displayName: item.displayName,
-				divisionId: item.divisionId,
-				classSubtypeId: item.classSubtypeId,
-				minimumAge: item.minimumAge,
-				maximumAge: item.maximumAge,
-				price: item.price,
-				maximumPerformancePieces: item.maximumPerformancePieces,
-				performanceMinutes: item.performanceMinutes,
-				capacity: item.capacity,
-			})),
+			classes: await Promise.all(
+				eligible.map(async (item) => {
+					const placedCount = this.commerce
+						? await this.commerce.countConfirmedClassEntitlements(
+								access.organizationId,
+								item.id,
+							)
+						: undefined;
+					const subtype = subtypeById.get(item.classSubtypeId) ?? null;
+					return {
+						id: item.id,
+						displayName: item.displayName,
+						divisionId: item.divisionId,
+						classSubtypeId: item.classSubtypeId,
+						...(subtype ? { classSubtypeName: subtype.displayName } : {}),
+						requiresConcerto: doesClassRequireConcerto(item, subtype),
+						minimumAge: item.minimumAge,
+						maximumAge: item.maximumAge,
+						price: item.price,
+						maximumPerformancePieces: item.maximumPerformancePieces,
+						performanceMinutes: item.performanceMinutes,
+						capacity: item.capacity,
+						isRegistrationOpen,
+						...(placedCount !== undefined
+							? {
+									placedCount,
+									availability: evaluateClassCapacityStatus(
+										item.capacity,
+										placedCount,
+									).availability,
+								}
+							: {}),
+					};
+				}),
+			),
 		};
 	}
 

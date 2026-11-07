@@ -176,6 +176,106 @@ async function setupCustomerFixture() {
 }
 
 describe("OrganizationService - Festival Class Configuration", () => {
+	it("keeps fallback class creation and capacity updates atomic with audits", async () => {
+		const repo = new InMemoryOrganizationRepository();
+		const service = new OrganizationService(repo);
+		const org = await repo.createOrganization({
+			name: "Atomic",
+			slug: "atomic",
+		});
+		const festival = await repo.createFestival({
+			id: "atomic-festival",
+			organizationId: org.id,
+			code: "AT",
+			shortName: "at",
+			name: "Atomic",
+			startDate: "2027-01-01",
+			endDate: "2027-01-02",
+		});
+		const division = await repo.createDivision({
+			organizationId: org.id,
+			displayName: "Piano",
+			normalizedName: "piano",
+		});
+		const subtype = await repo.createRegistrationCatalogValue({
+			organizationId: org.id,
+			kind: "class_subtype",
+			displayName: "Solo",
+			normalizedName: "solo",
+		});
+		await repo.associateFestivalClassSubtype({
+			organizationId: org.id,
+			festivalId: festival.id,
+			classSubtypeId: subtype.id,
+		});
+		const input = {
+			displayName: "Atomic class",
+			divisionId: division.id,
+			classSubtypeId: subtype.id,
+			minimumAge: 5,
+			maximumAge: 18,
+			price: "30.00",
+			maximumPerformancePieces: 1 as const,
+			performanceMinutes: 5,
+			capacity: 25,
+			shopifyProductGid: "gid://shopify/Product/atomic",
+			shopifyVariantGid: "gid://shopify/ProductVariant/atomic",
+		};
+		const recordAudit = repo.recordFestivalClassCapacityAudit;
+		const failAudit = async () => {
+			throw new Error("Capacity audit unavailable");
+		};
+		repo.recordFestivalClassCapacityAudit = failAudit;
+		await expect(
+			service.createFestivalClass(org.slug, festival.shortName, input),
+		).rejects.toThrow("Capacity audit unavailable");
+		expect(
+			await repo.listFestivalClassConfigurations(org.id, festival.id, false),
+		).toEqual([]);
+		repo.recordFestivalClassCapacityAudit = recordAudit;
+		const created = await service.createFestivalClass(
+			org.slug,
+			festival.shortName,
+			input,
+		);
+		repo.recordFestivalClassCapacityAudit = failAudit;
+		await expect(
+			service.updateFestivalClass(org.slug, festival.shortName, created.id, {
+				capacity: 10,
+				displayName: "Changed",
+			}),
+		).rejects.toThrow("Capacity audit unavailable");
+		expect(
+			await repo.findFestivalClassConfigurationById(
+				org.id,
+				festival.id,
+				created.id,
+			),
+		).toEqual(created);
+		expect(
+			await repo.listFestivalClassCapacityAudits(org.id, created.id),
+		).toHaveLength(1);
+		repo.recordFestivalClassCapacityAudit = recordAudit;
+		await service.updateFestivalClass(
+			org.slug,
+			festival.shortName,
+			created.id,
+			{ capacity: 10 },
+			"admin-retry",
+		);
+		const audits = await repo.listFestivalClassCapacityAudits(
+			org.id,
+			created.id,
+		);
+		expect(audits).toHaveLength(2);
+		expect(
+			audits.find((audit) => audit.action === "capacity_updated"),
+		).toMatchObject({
+			previousCapacity: 25,
+			newCapacity: 10,
+			actorUid: "admin-retry",
+		});
+	});
 	it("lists, creates, and updates festival classes with validation", async () => {
 		const repo = new InMemoryOrganizationRepository();
 		const orgService = new OrganizationService(repo);
@@ -321,6 +421,36 @@ describe("OrganizationService - Festival Class Configuration", () => {
 		expect(updated.displayName).toBe("Violin Solo Intermediate");
 		expect(updated.price).toBe("45.00");
 		expect(updated.isActive).toBe(false);
+
+		// 6. Records actual placedCountAtChange when commerce repository is provided
+		const orgServiceWithCommerce = new OrganizationService(
+			repo,
+			undefined,
+			undefined,
+			undefined,
+			{
+				countConfirmedClassEntitlements: async () => 5,
+			},
+		);
+		await orgServiceWithCommerce.updateFestivalClass(
+			"pafe-org",
+			"pf2026",
+			createdClass.id,
+			{ capacity: 5 },
+			"admin-uid-2",
+		);
+		const audits = await repo.listFestivalClassCapacityAudits(
+			org.id,
+			createdClass.id,
+		);
+		expect(audits[0]).toMatchObject({
+			action: "capacity_updated",
+			previousCapacity: 15,
+			newCapacity: 5,
+			placedCountAtChange: 5,
+			availabilityAfterChange: "waitlist",
+			actorUid: "admin-uid-2",
+		});
 	});
 });
 

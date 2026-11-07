@@ -1,6 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { generateKeyPairSync, sign } from "node:crypto";
-import { deriveFestivalMetadataCutoff } from "@festival/common";
+import {
+	CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION,
+	deriveFestivalMetadataCutoff,
+} from "@festival/common";
 import { InMemoryCheckoutRepository } from "../src/checkout/checkout-repository.js";
 import { InMemoryMembershipCommerceRepository } from "../src/commerce/membership-commerce-repository.js";
 import type {
@@ -10,6 +13,7 @@ import type {
 import { CustomerAccountService } from "../src/customer/customer-account-service.js";
 import { CustomerAccountTransport } from "../src/customer/customer-account-transport.js";
 import { InMemoryCustomerAccountRepository } from "../src/customer/in-memory-customer-account-repository.js";
+import { InMemoryRepertoireRepository } from "../src/repertoire/index.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
 import {
 	SHOPIFY_CUSTOMER_TOKENS_PURPOSE,
@@ -102,6 +106,7 @@ async function fixture(
 	const commerceRepo =
 		commerce ?? new InMemoryMembershipCommerceRepository(organizations);
 	const checkoutRepo = checkout ?? new InMemoryCheckoutRepository();
+	const repertoire = new InMemoryRepertoireRepository();
 	const org = await organizations.createOrganization({
 		name: "Festival",
 		slug: "festival",
@@ -209,7 +214,11 @@ async function fixture(
 		"test",
 	);
 	if (!keyring) throw new Error("keyring");
-	const service = new CustomerAccountService(
+	const service = new (
+		CustomerAccountService as unknown as new (
+			...args: unknown[]
+		) => CustomerAccountService
+	)(
 		repository,
 		organizations,
 		keyring,
@@ -220,6 +229,7 @@ async function fixture(
 		},
 		commerceRepo,
 		checkoutRepo,
+		repertoire,
 	);
 	await service.saveAndVerify(org.id, org.slug, {
 		storefrontDomain: "store.example.com",
@@ -242,6 +252,7 @@ async function fixture(
 		organizations,
 		commerce: commerceRepo,
 		checkout: checkoutRepo,
+		repertoire,
 		org,
 		other,
 		keyring,
@@ -643,6 +654,105 @@ describe("CustomerAccountService", () => {
 		});
 		expect(initial).not.toHaveProperty("customerId");
 		expect(JSON.stringify(initial)).not.toContain("gid://shopify/Customer");
+	});
+	it("returns null for missing or outdated Admin consent while preserving the existing 404 contract", async () => {
+		const f = await fixture();
+		const auth = await f.authenticate();
+		const session = await f.repository.getSession(auth.sessionId);
+		if (!session) throw new Error("session");
+		for (const outdatedConsent of [false, true]) {
+			if (outdatedConsent) {
+				await f.repository.recordStaffAccessConsent({
+					organizationId: f.org.id,
+					customerId: session.customerId,
+					privacyNoticeVersion: "obsolete-privacy-notice",
+					consentedAtIso: new Date().toISOString(),
+				});
+			}
+			expect(
+				await f.service.findAdminCustomerProfile(
+					f.org.id,
+					session.customerId,
+					"admin-uid",
+				),
+			).toBeNull();
+			await expect(
+				f.service.adminCustomerProfile(
+					f.org.id,
+					session.customerId,
+					"admin-uid",
+				),
+			).rejects.toMatchObject({ status: 404 });
+		}
+		expect(f.repository.profileAccessAudits).toEqual([]);
+	});
+	it("keeps consent tenant-bound and audits a successful nullable Admin profile read", async () => {
+		const f = await fixture();
+		const auth = await f.authenticate();
+		const session = await f.repository.getSession(auth.sessionId);
+		if (!session) throw new Error("session");
+		await f.repository.recordStaffAccessConsent({
+			organizationId: f.org.id,
+			customerId: session.customerId,
+			privacyNoticeVersion: CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION,
+			consentedAtIso: new Date().toISOString(),
+		});
+		expect(
+			await f.service.findAdminCustomerProfile(
+				f.other.id,
+				session.customerId,
+				"other-admin",
+			),
+		).toBeNull();
+		expect(f.repository.profileAccessAudits).toEqual([]);
+		const visible = await f.service.findAdminCustomerProfile(
+			f.org.id,
+			session.customerId,
+			"verified-admin-uid",
+		);
+		expect(visible?.customerId).toBe(session.customerId);
+		expect(f.repository.profileAccessAudits).toEqual([
+			{
+				organizationId: f.org.id,
+				actorUid: "verified-admin-uid",
+				action: "view",
+				targetCustomerId: session.customerId,
+				occurredAtIso: expect.any(String),
+			},
+		]);
+	});
+	it("does not return an Admin profile when consent lookup or access auditing fails", async () => {
+		for (const failure of ["read", "audit"] as const) {
+			const f = await fixture();
+			const auth = await f.authenticate();
+			const session = await f.repository.getSession(auth.sessionId);
+			if (!session) throw new Error("session");
+			await f.repository.recordStaffAccessConsent({
+				organizationId: f.org.id,
+				customerId: session.customerId,
+				privacyNoticeVersion: CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION,
+				consentedAtIso: new Date().toISOString(),
+			});
+			const fail = async () => {
+				throw new Error("unavailable consent boundary");
+			};
+			if (failure === "read") f.repository.getConsentedCustomer = fail;
+			else f.repository.recordCustomerProfileAccessAudit = fail;
+			await expect(
+				f.service.findAdminCustomerProfile(
+					f.org.id,
+					session.customerId,
+					"admin-uid",
+				),
+			).rejects.toThrow("unavailable consent boundary");
+			await expect(
+				f.service.adminCustomerProfile(
+					f.org.id,
+					session.customerId,
+					"admin-uid",
+				),
+			).rejects.toThrow("unavailable consent boundary");
+		}
 	});
 	it("protects Festival profile edits and gates audited Admin access on consent", async () => {
 		const f = await fixture();
@@ -1346,5 +1456,385 @@ describe("CustomerAccountService", () => {
 			{ pieces: validPieces },
 		);
 		expect(noFestRes.metadata.id).toBe("reg-meta-1");
+	});
+
+	it("does not allow reading Shopify order history without a session, or across tenants", async () => {
+		const f = await fixture();
+		await expect(f.service.orders("festival", undefined)).rejects.toMatchObject(
+			{ status: 401 },
+		);
+		const auth = await f.authenticate();
+		await expect(
+			f.service.orders("other", auth.sessionId),
+		).rejects.toMatchObject({ status: 401 });
+	});
+
+	it("does not allow a customer session to list class registrations across tenants", async () => {
+		const f = await fixture();
+		const auth = await f.authenticate();
+		await expect(
+			f.service.listClassRegistrations("other", auth.sessionId),
+		).rejects.toMatchObject({ status: 401 });
+	});
+
+	it("only lists the authenticated parent's own class registrations, not another parent's", async () => {
+		const f = await fixture();
+		const festival = await f.organizations.createFestival({
+			id: "fest-1",
+			organizationId: f.org.id,
+			code: "SPF26",
+			name: "Spring Festival 2026",
+			shortName: "spring-2026",
+			startDate: "2026-05-15",
+			endDate: "2026-05-20",
+		});
+		const classConfig = await f.organizations.createFestivalClassConfiguration({
+			organizationId: f.org.id,
+			festivalId: festival.id,
+			displayName: "Solo Piano",
+			classSubtypeId: "piano",
+			divisionId: "div_1",
+			minimumAge: 5,
+			maximumAge: 18,
+			price: 30,
+			maximumPerformancePieces: 2,
+			performanceMinutes: 10,
+			capacity: 20,
+		});
+		const auth = await f.authenticate();
+
+		await f.commerce.createClassEntitlement({
+			organizationId: f.org.id,
+			festivalId: festival.id,
+			festivalClassId: classConfig.id,
+			parentCustomerId: "a-different-parent",
+			childId: "someone-elses-child",
+			checkoutIntentId: "intent-other-parent",
+			shopifyOrderGid: "gid://shopify/Order/999",
+			shopifyOrderLineGid: "gid://shopify/LineItem/999",
+			paidAmountCents: 3000,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+
+		const result = await f.service.listClassRegistrations(
+			"festival",
+			auth.sessionId,
+		);
+		expect(result.registrations).toEqual([]);
+	});
+
+	it("exposes the verified Shopify paid time on a class registration, and null when no payment evidence exists yet", async () => {
+		const f = await fixture();
+		const festival = await f.organizations.createFestival({
+			id: "fest-1",
+			organizationId: f.org.id,
+			code: "SPF26",
+			name: "Spring Festival 2026",
+			shortName: "spring-2026",
+			startDate: "2026-05-15",
+			endDate: "2026-05-20",
+		});
+		const classConfig = await f.organizations.createFestivalClassConfiguration({
+			organizationId: f.org.id,
+			festivalId: festival.id,
+			displayName: "Solo Piano",
+			classSubtypeId: "piano",
+			divisionId: "div_1",
+			minimumAge: 5,
+			maximumAge: 18,
+			price: 30,
+			maximumPerformancePieces: 2,
+			performanceMinutes: 10,
+			capacity: 20,
+		});
+		const auth = await f.authenticate();
+		const storedSession = await f.repository.getSession(auth.sessionId);
+		if (!storedSession) throw new Error("session");
+		const customerId = storedSession.customerId;
+		const unpaidChild = await f.repository.createChild({
+			organizationId: f.org.id,
+			parentCustomerId: customerId,
+			displayName: "Unpaid-Evidence Child",
+		});
+
+		const paidEntitlement = await f.commerce.createClassEntitlement({
+			organizationId: f.org.id,
+			festivalId: festival.id,
+			festivalClassId: classConfig.id,
+			parentCustomerId: customerId,
+			childId: "child-with-paid-order",
+			checkoutIntentId: "intent-paid",
+			shopifyOrderGid: "gid://shopify/Order/paid-1",
+			shopifyOrderLineGid: "gid://shopify/LineItem/paid-1",
+			paidAmountCents: 3000,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+		await f.commerce.upsertOrderProjection({
+			organizationId: f.org.id,
+			shopifyOrderGid: "gid://shopify/Order/paid-1",
+			fullyPaidAtIso: "2026-05-01T12:00:00.000Z",
+			updatedAtIso: "2026-05-01T12:00:00.000Z",
+		});
+
+		const noProjectionEntitlement = await f.commerce.createClassEntitlement({
+			organizationId: f.org.id,
+			festivalId: festival.id,
+			festivalClassId: classConfig.id,
+			parentCustomerId: customerId,
+			childId: unpaidChild.id,
+			checkoutIntentId: "intent-no-projection",
+			checkoutIntentLineId: "intent-line-no-projection",
+			shopifyOrderGid: "gid://shopify/Order/no-projection-1",
+			shopifyOrderLineGid: "gid://shopify/LineItem/no-projection-1",
+			paidAmountCents: 3000,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+
+		const result = await f.service.listClassRegistrations(
+			"festival",
+			auth.sessionId,
+		);
+		const paid = result.registrations.find(
+			(r) => r.entitlement.id === paidEntitlement.id,
+		);
+		const noProjection = result.registrations.find(
+			(r) => r.entitlement.id === noProjectionEntitlement.id,
+		);
+		expect(paid?.paidAtIso).toBe("2026-05-01T12:00:00.000Z");
+		expect(noProjection?.paidAtIso).toBeNull();
+		for (const item of result.registrations) {
+			expect(item.entitlement).not.toHaveProperty("shopifyOrderGid");
+			expect(item.entitlement).not.toHaveProperty("shopifyOrderLineGid");
+			expect(item.entitlement).not.toHaveProperty("checkoutIntentId");
+			expect(item.entitlement).not.toHaveProperty("checkoutIntentLineId");
+		}
+	});
+
+	it("enforces concerto catalog work requirement when updating registration metadata (#197)", async () => {
+		const f = await fixture();
+		await f.organizations.updateOrganizationTimezone(
+			f.org.id,
+			"America/Los_Angeles",
+		);
+
+		const festival = await f.organizations.createFestival({
+			id: "fest-concerto",
+			organizationId: f.org.id,
+			code: "SPF26",
+			name: "Spring Festival 2026",
+			shortName: "spring-2026",
+			startDate: "2026-05-15",
+			endDate: "2026-05-20",
+		});
+
+		const concertoSubtype =
+			await f.organizations.createRegistrationCatalogValue({
+				organizationId: f.org.id,
+				kind: "class_subtype",
+				displayName: "Concerto",
+				normalizedName: "concerto",
+			});
+
+		const concertoClass =
+			await f.organizations.createFestivalClassConfiguration({
+				organizationId: f.org.id,
+				festivalId: festival.id,
+				displayName: "Junior Piano Concerto",
+				classSubtypeId: concertoSubtype.id,
+				divisionId: "div_1",
+				minimumAge: 5,
+				maximumAge: 18,
+				price: 45,
+				maximumPerformancePieces: 1,
+				performanceMinutes: 15,
+				capacity: 20,
+			});
+
+		const auth = await f.authenticate();
+		const { session } = await f.service.session("festival", auth.sessionId);
+		const storedSession = await f.repository.getSession(auth.sessionId);
+		if (!storedSession) throw new Error("session");
+		const customerId = storedSession.customerId;
+		const csrfToken = session.csrfToken;
+		const origin = "https://festival.example.com";
+
+		const entitlement = await f.commerce.createClassEntitlement({
+			organizationId: f.org.id,
+			festivalId: festival.id,
+			festivalClassId: concertoClass.id,
+			parentCustomerId: customerId,
+			childId: "child-1",
+			checkoutIntentId: "intent-concerto-1",
+			shopifyOrderGid: "gid://shopify/Order/concerto-1",
+			shopifyOrderLineGid: "gid://shopify/LineItem/concerto-1",
+			paidAmountCents: 4500,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+
+		await f.checkout.insertRegistrationMetadata({
+			id: "reg-meta-concerto-1",
+			organizationId: f.org.id,
+			festivalClassId: concertoClass.id,
+			checkoutIntentId: "intent-concerto-1",
+			childId: "child-1",
+			teacherMembershipId: "teacher-1",
+			accompanistMembershipId: null,
+			repertoireJson: [
+				{
+					title: "Initial Concerto",
+					composer: "Grieg",
+					durationSeconds: 300,
+				},
+			],
+		});
+		await f.checkout.linkRegistrationMetadataToEntitlement({
+			checkoutIntentId: "intent-concerto-1",
+			classEntitlementId: entitlement.id,
+		});
+
+		const cutoff = deriveFestivalMetadataCutoff(
+			"2026-05-15",
+			"America/Los_Angeles",
+		);
+		f.setNow(new Date(cutoff.getTime() - 10_000));
+
+		// 1. Free-text repertoire without catalogWorkId is rejected with 400
+		await expect(
+			f.service.updateRegistrationMetadata(
+				"festival",
+				"spring-2026",
+				entitlement.id,
+				auth.sessionId,
+				csrfToken,
+				origin,
+				{
+					pieces: [
+						{
+							title: "Piano Concerto in A minor",
+							composer: "Edvard Grieg",
+							durationSeconds: 300,
+						},
+					],
+				},
+			),
+		).rejects.toMatchObject({ status: 400 });
+
+		// 2. Catalog work not classified as concerto is rejected with 400
+		f.repertoire.seedCanonicalWork({
+			id: "work-sonata-1",
+			organizationId: f.org.id,
+			title: "Piano Sonata in C",
+			composerName: "Mozart",
+			classifications: ["sonata"],
+			isActive: true,
+		});
+
+		await expect(
+			f.service.updateRegistrationMetadata(
+				"festival",
+				"spring-2026",
+				entitlement.id,
+				auth.sessionId,
+				csrfToken,
+				origin,
+				{
+					pieces: [
+						{
+							title: "Piano Sonata in C",
+							composer: "Mozart",
+							durationSeconds: 300,
+							catalogWorkId: "work-sonata-1",
+						} as unknown as {
+							title: string;
+							composer: string;
+							durationSeconds: number;
+						},
+					],
+				},
+			),
+		).rejects.toMatchObject({ status: 400 });
+
+		// 3. Catalog work classified as concerto is accepted and persists catalogWorkId
+		f.repertoire.seedCanonicalWork({
+			id: "work-concerto-valid",
+			organizationId: f.org.id,
+			title: "Piano Concerto No. 2, Op. 18",
+			composerName: "Sergei Rachmaninoff",
+			classifications: ["concerto"],
+			isActive: true,
+		});
+
+		const updated = await f.service.updateRegistrationMetadata(
+			"festival",
+			"spring-2026",
+			entitlement.id,
+			auth.sessionId,
+			csrfToken,
+			origin,
+			{
+				pieces: [
+					{
+						title: "Piano Concerto No. 2, Op. 18",
+						composer: "Sergei Rachmaninoff",
+						movement: "I. Moderato",
+						durationSeconds: 420,
+						catalogWorkId: "work-concerto-valid",
+					} as unknown as {
+						title: string;
+						composer: string;
+						durationSeconds: number;
+					},
+				],
+			},
+		);
+
+		expect(
+			(
+				updated.metadata.repertoireJson[0] as {
+					catalogWorkId?: string | null;
+				}
+			)?.catalogWorkId,
+		).toBe("work-concerto-valid");
+		expect(updated.metadata.repertoireItems[0]?.catalogWorkId).toBe(
+			"work-concerto-valid",
+		);
+
+		// 4. Cross-tenant catalogWorkId is rejected with 400
+		f.repertoire.seedCanonicalWork({
+			id: "work-other-org",
+			organizationId: f.other.id,
+			title: "Other Org Concerto",
+			composerName: "Rachmaninoff",
+			classifications: ["concerto"],
+			isActive: true,
+		});
+		await expect(
+			f.service.updateRegistrationMetadata(
+				"festival",
+				"spring-2026",
+				entitlement.id,
+				auth.sessionId,
+				csrfToken,
+				origin,
+				{
+					pieces: [
+						{
+							title: "Other Org Concerto",
+							composer: "Rachmaninoff",
+							durationSeconds: 300,
+							catalogWorkId: "work-other-org",
+						} as unknown as {
+							title: string;
+							composer: string;
+							durationSeconds: number;
+						},
+					],
+				},
+			),
+		).rejects.toMatchObject({ status: 400 });
 	});
 });

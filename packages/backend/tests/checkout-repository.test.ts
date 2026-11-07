@@ -22,6 +22,25 @@ describe("checkout repository", () => {
 		expect(intent.kind).toBe("created");
 		if (intent.kind !== "created")
 			throw new Error("Expected a created intent.");
+		await expect(
+			repository.attachCart({
+				intentId: intent.intent.id,
+				shopifyCartId: "gid://shopify/Cart/foreign",
+				organizationId: "org-b",
+				customerId: "customer-a",
+				sessionId: "session-a",
+				integrationVersion: 1,
+				expiresAtIso: "2030-01-01T00:00:00.000Z",
+			}),
+		).rejects.toThrow("Checkout intent cannot accept a cart.");
+		expect(
+			(
+				await repository.findIntentByCorrelation(
+					"org-a",
+					intent.intent.correlationId,
+				)
+			)?.status,
+		).toBe("creating");
 		const cart = await repository.attachCart({
 			intentId: intent.intent.id,
 			shopifyCartId: "gid://shopify/Cart/private",
@@ -274,6 +293,76 @@ describe("checkout repository", () => {
 				})
 			)?.kind,
 		).toBe("expired");
+	});
+
+	it("rejects duplicate metadata IDs and checkout lines without replacing the original registration", async () => {
+		const repository = new InMemoryCheckoutRepository();
+		const input = {
+			id: "metadata-1",
+			organizationId: "org",
+			festivalId: "festival",
+			checkoutIntentId: "intent",
+			checkoutIntentLineId: "line-1",
+			teacherMembershipId: "teacher",
+			accompanistMembershipId: null,
+			repertoireJson: [
+				{ title: "Original piece", composer: "Composer", durationSeconds: 120 },
+			],
+		};
+		await repository.insertRegistrationMetadata(input);
+		await expect(
+			repository.insertRegistrationMetadata({
+				...input,
+				checkoutIntentId: "other-intent",
+				checkoutIntentLineId: "other-line",
+			}),
+		).rejects.toThrow("Registration metadata ID already exists.");
+		await expect(
+			repository.insertRegistrationMetadata({ ...input, id: "metadata-2" }),
+		).rejects.toThrow(
+			"Registration metadata checkout intent line already exists.",
+		);
+		await repository.linkRegistrationMetadataToEntitlement({
+			checkoutIntentLineId: "line-1",
+			classEntitlementId: "entitlement",
+		});
+		expect(
+			await repository.getRegistrationMetadataByEntitlementId(
+				"org",
+				"entitlement",
+			),
+		).toMatchObject({
+			id: "metadata-1",
+			checkoutIntentLineId: "line-1",
+			repertoireJson: input.repertoireJson,
+		});
+		// The same cart may still have a separate record for every purchased line.
+		expect(
+			await repository.insertRegistrationMetadata({
+				...input,
+				id: "metadata-2",
+				checkoutIntentLineId: "line-2",
+			}),
+		).toMatchObject({
+			id: "metadata-2",
+			checkoutIntentId: "intent",
+			checkoutIntentLineId: "line-2",
+		});
+		// PostgreSQL's partial uniqueness excludes NULL, but includes empty text.
+		await repository.insertRegistrationMetadata({
+			...input,
+			id: "metadata-empty",
+			checkoutIntentLineId: "",
+		});
+		await expect(
+			repository.insertRegistrationMetadata({
+				...input,
+				id: "metadata-empty-duplicate",
+				checkoutIntentLineId: "",
+			}),
+		).rejects.toThrow(
+			"Registration metadata checkout intent line already exists.",
+		);
 	});
 
 	it("creates durable relational snapshots from the legacy repertoire payload", async () => {

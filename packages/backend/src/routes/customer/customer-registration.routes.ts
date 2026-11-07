@@ -139,6 +139,7 @@ function buildCheckoutInput(
 		pieces: payload.pieces as RepertoirePiece[],
 		...opt("divisionId"),
 		...opt("accompanistId"),
+		...opt("instrumentId"),
 	};
 }
 
@@ -172,6 +173,7 @@ export async function handleClassCheckout(
 				"accompanistOption",
 				"pieces",
 				"instrument",
+				"instrumentId",
 				"festivalId",
 				"festivalShortName",
 				"organizationSlug",
@@ -267,6 +269,17 @@ export function buildCustomerRegistrationRoutes(
 		dropTransferService: dts,
 	} = options;
 	const reg = "/festivals/:festivalShortName/registration";
+
+	router.get(`${reg}/concerto-catalog`, (c) =>
+		withCustomerAccount(c, cas, (s) =>
+			s.searchRegistrationConcertoCatalog(
+				requireSlug(c),
+				c.req.param("festivalShortName") ?? "",
+				getCookie(c, CUSTOMER_SESSION_COOKIE),
+				c.req.query("q") ?? "",
+			),
+		),
+	);
 
 	router.get(`${reg}/teachers`, (c) =>
 		withCustomerAccount(c, cas, (s) =>

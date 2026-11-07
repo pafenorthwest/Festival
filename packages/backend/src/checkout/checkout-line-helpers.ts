@@ -146,7 +146,10 @@ export function repertoireItemsFromLegacyPieces(
 		registrationMetadataId,
 		organizationId,
 		displayOrder: index + 1,
-		catalogWorkId: null,
+		catalogWorkId:
+			typeof piece.catalogWorkId === "string" && piece.catalogWorkId.trim()
+				? piece.catalogWorkId.trim()
+				: null,
 		titleSnapshot: piece.title,
 		performedMovementText:
 			typeof piece.movement === "string" ? piece.movement.trim() || null : null,

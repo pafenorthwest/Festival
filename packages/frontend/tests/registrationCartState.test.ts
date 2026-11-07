@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
+	buildCartItemInput,
 	cartItemsToLineItemInputs,
 	createRegistrationCart,
 	formatPriceCents,
@@ -178,6 +179,7 @@ describe("registrationCartState", () => {
 		let classId = "selected-class";
 		let pieces = [{ title: "T", composer: "C", durationSeconds: 60 }];
 		let accompanistId = "acc-1";
+		let instrumentId = "violin";
 
 		resetClassFormSelection({
 			setSelectedClassId: (v) => {
@@ -189,11 +191,38 @@ describe("registrationCartState", () => {
 			setSelectedAccompanistId: (a) => {
 				accompanistId = a;
 			},
+			setSelectedInstrumentId: (id) => {
+				instrumentId = id;
+			},
 		});
 
 		expect(classId).toBe("");
 		expect(pieces.length).toBe(0);
 		expect(accompanistId).toBe("");
+		expect(instrumentId).toBe("");
+	});
+
+	it("retains the selected instrument for review and sends only its catalog identity", () => {
+		const cart = createRegistrationCart();
+		cart.addItem(
+			buildCartItemInput(
+				{ id: "child", displayName: "Alice" },
+				"division",
+				"Strings",
+				{ id: "teacher", name: "Teacher" },
+				{ id: "class", displayName: "Solo", price: "50.00" },
+				null,
+				[{ title: "Work", composer: "Composer", durationSeconds: 60 }],
+				{ id: "violin", displayName: "Violin" },
+			),
+		);
+		expect(cart.items()[0]).toMatchObject({
+			instrumentId: "violin",
+			instrumentName: "Violin",
+		});
+		const [line] = cartItemsToLineItemInputs(cart.items());
+		expect(line.instrumentId).toBe("violin");
+		expect(line).not.toHaveProperty("instrumentName");
 	});
 
 	it("maps cart items cleanly to ClassCheckoutLineItemInput with piece normalization", () => {

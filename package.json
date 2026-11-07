@@ -36,7 +36,8 @@
     "test:frontend": "bun run --cwd packages/frontend test",
 		"benchmark:customer-account-cache": "bun packages/backend/scripts/benchmark-customer-account-cache.ts",
 		"reconcile:shopify-orders": "bun packages/backend/scripts/reconcile-shopify-orders.ts",
-		"reconcile:firebase-claims": "bun packages/backend/scripts/reconcile-firebase-claims.ts"
+		"reconcile:firebase-claims": "bun packages/backend/scripts/reconcile-firebase-claims.ts",
+		"seed:test-data": "bun run --cwd packages/backend seed:test-data"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.9",

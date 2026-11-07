@@ -6,6 +6,7 @@ export const CUSTOMER_MEMBERSHIP_STATUSES = [
 	"needs_review",
 	"scheduled",
 	"active",
+	"superseded",
 	"expired",
 	"revoked",
 ] as const;
@@ -27,6 +28,7 @@ export interface CustomerMembershipStatusEntry {
 	durationDays?: number;
 	startsOn?: string;
 	endsOn?: string;
+	supersededOn?: string | null;
 	reasonCode?: "validation_rejected" | "validation_needs_review";
 }
 

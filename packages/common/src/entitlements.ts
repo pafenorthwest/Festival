@@ -1,4 +1,11 @@
-import { isValidIanaTimezone } from "./organization.js";
+import {
+	type ClassAvailabilityStatus,
+	isValidIanaTimezone,
+} from "./organization.js";
+import type {
+	RegistrationRepertoireItem,
+	RepertoirePiece,
+} from "./registration.js";
 
 export const TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS =
 	"teacher_membership" as const;
@@ -12,6 +19,7 @@ export type EntitlementClass = (typeof ENTITLEMENT_CLASSES)[number];
 
 export const INITIAL_TEACHER_MEMBERSHIP_DURATION_DAYS = 365;
 export const INITIAL_ACCOMPANIST_MEMBERSHIP_DURATION_DAYS = 365;
+export const TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS = 30;
 export const MAX_ENTITLEMENT_DURATION_DAYS = 36_500;
 
 export const MEMBERSHIP_DIVISION_SELECTION_POLICIES = [
@@ -58,6 +66,7 @@ export const validateAccompanistDivisionSelection =
 export const ENTITLEMENT_GRANT_STATUSES = [
 	"scheduled",
 	"active",
+	"superseded",
 	"expired",
 	"revoked",
 ] as const;
@@ -93,6 +102,9 @@ export interface EntitlementGrantSnapshot {
 	readonly shopifyOrderLineGid: string;
 	readonly startsOn: string;
 	readonly endsOn: string;
+	readonly supersededOn?: string;
+	readonly supersededAt?: string | null;
+	readonly supersededByGrantId?: string | null;
 	readonly status: EntitlementGrantStatus;
 	readonly createdAtIso: string;
 }
@@ -100,6 +112,7 @@ export interface EntitlementGrantSnapshot {
 export const ENTITLEMENT_LIFECYCLES = [
 	"scheduled",
 	"active",
+	"superseded",
 	"expired",
 	"revoked",
 ] as const;
@@ -109,6 +122,9 @@ export type EntitlementLifecycleState = (typeof ENTITLEMENT_LIFECYCLES)[number];
 export interface EntitlementLifecycleInput {
 	readonly startsOn: string;
 	readonly endsOn: string;
+	readonly supersededOn?: string;
+	readonly supersededAt?: string | null;
+	readonly supersededByGrantId?: string | null;
 	readonly revokedAtIso?: string;
 }
 
@@ -130,6 +146,8 @@ export function deriveEntitlementLifecycle(
 ): EntitlementLifecycleState {
 	parseCalendarDate(today);
 	if (entitlement.revokedAtIso) return "revoked";
+	if (entitlement.supersededOn && today >= entitlement.supersededOn)
+		return "superseded";
 	if (today < entitlement.startsOn) return "scheduled";
 	if (today >= entitlement.endsOn) return "expired";
 	return "active";
@@ -223,8 +241,12 @@ export function assertValidEntitlementGrantSnapshotInput(
 		throw new Error("Entitlement grant status is invalid.");
 	}
 	parseCalendarDate(input.endsOn);
-	const expectedEndsOn = addCalendarDays(input.startsOn, input.durationDays);
-	if (input.endsOn !== expectedEndsOn) {
+	const minEndsOn = addCalendarDays(input.startsOn, input.durationDays);
+	const maxEndsOn = addCalendarDays(
+		input.startsOn,
+		input.durationDays + TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS,
+	);
+	if (input.endsOn < minEndsOn || input.endsOn > maxEndsOn) {
 		throw new Error(
 			"Entitlement endsOn must equal startsOn plus durationDays calendar days.",
 		);
@@ -240,6 +262,12 @@ export function addCalendarDays(
 		parsed.getUTCDate() + assertValidEntitlementDurationDays(durationDays),
 	);
 	return parsed.toISOString().slice(0, 10);
+}
+
+export function calendarDaysUntil(from: string, exclusiveEnd: string): number {
+	const start = parseCalendarDate(from);
+	const end = parseCalendarDate(exclusiveEnd);
+	return Math.round((end.getTime() - start.getTime()) / 86_400_000);
 }
 
 export function calendarDateInTimezone(
@@ -321,6 +349,9 @@ export interface ClassEntitlement {
 	paidAmountCents: number;
 	paidCurrencyCode: string;
 	status: ClassEntitlementStatus;
+	admittedCartReference?: string | null;
+	capacityAtAllocation?: number | null;
+	placedCountBeforeAllocation?: number | null;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -334,6 +365,9 @@ export type CreateClassEntitlementInput = Omit<
 	createdAt?: string;
 	updatedAt?: string;
 	checkoutIntentLineId?: string | null;
+	admittedCartReference?: string | null;
+	capacityAtAllocation?: number | null;
+	placedCountBeforeAllocation?: number | null;
 };
 
 export function assertValidClassEntitlementInput(
@@ -430,10 +464,63 @@ export interface RegistrationEligibleClass {
 	readonly displayName: string;
 	readonly divisionId: string;
 	readonly classSubtypeId: string;
+	readonly classSubtypeName?: string;
+	readonly requiresConcerto?: boolean;
 	readonly minimumAge: number;
 	readonly maximumAge: number;
 	readonly price: string;
 	readonly maximumPerformancePieces: number;
 	readonly performanceMinutes: number;
 	readonly capacity: number;
+	readonly placedCount?: number;
+	readonly availability?: ClassAvailabilityStatus;
+	readonly isRegistrationOpen?: boolean;
+}
+
+export interface CustomerClassEntitlementSummary {
+	readonly id: string;
+	readonly festivalId: string;
+	readonly festivalClassId: string;
+	readonly childId: string;
+	readonly status: ClassEntitlementStatus;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+}
+
+export interface CustomerFestivalClassSummary {
+	readonly id: string;
+	readonly festivalId: string;
+	readonly displayName: string;
+	readonly classSubtypeId: string;
+	readonly divisionId: string;
+	readonly minimumAge: number;
+	readonly maximumAge: number;
+	readonly price: string;
+	readonly maximumPerformancePieces: 1 | 2 | 3;
+	readonly performanceMinutes: number;
+	readonly capacity: number;
+	readonly isActive: boolean;
+}
+
+export interface CustomerClassRegistrationMetadataSummary {
+	readonly id: string;
+	readonly festivalId: string;
+	readonly classEntitlementId: string | null;
+	readonly teacherMembershipId: string;
+	readonly accompanistMembershipId: string | null;
+	readonly repertoireJson: RepertoirePiece[];
+	readonly repertoireItems: RegistrationRepertoireItem[];
+}
+
+export interface CustomerClassRegistrationItem {
+	readonly entitlement: CustomerClassEntitlementSummary;
+	readonly festivalClass?: CustomerFestivalClassSummary;
+	readonly child?: { id: string; name: string };
+	readonly metadata?: CustomerClassRegistrationMetadataSummary | null;
+	/** Verified Shopify payment time from the order projection; null when no matching projection exists yet. */
+	readonly paidAtIso: string | null;
+}
+
+export interface CustomerClassRegistrationsResponse {
+	readonly registrations: CustomerClassRegistrationItem[];
 }

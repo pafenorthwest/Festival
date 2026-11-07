@@ -2,11 +2,14 @@ import { randomUUID } from "node:crypto";
 import type {
 	AccompanistDivisionSelectionPolicy,
 	AccompanistMembershipGrant,
+	AccompanistProfileRecord,
 	AuthenticatedUser,
+	ClassAvailabilityStatus,
 	CreateEntitlementGrantSnapshotInput,
 	EntitlementClass,
 	EntitlementGrantSnapshot,
 	EntitlementGrantStatus,
+	FestivalClassCapacityAuditRecord,
 	FestivalClassConfiguration,
 	FestivalRecord,
 	OrganizationAdminUserEntry,
@@ -16,6 +19,9 @@ import type {
 	OrganizationRecord,
 	OrganizationRole,
 	OrganizationUserRecord,
+	ProfileApprovalStatus,
+	PublicDirectoryDivisionDto,
+	PublicDirectoryProfileDto,
 	RegistrationAgeConfiguration,
 	RegistrationCatalogValue,
 	ShopifyCapabilityDiagnostics,
@@ -23,18 +29,29 @@ import type {
 	ShopifyVerificationStatus,
 	ShopifyWebhookFailureCategory,
 	ShopifyWebhookReadinessStatus,
+	TeacherProfileRecord,
 } from "@festival/common";
 import {
 	AppError,
+	addCalendarDays,
 	assertValidEntitlementDurationDays,
 	assertValidEntitlementGrantSnapshotInput,
+	evaluateClassCapacityStatus,
+	getDeterministicTeacherColor,
 	normalizeVerifiedShopifyIdentityEmail,
+	validateDisplayName,
+	validateDivisionIds,
+	validateProfileApprovalStatus,
+	validatePublicDirectoryOptIn,
+	validatePublicDirectoryProfileDto,
 } from "@festival/common";
 import { sql } from "bun";
+import { countConfirmedClassEntitlements } from "../commerce/postgres-class-entitlement-count.js";
 import type {
 	AccompanistDivisionPolicyHistoryRecord,
 	AccompanistDivisionPolicyRecord,
 	CreateAccompanistMembershipGrantInput,
+	CreateFestivalClassCapacityAuditInput,
 	CreateFestivalClassConfigurationInput,
 	CreateFestivalRecordInput,
 	CreateInviteRecordInput,
@@ -50,7 +67,9 @@ import type {
 	UpdateFestivalClassConfigurationInput,
 	UpdateShopifyVerificationInput,
 	UpdateShopifyWebhookReadinessInput,
+	UpsertAccompanistProfileInput,
 	UpsertShopifyIntegrationInput,
+	UpsertTeacherProfileInput,
 } from "./organization-repository.js";
 import {
 	AccompanistMembershipConflictError,
@@ -61,6 +80,7 @@ import {
 	initializePostgresSchema,
 	postgresSchemaName,
 } from "./postgres-schema.js";
+import { profileEditRequiresReapproval } from "./profile-moderation.js";
 
 interface MembershipRow {
 	id: string;
@@ -102,6 +122,8 @@ interface FestivalRow {
 	name: string;
 	start_date: string;
 	end_date: string;
+	registration_opens_at?: Date | string | null;
+	registration_closes_at?: Date | string | null;
 	created_at: string;
 }
 
@@ -206,6 +228,9 @@ interface EntitlementGrantRow {
 	shopify_order_line_gid: string;
 	starts_on: string;
 	ends_on: string;
+	superseded_on?: string | null;
+	superseded_at?: Date | string | null;
+	superseded_by_grant_id?: string | null;
 	status: EntitlementGrantStatus;
 	created_at: string;
 }
@@ -275,6 +300,19 @@ interface FestivalClassConfigurationRow {
 	created_at: string;
 	updated_at: string;
 }
+interface FestivalClassCapacityAuditRow {
+	id: string;
+	organization_id: string;
+	festival_id: string;
+	festival_class_id: string;
+	actor_uid: string | null;
+	action: "class_created" | "capacity_updated";
+	previous_capacity: number | null;
+	new_capacity: number;
+	placed_count_at_change: number;
+	availability_after_change: ClassAvailabilityStatus;
+	created_at: string;
+}
 
 function mapOrganization(row: {
 	id: string;
@@ -303,6 +341,80 @@ function mapDivision(row: DivisionRow): OrganizationDivision {
 		displayOrder: row.display_order,
 		createdAtIso: row.created_at,
 		updatedAtIso: row.updated_at,
+	};
+}
+
+interface TeacherProfileRow {
+	id: string;
+	organization_id: string;
+	customer_id: string;
+	display_name: string;
+	public_directory_opt_in: boolean;
+	approval_status: ProfileApprovalStatus;
+	created_at: string;
+	updated_at: string;
+	zip_code: string | null;
+	division_ids: string[] | string;
+}
+
+interface AccompanistProfileRow {
+	id: string;
+	organization_id: string;
+	customer_id: string;
+	display_name: string;
+	public_directory_opt_in: boolean;
+	approval_status: ProfileApprovalStatus;
+	created_at: string;
+	updated_at: string;
+	phone: string | null;
+	email: string | null;
+	zip_code: string | null;
+	division_ids: string[] | string;
+}
+
+function parseDivisionIds(raw: string[] | string | null | undefined): string[] {
+	if (!raw) return [];
+	if (Array.isArray(raw)) return raw.filter(Boolean);
+	try {
+		const parsed = JSON.parse(raw);
+		return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+	} catch {
+		return [];
+	}
+}
+
+function mapTeacherProfileRow(row: TeacherProfileRow): TeacherProfileRecord {
+	return {
+		id: row.id,
+		organization_id: row.organization_id,
+		customer_id: row.customer_id,
+		display_name: row.display_name,
+		teacher_color: getDeterministicTeacherColor(row.customer_id),
+		public_directory_opt_in: row.public_directory_opt_in,
+		approval_status: row.approval_status,
+		division_ids: parseDivisionIds(row.division_ids),
+		created_at: new Date(row.created_at).toISOString(),
+		updated_at: new Date(row.updated_at).toISOString(),
+		...(row.zip_code ? { zip_code: row.zip_code } : {}),
+	};
+}
+
+function mapAccompanistProfileRow(
+	row: AccompanistProfileRow,
+): AccompanistProfileRecord {
+	return {
+		id: row.id,
+		organization_id: row.organization_id,
+		customer_id: row.customer_id,
+		display_name: row.display_name,
+		public_directory_opt_in: row.public_directory_opt_in,
+		approval_status: row.approval_status,
+		division_ids: parseDivisionIds(row.division_ids),
+		created_at: new Date(row.created_at).toISOString(),
+		updated_at: new Date(row.updated_at).toISOString(),
+		...(row.phone ? { phone: row.phone } : {}),
+		...(row.email ? { email: row.email } : {}),
+		...(row.zip_code ? { zip_code: row.zip_code } : {}),
 	};
 }
 
@@ -343,9 +455,34 @@ function mapFestivalClassConfiguration(
 	};
 }
 
+function mapFestivalClassCapacityAudit(
+	row: FestivalClassCapacityAuditRow,
+): FestivalClassCapacityAuditRecord {
+	return {
+		id: row.id,
+		organizationId: row.organization_id,
+		festivalId: row.festival_id,
+		festivalClassId: row.festival_class_id,
+		actorUid: row.actor_uid ?? null,
+		action: row.action,
+		previousCapacity:
+			row.previous_capacity !== null && row.previous_capacity !== undefined
+				? Number(row.previous_capacity)
+				: null,
+		newCapacity: Number(row.new_capacity),
+		placedCountAtChange: Number(row.placed_count_at_change),
+		availabilityAfterChange: row.availability_after_change,
+		createdAtIso: row.created_at,
+	};
+}
+
 function mapEntitlementGrant(
 	row: EntitlementGrantRow,
 ): EntitlementGrantSnapshot {
+	const supersededAt =
+		row.superseded_at instanceof Date
+			? row.superseded_at.toISOString()
+			: row.superseded_at;
 	const grant: EntitlementGrantSnapshot = {
 		id: row.id,
 		organizationId: row.organization_id,
@@ -362,6 +499,11 @@ function mapEntitlementGrant(
 		shopifyOrderLineGid: row.shopify_order_line_gid,
 		startsOn: row.starts_on,
 		endsOn: row.ends_on,
+		...(row.superseded_on ? { supersededOn: row.superseded_on } : {}),
+		...(supersededAt ? { supersededAt } : {}),
+		...(row.superseded_by_grant_id
+			? { supersededByGrantId: row.superseded_by_grant_id }
+			: {}),
 		status: row.status,
 		createdAtIso: row.created_at,
 	};
@@ -415,6 +557,11 @@ function mapUser(row: {
 	};
 }
 
+function toNullableIso(value?: Date | string | null): string | null {
+	if (!value) return null;
+	return value instanceof Date ? value.toISOString() : value;
+}
+
 function mapFestival(row: FestivalRow): FestivalRecord {
 	return {
 		id: row.id,
@@ -425,6 +572,8 @@ function mapFestival(row: FestivalRow): FestivalRecord {
 		name: row.name,
 		startDate: row.start_date,
 		endDate: row.end_date,
+		registrationOpensAt: toNullableIso(row.registration_opens_at),
+		registrationClosesAt: toNullableIso(row.registration_closes_at),
 		createdAtIso: row.created_at,
 	};
 }
@@ -1170,6 +1319,8 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				name,
 				start_date::text AS start_date,
 				end_date::text AS end_date,
+				registration_opens_at,
+				registration_closes_at,
 				created_at
 			 FROM ${this.schema}.festivals
 			 WHERE organization_id = $1
@@ -1194,7 +1345,9 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				is_primary,
 					name,
 					start_date,
-					end_date
+					end_date,
+					registration_opens_at,
+					registration_closes_at
 				) VALUES (
 					$1,
 					$2,
@@ -1207,7 +1360,9 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 					),
 					$5,
 					$6,
-					$7
+					$7,
+					$8,
+					$9
 				)
 			RETURNING
 				id,
@@ -1218,6 +1373,8 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				name,
 				start_date::text AS start_date,
 				end_date::text AS end_date,
+				registration_opens_at,
+				registration_closes_at,
 				created_at`,
 			[
 				input.id,
@@ -1227,6 +1384,8 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				input.name,
 				input.startDate,
 				input.endDate,
+				input.registrationOpensAt ?? null,
+				input.registrationClosesAt ?? null,
 			],
 		)) as FestivalRow[];
 
@@ -1244,9 +1403,13 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				id,
 				organization_id,
 				code,
+				short_name,
+				is_primary,
 				name,
 				start_date::text AS start_date,
 				end_date::text AS end_date,
+				registration_opens_at,
+				registration_closes_at,
 				created_at
 			 FROM ${this.schema}.festivals
 			 WHERE organization_id = $1
@@ -1264,7 +1427,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 	): Promise<FestivalRecord | null> {
 		await this.ensureReady();
 		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, code, short_name, is_primary, name, start_date::text AS start_date, end_date::text AS end_date, created_at FROM ${this.schema}.festivals WHERE organization_id = $1 AND short_name = $2 LIMIT 1`,
+			`SELECT id, organization_id, code, short_name, is_primary, name, start_date::text AS start_date, end_date::text AS end_date, registration_opens_at, registration_closes_at, created_at FROM ${this.schema}.festivals WHERE organization_id = $1 AND short_name = $2 LIMIT 1`,
 			[organizationId, shortName],
 		)) as FestivalRow[];
 		return rows[0] ? mapFestival(rows[0]) : null;
@@ -1287,8 +1450,46 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			if (!rows[0]) throw new Error("Festival not found.");
 		});
 		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, code, short_name, is_primary, name, start_date::text AS start_date, end_date::text AS end_date, created_at FROM ${this.schema}.festivals WHERE organization_id = $1 AND id = $2`,
+			`SELECT id, organization_id, code, short_name, is_primary, name, start_date::text AS start_date, end_date::text AS end_date, registration_opens_at, registration_closes_at, created_at FROM ${this.schema}.festivals WHERE organization_id = $1 AND id = $2`,
 			[organizationId, festivalId],
+		)) as FestivalRow[];
+		if (!rows[0]) throw new Error("Festival not found.");
+		return mapFestival(rows[0]);
+	}
+
+	async updateFestivalRegistrationWindow(
+		organizationId: string,
+		festivalId: string,
+		input: {
+			registrationOpensAt: string | null;
+			registrationClosesAt: string | null;
+		},
+	): Promise<FestivalRecord> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`UPDATE ${this.schema}.festivals
+			 SET registration_opens_at = $3,
+			     registration_closes_at = $4
+			 WHERE organization_id = $1
+			   AND id = $2
+			 RETURNING
+				id,
+				organization_id,
+				code,
+				short_name,
+				is_primary,
+				name,
+				start_date::text AS start_date,
+				end_date::text AS end_date,
+				registration_opens_at,
+				registration_closes_at,
+				created_at`,
+			[
+				organizationId,
+				festivalId,
+				input.registrationOpensAt,
+				input.registrationClosesAt,
+			],
 		)) as FestivalRow[];
 		if (!rows[0]) throw new Error("Festival not found.");
 		return mapFestival(rows[0]);
@@ -1957,6 +2158,18 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		throw new Error("Unreachable accompanist membership contention state.");
 	}
 
+	async findCurrentAccompanistMembershipGrant(input: {
+		organizationId: string;
+		customerId: string;
+	}): Promise<AccompanistMembershipGrant | null> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT e.id,e.organization_id,e.customer_id,identity.normalized_email,e.offering_id,COALESCE(p.product_name_snapshot,'Accompanist Membership') AS offering_name_snapshot,e.source,d.contact_name,d.contact_email,d.contact_city,d.contact_phone,COALESCE(jsonb_agg(jsonb_build_object('divisionId',ed.division_id,'divisionName',ed.division_name_snapshot)) FILTER (WHERE ed.division_id IS NOT NULL),'[]') AS divisions,e.starts_on::text,e.ends_on::text,'active' AS status,TRUE AS is_current,e.created_at FROM ${this.schema}.membership_entitlements e JOIN ${this.schema}.organizations o ON o.id=e.organization_id LEFT JOIN ${this.schema}.products p ON p.id=e.offering_id JOIN ${this.schema}.accompanist_membership_entitlement_details d ON d.entitlement_id=e.id LEFT JOIN ${this.schema}.membership_identity_emails identity ON identity.organization_id=e.organization_id AND identity.customer_id=e.customer_id LEFT JOIN ${this.schema}.membership_entitlement_divisions ed ON ed.entitlement_id=e.id WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class='accompanist_membership' AND e.revoked_at IS NULL AND e.starts_on <= (NOW() AT TIME ZONE o.timezone)::date AND e.ends_on > (NOW() AT TIME ZONE o.timezone)::date GROUP BY e.id,identity.normalized_email,p.product_name_snapshot,d.contact_name,d.contact_email,d.contact_city,d.contact_phone,o.timezone ORDER BY e.created_at ASC, e.id ASC LIMIT 1`,
+			[input.organizationId, input.customerId],
+		)) as AccompanistMembershipGrantRow[];
+		return rows[0] ? mapAccompanistGrant(rows[0]) : null;
+	}
+
 	async listAccompanistMembershipGrants(input: {
 		organizationId: string;
 		customerId?: string;
@@ -2171,11 +2384,83 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		return this.listRegistrationCatalogValues(organizationId, kind);
 	}
 
-	async createFestivalClassConfiguration(
+	async createFestivalClassConfigurationWithCapacityAudit(
 		input: CreateFestivalClassConfigurationInput,
+		actorUid?: string,
 	): Promise<FestivalClassConfiguration> {
 		await this.ensureReady();
-		const rows = (await sql.unsafe(
+		return sql.begin(async (transaction) => {
+			const created = await this.createFestivalClassConfiguration(
+				input,
+				transaction,
+			);
+			await this.recordFestivalClassCapacityAudit(
+				{
+					organizationId: input.organizationId,
+					festivalId: input.festivalId,
+					festivalClassId: created.id,
+					actorUid,
+					previousCapacity: null,
+					newCapacity: created.capacity,
+					placedCountAtChange: 0,
+					action: "class_created",
+				},
+				transaction,
+			);
+			return created;
+		});
+	}
+
+	async updateFestivalClassConfigurationWithCapacityAudit(
+		input: UpdateFestivalClassConfigurationInput,
+		actorUid?: string,
+	): Promise<FestivalClassConfiguration> {
+		await this.ensureReady();
+		return sql.begin(async (transaction) => {
+			await transaction.unsafe(
+				"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+				[`${this.schema}:class-capacity-cutoff`],
+			);
+			const [previous] = await transaction.unsafe(
+				`SELECT capacity FROM ${this.schema}.festival_class_configurations WHERE organization_id = $1 AND festival_id = $2 AND id = $3 FOR UPDATE`,
+				[input.organizationId, input.festivalId, input.id],
+			);
+			if (!previous) throw new Error("Festival class configuration not found.");
+			const updated = await this.updateFestivalClassConfiguration(
+				input,
+				transaction,
+			);
+			if (updated.capacity !== Number(previous.capacity)) {
+				const placedCount = await countConfirmedClassEntitlements(
+					transaction,
+					this.schema,
+					input.organizationId,
+					input.id,
+				);
+				await this.recordFestivalClassCapacityAudit(
+					{
+						organizationId: input.organizationId,
+						festivalId: input.festivalId,
+						festivalClassId: input.id,
+						actorUid,
+						previousCapacity: Number(previous.capacity),
+						newCapacity: updated.capacity,
+						placedCountAtChange: placedCount,
+						action: "capacity_updated",
+					},
+					transaction,
+				);
+			}
+			return updated;
+		});
+	}
+
+	async createFestivalClassConfiguration(
+		input: CreateFestivalClassConfigurationInput,
+		database: Pick<typeof sql, "unsafe"> = sql,
+	): Promise<FestivalClassConfiguration> {
+		await this.ensureReady();
+		const rows = (await database.unsafe(
 			`INSERT INTO ${this.schema}.festival_class_configurations (id, organization_id, festival_id, display_name, class_subtype_id, division_id, minimum_age, maximum_age, price, maximum_performance_pieces, performance_minutes, capacity, is_active, shopify_product_gid, shopify_variant_gid) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id, organization_id, festival_id, display_name, class_subtype_id, division_id, minimum_age, maximum_age, price, maximum_performance_pieces, performance_minutes, capacity, is_active, shopify_product_gid, shopify_variant_gid, created_at, updated_at`,
 			[
 				randomUUID(),
@@ -2202,10 +2487,11 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 
 	async updateFestivalClassConfiguration(
 		input: UpdateFestivalClassConfigurationInput,
+		database: Pick<typeof sql, "unsafe"> = sql,
 	): Promise<FestivalClassConfiguration> {
 		await this.ensureReady();
 		try {
-			const rows = (await sql.unsafe(
+			const rows = (await database.unsafe(
 				`UPDATE ${this.schema}.festival_class_configurations
 				 SET
 					display_name = COALESCE($4, display_name),
@@ -2272,6 +2558,20 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		}
 	}
 
+	async findFestivalClassConfigurationsByIds(
+		organizationId: string,
+		festivalId: string,
+		classIds: string[],
+	): Promise<FestivalClassConfiguration[]> {
+		if (classIds.length === 0) return [];
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT * FROM ${this.schema}.festival_class_configurations WHERE organization_id = $1 AND festival_id = $2 AND id = ANY($3::text[])`,
+			[organizationId, festivalId, sql.array([...new Set(classIds)], "text")],
+		)) as FestivalClassConfigurationRow[];
+		return rows.map(mapFestivalClassConfiguration);
+	}
+
 	findFestivalClassConfigurationById(
 		organizationId: string,
 		festivalId: string,
@@ -2301,6 +2601,24 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		return rows[0] ? mapFestivalClassConfiguration(rows[0]) : null;
 	}
 
+	async findActiveFestivalClassByShortName(
+		organizationId: string,
+		festivalShortName: string,
+		classId: string,
+		festivalId?: string,
+	): Promise<FestivalClassConfiguration | null> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT c.* FROM ${this.schema}.festival_class_configurations c
+			 INNER JOIN ${this.schema}.festivals f ON f.id = c.festival_id AND f.organization_id = c.organization_id
+			 WHERE c.organization_id = $1 AND LOWER(BTRIM(f.short_name)) = LOWER(BTRIM($2))
+			 AND c.id = $3 AND c.is_active AND ($4::text IS NULL OR f.id = $4)
+			 LIMIT 1`,
+			[organizationId, festivalShortName, classId, festivalId?.trim() || null],
+		)) as FestivalClassConfigurationRow[];
+		return rows[0] ? mapFestivalClassConfiguration(rows[0]) : null;
+	}
+
 	async listFestivalClassConfigurations(
 		organizationId: string,
 		festivalId: string,
@@ -2312,6 +2630,54 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			[organizationId, festivalId, activeOnly],
 		)) as FestivalClassConfigurationRow[];
 		return rows.map(mapFestivalClassConfiguration);
+	}
+
+	async recordFestivalClassCapacityAudit(
+		input: CreateFestivalClassCapacityAuditInput,
+		database: Pick<typeof sql, "unsafe"> = sql,
+	): Promise<FestivalClassCapacityAuditRecord> {
+		await this.ensureReady();
+		const previousCapacity = input.previousCapacity ?? null;
+		const action =
+			input.action ??
+			(previousCapacity === null ? "class_created" : "capacity_updated");
+		const availabilityAfterChange =
+			input.availabilityAfterChange ??
+			evaluateClassCapacityStatus(input.newCapacity, input.placedCountAtChange)
+				.availability;
+		const rows = (await database.unsafe(
+			`INSERT INTO ${this.schema}.festival_class_capacity_audit_logs (id, organization_id, festival_id, festival_class_id, actor_uid, action, previous_capacity, new_capacity, placed_count_at_change, availability_after_change, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11::timestamptz, NOW())) RETURNING id, organization_id, festival_id, festival_class_id, actor_uid, action, previous_capacity, new_capacity, placed_count_at_change, availability_after_change, created_at::text`,
+			[
+				input.id ?? randomUUID(),
+				input.organizationId,
+				input.festivalId,
+				input.festivalClassId,
+				input.actorUid ?? null,
+				action,
+				previousCapacity,
+				input.newCapacity,
+				input.placedCountAtChange,
+				availabilityAfterChange,
+				input.createdAtIso ?? null,
+			],
+		)) as FestivalClassCapacityAuditRow[];
+		const row = rows[0];
+		if (!row) {
+			throw new Error("Unable to record Festival class capacity audit.");
+		}
+		return mapFestivalClassCapacityAudit(row);
+	}
+
+	async listFestivalClassCapacityAudits(
+		organizationId: string,
+		festivalClassId: string,
+	): Promise<FestivalClassCapacityAuditRecord[]> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT id, organization_id, festival_id, festival_class_id, actor_uid, action, previous_capacity, new_capacity, placed_count_at_change, availability_after_change, created_at::text FROM ${this.schema}.festival_class_capacity_audit_logs WHERE organization_id = $1 AND festival_class_id = $2 ORDER BY created_at DESC, id DESC`,
+			[organizationId, festivalClassId],
+		)) as FestivalClassCapacityAuditRow[];
+		return rows.map(mapFestivalClassCapacityAudit);
 	}
 
 	async findProductRecordByShopifyProductGid(
@@ -2383,53 +2749,117 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		}
 
 		const id = randomUUID();
-		await sql.begin(async (transaction) => {
-			const identityRows = (await transaction.unsafe(
-				`INSERT INTO ${this.schema}.membership_identity_emails (organization_id, normalized_email, customer_id) VALUES ($1,$2,$3) ON CONFLICT (organization_id, normalized_email) DO UPDATE SET customer_id = EXCLUDED.customer_id WHERE ${this.schema}.membership_identity_emails.customer_id = EXCLUDED.customer_id RETURNING customer_id`,
-				[input.organizationId, verifiedIdentityEmail, input.customerId],
-			)) as Array<Record<string, unknown>>;
-			if (!identityRows[0]) {
-				throw new Error("Shopify identity email belongs to another customer.");
-			}
-			const inserted = await transaction.unsafe(
-				`INSERT INTO ${this.schema}.membership_entitlements (id,organization_id,customer_id,entitlement_class,source,offering_id,starts_on,ends_on) SELECT $1,$2,$3,$4,'teacher_checkout',$5,$6::date,$7::date FROM ${this.schema}.products WHERE id=$5 AND organization_id=$2 AND entitlement_class=$4 RETURNING id`,
-				[
-					id,
-					input.organizationId,
-					input.customerId,
-					input.entitlementClass,
-					input.offeringId,
-					input.startsOn,
-					input.endsOn,
-				],
-			);
-			if (!inserted[0])
-				throw new Error(
-					"Entitlement offering was not found for this Organization.",
+		let effectiveEndsOn = input.endsOn;
+		try {
+			await sql.begin(async (transaction) => {
+				const identityRows = (await transaction.unsafe(
+					`INSERT INTO ${this.schema}.membership_identity_emails (organization_id, normalized_email, customer_id) VALUES ($1,$2,$3) ON CONFLICT (organization_id, normalized_email) DO UPDATE SET customer_id = EXCLUDED.customer_id WHERE ${this.schema}.membership_identity_emails.customer_id = EXCLUDED.customer_id RETURNING customer_id`,
+					[input.organizationId, verifiedIdentityEmail, input.customerId],
+				)) as Array<Record<string, unknown>>;
+				if (!identityRows[0]) {
+					throw new Error(
+						"Shopify identity email belongs to another customer.",
+					);
+				}
+				const supersededRows = (await transaction.unsafe(
+					`UPDATE ${this.schema}.membership_entitlements SET superseded_on = $4::date, superseded_at = NOW(), superseded_by_grant_id = $5 WHERE organization_id = $1 AND customer_id = $2 AND entitlement_class = $3 AND revoked_at IS NULL AND superseded_on IS NULL AND starts_on <= $4::date AND ends_on > $4::date AND ends_on <= ($4::date + INTERVAL '30 days')::date RETURNING ends_on::text`,
+					[
+						input.organizationId,
+						input.customerId,
+						input.entitlementClass,
+						input.startsOn,
+						id,
+					],
+				)) as Array<{ ends_on?: string }>;
+				const effectiveStartDate =
+					supersededRows[0]?.ends_on &&
+					supersededRows[0].ends_on > input.startsOn
+						? supersededRows[0].ends_on
+						: input.startsOn;
+				effectiveEndsOn =
+					supersededRows[0]?.ends_on &&
+					supersededRows[0].ends_on > input.startsOn
+						? addCalendarDays(effectiveStartDate, input.durationDays)
+						: input.endsOn;
+				const inserted = await transaction.unsafe(
+					`INSERT INTO ${this.schema}.membership_entitlements (id,organization_id,customer_id,entitlement_class,source,offering_id,starts_on,ends_on) SELECT $1,$2,$3,$4,'teacher_checkout',$5,$6::date,$7::date FROM ${this.schema}.products WHERE id=$5 AND organization_id=$2 AND entitlement_class=$4 RETURNING id`,
+					[
+						id,
+						input.organizationId,
+						input.customerId,
+						input.entitlementClass,
+						input.offeringId,
+						input.startsOn,
+						effectiveEndsOn,
+					],
 				);
-			await transaction.unsafe(
-				`INSERT INTO ${this.schema}.membership_entitlement_divisions (entitlement_id,organization_id,division_id,division_name_snapshot) VALUES ($1,$2,$3,$4)`,
-				[
-					id,
-					input.organizationId,
-					input.divisionId,
-					input.divisionNameSnapshot,
-				],
-			);
-			await transaction.unsafe(
-				`INSERT INTO ${this.schema}.teacher_membership_entitlement_details (entitlement_id,checkout_intent_id,shopify_order_gid,shopify_order_line_gid,paid_amount,paid_currency_code,duration_days) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-				[
-					id,
-					input.checkoutIntentId,
-					input.shopifyOrderGid,
-					input.shopifyOrderLineGid,
-					input.paidAmount,
-					input.paidCurrencyCode,
-					input.durationDays,
-				],
-			);
-		});
-		return { ...input, id, createdAtIso: new Date().toISOString() };
+				if (!inserted[0])
+					throw new Error(
+						"Entitlement offering was not found for this Organization.",
+					);
+				await transaction.unsafe(
+					`INSERT INTO ${this.schema}.membership_entitlement_divisions (entitlement_id,organization_id,division_id,division_name_snapshot) VALUES ($1,$2,$3,$4)`,
+					[
+						id,
+						input.organizationId,
+						input.divisionId,
+						input.divisionNameSnapshot,
+					],
+				);
+				await transaction.unsafe(
+					`INSERT INTO ${this.schema}.teacher_membership_entitlement_details (entitlement_id,checkout_intent_id,shopify_order_gid,shopify_order_line_gid,paid_amount,paid_currency_code,duration_days) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+					[
+						id,
+						input.checkoutIntentId,
+						input.shopifyOrderGid,
+						input.shopifyOrderLineGid,
+						input.paidAmount,
+						input.paidCurrencyCode,
+						input.durationDays,
+					],
+				);
+			});
+		} catch (error) {
+			const code =
+				error && typeof error === "object"
+					? ((error as { code?: string; errno?: string }).code ??
+						(error as { code?: string; errno?: string }).errno)
+					: undefined;
+			const message =
+				error && typeof error === "object" && "message" in error
+					? String((error as { message?: unknown }).message)
+					: "";
+			if (
+				code === "23P01" ||
+				message.includes(
+					"membership_entitlements_organization_id_customer_id_entitl_excl",
+				)
+			) {
+				throw new Error(
+					"Teacher Membership entitlement intervals may not overlap.",
+				);
+			}
+			throw error;
+		}
+		return {
+			...input,
+			endsOn: effectiveEndsOn,
+			id,
+			createdAtIso: new Date().toISOString(),
+		};
+	}
+
+	async findActiveTeacherEntitlementGrant(input: {
+		organizationId: string;
+		customerId: string;
+		divisionId: string;
+	}): Promise<EntitlementGrantSnapshot | null> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT e.id,e.organization_id,e.customer_id,e.entitlement_class,e.offering_id,d.duration_days,ed.division_id,ed.division_name_snapshot,d.paid_amount,d.paid_currency_code,d.checkout_intent_id,d.shopify_order_gid,d.shopify_order_line_gid,e.starts_on::text,e.ends_on::text,e.superseded_on::text,e.superseded_at,e.superseded_by_grant_id,'active' AS status,e.created_at FROM ${this.schema}.membership_entitlements e JOIN ${this.schema}.organizations o ON o.id=e.organization_id JOIN ${this.schema}.teacher_membership_entitlement_details d ON d.entitlement_id=e.id JOIN ${this.schema}.membership_entitlement_divisions ed ON ed.entitlement_id=e.id WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class='teacher_membership' AND ed.division_id=$3 AND e.revoked_at IS NULL AND (e.superseded_on IS NULL OR e.superseded_on > (NOW() AT TIME ZONE o.timezone)::date) AND e.starts_on <= (NOW() AT TIME ZONE o.timezone)::date AND e.ends_on > (NOW() AT TIME ZONE o.timezone)::date ORDER BY e.created_at ASC, e.id ASC LIMIT 1`,
+			[input.organizationId, input.customerId, input.divisionId],
+		)) as EntitlementGrantRow[];
+		return rows[0] ? mapEntitlementGrant(rows[0]) : null;
 	}
 
 	async listEntitlementGrantSnapshots(
@@ -2438,7 +2868,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 	): Promise<EntitlementGrantSnapshot[]> {
 		await this.ensureReady();
 		const rows = (await sql.unsafe(
-			`SELECT e.id,e.organization_id,e.customer_id,e.entitlement_class,e.offering_id,d.duration_days,ed.division_id,ed.division_name_snapshot,d.paid_amount,d.paid_currency_code,d.checkout_intent_id,d.shopify_order_gid,d.shopify_order_line_gid,e.starts_on::text,e.ends_on::text,CASE WHEN e.revoked_at IS NOT NULL THEN 'revoked' WHEN e.starts_on > (NOW() AT TIME ZONE o.timezone)::date THEN 'scheduled' WHEN e.ends_on <= (NOW() AT TIME ZONE o.timezone)::date THEN 'expired' ELSE 'active' END AS status,e.created_at FROM ${this.schema}.membership_entitlements e JOIN ${this.schema}.organizations o ON o.id=e.organization_id JOIN ${this.schema}.teacher_membership_entitlement_details d ON d.entitlement_id=e.id JOIN ${this.schema}.membership_entitlement_divisions ed ON ed.entitlement_id=e.id WHERE e.organization_id=$1 ${customerId ? "AND e.customer_id=$2" : ""}
+			`SELECT e.id,e.organization_id,e.customer_id,e.entitlement_class,e.offering_id,d.duration_days,ed.division_id,ed.division_name_snapshot,d.paid_amount,d.paid_currency_code,d.checkout_intent_id,d.shopify_order_gid,d.shopify_order_line_gid,e.starts_on::text,e.ends_on::text,e.superseded_on::text,e.superseded_at,e.superseded_by_grant_id,CASE WHEN e.revoked_at IS NOT NULL THEN 'revoked' WHEN e.superseded_on IS NOT NULL AND e.superseded_on <= (NOW() AT TIME ZONE o.timezone)::date THEN 'superseded' WHEN e.starts_on > (NOW() AT TIME ZONE o.timezone)::date THEN 'scheduled' WHEN e.ends_on <= (NOW() AT TIME ZONE o.timezone)::date THEN 'expired' ELSE 'active' END AS status,e.created_at FROM ${this.schema}.membership_entitlements e JOIN ${this.schema}.organizations o ON o.id=e.organization_id JOIN ${this.schema}.teacher_membership_entitlement_details d ON d.entitlement_id=e.id JOIN ${this.schema}.membership_entitlement_divisions ed ON ed.entitlement_id=e.id WHERE e.organization_id=$1 ${customerId ? "AND e.customer_id=$2" : ""}
 			 ORDER BY created_at ASC`,
 			customerId ? [organizationId, customerId] : [organizationId],
 		)) as EntitlementGrantRow[];
@@ -2500,24 +2930,26 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				`SELECT customer_id FROM ${this.schema}.membership_entitlements WHERE id=$1 AND organization_id=$2`,
 				[input.entitlementId, input.organizationId],
 			)) as Array<{ customer_id: string }>;
-			if (!initial[0]) throw new Error("Entitlement was not found.");
+			if (!initial[0]) throw new AppError("Entitlement was not found.", 404);
 			await transaction.unsafe(
 				"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
 				[`${input.organizationId}:${initial[0].customer_id}`],
 			);
 			const entitlement = (await transaction.unsafe(
-				`SELECT customer_id, entitlement_class, revoked_at::text, revoked_reason FROM ${this.schema}.membership_entitlements WHERE id=$1 AND organization_id=$2 FOR UPDATE`,
+				`SELECT e.customer_id, e.entitlement_class, e.revoked_at::text, e.revoked_reason, (e.ends_on <= (NOW() AT TIME ZONE o.timezone)::date) AS is_expired FROM ${this.schema}.membership_entitlements e JOIN ${this.schema}.organizations o ON o.id = e.organization_id WHERE e.id=$1 AND e.organization_id=$2 FOR UPDATE OF e`,
 				[input.entitlementId, input.organizationId],
 			)) as Array<{
 				customer_id: string;
 				entitlement_class: string;
 				revoked_at: string | null;
 				revoked_reason: string | null;
+				is_expired: boolean;
 			}>;
-			if (!entitlement[0]) throw new Error("Entitlement was not found.");
+			if (!entitlement[0])
+				throw new AppError("Entitlement was not found.", 404);
 			const existing = (await transaction.unsafe(
-				`SELECT id, entitlement_id, organization_id, actor_user_id, reason, revoked_at::text FROM ${this.schema}.membership_entitlement_revocations WHERE entitlement_id=$1`,
-				[input.entitlementId],
+				`SELECT id, entitlement_id, organization_id, actor_user_id, reason, revoked_at::text FROM ${this.schema}.membership_entitlement_revocations WHERE entitlement_id=$1 AND organization_id=$2`,
+				[input.entitlementId, input.organizationId],
 			)) as Array<{
 				id: string;
 				entitlement_id: string;
@@ -2538,6 +2970,9 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 					},
 					existing: true,
 				};
+			if (entitlement[0].is_expired) {
+				throw new AppError("Expired entitlements cannot be revoked.", 409);
+			}
 			await transaction.unsafe(
 				`UPDATE ${this.schema}.membership_entitlements SET revoked_at=$3::timestamptz, revoked_reason=$4 WHERE id=$1 AND organization_id=$2`,
 				[
@@ -2606,11 +3041,596 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			   AND e.entitlement_class = 'teacher_membership'
 			   AND ed.division_id = $2
 			   AND e.revoked_at IS NULL
+			   AND (e.superseded_on IS NULL OR e.superseded_on > (NOW() AT TIME ZONE o.timezone)::date)
 			   AND e.starts_on <= (NOW() AT TIME ZONE o.timezone)::date
 			   AND e.ends_on > (NOW() AT TIME ZONE o.timezone)::date
 			 ORDER BY name, c.id`,
 			[organizationId, divisionId],
 		)) as Array<{ id: string; name: string }>;
 		return rows.map((row) => ({ id: row.id, name: row.name }));
+	}
+
+	private async assertValidDivisionIds(
+		organizationId: string,
+		divisionIds: string[],
+	): Promise<string[]> {
+		const validated = validateDivisionIds(divisionIds);
+		const uniqueIds = [...new Set(validated)];
+		if (uniqueIds.length === 0) {
+			return uniqueIds;
+		}
+		const validRows = (await sql.unsafe(
+			`SELECT id FROM ${this.schema}.organization_divisions WHERE organization_id = $1 AND id = ANY($2::text[])`,
+			[organizationId, uniqueIds],
+		)) as Array<{ id: string }>;
+		if (validRows.length !== uniqueIds.length) {
+			throw new AppError(
+				"One or more divisions do not belong to the organization.",
+				400,
+				"invalid_division",
+			);
+		}
+		return uniqueIds;
+	}
+
+	/**
+	 * Locks the existing profile row (if any) inside the caller's transaction
+	 * and reports whether the pending edit must reset approval to 'pending'.
+	 * Missing rows report true so a concurrent insert race stays pending.
+	 */
+	private async lockedProfileRequiresReapproval(
+		transaction: Pick<typeof sql, "unsafe">,
+		kind: "teacher" | "accompanist",
+		next: {
+			organizationId: string;
+			customerId: string;
+			displayName: string;
+			divisionIds: string[];
+		},
+	): Promise<boolean> {
+		const existingRows = (await transaction.unsafe(
+			`SELECT id, display_name FROM ${this.schema}.${kind}_profiles
+			 WHERE organization_id = $1 AND customer_id = $2
+			 FOR UPDATE`,
+			[next.organizationId, next.customerId],
+		)) as Array<{ id: string; display_name: string }>;
+		const existing = existingRows[0];
+		if (!existing) {
+			return true;
+		}
+		const divisionRows = (await transaction.unsafe(
+			`SELECT division_id FROM ${this.schema}.${kind}_profile_divisions WHERE ${kind}_profile_id = $1 AND organization_id = $2`,
+			[existing.id, next.organizationId],
+		)) as Array<{ division_id: string }>;
+		return profileEditRequiresReapproval(
+			{
+				displayName: existing.display_name,
+				divisionIds: divisionRows.map((row) => row.division_id),
+			},
+			next,
+		);
+	}
+
+	async getTeacherProfile(
+		organizationId: string,
+		customerId: string,
+	): Promise<TeacherProfileRecord | null> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT
+				tp.id,
+				tp.organization_id,
+				tp.customer_id,
+				tp.display_name,
+				tp.public_directory_opt_in,
+				tp.approval_status,
+				tp.created_at::text,
+				tp.updated_at::text,
+				c.mailing_address->>'postalCode' AS zip_code,
+				COALESCE(
+					jsonb_agg(tpd.division_id ORDER BY tpd.division_id) FILTER (WHERE tpd.division_id IS NOT NULL),
+					'[]'::jsonb
+				) AS division_ids
+			 FROM ${this.schema}.teacher_profiles tp
+			 LEFT JOIN ${this.schema}.festival_customers c
+				ON c.id = tp.customer_id AND c.organization_id = tp.organization_id
+			 LEFT JOIN ${this.schema}.teacher_profile_divisions tpd
+				ON tpd.teacher_profile_id = tp.id AND tpd.organization_id = tp.organization_id
+			 WHERE tp.organization_id = $1 AND tp.customer_id = $2
+			 GROUP BY tp.id, tp.organization_id, tp.customer_id, tp.display_name, tp.public_directory_opt_in, tp.approval_status, tp.created_at, tp.updated_at, c.mailing_address`,
+			[organizationId, customerId],
+		)) as TeacherProfileRow[];
+		return rows[0] ? mapTeacherProfileRow(rows[0]) : null;
+	}
+
+	async getTeacherProfileById(
+		organizationId: string,
+		profileId: string,
+	): Promise<TeacherProfileRecord | null> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT
+				tp.id,
+				tp.organization_id,
+				tp.customer_id,
+				tp.display_name,
+				tp.public_directory_opt_in,
+				tp.approval_status,
+				tp.created_at::text,
+				tp.updated_at::text,
+				c.mailing_address->>'postalCode' AS zip_code,
+				COALESCE(
+					jsonb_agg(tpd.division_id ORDER BY tpd.division_id) FILTER (WHERE tpd.division_id IS NOT NULL),
+					'[]'::jsonb
+				) AS division_ids
+			 FROM ${this.schema}.teacher_profiles tp
+			 LEFT JOIN ${this.schema}.festival_customers c
+				ON c.id = tp.customer_id AND c.organization_id = tp.organization_id
+			 LEFT JOIN ${this.schema}.teacher_profile_divisions tpd
+				ON tpd.teacher_profile_id = tp.id AND tpd.organization_id = tp.organization_id
+			 WHERE tp.organization_id = $1 AND tp.id = $2
+			 GROUP BY tp.id, tp.organization_id, tp.customer_id, tp.display_name, tp.public_directory_opt_in, tp.approval_status, tp.created_at, tp.updated_at, c.mailing_address`,
+			[organizationId, profileId],
+		)) as TeacherProfileRow[];
+		return rows[0] ? mapTeacherProfileRow(rows[0]) : null;
+	}
+
+	async upsertTeacherProfile(
+		params: UpsertTeacherProfileInput,
+	): Promise<TeacherProfileRecord> {
+		await this.ensureReady();
+		const displayName = validateDisplayName(params.displayName);
+		const publicDirectoryOptIn = validatePublicDirectoryOptIn(
+			params.publicDirectoryOptIn,
+		);
+		const divisionIds = await this.assertValidDivisionIds(
+			params.organizationId,
+			params.divisionIds,
+		);
+
+		const generatedId = randomUUID();
+		const row = await sql.begin(async (transaction) => {
+			const requiresReapproval = await this.lockedProfileRequiresReapproval(
+				transaction,
+				"teacher",
+				{ ...params, displayName, divisionIds },
+			);
+			const upserted = (await transaction.unsafe(
+				`INSERT INTO ${this.schema}.teacher_profiles (
+					id, organization_id, customer_id, display_name, public_directory_opt_in, approval_status, created_at, updated_at
+				 ) VALUES ($1, $2, $3, $4, $5, 'pending', NOW(), NOW())
+				 ON CONFLICT (organization_id, customer_id) DO UPDATE SET
+					display_name = EXCLUDED.display_name,
+					public_directory_opt_in = EXCLUDED.public_directory_opt_in,
+					approval_status = CASE WHEN $6::boolean THEN 'pending' ELSE ${this.schema}.teacher_profiles.approval_status END,
+					updated_at = NOW()
+				 RETURNING id`,
+				[
+					generatedId,
+					params.organizationId,
+					params.customerId,
+					displayName,
+					publicDirectoryOptIn,
+					requiresReapproval,
+				],
+			)) as Array<{ id: string }>;
+
+			const profileId = upserted[0].id;
+			await transaction.unsafe(
+				`DELETE FROM ${this.schema}.teacher_profile_divisions WHERE teacher_profile_id = $1 AND organization_id = $2`,
+				[profileId, params.organizationId],
+			);
+
+			for (const divisionId of divisionIds) {
+				await transaction.unsafe(
+					`INSERT INTO ${this.schema}.teacher_profile_divisions (teacher_profile_id, organization_id, division_id)
+					 VALUES ($1, $2, $3)
+					 ON CONFLICT DO NOTHING`,
+					[profileId, params.organizationId, divisionId],
+				);
+			}
+
+			return upserted[0];
+		});
+
+		const result = await this.getTeacherProfileById(
+			params.organizationId,
+			row.id,
+		);
+		if (!result) {
+			throw new Error("Unable to load upserted teacher profile.");
+		}
+		return result;
+	}
+
+	async updateTeacherProfileApproval(
+		organizationId: string,
+		profileId: string,
+		approvalStatus: ProfileApprovalStatus,
+	): Promise<TeacherProfileRecord | null> {
+		await this.ensureReady();
+		const validStatus = validateProfileApprovalStatus(approvalStatus);
+		const updated = (await sql.unsafe(
+			`UPDATE ${this.schema}.teacher_profiles
+			 SET approval_status = $1, updated_at = NOW()
+			 WHERE organization_id = $2 AND id = $3
+			 RETURNING id`,
+			[validStatus, organizationId, profileId],
+		)) as Array<{ id: string }>;
+		if (!updated[0]) return null;
+		return this.getTeacherProfileById(organizationId, profileId);
+	}
+
+	async listTeacherProfiles(
+		organizationId: string,
+	): Promise<TeacherProfileRecord[]> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT
+				tp.id,
+				tp.organization_id,
+				tp.customer_id,
+				tp.display_name,
+				tp.public_directory_opt_in,
+				tp.approval_status,
+				tp.created_at::text,
+				tp.updated_at::text,
+				c.mailing_address->>'postalCode' AS zip_code,
+				COALESCE(
+					jsonb_agg(tpd.division_id ORDER BY tpd.division_id) FILTER (WHERE tpd.division_id IS NOT NULL),
+					'[]'::jsonb
+				) AS division_ids
+			 FROM ${this.schema}.teacher_profiles tp
+			 LEFT JOIN ${this.schema}.festival_customers c
+				ON c.id = tp.customer_id AND c.organization_id = tp.organization_id
+			 LEFT JOIN ${this.schema}.teacher_profile_divisions tpd
+				ON tpd.teacher_profile_id = tp.id AND tpd.organization_id = tp.organization_id
+			 WHERE tp.organization_id = $1
+			 GROUP BY tp.id, tp.organization_id, tp.customer_id, tp.display_name, tp.public_directory_opt_in, tp.approval_status, tp.created_at, tp.updated_at, c.mailing_address
+			 ORDER BY lower(tp.display_name) COLLATE "C" ASC, tp.display_name COLLATE "C" ASC, tp.id COLLATE "C" ASC`,
+			[organizationId],
+		)) as TeacherProfileRow[];
+		return rows.map((row) => mapTeacherProfileRow(row));
+	}
+
+	async getAccompanistProfile(
+		organizationId: string,
+		customerId: string,
+	): Promise<AccompanistProfileRecord | null> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT
+				ap.id,
+				ap.organization_id,
+				ap.customer_id,
+				ap.display_name,
+				ap.public_directory_opt_in,
+				ap.approval_status,
+				ap.created_at::text,
+				ap.updated_at::text,
+				c.phone,
+				COALESCE(identity.normalized_email, c.email) AS email,
+				c.mailing_address->>'postalCode' AS zip_code,
+				COALESCE(
+					jsonb_agg(apd.division_id ORDER BY apd.division_id) FILTER (WHERE apd.division_id IS NOT NULL),
+					'[]'::jsonb
+				) AS division_ids
+			 FROM ${this.schema}.accompanist_profiles ap
+			 LEFT JOIN ${this.schema}.festival_customers c
+				ON c.id = ap.customer_id AND c.organization_id = ap.organization_id
+			 LEFT JOIN ${this.schema}.membership_identity_emails identity
+				ON identity.organization_id = ap.organization_id AND identity.customer_id = ap.customer_id
+			 LEFT JOIN ${this.schema}.accompanist_profile_divisions apd
+				ON apd.accompanist_profile_id = ap.id AND apd.organization_id = ap.organization_id
+			 WHERE ap.organization_id = $1 AND ap.customer_id = $2
+			 GROUP BY ap.id, ap.organization_id, ap.customer_id, ap.display_name, ap.public_directory_opt_in, ap.approval_status, ap.created_at, ap.updated_at, c.phone, identity.normalized_email, c.email, c.mailing_address`,
+			[organizationId, customerId],
+		)) as AccompanistProfileRow[];
+		return rows[0] ? mapAccompanistProfileRow(rows[0]) : null;
+	}
+
+	async getAccompanistProfileById(
+		organizationId: string,
+		profileId: string,
+	): Promise<AccompanistProfileRecord | null> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT
+				ap.id,
+				ap.organization_id,
+				ap.customer_id,
+				ap.display_name,
+				ap.public_directory_opt_in,
+				ap.approval_status,
+				ap.created_at::text,
+				ap.updated_at::text,
+				c.phone,
+				COALESCE(identity.normalized_email, c.email) AS email,
+				c.mailing_address->>'postalCode' AS zip_code,
+				COALESCE(
+					jsonb_agg(apd.division_id ORDER BY apd.division_id) FILTER (WHERE apd.division_id IS NOT NULL),
+					'[]'::jsonb
+				) AS division_ids
+			 FROM ${this.schema}.accompanist_profiles ap
+			 LEFT JOIN ${this.schema}.festival_customers c
+				ON c.id = ap.customer_id AND c.organization_id = ap.organization_id
+			 LEFT JOIN ${this.schema}.membership_identity_emails identity
+				ON identity.organization_id = ap.organization_id AND identity.customer_id = ap.customer_id
+			 LEFT JOIN ${this.schema}.accompanist_profile_divisions apd
+				ON apd.accompanist_profile_id = ap.id AND apd.organization_id = ap.organization_id
+			 WHERE ap.organization_id = $1 AND ap.id = $2
+			 GROUP BY ap.id, ap.organization_id, ap.customer_id, ap.display_name, ap.public_directory_opt_in, ap.approval_status, ap.created_at, ap.updated_at, c.phone, identity.normalized_email, c.email, c.mailing_address`,
+			[organizationId, profileId],
+		)) as AccompanistProfileRow[];
+		return rows[0] ? mapAccompanistProfileRow(rows[0]) : null;
+	}
+
+	async upsertAccompanistProfile(
+		params: UpsertAccompanistProfileInput,
+	): Promise<AccompanistProfileRecord> {
+		await this.ensureReady();
+		const displayName = validateDisplayName(params.displayName);
+		const publicDirectoryOptIn = validatePublicDirectoryOptIn(
+			params.publicDirectoryOptIn,
+		);
+		const divisionIds = await this.assertValidDivisionIds(
+			params.organizationId,
+			params.divisionIds,
+		);
+
+		const generatedId = randomUUID();
+		const row = await sql.begin(async (transaction) => {
+			const requiresReapproval = await this.lockedProfileRequiresReapproval(
+				transaction,
+				"accompanist",
+				{ ...params, displayName, divisionIds },
+			);
+			const upserted = (await transaction.unsafe(
+				`INSERT INTO ${this.schema}.accompanist_profiles (
+					id, organization_id, customer_id, display_name, public_directory_opt_in, approval_status, created_at, updated_at
+				 ) VALUES ($1, $2, $3, $4, $5, 'pending', NOW(), NOW())
+				 ON CONFLICT (organization_id, customer_id) DO UPDATE SET
+					display_name = EXCLUDED.display_name,
+					public_directory_opt_in = EXCLUDED.public_directory_opt_in,
+					approval_status = CASE WHEN $6::boolean THEN 'pending' ELSE ${this.schema}.accompanist_profiles.approval_status END,
+					updated_at = NOW()
+				 RETURNING id`,
+				[
+					generatedId,
+					params.organizationId,
+					params.customerId,
+					displayName,
+					publicDirectoryOptIn,
+					requiresReapproval,
+				],
+			)) as Array<{ id: string }>;
+
+			const profileId = upserted[0].id;
+			await transaction.unsafe(
+				`DELETE FROM ${this.schema}.accompanist_profile_divisions WHERE accompanist_profile_id = $1 AND organization_id = $2`,
+				[profileId, params.organizationId],
+			);
+
+			for (const divisionId of divisionIds) {
+				await transaction.unsafe(
+					`INSERT INTO ${this.schema}.accompanist_profile_divisions (accompanist_profile_id, organization_id, division_id)
+					 VALUES ($1, $2, $3)
+					 ON CONFLICT DO NOTHING`,
+					[profileId, params.organizationId, divisionId],
+				);
+			}
+
+			return upserted[0];
+		});
+
+		const result = await this.getAccompanistProfileById(
+			params.organizationId,
+			row.id,
+		);
+		if (!result) {
+			throw new Error("Unable to load upserted accompanist profile.");
+		}
+		return result;
+	}
+
+	async updateAccompanistProfileApproval(
+		organizationId: string,
+		profileId: string,
+		approvalStatus: ProfileApprovalStatus,
+	): Promise<AccompanistProfileRecord | null> {
+		await this.ensureReady();
+		const validStatus = validateProfileApprovalStatus(approvalStatus);
+		const updated = (await sql.unsafe(
+			`UPDATE ${this.schema}.accompanist_profiles
+			 SET approval_status = $1, updated_at = NOW()
+			 WHERE organization_id = $2 AND id = $3
+			 RETURNING id`,
+			[validStatus, organizationId, profileId],
+		)) as Array<{ id: string }>;
+		if (!updated[0]) return null;
+		return this.getAccompanistProfileById(organizationId, profileId);
+	}
+
+	async listAccompanistProfiles(
+		organizationId: string,
+	): Promise<AccompanistProfileRecord[]> {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT
+				ap.id,
+				ap.organization_id,
+				ap.customer_id,
+				ap.display_name,
+				ap.public_directory_opt_in,
+				ap.approval_status,
+				ap.created_at::text,
+				ap.updated_at::text,
+				c.phone,
+				COALESCE(identity.normalized_email, c.email) AS email,
+				c.mailing_address->>'postalCode' AS zip_code,
+				COALESCE(
+					jsonb_agg(apd.division_id ORDER BY apd.division_id) FILTER (WHERE apd.division_id IS NOT NULL),
+					'[]'::jsonb
+				) AS division_ids
+			 FROM ${this.schema}.accompanist_profiles ap
+			 LEFT JOIN ${this.schema}.festival_customers c
+				ON c.id = ap.customer_id AND c.organization_id = ap.organization_id
+			 LEFT JOIN ${this.schema}.membership_identity_emails identity
+				ON identity.organization_id = ap.organization_id AND identity.customer_id = ap.customer_id
+			 LEFT JOIN ${this.schema}.accompanist_profile_divisions apd
+				ON apd.accompanist_profile_id = ap.id AND apd.organization_id = ap.organization_id
+			 WHERE ap.organization_id = $1
+			 GROUP BY ap.id, ap.organization_id, ap.customer_id, ap.display_name, ap.public_directory_opt_in, ap.approval_status, ap.created_at, ap.updated_at, c.phone, identity.normalized_email, c.email, c.mailing_address
+			 ORDER BY lower(ap.display_name) COLLATE "C" ASC, ap.display_name COLLATE "C" ASC, ap.id COLLATE "C" ASC`,
+			[organizationId],
+		)) as AccompanistProfileRow[];
+		return rows.map((row) => mapAccompanistProfileRow(row));
+	}
+
+	async getPublicDirectoryProfiles(
+		organizationId: string,
+	): Promise<PublicDirectoryProfileDto[]> {
+		await this.ensureReady();
+
+		const activeTeacherRows = (await sql.unsafe(
+			`SELECT DISTINCT e.customer_id
+			 FROM ${this.schema}.membership_entitlements e
+			 JOIN ${this.schema}.organizations o ON o.id = e.organization_id
+			 WHERE e.organization_id = $1
+			   AND e.entitlement_class = 'teacher_membership'
+			   AND e.revoked_at IS NULL
+			   AND (e.superseded_on IS NULL OR e.superseded_on > (NOW() AT TIME ZONE o.timezone)::date)
+			   AND e.starts_on <= (NOW() AT TIME ZONE o.timezone)::date
+			   AND e.ends_on > (NOW() AT TIME ZONE o.timezone)::date`,
+			[organizationId],
+		)) as Array<{ customer_id: string }>;
+		const activeTeacherCustomerIds = new Set(
+			activeTeacherRows.map((r) => r.customer_id),
+		);
+
+		const teacherRows = (await sql.unsafe(
+			`SELECT
+				tp.id,
+				tp.customer_id,
+				tp.display_name,
+				COALESCE(
+					jsonb_agg(
+						jsonb_build_object('id', od.id, 'name', od.display_name)
+						ORDER BY lower(od.display_name) COLLATE "C", od.display_name COLLATE "C", od.id COLLATE "C"
+					) FILTER (WHERE od.id IS NOT NULL),
+					'[]'::jsonb
+				) AS divisions
+			 FROM ${this.schema}.teacher_profiles tp
+			 LEFT JOIN ${this.schema}.teacher_profile_divisions tpd
+				ON tpd.teacher_profile_id = tp.id AND tpd.organization_id = tp.organization_id
+			 LEFT JOIN ${this.schema}.organization_divisions od
+				ON od.id = tpd.division_id AND od.organization_id = tp.organization_id
+			 WHERE tp.organization_id = $1
+			   AND tp.public_directory_opt_in = TRUE
+			   AND tp.approval_status = 'approved'
+			 GROUP BY tp.id, tp.customer_id, tp.display_name
+			 ORDER BY lower(tp.display_name) COLLATE "C" ASC, tp.display_name COLLATE "C" ASC, tp.id COLLATE "C" ASC`,
+			[organizationId],
+		)) as Array<{
+			id: string;
+			customer_id: string;
+			display_name: string;
+			divisions: unknown;
+		}>;
+
+		const teachers: PublicDirectoryProfileDto[] = teacherRows.map((row) => {
+			const rawDivisions = (
+				Array.isArray(row.divisions)
+					? row.divisions
+					: typeof row.divisions === "string"
+						? JSON.parse(row.divisions)
+						: []
+			) as Array<{ id: string; name: string }>;
+			const approvedDivisions: PublicDirectoryDivisionDto[] = rawDivisions.map(
+				(div) => ({
+					id: div.id,
+					name: div.name,
+				}),
+			);
+
+			return validatePublicDirectoryProfileDto({
+				displayName: row.display_name,
+				role: "Teacher",
+				approvedDivisions,
+				teacherColor: getDeterministicTeacherColor(row.customer_id),
+				isActiveMember: activeTeacherCustomerIds.has(row.customer_id),
+			});
+		});
+
+		const activeAccompanistRows = (await sql.unsafe(
+			`SELECT DISTINCT e.customer_id
+			 FROM ${this.schema}.membership_entitlements e
+			 JOIN ${this.schema}.organizations o ON o.id = e.organization_id
+			 WHERE e.organization_id = $1
+			   AND e.entitlement_class = 'accompanist_membership'
+			   AND e.revoked_at IS NULL
+			   AND e.starts_on <= (NOW() AT TIME ZONE o.timezone)::date
+			   AND e.ends_on > (NOW() AT TIME ZONE o.timezone)::date`,
+			[organizationId],
+		)) as Array<{ customer_id: string }>;
+		const activeAccompanistCustomerIds = new Set(
+			activeAccompanistRows.map((r) => r.customer_id),
+		);
+
+		const accompanistRows = (await sql.unsafe(
+			`SELECT
+				ap.id,
+				ap.customer_id,
+				ap.display_name,
+				COALESCE(
+					jsonb_agg(
+						jsonb_build_object('id', od.id, 'name', od.display_name)
+						ORDER BY lower(od.display_name) COLLATE "C", od.display_name COLLATE "C", od.id COLLATE "C"
+					) FILTER (WHERE od.id IS NOT NULL),
+					'[]'::jsonb
+				) AS divisions
+			 FROM ${this.schema}.accompanist_profiles ap
+			 LEFT JOIN ${this.schema}.accompanist_profile_divisions apd
+				ON apd.accompanist_profile_id = ap.id AND apd.organization_id = ap.organization_id
+			 LEFT JOIN ${this.schema}.organization_divisions od
+				ON od.id = apd.division_id AND od.organization_id = ap.organization_id
+			 WHERE ap.organization_id = $1
+			   AND ap.public_directory_opt_in = TRUE
+			   AND ap.approval_status = 'approved'
+			 GROUP BY ap.id, ap.customer_id, ap.display_name
+			 ORDER BY lower(ap.display_name) COLLATE "C" ASC, ap.display_name COLLATE "C" ASC, ap.id COLLATE "C" ASC`,
+			[organizationId],
+		)) as Array<{
+			id: string;
+			customer_id: string;
+			display_name: string;
+			divisions: unknown;
+		}>;
+
+		const accompanists: PublicDirectoryProfileDto[] = accompanistRows.map(
+			(row) => {
+				const rawDivisions = (
+					Array.isArray(row.divisions)
+						? row.divisions
+						: typeof row.divisions === "string"
+							? JSON.parse(row.divisions)
+							: []
+				) as Array<{ id: string; name: string }>;
+				const approvedDivisions: PublicDirectoryDivisionDto[] =
+					rawDivisions.map((div) => ({
+						id: div.id,
+						name: div.name,
+					}));
+
+				return validatePublicDirectoryProfileDto({
+					displayName: row.display_name,
+					role: "Accompanist",
+					approvedDivisions,
+					isActiveMember: activeAccompanistCustomerIds.has(row.customer_id),
+				});
+			},
+		);
+
+		return [...teachers, ...accompanists];
 	}
 }

@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
 import {
+	addCalendarDays,
 	CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION,
+	calendarDaysUntil,
 	deriveEntitlementDates,
 	type FestivalClassConfiguration,
 	TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+	TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS,
 } from "@festival/common";
 import {
 	CHECKOUT_INTENT_LINE_ID_ATTRIBUTE_KEY,
@@ -15,6 +18,7 @@ import type {
 	CheckoutRepository,
 } from "../checkout/checkout-repository.js";
 import type { CustomerAccountRepository } from "../customer/customer-account-repository.js";
+import { AppError } from "../errors/app-error.js";
 import type {
 	OrganizationRepository,
 	ShopifyIntegrationRecord,
@@ -32,6 +36,7 @@ import type {
 	ShopifyPaidOrder,
 	ShopifyPaidOrderReader,
 } from "../shopify/types.js";
+import { lifecycleForEntitlementRead } from "./entitlement-lifecycle.js";
 import type {
 	MembershipCommerceRepository,
 	MembershipReasonCode,
@@ -196,7 +201,18 @@ function validateMultiLinePayment(
 type CorrelatedClassOrderLine = {
 	intentLine: CheckoutIntentLineItemRecord;
 	orderLine: ShopifyPaidOrder["lineItems"][number];
+	classConfig?: FestivalClassConfiguration;
+	festivalId?: string;
+	placedCountBeforeAllocation?: number;
 };
+
+function hasAttachedCart(intent: CheckoutIntentRecord): boolean {
+	return (
+		Boolean(intent.cartReference?.trim()) &&
+		intent.status !== "creating" &&
+		intent.status !== "failed"
+	);
+}
 
 /**
  * Correlate class-entitlement records to Shopify paid lines by the opaque UUID
@@ -435,6 +451,23 @@ export class ShopifyOrderProjectionService {
 				organizationTimezone: timezone,
 				durationDays: intent.durationDays,
 			});
+			const existingGrants =
+				await this.organizations.listEntitlementGrantSnapshots(
+					delivery.organizationId,
+					intent.customerId,
+				);
+			const previousActiveGrant = existingGrants.find(
+				(grant) =>
+					grant.entitlementClass === TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS &&
+					lifecycleForEntitlementRead(grant, dates.startsOn) === "active" &&
+					calendarDaysUntil(dates.startsOn, grant.endsOn) <=
+						TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS,
+			);
+			const effectiveStartDate =
+				previousActiveGrant && previousActiveGrant.endsOn > dates.startsOn
+					? previousActiveGrant.endsOn
+					: dates.startsOn;
+			const endsOn = addCalendarDays(effectiveStartDate, intent.durationDays);
 			await this.finalize(
 				delivery,
 				{
@@ -456,7 +489,7 @@ export class ShopifyOrderProjectionService {
 						shopifyOrderGid: order.id,
 						shopifyOrderLineGid: line.id,
 						startsOn: dates.startsOn,
-						endsOn: dates.endsOn,
+						endsOn,
 						status: "active",
 						verifiedIdentityEmail: identityEmail,
 					},
@@ -550,6 +583,114 @@ export class ShopifyOrderProjectionService {
 			});
 			throw new Error("Shopify order reconciliation failed.");
 		}
+	}
+
+	async prepareManualApproval(organizationId: string, shopifyOrderGid: string) {
+		let order: ShopifyPaidOrder | null;
+		try {
+			order = await this.readOrder(organizationId, shopifyOrderGid);
+		} catch {
+			throw new AppError("Shopify order could not be verified.", 503);
+		}
+		if (!order || order.id !== shopifyOrderGid) {
+			throw new AppError(
+				"Order cannot be manually approved: upstream_invalid.",
+				422,
+			);
+		}
+		const correlation = correlationFromOrder(order);
+		if (!correlation.correlationId) {
+			throw new AppError(
+				`Order cannot be manually approved: ${correlation.reasonCode ?? "correlation_invalid"}.`,
+				422,
+			);
+		}
+		const intent = await this.checkout.findIntentByCorrelation(
+			organizationId,
+			correlation.correlationId,
+		);
+		if (!intent) {
+			throw new AppError(
+				"Order cannot be manually approved: correlation_invalid.",
+				422,
+			);
+		}
+		const reason = await this.validate(organizationId, intent, order);
+		if (reason) {
+			throw new AppError(
+				`Order cannot be manually approved: ${reason}.`,
+				reason === "duplicate_purchase" ? 409 : 422,
+			);
+		}
+		return this.buildManualApprovalGrant({
+			organizationId,
+			intent,
+			order,
+			correlationId: correlation.correlationId,
+		});
+	}
+
+	private async buildManualApprovalGrant(input: {
+		organizationId: string;
+		intent: CheckoutIntentRecord;
+		order: ShopifyPaidOrder;
+		correlationId: string;
+	}) {
+		const { organizationId, intent, order, correlationId } = input;
+		const line = order.lineItems[0];
+		const identityEmail = verifiedIdentityEmail(order.customerEmail);
+		if (
+			!line ||
+			!order.fullyPaidAtIso ||
+			!intent.divisionId ||
+			!intent.divisionNameSnapshot ||
+			!intent.offeringId ||
+			intent.durationDays == null ||
+			!identityEmail
+		) {
+			throw new AppError(
+				"Order cannot be manually approved: upstream_invalid.",
+				422,
+			);
+		}
+		const timezone =
+			await this.organizations.getOrganizationTimezone(organizationId);
+		const dates = deriveEntitlementDates({
+			fullyPaidAtIso: order.fullyPaidAtIso,
+			organizationTimezone: timezone,
+			durationDays: intent.durationDays,
+		});
+		return {
+			customerId: intent.customerId,
+			checkoutIntentId: intent.id,
+			shopifyOrderLineGid: line.id,
+			projection: {
+				organizationId,
+				shopifyOrderGid: order.id,
+				shopifyCustomerGid: order.customerGid,
+				correlationId,
+				fullyPaidAtIso: order.fullyPaidAtIso,
+				currencyCode: order.currencyCode,
+				updatedAtIso: nowIso(this.now),
+			},
+			grant: {
+				organizationId,
+				customerId: intent.customerId,
+				entitlementClass: TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+				offeringId: intent.offeringId,
+				durationDays: intent.durationDays,
+				divisionId: intent.divisionId,
+				divisionNameSnapshot: intent.divisionNameSnapshot,
+				paidAmount: line.paidAmount,
+				paidCurrencyCode: line.paidCurrencyCode,
+				checkoutIntentId: intent.id,
+				shopifyOrderGid: order.id,
+				shopifyOrderLineGid: line.id,
+				...dates,
+				status: "active" as const,
+				verifiedIdentityEmail: identityEmail,
+			},
+		};
 	}
 
 	private async readOrder(organizationId: string, orderGid: string) {
@@ -677,8 +818,8 @@ export class ShopifyOrderProjectionService {
 		}
 		const timezone =
 			await this.organizations.getOrganizationTimezone(organizationId);
-		const today = deriveEntitlementDates({
-			fullyPaidAtIso: nowIso(this.now),
+		const paidDate = deriveEntitlementDates({
+			fullyPaidAtIso: order.fullyPaidAtIso,
 			organizationTimezone: timezone,
 			durationDays: 1,
 		}).startsOn;
@@ -687,9 +828,24 @@ export class ShopifyOrderProjectionService {
 				organizationId,
 				intent.customerId,
 				TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
-				today,
+				paidDate,
 			)
 		) {
+			return "duplicate_purchase";
+		}
+		const existingGrants =
+			await this.organizations.listEntitlementGrantSnapshots(
+				organizationId,
+				intent.customerId,
+			);
+		const hasIneligibleActive = existingGrants.some(
+			(grant) =>
+				grant.entitlementClass === TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS &&
+				lifecycleForEntitlementRead(grant, paidDate) === "active" &&
+				calendarDaysUntil(paidDate, grant.endsOn) >
+					TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS,
+		);
+		if (hasIneligibleActive) {
 			return "duplicate_purchase";
 		}
 		return undefined;
@@ -707,6 +863,7 @@ export class ShopifyOrderProjectionService {
 			festivalId,
 			correlatedLines,
 			legacySingleLine,
+			placedCountBeforeAllocation,
 		} = await this.validateClassPurchase(
 			delivery.organizationId,
 			intent,
@@ -758,6 +915,7 @@ export class ShopifyOrderProjectionService {
 				classConfig,
 				correlatedLines,
 				legacySingleLine,
+				placedCountBeforeAllocation,
 			);
 			if (singleResult) return singleResult;
 		}
@@ -778,29 +936,43 @@ export class ShopifyOrderProjectionService {
 		classConfig: FestivalClassConfiguration,
 		correlatedLines: readonly CorrelatedClassOrderLine[],
 	): Promise<void> {
+		const admittedCartReference = intent.cartReference?.trim() || null;
 		await this.finalize(
 			delivery,
 			{
 				customerId: intent.customerId,
 				checkoutIntentId: intent.id,
 				status: "approved",
-				classEntitlements: correlatedLines.map(({ intentLine, orderLine }) => {
-					const paidMinor = moneyInMinorUnits(orderLine.paidAmount);
-					return {
-						organizationId: delivery.organizationId,
-						festivalId,
-						festivalClassId: intentLine.festivalClassId ?? classConfig.id,
-						parentCustomerId: intent.customerId,
-						childId: intentLine.childId ?? intent.childId ?? "",
-						checkoutIntentId: intent.id,
-						checkoutIntentLineId: intentLine.id,
-						shopifyOrderGid: order.id,
-						shopifyOrderLineGid: orderLine.id,
-						paidAmountCents: Number(paidMinor ?? 0n),
-						paidCurrencyCode: orderLine.paidCurrencyCode,
-						status: "confirmed" as const,
-					};
-				}),
+				classEntitlements: correlatedLines.map(
+					({
+						intentLine,
+						orderLine,
+						classConfig: lineConfig,
+						festivalId: lineFestivalId,
+						placedCountBeforeAllocation,
+					}) => {
+						const paidMinor = moneyInMinorUnits(orderLine.paidAmount);
+						const resolvedClassConfig = lineConfig ?? classConfig;
+						return {
+							organizationId: delivery.organizationId,
+							festivalId: lineFestivalId ?? festivalId,
+							festivalClassId:
+								intentLine.festivalClassId ?? resolvedClassConfig.id,
+							parentCustomerId: intent.customerId,
+							childId: intentLine.childId ?? intent.childId ?? "",
+							checkoutIntentId: intent.id,
+							checkoutIntentLineId: intentLine.id,
+							shopifyOrderGid: order.id,
+							shopifyOrderLineGid: orderLine.id,
+							paidAmountCents: Number(paidMinor ?? 0n),
+							paidCurrencyCode: orderLine.paidCurrencyCode,
+							status: "confirmed" as const,
+							admittedCartReference,
+							capacityAtAllocation: resolvedClassConfig.capacity,
+							placedCountBeforeAllocation: placedCountBeforeAllocation ?? null,
+						};
+					},
+				),
 			},
 			projection,
 		);
@@ -815,6 +987,7 @@ export class ShopifyOrderProjectionService {
 		classConfig: FestivalClassConfiguration,
 		correlatedLines: readonly CorrelatedClassOrderLine[] | undefined,
 		legacySingleLine: boolean | undefined,
+		placedCountBeforeAllocation?: number,
 	): Promise<ProcessingResult | undefined> {
 		const correlatedLine = correlatedLines?.[0];
 		const orderLine =
@@ -856,6 +1029,9 @@ export class ShopifyOrderProjectionService {
 					paidAmountCents,
 					paidCurrencyCode: orderLine.paidCurrencyCode,
 					status: "confirmed",
+					admittedCartReference: intent.cartReference?.trim() || null,
+					capacityAtAllocation: classConfig.capacity,
+					placedCountBeforeAllocation: placedCountBeforeAllocation ?? null,
 				},
 			},
 			projection,
@@ -873,6 +1049,7 @@ export class ShopifyOrderProjectionService {
 		festivalId?: string;
 		correlatedLines?: CorrelatedClassOrderLine[];
 		legacySingleLine?: boolean;
+		placedCountBeforeAllocation?: number;
 	}> {
 		const correlatedLines = correlateClassOrderLines(intent, order);
 		const legacySingleLine = isLegacySingleLineClassOrder(intent, order);
@@ -946,6 +1123,7 @@ export class ShopifyOrderProjectionService {
 		festivalId?: string;
 		correlatedLines?: CorrelatedClassOrderLine[];
 		legacySingleLine?: boolean;
+		placedCountBeforeAllocation?: number;
 	}> {
 		if (!intent.festivalClassId || !intent.childId) {
 			return { reason: "upstream_invalid" };
@@ -988,9 +1166,21 @@ export class ShopifyOrderProjectionService {
 		) {
 			return { reason: "payment_mismatch" };
 		}
+		const placedCountBeforeAllocation =
+			await this.commerce.countConfirmedClassEntitlements(
+				organizationId,
+				classConfig.id,
+			);
+		if (
+			placedCountBeforeAllocation >= classConfig.capacity &&
+			!hasAttachedCart(intent)
+		) {
+			return { reason: "correlation_invalid" };
+		}
 		return {
 			classConfig,
 			festivalId,
+			placedCountBeforeAllocation,
 			...(correlatedLines ? { correlatedLines: [...correlatedLines] } : {}),
 			...(legacySingleLine ? { legacySingleLine: true } : {}),
 		};
@@ -1007,6 +1197,12 @@ export class ShopifyOrderProjectionService {
 		festivalId?: string;
 		correlatedLines?: CorrelatedClassOrderLine[];
 	}> {
+		if (!validateMultiLinePayment(intent, order)) {
+			return { reason: "payment_mismatch" };
+		}
+		const attachedCart = hasAttachedCart(intent);
+		const placedCountCache = new Map<string, number>();
+		const enrichedLines: CorrelatedClassOrderLine[] = [];
 		for (const { intentLine, orderLine } of correlatedLines) {
 			if (
 				orderLine.quantity !== 1 ||
@@ -1015,21 +1211,47 @@ export class ShopifyOrderProjectionService {
 			) {
 				return { reason: "offering_mismatch" };
 			}
+			const targetClassId =
+				intentLine.festivalClassId ?? intent.festivalClassId;
+			if (!targetClassId) return { reason: "upstream_invalid" };
+			const { classConfig: lineConfig, festivalId: lineFestivalId } =
+				await this.findActiveClassConfig(organizationId, targetClassId);
+			if (
+				!lineConfig ||
+				!lineFestivalId ||
+				lineConfig.shopifyProductGid !== intentLine.shopifyProductGid ||
+				lineConfig.shopifyVariantGid !== intentLine.shopifyVariantGid
+			) {
+				return { reason: "offering_mismatch" };
+			}
+			let placedCount = placedCountCache.get(lineConfig.id);
+			if (placedCount === undefined) {
+				placedCount = await this.commerce.countConfirmedClassEntitlements(
+					organizationId,
+					lineConfig.id,
+				);
+			}
+			if (placedCount >= lineConfig.capacity && !attachedCart) {
+				return { reason: "correlation_invalid" };
+			}
+			placedCountCache.set(lineConfig.id, placedCount + 1);
+			enrichedLines.push({
+				intentLine,
+				orderLine,
+				classConfig: lineConfig,
+				festivalId: lineFestivalId,
+				placedCountBeforeAllocation: placedCount,
+			});
 		}
-		if (!validateMultiLinePayment(intent, order)) {
-			return { reason: "payment_mismatch" };
+		const firstLine = enrichedLines[0];
+		if (!firstLine?.classConfig || !firstLine.festivalId) {
+			return { reason: "upstream_invalid" };
 		}
-		const targetClassId =
-			intent.festivalClassId ?? correlatedLines[0]?.intentLine.festivalClassId;
-		if (!targetClassId) return { reason: "upstream_invalid" };
-		const { classConfig, festivalId } = await this.findActiveClassConfig(
-			organizationId,
-			targetClassId,
-		);
-		if (!classConfig || !festivalId) {
-			return { reason: "offering_mismatch" };
-		}
-		return { classConfig, festivalId, correlatedLines: [...correlatedLines] };
+		return {
+			classConfig: firstLine.classConfig,
+			festivalId: firstLine.festivalId,
+			correlatedLines: enrichedLines,
+		};
 	}
 
 	private async projectConsentedCustomerProfile(
