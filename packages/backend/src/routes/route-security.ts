@@ -78,6 +78,26 @@ export const CURRENT_ROUTE_SECURITY = [
 	},
 	{
 		method: "GET",
+		path: "/api/organizations/:slug/admin/entitlements/operations",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/entitlements/reconcile",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/entitlements/decisions/:decisionId/decline",
+		authenticationClass: "admin",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/admin/entitlements/decisions/:decisionId/approve",
+		authenticationClass: "admin",
+	},
+	{
+		method: "GET",
 		path: "/api/organizations/:slug/admin/festivals/:festivalShortName/class-subtypes",
 		authenticationClass: "admin",
 	},

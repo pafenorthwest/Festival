@@ -167,7 +167,7 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		AccompanistProfileRecord
 	>();
 
-	constructor(private readonly now: () => Date = () => new Date()) {}
+	constructor(readonly now: () => Date = () => new Date()) {}
 
 	async ensureReady(): Promise<void> {}
 
@@ -1787,27 +1787,44 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		reason: string;
 		revokedAtIso: string;
 	}) {
+		const teacher = this.entitlementGrants.get(input.entitlementId);
+		const accompanist = this.accompanistMembershipGrants.get(
+			input.entitlementId,
+		);
+		const target =
+			teacher?.organizationId === input.organizationId
+				? {
+						entitlementClass: teacher.entitlementClass,
+						customerId: teacher.customerId,
+						startsOn: teacher.startsOn,
+						endsOn: teacher.endsOn,
+					}
+				: accompanist?.organizationId === input.organizationId
+					? {
+							entitlementClass: "accompanist_membership" as const,
+							customerId: accompanist.customerId,
+							startsOn: accompanist.startsOn,
+							endsOn: accompanist.endsOn,
+						}
+					: null;
+		if (!target) {
+			throw new AppError("Entitlement was not found.", 404);
+		}
 		const existing = this.entitlementRevocations.get(input.entitlementId);
 		if (existing) return { revocation: existing, existing: true };
-		const teacher = this.entitlementGrants.get(input.entitlementId);
-		let entitlementClass: EntitlementClass;
-		let customerId: string;
-		if (teacher?.organizationId === input.organizationId) {
-			entitlementClass = teacher.entitlementClass;
-			customerId = teacher.customerId;
-		} else {
-			const accompanist = this.accompanistMembershipGrants.get(
-				input.entitlementId,
-			);
-			if (!accompanist || accompanist.organizationId !== input.organizationId)
-				throw new Error("Entitlement was not found.");
-			entitlementClass = "accompanist_membership";
-			customerId = accompanist.customerId;
+		const organization = this.organizations.get(input.organizationId);
+		if (!organization) throw new AppError("Organization not found.", 404);
+		const lifecycle = deriveEntitlementLifecycle(
+			target,
+			calendarDateInTimezone(this.now().toISOString(), organization.timezone),
+		);
+		if (lifecycle === "expired") {
+			throw new AppError("Expired entitlements cannot be revoked.", 409);
 		}
 		this.advanceEntitlementCohort(
 			input.organizationId,
-			customerId,
-			entitlementClass,
+			target.customerId,
+			target.entitlementClass,
 		);
 		const revocation: EntitlementRevocationRecord = {
 			id: randomUUID(),

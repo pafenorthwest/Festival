@@ -2,10 +2,19 @@ import {
 	ENTITLEMENT_CLASSES,
 	ENTITLEMENT_LIFECYCLES,
 	type EntitlementClass,
+	type EntitlementGrantSnapshot,
 	type EntitlementLifecycleState,
 } from "./entitlements.js";
 
 export type EntitlementReportSource = "teacher_checkout" | "accompanist_form";
+
+export interface EntitlementSummaryCounts {
+	active: number;
+	scheduled: number;
+	superseded: number;
+	expired: number;
+	revoked: number;
+}
 
 export interface EntitlementReportEntry {
 	id: string;
@@ -18,6 +27,8 @@ export interface EntitlementReportEntry {
 	endsOn: string;
 	source: EntitlementReportSource;
 	status: EntitlementLifecycleState;
+	revokedAtIso?: string;
+	revokedReason?: string;
 }
 
 export interface EntitlementReportFilters {
@@ -47,6 +58,120 @@ export interface EntitlementReportResponse {
 	totalPages: number;
 	/** Every division held by any entitlement, ignoring the active filters. */
 	divisions: EntitlementReportDivisionOption[];
+	/** Unfiltered organization-wide counts by lifecycle state. */
+	summaryCounts?: EntitlementSummaryCounts;
+}
+
+export interface AdminReconciliationRunSummary {
+	id: string;
+	organizationId?: string;
+	status: "completed" | "failed";
+	discoveredCount: number;
+	processedCount: number;
+	startedAtIso: string;
+	finishedAtIso: string;
+	failureCategory?: "upstream" | "persistence" | "invalid";
+}
+
+export type AdminValidationDecisionAction = "approve" | "decline";
+
+export interface AdminUnresolvedValidationDecision {
+	id: string;
+	organizationId?: string;
+	shopifyOrderGid: string;
+	shopifyOrderLineGid?: string;
+	status: "pending_validation" | "needs_review";
+	reasonCode?: string;
+	customerId?: string;
+	customerName?: string;
+	customerEmail?: string;
+	checkoutIntentId?: string;
+	offeringName?: string;
+	divisionName?: string;
+	createdAtIso: string;
+	updatedAtIso: string;
+	availableActions: AdminValidationDecisionAction[];
+}
+
+export interface AdminValidationDecisionResolutionAudit {
+	id: string;
+	organizationId: string;
+	decisionId: string;
+	priorStatus: "pending_validation" | "needs_review";
+	finalStatus: "approved" | "rejected";
+	actorUserId: string;
+	note: string;
+	resolvedAtIso: string;
+}
+
+export interface AdminEntitlementOperationsResponse {
+	summaryCounts: EntitlementSummaryCounts;
+	latestReconciliationRun: AdminReconciliationRunSummary | null;
+	reconciliationRuns: AdminReconciliationRunSummary[];
+	unresolvedDecisions: AdminUnresolvedValidationDecision[];
+}
+
+export interface AdminEntitlementReconcileResponse {
+	run: AdminReconciliationRunSummary;
+	discoveredCount: number;
+	processedCount: number;
+}
+
+export interface AdminResolveValidationDecisionInput {
+	confirmed: boolean;
+	note: string;
+}
+
+export interface AdminResolveValidationDecisionResponse {
+	decision: {
+		id: string;
+		organizationId: string;
+		shopifyOrderGid: string;
+		shopifyOrderLineGid?: string;
+		customerId?: string;
+		checkoutIntentId?: string;
+		status: "approved" | "rejected";
+		reasonCode?: string;
+		createdAtIso: string;
+		updatedAtIso: string;
+	};
+	grant?: EntitlementGrantSnapshot;
+	audit: AdminValidationDecisionResolutionAudit;
+}
+
+export interface AdminRevokeEntitlementInput {
+	confirmed?: boolean;
+	reason: string;
+}
+
+export interface AdminEntitlementRevocationRecord {
+	id: string;
+	entitlementId: string;
+	organizationId: string;
+	actorUserId: string;
+	reason: string;
+	revokedAtIso: string;
+}
+
+export interface AdminRevokeEntitlementResponse {
+	revocation: AdminEntitlementRevocationRecord;
+	existing: boolean;
+}
+
+export function summarizeEntitlementCounts(
+	entries: ReadonlyArray<{ status: EntitlementLifecycleState }>,
+): EntitlementSummaryCounts {
+	const counts: EntitlementSummaryCounts = {
+		active: 0,
+		scheduled: 0,
+		superseded: 0,
+		expired: 0,
+		revoked: 0,
+	};
+	for (const entry of entries) {
+		counts[entry.status] += 1;
+	}
+	return counts;
 }
 
 export const ENTITLEMENT_REPORT_DEFAULT_PAGE_SIZE = 25;

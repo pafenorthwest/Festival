@@ -72,13 +72,17 @@ export function buildStaffRoutes(options: {
 						400,
 					);
 				}
-				const report = await accompanistMembershipService.listEntitlementReport(
-					getRequiredTenant(c).organization.id,
-					filters,
-					pageRequest,
-				);
+				const organizationId = getRequiredTenant(c).organization.id;
+				const [report, summaryCounts] = await Promise.all([
+					accompanistMembershipService.listEntitlementReport(
+						organizationId,
+						filters,
+						pageRequest,
+					),
+					accompanistMembershipService.getSummaryCounts(organizationId),
+				]);
 				c.header("Cache-Control", "no-store");
-				return c.json(report);
+				return c.json({ ...report, summaryCounts });
 			} catch (error) {
 				return toJsonError(c, error);
 			}

@@ -18,6 +18,7 @@ import type {
 	CheckoutRepository,
 } from "../checkout/checkout-repository.js";
 import type { CustomerAccountRepository } from "../customer/customer-account-repository.js";
+import { AppError } from "../errors/app-error.js";
 import type {
 	OrganizationRepository,
 	ShopifyIntegrationRecord,
@@ -582,6 +583,114 @@ export class ShopifyOrderProjectionService {
 			});
 			throw new Error("Shopify order reconciliation failed.");
 		}
+	}
+
+	async prepareManualApproval(organizationId: string, shopifyOrderGid: string) {
+		let order: ShopifyPaidOrder | null;
+		try {
+			order = await this.readOrder(organizationId, shopifyOrderGid);
+		} catch {
+			throw new AppError("Shopify order could not be verified.", 503);
+		}
+		if (!order || order.id !== shopifyOrderGid) {
+			throw new AppError(
+				"Order cannot be manually approved: upstream_invalid.",
+				422,
+			);
+		}
+		const correlation = correlationFromOrder(order);
+		if (!correlation.correlationId) {
+			throw new AppError(
+				`Order cannot be manually approved: ${correlation.reasonCode ?? "correlation_invalid"}.`,
+				422,
+			);
+		}
+		const intent = await this.checkout.findIntentByCorrelation(
+			organizationId,
+			correlation.correlationId,
+		);
+		if (!intent) {
+			throw new AppError(
+				"Order cannot be manually approved: correlation_invalid.",
+				422,
+			);
+		}
+		const reason = await this.validate(organizationId, intent, order);
+		if (reason) {
+			throw new AppError(
+				`Order cannot be manually approved: ${reason}.`,
+				reason === "duplicate_purchase" ? 409 : 422,
+			);
+		}
+		return this.buildManualApprovalGrant({
+			organizationId,
+			intent,
+			order,
+			correlationId: correlation.correlationId,
+		});
+	}
+
+	private async buildManualApprovalGrant(input: {
+		organizationId: string;
+		intent: CheckoutIntentRecord;
+		order: ShopifyPaidOrder;
+		correlationId: string;
+	}) {
+		const { organizationId, intent, order, correlationId } = input;
+		const line = order.lineItems[0];
+		const identityEmail = verifiedIdentityEmail(order.customerEmail);
+		if (
+			!line ||
+			!order.fullyPaidAtIso ||
+			!intent.divisionId ||
+			!intent.divisionNameSnapshot ||
+			!intent.offeringId ||
+			intent.durationDays == null ||
+			!identityEmail
+		) {
+			throw new AppError(
+				"Order cannot be manually approved: upstream_invalid.",
+				422,
+			);
+		}
+		const timezone =
+			await this.organizations.getOrganizationTimezone(organizationId);
+		const dates = deriveEntitlementDates({
+			fullyPaidAtIso: order.fullyPaidAtIso,
+			organizationTimezone: timezone,
+			durationDays: intent.durationDays,
+		});
+		return {
+			customerId: intent.customerId,
+			checkoutIntentId: intent.id,
+			shopifyOrderLineGid: line.id,
+			projection: {
+				organizationId,
+				shopifyOrderGid: order.id,
+				shopifyCustomerGid: order.customerGid,
+				correlationId,
+				fullyPaidAtIso: order.fullyPaidAtIso,
+				currencyCode: order.currencyCode,
+				updatedAtIso: nowIso(this.now),
+			},
+			grant: {
+				organizationId,
+				customerId: intent.customerId,
+				entitlementClass: TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+				offeringId: intent.offeringId,
+				durationDays: intent.durationDays,
+				divisionId: intent.divisionId,
+				divisionNameSnapshot: intent.divisionNameSnapshot,
+				paidAmount: line.paidAmount,
+				paidCurrencyCode: line.paidCurrencyCode,
+				checkoutIntentId: intent.id,
+				shopifyOrderGid: order.id,
+				shopifyOrderLineGid: line.id,
+				...dates,
+				status: "active" as const,
+				verifiedIdentityEmail: identityEmail,
+			},
+		};
 	}
 
 	private async readOrder(organizationId: string, orderGid: string) {

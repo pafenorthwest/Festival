@@ -646,6 +646,17 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL,
 			UNIQUE (organization_id, shopify_order_gid), UNIQUE (organization_id, shopify_order_line_gid)
 		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.membership_validation_decision_audits (
+			id TEXT PRIMARY KEY,
+			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
+			decision_id TEXT NOT NULL REFERENCES ${safeSchema}.membership_validation_decisions (id) ON DELETE RESTRICT,
+			prior_status TEXT NOT NULL CHECK (prior_status IN ('pending_validation', 'needs_review')),
+			final_status TEXT NOT NULL CHECK (final_status IN ('approved', 'rejected')),
+			actor_user_id TEXT NOT NULL REFERENCES ${safeSchema}.users (id) ON DELETE RESTRICT,
+			note TEXT NOT NULL CHECK (LENGTH(note) BETWEEN 1 AND 500),
+			resolved_at TIMESTAMPTZ NOT NULL,
+			UNIQUE (decision_id)
+		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.membership_reconciliation_runs (
 			id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
 			status TEXT NOT NULL CHECK (status IN ('completed', 'failed')),
@@ -1028,6 +1039,8 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			ON ${safeSchema}.festival_class_waitlist_events (organization_id, waitlist_entry_id, occurred_at);
 		CREATE INDEX IF NOT EXISTS idx_waitlist_events_class
 			ON ${safeSchema}.festival_class_waitlist_events (organization_id, festival_class_id, occurred_at);
+		CREATE INDEX IF NOT EXISTS membership_validation_decision_audits_org_idx
+			ON ${safeSchema}.membership_validation_decision_audits (organization_id, resolved_at DESC);
 	`;
 }
 

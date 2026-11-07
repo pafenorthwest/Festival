@@ -6,9 +6,12 @@ import { BillingReconciliationService } from "../billing/billing-reconciliation-
 import { InMemoryBillingRepository } from "../billing/billing-repository.js";
 import { InMemoryCheckoutRecoveryRepository } from "../checkout/checkout-recovery-repository.js";
 import { CheckoutRecoveryService } from "../checkout/checkout-recovery-service.js";
+import type { CheckoutRepository } from "../checkout/checkout-repository.js";
 import type { ClassCheckoutService } from "../checkout/class-checkout-service.js";
 import type { MembershipCheckoutService } from "../checkout/membership-checkout-service.js";
+import type { MembershipCommerceRepository } from "../commerce/membership-commerce-repository.js";
 import type { MembershipStatusService } from "../commerce/membership-status-service.js";
+import type { ShopifyOrderProjectionService } from "../commerce/shopify-order-projection-service.js";
 import type { CommunicationService } from "../communication/communication-service.js";
 import type { CustomerAccountService } from "../customer/customer-account-service.js";
 import type { CustomerAvailabilityService } from "../customer/customer-availability-service.js";
@@ -26,6 +29,7 @@ import type { VolunteerRepository } from "../volunteers/volunteer-repository.js"
 import type { WaitlistService } from "../waitlist/waitlist-service.js";
 import { buildAdminBillingRoutes } from "./admin-billing.routes.js";
 import { buildAdminCheckoutRecoveryRoutes } from "./admin-checkout-recovery.routes.js";
+import { buildAdminEntitlementsRoutes } from "./admin-entitlements.routes.js";
 import { buildAdminOrgRoutes } from "./admin-org/admin-org.routes.js";
 import { buildAdminRegistrationRoutes } from "./admin-registration/admin-registration.routes.js";
 import { buildAdminWaitlistRoutes } from "./admin-registration/admin-waitlist.routes.js";
@@ -59,6 +63,9 @@ export interface ApiRouterOptions {
 	membershipCheckoutService?: MembershipCheckoutService;
 	membershipStatusService?: MembershipStatusService;
 	accompanistMembershipService?: AccompanistMembershipService;
+	commerceRepository?: MembershipCommerceRepository;
+	checkoutRepository?: CheckoutRepository;
+	shopifyOrderProjectionService?: ShopifyOrderProjectionService;
 	volunteerRepository?: VolunteerRepository;
 	classCheckoutService?: ClassCheckoutService;
 	customClaimsWriter?: CustomClaimsWriter;
@@ -89,6 +96,9 @@ export function buildApiRouter(
 		membershipCheckoutService,
 		membershipStatusService,
 		accompanistMembershipService,
+		commerceRepository,
+		checkoutRepository,
+		shopifyOrderProjectionService,
 		volunteerRepository,
 		classCheckoutService,
 		customClaimsWriter,
@@ -143,6 +153,17 @@ export function buildApiRouter(
 			shopifyIntegrationDiagnosticService,
 			shopifyMembershipProductService,
 			customerAccountService,
+		}),
+	);
+	router.route(
+		"/",
+		buildAdminEntitlementsRoutes({
+			authVerifier,
+			repository,
+			accompanistMembershipService,
+			commerceRepository,
+			checkoutRepository,
+			shopifyOrderProjectionService,
 		}),
 	);
 	const recoveryService =

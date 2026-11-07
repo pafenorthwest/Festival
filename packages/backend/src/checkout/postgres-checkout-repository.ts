@@ -328,6 +328,22 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 		intent.lines = await this.getIntentLines(sql, intent.id);
 		return intent;
 	}
+	async findIntentByCorrelationId(
+		organizationId: string,
+		correlationId: string,
+	) {
+		return this.findIntentByCorrelation(organizationId, correlationId);
+	}
+	async findIntentById(organizationId: string, intentId: string) {
+		const rows = (await sql.unsafe(
+			`SELECT id, correlation_id, organization_id, customer_id, session_id, idempotency_key, intent_type, offering_id, entitlement_class, duration_days, festival_class_id, child_id, shopify_product_gid, shopify_variant_gid, policy_version, division_id, division_name_snapshot, staff_access_consent, amount, currency_code, line_identity_protocol, cart_reference, status, expires_at::text, created_at::text FROM ${this.schema}.checkout_intents WHERE organization_id = $1 AND id = $2`,
+			[organizationId, intentId],
+		)) as Array<Record<string, unknown>>;
+		if (!rows[0]) return null;
+		const intent = this.intent(rows[0]);
+		intent.lines = await this.getIntentLines(sql, intent.id);
+		return intent;
+	}
 	async hasProcessingIntent(
 		organizationId: string,
 		customerId: string,

@@ -4,6 +4,7 @@ import {
 	type EntitlementLifecycleState,
 	type EntitlementReportDivisionOption,
 	type EntitlementReportEntry,
+	type EntitlementSummaryCounts,
 } from "@festival/common";
 import {
 	createEffect,
@@ -14,8 +15,17 @@ import {
 	untrack,
 } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
-import { getAdminEntitlementReport } from "../lib/api.js";
 import {
+	getAdminEntitlementReport,
+	revokeAdminEntitlement,
+} from "../lib/api.js";
+import {
+	ActionConfirmBox,
+	AdminEntitlementOperationsSection,
+} from "./AdminEntitlementOperationsSection.js";
+import {
+	canRevokeEntitlement,
+	EMPTY_ENTITLEMENT_SUMMARY_COUNTS,
 	ENTITLEMENT_CLASS_FILTER_OPTIONS,
 	ENTITLEMENT_STATUS_FILTER_OPTIONS,
 	entitlementPageNumbers,
@@ -29,6 +39,79 @@ import {
 } from "./adminEntitlementReportHelpers.js";
 
 const SEARCH_DEBOUNCE_MS = 300;
+
+function EntitlementRevokeCell(props: {
+	app: FestivalAppController;
+	entry: EntitlementReportEntry;
+	onRevoked: () => void;
+}) {
+	const [open, setOpen] = createSignal(false);
+
+	const submitRevoke = async (reason: string) => {
+		const user = props.app.firebaseUser();
+		const route = props.app.route();
+		if (!user || route.kind !== "org-admin-memberships") return;
+		await revokeAdminEntitlement(
+			await user.getIdToken(),
+			route.slug,
+			props.entry.id,
+			{ confirmed: true, reason },
+		);
+		setOpen(false);
+		props.onRevoked();
+	};
+
+	return (
+		<Show
+			when={
+				props.app.isAdminMember() && canRevokeEntitlement(props.entry.status)
+			}
+		>
+			<Show
+				when={open()}
+				fallback={
+					<button
+						type="button"
+						class="secondary-button"
+						onClick={() => setOpen(true)}
+					>
+						Revoke
+					</button>
+				}
+			>
+				<ActionConfirmBox
+					placeholder="Revocation reason"
+					confirmLabel="Confirm revoke"
+					busyLabel="Revoking…"
+					onSubmit={submitRevoke}
+					onCancel={() => setOpen(false)}
+				/>
+			</Show>
+		</Show>
+	);
+}
+
+function SummaryCountsSection(props: {
+	summaryCounts: EntitlementSummaryCounts;
+}) {
+	return (
+		<section
+			class="entitlement-summary-counts"
+			aria-label="Entitlement status summary"
+		>
+			<For each={ENTITLEMENT_STATUS_FILTER_OPTIONS}>
+				{(item) => (
+					<div class="entitlement-summary-card">
+						<span class={entitlementStatusBadgeClass(item.value)}>
+							{item.label}
+						</span>
+						<strong>{props.summaryCounts[item.value]}</strong>
+					</div>
+				)}
+			</For>
+		</section>
+	);
+}
 
 export function AdminEntitlementReportPanel(props: {
 	app: FestivalAppController;
@@ -48,6 +131,9 @@ export function AdminEntitlementReportPanel(props: {
 	const [page, setPage] = createSignal(1);
 	const [total, setTotal] = createSignal(0);
 	const [totalPages, setTotalPages] = createSignal(1);
+	const [summaryCounts, setSummaryCounts] =
+		createSignal<EntitlementSummaryCounts>(EMPTY_ENTITLEMENT_SUMMARY_COUNTS);
+	const [opsRefreshVersion, setOpsRefreshVersion] = createSignal(0);
 	const hasFilters = () =>
 		Boolean(search().trim() || entitlementClass() || status() || divisionId());
 
@@ -95,6 +181,7 @@ export function AdminEntitlementReportPanel(props: {
 			setTotal(response.total);
 			setTotalPages(response.totalPages);
 			setDivisions(response.divisions);
+			if (response.summaryCounts) setSummaryCounts(response.summaryCounts);
 			// The server clamps a page past the end (e.g. rows were removed elsewhere).
 			setPage(response.page);
 		} catch (reason) {
@@ -159,14 +246,22 @@ export function AdminEntitlementReportPanel(props: {
 				<div>
 					<h2 id="entitlement-report-title">Entitlements</h2>
 					<p>
-						Read-only report of Teacher and Accompanist memberships held by
-						customers.
+						Report and operational lifecycle controls for Teacher and
+						Accompanist memberships held by customers.
 					</p>
 				</div>
 				<Show when={!loading() && !error()}>
 					<span class="shopify-status shopify-status-ok">{total()}</span>
 				</Show>
 			</div>
+
+			<SummaryCountsSection summaryCounts={summaryCounts()} />
+
+			<AdminEntitlementOperationsSection
+				app={props.app}
+				refreshVersion={opsRefreshVersion()}
+				onMutated={() => void load()}
+			/>
 
 			<form
 				class="entitlement-report-filters"
@@ -307,6 +402,19 @@ export function AdminEntitlementReportPanel(props: {
 										<span class={entitlementStatusBadgeClass(entry.status)}>
 											{formatEntitlementStatus(entry.status)}
 										</span>
+										<Show when={entry.revokedReason}>
+											<span class="entitlement-report-secondary">
+												{entry.revokedReason}
+											</span>
+										</Show>
+										<EntitlementRevokeCell
+											app={props.app}
+											entry={entry}
+											onRevoked={() => {
+												setOpsRefreshVersion((v) => v + 1);
+												void load();
+											}}
+										/>
 									</span>
 								</div>
 							);

@@ -2930,24 +2930,26 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 				`SELECT customer_id FROM ${this.schema}.membership_entitlements WHERE id=$1 AND organization_id=$2`,
 				[input.entitlementId, input.organizationId],
 			)) as Array<{ customer_id: string }>;
-			if (!initial[0]) throw new Error("Entitlement was not found.");
+			if (!initial[0]) throw new AppError("Entitlement was not found.", 404);
 			await transaction.unsafe(
 				"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
 				[`${input.organizationId}:${initial[0].customer_id}`],
 			);
 			const entitlement = (await transaction.unsafe(
-				`SELECT customer_id, entitlement_class, revoked_at::text, revoked_reason FROM ${this.schema}.membership_entitlements WHERE id=$1 AND organization_id=$2 FOR UPDATE`,
+				`SELECT e.customer_id, e.entitlement_class, e.revoked_at::text, e.revoked_reason, (e.ends_on <= (NOW() AT TIME ZONE o.timezone)::date) AS is_expired FROM ${this.schema}.membership_entitlements e JOIN ${this.schema}.organizations o ON o.id = e.organization_id WHERE e.id=$1 AND e.organization_id=$2 FOR UPDATE OF e`,
 				[input.entitlementId, input.organizationId],
 			)) as Array<{
 				customer_id: string;
 				entitlement_class: string;
 				revoked_at: string | null;
 				revoked_reason: string | null;
+				is_expired: boolean;
 			}>;
-			if (!entitlement[0]) throw new Error("Entitlement was not found.");
+			if (!entitlement[0])
+				throw new AppError("Entitlement was not found.", 404);
 			const existing = (await transaction.unsafe(
-				`SELECT id, entitlement_id, organization_id, actor_user_id, reason, revoked_at::text FROM ${this.schema}.membership_entitlement_revocations WHERE entitlement_id=$1`,
-				[input.entitlementId],
+				`SELECT id, entitlement_id, organization_id, actor_user_id, reason, revoked_at::text FROM ${this.schema}.membership_entitlement_revocations WHERE entitlement_id=$1 AND organization_id=$2`,
+				[input.entitlementId, input.organizationId],
 			)) as Array<{
 				id: string;
 				entitlement_id: string;
@@ -2968,6 +2970,9 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 					},
 					existing: true,
 				};
+			if (entitlement[0].is_expired) {
+				throw new AppError("Expired entitlements cannot be revoked.", 409);
+			}
 			await transaction.unsafe(
 				`UPDATE ${this.schema}.membership_entitlements SET revoked_at=$3::timestamptz, revoked_reason=$4 WHERE id=$1 AND organization_id=$2`,
 				[

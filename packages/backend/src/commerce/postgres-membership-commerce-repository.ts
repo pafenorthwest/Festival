@@ -14,14 +14,17 @@ import {
 	isClassEntitlementStatus,
 } from "@festival/common";
 import { sql } from "bun";
+import { AppError } from "../errors/app-error.js";
 import { initializePostgresSchema } from "../repo/postgres-schema.js";
 import type { ClassEntitlementFilter } from "./class-entitlement-repository.js";
 import type {
 	MembershipCommerceRepository,
+	MembershipDecisionAuditRecord,
 	MembershipDecisionStatus,
 	MembershipReasonCode,
 	MembershipReconciliationRun,
 	MembershipValidationDecision,
+	ResolveDecisionManuallyInput,
 	ShopifyOrderProjection,
 	ShopifyOrderProjectionInput,
 	ShopifyWebhookDelivery,
@@ -945,6 +948,197 @@ export class PostgresMembershipCommerceRepository
 		)) as Array<Record<string, unknown>>;
 		if (!rows[0]) throw new Error("Reconciliation run was not recorded.");
 		return reconciliationRun(rows[0]);
+	}
+
+	async listReconciliationRuns(organizationId: string, limit = 10) {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT id, organization_id, status, discovered_count, processed_count, started_at::text, finished_at::text, failure_category FROM ${this.schema}.membership_reconciliation_runs WHERE organization_id = $1 ORDER BY finished_at DESC, id DESC LIMIT $2`,
+			[organizationId, limit],
+		)) as Array<Record<string, unknown>>;
+		return rows.map(reconciliationRun);
+	}
+
+	async listUnresolvedDecisions(organizationId: string) {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT id, organization_id, customer_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, status, reason_code, created_at::text, updated_at::text FROM ${this.schema}.membership_validation_decisions WHERE organization_id = $1 AND status IN ('pending_validation', 'needs_review') ORDER BY updated_at DESC, id DESC`,
+			[organizationId],
+		)) as Array<Record<string, unknown>>;
+		return rows.map(decision);
+	}
+
+	async getDecisionById(organizationId: string, decisionId: string) {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT id, organization_id, customer_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, status, reason_code, created_at::text, updated_at::text FROM ${this.schema}.membership_validation_decisions WHERE organization_id = $1 AND id = $2 LIMIT 1`,
+			[organizationId, decisionId],
+		)) as Array<Record<string, unknown>>;
+		return rows[0] ? decision(rows[0]) : null;
+	}
+
+	async getDecisionAudit(organizationId: string, decisionId: string) {
+		await this.ensureReady();
+		const rows = (await sql.unsafe(
+			`SELECT id, organization_id, decision_id, prior_status, final_status, actor_user_id, note, resolved_at::text FROM ${this.schema}.membership_validation_decision_audits WHERE organization_id = $1 AND decision_id = $2 LIMIT 1`,
+			[organizationId, decisionId],
+		)) as Array<Record<string, unknown>>;
+		if (!rows[0]) return null;
+		const row = rows[0];
+		return {
+			id: String(row.id),
+			organizationId: String(row.organization_id),
+			decisionId: String(row.decision_id),
+			priorStatus: row.prior_status as "pending_validation" | "needs_review",
+			finalStatus: row.final_status as "approved" | "rejected",
+			actorUserId: String(row.actor_user_id),
+			note: String(row.note),
+			resolvedAtIso: String(row.resolved_at),
+		};
+	}
+
+	async resolveDecisionManually(input: ResolveDecisionManuallyInput) {
+		await this.ensureReady();
+		return sql.begin(async (tx) => {
+			const rows = (await tx.unsafe(
+				`SELECT id, organization_id, customer_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, status, reason_code, created_at::text, updated_at::text FROM ${this.schema}.membership_validation_decisions WHERE organization_id = $1 AND id = $2 FOR UPDATE`,
+				[input.organizationId, input.decisionId],
+			)) as Array<Record<string, unknown>>;
+			if (!rows[0]) {
+				throw new AppError("Validation decision was not found.", 404);
+			}
+			const existing = decision(rows[0]);
+			if (
+				existing.status !== "pending_validation" &&
+				existing.status !== "needs_review"
+			) {
+				throw new AppError("Validation decision is already resolved.", 409);
+			}
+			const priorStatus = existing.status;
+			let createdGrant: EntitlementGrantSnapshot | undefined;
+			if (input.finalStatus === "approved") {
+				if (!input.grant) {
+					throw new AppError("Approved decision requires a grant.", 422);
+				}
+				assertValidEntitlementGrantSnapshotInput(input.grant);
+				const grantInput = input.grant;
+				const entitlementId = randomUUID();
+				await tx.unsafe(
+					`INSERT INTO ${this.schema}.membership_identity_emails (organization_id, normalized_email, customer_id) VALUES ($1,$2,$3) ON CONFLICT (organization_id, normalized_email) DO UPDATE SET customer_id = EXCLUDED.customer_id WHERE ${this.schema}.membership_identity_emails.customer_id = EXCLUDED.customer_id`,
+					[
+						grantInput.organizationId,
+						grantInput.verifiedIdentityEmail ?? "",
+						grantInput.customerId,
+					],
+				);
+				await tx.unsafe(
+					`INSERT INTO ${this.schema}.membership_entitlements (id,organization_id,customer_id,entitlement_class,source,offering_id,starts_on,ends_on) SELECT $1,$2,$3,$4,'teacher_checkout',$5,$6::date,$7::date FROM ${this.schema}.products WHERE id=$5 AND organization_id=$2 AND entitlement_class=$4`,
+					[
+						entitlementId,
+						grantInput.organizationId,
+						grantInput.customerId,
+						grantInput.entitlementClass,
+						grantInput.offeringId,
+						grantInput.startsOn,
+						grantInput.endsOn,
+					],
+				);
+				await tx.unsafe(
+					`INSERT INTO ${this.schema}.membership_entitlement_divisions (entitlement_id,organization_id,division_id,division_name_snapshot) VALUES ($1,$2,$3,$4)`,
+					[
+						entitlementId,
+						grantInput.organizationId,
+						grantInput.divisionId,
+						grantInput.divisionNameSnapshot,
+					],
+				);
+				await tx.unsafe(
+					`INSERT INTO ${this.schema}.teacher_membership_entitlement_details (entitlement_id,checkout_intent_id,shopify_order_gid,shopify_order_line_gid,paid_amount,paid_currency_code,duration_days) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+					[
+						entitlementId,
+						grantInput.checkoutIntentId,
+						grantInput.shopifyOrderGid,
+						grantInput.shopifyOrderLineGid,
+						grantInput.paidAmount,
+						grantInput.paidCurrencyCode,
+						grantInput.durationDays,
+					],
+				);
+				createdGrant = {
+					...grantInput,
+					id: entitlementId,
+					createdAtIso: input.resolvedAtIso,
+				};
+			}
+			if (input.projection) {
+				await tx.unsafe(
+					`INSERT INTO ${this.schema}.shopify_order_projections (organization_id, shopify_order_gid, shopify_customer_gid, correlation_id, fully_paid_at, currency_code, created_at, updated_at) VALUES ($1,$2,$3,$4,$5::timestamptz,$6,$7::timestamptz,$7::timestamptz) ON CONFLICT (organization_id, shopify_order_gid) DO UPDATE SET shopify_customer_gid = EXCLUDED.shopify_customer_gid, correlation_id = EXCLUDED.correlation_id, fully_paid_at = EXCLUDED.fully_paid_at, currency_code = EXCLUDED.currency_code, updated_at = EXCLUDED.updated_at`,
+					[
+						input.projection.organizationId,
+						input.projection.shopifyOrderGid,
+						input.projection.shopifyCustomerGid ?? null,
+						input.projection.correlationId ?? null,
+						input.projection.fullyPaidAtIso ?? null,
+						input.projection.currencyCode ?? null,
+						input.projection.updatedAtIso,
+					],
+				);
+			}
+			const customerId = input.customerId ?? existing.customerId ?? null;
+			const checkoutIntentId =
+				input.checkoutIntentId ?? existing.checkoutIntentId ?? null;
+			const shopifyOrderLineGid =
+				input.shopifyOrderLineGid ?? existing.shopifyOrderLineGid ?? null;
+			const reasonCode =
+				input.finalStatus === "approved" ? null : (existing.reasonCode ?? null);
+			const updatedRows = (await tx.unsafe(
+				`UPDATE ${this.schema}.membership_validation_decisions SET customer_id = $2, checkout_intent_id = $3, shopify_order_line_gid = $4, status = $5, reason_code = $6, updated_at = $7::timestamptz WHERE id = $1 RETURNING id, organization_id, customer_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, status, reason_code, created_at::text, updated_at::text`,
+				[
+					existing.id,
+					customerId,
+					checkoutIntentId,
+					shopifyOrderLineGid,
+					input.finalStatus,
+					reasonCode,
+					input.resolvedAtIso,
+				],
+			)) as Array<Record<string, unknown>>;
+			if (checkoutIntentId) {
+				await tx.unsafe(
+					`UPDATE ${this.schema}.checkout_intents SET status = $1 WHERE id = $2 AND organization_id = $3`,
+					[input.finalStatus, checkoutIntentId, input.organizationId],
+				);
+			}
+			const auditId = randomUUID();
+			await tx.unsafe(
+				`INSERT INTO ${this.schema}.membership_validation_decision_audits (id, organization_id, decision_id, prior_status, final_status, actor_user_id, note, resolved_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::timestamptz)`,
+				[
+					auditId,
+					input.organizationId,
+					existing.id,
+					priorStatus,
+					input.finalStatus,
+					input.actorUserId,
+					input.note,
+					input.resolvedAtIso,
+				],
+			);
+			const audit: MembershipDecisionAuditRecord = {
+				id: auditId,
+				organizationId: input.organizationId,
+				decisionId: existing.id,
+				priorStatus,
+				finalStatus: input.finalStatus,
+				actorUserId: input.actorUserId,
+				note: input.note,
+				resolvedAtIso: input.resolvedAtIso,
+			};
+			return {
+				decision: decision(updatedRows[0]),
+				grant: createdGrant,
+				audit,
+			};
+		});
 	}
 
 	async createClassEntitlement(
