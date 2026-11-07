@@ -3,6 +3,7 @@ import {
 	type CanonicalContributor,
 	type CanonicalWork,
 	calculateRepertoireReviewQueueSummary,
+	isCatalogWorkClassifiedAsConcerto,
 	type RepertoireReviewItem,
 	type RepertoireReviewQueueSummary,
 	type RepertoireReviewStatus,
@@ -75,6 +76,7 @@ export interface SearchCatalogWorksInput {
 	organizationId: string;
 	query: string;
 	limit?: number;
+	concertoOnly?: boolean;
 }
 
 export interface AddCatalogWorkInput {
@@ -83,6 +85,7 @@ export interface AddCatalogWorkInput {
 	composerName?: string;
 	composer?: string;
 	imslpUrl?: string | null;
+	classifications?: string[];
 }
 
 export interface RawRepertoireSnapshot {
@@ -112,6 +115,10 @@ export interface RepertoireRepository {
 	flagReviewItem(input: FlagReviewItemInput): Promise<RepertoireReviewItem>;
 	resolveFlag(input: ResolveFlagInput): Promise<RepertoireReviewItem>;
 	searchCatalogWorks(input: SearchCatalogWorksInput): Promise<CanonicalWork[]>;
+	getCatalogWorkById(
+		organizationId: string,
+		workId: string,
+	): Promise<CanonicalWork | null>;
 	addCatalogWork(input: AddCatalogWorkInput): Promise<CanonicalWork>;
 }
 
@@ -405,12 +412,28 @@ export class InMemoryRepertoireRepository implements RepertoireRepository {
 		const matching = Array.from(this.canonicalWorks.values()).filter(
 			(work) =>
 				work.organizationId === input.organizationId &&
+				(!input.concertoOnly || isCatalogWorkClassifiedAsConcerto(work)) &&
 				(work.title.toLowerCase().includes(q) ||
 					Boolean(work.composerName?.toLowerCase().includes(q))),
 		);
 
 		matching.sort((a, b) => a.title.localeCompare(b.title));
 		return matching.slice(0, limit);
+	}
+
+	async getCatalogWorkById(
+		organizationId: string,
+		workId: string,
+	): Promise<CanonicalWork | null> {
+		const work = this.canonicalWorks.get(workId);
+		if (
+			!work ||
+			work.organizationId !== organizationId ||
+			work.isActive === false
+		) {
+			return null;
+		}
+		return { ...work };
 	}
 
 	async addCatalogWork(input: AddCatalogWorkInput): Promise<CanonicalWork> {
@@ -424,6 +447,7 @@ export class InMemoryRepertoireRepository implements RepertoireRepository {
 			input.title,
 			contributor,
 			input.imslpUrl,
+			input.classifications,
 		);
 	}
 
@@ -458,8 +482,16 @@ export class InMemoryRepertoireRepository implements RepertoireRepository {
 		title: string,
 		composer: CanonicalContributor,
 		imslpUrl?: string | null,
+		classifications?: string[],
 	): CanonicalWork {
 		const normalized = title.toLowerCase().trim();
+		const normalizedClassifications = Array.isArray(classifications)
+			? [
+					...new Set(
+						classifications.map((c) => c.trim().toLowerCase()).filter(Boolean),
+					),
+				]
+			: undefined;
 		const existing = Array.from(this.canonicalWorks.values()).find(
 			(w) =>
 				w.organizationId === organizationId &&
@@ -468,6 +500,14 @@ export class InMemoryRepertoireRepository implements RepertoireRepository {
 		if (existing) {
 			if (imslpUrl && !existing.imslpUrl) {
 				existing.imslpUrl = imslpUrl;
+			}
+			if (normalizedClassifications && normalizedClassifications.length > 0) {
+				existing.classifications = [
+					...new Set([
+						...(existing.classifications ?? []),
+						...normalizedClassifications,
+					]),
+				];
 			}
 			return existing;
 		}
@@ -481,6 +521,9 @@ export class InMemoryRepertoireRepository implements RepertoireRepository {
 			composerId: composer.id,
 			composerName: composer.name,
 			imslpUrl: imslpUrl ?? null,
+			...(normalizedClassifications !== undefined
+				? { classifications: normalizedClassifications }
+				: {}),
 			isActive: true,
 			createdAtIso: new Date().toISOString(),
 			updatedAtIso: new Date().toISOString(),

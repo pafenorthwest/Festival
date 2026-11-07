@@ -121,6 +121,8 @@ import type {
 	UpdateCustomerProfileInput,
 	UpdateFestivalClassInput,
 	UpdateFestivalRegistrationWindowInput,
+	UpdateMembershipProductInput,
+	UpdateMembershipProductResponse,
 	UpdateMessageTemplateInput,
 	UpdateOrganizationDivisionInput,
 	UpdateOrganizationTimezoneInput,
@@ -999,6 +1001,26 @@ export function createMembershipProduct(
 	);
 }
 
+export function updateAdminMembershipProduct(
+	idToken: string,
+	slug: string,
+	offeringId: string,
+	input: UpdateMembershipProductInput,
+) {
+	return requestJson<UpdateMembershipProductResponse>(
+		`/api/organizations/${encodeURIComponent(slug)}/admin/membership-products/${encodeURIComponent(offeringId)}`,
+		{
+			method: "POST",
+			body: JSON.stringify({
+				name: input.name,
+				description: input.description,
+				price: input.price,
+			}),
+		},
+		idToken,
+	);
+}
+
 export function dismissWelcome(idToken: string, slug: string) {
 	return requestJson<DismissWelcomeResponse>(
 		`/api/organizations/${slug}/welcome/dismiss`,
@@ -1637,6 +1659,20 @@ export function listRegistrationEligibleClasses(
 	const query = searchParams.toString() ? `?${searchParams.toString()}` : "";
 	return requestJson<{ classes: RegistrationEligibleClass[] }>(
 		`/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/registration/eligible-classes${query}`,
+		undefined,
+		undefined,
+		"",
+	);
+}
+
+export function searchRegistrationConcertoCatalog(
+	slug: string,
+	festivalSlug: string,
+	query: string,
+): Promise<{ works: CanonicalWork[] }> {
+	const params = new URLSearchParams({ q: query });
+	return requestJson<{ works: CanonicalWork[] }>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/registration/concerto-catalog?${params.toString()}`,
 		undefined,
 		undefined,
 		"",

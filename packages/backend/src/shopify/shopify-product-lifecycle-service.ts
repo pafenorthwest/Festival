@@ -113,6 +113,18 @@ export class ShopifyProductLifecycleService {
 		);
 	}
 
+	async disableInventoryItemShipping(
+		context: ShopifyAdminOperationContext,
+		inventoryItemId: string,
+	): Promise<{ requiresShipping: boolean }> {
+		return this.attemptMutation(context, "inventoryItemUpdate", () =>
+			this.shopifyClient.updateInventoryItem(context, {
+				inventoryItemId,
+				requiresShipping: false,
+			}),
+		);
+	}
+
 	async publishProduct(
 		context: ShopifyAdminOperationContext,
 		productId: string,

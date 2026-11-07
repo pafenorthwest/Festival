@@ -377,6 +377,32 @@ export function buildAdminShopifyRoutes(
 	);
 
 	router.post(
+		"/organizations/:slug/admin/membership-products/:offeringId",
+		requireAuth(authVerifier),
+		requireTenant(repository),
+		requireTenantRole(["Admin"]),
+		async (c) => {
+			try {
+				if (!shopifyMembershipProductService) {
+					throw new AppError("Shopify integration is not configured.", 503);
+				}
+				const payload = await c.req.json();
+				assertNoForbiddenMembershipProductFields(payload);
+				return c.json({
+					membershipProduct:
+						await shopifyMembershipProductService.updateMembershipProduct(
+							getRequiredTenant(c),
+							c.req.param("offeringId"),
+							payload,
+						),
+				});
+			} catch (error) {
+				return toJsonError(c, error);
+			}
+		},
+	);
+
+	router.post(
 		"/organizations/:slug/admin/membership-products/:offeringId/retire",
 		requireAuth(authVerifier),
 		requireTenant(repository),

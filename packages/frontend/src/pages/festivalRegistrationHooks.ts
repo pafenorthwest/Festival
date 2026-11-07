@@ -1,8 +1,9 @@
 import type {
+	CanonicalWork,
 	CustomerWaitlistEntryDto,
 	RegistrationEligibleClass,
 } from "@festival/common";
-import { type Accessor, createEffect, createSignal } from "solid-js";
+import { type Accessor, createEffect, createSignal, onCleanup } from "solid-js";
 import {
 	type CustomerChildDto,
 	getCustomerChildren,
@@ -11,6 +12,7 @@ import {
 	listRegistrationAccompanists,
 	listRegistrationEligibleClasses,
 	listRegistrationTeachers,
+	searchRegistrationConcertoCatalog,
 } from "../lib/api.js";
 
 export interface RegistrationOptionsInput {
@@ -184,5 +186,67 @@ export function useRegistrationWaitlist(input: RegistrationWaitlistInput) {
 		sessionProfile,
 		currentWaitlistEntry,
 		handleWaitlistEntryChanged,
+	};
+}
+
+export function useConcertoCatalogSearch(
+	slug: Accessor<string>,
+	festivalSlug: Accessor<string>,
+	enabled: Accessor<boolean>,
+) {
+	const [query, setQuery] = createSignal("");
+	const [catalogWorks, setCatalogWorks] = createSignal<CanonicalWork[]>([]);
+	const [results, setResults] = createSignal<CanonicalWork[]>([]);
+	const [loading, setLoading] = createSignal(false);
+	const [error, setError] = createSignal<string>();
+	const [retryCount, setRetryCount] = createSignal(0);
+
+	createEffect(() => {
+		slug();
+		setCatalogWorks([]);
+	});
+
+	createEffect(() => {
+		const organizationSlug = slug();
+		const festival = festivalSlug();
+		const search = query().trim();
+		retryCount();
+		if (!enabled()) return;
+		let cancelled = false;
+		setLoading(true);
+		setError(undefined);
+		setResults([]);
+		const timer = setTimeout(() => {
+			void searchRegistrationConcertoCatalog(organizationSlug, festival, search)
+				.then(({ works }) => {
+					if (cancelled) return;
+					setResults(works);
+					setCatalogWorks((known) => [
+						...new Map(
+							[...known, ...works].map((work) => [work.id, work]),
+						).values(),
+					]);
+				})
+				.catch(() => {
+					if (!cancelled) setError("Could not search the concerto catalog.");
+				})
+				.finally(() => {
+					if (!cancelled) setLoading(false);
+				});
+		}, 250);
+		onCleanup(() => {
+			cancelled = true;
+			clearTimeout(timer);
+		});
+	});
+
+	return {
+		catalogWorks,
+		results,
+		query,
+		setQuery,
+		loading,
+		error,
+		retry: () => setRetryCount((count) => count + 1),
 	};
 }

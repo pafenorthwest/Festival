@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
 import {
+	addCalendarDays,
 	CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION,
+	calendarDaysUntil,
 	deriveEntitlementDates,
 	type FestivalClassConfiguration,
 	TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+	TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS,
 } from "@festival/common";
 import {
 	CHECKOUT_INTENT_LINE_ID_ATTRIBUTE_KEY,
@@ -33,6 +36,7 @@ import type {
 	ShopifyPaidOrder,
 	ShopifyPaidOrderReader,
 } from "../shopify/types.js";
+import { lifecycleForEntitlementRead } from "./entitlement-lifecycle.js";
 import type {
 	MembershipCommerceRepository,
 	MembershipReasonCode,
@@ -447,6 +451,23 @@ export class ShopifyOrderProjectionService {
 				organizationTimezone: timezone,
 				durationDays: intent.durationDays,
 			});
+			const existingGrants =
+				await this.organizations.listEntitlementGrantSnapshots(
+					delivery.organizationId,
+					intent.customerId,
+				);
+			const previousActiveGrant = existingGrants.find(
+				(grant) =>
+					grant.entitlementClass === TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS &&
+					lifecycleForEntitlementRead(grant, dates.startsOn) === "active" &&
+					calendarDaysUntil(dates.startsOn, grant.endsOn) <=
+						TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS,
+			);
+			const effectiveStartDate =
+				previousActiveGrant && previousActiveGrant.endsOn > dates.startsOn
+					? previousActiveGrant.endsOn
+					: dates.startsOn;
+			const endsOn = addCalendarDays(effectiveStartDate, intent.durationDays);
 			await this.finalize(
 				delivery,
 				{
@@ -468,7 +489,7 @@ export class ShopifyOrderProjectionService {
 						shopifyOrderGid: order.id,
 						shopifyOrderLineGid: line.id,
 						startsOn: dates.startsOn,
-						endsOn: dates.endsOn,
+						endsOn,
 						status: "active",
 						verifiedIdentityEmail: identityEmail,
 					},
@@ -797,8 +818,8 @@ export class ShopifyOrderProjectionService {
 		}
 		const timezone =
 			await this.organizations.getOrganizationTimezone(organizationId);
-		const today = deriveEntitlementDates({
-			fullyPaidAtIso: nowIso(this.now),
+		const paidDate = deriveEntitlementDates({
+			fullyPaidAtIso: order.fullyPaidAtIso,
 			organizationTimezone: timezone,
 			durationDays: 1,
 		}).startsOn;
@@ -807,9 +828,24 @@ export class ShopifyOrderProjectionService {
 				organizationId,
 				intent.customerId,
 				TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
-				today,
+				paidDate,
 			)
 		) {
+			return "duplicate_purchase";
+		}
+		const existingGrants =
+			await this.organizations.listEntitlementGrantSnapshots(
+				organizationId,
+				intent.customerId,
+			);
+		const hasIneligibleActive = existingGrants.some(
+			(grant) =>
+				grant.entitlementClass === TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS &&
+				lifecycleForEntitlementRead(grant, paidDate) === "active" &&
+				calendarDaysUntil(paidDate, grant.endsOn) >
+					TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS,
+		);
+		if (hasIneligibleActive) {
 			return "duplicate_purchase";
 		}
 		return undefined;

@@ -33,6 +33,7 @@ import type {
 } from "@festival/common";
 import {
 	AppError,
+	addCalendarDays,
 	assertValidEntitlementDurationDays,
 	assertValidEntitlementGrantSnapshotInput,
 	evaluateClassCapacityStatus,
@@ -227,6 +228,9 @@ interface EntitlementGrantRow {
 	shopify_order_line_gid: string;
 	starts_on: string;
 	ends_on: string;
+	superseded_on?: string | null;
+	superseded_at?: Date | string | null;
+	superseded_by_grant_id?: string | null;
 	status: EntitlementGrantStatus;
 	created_at: string;
 }
@@ -475,6 +479,10 @@ function mapFestivalClassCapacityAudit(
 function mapEntitlementGrant(
 	row: EntitlementGrantRow,
 ): EntitlementGrantSnapshot {
+	const supersededAt =
+		row.superseded_at instanceof Date
+			? row.superseded_at.toISOString()
+			: row.superseded_at;
 	const grant: EntitlementGrantSnapshot = {
 		id: row.id,
 		organizationId: row.organization_id,
@@ -491,6 +499,11 @@ function mapEntitlementGrant(
 		shopifyOrderLineGid: row.shopify_order_line_gid,
 		startsOn: row.starts_on,
 		endsOn: row.ends_on,
+		...(row.superseded_on ? { supersededOn: row.superseded_on } : {}),
+		...(supersededAt ? { supersededAt } : {}),
+		...(row.superseded_by_grant_id
+			? { supersededByGrantId: row.superseded_by_grant_id }
+			: {}),
 		status: row.status,
 		createdAtIso: row.created_at,
 	};
@@ -2736,53 +2749,104 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		}
 
 		const id = randomUUID();
-		await sql.begin(async (transaction) => {
-			const identityRows = (await transaction.unsafe(
-				`INSERT INTO ${this.schema}.membership_identity_emails (organization_id, normalized_email, customer_id) VALUES ($1,$2,$3) ON CONFLICT (organization_id, normalized_email) DO UPDATE SET customer_id = EXCLUDED.customer_id WHERE ${this.schema}.membership_identity_emails.customer_id = EXCLUDED.customer_id RETURNING customer_id`,
-				[input.organizationId, verifiedIdentityEmail, input.customerId],
-			)) as Array<Record<string, unknown>>;
-			if (!identityRows[0]) {
-				throw new Error("Shopify identity email belongs to another customer.");
-			}
-			const inserted = await transaction.unsafe(
-				`INSERT INTO ${this.schema}.membership_entitlements (id,organization_id,customer_id,entitlement_class,source,offering_id,starts_on,ends_on) SELECT $1,$2,$3,$4,'teacher_checkout',$5,$6::date,$7::date FROM ${this.schema}.products WHERE id=$5 AND organization_id=$2 AND entitlement_class=$4 RETURNING id`,
-				[
-					id,
-					input.organizationId,
-					input.customerId,
-					input.entitlementClass,
-					input.offeringId,
-					input.startsOn,
-					input.endsOn,
-				],
-			);
-			if (!inserted[0])
-				throw new Error(
-					"Entitlement offering was not found for this Organization.",
+		let effectiveEndsOn = input.endsOn;
+		try {
+			await sql.begin(async (transaction) => {
+				const identityRows = (await transaction.unsafe(
+					`INSERT INTO ${this.schema}.membership_identity_emails (organization_id, normalized_email, customer_id) VALUES ($1,$2,$3) ON CONFLICT (organization_id, normalized_email) DO UPDATE SET customer_id = EXCLUDED.customer_id WHERE ${this.schema}.membership_identity_emails.customer_id = EXCLUDED.customer_id RETURNING customer_id`,
+					[input.organizationId, verifiedIdentityEmail, input.customerId],
+				)) as Array<Record<string, unknown>>;
+				if (!identityRows[0]) {
+					throw new Error(
+						"Shopify identity email belongs to another customer.",
+					);
+				}
+				const supersededRows = (await transaction.unsafe(
+					`UPDATE ${this.schema}.membership_entitlements SET superseded_on = $4::date, superseded_at = NOW(), superseded_by_grant_id = $5 WHERE organization_id = $1 AND customer_id = $2 AND entitlement_class = $3 AND revoked_at IS NULL AND superseded_on IS NULL AND starts_on <= $4::date AND ends_on > $4::date AND ends_on <= ($4::date + INTERVAL '30 days')::date RETURNING ends_on::text`,
+					[
+						input.organizationId,
+						input.customerId,
+						input.entitlementClass,
+						input.startsOn,
+						id,
+					],
+				)) as Array<{ ends_on?: string }>;
+				const effectiveStartDate =
+					supersededRows[0]?.ends_on &&
+					supersededRows[0].ends_on > input.startsOn
+						? supersededRows[0].ends_on
+						: input.startsOn;
+				effectiveEndsOn =
+					supersededRows[0]?.ends_on &&
+					supersededRows[0].ends_on > input.startsOn
+						? addCalendarDays(effectiveStartDate, input.durationDays)
+						: input.endsOn;
+				const inserted = await transaction.unsafe(
+					`INSERT INTO ${this.schema}.membership_entitlements (id,organization_id,customer_id,entitlement_class,source,offering_id,starts_on,ends_on) SELECT $1,$2,$3,$4,'teacher_checkout',$5,$6::date,$7::date FROM ${this.schema}.products WHERE id=$5 AND organization_id=$2 AND entitlement_class=$4 RETURNING id`,
+					[
+						id,
+						input.organizationId,
+						input.customerId,
+						input.entitlementClass,
+						input.offeringId,
+						input.startsOn,
+						effectiveEndsOn,
+					],
 				);
-			await transaction.unsafe(
-				`INSERT INTO ${this.schema}.membership_entitlement_divisions (entitlement_id,organization_id,division_id,division_name_snapshot) VALUES ($1,$2,$3,$4)`,
-				[
-					id,
-					input.organizationId,
-					input.divisionId,
-					input.divisionNameSnapshot,
-				],
-			);
-			await transaction.unsafe(
-				`INSERT INTO ${this.schema}.teacher_membership_entitlement_details (entitlement_id,checkout_intent_id,shopify_order_gid,shopify_order_line_gid,paid_amount,paid_currency_code,duration_days) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-				[
-					id,
-					input.checkoutIntentId,
-					input.shopifyOrderGid,
-					input.shopifyOrderLineGid,
-					input.paidAmount,
-					input.paidCurrencyCode,
-					input.durationDays,
-				],
-			);
-		});
-		return { ...input, id, createdAtIso: new Date().toISOString() };
+				if (!inserted[0])
+					throw new Error(
+						"Entitlement offering was not found for this Organization.",
+					);
+				await transaction.unsafe(
+					`INSERT INTO ${this.schema}.membership_entitlement_divisions (entitlement_id,organization_id,division_id,division_name_snapshot) VALUES ($1,$2,$3,$4)`,
+					[
+						id,
+						input.organizationId,
+						input.divisionId,
+						input.divisionNameSnapshot,
+					],
+				);
+				await transaction.unsafe(
+					`INSERT INTO ${this.schema}.teacher_membership_entitlement_details (entitlement_id,checkout_intent_id,shopify_order_gid,shopify_order_line_gid,paid_amount,paid_currency_code,duration_days) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+					[
+						id,
+						input.checkoutIntentId,
+						input.shopifyOrderGid,
+						input.shopifyOrderLineGid,
+						input.paidAmount,
+						input.paidCurrencyCode,
+						input.durationDays,
+					],
+				);
+			});
+		} catch (error) {
+			const code =
+				error && typeof error === "object"
+					? ((error as { code?: string; errno?: string }).code ??
+						(error as { code?: string; errno?: string }).errno)
+					: undefined;
+			const message =
+				error && typeof error === "object" && "message" in error
+					? String((error as { message?: unknown }).message)
+					: "";
+			if (
+				code === "23P01" ||
+				message.includes(
+					"membership_entitlements_organization_id_customer_id_entitl_excl",
+				)
+			) {
+				throw new Error(
+					"Teacher Membership entitlement intervals may not overlap.",
+				);
+			}
+			throw error;
+		}
+		return {
+			...input,
+			endsOn: effectiveEndsOn,
+			id,
+			createdAtIso: new Date().toISOString(),
+		};
 	}
 
 	async findActiveTeacherEntitlementGrant(input: {
@@ -2792,7 +2856,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 	}): Promise<EntitlementGrantSnapshot | null> {
 		await this.ensureReady();
 		const rows = (await sql.unsafe(
-			`SELECT e.id,e.organization_id,e.customer_id,e.entitlement_class,e.offering_id,d.duration_days,ed.division_id,ed.division_name_snapshot,d.paid_amount,d.paid_currency_code,d.checkout_intent_id,d.shopify_order_gid,d.shopify_order_line_gid,e.starts_on::text,e.ends_on::text,'active' AS status,e.created_at FROM ${this.schema}.membership_entitlements e JOIN ${this.schema}.organizations o ON o.id=e.organization_id JOIN ${this.schema}.teacher_membership_entitlement_details d ON d.entitlement_id=e.id JOIN ${this.schema}.membership_entitlement_divisions ed ON ed.entitlement_id=e.id WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class='teacher_membership' AND ed.division_id=$3 AND e.revoked_at IS NULL AND e.starts_on <= (NOW() AT TIME ZONE o.timezone)::date AND e.ends_on > (NOW() AT TIME ZONE o.timezone)::date ORDER BY e.created_at ASC, e.id ASC LIMIT 1`,
+			`SELECT e.id,e.organization_id,e.customer_id,e.entitlement_class,e.offering_id,d.duration_days,ed.division_id,ed.division_name_snapshot,d.paid_amount,d.paid_currency_code,d.checkout_intent_id,d.shopify_order_gid,d.shopify_order_line_gid,e.starts_on::text,e.ends_on::text,e.superseded_on::text,e.superseded_at,e.superseded_by_grant_id,'active' AS status,e.created_at FROM ${this.schema}.membership_entitlements e JOIN ${this.schema}.organizations o ON o.id=e.organization_id JOIN ${this.schema}.teacher_membership_entitlement_details d ON d.entitlement_id=e.id JOIN ${this.schema}.membership_entitlement_divisions ed ON ed.entitlement_id=e.id WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class='teacher_membership' AND ed.division_id=$3 AND e.revoked_at IS NULL AND (e.superseded_on IS NULL OR e.superseded_on > (NOW() AT TIME ZONE o.timezone)::date) AND e.starts_on <= (NOW() AT TIME ZONE o.timezone)::date AND e.ends_on > (NOW() AT TIME ZONE o.timezone)::date ORDER BY e.created_at ASC, e.id ASC LIMIT 1`,
 			[input.organizationId, input.customerId, input.divisionId],
 		)) as EntitlementGrantRow[];
 		return rows[0] ? mapEntitlementGrant(rows[0]) : null;
@@ -2804,7 +2868,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 	): Promise<EntitlementGrantSnapshot[]> {
 		await this.ensureReady();
 		const rows = (await sql.unsafe(
-			`SELECT e.id,e.organization_id,e.customer_id,e.entitlement_class,e.offering_id,d.duration_days,ed.division_id,ed.division_name_snapshot,d.paid_amount,d.paid_currency_code,d.checkout_intent_id,d.shopify_order_gid,d.shopify_order_line_gid,e.starts_on::text,e.ends_on::text,CASE WHEN e.revoked_at IS NOT NULL THEN 'revoked' WHEN e.starts_on > (NOW() AT TIME ZONE o.timezone)::date THEN 'scheduled' WHEN e.ends_on <= (NOW() AT TIME ZONE o.timezone)::date THEN 'expired' ELSE 'active' END AS status,e.created_at FROM ${this.schema}.membership_entitlements e JOIN ${this.schema}.organizations o ON o.id=e.organization_id JOIN ${this.schema}.teacher_membership_entitlement_details d ON d.entitlement_id=e.id JOIN ${this.schema}.membership_entitlement_divisions ed ON ed.entitlement_id=e.id WHERE e.organization_id=$1 ${customerId ? "AND e.customer_id=$2" : ""}
+			`SELECT e.id,e.organization_id,e.customer_id,e.entitlement_class,e.offering_id,d.duration_days,ed.division_id,ed.division_name_snapshot,d.paid_amount,d.paid_currency_code,d.checkout_intent_id,d.shopify_order_gid,d.shopify_order_line_gid,e.starts_on::text,e.ends_on::text,e.superseded_on::text,e.superseded_at,e.superseded_by_grant_id,CASE WHEN e.revoked_at IS NOT NULL THEN 'revoked' WHEN e.superseded_on IS NOT NULL AND e.superseded_on <= (NOW() AT TIME ZONE o.timezone)::date THEN 'superseded' WHEN e.starts_on > (NOW() AT TIME ZONE o.timezone)::date THEN 'scheduled' WHEN e.ends_on <= (NOW() AT TIME ZONE o.timezone)::date THEN 'expired' ELSE 'active' END AS status,e.created_at FROM ${this.schema}.membership_entitlements e JOIN ${this.schema}.organizations o ON o.id=e.organization_id JOIN ${this.schema}.teacher_membership_entitlement_details d ON d.entitlement_id=e.id JOIN ${this.schema}.membership_entitlement_divisions ed ON ed.entitlement_id=e.id WHERE e.organization_id=$1 ${customerId ? "AND e.customer_id=$2" : ""}
 			 ORDER BY created_at ASC`,
 			customerId ? [organizationId, customerId] : [organizationId],
 		)) as EntitlementGrantRow[];
@@ -2977,6 +3041,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			   AND e.entitlement_class = 'teacher_membership'
 			   AND ed.division_id = $2
 			   AND e.revoked_at IS NULL
+			   AND (e.superseded_on IS NULL OR e.superseded_on > (NOW() AT TIME ZONE o.timezone)::date)
 			   AND e.starts_on <= (NOW() AT TIME ZONE o.timezone)::date
 			   AND e.ends_on > (NOW() AT TIME ZONE o.timezone)::date
 			 ORDER BY name, c.id`,
@@ -3434,6 +3499,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			 WHERE e.organization_id = $1
 			   AND e.entitlement_class = 'teacher_membership'
 			   AND e.revoked_at IS NULL
+			   AND (e.superseded_on IS NULL OR e.superseded_on > (NOW() AT TIME ZONE o.timezone)::date)
 			   AND e.starts_on <= (NOW() AT TIME ZONE o.timezone)::date
 			   AND e.ends_on > (NOW() AT TIME ZONE o.timezone)::date`,
 			[organizationId],

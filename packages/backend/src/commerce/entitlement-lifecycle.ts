@@ -17,5 +17,7 @@ export function lifecycleForEntitlementRead(
 	today: string,
 ): EntitlementLifecycleState {
 	if (entitlement.status === "revoked") return "revoked";
+	if (entitlement.status === "superseded" && !entitlement.supersededOn)
+		return "superseded";
 	return deriveEntitlementLifecycle(entitlement, today);
 }

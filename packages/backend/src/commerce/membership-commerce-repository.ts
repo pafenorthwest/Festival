@@ -971,6 +971,8 @@ export class InMemoryMembershipCommerceRepository
 			(grant) =>
 				grant.entitlementClass === entitlementClass &&
 				grant.status !== "revoked" &&
+				grant.status !== "superseded" &&
+				!grant.supersededOn &&
 				grant.startsOn > today &&
 				grant.endsOn > grant.startsOn,
 		);

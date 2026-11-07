@@ -582,7 +582,7 @@ describe("PostgresOrganizationRepository", () => {
 			});
 			expect(unsafeSpy).toHaveBeenCalledWith(
 				expect.stringContaining(
-					"WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class='teacher_membership' AND ed.division_id=$3 AND e.revoked_at IS NULL AND e.starts_on <= (NOW() AT TIME ZONE o.timezone)::date AND e.ends_on > (NOW() AT TIME ZONE o.timezone)::date ORDER BY e.created_at ASC, e.id ASC LIMIT 1",
+					"WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class='teacher_membership' AND ed.division_id=$3 AND e.revoked_at IS NULL AND (e.superseded_on IS NULL OR e.superseded_on > (NOW() AT TIME ZONE o.timezone)::date) AND e.starts_on <= (NOW() AT TIME ZONE o.timezone)::date AND e.ends_on > (NOW() AT TIME ZONE o.timezone)::date ORDER BY e.created_at ASC, e.id ASC LIMIT 1",
 				),
 				["org-1", "teacher-1", "div-1"],
 			);
@@ -903,6 +903,188 @@ describe("PostgresOrganizationRepository", () => {
 					registrationClosesAt: null,
 				}),
 			).rejects.toThrow("Festival not found.");
+		});
+	});
+
+	describe("teacher membership entitlement supersession and overlap handling", () => {
+		let repo: PostgresOrganizationRepository;
+		let unsafeSpy: ReturnType<typeof spyOn>;
+		let beginSpy: ReturnType<typeof spyOn>;
+
+		const validGrantInput = {
+			organizationId: "org-1",
+			customerId: "teacher-1",
+			verifiedIdentityEmail: "teacher@example.com",
+			entitlementClass: "teacher_membership" as const,
+			offeringId: "offering-1",
+			durationDays: 365,
+			divisionId: "div-1",
+			divisionNameSnapshot: "Junior Piano",
+			paidAmount: "50.00",
+			paidCurrencyCode: "USD",
+			checkoutIntentId: "intent-1",
+			shopifyOrderGid: "gid://shopify/Order/1",
+			shopifyOrderLineGid: "gid://shopify/LineItem/1",
+			startsOn: "2026-12-15",
+			endsOn: "2027-12-15",
+			status: "active" as const,
+		};
+
+		beforeEach(() => {
+			repo = new PostgresOrganizationRepository("test_schema");
+			spyOn(repo, "ensureReady").mockResolvedValue();
+			unsafeSpy = spyOn(sql, "unsafe");
+			beginSpy = spyOn(sql, "begin").mockImplementation(((
+				cb: (tx: { unsafe: typeof sql.unsafe }) => unknown,
+			) =>
+				cb({
+					unsafe: unsafeSpy as unknown as typeof sql.unsafe,
+				})) as unknown as typeof sql.begin);
+		});
+
+		afterEach(() => {
+			beginSpy.mockRestore();
+			unsafeSpy.mockRestore();
+		});
+
+		it("createEntitlementGrantSnapshot sets superseded_on on renewal-window grant and inserts new grant", async () => {
+			unsafeSpy
+				.mockResolvedValueOnce([{ customer_id: "teacher-1" }])
+				.mockResolvedValueOnce([{ ends_on: "2027-01-01" }])
+				.mockResolvedValueOnce([{ id: "grant-new" }])
+				.mockResolvedValueOnce([])
+				.mockResolvedValueOnce([]);
+
+			const created =
+				await repo.createEntitlementGrantSnapshot(validGrantInput);
+
+			expect(created.organizationId).toBe("org-1");
+			expect(created.startsOn).toBe("2026-12-15");
+			expect(created.endsOn).toBe("2028-01-01");
+			expect(unsafeSpy).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"UPDATE test_schema.membership_entitlements SET superseded_on = $4::date, superseded_at = NOW(), superseded_by_grant_id = $5 WHERE organization_id = $1 AND customer_id = $2 AND entitlement_class = $3 AND revoked_at IS NULL AND superseded_on IS NULL AND starts_on <= $4::date AND ends_on > $4::date AND ends_on <= ($4::date + INTERVAL '30 days')::date",
+				),
+				["org-1", "teacher-1", "teacher_membership", "2026-12-15", created.id],
+			);
+			expect(unsafeSpy).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"INSERT INTO test_schema.membership_entitlements",
+				),
+				[
+					created.id,
+					"org-1",
+					"teacher-1",
+					"teacher_membership",
+					"offering-1",
+					"2026-12-15",
+					"2028-01-01",
+				],
+			);
+		});
+
+		it("createEntitlementGrantSnapshot translates exclusion constraint violation (23P01) into overlap error", async () => {
+			unsafeSpy
+				.mockResolvedValueOnce([{ customer_id: "teacher-1" }])
+				.mockResolvedValueOnce([])
+				.mockRejectedValueOnce({ code: "23P01" });
+
+			await expect(
+				repo.createEntitlementGrantSnapshot(validGrantInput),
+			).rejects.toThrow(
+				"Teacher Membership entitlement intervals may not overlap.",
+			);
+		});
+
+		it("listEntitlementGrantSnapshots maps superseded_on and status", async () => {
+			unsafeSpy.mockResolvedValueOnce([
+				{
+					id: "grant-old",
+					organization_id: "org-1",
+					customer_id: "teacher-1",
+					entitlement_class: "teacher_membership",
+					offering_id: "offering-1",
+					duration_days: 365,
+					division_id: "div-1",
+					division_name_snapshot: "Junior Piano",
+					paid_amount: "50.00",
+					paid_currency_code: "USD",
+					checkout_intent_id: "intent-old",
+					shopify_order_gid: "gid://shopify/Order/1",
+					shopify_order_line_gid: "gid://shopify/LineItem/1",
+					starts_on: "2026-01-01",
+					ends_on: "2027-01-01",
+					superseded_on: "2026-12-15",
+					superseded_at: "2026-12-15T12:00:00.000Z",
+					superseded_by_grant_id: "grant-new",
+					status: "active",
+					created_at: "2026-01-01T00:00:00.000Z",
+				},
+			]);
+
+			const grants = await repo.listEntitlementGrantSnapshots(
+				"org-1",
+				"teacher-1",
+			);
+
+			expect(grants).toEqual([
+				{
+					id: "grant-old",
+					organizationId: "org-1",
+					customerId: "teacher-1",
+					entitlementClass: "teacher_membership",
+					offeringId: "offering-1",
+					durationDays: 365,
+					divisionId: "div-1",
+					divisionNameSnapshot: "Junior Piano",
+					paidAmount: "50.00",
+					paidCurrencyCode: "USD",
+					checkoutIntentId: "intent-old",
+					shopifyOrderGid: "gid://shopify/Order/1",
+					shopifyOrderLineGid: "gid://shopify/LineItem/1",
+					startsOn: "2026-01-01",
+					endsOn: "2027-01-01",
+					supersededOn: "2026-12-15",
+					supersededAt: "2026-12-15T12:00:00.000Z",
+					supersededByGrantId: "grant-new",
+					status: "active",
+					createdAtIso: "2026-01-01T00:00:00.000Z",
+				},
+			]);
+			expect(unsafeSpy).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"WHEN e.superseded_on IS NOT NULL AND e.superseded_on <= (NOW() AT TIME ZONE o.timezone)::date THEN 'superseded'",
+				),
+				["org-1", "teacher-1"],
+			);
+		});
+
+		it("listActiveTeachersForDivision and getPublicDirectoryProfiles filter out superseded grants", async () => {
+			unsafeSpy.mockResolvedValueOnce([{ id: "teacher-1", name: "Teacher 1" }]);
+			const teachers = await repo.listActiveTeachersForDivision(
+				"org-1",
+				"div-1",
+			);
+			expect(teachers).toEqual([{ id: "teacher-1", name: "Teacher 1" }]);
+			expect(unsafeSpy).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"AND (e.superseded_on IS NULL OR e.superseded_on > (NOW() AT TIME ZONE o.timezone)::date)",
+				),
+				["org-1", "div-1"],
+			);
+
+			unsafeSpy
+				.mockResolvedValueOnce([{ customer_id: "teacher-1" }])
+				.mockResolvedValueOnce([])
+				.mockResolvedValueOnce([])
+				.mockResolvedValueOnce([]);
+			await repo.getPublicDirectoryProfiles("org-1");
+			expect(unsafeSpy).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"AND (e.superseded_on IS NULL OR e.superseded_on > (NOW() AT TIME ZONE o.timezone)::date)",
+				),
+				["org-1"],
+			);
 		});
 	});
 });

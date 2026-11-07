@@ -28,6 +28,7 @@ export const ENTITLEMENT_STATUS_FILTER_OPTIONS: ReadonlyArray<{
 }> = [
 	{ value: "active", label: "Active" },
 	{ value: "scheduled", label: "Scheduled" },
+	{ value: "superseded", label: "Superseded" },
 	{ value: "expired", label: "Expired" },
 	{ value: "revoked", label: "Revoked" },
 ];

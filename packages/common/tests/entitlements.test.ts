@@ -4,12 +4,14 @@ import {
 	assertValidEntitlementDurationDays,
 	assertValidEntitlementGrantSnapshotInput,
 	calendarDateInTimezone,
+	calendarDaysUntil,
 	deriveEntitlementDates,
 	deriveEntitlementLifecycle,
 	INITIAL_TEACHER_MEMBERSHIP_DURATION_DAYS,
 	isClassEntitlementStatus,
 	isEntitlementClass,
 	MAX_ENTITLEMENT_DURATION_DAYS,
+	TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS,
 } from "../src/entitlements.js";
 
 describe("Teacher Membership entitlement contracts", () => {
@@ -73,6 +75,26 @@ describe("Teacher Membership entitlement contracts", () => {
 				"2026-08-14",
 			),
 		).toBe("revoked");
+		expect(
+			deriveEntitlementLifecycle(
+				{ ...entitlement, supersededOn: "2027-08-01" },
+				"2027-07-31",
+			),
+		).toBe("active");
+		expect(
+			deriveEntitlementLifecycle(
+				{ ...entitlement, supersededOn: "2027-08-01" },
+				"2027-08-01",
+			),
+		).toBe("superseded");
+	});
+
+	it("calculates calendar days remaining against the 30-day renewal window", () => {
+		expect(TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS).toBe(30);
+		expect(calendarDaysUntil("2027-07-14", "2027-08-14")).toBe(31);
+		expect(calendarDaysUntil("2027-07-15", "2027-08-14")).toBe(30);
+		expect(calendarDaysUntil("2027-08-13", "2027-08-14")).toBe(1);
+		expect(calendarDaysUntil("2027-08-14", "2027-08-14")).toBe(0);
 	});
 
 	it("rejects invalid dates, timestamps, and timezones explicitly", () => {
