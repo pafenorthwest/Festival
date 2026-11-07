@@ -368,7 +368,13 @@ describe("Admin Entitlement Operations & Lifecycle Controls (#127)", () => {
 			(await adminGet(f, opsUrl, "otherAdmin")).status,
 		);
 
-		const expectedCounts = { active: 1, scheduled: 0, expired: 1, revoked: 1 };
+		const expectedCounts = {
+			active: 1,
+			scheduled: 0,
+			superseded: 0,
+			expired: 1,
+			revoked: 1,
+		};
 		const reportRes = await adminGet(
 			f,
 			"/api/organizations/festival/admin/entitlements?status=active",
@@ -691,7 +697,14 @@ describe("Admin Entitlement Operations & Lifecycle Controls (#127)", () => {
 			await f.commerce.listCustomerDecisions(f.organization.id, f.customer.id),
 		).toMatchObject([{ status: "approved" }]);
 
-		await adminPost(f, revUrl(activeGrant.id), {
+		const grantsAfterRenewal =
+			await f.organizations.listEntitlementGrantSnapshots(
+				f.organization.id,
+				f.customer.id,
+			);
+		const renewedGrant = grantsAfterRenewal.find((g) => g.status === "active");
+		expect(renewedGrant).toBeDefined();
+		await adminPost(f, revUrl(renewedGrant?.id ?? activeGrant.id), {
 			body: { confirmed: true, reason: "Revoke active" },
 		});
 		const rosterRes = await adminGet(

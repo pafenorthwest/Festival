@@ -10,6 +10,7 @@ import type {
 export const EMPTY_ENTITLEMENT_SUMMARY_COUNTS: EntitlementSummaryCounts = {
 	active: 0,
 	scheduled: 0,
+	superseded: 0,
 	expired: 0,
 	revoked: 0,
 };

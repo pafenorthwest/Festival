@@ -11,6 +11,7 @@ export type EntitlementReportSource = "teacher_checkout" | "accompanist_form";
 export interface EntitlementSummaryCounts {
 	active: number;
 	scheduled: number;
+	superseded: number;
 	expired: number;
 	revoked: number;
 }
@@ -163,6 +164,7 @@ export function summarizeEntitlementCounts(
 	const counts: EntitlementSummaryCounts = {
 		active: 0,
 		scheduled: 0,
+		superseded: 0,
 		expired: 0,
 		revoked: 0,
 	};

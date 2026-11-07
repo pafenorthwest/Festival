@@ -9,7 +9,6 @@ import type {
 	EntitlementGrantSnapshot,
 } from "@festival/common";
 import {
-	addCalendarDays,
 	assertValidClassEntitlementInput,
 	assertValidEntitlementGrantSnapshotInput,
 	isClassEntitlementStatus,
@@ -856,29 +855,9 @@ export class InMemoryMembershipCommerceRepository
 			}
 			if (input.grant) {
 				assertValidEntitlementGrantSnapshotInput(input.grant);
-				let grantInput = input.grant;
-				const existingGrants =
-					await this.organizations.listEntitlementGrantSnapshots(
-						grantInput.organizationId,
-						grantInput.customerId,
-					);
-				const activeGrant = existingGrants.find(
-					(g) =>
-						g.entitlementClass === grantInput.entitlementClass &&
-						g.status === "active" &&
-						g.endsOn > grantInput.startsOn,
+				grant = await this.organizations.createEntitlementGrantSnapshot(
+					input.grant,
 				);
-				if (activeGrant) {
-					const startsOn = activeGrant.endsOn;
-					grantInput = {
-						...grantInput,
-						startsOn,
-						endsOn: addCalendarDays(startsOn, grantInput.durationDays),
-						status: "scheduled",
-					};
-				}
-				grant =
-					await this.organizations.createEntitlementGrantSnapshot(grantInput);
 			}
 			if (classEntitlementInputs.length > 0) {
 				classEntitlements = [];

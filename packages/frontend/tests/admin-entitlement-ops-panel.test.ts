@@ -39,7 +39,13 @@ afterEach(() => {
 describe("Admin entitlement operations API client helpers (#127)", () => {
 	it("fetches admin entitlement operations snapshot with auth token and signal", async () => {
 		mockFetch({
-			summaryCounts: { active: 2, scheduled: 1, expired: 0, revoked: 1 },
+			summaryCounts: {
+				active: 2,
+				scheduled: 1,
+				superseded: 0,
+				expired: 0,
+				revoked: 1,
+			},
 			latestReconciliationRun: null,
 			reconciliationRuns: [],
 			unresolvedDecisions: [],
