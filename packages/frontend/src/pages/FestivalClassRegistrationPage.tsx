@@ -22,9 +22,9 @@ import {
 	isInstrumentSelectionValid,
 	isRegistrationSelectionValid,
 	normalizeMaxPieces,
-	validatePieceDrafts,
 } from "./festivalRegistrationHelpers.js";
 import {
+	useConcertoCatalogSearch,
 	useRegistrationOptions,
 	useRegistrationWaitlist,
 } from "./festivalRegistrationHooks.js";
@@ -71,18 +71,16 @@ export function FestivalClassRegistrationPage(
 		[selectedAccompanistId, setSelectedAccompanistId] = createSignal(""),
 		[selectedInstrumentId, setSelectedInstrumentId] = createSignal(""),
 		[pieces, setPieces] = createSignal<RepertoirePiece[]>([]),
-		regOptions = useRegistrationOptions({
-			slug: props.slug,
-			festivalSlug: props.festivalSlug,
-			isAuthenticated: () => props.app.customerSession().authenticated,
-			childId: selectedChildId,
-			divisionId: selectedDivisionId,
-			teacherId: selectedTeacherId,
-			onAutoSelectChild: setSelectedChildId,
-		}),
 		{ children, teachers, eligibleClasses, accompanists, loadChildren } =
-			regOptions,
-		catalogWorks = regOptions.catalogWorks,
+			useRegistrationOptions({
+				slug: props.slug,
+				festivalSlug: props.festivalSlug,
+				isAuthenticated: () => props.app.customerSession().authenticated,
+				childId: selectedChildId,
+				divisionId: selectedDivisionId,
+				teacherId: selectedTeacherId,
+				onAutoSelectChild: setSelectedChildId,
+			}),
 		classOptionEligibility = useClassOptionEligibility({
 			slug: () => props.slug,
 			festivalSlug: () => props.festivalSlug,
@@ -107,6 +105,13 @@ export function FestivalClassRegistrationPage(
 			}),
 		selectedChild = () => findById(children(), selectedChildId()),
 		selectedClass = () => findById(eligibleClasses(), selectedClassId()),
+		catalogSearch = useConcertoCatalogSearch(
+			() => props.slug,
+			() => props.festivalSlug,
+			() =>
+				isRepertoireModalOpen() && doesClassRequireConcerto(selectedClass()),
+		),
+		catalogWorks = catalogSearch.catalogWorks,
 		selectedTeacher = () => findById(teachers(), selectedTeacherId()),
 		selectedAccompanist = () =>
 			findById(accompanists(), selectedAccompanistId()),
@@ -167,11 +172,6 @@ export function FestivalClassRegistrationPage(
 			selectedTeacherId(),
 			selectedClassId(),
 			pieces(),
-			catalogWorks(),
-		) &&
-		validatePieceDrafts(
-			pieces(),
-			doesClassRequireConcerto(selectedClass()),
 			catalogWorks(),
 		) &&
 		!divisions.loading &&
@@ -538,6 +538,7 @@ export function FestivalClassRegistrationPage(
 						initialPieces={pieces()}
 						requiresConcerto={doesClassRequireConcerto(selectedClass())}
 						catalogWorks={catalogWorks()}
+						catalogSearch={catalogSearch}
 						onSave={setPieces}
 						onClose={() => setIsRepertoireModalOpen(false)}
 					/>

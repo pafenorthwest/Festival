@@ -218,12 +218,9 @@ export function isRegistrationSelectionValid(
 		return false;
 	}
 	const requiresConcerto = doesClassRequireConcerto(classConfig);
-	return pieces.every(
-		(p) =>
-			Boolean(p.title.trim()) &&
-			Boolean(p.composer.trim()) &&
-			p.durationSeconds > 0 &&
-			!validatePieceCatalogWork(p, { requiresConcerto, catalogWorks }),
+	return (
+		pieces.every((piece) => piece.durationSeconds > 0) &&
+		validatePieceDrafts(pieces, { requiresConcerto, catalogWorks })
 	);
 }
 

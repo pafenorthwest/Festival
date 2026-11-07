@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import {
 	evaluateRegistrationEligibility,
 	getPublicDivisions,
+	searchRegistrationConcertoCatalog,
 	startClassCheckout,
 } from "../src/lib/api.js";
 import {
@@ -427,7 +428,7 @@ describe("Festival Repertoire Modal", () => {
 		expect(repertoireModal).toContain("handleSelectCatalogWork");
 		expect(repertoireModal).toContain("validatePieceCatalogWork(");
 		expect(regPage).toContain("catalogWorks={catalogWorks()}");
-		expect(regPage).toContain("validatePieceDrafts");
+		expect(regPage).toContain("isRegistrationSelectionValid");
 	});
 	it("uses index-stable rows so editing a draft preserves input focus", () => {
 		expect(repertoireModal).toContain("<Index each={pieces()}>");
@@ -531,6 +532,30 @@ describe("Registration eligibility & multi-line checkout API", () => {
 	const originalFetch = globalThis.fetch;
 	afterEach(() => {
 		globalThis.fetch = originalFetch;
+	});
+
+	it("searches concertos using the customer session", async () => {
+		globalThis.fetch = (async (
+			input: RequestInfo | URL,
+			init?: RequestInit,
+		) => {
+			const url = new URL(String(input), "https://festival.test");
+			expect(url.searchParams.get("q")).toBe("Grieg & Ravel");
+			expect(url.pathname).toBe(
+				"/api/organizations/test-org/customer/festivals/test-fest/registration/concerto-catalog",
+			);
+			expect(init?.credentials).toBe("include");
+			expect(new Headers(init?.headers).has("Authorization")).toBe(false);
+			return Response.json({ works: [] });
+		}) as typeof fetch;
+
+		await expect(
+			searchRegistrationConcertoCatalog(
+				"test-org",
+				"test-fest",
+				"Grieg & Ravel",
+			),
+		).resolves.toEqual({ works: [] });
 	});
 
 	it("loads public instrument options and preserves catalog IDs in checkout transport", async () => {

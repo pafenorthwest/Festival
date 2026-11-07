@@ -3,6 +3,7 @@ import {
 	type CanonicalContributor,
 	type CanonicalWork,
 	calculateRepertoireReviewQueueSummary,
+	isCatalogWorkClassifiedAsConcerto,
 	type RepertoireReviewItem,
 	type RepertoireReviewQueueSummary,
 	type RepertoireReviewStatus,
@@ -75,6 +76,7 @@ export interface SearchCatalogWorksInput {
 	organizationId: string;
 	query: string;
 	limit?: number;
+	concertoOnly?: boolean;
 }
 
 export interface AddCatalogWorkInput {
@@ -410,6 +412,7 @@ export class InMemoryRepertoireRepository implements RepertoireRepository {
 		const matching = Array.from(this.canonicalWorks.values()).filter(
 			(work) =>
 				work.organizationId === input.organizationId &&
+				(!input.concertoOnly || isCatalogWorkClassifiedAsConcerto(work)) &&
 				(work.title.toLowerCase().includes(q) ||
 					Boolean(work.composerName?.toLowerCase().includes(q))),
 		);

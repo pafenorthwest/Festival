@@ -8,6 +8,7 @@ import {
 import type {
 	AdminCustomerProfileSummary,
 	AdminCustomerSearchResponse,
+	CanonicalWork,
 	ClassEntitlement,
 	ClassRegistrationMetadata,
 	CustomerAccountSettings,
@@ -1959,6 +1960,24 @@ export class CustomerAccountService {
 				name: teacher.name,
 			})),
 		};
+	}
+
+	async searchRegistrationConcertoCatalog(
+		slug: string,
+		festivalShortName: string,
+		sessionId: string | undefined,
+		query: string,
+	): Promise<{ works: CanonicalWork[] }> {
+		const { organizationId } = await this.customerReadAccess(slug, sessionId);
+		await this.requireFestival(organizationId, festivalShortName);
+		if (!this.repertoire)
+			throw new AppError("Repertoire catalog is unavailable.", 503);
+		const works = await this.repertoire.searchCatalogWorks({
+			organizationId,
+			query,
+			concertoOnly: true,
+		});
+		return { works };
 	}
 
 	async listRegistrationEligibleClasses(

@@ -198,6 +198,11 @@ export const CURRENT_ROUTE_SECURITY = [
 	},
 	{
 		method: "GET",
+		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/registration/concerto-catalog",
+		authenticationClass: "customer",
+	},
+	{
+		method: "GET",
 		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/registration/accompanists",
 		authenticationClass: "customer",
 	},

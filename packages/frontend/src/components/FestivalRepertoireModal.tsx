@@ -24,6 +24,14 @@ interface FestivalRepertoireModalProps {
 	maxPieces: 1 | 2 | 3;
 	initialPieces: RepertoirePiece[];
 	requiresConcerto?: boolean;
+	catalogSearch?: {
+		query: () => string;
+		setQuery: (value: string) => void;
+		results: () => readonly CanonicalWork[];
+		loading: () => boolean;
+		error: () => string | undefined;
+		retry: () => void;
+	};
 	catalogWorks?: readonly (CanonicalWork | RepertoireCatalogWork)[];
 	onSave: (pieces: RepertoirePiece[]) => void;
 	onClose: () => void;
@@ -36,9 +44,15 @@ export function FestivalRepertoireModal(props: FestivalRepertoireModalProps) {
 			: [createEmptyPieceDraft()],
 	);
 	const [touched, setTouched] = createSignal(false);
-	const concertoCatalogWorks = () =>
-		(props.catalogWorks ?? []).filter((work) =>
-			isCatalogWorkClassifiedAsConcerto(work),
+	const concertoCatalogWorks = (selectedId?: string | null) =>
+		(props.catalogWorks ?? []).filter(
+			(work) =>
+				(work.id === selectedId ||
+					!props.catalogSearch ||
+					props.catalogSearch
+						.results()
+						.some((result) => result.id === work.id)) &&
+				isCatalogWorkClassifiedAsConcerto(work),
 		);
 
 	function updatePieceField<K extends keyof RepertoirePieceDraft>(
@@ -109,6 +123,50 @@ export function FestivalRepertoireModal(props: FestivalRepertoireModalProps) {
 					</header>
 
 					<form class="flow-panel" onSubmit={handleSave}>
+						<Show when={props.requiresConcerto && props.catalogSearch}>
+							{(search) => (
+								<>
+									<label class="field">
+										<span>Search the concerto catalog</span>
+										<input
+											type="search"
+											placeholder="Work title or composer"
+											value={search().query()}
+											onInput={(event) =>
+												search().setQuery(event.currentTarget.value)
+											}
+											onKeyDown={(event) => {
+												if (event.key === "Enter") event.preventDefault();
+											}}
+										/>
+									</label>
+									<div aria-live="polite">
+										<Show when={search().loading()}>
+											<p>Searching the catalog…</p>
+										</Show>
+										<Show when={search().error()}>
+											<p>{search().error()}</p>
+											<Button
+												type="button"
+												variant="secondary"
+												onClick={search().retry}
+											>
+												Retry search
+											</Button>
+										</Show>
+										<Show
+											when={
+												!search().loading() &&
+												!search().error() &&
+												search().results().length === 0
+											}
+										>
+											<p>No concertos match this search.</p>
+										</Show>
+									</div>
+								</>
+							)}
+						</Show>
 						<Index each={pieces()}>
 							{(piece, index) => (
 								<div class="panel flow-panel repertoire-piece-box">
@@ -134,15 +192,19 @@ export function FestivalRepertoireModal(props: FestivalRepertoireModalProps) {
 											<select
 												id={`repertoire-piece-${index}-catalog-work`}
 												name={`repertoire-piece-${index}-catalog-work`}
-												value={piece().catalogWorkId ?? ""}
 												onChange={(e) =>
 													handleSelectCatalogWork(index, e.currentTarget.value)
 												}
 											>
-												<option value="">Select a concerto work…</option>
-												<For each={concertoCatalogWorks()}>
+												<option value="" selected={!piece().catalogWorkId}>
+													Select a concerto work…
+												</option>
+												<For each={concertoCatalogWorks(piece().catalogWorkId)}>
 													{(work) => (
-														<option value={work.id}>
+														<option
+															value={work.id}
+															selected={piece().catalogWorkId === work.id}
+														>
 															{work.composerName
 																? `${work.title} — ${work.composerName}`
 																: work.title}

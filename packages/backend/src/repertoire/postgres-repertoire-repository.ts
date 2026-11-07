@@ -555,6 +555,17 @@ export class PostgresRepertoireRepository implements RepertoireRepository {
 			 ) rc ON TRUE
 			 WHERE rw.organization_id = $1
 				 AND rw.is_active = TRUE
+				 AND (NOT $4::boolean OR EXISTS (
+					 SELECT 1
+					 FROM ${this.schema}.repertoire_work_classifications rwcl
+					 JOIN ${this.schema}.repertoire_classifications rcl
+						 ON rcl.id = rwcl.repertoire_classification_id
+						 AND rcl.organization_id = rwcl.organization_id
+					 WHERE rwcl.repertoire_work_id = rw.id
+						 AND rwcl.organization_id = rw.organization_id
+						 AND rcl.is_active = TRUE
+						 AND lower(trim(rcl.normalized_name)) = 'concerto'
+				 ))
 				 AND (
 					 rw.display_title ILIKE $2
 					 OR rw.normalized_title ILIKE $2
@@ -562,7 +573,7 @@ export class PostgresRepertoireRepository implements RepertoireRepository {
 				 )
 			 ORDER BY rw.display_title ASC
 			 LIMIT $3`,
-			[input.organizationId, term, limit],
+			[input.organizationId, term, limit, input.concertoOnly ?? false],
 		)) as Array<Record<string, unknown>>;
 
 		return rows.map((row) => ({
