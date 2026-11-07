@@ -13,6 +13,7 @@ export interface RepertoirePiece {
 	/** Positive whole seconds. */
 	durationSeconds: number;
 	durationMinutes?: number;
+	catalogWorkId?: string | null;
 }
 
 /** Roles supported by an organization-owned repertoire catalog. */
@@ -376,10 +377,10 @@ function parseInteger(
 	return value;
 }
 
-function validateRepertoirePiece(
+export function validateRepertoirePiece(
 	item: unknown,
-	index: number,
-	errors: string[],
+	index = 0,
+	errors: string[] = [],
 ): RepertoirePiece | null {
 	const piece = asObject(item);
 	if (!piece) {
@@ -390,6 +391,7 @@ function validateRepertoirePiece(
 	const composer = asTrimmed(piece.composer);
 	const movement = asTrimmed(piece.movement) || null;
 	const durationSeconds = piece.durationSeconds;
+	let catalogWorkId: string | undefined;
 
 	if (!title) errors.push(`Piece at index ${index} requires a title.`);
 	if (!composer) errors.push(`Piece at index ${index} requires a composer.`);
@@ -402,6 +404,16 @@ function validateRepertoirePiece(
 			`Piece at index ${index} durationSeconds must be a positive integer.`,
 		);
 	}
+	if (piece.catalogWorkId !== undefined && piece.catalogWorkId !== null) {
+		if (
+			typeof piece.catalogWorkId !== "string" ||
+			piece.catalogWorkId.trim().length === 0
+		) {
+			errors.push("Each repertoire piece must have a valid catalog work ID.");
+		} else {
+			catalogWorkId = piece.catalogWorkId.trim();
+		}
+	}
 
 	if (errors.length > 0) return null;
 	return {
@@ -409,6 +421,7 @@ function validateRepertoirePiece(
 		composer,
 		...(movement ? { movement } : {}),
 		durationSeconds: durationSeconds as number,
+		...(catalogWorkId ? { catalogWorkId } : {}),
 	};
 }
 

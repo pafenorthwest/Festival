@@ -2,15 +2,21 @@ import { afterEach, describe, expect, it } from "bun:test";
 import {
 	evaluateRegistrationEligibility,
 	getPublicDivisions,
+	searchRegistrationConcertoCatalog,
 	startClassCheckout,
 } from "../src/lib/api.js";
 import {
+	applyCatalogWorkSelection,
 	arePiecesValid,
+	createEmptyPieceDraft,
 	createRegistrationSelectHandlers,
 	formatTotalDuration,
 	isInstrumentSelectionValid,
+	isRegistrationSelectionValid,
 	pieceDraftToRepertoirePiece,
+	validatePieceCatalogWork,
 	validatePieceComposer,
+	validatePieceDrafts,
 	validatePieceDuration,
 	validatePieceTitle,
 } from "../src/pages/festivalRegistrationHelpers.js";
@@ -152,9 +158,278 @@ describe("Repertoire validation & transformation helpers", () => {
 			]),
 		).toBe("3m 15s");
 	});
+
+	it("enforces concerto catalog work requirement when class requires a concerto (#197)", () => {
+		const child = { hasCurrentValidAgeSnapshot: true };
+		const concertoWorks = [
+			{
+				id: "work-concerto-1",
+				title: "Piano Concerto in A minor, Op. 16",
+				composerName: "Edvard Grieg",
+				classifications: ["concerto"],
+				isActive: true,
+			},
+			{
+				id: "work-sonata-1",
+				title: "Piano Sonata in C",
+				composerName: "W. A. Mozart",
+				classifications: ["sonata"],
+				isActive: true,
+			},
+		];
+
+		for (const concertoClass of [
+			{
+				maximumPerformancePieces: 1,
+				requiresConcerto: true,
+			},
+			{
+				maximumPerformancePieces: 1,
+				classSubtypeName: "Concerto",
+			},
+		]) {
+			// Free-text repertoire (no catalogWorkId) is invalid for concerto classes
+			expect(
+				(
+					isRegistrationSelectionValid as unknown as (
+						...args: unknown[]
+					) => boolean
+				)(
+					child,
+					concertoClass,
+					"div-1",
+					"teacher-1",
+					"class-concerto",
+					[
+						{
+							title: "Piano Concerto in A minor, Op. 16",
+							composer: "Edvard Grieg",
+							durationSeconds: 300,
+						},
+					],
+					concertoWorks,
+				),
+			).toBe(false);
+
+			// Non-concerto catalog work is invalid for concerto classes
+			expect(
+				(
+					isRegistrationSelectionValid as unknown as (
+						...args: unknown[]
+					) => boolean
+				)(
+					child,
+					concertoClass,
+					"div-1",
+					"teacher-1",
+					"class-concerto",
+					[
+						{
+							title: "Piano Sonata in C",
+							composer: "W. A. Mozart",
+							durationSeconds: 300,
+							catalogWorkId: "work-sonata-1",
+						},
+					],
+					concertoWorks,
+				),
+			).toBe(false);
+
+			// Concerto-classified catalog work is valid
+			expect(
+				(
+					isRegistrationSelectionValid as unknown as (
+						...args: unknown[]
+					) => boolean
+				)(
+					child,
+					concertoClass,
+					"div-1",
+					"teacher-1",
+					"class-concerto",
+					[
+						{
+							title: "Piano Concerto in A minor, Op. 16",
+							composer: "Edvard Grieg",
+							durationSeconds: 300,
+							catalogWorkId: "work-concerto-1",
+						},
+					],
+					concertoWorks,
+				),
+			).toBe(true);
+		}
+
+		// arePiecesValid with requiresConcerto = true
+		expect(
+			(arePiecesValid as unknown as (...args: unknown[]) => boolean)(
+				[
+					{
+						title: "Piano Concerto in A minor, Op. 16",
+						composer: "Edvard Grieg",
+						movement: "I. Allegro",
+						durationMinutes: 5,
+						durationSeconds: 0,
+					},
+				],
+				{ requiresConcerto: true, catalogWorks: concertoWorks },
+			),
+		).toBe(false);
+
+		expect(
+			(arePiecesValid as unknown as (...args: unknown[]) => boolean)(
+				[
+					{
+						title: "Piano Sonata in C",
+						composer: "W. A. Mozart",
+						movement: "I. Allegro",
+						durationMinutes: 5,
+						durationSeconds: 0,
+						catalogWorkId: "work-sonata-1",
+					},
+				],
+				{ requiresConcerto: true, catalogWorks: concertoWorks },
+			),
+		).toBe(false);
+
+		expect(
+			(arePiecesValid as unknown as (...args: unknown[]) => boolean)(
+				[
+					{
+						title: "Piano Concerto in A minor, Op. 16",
+						composer: "Edvard Grieg",
+						movement: "I. Allegro",
+						durationMinutes: 5,
+						durationSeconds: 0,
+						catalogWorkId: "work-concerto-1",
+					},
+				],
+				{ requiresConcerto: true, catalogWorks: concertoWorks },
+			),
+		).toBe(true);
+	});
+
+	it("continues to allow free-text repertoire without catalogWorkId when class does not require a concerto (#197)", () => {
+		const child = { hasCurrentValidAgeSnapshot: true };
+		for (const nonConcertoClass of [
+			{
+				maximumPerformancePieces: 2,
+				requiresConcerto: false,
+			},
+			{
+				maximumPerformancePieces: 2,
+				classSubtypeName: "Solo Piano",
+			},
+		]) {
+			expect(
+				isRegistrationSelectionValid(
+					child,
+					nonConcertoClass,
+					"div-1",
+					"teacher-1",
+					"class-solo",
+					[
+						{
+							title: "Clair de Lune",
+							composer: "Claude Debussy",
+							durationSeconds: 240,
+						},
+					],
+				),
+			).toBe(true);
+		}
+
+		expect(
+			(arePiecesValid as unknown as (...args: unknown[]) => boolean)(
+				[
+					{
+						title: "Clair de Lune",
+						composer: "Claude Debussy",
+						movement: "",
+						durationMinutes: 4,
+						durationSeconds: 0,
+					},
+				],
+				{ requiresConcerto: false },
+			),
+		).toBe(true);
+	});
+
+	it("validates concerto catalog work selection and links selected work into draft fields (#197)", () => {
+		const catalogWorks = [
+			{
+				id: "work-concerto-1",
+				title: "Piano Concerto in A minor, Op. 16",
+				composerName: "Edvard Grieg",
+				classifications: ["concerto"],
+				isActive: true,
+			},
+			{
+				id: "work-sonata-1",
+				title: "Piano Sonata in C",
+				composerName: "W. A. Mozart",
+				classifications: ["sonata"],
+				isActive: true,
+			},
+		];
+
+		const emptyDraft = createEmptyPieceDraft();
+		expect(validatePieceCatalogWork(emptyDraft, true, catalogWorks)).toBe(
+			"Concerto classes require selecting a concerto work from the catalog.",
+		);
+		expect(
+			validatePieceCatalogWork(emptyDraft, false, catalogWorks),
+		).toBeNull();
+
+		const nonConcertoDraft = applyCatalogWorkSelection(
+			emptyDraft,
+			"work-sonata-1",
+			catalogWorks,
+		);
+		expect(nonConcertoDraft.catalogWorkId).toBe("work-sonata-1");
+		expect(nonConcertoDraft.title).toBe("Piano Sonata in C");
+		expect(nonConcertoDraft.composer).toBe("W. A. Mozart");
+		expect(validatePieceCatalogWork(nonConcertoDraft, true, catalogWorks)).toBe(
+			"Selected catalog work must be classified as a concerto.",
+		);
+		expect(validatePieceDrafts([nonConcertoDraft], true, catalogWorks)).toBe(
+			false,
+		);
+
+		const concertoDraft = applyCatalogWorkSelection(
+			emptyDraft,
+			"work-concerto-1",
+			catalogWorks,
+		);
+		expect(concertoDraft.catalogWorkId).toBe("work-concerto-1");
+		expect(concertoDraft.title).toBe("Piano Concerto in A minor, Op. 16");
+		expect(concertoDraft.composer).toBe("Edvard Grieg");
+		expect(
+			validatePieceCatalogWork(concertoDraft, true, catalogWorks),
+		).toBeNull();
+		expect(validatePieceDrafts([concertoDraft], true, catalogWorks)).toBe(true);
+
+		const clearedDraft = applyCatalogWorkSelection(
+			concertoDraft,
+			"",
+			catalogWorks,
+		);
+		expect(clearedDraft.catalogWorkId).toBeUndefined();
+	});
 });
 
 describe("Festival Repertoire Modal", () => {
+	it("renders concerto catalog work selector and validation feedback when requiresConcerto is true", () => {
+		expect(repertoireModal).toContain("props.requiresConcerto");
+		expect(repertoireModal).toContain("Concerto Catalog Work");
+		expect(repertoireModal).toContain(
+			"id={`repertoire-piece-${" + "index}-catalog-work`}",
+		);
+		expect(repertoireModal).toContain("handleSelectCatalogWork");
+		expect(repertoireModal).toContain("validatePieceCatalogWork(");
+		expect(regPage).toContain("catalogWorks={catalogWorks()}");
+		expect(regPage).toContain("isRegistrationSelectionValid");
+	});
 	it("uses index-stable rows so editing a draft preserves input focus", () => {
 		expect(repertoireModal).toContain("<Index each={pieces()}>");
 		expect(repertoireModal).not.toContain("<For each={pieces()}>");
@@ -257,6 +532,30 @@ describe("Registration eligibility & multi-line checkout API", () => {
 	const originalFetch = globalThis.fetch;
 	afterEach(() => {
 		globalThis.fetch = originalFetch;
+	});
+
+	it("searches concertos using the customer session", async () => {
+		globalThis.fetch = (async (
+			input: RequestInfo | URL,
+			init?: RequestInit,
+		) => {
+			const url = new URL(String(input), "https://festival.test");
+			expect(url.searchParams.get("q")).toBe("Grieg & Ravel");
+			expect(url.pathname).toBe(
+				"/api/organizations/test-org/customer/festivals/test-fest/registration/concerto-catalog",
+			);
+			expect(init?.credentials).toBe("include");
+			expect(new Headers(init?.headers).has("Authorization")).toBe(false);
+			return Response.json({ works: [] });
+		}) as typeof fetch;
+
+		await expect(
+			searchRegistrationConcertoCatalog(
+				"test-org",
+				"test-fest",
+				"Grieg & Ravel",
+			),
+		).resolves.toEqual({ works: [] });
 	});
 
 	it("loads public instrument options and preserves catalog IDs in checkout transport", async () => {

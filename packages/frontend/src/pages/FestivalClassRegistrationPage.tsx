@@ -17,12 +17,14 @@ import {
 } from "../lib/api.js";
 import {
 	createRegistrationSelectHandlers,
+	doesClassRequireConcerto,
 	findById,
 	isInstrumentSelectionValid,
 	isRegistrationSelectionValid,
 	normalizeMaxPieces,
 } from "./festivalRegistrationHelpers.js";
 import {
+	useConcertoCatalogSearch,
 	useRegistrationOptions,
 	useRegistrationWaitlist,
 } from "./festivalRegistrationHooks.js";
@@ -40,70 +42,76 @@ interface FestivalClassRegistrationPageProps {
 	slug: string;
 	festivalSlug: string;
 }
-
 export function FestivalClassRegistrationPage(
 	props: FestivalClassRegistrationPageProps,
 ) {
 	const [festival] = createResource(
-		() => [props.slug, props.festivalSlug] as const,
-		([s, f]) => getPublicFestival(s, f),
-	);
-	const [divisions] = createResource(
-		() => props.slug,
-		(slug) => getPublicDivisions(slug),
-	);
-	const cart = createRegistrationCart();
-	const getCsrf = () =>
-		props.app.customerSession().authenticated
-			? props.app.customerSession().csrfToken
-			: "";
-	const eligibility = useCartEligibility({
-		slug: () => props.slug,
-		festivalSlug: () => props.festivalSlug,
-		csrfToken: getCsrf,
-		cart,
-	});
-	const [selectedChildId, setSelectedChildId] = createSignal(""),
+			() => [props.slug, props.festivalSlug] as const,
+			([s, f]) => getPublicFestival(s, f),
+		),
+		[divisions] = createResource(
+			() => props.slug,
+			(slug) => getPublicDivisions(slug),
+		),
+		cart = createRegistrationCart(),
+		getCsrf = () => {
+			const session = props.app.customerSession();
+			return session.authenticated ? session.csrfToken : "";
+		},
+		eligibility = useCartEligibility({
+			slug: () => props.slug,
+			festivalSlug: () => props.festivalSlug,
+			csrfToken: getCsrf,
+			cart,
+		}),
+		[selectedChildId, setSelectedChildId] = createSignal(""),
 		[selectedDivisionId, setSelectedDivisionId] = createSignal(""),
 		[selectedTeacherId, setSelectedTeacherId] = createSignal(""),
 		[selectedClassId, setSelectedClassId] = createSignal(""),
 		[selectedAccompanistId, setSelectedAccompanistId] = createSignal(""),
-		[selectedInstrumentId, setSelectedInstrumentId] = createSignal("");
-	const [pieces, setPieces] = createSignal<RepertoirePiece[]>([]);
-	const { children, teachers, eligibleClasses, accompanists, loadChildren } =
-		useRegistrationOptions({
-			slug: props.slug,
-			festivalSlug: props.festivalSlug,
-			isAuthenticated: () => props.app.customerSession().authenticated,
+		[selectedInstrumentId, setSelectedInstrumentId] = createSignal(""),
+		[pieces, setPieces] = createSignal<RepertoirePiece[]>([]),
+		{ children, teachers, eligibleClasses, accompanists, loadChildren } =
+			useRegistrationOptions({
+				slug: props.slug,
+				festivalSlug: props.festivalSlug,
+				isAuthenticated: () => props.app.customerSession().authenticated,
+				childId: selectedChildId,
+				divisionId: selectedDivisionId,
+				teacherId: selectedTeacherId,
+				onAutoSelectChild: setSelectedChildId,
+			}),
+		classOptionEligibility = useClassOptionEligibility({
+			slug: () => props.slug,
+			festivalSlug: () => props.festivalSlug,
+			csrfToken: getCsrf,
 			childId: selectedChildId,
-			divisionId: selectedDivisionId,
-			teacherId: selectedTeacherId,
-			onAutoSelectChild: setSelectedChildId,
-		});
-	const classOptionEligibility = useClassOptionEligibility({
-		slug: () => props.slug,
-		festivalSlug: () => props.festivalSlug,
-		csrfToken: getCsrf,
-		childId: selectedChildId,
-		classes: eligibleClasses,
-		cart,
-	});
-	const [isRepertoireModalOpen, setIsRepertoireModalOpen] = createSignal(false),
+			classes: eligibleClasses,
+			cart,
+		}),
+		[isRepertoireModalOpen, setIsRepertoireModalOpen] = createSignal(false),
 		[isSubmittingCheckout, setIsSubmittingCheckout] = createSignal(false),
 		[checkoutError, setCheckoutError] = createSignal<string | null>(null),
 		[birthdayDraft, setBirthdayDraft] = createSignal(""),
 		[isRefreshingSnapshot, setIsRefreshingSnapshot] = createSignal(false),
-		[snapshotError, setSnapshotError] = createSignal<string | null>(null);
-	const { sessionProfile, currentWaitlistEntry, handleWaitlistEntryChanged } =
-		useRegistrationWaitlist({
-			slug: props.slug,
-			festivalSlug: props.festivalSlug,
-			isAuthenticated: () => props.app.customerSession().authenticated,
-			selectedClassId,
-			selectedChildId,
-		});
-	const selectedChild = () => findById(children(), selectedChildId()),
+		[snapshotError, setSnapshotError] = createSignal<string | null>(null),
+		{ sessionProfile, currentWaitlistEntry, handleWaitlistEntryChanged } =
+			useRegistrationWaitlist({
+				slug: props.slug,
+				festivalSlug: props.festivalSlug,
+				isAuthenticated: () => props.app.customerSession().authenticated,
+				selectedClassId,
+				selectedChildId,
+			}),
+		selectedChild = () => findById(children(), selectedChildId()),
 		selectedClass = () => findById(eligibleClasses(), selectedClassId()),
+		catalogSearch = useConcertoCatalogSearch(
+			() => props.slug,
+			() => props.festivalSlug,
+			() =>
+				isRepertoireModalOpen() && doesClassRequireConcerto(selectedClass()),
+		),
+		catalogWorks = catalogSearch.catalogWorks,
 		selectedTeacher = () => findById(teachers(), selectedTeacherId()),
 		selectedAccompanist = () =>
 			findById(accompanists(), selectedAccompanistId()),
@@ -120,12 +128,10 @@ export function FestivalClassRegistrationPage(
 			normalizeMaxPieces(selectedClass()?.maximumPerformancePieces),
 		cartSummary = () =>
 			`Cart: ${cart.itemCount()} ${cart.itemCount() === 1 ? "class" : "classes"} (${cart.totalPriceFormatted()})`;
-
 	const handleSignIn = () => {
 		if (typeof window !== "undefined" && window.location?.assign)
 			window.location.assign(signInPath());
 	};
-
 	const selectHandlers = createRegistrationSelectHandlers(
 		setSelectedChildId,
 		setSelectedDivisionId,
@@ -166,12 +172,12 @@ export function FestivalClassRegistrationPage(
 			selectedTeacherId(),
 			selectedClassId(),
 			pieces(),
+			catalogWorks(),
 		) &&
 		!divisions.loading &&
 		!divisions.error &&
 		isInstrumentSelectionValid(instruments(), selectedInstrumentId()) &&
 		classOptionEligibility.isEligible(selectedClassId());
-
 	function handleAddToCart() {
 		setCheckoutError(null);
 		const cls = selectedClass(),
@@ -302,7 +308,6 @@ export function FestivalClassRegistrationPage(
 							</div>
 						</Show>
 					</header>
-
 					<Show when={cart.itemCount() > 0}>
 						<FestivalRegistrationCartView
 							cart={cart}
@@ -312,7 +317,6 @@ export function FestivalClassRegistrationPage(
 							onSubmitCheckout={handleCartCheckout}
 						/>
 					</Show>
-
 					<Show when={children().length === 0}>
 						<FestivalNoChildrenPanel
 							manageChildrenPath={`/org/${props.slug}/account/children`}
@@ -342,7 +346,6 @@ export function FestivalClassRegistrationPage(
 									</For>
 								</select>
 							</label>
-
 							<Show
 								when={
 									selectedChild() &&
@@ -387,7 +390,6 @@ export function FestivalClassRegistrationPage(
 									</Show>
 								</div>
 							</Show>
-
 							<Show when={selectedChild()?.hasCurrentValidAgeSnapshot}>
 								<label class="field">
 									<span>Division</span>
@@ -414,7 +416,6 @@ export function FestivalClassRegistrationPage(
 										</p>
 									</Show>
 								</label>
-
 								<Show when={selectedDivisionId()}>
 									<label class="field">
 										<span>Teacher</span>
@@ -431,7 +432,6 @@ export function FestivalClassRegistrationPage(
 										</select>
 									</label>
 								</Show>
-
 								<Show when={selectedTeacherId()}>
 									<label class="field">
 										<span>Eligible Class</span>
@@ -465,7 +465,6 @@ export function FestivalClassRegistrationPage(
 										</Show>
 									</label>
 								</Show>
-
 								<Show when={selectedClass()}>
 									<Show
 										when={classOptionEligibility.isWaitlist(selectedClassId())}
@@ -532,12 +531,14 @@ export function FestivalClassRegistrationPage(
 						</div>
 					</Show>
 				</section>
-
 				<Show when={selectedClass()}>
 					<FestivalRepertoireModal
 						isOpen={isRepertoireModalOpen()}
 						maxPieces={maxPieces()}
 						initialPieces={pieces()}
+						requiresConcerto={doesClassRequireConcerto(selectedClass())}
+						catalogWorks={catalogWorks()}
+						catalogSearch={catalogSearch}
 						onSave={setPieces}
 						onClose={() => setIsRepertoireModalOpen(false)}
 					/>

@@ -8,6 +8,7 @@ import {
 import type {
 	AdminCustomerProfileSummary,
 	AdminCustomerSearchResponse,
+	CanonicalWork,
 	ClassEntitlement,
 	ClassRegistrationMetadata,
 	CustomerAccountSettings,
@@ -34,6 +35,7 @@ import {
 	CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION,
 	calendarDateInTimezone,
 	deriveFestivalMetadataCutoff,
+	doesClassRequireConcerto,
 	evaluateClassCapacityStatus,
 	isAccompanistMembershipGrantActive,
 	isFestivalRegistrationOpen,
@@ -41,9 +43,14 @@ import {
 	validateCustomerProfileInput,
 } from "@festival/common";
 import type { CheckoutRepository } from "../checkout/checkout-repository.js";
+import {
+	resolvePieceCatalogWorks,
+	validateAndNormalizeRepertoirePieces,
+} from "../checkout/class-checkout-helpers.js";
 import { lifecycleForEntitlementRead } from "../commerce/entitlement-lifecycle.js";
 import type { MembershipCommerceRepository } from "../commerce/membership-commerce-repository.js";
 import { AppError } from "../errors/app-error.js";
+import type { RepertoireRepository } from "../repertoire/repertoire-repository.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
 import {
 	SHOPIFY_CUSTOMER_CLIENT_SECRET_PURPOSE,
@@ -251,6 +258,7 @@ export interface CustomerAccountServiceOptions {
 	jwksCacheTtlMs?: number;
 	jwksCacheMaxTotalBytes?: number;
 	cacheMaxEntryBytes?: number;
+	repertoire?: RepertoireRepository;
 }
 
 export class CustomerAccountService {
@@ -267,6 +275,7 @@ export class CustomerAccountService {
 		{ oidc: Discovery; api: ApiDiscovery }
 	>;
 	private jwksCache: BoundedAsyncCache<string, readonly JsonRecord[]>;
+	private readonly repertoire?: RepertoireRepository;
 	private get customers(): CustomerAccountRepository {
 		return this.repository;
 	}
@@ -278,7 +287,9 @@ export class CustomerAccountService {
 		options: CustomerAccountServiceOptions,
 		private readonly commerce?: MembershipCommerceRepository,
 		private readonly checkout?: CheckoutRepository,
+		repertoire?: RepertoireRepository,
 	) {
+		this.repertoire = repertoire ?? options.repertoire;
 		const origin = new URL(options.publicOrigin);
 		if (
 			!/^https:$/.test(origin.protocol) &&
@@ -1326,72 +1337,25 @@ export class CustomerAccountService {
 		return config;
 	}
 
-	private validatePieceItem(piece: unknown): RepertoirePiece {
-		const item = piece as Record<string, unknown> | null;
-		if (!item || typeof item.title !== "string" || !item.title.trim()) {
-			throw new AppError("Each repertoire piece must have a valid title.", 400);
-		}
-		if (typeof item.composer !== "string" || !item.composer.trim()) {
-			throw new AppError(
-				"Each repertoire piece must have a valid composer.",
-				400,
-			);
-		}
-		if (
-			item.movement !== undefined &&
-			item.movement !== null &&
-			typeof item.movement !== "string"
-		) {
-			throw new AppError(
-				"Each repertoire piece must have a valid movement.",
-				400,
-			);
-		}
-		if (
-			typeof item.durationSeconds !== "number" ||
-			item.durationSeconds <= 0 ||
-			!Number.isSafeInteger(item.durationSeconds) ||
-			item.durationSeconds > 2_147_483_647
-		) {
-			throw new AppError(
-				"Each repertoire piece must have a positive whole-number duration in seconds.",
-				400,
-			);
-		}
-		return {
-			title: item.title.trim(),
-			composer: item.composer.trim(),
-			movement:
-				typeof item.movement === "string"
-					? item.movement.trim() || undefined
-					: undefined,
-			durationSeconds: item.durationSeconds,
-		};
-	}
-
-	private validateRegistrationPieces(
+	private async validateRegistrationPieces(
+		organizationId: string,
 		pieces: unknown,
 		classConfig: FestivalClassConfiguration,
-	): RepertoirePiece[] {
-		if (!Array.isArray(pieces) || pieces.length === 0) {
-			throw new AppError("Repertoire pieces must be a non-empty array.", 400);
-		}
-		if (pieces.length > classConfig.maximumPerformancePieces) {
-			throw new AppError(
-				`Number of pieces (${pieces.length}) exceeds the maximum allowed (${classConfig.maximumPerformancePieces}).`,
-				400,
-			);
-		}
-		const normalized = pieces.map((p) => this.validatePieceItem(p));
-		const totalMinutes =
-			normalized.reduce((s, p) => s + p.durationSeconds, 0) / 60;
-		if (totalMinutes > classConfig.performanceMinutes) {
-			throw new AppError(
-				`Total performance duration (${totalMinutes} minutes) exceeds the maximum allowed of ${classConfig.performanceMinutes} minutes.`,
-				400,
-			);
-		}
-		return normalized;
+	): Promise<RepertoirePiece[]> {
+		const subtypes = await this.organizations.listRegistrationCatalogValues(
+			organizationId,
+			"class_subtype",
+			false,
+		);
+		const subtype =
+			subtypes.find((s) => s.id === classConfig.classSubtypeId) ?? null;
+		const catalogWorksById = this.repertoire
+			? await resolvePieceCatalogWorks(pieces, organizationId, this.repertoire)
+			: undefined;
+		return validateAndNormalizeRepertoirePieces(pieces, classConfig, {
+			subtype,
+			catalogWorksById,
+		});
 	}
 
 	private async validateRegistrationAccompanist(
@@ -1497,7 +1461,11 @@ export class CustomerAccountService {
 			entitlement.festivalClassId,
 		);
 		const payload = this.parseRegistrationMetadataInput(input);
-		const pieces = this.validateRegistrationPieces(payload.pieces, classConfig);
+		const pieces = await this.validateRegistrationPieces(
+			access.organizationId,
+			payload.pieces,
+			classConfig,
+		);
 		const rawAcc =
 			payload.accompanistMembershipId !== undefined
 				? payload.accompanistMembershipId
@@ -1994,6 +1962,24 @@ export class CustomerAccountService {
 		};
 	}
 
+	async searchRegistrationConcertoCatalog(
+		slug: string,
+		festivalShortName: string,
+		sessionId: string | undefined,
+		query: string,
+	): Promise<{ works: CanonicalWork[] }> {
+		const { organizationId } = await this.customerReadAccess(slug, sessionId);
+		await this.requireFestival(organizationId, festivalShortName);
+		if (!this.repertoire)
+			throw new AppError("Repertoire catalog is unavailable.", 503);
+		const works = await this.repertoire.searchCatalogWorks({
+			organizationId,
+			query,
+			concertoOnly: true,
+		});
+		return { works };
+	}
+
 	async listRegistrationEligibleClasses(
 		slug: string,
 		festivalShortName: string,
@@ -2029,14 +2015,20 @@ export class CustomerAccountService {
 			);
 		}
 
-		const [classes, timezone] = await Promise.all([
+		const [classes, timezone, subtypes] = await Promise.all([
 			this.organizations.listFestivalClassConfigurations(
 				access.organizationId,
 				festival.id,
 				true,
 			),
 			this.organizations.getOrganizationTimezone(access.organizationId),
+			this.organizations.listRegistrationCatalogValues(
+				access.organizationId,
+				"class_subtype",
+				false,
+			),
 		]);
+		const subtypeById = new Map(subtypes.map((s) => [s.id, s]));
 		const isRegistrationOpen = isFestivalRegistrationOpen(
 			festival,
 			this.now(),
@@ -2058,11 +2050,14 @@ export class CustomerAccountService {
 								item.id,
 							)
 						: undefined;
+					const subtype = subtypeById.get(item.classSubtypeId) ?? null;
 					return {
 						id: item.id,
 						displayName: item.displayName,
 						divisionId: item.divisionId,
 						classSubtypeId: item.classSubtypeId,
+						...(subtype ? { classSubtypeName: subtype.displayName } : {}),
+						requiresConcerto: doesClassRequireConcerto(item, subtype),
 						minimumAge: item.minimumAge,
 						maximumAge: item.maximumAge,
 						price: item.price,

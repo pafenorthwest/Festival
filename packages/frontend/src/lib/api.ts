@@ -1574,6 +1574,20 @@ export function listRegistrationEligibleClasses(
 	);
 }
 
+export function searchRegistrationConcertoCatalog(
+	slug: string,
+	festivalSlug: string,
+	query: string,
+): Promise<{ works: CanonicalWork[] }> {
+	const params = new URLSearchParams({ q: query });
+	return requestJson<{ works: CanonicalWork[] }>(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/registration/concerto-catalog?${params.toString()}`,
+		undefined,
+		undefined,
+		"",
+	);
+}
+
 export function listRegistrationAccompanists(
 	slug: string,
 	festivalSlug: string,

@@ -270,6 +270,17 @@ export function buildCustomerRegistrationRoutes(
 	} = options;
 	const reg = "/festivals/:festivalShortName/registration";
 
+	router.get(`${reg}/concerto-catalog`, (c) =>
+		withCustomerAccount(c, cas, (s) =>
+			s.searchRegistrationConcertoCatalog(
+				requireSlug(c),
+				c.req.param("festivalShortName") ?? "",
+				getCookie(c, CUSTOMER_SESSION_COOKIE),
+				c.req.query("q") ?? "",
+			),
+		),
+	);
+
 	router.get(`${reg}/teachers`, (c) =>
 		withCustomerAccount(c, cas, (s) =>
 			s.listRegistrationTeachers(

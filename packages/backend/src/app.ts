@@ -331,6 +331,13 @@ export async function createApp(options: CreateAppOptions = {}) {
 			? new PostgresCustomerAccountRepository(env.databaseSchema)
 			: undefined);
 	if (customerAccountRepository) await customerAccountRepository.ensureReady();
+	const repertoireRepository =
+		options.repertoireRepository ??
+		(env.databaseSchema
+			? new PostgresRepertoireRepository(env.databaseSchema)
+			: new InMemoryRepertoireRepository());
+	if (repertoireRepository instanceof PostgresRepertoireRepository)
+		await repertoireRepository.ensureReady();
 	const customerAccountService =
 		options.customerAccountService ??
 		(secretKeyring && customerAccountRepository && env.publicOrigin
@@ -365,6 +372,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 					},
 					commerceRepository,
 					checkoutRepository,
+					repertoireRepository,
 				)
 			: undefined);
 	const customerAvailabilityRepository =
@@ -409,6 +417,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 					commerceRepository,
 					undefined,
 					consoleClassCheckoutFailureLogger,
+					repertoireRepository,
 				)
 			: undefined);
 	const shopifyOrderProjectionService =
@@ -442,13 +451,6 @@ export async function createApp(options: CreateAppOptions = {}) {
 			: new InMemoryVolunteerRepository());
 	if (volunteerRepository instanceof PostgresVolunteerRepository)
 		await volunteerRepository.ensureReady();
-	const repertoireRepository =
-		options.repertoireRepository ??
-		(env.databaseSchema
-			? new PostgresRepertoireRepository(env.databaseSchema)
-			: new InMemoryRepertoireRepository());
-	if (repertoireRepository instanceof PostgresRepertoireRepository)
-		await repertoireRepository.ensureReady();
 	const classEntitlementRepository =
 		options.classEntitlementRepository ??
 		(env.databaseSchema
