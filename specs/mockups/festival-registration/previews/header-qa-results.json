@@ -1,0 +1,219 @@
+{
+  "pages": [
+    {
+      "file": "index.html",
+      "width": 1440,
+      "screenshot": "/Users/eric/pafenorthwest/Festival/specs/mockups/festival-registration/previews/registration.png"
+    },
+    {
+      "file": "class-registration.html",
+      "width": 1440,
+      "screenshot": "/Users/eric/pafenorthwest/Festival/specs/mockups/festival-registration/previews/class-registration.png"
+    },
+    {
+      "file": "cart.html",
+      "width": 1440,
+      "screenshot": "/Users/eric/pafenorthwest/Festival/specs/mockups/festival-registration/previews/cart.png"
+    },
+    {
+      "file": "my-registrations.html",
+      "width": 1440,
+      "screenshot": "/Users/eric/pafenorthwest/Festival/specs/mockups/festival-registration/previews/my-registrations.png"
+    },
+    {
+      "file": "edit-registration.html",
+      "width": 1440,
+      "screenshot": "/Users/eric/pafenorthwest/Festival/specs/mockups/festival-registration/previews/edit-registration.png"
+    },
+    {
+      "file": "festival-home.html",
+      "width": 1440,
+      "screenshot": "/Users/eric/pafenorthwest/Festival/specs/mockups/festival-registration/previews/festival-home.png"
+    },
+    {
+      "file": "index.html",
+      "width": 1024,
+      "screenshot": "/Users/eric/pafenorthwest/Festival/specs/mockups/festival-registration/previews/tablet/registration.png"
+    },
+    {
+      "file": "class-registration.html",
+      "width": 1024,
+      "screenshot": "/Users/eric/pafenorthwest/Festival/specs/mockups/festival-registration/previews/tablet/class-registration.png"
+    },
+    {
+      "file": "cart.html",
+      "width": 1024,
+      "screenshot": "/Users/eric/pafenorthwest/Festival/specs/mockups/festival-registration/previews/tablet/cart.png"
+    },
+    {
+      "file": "my-registrations.html",
+      "width": 1024,
+      "screenshot": "/Users/eric/pafenorthwest/Festival/specs/mockups/festival-registration/previews/tablet/my-registrations.png"
+    },
+    {
+      "file": "edit-registration.html",
+      "width": 1024,
+      "screenshot": "/Users/eric/pafenorthwest/Festival/specs/mockups/festival-registration/previews/tablet/edit-registration.png"
+    },
+    {
+      "file": "festival-home.html",
+      "width": 1024,
+      "screenshot": "/Users/eric/pafenorthwest/Festival/specs/mockups/festival-registration/previews/tablet/festival-home.png"
+    },
+    {
+      "file": "index.html",
+      "width": 390,
+      "screenshot": "/Users/eric/pafenorthwest/Festival/specs/mockups/festival-registration/previews/mobile/registration.png"
+    },
+    {
+      "file": "class-registration.html",
+      "width": 390,
+      "screenshot": "/Users/eric/pafenorthwest/Festival/specs/mockups/festival-registration/previews/mobile/class-registration.png"
+    },
+    {
+      "file": "cart.html",
+      "width": 390,
+      "screenshot": "/Users/eric/pafenorthwest/Festival/specs/mockups/festival-registration/previews/mobile/cart.png"
+    },
+    {
+      "file": "my-registrations.html",
+      "width": 390,
+      "screenshot": "/Users/eric/pafenorthwest/Festival/specs/mockups/festival-registration/previews/mobile/my-registrations.png"
+    },
+    {
+      "file": "edit-registration.html",
+      "width": 390,
+      "screenshot": "/Users/eric/pafenorthwest/Festival/specs/mockups/festival-registration/previews/mobile/edit-registration.png"
+    },
+    {
+      "file": "festival-home.html",
+      "width": 390,
+      "screenshot": "/Users/eric/pafenorthwest/Festival/specs/mockups/festival-registration/previews/mobile/festival-home.png"
+    }
+  ],
+  "checks": [
+    "index.html: brand remains plain home anchor",
+    "class-registration.html: brand remains plain home anchor",
+    "cart.html: brand remains plain home anchor",
+    "my-registrations.html: brand remains plain home anchor",
+    "edit-registration.html: brand remains plain home anchor",
+    "festival-home.html: brand remains plain home anchor",
+    "performers.html: brand remains plain home anchor",
+    "index.html 1440px: brand has no button surface",
+    "index.html 1440px: brand retains home navigation",
+    "index.html 1440px: header action remains button styled",
+    "index.html 1440px: header action remains button styled",
+    "index.html 1440px: header action remains button styled",
+    "index.html 1440px: no horizontal overflow",
+    "class-registration.html 1440px: brand has no button surface",
+    "class-registration.html 1440px: brand retains home navigation",
+    "class-registration.html 1440px: header action remains button styled",
+    "class-registration.html 1440px: header action remains button styled",
+    "class-registration.html 1440px: header action remains button styled",
+    "class-registration.html 1440px: no horizontal overflow",
+    "cart.html 1440px: brand has no button surface",
+    "cart.html 1440px: brand retains home navigation",
+    "cart.html 1440px: header action remains button styled",
+    "cart.html 1440px: header action remains button styled",
+    "cart.html 1440px: header action remains button styled",
+    "cart.html 1440px: no horizontal overflow",
+    "my-registrations.html 1440px: brand has no button surface",
+    "my-registrations.html 1440px: brand retains home navigation",
+    "my-registrations.html 1440px: header action remains button styled",
+    "my-registrations.html 1440px: header action remains button styled",
+    "my-registrations.html 1440px: header action remains button styled",
+    "my-registrations.html 1440px: no horizontal overflow",
+    "edit-registration.html 1440px: brand has no button surface",
+    "edit-registration.html 1440px: brand retains home navigation",
+    "edit-registration.html 1440px: header action remains button styled",
+    "edit-registration.html 1440px: header action remains button styled",
+    "edit-registration.html 1440px: header action remains button styled",
+    "edit-registration.html 1440px: no horizontal overflow",
+    "festival-home.html 1440px: brand has no button surface",
+    "festival-home.html 1440px: brand retains home navigation",
+    "festival-home.html 1440px: header action remains button styled",
+    "festival-home.html 1440px: header action remains button styled",
+    "festival-home.html 1440px: header action remains button styled",
+    "festival-home.html 1440px: no horizontal overflow",
+    "index.html 1024px: brand has no button surface",
+    "index.html 1024px: brand retains home navigation",
+    "index.html 1024px: header action remains button styled",
+    "index.html 1024px: header action remains button styled",
+    "index.html 1024px: header action remains button styled",
+    "index.html 1024px: no horizontal overflow",
+    "class-registration.html 1024px: brand has no button surface",
+    "class-registration.html 1024px: brand retains home navigation",
+    "class-registration.html 1024px: header action remains button styled",
+    "class-registration.html 1024px: header action remains button styled",
+    "class-registration.html 1024px: header action remains button styled",
+    "class-registration.html 1024px: no horizontal overflow",
+    "cart.html 1024px: brand has no button surface",
+    "cart.html 1024px: brand retains home navigation",
+    "cart.html 1024px: header action remains button styled",
+    "cart.html 1024px: header action remains button styled",
+    "cart.html 1024px: header action remains button styled",
+    "cart.html 1024px: no horizontal overflow",
+    "my-registrations.html 1024px: brand has no button surface",
+    "my-registrations.html 1024px: brand retains home navigation",
+    "my-registrations.html 1024px: header action remains button styled",
+    "my-registrations.html 1024px: header action remains button styled",
+    "my-registrations.html 1024px: header action remains button styled",
+    "my-registrations.html 1024px: no horizontal overflow",
+    "edit-registration.html 1024px: brand has no button surface",
+    "edit-registration.html 1024px: brand retains home navigation",
+    "edit-registration.html 1024px: header action remains button styled",
+    "edit-registration.html 1024px: header action remains button styled",
+    "edit-registration.html 1024px: header action remains button styled",
+    "edit-registration.html 1024px: no horizontal overflow",
+    "festival-home.html 1024px: brand has no button surface",
+    "festival-home.html 1024px: brand retains home navigation",
+    "festival-home.html 1024px: header action remains button styled",
+    "festival-home.html 1024px: header action remains button styled",
+    "festival-home.html 1024px: header action remains button styled",
+    "festival-home.html 1024px: no horizontal overflow",
+    "index.html 390px: brand has no button surface",
+    "index.html 390px: brand retains home navigation",
+    "index.html 390px: header action remains button styled",
+    "index.html 390px: header action remains button styled",
+    "index.html 390px: header action remains button styled",
+    "index.html 390px: header action remains button styled",
+    "index.html 390px: no horizontal overflow",
+    "class-registration.html 390px: brand has no button surface",
+    "class-registration.html 390px: brand retains home navigation",
+    "class-registration.html 390px: header action remains button styled",
+    "class-registration.html 390px: header action remains button styled",
+    "class-registration.html 390px: header action remains button styled",
+    "class-registration.html 390px: header action remains button styled",
+    "class-registration.html 390px: no horizontal overflow",
+    "cart.html 390px: brand has no button surface",
+    "cart.html 390px: brand retains home navigation",
+    "cart.html 390px: header action remains button styled",
+    "cart.html 390px: header action remains button styled",
+    "cart.html 390px: header action remains button styled",
+    "cart.html 390px: header action remains button styled",
+    "cart.html 390px: no horizontal overflow",
+    "my-registrations.html 390px: brand has no button surface",
+    "my-registrations.html 390px: brand retains home navigation",
+    "my-registrations.html 390px: header action remains button styled",
+    "my-registrations.html 390px: header action remains button styled",
+    "my-registrations.html 390px: header action remains button styled",
+    "my-registrations.html 390px: header action remains button styled",
+    "my-registrations.html 390px: no horizontal overflow",
+    "edit-registration.html 390px: brand has no button surface",
+    "edit-registration.html 390px: brand retains home navigation",
+    "edit-registration.html 390px: header action remains button styled",
+    "edit-registration.html 390px: header action remains button styled",
+    "edit-registration.html 390px: header action remains button styled",
+    "edit-registration.html 390px: header action remains button styled",
+    "edit-registration.html 390px: no horizontal overflow",
+    "festival-home.html 390px: brand has no button surface",
+    "festival-home.html 390px: brand retains home navigation",
+    "festival-home.html 390px: header action remains button styled",
+    "festival-home.html 390px: header action remains button styled",
+    "festival-home.html 390px: header action remains button styled",
+    "festival-home.html 390px: header action remains button styled",
+    "festival-home.html 390px: no horizontal overflow",
+    "No browser JavaScript errors"
+  ],
+  "errors": []
+}
