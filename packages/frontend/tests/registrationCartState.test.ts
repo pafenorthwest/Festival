@@ -9,6 +9,94 @@ import {
 } from "../src/pages/registrationCartState.js";
 
 describe("registrationCartState", () => {
+	it("permits explicit identity replacement only after recorded abandonment while retaining registrations", () => {
+		const cart = createRegistrationCart();
+		cart.addItem({
+			childId: "child",
+			childName: "Performer",
+			divisionId: "division",
+			divisionName: "Division",
+			teacherId: "teacher",
+			teacherName: "Teacher",
+			classId: "class",
+			className: "Class",
+			priceCents: 100,
+			pieces: [],
+		});
+		const submission = cart.beginCheckout();
+		for (const reasonCode of [
+			"checkout_completed",
+			"needs_review",
+			"business_rejected",
+		]) {
+			cart.setCheckoutRecovery({
+				status: "resolved",
+				recoveryReference: "reference",
+				reasonCode,
+				retryAllowed: false,
+			});
+			expect(cart.restartAbandonedCheckout()).toBe(false);
+			expect(cart.checkoutSubmission()).toBe(submission);
+		}
+		cart.setCheckoutRecovery({
+			status: "recovery_required",
+			recoveryReference: "reference",
+			reasonCode: "abandoned_unknown",
+			retryAllowed: false,
+		});
+		expect(cart.restartAbandonedCheckout()).toBe(false);
+		for (const reasonCode of ["abandoned_unknown", "checkout_abandoned"]) {
+			const previous = cart.beginCheckout();
+			cart.setCheckoutRecovery({
+				status: "resolved",
+				recoveryReference: "reference",
+				reasonCode,
+				retryAllowed: false,
+			});
+			expect(cart.restartAbandonedCheckout()).toBe(true);
+			expect(cart.itemCount()).toBe(1);
+			expect(cart.checkoutSubmission()).toBeNull();
+			expect(cart.getCheckoutIdempotencyKey()).not.toBe(
+				previous.idempotencyKey,
+			);
+		}
+	});
+	it("freezes checkout identity and payload until the submitted snapshot is completed", () => {
+		const cart = createRegistrationCart();
+		cart.addItem({
+			childId: "child",
+			childName: "Performer",
+			divisionId: "division",
+			divisionName: "Division",
+			teacherId: "teacher",
+			teacherName: "Teacher",
+			classId: "class",
+			className: "Class",
+			priceCents: 100,
+			pieces: [
+				{ title: "Original", composer: "Composer", durationSeconds: 60 },
+			],
+		});
+		const submission = cart.beginCheckout();
+		cart.items()[0].pieces[0].title = "Changed outside controls";
+		expect(submission.lineItems[0].pieces[0].title).toBe("Original");
+		expect(cart.beginCheckout()).toBe(submission);
+		expect(cart.getCheckoutIdempotencyKey()).toBe(submission.idempotencyKey);
+		expect(() => cart.removeItem(cart.items()[0].lineId)).toThrow(
+			"existing checkout",
+		);
+		cart.setCheckoutRecovery({
+			status: "recovery_required",
+			recoveryReference: "reference",
+			reasonCode: "unknown",
+			retryAllowed: false,
+		});
+		expect(cart.checkoutRecovery()?.recoveryReference).toBe("reference");
+		cart.completeCheckout(submission);
+		expect(cart.itemCount()).toBe(0);
+		expect(cart.checkoutSubmission()).toBeNull();
+		expect(cart.checkoutRecovery()).toBeNull();
+	});
 	it("formats and parses prices in cents correctly", () => {
 		expect(parsePriceToCents("25.00")).toBe(2500);
 		expect(parsePriceToCents("30")).toBe(3000);

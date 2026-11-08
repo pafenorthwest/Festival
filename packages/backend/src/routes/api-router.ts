@@ -29,6 +29,7 @@ import type { VolunteerRepository } from "../volunteers/volunteer-repository.js"
 import type { WaitlistService } from "../waitlist/waitlist-service.js";
 import { buildAdminBillingRoutes } from "./admin-billing.routes.js";
 import { buildAdminCheckoutRecoveryRoutes } from "./admin-checkout-recovery.routes.js";
+import { buildAdminClassCheckoutRecoveryRoutes } from "./admin-class-checkout-recovery.routes.js";
 import { buildAdminEntitlementsRoutes } from "./admin-entitlements.routes.js";
 import { buildAdminOrgRoutes } from "./admin-org/admin-org.routes.js";
 import { buildAdminRegistrationRoutes } from "./admin-registration/admin-registration.routes.js";
@@ -113,6 +114,14 @@ export function buildApiRouter(
 		waitlistService,
 	} = options;
 	const repository = organizationService.repository;
+	router.route(
+		"/",
+		buildAdminClassCheckoutRecoveryRoutes({
+			authVerifier,
+			repository,
+			classCheckoutService,
+		}),
+	);
 
 	router.route(
 		"/",

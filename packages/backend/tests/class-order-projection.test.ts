@@ -313,6 +313,204 @@ async function delivery(
 }
 
 describe("Class Order Projection and Entitlements", () => {
+	it("retains unknown-creation evidence and sends late payment to review without granting admission", async () => {
+		const f = await fixture();
+		await f.checkout.classExecutions.prepare({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			intentId: f.intent.id,
+			fingerprint: "snapshot",
+			requestSnapshot: { selections: [] },
+		});
+		const worker = await f.checkout.classExecutions.claim({
+			organizationId: f.organization.id,
+			intentId: f.intent.id,
+			owner: "worker",
+		});
+		if (!worker) throw new Error("Expected execution lease.");
+		const claim = {
+			organizationId: f.organization.id,
+			intentId: f.intent.id,
+			owner: "worker",
+			generation: worker.generation,
+		};
+		await f.checkout.classExecutions.transition({
+			claim,
+			checkpoint: "create_dispatched",
+		});
+		await f.checkout.classExecutions.recordRecoveryRequired({
+			claim,
+			reason: "checkout_creation_unknown",
+		});
+		const order = paidClassOrder(f.intent.correlationId);
+		f.orders.values.set(order.id, order);
+		const received = await delivery(
+			f.commerce,
+			f.organization.id,
+			"unknown-creation-paid",
+		);
+		expect(await f.service.processDelivery(received.id)).toBe("processed");
+		expect(
+			await f.commerce.listClassEntitlements({
+				organizationId: f.organization.id,
+			}),
+		).toHaveLength(0);
+		expect(
+			(
+				await f.commerce.listCustomerDecisions(f.organization.id, f.customer.id)
+			)[0].status,
+		).toBe("needs_review");
+		const recorded = await f.checkout.classExecutions.get(
+			f.organization.id,
+			f.intent.id,
+		);
+		expect(recorded).toMatchObject({
+			state: "recovery_required",
+			leaseOwner: null,
+			leaseExpiresAtIso: null,
+		});
+		expect(
+			(
+				await f.checkout.classExecutions.events(f.organization.id, f.intent.id)
+			).some(
+				(event) =>
+					event.eventType === "paid_order_observed" &&
+					event.evidence.shopifyOrderGid === order.id,
+			),
+		).toBe(true);
+		expect(
+			await f.checkout.classExecutions.transition({
+				claim,
+				state: "completed",
+			}),
+		).toBe(false);
+	});
+
+	it("keeps abandoned-unknown evidence terminal when a late paid order arrives", async () => {
+		const f = await fixture();
+		await f.checkout.classExecutions.prepare({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			intentId: f.intent.id,
+			fingerprint: "snapshot",
+			requestSnapshot: {},
+		});
+		const worker = await f.checkout.classExecutions.claim({
+			organizationId: f.organization.id,
+			intentId: f.intent.id,
+			owner: "worker",
+		});
+		if (!worker) throw new Error("Expected execution lease.");
+		const claim = {
+			organizationId: f.organization.id,
+			intentId: f.intent.id,
+			owner: "worker",
+			generation: worker.generation,
+		};
+		await f.checkout.classExecutions.transition({
+			claim,
+			checkpoint: "create_dispatched",
+		});
+		await f.checkout.classExecutions.recordRecoveryRequired({
+			claim,
+			reason: "checkout_creation_unknown",
+		});
+		const abandoned = await f.checkout.classExecutions.resolve({
+			organizationId: f.organization.id,
+			intentId: f.intent.id,
+			expectedGeneration: worker.generation,
+			actorId: "admin",
+			reason: "Reviewed uncertainty",
+			action: "abandon",
+		});
+		expect(abandoned?.state).toBe("rejected");
+		const order = paidClassOrder(f.intent.correlationId);
+		f.orders.values.set(order.id, order);
+		const received = await delivery(
+			f.commerce,
+			f.organization.id,
+			"abandoned-creation-paid",
+		);
+		await f.service.processDelivery(received.id);
+		expect(
+			await f.commerce.listClassEntitlements({
+				organizationId: f.organization.id,
+			}),
+		).toHaveLength(0);
+		expect(
+			(
+				await f.commerce.listCustomerDecisions(f.organization.id, f.customer.id)
+			)[0].status,
+		).toBe("needs_review");
+		expect(
+			(await f.checkout.classExecutions.get(f.organization.id, f.intent.id))
+				?.state,
+		).toBe("rejected");
+	});
+
+	it("fences a live checkout worker when admitted payment completes", async () => {
+		const f = await fixture();
+		await f.checkout.classExecutions.prepare({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			intentId: f.intent.id,
+			fingerprint: "snapshot",
+			requestSnapshot: {},
+		});
+		const worker = await f.checkout.classExecutions.claim({
+			organizationId: f.organization.id,
+			intentId: f.intent.id,
+			owner: "worker",
+		});
+		if (!worker) throw new Error("Expected execution lease.");
+		const claim = {
+			organizationId: f.organization.id,
+			intentId: f.intent.id,
+			owner: "worker",
+			generation: worker.generation,
+		};
+		await f.checkout.attachCart({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			sessionId: f.intent.sessionId,
+			intentId: f.intent.id,
+			shopifyCartId: "gid://shopify/Cart/admitted",
+			integrationVersion: 1,
+			expiresAtIso: f.intent.expiresAtIso,
+		});
+		await f.checkout.classExecutions.transition({
+			claim,
+			checkpoint: "attached",
+			shopifyCartId: "gid://shopify/Cart/admitted",
+		});
+		const order = paidClassOrder(f.intent.correlationId);
+		f.orders.values.set(order.id, order);
+		const received = await delivery(
+			f.commerce,
+			f.organization.id,
+			"admitted-creation-paid",
+		);
+		await f.service.processDelivery(received.id);
+		expect(
+			await f.commerce.listClassEntitlements({
+				organizationId: f.organization.id,
+			}),
+		).toHaveLength(1);
+		expect(
+			await f.checkout.classExecutions.get(f.organization.id, f.intent.id),
+		).toMatchObject({
+			state: "completed",
+			leaseOwner: null,
+			leaseExpiresAtIso: null,
+		});
+		expect(
+			await f.checkout.classExecutions.transition({
+				claim,
+				state: "retryable",
+			}),
+		).toBe(false);
+	});
+
 	it("links the original selection to the verified paid line and preserves it through edits, replay and reconciliation", async () => {
 		const f = await fixture();
 		const original: ClassRegistrationSnapshot = {

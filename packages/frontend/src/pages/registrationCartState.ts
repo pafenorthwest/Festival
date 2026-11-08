@@ -1,5 +1,6 @@
 import type {
 	ClassCheckoutLineItemInput,
+	ClassCheckoutRecoveryStatusDto,
 	RepertoirePiece,
 } from "@festival/common";
 import { createSignal } from "solid-js";
@@ -128,6 +129,19 @@ export interface RegistrationCartState {
 	removeItems: (lineIds: string[]) => void;
 	clearCart: () => void;
 	getCheckoutIdempotencyKey: () => string;
+	checkoutSubmission: () => RegistrationCheckoutSubmission | null;
+	beginCheckout: () => RegistrationCheckoutSubmission;
+	releaseCheckout: () => void;
+	restartAbandonedCheckout: () => boolean;
+	completeCheckout: (submission: RegistrationCheckoutSubmission) => void;
+	checkoutRecovery: () => ClassCheckoutRecoveryStatusDto | null;
+	setCheckoutRecovery: (recovery: ClassCheckoutRecoveryStatusDto) => void;
+}
+
+export interface RegistrationCheckoutSubmission {
+	idempotencyKey: string;
+	lineItems: ReturnType<typeof cartItemsToLineItemInputs>;
+	lineIds: string[];
 }
 
 export function createRegistrationCart(
@@ -136,7 +150,55 @@ export function createRegistrationCart(
 	const [items, setItems] = createSignal<RegistrationCartItem[]>(initialItems);
 	let checkoutPayload = "";
 	let checkoutKey = "";
+	const [checkoutSubmission, setCheckoutSubmission] =
+		createSignal<RegistrationCheckoutSubmission | null>(null);
+	const [checkoutRecovery, setCheckoutRecovery] =
+		createSignal<ClassCheckoutRecoveryStatusDto | null>(null);
+	function beginCheckout() {
+		const current = checkoutSubmission();
+		if (current) return current;
+		const submission = {
+			idempotencyKey: getCheckoutIdempotencyKey(),
+			lineItems: structuredClone(cartItemsToLineItemInputs(items())),
+			lineIds: items().map((item) => item.lineId),
+		};
+		setCheckoutSubmission(submission);
+		return submission;
+	}
+	function releaseCheckout() {
+		setCheckoutSubmission(null);
+		setCheckoutRecovery(null);
+	}
+	function restartAbandonedCheckout() {
+		const recovery = checkoutRecovery();
+		if (
+			recovery?.status !== "resolved" ||
+			!["abandoned_unknown", "checkout_abandoned"].includes(recovery.reasonCode)
+		)
+			return false;
+		releaseCheckout();
+		checkoutPayload = "";
+		checkoutKey = "";
+		return true;
+	}
+	function completeCheckout(submission: RegistrationCheckoutSubmission) {
+		const submitted = new Set(submission.lineIds);
+		setItems((current) =>
+			current.filter((item) => !submitted.has(item.lineId)),
+		);
+		if (checkoutSubmission() === submission) releaseCheckout();
+		checkoutPayload = "";
+		checkoutKey = "";
+	}
+	function assertEditable() {
+		if (checkoutSubmission())
+			throw new Error(
+				"Check the existing checkout before changing these registrations.",
+			);
+	}
 	function getCheckoutIdempotencyKey() {
+		const submission = checkoutSubmission();
+		if (submission) return submission.idempotencyKey;
 		const payload = JSON.stringify(cartItemsToLineItemInputs(items()));
 		if (payload !== checkoutPayload || !checkoutKey) {
 			checkoutPayload = payload;
@@ -160,6 +222,7 @@ export function createRegistrationCart(
 	}
 
 	function addItem(input: AddRegistrationCartItemInput): RegistrationCartItem {
+		assertEditable();
 		if (hasItem(input.childId, input.classId)) {
 			throw new Error(
 				`Class "${input.className}" is already in the cart for ${input.childName}.`,
@@ -180,10 +243,12 @@ export function createRegistrationCart(
 	}
 
 	function removeItem(lineId: string): void {
+		assertEditable();
 		setItems((prev) => prev.filter((item) => item.lineId !== lineId));
 	}
 
 	function removeItems(lineIds: string[]): void {
+		assertEditable();
 		if (lineIds.length === 0) return;
 		const idSet = new Set(lineIds);
 		setItems((prev) => prev.filter((item) => !idSet.has(item.lineId)));
@@ -191,6 +256,7 @@ export function createRegistrationCart(
 
 	function clearCart(): void {
 		setItems([]);
+		releaseCheckout();
 		checkoutPayload = "";
 		checkoutKey = "";
 	}
@@ -206,5 +272,12 @@ export function createRegistrationCart(
 		removeItems,
 		clearCart,
 		getCheckoutIdempotencyKey,
+		checkoutSubmission,
+		beginCheckout,
+		releaseCheckout,
+		restartAbandonedCheckout,
+		completeCheckout,
+		checkoutRecovery,
+		setCheckoutRecovery,
 	};
 }

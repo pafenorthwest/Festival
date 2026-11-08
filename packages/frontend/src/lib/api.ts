@@ -353,6 +353,7 @@ export class ApiError extends Error {
 		message: string,
 		readonly status: number,
 		readonly code?: string,
+		readonly recovery?: import("@festival/common").ClassCheckoutRecoveryStatusDto,
 	) {
 		super(message);
 	}
@@ -397,6 +398,11 @@ async function requestJson<T>(
 			(payload as { error?: string }).error ?? `Request failed for ${path}`,
 			response.status,
 			(payload as { code?: string }).code,
+			(
+				payload as {
+					recovery?: import("@festival/common").ClassCheckoutRecoveryStatusDto;
+				}
+			).recovery,
 		);
 	}
 
@@ -1772,6 +1778,25 @@ export interface StartClassCheckoutInput {
 export interface StartClassCheckoutResponse {
 	checkoutUrl: string;
 	correlationId: string;
+}
+
+export function getClassCheckoutRecoveryStatus(
+	slug: string,
+	festivalSlug: string,
+	recoveryReference: string,
+	csrfToken: string,
+	idempotencyKey: string,
+): Promise<import("@festival/common").ClassCheckoutRecoveryStatusDto> {
+	return requestJson(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/registration/checkout/status`,
+		{
+			method: "POST",
+			headers: { "X-CSRF-Token": csrfToken, "Idempotency-Key": idempotencyKey },
+			body: JSON.stringify({ recoveryReference }),
+		},
+		undefined,
+		"",
+	);
 }
 
 export function startClassCheckout(

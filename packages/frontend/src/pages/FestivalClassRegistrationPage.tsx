@@ -68,6 +68,8 @@ export function FestivalClassRegistrationPage(
 		localSelectionValid,
 		handleAddToCart,
 		handleCartCheckout,
+		handleRefreshCheckout,
+		handleRestartCheckout,
 		cart,
 	} = state;
 	return (
@@ -123,6 +125,8 @@ export function FestivalClassRegistrationPage(
 						isSubmitting={isSubmittingCheckout()}
 						error={checkoutError()}
 						onSubmitCheckout={handleCartCheckout}
+						onRefreshCheckout={handleRefreshCheckout}
+						onRestartCheckout={handleRestartCheckout}
 					/>
 					<p class="parent-note">
 						Need to change a registration before payment? Remove it and register
@@ -429,6 +433,7 @@ export function FestivalClassRegistrationPage(
 												!localSelectionValid() ||
 												pieceDirty() ||
 												isAdding() ||
+												Boolean(cart.checkoutSubmission()) ||
 												cart.hasItem(selectedChildId(), cls.id) ||
 												isPurchased(cls.id)
 											}

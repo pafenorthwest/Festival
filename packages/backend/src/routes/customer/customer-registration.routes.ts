@@ -1,5 +1,6 @@
 import {
 	type ClassCheckoutLineItemInput,
+	type ClassCheckoutRecoveryStatusDto,
 	type ProposedPurchaseLineItem,
 	type RepertoirePiece,
 	stripCandidateMarker,
@@ -7,7 +8,10 @@ import {
 import { type Context, Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import { type ApiVariables, toJsonError } from "../../auth/tenant-context.js";
-import type { ClassCheckoutService } from "../../checkout/class-checkout-service.js";
+import {
+	ClassCheckoutRecoveryRequiredError,
+	type ClassCheckoutService,
+} from "../../checkout/class-checkout-service.js";
 import {
 	CUSTOMER_SESSION_COOKIE,
 	type CustomerAccountService,
@@ -25,6 +29,35 @@ const UUID_REGEX =
 export interface BrowserClassCheckoutDto {
 	checkoutUrl: string;
 	correlationId: string;
+}
+
+function recoveryDto(
+	result: ClassCheckoutRecoveryStatusDto,
+): ClassCheckoutRecoveryStatusDto {
+	return {
+		status: result.status,
+		recoveryReference: result.recoveryReference,
+		reasonCode: result.reasonCode,
+		retryAllowed: result.retryAllowed,
+		...(result.checkoutUrl ? { checkoutUrl: result.checkoutUrl } : {}),
+		...(result.correlationId ? { correlationId: result.correlationId } : {}),
+		...(result.recordedAtIso ? { recordedAtIso: result.recordedAtIso } : {}),
+	};
+}
+
+function checkoutError(c: Context<CustomerEnv>, error: unknown): Response {
+	if (error instanceof ClassCheckoutRecoveryRequiredError) {
+		c.header("Cache-Control", "no-store");
+		return c.json(
+			{
+				error: error.message,
+				code: error.code,
+				recovery: recoveryDto(error.recovery),
+			},
+			409,
+		);
+	}
+	return toJsonError(c, error);
 }
 
 export interface CustomerRegistrationRoutesOptions {
@@ -106,7 +139,14 @@ function resolveFestivalShortName(
 }
 
 function buildCheckoutInput(
-	access: Awaited<ReturnType<CustomerAccountService["checkoutAccess"]>>,
+	access: Pick<
+		Awaited<ReturnType<CustomerAccountService["checkoutAccess"]>>,
+		| "organizationId"
+		| "customerId"
+		| "sessionId"
+		| "integrationVersion"
+		| "shopifyCustomerAccessToken"
+	>,
 	payload: Record<string, unknown>,
 	idempotencyKey: string,
 	festivalShortName?: string,
@@ -155,9 +195,10 @@ export async function handleClassCheckout(
 		}
 		const idempotencyKey = requireIdempotencyKey(c);
 		const origin = resolveRequestOrigin(c);
-		const access = await accountService.checkoutAccess(
+		const sessionCookie = getCookie(c, CUSTOMER_SESSION_COOKIE);
+		const localAccess = await accountService.formAccess(
 			requireSlug(c),
-			getCookie(c, CUSTOMER_SESSION_COOKIE),
+			sessionCookie,
 			c.req.header("X-CSRF-Token"),
 			origin,
 		);
@@ -182,6 +223,27 @@ export async function handleClassCheckout(
 			"Class checkout request",
 		);
 		const festShortName = resolveFestivalShortName(c, payload);
+		if (checkoutService.preflightRecovery) {
+			await checkoutService.preflightRecovery(
+				buildCheckoutInput(
+					{
+						...localAccess,
+						sessionId: sessionCookie ?? "",
+						integrationVersion: 0,
+						shopifyCustomerAccessToken: "",
+					},
+					payload,
+					idempotencyKey,
+					festShortName,
+				),
+			);
+		}
+		const access = await accountService.checkoutAccess(
+			requireSlug(c),
+			sessionCookie,
+			c.req.header("X-CSRF-Token"),
+			origin,
+		);
 		const input = buildCheckoutInput(
 			access,
 			payload,
@@ -196,7 +258,49 @@ export async function handleClassCheckout(
 		};
 		return c.json(responseDto);
 	} catch (error) {
-		return toJsonError(c, error);
+		return checkoutError(c, error);
+	}
+}
+
+export async function handleClassCheckoutStatus(
+	c: Context<CustomerEnv>,
+	accountService?: CustomerAccountService,
+	checkoutService?: ClassCheckoutService,
+): Promise<Response> {
+	try {
+		assertNoBearerPrincipal(c.req.header("Authorization"));
+		if (!accountService || !checkoutService)
+			throw new AppError("Class checkout is unavailable.", 503);
+		const sessionCookie = getCookie(c, CUSTOMER_SESSION_COOKIE);
+		const access = await accountService.formAccess(
+			requireSlug(c),
+			sessionCookie,
+			c.req.header("X-CSRF-Token"),
+			resolveRequestOrigin(c),
+		);
+		const payload = parseCheckoutPayload(await readJsonBody(c));
+		assertAllowedFields(
+			payload,
+			["recoveryReference"],
+			"Checkout status request",
+		);
+		if (
+			typeof payload.recoveryReference !== "string" ||
+			!UUID_REGEX.test(payload.recoveryReference)
+		)
+			throw new AppError("Checkout status request is invalid.", 400);
+		const result = await checkoutService.recoveryStatus({
+			organizationId: access.organizationId,
+			customerId: access.customerId,
+			sessionId: sessionCookie ?? "",
+			festivalShortName: c.req.param("festivalShortName"),
+			recoveryReference: payload.recoveryReference,
+			idempotencyKey: requireIdempotencyKey(c),
+		});
+		c.header("Cache-Control", "no-store");
+		return c.json(recoveryDto(result));
+	} catch (error) {
+		return checkoutError(c, error);
 	}
 }
 
@@ -315,6 +419,9 @@ export function buildCustomerRegistrationRoutes(
 	);
 	router.post("/class-checkout", (c) => handleClassCheckout(c, cas, ccs));
 	router.post(`${reg}/checkout`, (c) => handleClassCheckout(c, cas, ccs));
+	router.post(`${reg}/checkout/status`, (c) =>
+		handleClassCheckoutStatus(c, cas, ccs),
+	);
 	router.post(`${reg}/eligibility`, (c) =>
 		handleEvaluateEligibility(c, cas, ccs),
 	);

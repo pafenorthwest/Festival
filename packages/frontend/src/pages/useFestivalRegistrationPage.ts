@@ -8,7 +8,9 @@ import {
 } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import {
+	ApiError,
 	evaluateRegistrationEligibility,
+	getClassCheckoutRecoveryStatus,
 	getPublicDivisions,
 	getPublicFestival,
 	listCustomerClassRegistrations,
@@ -31,6 +33,7 @@ import {
 import {
 	buildCartItemInput,
 	cartItemsToLineItemInputs,
+	type RegistrationCheckoutSubmission,
 	resetClassFormSelection,
 } from "./registrationCartState.js";
 import { useCartEligibility } from "./useCartEligibility.js";
@@ -307,6 +310,7 @@ export function useFestivalRegistrationPage(
 			!localSelectionValid() ||
 			pieceDirty() ||
 			isAdding() ||
+			Boolean(cart.checkoutSubmission()) ||
 			isPurchased(cls.id) ||
 			cart.hasItem(child.id, cls.id)
 		)
@@ -370,41 +374,97 @@ export function useFestivalRegistrationPage(
 			setIsAdding(false);
 		}
 	}
-	async function handleCartCheckout() {
-		if (cart.itemCount() === 0 || isSubmittingCheckout()) return;
+	function handOffCheckout(
+		checkoutUrl: string,
+		submission: RegistrationCheckoutSubmission,
+	) {
+		handingOff = true;
+		completeHandoff = () => {
+			cart.completeCheckout(submission);
+			handingOff = false;
+			setIsSubmittingCheckout(false);
+		};
+		window.addEventListener("pagehide", completeHandoff, { once: true });
+		window.location.assign(checkoutUrl);
+	}
+	function handleCheckoutError(error: unknown, validationMayRelease = false) {
+		handingOff = false;
+		if (completeHandoff)
+			window.removeEventListener("pagehide", completeHandoff);
+		if (error instanceof ApiError && error.recovery) {
+			cart.setCheckoutRecovery(error.recovery);
+		} else if (
+			validationMayRelease &&
+			error instanceof ApiError &&
+			[400, 404, 422].includes(error.status)
+		) {
+			// These are definitive validation rejections before external dispatch.
+			cart.releaseCheckout();
+		}
+		setCheckoutError(
+			error instanceof Error
+				? error.message
+				: "Checkout failed. Please try again.",
+		);
+	}
+	async function handleRefreshCheckout() {
+		const recovery = cart.checkoutRecovery();
+		const submission = cart.checkoutSubmission();
+		if (!recovery || !submission || isSubmittingCheckout()) return;
 		setCheckoutError(null);
 		setIsSubmittingCheckout(true);
 		try {
-			await eligibility.recheck();
-			if (!eligibility.isCartEligible())
-				throw new Error(
-					eligibility.error() ||
-						"Resolve the cart's eligibility issues before checkout.",
-				);
-			const lineItems = cartItemsToLineItemInputs(cart.items());
+			const result = await getClassCheckoutRecoveryStatus(
+				props.slug,
+				props.festivalSlug,
+				recovery.recoveryReference,
+				getCsrf(),
+				submission.idempotencyKey,
+			);
+			if (disposed || cart.checkoutSubmission() !== submission) return;
+			cart.setCheckoutRecovery(result);
+			if (result.checkoutUrl) handOffCheckout(result.checkoutUrl, submission);
+		} catch (error) {
+			handleCheckoutError(error);
+		} finally {
+			if (!handingOff) setIsSubmittingCheckout(false);
+		}
+	}
+	function handleRestartCheckout() {
+		if (isSubmittingCheckout()) return;
+		if (cart.restartAbandonedCheckout()) setCheckoutError(null);
+	}
+	async function handleCartCheckout() {
+		if (cart.itemCount() === 0 || isSubmittingCheckout()) return;
+		const recovery = cart.checkoutRecovery();
+		if (recovery && !recovery.retryAllowed) return;
+		setCheckoutError(null);
+		setIsSubmittingCheckout(true);
+		try {
+			// An existing submission must reach server-side resume even if a new
+			// advisory capacity check would reject a fresh cart.
+			if (!cart.checkoutSubmission()) {
+				await eligibility.recheck();
+				if (!eligibility.isCartEligible())
+					throw new Error(
+						eligibility.error() ||
+							"Resolve the cart's eligibility issues before checkout.",
+					);
+			}
+			const submission = cart.beginCheckout();
 			const res = await startClassCheckout(props.slug, props.festivalSlug, {
-				lineItems,
+				lineItems: submission.lineItems,
 				csrfToken: getCsrf(),
-				idempotencyKey: cart.getCheckoutIdempotencyKey(),
+				idempotencyKey: submission.idempotencyKey,
 			});
-			if (disposed) return;
+			if (disposed || cart.checkoutSubmission() !== submission) return;
 			if (!res?.checkoutUrl)
 				throw new Error("Checkout failed to initialize. Please try again.");
-			handingOff = true;
-			completeHandoff = () => cart.clearCart();
-			window.addEventListener("pagehide", completeHandoff, { once: true });
-			window.location.assign(res.checkoutUrl);
+			handOffCheckout(res.checkoutUrl, submission);
 		} catch (error) {
-			handingOff = false;
-			if (completeHandoff)
-				window.removeEventListener("pagehide", completeHandoff);
-			setCheckoutError(
-				error instanceof Error
-					? error.message
-					: "Checkout failed. Please try again.",
-			);
+			handleCheckoutError(error, true);
 		} finally {
-			setIsSubmittingCheckout(false);
+			if (!handingOff) setIsSubmittingCheckout(false);
 		}
 	}
 	return {
@@ -460,6 +520,8 @@ export function useFestivalRegistrationPage(
 		localSelectionValid,
 		handleAddToCart,
 		handleCartCheckout,
+		handleRefreshCheckout,
+		handleRestartCheckout,
 		cart,
 	};
 }
