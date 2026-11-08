@@ -296,8 +296,14 @@ a {
 
 .organization-side-navigation.is-collapsed a:hover .nav-tooltip,
 .organization-side-navigation.is-collapsed a:focus-visible .nav-tooltip,
-.application-page-layout.nav-collapsed .organization-side-navigation a:hover .nav-tooltip,
-.application-page-layout.nav-collapsed .organization-side-navigation a:focus-visible .nav-tooltip {
+.application-page-layout.nav-collapsed
+	.organization-side-navigation
+	a:hover
+	.nav-tooltip,
+.application-page-layout.nav-collapsed
+	.organization-side-navigation
+	a:focus-visible
+	.nav-tooltip {
 	display: block;
 }
 
@@ -307,8 +313,11 @@ a {
 		width: 4.25rem;
 	}
 
-	.organization-side-navigation.organization-side-navigation .organization-side-navigation-section h2,
-	.organization-side-navigation.organization-side-navigation .organization-side-navigation-label {
+	.organization-side-navigation.organization-side-navigation
+		.organization-side-navigation-section
+		h2,
+	.organization-side-navigation.organization-side-navigation
+		.organization-side-navigation-label {
 		display: none;
 	}
 

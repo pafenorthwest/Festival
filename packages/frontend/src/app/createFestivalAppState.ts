@@ -64,7 +64,9 @@ export function createFestivalAppState() {
 	const toggleNavCollapsed = () => setIsNavCollapsed((prev) => !prev);
 	const toggleNavOpen = () => setIsNavOpen((prev) => !prev);
 	const closeNavOpen = () => setIsNavOpen(false);
-	const [activeFestivalSlug, setActiveFestivalSlug] = createSignal<string | null>(null);
+	const [activeFestivalSlug, setActiveFestivalSlug] = createSignal<
+		string | null
+	>(null);
 	const [firebaseUser, setFirebaseUser] = createSignal<User | null>(null);
 	const [session, setSession] = createSignal<SessionResponse["session"]>({
 		authenticated: false,
@@ -79,35 +81,64 @@ export function createFestivalAppState() {
 		OrganizationLandingResponse["organization"] | null
 	>(null);
 	const [invite, setInvite] = createSignal<InviteSummary | null>(null);
-	const [createdOrganizationSlug, setCreatedOrganizationSlug] = createSignal<string | null>(null);
+	const [createdOrganizationSlug, setCreatedOrganizationSlug] = createSignal<
+		string | null
+	>(null);
 	const [createdInvites, setCreatedInvites] = createSignal<InviteSummary[]>([]);
-	const [adminUsers, setAdminUsers] = createSignal<OrganizationAdminUserEntry[]>([]);
+	const [adminUsers, setAdminUsers] = createSignal<
+		OrganizationAdminUserEntry[]
+	>([]);
 	const [festivals, setFestivals] = createSignal<FestivalSummary[]>([]);
 	const [divisions, setDivisions] = createSignal<OrganizationDivision[]>([]);
 	const [divisionNameDraft, setDivisionNameDraft] = createSignal("");
-	const [divisionRenameDrafts, setDivisionRenameDrafts] = createSignal<Record<string, string>>({});
-	const [createDivisionAttempted, setCreateDivisionAttempted] = createSignal(false);
-	const [isLoadingDivisionConfiguration, setIsLoadingDivisionConfiguration] = createSignal(false);
-	const [divisionConfigurationLoadError, setDivisionConfigurationLoadError] = createSignal("");
-	const [isDivisionMutationPending, setIsDivisionMutationPending] = createSignal(false);
-	const [membershipProducts, setMembershipProducts] = createSignal<MembershipProductSummary[]>([]);
-	const [isLoadingMembershipProducts, setIsLoadingMembershipProducts] = createSignal(false);
-	const [membershipProductsLoadError, setMembershipProductsLoadError] = createSignal("");
-	const [shopifySettings, setShopifySettings] = createSignal<ShopifyIntegrationSettings | null>(null);
-	const [shopifyDraft, setShopifyDraft] = createSignal<ShopifyDraft>({ storeUrl: "", clientId: "", clientSecret: "", storefrontPrivateToken: "" });
+	const [divisionRenameDrafts, setDivisionRenameDrafts] = createSignal<
+		Record<string, string>
+	>({});
+	const [createDivisionAttempted, setCreateDivisionAttempted] =
+		createSignal(false);
+	const [isLoadingDivisionConfiguration, setIsLoadingDivisionConfiguration] =
+		createSignal(false);
+	const [divisionConfigurationLoadError, setDivisionConfigurationLoadError] =
+		createSignal("");
+	const [isDivisionMutationPending, setIsDivisionMutationPending] =
+		createSignal(false);
+	const [membershipProducts, setMembershipProducts] = createSignal<
+		MembershipProductSummary[]
+	>([]);
+	const [isLoadingMembershipProducts, setIsLoadingMembershipProducts] =
+		createSignal(false);
+	const [membershipProductsLoadError, setMembershipProductsLoadError] =
+		createSignal("");
+	const [shopifySettings, setShopifySettings] =
+		createSignal<ShopifyIntegrationSettings | null>(null);
+	const [shopifyDraft, setShopifyDraft] = createSignal<ShopifyDraft>({
+		storeUrl: "",
+		clientId: "",
+		clientSecret: "",
+		storefrontPrivateToken: "",
+	});
 	const [isShopifyTesting, setIsShopifyTesting] = createSignal(false);
-	const [signInModalKind, setSignInModalKind] = createSignal<SignInModalKind | null>(null);
+	const [signInModalKind, setSignInModalKind] =
+		createSignal<SignInModalKind | null>(null);
 	const [signInStep, setSignInStep] = createSignal<SignInStep>("method");
 	const [signInEmail, setSignInEmail] = createSignal("");
-	const [needsEmailLinkConfirmation, setNeedsEmailLinkConfirmation] = createSignal(false);
+	const [needsEmailLinkConfirmation, setNeedsEmailLinkConfirmation] =
+		createSignal(false);
 	const [inviteName, setInviteName] = createSignal("");
 	const [organizationName, setOrganizationName] = createSignal("");
 	const [organizationShortName, setOrganizationShortName] = createSignal("");
-	const [organizationNameTouched, setOrganizationNameTouched] = createSignal(false);
-	const [organizationShortNameTouched, setOrganizationShortNameTouched] = createSignal(false);
-	const [createOrganizationAttempted, setCreateOrganizationAttempted] = createSignal(false);
-	const [inviteDraft, setInviteDraft] = createSignal<InviteDraft>({ email: "", role: "Admin" });
-	const [inviteFeedback, setInviteFeedback] = createSignal<InviteFeedback | null>(null);
+	const [organizationNameTouched, setOrganizationNameTouched] =
+		createSignal(false);
+	const [organizationShortNameTouched, setOrganizationShortNameTouched] =
+		createSignal(false);
+	const [createOrganizationAttempted, setCreateOrganizationAttempted] =
+		createSignal(false);
+	const [inviteDraft, setInviteDraft] = createSignal<InviteDraft>({
+		email: "",
+		role: "Admin",
+	});
+	const [inviteFeedback, setInviteFeedback] =
+		createSignal<InviteFeedback | null>(null);
 	const [festivalDraft, setFestivalDraft] = createSignal<FestivalDraft>({
 		shortName: "",
 		name: "",

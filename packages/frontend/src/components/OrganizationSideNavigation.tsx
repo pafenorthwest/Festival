@@ -1,4 +1,4 @@
-import { Show, createSignal } from "solid-js";
+import { createSignal, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import {
 	type AppRoute,
@@ -76,11 +76,7 @@ export function OrganizationSideNavigation(props: {
 	return (
 		<>
 			<Show when={props.app?.isNavOpen()}>
-				<div
-					class="nav-mobile-overlay"
-					onClick={closeNav}
-					aria-hidden="true"
-				/>
+				<div class="nav-mobile-overlay" onClick={closeNav} aria-hidden="true" />
 			</Show>
 
 			<nav
@@ -95,7 +91,9 @@ export function OrganizationSideNavigation(props: {
 					type="button"
 					class="organization-side-navigation-toggle"
 					onClick={toggleCollapsed}
-					aria-label={isCollapsed() ? "Expand navigation" : "Collapse navigation"}
+					aria-label={
+						isCollapsed() ? "Expand navigation" : "Collapse navigation"
+					}
 					title={isCollapsed() ? "Expand navigation" : "Collapse navigation"}
 				>
 					<span class="material-symbols-outlined" aria-hidden="true">
@@ -121,7 +119,9 @@ export function OrganizationSideNavigation(props: {
 							home
 						</span>
 						<span class="organization-side-navigation-label">Home</span>
-						<span class="nav-tooltip" role="tooltip">Home</span>
+						<span class="nav-tooltip" role="tooltip">
+							Home
+						</span>
 					</a>
 					<a
 						class="org-nav-link"
@@ -144,7 +144,9 @@ export function OrganizationSideNavigation(props: {
 							groups
 						</span>
 						<span class="organization-side-navigation-label">Directory</span>
-						<span class="nav-tooltip" role="tooltip">Directory</span>
+						<span class="nav-tooltip" role="tooltip">
+							Directory
+						</span>
 					</a>
 					<a
 						class="org-nav-link"
@@ -167,7 +169,9 @@ export function OrganizationSideNavigation(props: {
 							face
 						</span>
 						<span class="organization-side-navigation-label">Performers</span>
-						<span class="nav-tooltip" role="tooltip">Performers</span>
+						<span class="nav-tooltip" role="tooltip">
+							Performers
+						</span>
 					</a>
 					<a
 						class="org-nav-link"
@@ -190,7 +194,9 @@ export function OrganizationSideNavigation(props: {
 							how_to_reg
 						</span>
 						<span class="organization-side-navigation-label">Registration</span>
-						<span class="nav-tooltip" role="tooltip">Registration</span>
+						<span class="nav-tooltip" role="tooltip">
+							Registration
+						</span>
 					</a>
 					<a
 						class="org-nav-link"
@@ -209,8 +215,12 @@ export function OrganizationSideNavigation(props: {
 						<span class="material-symbols-outlined" aria-hidden="true">
 							school
 						</span>
-						<span class="organization-side-navigation-label">My Registrations</span>
-						<span class="nav-tooltip" role="tooltip">My Registrations</span>
+						<span class="organization-side-navigation-label">
+							My Registrations
+						</span>
+						<span class="nav-tooltip" role="tooltip">
+							My Registrations
+						</span>
 					</a>
 				</section>
 
@@ -236,7 +246,9 @@ export function OrganizationSideNavigation(props: {
 							card_membership
 						</span>
 						<span class="organization-side-navigation-label">Memberships</span>
-						<span class="nav-tooltip" role="tooltip">Memberships</span>
+						<span class="nav-tooltip" role="tooltip">
+							Memberships
+						</span>
 					</a>
 					<a
 						class="org-nav-link"
@@ -258,7 +270,9 @@ export function OrganizationSideNavigation(props: {
 						<span class="organization-side-navigation-label">
 							Contact Information
 						</span>
-						<span class="nav-tooltip" role="tooltip">Contact Information</span>
+						<span class="nav-tooltip" role="tooltip">
+							Contact Information
+						</span>
 					</a>
 					<a
 						class="org-nav-link"
@@ -277,8 +291,12 @@ export function OrganizationSideNavigation(props: {
 						<span class="material-symbols-outlined" aria-hidden="true">
 							receipt_long
 						</span>
-						<span class="organization-side-navigation-label">Order History</span>
-						<span class="nav-tooltip" role="tooltip">Order History</span>
+						<span class="organization-side-navigation-label">
+							Order History
+						</span>
+						<span class="nav-tooltip" role="tooltip">
+							Order History
+						</span>
 					</a>
 					<a
 						class="org-nav-link"
@@ -300,7 +318,9 @@ export function OrganizationSideNavigation(props: {
 							schedule
 						</span>
 						<span class="organization-side-navigation-label">Availability</span>
-						<span class="nav-tooltip" role="tooltip">Availability</span>
+						<span class="nav-tooltip" role="tooltip">
+							Availability
+						</span>
 					</a>
 				</section>
 			</nav>
