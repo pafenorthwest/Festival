@@ -75,12 +75,17 @@ export default function App() {
 
 			<div
 				class="application-page-layout"
-				classList={{ "organization-page-layout": organizationSlug() !== null }}
+				classList={{
+					"organization-page-layout": organizationSlug() !== null,
+					"nav-collapsed": app.isNavCollapsed(),
+					"nav-open": app.isNavOpen(),
+				}}
 			>
 				{organizationSlug() && (
 					<OrganizationSideNavigation
 						slug={organizationSlug() ?? ""}
 						currentRoute={app.route()}
+						app={app}
 					/>
 				)}
 				<div

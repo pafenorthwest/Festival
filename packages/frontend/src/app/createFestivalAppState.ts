@@ -16,8 +16,9 @@ import {
 } from "@festival/common";
 import { useLocation, useNavigate } from "@solidjs/router";
 import type { User } from "firebase/auth";
-import { createMemo, createSignal } from "solid-js";
+import { createEffect, createMemo, createSignal } from "solid-js";
 import { type AppRoute, buildOrgPath, parseRoute } from "../lib/routes.js";
+import { createRegistrationCart } from "../pages/registrationCartState.js";
 import { shortUserLabel, toAuthenticatedUser } from "./appFormatting.js";
 import type {
 	FestivalDraft,
@@ -57,6 +58,13 @@ export const INVITE_CARD_SCROLL_DELAY_MS = 600;
 export function createFestivalAppState() {
 	const location = useLocation();
 	const routerNavigate = useNavigate();
+	const cart = createRegistrationCart();
+	const [isNavCollapsed, setIsNavCollapsed] = createSignal(false);
+	const [isNavOpen, setIsNavOpen] = createSignal(false);
+	const toggleNavCollapsed = () => setIsNavCollapsed((prev) => !prev);
+	const toggleNavOpen = () => setIsNavOpen((prev) => !prev);
+	const closeNavOpen = () => setIsNavOpen(false);
+	const [activeFestivalSlug, setActiveFestivalSlug] = createSignal<string | null>(null);
 	const [firebaseUser, setFirebaseUser] = createSignal<User | null>(null);
 	const [session, setSession] = createSignal<SessionResponse["session"]>({
 		authenticated: false,
@@ -71,64 +79,35 @@ export function createFestivalAppState() {
 		OrganizationLandingResponse["organization"] | null
 	>(null);
 	const [invite, setInvite] = createSignal<InviteSummary | null>(null);
-	const [createdOrganizationSlug, setCreatedOrganizationSlug] = createSignal<
-		string | null
-	>(null);
+	const [createdOrganizationSlug, setCreatedOrganizationSlug] = createSignal<string | null>(null);
 	const [createdInvites, setCreatedInvites] = createSignal<InviteSummary[]>([]);
-	const [adminUsers, setAdminUsers] = createSignal<
-		OrganizationAdminUserEntry[]
-	>([]);
+	const [adminUsers, setAdminUsers] = createSignal<OrganizationAdminUserEntry[]>([]);
 	const [festivals, setFestivals] = createSignal<FestivalSummary[]>([]);
 	const [divisions, setDivisions] = createSignal<OrganizationDivision[]>([]);
 	const [divisionNameDraft, setDivisionNameDraft] = createSignal("");
-	const [divisionRenameDrafts, setDivisionRenameDrafts] = createSignal<
-		Record<string, string>
-	>({});
-	const [createDivisionAttempted, setCreateDivisionAttempted] =
-		createSignal(false);
-	const [isLoadingDivisionConfiguration, setIsLoadingDivisionConfiguration] =
-		createSignal(false);
-	const [divisionConfigurationLoadError, setDivisionConfigurationLoadError] =
-		createSignal("");
-	const [isDivisionMutationPending, setIsDivisionMutationPending] =
-		createSignal(false);
-	const [membershipProducts, setMembershipProducts] = createSignal<
-		MembershipProductSummary[]
-	>([]);
-	const [isLoadingMembershipProducts, setIsLoadingMembershipProducts] =
-		createSignal(false);
-	const [membershipProductsLoadError, setMembershipProductsLoadError] =
-		createSignal("");
-	const [shopifySettings, setShopifySettings] =
-		createSignal<ShopifyIntegrationSettings | null>(null);
-	const [shopifyDraft, setShopifyDraft] = createSignal<ShopifyDraft>({
-		storeUrl: "",
-		clientId: "",
-		clientSecret: "",
-		storefrontPrivateToken: "",
-	});
+	const [divisionRenameDrafts, setDivisionRenameDrafts] = createSignal<Record<string, string>>({});
+	const [createDivisionAttempted, setCreateDivisionAttempted] = createSignal(false);
+	const [isLoadingDivisionConfiguration, setIsLoadingDivisionConfiguration] = createSignal(false);
+	const [divisionConfigurationLoadError, setDivisionConfigurationLoadError] = createSignal("");
+	const [isDivisionMutationPending, setIsDivisionMutationPending] = createSignal(false);
+	const [membershipProducts, setMembershipProducts] = createSignal<MembershipProductSummary[]>([]);
+	const [isLoadingMembershipProducts, setIsLoadingMembershipProducts] = createSignal(false);
+	const [membershipProductsLoadError, setMembershipProductsLoadError] = createSignal("");
+	const [shopifySettings, setShopifySettings] = createSignal<ShopifyIntegrationSettings | null>(null);
+	const [shopifyDraft, setShopifyDraft] = createSignal<ShopifyDraft>({ storeUrl: "", clientId: "", clientSecret: "", storefrontPrivateToken: "" });
 	const [isShopifyTesting, setIsShopifyTesting] = createSignal(false);
-	const [signInModalKind, setSignInModalKind] =
-		createSignal<SignInModalKind | null>(null);
+	const [signInModalKind, setSignInModalKind] = createSignal<SignInModalKind | null>(null);
 	const [signInStep, setSignInStep] = createSignal<SignInStep>("method");
 	const [signInEmail, setSignInEmail] = createSignal("");
-	const [needsEmailLinkConfirmation, setNeedsEmailLinkConfirmation] =
-		createSignal(false);
+	const [needsEmailLinkConfirmation, setNeedsEmailLinkConfirmation] = createSignal(false);
 	const [inviteName, setInviteName] = createSignal("");
 	const [organizationName, setOrganizationName] = createSignal("");
 	const [organizationShortName, setOrganizationShortName] = createSignal("");
-	const [organizationNameTouched, setOrganizationNameTouched] =
-		createSignal(false);
-	const [organizationShortNameTouched, setOrganizationShortNameTouched] =
-		createSignal(false);
-	const [createOrganizationAttempted, setCreateOrganizationAttempted] =
-		createSignal(false);
-	const [inviteDraft, setInviteDraft] = createSignal<InviteDraft>({
-		email: "",
-		role: "Admin",
-	});
-	const [inviteFeedback, setInviteFeedback] =
-		createSignal<InviteFeedback | null>(null);
+	const [organizationNameTouched, setOrganizationNameTouched] = createSignal(false);
+	const [organizationShortNameTouched, setOrganizationShortNameTouched] = createSignal(false);
+	const [createOrganizationAttempted, setCreateOrganizationAttempted] = createSignal(false);
+	const [inviteDraft, setInviteDraft] = createSignal<InviteDraft>({ email: "", role: "Admin" });
+	const [inviteFeedback, setInviteFeedback] = createSignal<InviteFeedback | null>(null);
 	const [festivalDraft, setFestivalDraft] = createSignal<FestivalDraft>({
 		shortName: "",
 		name: "",
@@ -160,6 +139,23 @@ export function createFestivalAppState() {
 	let inviteFeedbackTimeout: ReturnType<typeof setTimeout> | undefined;
 
 	const route = createMemo<AppRoute>(() => parseRoute(location.pathname));
+
+	createEffect(() => {
+		const currentRoute = route();
+		if ("festivalSlug" in currentRoute && currentRoute.festivalSlug) {
+			setActiveFestivalSlug(currentRoute.festivalSlug);
+		} else if (!activeFestivalSlug() && festivals().length > 0) {
+			const first = festivals()[0];
+			if (first?.shortName) {
+				setActiveFestivalSlug(first.shortName);
+			}
+		}
+	});
+
+	createEffect(() => {
+		location.pathname;
+		closeNavOpen();
+	});
 	const sessionMembership = createMemo(() => session().membership ?? null);
 	const shouldShowOrgChooser = createMemo(
 		() => route().kind === "home" && memberships().length > 1,
@@ -582,6 +578,14 @@ export function createFestivalAppState() {
 		shopifySettings,
 		statusMessage,
 		currentInviteToken,
+		activeFestivalSlug,
+		setActiveFestivalSlug,
+		cart,
+		closeNavOpen,
+		isNavCollapsed,
+		isNavOpen,
+		toggleNavCollapsed,
+		toggleNavOpen,
 	};
 }
 

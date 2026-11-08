@@ -2,7 +2,6 @@ import type { CustomerSessionProfile } from "@festival/common";
 import type { JSX } from "solid-js";
 import { createSignal, onMount, Show } from "solid-js";
 import { getCustomerSession } from "../lib/api.js";
-import { CustomerAccountNavigation } from "./CustomerAccountNavigation.js";
 
 export function CustomerAccountPageLayout(props: {
 	slug: string;
@@ -29,7 +28,6 @@ export function CustomerAccountPageLayout(props: {
 
 	return (
 		<section class="panel flow-panel customer-account-page">
-			<CustomerAccountNavigation slug={props.slug} />
 			<Show when={!loading()} fallback={<p>Loading customer session…</p>}>
 				<Show
 					when={session()}

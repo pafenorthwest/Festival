@@ -98,6 +98,16 @@ export function AppHeader(props: AppHeaderProps) {
 			}
 		>
 			<header class="org-landing-header">
+				<button
+					type="button"
+					class="mobile-menu button icon-button"
+					onClick={() => props.app.toggleNavOpen()}
+					aria-label="Open menu"
+				>
+					<span class="material-symbols-outlined" aria-hidden="true">
+						menu
+					</span>
+				</button>
 				<div>
 					<p class="eyebrow">Music festival</p>
 					<h1>{landing()?.organization.name ?? "Organization"}</h1>
@@ -143,6 +153,20 @@ export function AppHeader(props: AppHeaderProps) {
 							</Button>
 						</Show>
 					</Show>
+					<a
+						class="cart-link"
+						href={
+							props.app.activeFestivalSlug()
+								? `/org/${slug() ?? ""}/festival/${props.app.activeFestivalSlug()}/register`
+								: `/org/${slug() ?? ""}`
+						}
+						aria-label="Registration Cart"
+					>
+						<span class="material-symbols-outlined" aria-hidden="true">
+							shopping_cart
+						</span>
+						<span class="cart-count">{props.app.cart.itemCount()}</span>
+					</a>
 				</div>
 			</header>
 		</Show>

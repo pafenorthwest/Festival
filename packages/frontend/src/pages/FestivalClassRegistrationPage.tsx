@@ -53,7 +53,7 @@ export function FestivalClassRegistrationPage(
 			() => props.slug,
 			(slug) => getPublicDivisions(slug),
 		),
-		cart = createRegistrationCart(),
+		cart = props.app?.cart ?? createRegistrationCart(),
 		getCsrf = () => {
 			const session = props.app.customerSession();
 			return session.authenticated ? session.csrfToken : "";
