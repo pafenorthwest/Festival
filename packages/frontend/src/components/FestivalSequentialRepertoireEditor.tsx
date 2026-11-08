@@ -6,6 +6,8 @@ import {
 	validatePieceTitle,
 } from "../pages/festivalRegistrationHelpers.js";
 
+export { validatePieceDuration };
+
 export interface FestivalSequentialRepertoireEditorProps {
 	maxPieces: number;
 	maxMinutes?: number;
@@ -13,6 +15,11 @@ export interface FestivalSequentialRepertoireEditorProps {
 	onChangePieces: (pieces: RepertoirePiece[]) => void;
 	onDirtyChange?: (isDirty: boolean) => void;
 	requiresConcerto?: boolean;
+}
+
+function parseDurationPart(value: string): number {
+	const trimmed = value.trim();
+	return trimmed === "" ? 0 : Number(trimmed);
 }
 
 function formatDuration(totalSec: number): string {
@@ -111,8 +118,8 @@ export function FestivalSequentialRepertoireEditor(
 		e.preventDefault();
 		const tErr = validatePieceTitle(title1());
 		const cErr = validatePieceComposer(composer1());
-		const mins = parseInt(minutes1(), 10) || 0;
-		const secs = parseInt(seconds1(), 10) || 0;
+		const mins = parseDurationPart(minutes1());
+		const secs = parseDurationPart(seconds1());
 		const dErr = validatePieceDuration(mins, secs);
 
 		if (tErr || cErr || dErr) {
@@ -138,8 +145,8 @@ export function FestivalSequentialRepertoireEditor(
 		e.preventDefault();
 		const tErr = validatePieceTitle(title2());
 		const cErr = validatePieceComposer(composer2());
-		const mins = parseInt(minutes2(), 10) || 0;
-		const secs = parseInt(seconds2(), 10) || 0;
+		const mins = parseDurationPart(minutes2());
+		const secs = parseDurationPart(seconds2());
 		const dErr = validatePieceDuration(mins, secs);
 
 		if (tErr || cErr || dErr) {

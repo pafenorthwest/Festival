@@ -40,8 +40,14 @@ export function validatePieceDuration(
 	minutes: number,
 	seconds: number,
 ): string | null {
+	if (!Number.isInteger(minutes) || minutes < 0) {
+		return "Minutes must be a non-negative integer.";
+	}
+	if (!Number.isInteger(seconds) || seconds < 0 || seconds >= 60) {
+		return "Seconds must be between 0 and 59.";
+	}
 	const total = minutes * 60 + seconds;
-	if (!Number.isFinite(total) || total <= 0) {
+	if (total <= 0) {
 		return "Duration must be greater than 0 seconds.";
 	}
 	return null;
