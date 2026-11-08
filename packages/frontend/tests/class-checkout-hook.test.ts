@@ -1,5 +1,5 @@
-import { fileURLToPath } from "node:url";
 import { expect, it } from "bun:test";
+import { fileURLToPath } from "node:url";
 
 for (const scenario of ["handoff", "network", "recovery", "abandonment"]) {
 	it(`actual registration hook preserves deterministic ${scenario} behavior`, async () => {
@@ -7,7 +7,9 @@ for (const scenario of ["handoff", "network", "recovery", "abandonment"]) {
 		const process = Bun.spawn(
 			[
 				Bun.which("bun") ?? "bun",
-				fileURLToPath(new URL("./fixtures/class-checkout-hook.ts", import.meta.url)),
+				fileURLToPath(
+					new URL("./fixtures/class-checkout-hook.ts", import.meta.url),
+				),
 				scenario,
 			],
 			{ stdout: "pipe", stderr: "pipe" },

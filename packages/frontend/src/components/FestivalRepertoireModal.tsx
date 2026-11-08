@@ -146,7 +146,12 @@ export function FestivalRepertoireModal(props: FestivalRepertoireModalProps) {
 				<div class="panel modal-card repertoire-modal-card">
 					<header class="admin-page-header">
 						<div>
-							<h3 id="modal-repertoire-title" data-testid="modal-repertoire-title">Repertoire Details</h3>
+							<h3
+								id="modal-repertoire-title"
+								data-testid="modal-repertoire-title"
+							>
+								Repertoire Details
+							</h3>
 							<p class="muted">
 								Enter between 1 and {props.maxPieces} pieces performed for this
 								class.
@@ -263,13 +268,18 @@ export function FestivalRepertoireModal(props: FestivalRepertoireModalProps) {
 													id={`repertoire-piece-${index}-catalog-work`}
 													name={`repertoire-piece-${index}-catalog-work`}
 													onChange={(e) =>
-														handleSelectCatalogWork(index, e.currentTarget.value)
+														handleSelectCatalogWork(
+															index,
+															e.currentTarget.value,
+														)
 													}
 												>
 													<option value="" selected={!piece().catalogWorkId}>
 														Select a concerto work…
 													</option>
-													<For each={concertoCatalogWorks(piece().catalogWorkId)}>
+													<For
+														each={concertoCatalogWorks(piece().catalogWorkId)}
+													>
 														{(work) => (
 															<option
 																value={work.id}
@@ -303,7 +313,10 @@ export function FestivalRepertoireModal(props: FestivalRepertoireModalProps) {
 											</label>
 										</Show>
 
-										<label class="field" for={`repertoire-piece-${index}-title`}>
+										<label
+											class="field"
+											for={`repertoire-piece-${index}-title`}
+										>
 											<span>Title</span>
 											<input
 												id={`repertoire-piece-${index}-title`}
@@ -312,12 +325,18 @@ export function FestivalRepertoireModal(props: FestivalRepertoireModalProps) {
 												type="text"
 												value={piece().title}
 												onInput={(e) =>
-													updatePieceField(index, "title", e.currentTarget.value)
+													updatePieceField(
+														index,
+														"title",
+														e.currentTarget.value,
+													)
 												}
 												placeholder="e.g. Moonlight Sonata"
 												required
 											/>
-											<Show when={touched() && validatePieceTitle(piece().title)}>
+											<Show
+												when={touched() && validatePieceTitle(piece().title)}
+											>
 												<p class="field-error" role="alert">
 													{validatePieceTitle(piece().title)}
 												</p>
@@ -335,7 +354,13 @@ export function FestivalRepertoireModal(props: FestivalRepertoireModalProps) {
 												data-testid={`input-piece-composer-${index}`}
 												type="text"
 												value={piece().composer}
-												onInput={(e) => updatePieceField(index, "composer", e.currentTarget.value)}
+												onInput={(e) =>
+													updatePieceField(
+														index,
+														"composer",
+														e.currentTarget.value,
+													)
+												}
 												placeholder="e.g. Ludwig van Beethoven"
 												required
 											/>
@@ -361,7 +386,13 @@ export function FestivalRepertoireModal(props: FestivalRepertoireModalProps) {
 												data-testid={`input-piece-movement-${index}`}
 												type="text"
 												value={piece().movement}
-												onInput={(e) => updatePieceField(index, "movement", e.currentTarget.value)}
+												onInput={(e) =>
+													updatePieceField(
+														index,
+														"movement",
+														e.currentTarget.value,
+													)
+												}
 												placeholder="e.g. I. Adagio sostenuto"
 											/>
 										</label>
@@ -384,7 +415,13 @@ export function FestivalRepertoireModal(props: FestivalRepertoireModalProps) {
 													min="0"
 													max="60"
 													value={piece().durationMinutes}
-													onInput={(e) => updatePieceField(index, "durationMinutes", Number(e.currentTarget.value))}
+													onInput={(e) =>
+														updatePieceField(
+															index,
+															"durationMinutes",
+															Number(e.currentTarget.value),
+														)
+													}
 												/>
 											</label>
 											<label
@@ -401,7 +438,13 @@ export function FestivalRepertoireModal(props: FestivalRepertoireModalProps) {
 													min="0"
 													max="59"
 													value={piece().durationSeconds}
-													onInput={(e) => updatePieceField(index, "durationSeconds", Number(e.currentTarget.value))}
+													onInput={(e) =>
+														updatePieceField(
+															index,
+															"durationSeconds",
+															Number(e.currentTarget.value),
+														)
+													}
 												/>
 											</label>
 										</div>

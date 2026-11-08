@@ -1,5 +1,4 @@
 import type { FestivalSummary } from "@festival/common";
-import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import {
 	createMemo,
 	createSignal,
@@ -8,6 +7,7 @@ import {
 	onMount,
 	Show,
 } from "solid-js";
+import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { Button } from "../components/Button.js";
 import type { CustomerClassRegistrationItem } from "../lib/api.js";
 import {

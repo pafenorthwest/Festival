@@ -1,12 +1,12 @@
 import { type Accessor, createSignal, type Setter } from "solid-js";
 import {
-	createRegistrationCart,
-	type RegistrationCartState,
-} from "../pages/registrationCartState.js";
-import {
 	clearCartCheckoutIdempotencyKey,
 	getOrCreateCartCheckoutIdempotencyKey,
 } from "../pages/checkoutIdempotency.js";
+import {
+	createRegistrationCart,
+	type RegistrationCartState,
+} from "../pages/registrationCartState.js";
 
 export {
 	clearCartCheckoutIdempotencyKey,
