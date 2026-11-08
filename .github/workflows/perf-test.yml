@@ -3,6 +3,10 @@ name: Performance Benchmark (500 Parents)
 on:
   workflow_dispatch:
     inputs:
+      confirmation:
+        description: "Type 'RUN_LOAD_TEST' to execute (safety safeguard)"
+        required: true
+        type: string
       concurrency:
         description: 'Concurrent parent requests'
         required: true
@@ -16,7 +20,31 @@ permissions:
   contents: read
 
 jobs:
+  guard-check:
+    name: Safety guard check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate actor and confirmation
+        env:
+          ACTOR: ${{ github.actor }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          FAILED=0
+          if [ "$ACTOR" != "gustobru" ] && [ "$ACTOR" != "ericpassmore" ]; then
+            echo "::error::Actor '$ACTOR' is not authorized to run performance benchmarks. Allowed actors: gustobru, ericpassmore"
+            FAILED=1
+          fi
+          if [ "$CONFIRMATION" != "RUN_LOAD_TEST" ]; then
+            echo "::error::Invalid confirmation '$CONFIRMATION'. Must type 'RUN_LOAD_TEST' to execute."
+            FAILED=1
+          fi
+          if [ "$FAILED" -ne 0 ]; then
+            exit 1
+          fi
+          echo "Guard check passed for $ACTOR."
+
   seed-remote:
+    needs: [guard-check]
     if: ${{ inputs.apply_seed }}
     runs-on: ubuntu-latest
     environment: integration
@@ -44,8 +72,8 @@ jobs:
             docker compose --env-file cloud-setup/.env -f cloud-setup/compose.yml exec -T postgres psql -U festivaladmin -d "$DB_NAME" < database/seeds/04-perf-test.sql
 
   benchmark:
-    needs: [seed-remote]
-    if: always() && (needs.seed-remote.result == 'success' || needs.seed-remote.result == 'skipped')
+    needs: [guard-check, seed-remote]
+    if: always() && needs.guard-check.result == 'success' && (needs.seed-remote.result == 'success' || needs.seed-remote.result == 'skipped')
     runs-on: ubuntu-latest
     environment: integration
 
