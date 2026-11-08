@@ -149,3 +149,26 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 
 /token
+
+# Local environments and generated artifacts
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+bin/
+target/
+.DS_Store
+__pycache__/
+*.pyc
+*.pyo
+*.o
+*.class
+*.env
+*.env.*
+!.env.example
+!development.env
+
+# Generated registration browser screenshots remain local
+/tasks/festival-registration-ui/validation/*.png

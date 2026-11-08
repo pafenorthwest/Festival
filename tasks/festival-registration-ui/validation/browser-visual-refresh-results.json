@@ -1,0 +1,20 @@
+{
+  "checks": [
+    "registration: no horizontal overflow",
+    "class-registration: no horizontal overflow",
+    "my-registrations-mobile: no horizontal overflow",
+    "Latest CSS keeps 390px brand and action controls on one header row"
+  ],
+  "errors": [],
+  "screenshots": [
+    "/Users/eric/pafenorthwest/Festival/tasks/festival-registration-ui/validation/registration.png",
+    "/Users/eric/pafenorthwest/Festival/tasks/festival-registration-ui/validation/class-registration.png",
+    "/Users/eric/pafenorthwest/Festival/tasks/festival-registration-ui/validation/my-registrations-mobile.png"
+  ],
+  "headerBounds": {
+    "x": 0,
+    "y": 0,
+    "width": 390,
+    "height": 70
+  }
+}
