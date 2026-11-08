@@ -1,4 +1,4 @@
-FROM oven/bun:1.3.14-alpine AS deps
+FROM oven/bun:1.4.2-alpine AS deps
 WORKDIR /app
 
 COPY package.json bun.lock tsconfig.json tsconfig.base.json ./
@@ -16,7 +16,7 @@ RUN rm -rf packages/common/dist packages/common/tsconfig.tsbuildinfo \
 	&& bun run build:common \
 	&& bun run build:backend
 
-FROM oven/bun:1.3.14-alpine AS runtime
+FROM oven/bun:1.4.2-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
