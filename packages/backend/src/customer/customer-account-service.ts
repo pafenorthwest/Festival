@@ -536,6 +536,12 @@ export class CustomerAccountService {
 				expected = returnTo;
 			}
 		}
+		const festivalPattern = new RegExp(
+			`^/org/${slug.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")}/festival/([A-Za-z0-9_-]{1,128})/(register|cart)$`,
+		);
+		if (!offeringId && returnTo && festivalPattern.test(returnTo)) {
+			expected = returnTo;
+		}
 		if (returnTo && returnTo !== expected)
 			throw new AppError("Return target is invalid.", 400);
 		const state = randomOpaque(),
