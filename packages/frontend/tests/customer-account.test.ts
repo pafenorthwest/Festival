@@ -3,7 +3,10 @@ import {
 	customerSignInPath,
 	getCustomerMembershipStatus,
 } from "../src/lib/api.js";
-import { buildOrgCustomerAccountClassesPath } from "../src/lib/routes.js";
+import {
+	buildOrgCustomerAccountClassEditPath,
+	buildOrgCustomerAccountClassesPath,
+} from "../src/lib/routes.js";
 
 const membershipsPage = await Bun.file(
 	new URL("../src/pages/CustomerAccountMembershipsPage.tsx", import.meta.url),
@@ -16,6 +19,9 @@ const ordersPage = await Bun.file(
 ).text();
 const classesPage = await Bun.file(
 	new URL("../src/pages/CustomerAccountClassesPage.tsx", import.meta.url),
+).text();
+const classEditPage = await Bun.file(
+	new URL("../src/pages/CustomerAccountClassEditPage.tsx", import.meta.url),
 ).text();
 const layout = await Bun.file(
 	new URL("../src/pages/CustomerAccountPageLayout.tsx", import.meta.url),
@@ -200,5 +206,34 @@ describe("customer account frontend boundary", () => {
 		expect(classesPage).toContain("Waitlisted (Paid)");
 		expect(ordersPage).toContain("Placed / Confirmed");
 		expect(ordersPage).toContain("Waitlisted (Paid)");
+	});
+
+	it("builds the customer account class edit path and groups registrations with cutoff indicators", () => {
+		expect(buildOrgCustomerAccountClassEditPath("pafe", "reg-42")).toBe(
+			"/org/pafe/account/classes/reg-42/edit",
+		);
+		expect(classesPage).toContain("data-festival-filter");
+		expect(classesPage).toContain("panel registration-group");
+		expect(classesPage).toContain("deriveFestivalMetadataCutoff");
+		expect(classesPage).toContain("registration-edit-action");
+		expect(classesPage).toContain("registration-edit-info");
+		expect(classesPage).toContain("registration-edit-tooltip");
+		expect(classesPage).toContain('role="tooltip"');
+		expect(classesPage).toContain("aria-describedby");
+		expect(classesPage).toContain("Edit Repertoire / Accompanist");
+		expect(classesPage).toContain("Editing closed");
+		expect(classesPage).toContain("Historical name unavailable");
+	});
+
+	it("supports repertoire and accompanist editing with 42-day cutoff enforcement and discard confirmation", () => {
+		expect(classEditPage).toContain("deriveFestivalMetadataCutoff");
+		expect(classEditPage).toContain("updateRegistrationMetadata");
+		expect(classEditPage).toContain("editable-repertoire");
+		expect(classEditPage).toContain("editable-accompanist");
+		expect(classEditPage).toContain("Save Changes");
+		expect(classEditPage).toContain("Editing is closed.");
+		expect(classEditPage).toContain("data-confirm-discard");
+		expect(classEditPage).toContain("Discard changes?");
+		expect(classEditPage).toContain("data-edit-performer");
 	});
 });

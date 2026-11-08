@@ -24,6 +24,7 @@ import {
 	CreateOrganizationPage,
 	CustomerAccountAvailabilityPage,
 	CustomerAccountClassesPage,
+	CustomerAccountClassEditPage,
 	CustomerAccountContactPage,
 	CustomerAccountMembershipsPage,
 	CustomerAccountOrdersPage,
@@ -239,6 +240,18 @@ export default function App() {
 								>
 									<CustomerAccountClassesPage
 										slug={(app.route() as { slug: string }).slug}
+									/>
+								</Match>
+								<Match
+									when={
+										app.route().kind === "org-customer-account-classes-edit"
+									}
+								>
+									<CustomerAccountClassEditPage
+										slug={(app.route() as { slug: string }).slug}
+										registrationId={
+											(app.route() as { registrationId: string }).registrationId
+										}
 									/>
 								</Match>
 								<Match

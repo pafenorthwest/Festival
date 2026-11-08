@@ -18,6 +18,8 @@ import {
 	buildOrgBillingPath,
 	buildOrgCheckoutRecoveryPath,
 	buildOrgCustomerAccountAvailabilityPath,
+	buildOrgCustomerAccountClassEditPath,
+	buildOrgCustomerAccountClassesPath,
 	buildOrgCustomerAccountContactPath,
 	buildOrgCustomerAccountMembershipsPath,
 	buildOrgCustomerAccountOrdersPath,
@@ -90,6 +92,17 @@ describe("route helpers", () => {
 		expect(parseRoute("/org/festival-admins/account/orders")).toEqual({
 			kind: "org-customer-account-orders",
 			slug: "festival-admins",
+		});
+		expect(parseRoute("/org/festival-admins/account/classes")).toEqual({
+			kind: "org-customer-account-classes",
+			slug: "festival-admins",
+		});
+		expect(
+			parseRoute("/org/festival-admins/account/classes/reg-123/edit"),
+		).toEqual({
+			kind: "org-customer-account-classes-edit",
+			slug: "festival-admins",
+			registrationId: "reg-123",
 		});
 		expect(
 			parseRoute("/organizations/festival-admins/account/availability"),
@@ -217,6 +230,16 @@ describe("route helpers", () => {
 		).toBe(true);
 		expect(
 			isOrganizationPageRoute(
+				parseRoute("/org/festival-admins/account/classes"),
+			),
+		).toBe(true);
+		expect(
+			isOrganizationPageRoute(
+				parseRoute("/org/festival-admins/account/classes/reg-1/edit"),
+			),
+		).toBe(true);
+		expect(
+			isOrganizationPageRoute(
 				parseRoute("/organizations/festival-admins/account/availability"),
 			),
 		).toBe(true);
@@ -287,6 +310,12 @@ describe("route helpers", () => {
 		expect(buildOrgCustomerAccountOrdersPath("festival-admins")).toBe(
 			"/org/festival-admins/account/orders",
 		);
+		expect(buildOrgCustomerAccountClassesPath("festival-admins")).toBe(
+			"/org/festival-admins/account/classes",
+		);
+		expect(
+			buildOrgCustomerAccountClassEditPath("festival-admins", "reg-123"),
+		).toBe("/org/festival-admins/account/classes/reg-123/edit");
 		expect(buildOrgCustomerAccountAvailabilityPath("festival-admins")).toBe(
 			"/org/festival-admins/account/availability",
 		);

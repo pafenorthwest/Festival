@@ -107,6 +107,11 @@ export const CustomerAccountClassesPage = lazyPage(() =>
 		default: module.CustomerAccountClassesPage,
 	})),
 );
+export const CustomerAccountClassEditPage = lazyPage(() =>
+	import("../pages/CustomerAccountClassEditPage.js").then((module) => ({
+		default: module.CustomerAccountClassEditPage,
+	})),
+);
 export const CustomerAccountContactPage = lazyPage(() =>
 	import("../pages/CustomerAccountContactPage.js").then((module) => ({
 		default: module.CustomerAccountContactPage,
@@ -228,6 +233,7 @@ export const routePages = {
 	"org-customer-account-children": CustomerChildrenPage,
 	"org-customer-account-orders": CustomerAccountOrdersPage,
 	"org-customer-account-classes": CustomerAccountClassesPage,
+	"org-customer-account-classes-edit": CustomerAccountClassEditPage,
 	"org-customer-account-availability": CustomerAccountAvailabilityPage,
 	"org-admin": AdminHomePage,
 	"org-admin-users": AdminUsersPage,
