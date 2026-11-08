@@ -275,7 +275,12 @@ export function createRegistrationSelectHandlers(
 	setInstrument: (id: string) => void = () => {},
 ) {
 	return {
-		onChildChange: createSelectHandler(setChild, [setClass, setInstrument]),
+		onChildChange: createSelectHandler(setChild, [
+			setDivision,
+			setTeacher,
+			setClass,
+			setInstrument,
+		]),
 		onDivisionChange: createSelectHandler(setDivision, [
 			setTeacher,
 			setClass,

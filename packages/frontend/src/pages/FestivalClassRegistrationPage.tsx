@@ -2,11 +2,13 @@ import type { RepertoirePiece } from "@festival/common";
 import { createResource, createSignal, For, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { Button } from "../components/Button.js";
+import { FestivalClassCardList } from "../components/FestivalClassCardList.js";
 import { FestivalNoChildrenPanel } from "../components/FestivalNoChildrenPanel.js";
 import { FestivalRegistrationCartCard } from "../components/FestivalRegistrationCartCard.js";
 import { FestivalRegistrationCartView } from "../components/FestivalRegistrationCartView.js";
 import { FestivalRegistrationPerformanceOptions } from "../components/FestivalRegistrationPerformanceOptions.js";
 import { FestivalRepertoireModal } from "../components/FestivalRepertoireModal.js";
+import { FestivalSequentialRepertoireEditor } from "../components/FestivalSequentialRepertoireEditor.js";
 import { FestivalWaitlistCard } from "../components/FestivalWaitlistCard.js";
 import {
 	customerFestivalRegistrationSignInPath,
@@ -42,6 +44,7 @@ interface FestivalClassRegistrationPageProps {
 	slug: string;
 	festivalSlug: string;
 }
+
 export function FestivalClassRegistrationPage(
 	props: FestivalClassRegistrationPageProps,
 ) {
@@ -71,6 +74,7 @@ export function FestivalClassRegistrationPage(
 		[selectedAccompanistId, setSelectedAccompanistId] = createSignal(""),
 		[selectedInstrumentId, setSelectedInstrumentId] = createSignal(""),
 		[pieces, setPieces] = createSignal<RepertoirePiece[]>([]),
+		[isEditorDirty, setIsEditorDirty] = createSignal(false),
 		{ children, teachers, eligibleClasses, accompanists, loadChildren } =
 			useRegistrationOptions({
 				slug: props.slug,
@@ -128,42 +132,67 @@ export function FestivalClassRegistrationPage(
 			normalizeMaxPieces(selectedClass()?.maximumPerformancePieces),
 		cartSummary = () =>
 			`Cart: ${cart.itemCount()} ${cart.itemCount() === 1 ? "class" : "classes"} (${cart.totalPriceFormatted()})`;
+
 	const handleSignIn = () => {
 		if (typeof window !== "undefined" && window.location?.assign)
 			window.location.assign(signInPath());
 	};
+
 	const selectHandlers = createRegistrationSelectHandlers(
-		setSelectedChildId,
-		setSelectedDivisionId,
-		setSelectedTeacherId,
-		setSelectedClassId,
+		(id) => {
+			setSelectedChildId(id);
+			setPieces([]);
+			setIsEditorDirty(false);
+		},
+		(id) => {
+			setSelectedDivisionId(id);
+			setPieces([]);
+			setIsEditorDirty(false);
+		},
+		(id) => {
+			setSelectedTeacherId(id);
+			setPieces([]);
+			setIsEditorDirty(false);
+		},
+		(id) => {
+			setSelectedClassId(id);
+			setPieces([]);
+			setIsEditorDirty(false);
+		},
 		setSelectedAccompanistId,
 		setSelectedInstrumentId,
 	);
+
+	function handleBackToClasses() {
+		if (
+			isEditorDirty() &&
+			typeof window !== "undefined" &&
+			!window.confirm("You have unsaved changes. Discard changes?")
+		) {
+			return;
+		}
+		setSelectedClassId("");
+		setPieces([]);
+		setIsEditorDirty(false);
+	}
+
 	async function handleRefreshSnapshot(e: Event) {
 		e.preventDefault();
-		const childId = selectedChildId(),
-			birthday = birthdayDraft();
+		const childId = selectedChildId(), birthday = birthdayDraft();
 		if (!childId || !birthday) return;
 		setIsRefreshingSnapshot(true);
 		setSnapshotError(null);
 		try {
-			await refreshCustomerChildAgeSnapshot(
-				props.slug,
-				childId,
-				getCsrf(),
-				birthday,
-			);
+			await refreshCustomerChildAgeSnapshot(props.slug, childId, getCsrf(), birthday);
 			await loadChildren();
 			setBirthdayDraft("");
 		} catch (err) {
-			setSnapshotError(
-				err instanceof Error ? err.message : "Failed to verify birthdate.",
-			);
+			setSnapshotError(err instanceof Error ? err.message : "Failed to verify birthdate.");
 		} finally {
 			setIsRefreshingSnapshot(false);
 		}
 	}
+
 	const isReadyForCheckout = () =>
 		isRegistrationSelectionValid(
 			selectedChild(),
@@ -178,44 +207,23 @@ export function FestivalClassRegistrationPage(
 		!divisions.error &&
 		isInstrumentSelectionValid(instruments(), selectedInstrumentId()) &&
 		classOptionEligibility.isEligible(selectedClassId());
+
 	function handleAddToCart() {
 		setCheckoutError(null);
-		const cls = selectedClass(),
-			child = selectedChild();
-		if (
-			!cls ||
-			cls.isRegistrationOpen === false ||
-			!child ||
-			!isReadyForCheckout() ||
-			isAlreadyInCart() ||
-			!classOptionEligibility.isEligible(cls.id)
-		)
-			return;
-		cart.addItem(
-			buildCartItemInput(
-				child,
-				selectedDivisionId(),
-				selectedDivisionName(),
-				selectedTeacher(),
-				cls,
-				selectedAccompanist(),
-				pieces(),
-				selectedInstrument(),
-			),
-		);
-		resetClassFormSelection({
-			setSelectedClassId,
-			setPieces,
-			setSelectedAccompanistId,
-			setSelectedInstrumentId,
-		});
+		const cls = selectedClass(), child = selectedChild();
+		if (!cls || cls.isRegistrationOpen === false || !child || !isReadyForCheckout() || isAlreadyInCart() || !classOptionEligibility.isEligible(cls.id)) return;
+		cart.addItem(buildCartItemInput(child, selectedDivisionId(), selectedDivisionName(), selectedTeacher(), cls, selectedAccompanist(), pieces(), selectedInstrument()));
+		resetClassFormSelection({ setSelectedClassId, setPieces, setSelectedAccompanistId, setSelectedInstrumentId });
+		setIsEditorDirty(false);
 	}
+
 	const classSelectReason = () =>
 		classOptionEligibility.selectedReason(selectedClassId()) ||
 		(eligibleClasses().length > 0 &&
 		eligibleClasses().every((c) => c.isRegistrationOpen === false)
 			? "Registration closed"
 			: null);
+
 	async function executeCheckout(
 		lineItems: ReturnType<typeof cartItemsToLineItemInputs>,
 	) {
@@ -235,38 +243,28 @@ export function FestivalClassRegistrationPage(
 			}
 			setCheckoutError("Checkout failed to initialize. Please try again.");
 		} catch (err) {
-			setCheckoutError(
-				err instanceof Error
-					? err.message
-					: "Checkout failed. Please try again.",
-			);
+			setCheckoutError(err instanceof Error ? err.message : "Checkout failed. Please try again.");
 		} finally {
 			setIsSubmittingCheckout(false);
 		}
 	}
+
 	async function handleCartCheckout() {
 		const items = cart.items();
-		if (
-			items.length === 0 ||
-			eligibility.isEvaluating() ||
-			eligibility.hasIneligibleItems()
-		)
-			return;
+		if (items.length === 0 || eligibility.isEvaluating() || eligibility.hasIneligibleItems()) return;
 		const lineItems = cartItemsToLineItemInputs(items);
 		await executeCheckout(lineItems);
 	}
+
 	async function handleCheckout() {
 		handleAddToCart();
 		await handleCartCheckout();
 	}
+
 	return (
 		<Show
 			when={!props.app.isCustomerSessionLoading()}
-			fallback={
-				<section class="panel flow-panel" aria-busy="true">
-					<p role="status">Checking your sign-in status…</p>
-				</section>
-			}
+			fallback={<section class="panel flow-panel" aria-busy="true"><p role="status">Checking your sign-in status…</p></section>}
 		>
 			<Show
 				when={props.app.customerSession().authenticated}
@@ -275,37 +273,23 @@ export function FestivalClassRegistrationPage(
 						<header class="admin-page-header">
 							<div>
 								<h2>Register for Festival Classes</h2>
-								<p>
-									Sign in with your parent account to register your children.
-								</p>
+								<p>Sign in with your parent account to register your children.</p>
 							</div>
 						</header>
-						<Button
-							type="button"
-							onClick={() => window.location.assign(signInPath())}
-						>
+						<Button type="button" onClick={() => window.location.assign(signInPath())}>
 							Sign in to Register
 						</Button>
 					</section>
 				}
 			>
 				<section class="panel flow-panel">
-					<header
-						class="admin-page-header"
-						style="display: flex; justify-content: space-between; align-items: flex-start;"
-					>
+					<header class="admin-page-header" style="display: flex; justify-content: space-between; align-items: flex-start;">
 						<div>
-							<h2>
-								{festival()?.festival.name ?? "Festival"} Class Registration
-							</h2>
-							<p class="muted">
-								Select child, division, teacher, and class to register.
-							</p>
+							<h2>{festival()?.festival.name ?? "Festival"} Class Registration</h2>
+							<p class="muted">Select child, division, teacher, and class to register.</p>
 						</div>
 						<Show when={cart.itemCount() > 0}>
-							<div style="font-weight: bold; font-size: 0.95rem;">
-								{cartSummary()}
-							</div>
+							<div style="font-weight: bold; font-size: 0.95rem;">{cartSummary()}</div>
 						</Show>
 					</header>
 					<Show when={cart.itemCount() > 0}>
@@ -320,212 +304,166 @@ export function FestivalClassRegistrationPage(
 					<Show when={children().length === 0}>
 						<FestivalNoChildrenPanel
 							manageChildrenPath={`/org/${props.slug}/account/children`}
-							onManageChildren={() =>
-								props.app.navigate(`/org/${props.slug}/account/children`)
-							}
+							onManageChildren={() => props.app.navigate(`/org/${props.slug}/account/children`)}
 						/>
 					</Show>
 					<Show when={children().length > 0}>
-						<div
-							class="registration-form-grid"
-							style="display: grid; gap: 1rem;"
-						>
-							<label class="field">
-								<span>Performer (Child)</span>
-								<select
-									id="registration-child"
-									name="registration-child"
-									value={selectedChildId()}
-									onChange={selectHandlers.onChildChange}
-								>
-									<option value="">Select a child…</option>
-									<For each={children()}>
-										{(child) => (
-											<option value={child.id}>{child.displayName}</option>
-										)}
-									</For>
-								</select>
-							</label>
-							<Show
-								when={
-									selectedChild() &&
-									!selectedChild()?.hasCurrentValidAgeSnapshot
-								}
-							>
-								<div
-									class="panel flow-panel division-history-note"
-									role="alert"
-								>
+						<div class="registration-form-grid" style="display: grid; gap: 1rem;">
+							<section class="panel context-panel" aria-label="Registration selections">
+								<div class="field-grid three-columns">
+									<div class="field">
+										<label for="registration-child">Performer</label>
+										<select id="registration-child" name="registration-child" value={selectedChildId()} onChange={selectHandlers.onChildChange}>
+											<option value="">Select a child…</option>
+											<For each={children()}>{(child) => <option value={child.id}>{child.displayName}</option>}</For>
+										</select>
+										<a class="text-link" href={`/org/${props.slug}/account/children`}>Manage performers</a>
+									</div>
+									<div class="field">
+										<label for="registration-division">Division</label>
+										<select id="registration-division" name="registration-division" value={selectedDivisionId()} disabled={divisions.loading || Boolean(divisions.error)} onChange={selectHandlers.onDivisionChange}>
+											<option value="">Select a division…</option>
+											<For each={divisions()?.divisions ?? []}>{(div) => <option value={div.id}>{div.displayName}</option>}</For>
+										</select>
+										<Show when={divisions.loading}><p class="muted">Loading available divisions.</p></Show>
+										<Show when={divisions.error}><p class="field-error" role="alert">Available divisions could not be loaded. Please try again.</p></Show>
+									</div>
+									<div class="field">
+										<label for="registration-teacher">Registered teacher</label>
+										<select id="registration-teacher" name="registration-teacher" value={selectedTeacherId()} onChange={selectHandlers.onTeacherChange}>
+											<option value="">Select teacher…</option>
+											<For each={teachers()}>{(t) => <option value={t.id}>{t.name}</option>}</For>
+										</select>
+										<button class="text-link" type="button">My teacher isn’t listed</button>
+									</div>
+								</div>
+							</section>
+
+							<Show when={selectedChild() && !selectedChild()?.hasCurrentValidAgeSnapshot}>
+								<div class="panel flow-panel division-history-note" role="alert">
 									<strong>Age Snapshot Required (90-day validity)</strong>
-									<p>
-										{selectedChild()?.displayName} requires an updated age
-										snapshot for class eligibility. Please provide birthdate to
-										confirm eligibility.
-									</p>
-									<form
-										onSubmit={handleRefreshSnapshot}
-										style="display: flex; gap: 0.5rem; align-items: flex-end;"
-									>
+									<p>{selectedChild()?.displayName} requires an updated age snapshot for class eligibility. Please provide birthdate to confirm eligibility.</p>
+									<form onSubmit={handleRefreshSnapshot} style="display: flex; gap: 0.5rem; align-items: flex-end;">
 										<label class="field" style="flex: 1;">
 											<span>Birthdate</span>
-											<input
-												id="registration-birthdate"
-												name="registration-birthdate"
-												type="date"
-												value={birthdayDraft()}
-												onInput={(e) => setBirthdayDraft(e.currentTarget.value)}
-												required
-											/>
+											<input id="registration-birthdate" name="registration-birthdate" type="date" value={birthdayDraft()} onInput={(e) => setBirthdayDraft(e.currentTarget.value)} required />
 										</label>
-										<Button type="submit" disabled={isRefreshingSnapshot()}>
-											{isRefreshingSnapshot()
-												? "Verifying…"
-												: "Confirm Birthdate"}
-										</Button>
+										<Button type="submit" disabled={isRefreshingSnapshot()}>{isRefreshingSnapshot() ? "Verifying…" : "Confirm Birthdate"}</Button>
 									</form>
-									<Show when={snapshotError()}>
-										<p class="field-error" role="alert">
-											{snapshotError()}
-										</p>
-									</Show>
+									<Show when={snapshotError()}><p class="field-error" role="alert">{snapshotError()}</p></Show>
 								</div>
 							</Show>
-							<Show when={selectedChild()?.hasCurrentValidAgeSnapshot}>
+
+							<div style="display: none;" aria-hidden="true">
 								<label class="field">
-									<span>Division</span>
-									<select
-										id="registration-division"
-										name="registration-division"
-										value={selectedDivisionId()}
-										disabled={divisions.loading || Boolean(divisions.error)}
-										onChange={selectHandlers.onDivisionChange}
-									>
-										<option value="">Select a division…</option>
-										<For each={divisions()?.divisions ?? []}>
-											{(div) => (
-												<option value={div.id}>{div.displayName}</option>
+									<span>Eligible Class</span>
+									<select id="registration-class" name="registration-class" value={selectedClassId()} onChange={selectHandlers.onClassChange}>
+										<option value="">Select an eligible class…</option>
+										<For each={eligibleClasses()}>
+											{(c) => (
+												<option value={c.id} disabled={!classOptionEligibility.isEligible(c.id) && !classOptionEligibility.isWaitlist(c.id)}>
+													{classOptionEligibility.formatOption(c)}
+												</option>
 											)}
 										</For>
 									</select>
-									<Show when={divisions.loading}>
-										<p class="muted">Loading available divisions.</p>
-									</Show>
-									<Show when={divisions.error}>
-										<p class="field-error" role="alert">
-											Available divisions could not be loaded. Please try again.
-										</p>
-									</Show>
+									<Show when={classSelectReason()}>{(reason) => <p class="field-error" role="alert">{reason()}</p>}</Show>
 								</label>
-								<Show when={selectedDivisionId()}>
-									<label class="field">
-										<span>Teacher</span>
-										<select
-											id="registration-teacher"
-											name="registration-teacher"
-											value={selectedTeacherId()}
-											onChange={selectHandlers.onTeacherChange}
-										>
-											<option value="">Select teacher…</option>
-											<For each={teachers()}>
-												{(t) => <option value={t.id}>{t.name}</option>}
-											</For>
-										</select>
-									</label>
-								</Show>
-								<Show when={selectedTeacherId()}>
-									<label class="field">
-										<span>Eligible Class</span>
-										<select
-											id="registration-class"
-											name="registration-class"
-											value={selectedClassId()}
-											onChange={selectHandlers.onClassChange}
-										>
-											<option value="">Select an eligible class…</option>
-											<For each={eligibleClasses()}>
-												{(c) => (
-													<option
-														value={c.id}
-														disabled={
-															!classOptionEligibility.isEligible(c.id) &&
-															!classOptionEligibility.isWaitlist(c.id)
-														}
-													>
-														{classOptionEligibility.formatOption(c)}
-													</option>
-												)}
-											</For>
-										</select>
-										<Show when={classSelectReason()}>
-											{(reason) => (
-												<p class="field-error" role="alert">
-													{reason()}
-												</p>
-											)}
-										</Show>
-									</label>
-								</Show>
-								<Show when={selectedClass()}>
-									<Show
-										when={classOptionEligibility.isWaitlist(selectedClassId())}
-										fallback={
-											<>
-												<FestivalRegistrationPerformanceOptions
-													instruments={instruments()}
-													accompanists={accompanists()}
-													instrumentId={selectedInstrumentId()}
-													accompanistId={selectedAccompanistId()}
-													handlers={selectHandlers}
-												/>
-												<FestivalRegistrationCartCard
-													childName={selectedChild()?.displayName ?? null}
-													divisionName={selectedDivisionName()}
-													teacherName={selectedTeacher()?.name ?? null}
-													className={selectedClass()?.displayName ?? null}
-													classPrice={selectedClass()?.price ?? null}
-													pieces={pieces()}
-													accompanistName={selectedAccompanist()?.name ?? null}
-													instrumentName={
-														selectedInstrument()?.displayName ?? null
-													}
-													isValid={isReadyForCheckout()}
-													isSubmitting={isSubmittingCheckout()}
-													error={checkoutError()}
-													isAlreadyInCart={isAlreadyInCart()}
-													onOpenRepertoireModal={() =>
-														setIsRepertoireModalOpen(true)
-													}
-													onAddToCart={handleAddToCart}
-													onSubmitCheckout={handleCheckout}
-												/>
-											</>
+							</div>
+
+							<Show when={!selectedClass() && selectedChild()?.hasCurrentValidAgeSnapshot && selectedDivisionId() && selectedTeacherId()}>
+								<FestivalClassCardList
+									childName={selectedChild()?.displayName}
+									childAge={selectedChild()?.currentAgeInYears ?? null}
+									divisionName={selectedDivisionName()}
+									classes={eligibleClasses()}
+									eligibility={classOptionEligibility}
+									viewRegistrationsPath={`/org/${props.slug}/account/classes`}
+									onSelectClass={(id) => { setSelectedClassId(id); setPieces([]); setIsEditorDirty(false); }}
+								/>
+							</Show>
+
+							<Show when={selectedClass()}>
+								<Show
+									when={classOptionEligibility.isWaitlist(selectedClassId())}
+									fallback={
+										<div>
+											<button class="breadcrumb" type="button" data-confirm-discard onClick={handleBackToClasses}>
+												← Back to classes
+											</button>
+											<div class="page-heading">
+												<p class="eyebrow">REGISTRATION · {selectedChild()?.displayName?.toUpperCase() ?? "PERFORMER"}</p>
+												<h1>{selectedClass()?.displayName}</h1>
+												<p class="muted">{[selectedDivisionName(), selectedClass() ? `Ages ${selectedClass()?.minimumAge}–${selectedClass()?.maximumAge}` : null, selectedTeacher()?.name].filter(Boolean).join(" · ")}</p>
+											</div>
+											<div class="content-grid">
+												<div class="stack">
+													<FestivalSequentialRepertoireEditor
+														maxPieces={maxPieces()}
+														maxMinutes={selectedClass()?.performanceMinutes ?? 8}
+														pieces={pieces()}
+														onChangePieces={setPieces}
+														onDirtyChange={setIsEditorDirty}
+														requiresConcerto={doesClassRequireConcerto(selectedClass())}
+													/>
+													<FestivalRegistrationPerformanceOptions
+														instruments={instruments()}
+														accompanists={accompanists()}
+														instrumentId={selectedInstrumentId()}
+														accompanistId={selectedAccompanistId()}
+														handlers={selectHandlers}
+													/>
+												</div>
+												<aside class="side-summary">
+													<FestivalRegistrationCartCard
+														childName={selectedChild()?.displayName ?? null}
+														divisionName={selectedDivisionName()}
+														teacherName={selectedTeacher()?.name ?? null}
+														className={selectedClass()?.displayName ?? null}
+														classPrice={selectedClass()?.price ?? null}
+														pieces={pieces()}
+														accompanistName={selectedAccompanist()?.name ?? null}
+														instrumentName={selectedInstrument()?.displayName ?? null}
+														isValid={isReadyForCheckout()}
+														isSubmitting={isSubmittingCheckout()}
+														error={checkoutError()}
+														isAlreadyInCart={isAlreadyInCart()}
+														onOpenRepertoireModal={() => setIsRepertoireModalOpen(true)}
+														onAddToCart={handleAddToCart}
+														onSubmitCheckout={handleCheckout}
+													/>
+												</aside>
+											</div>
+										</div>
+									}
+								>
+									<button class="breadcrumb" type="button" onClick={() => setSelectedClassId("")}>
+										← Back to classes
+									</button>
+									<FestivalWaitlistCard
+										orgSlug={props.slug}
+										festivalSlug={props.festivalSlug}
+										// biome-ignore lint/style/noNonNullAssertion: prescribed contract
+										classId={selectedClassId()!}
+										className={selectedClass()?.displayName ?? "Class"}
+										// biome-ignore lint/style/noNonNullAssertion: prescribed contract
+										childId={selectedChildId()!}
+										childName={
+											selectedChild()?.displayName ??
+											selectedChild()?.name ??
+											"Student"
 										}
-									>
-										<FestivalWaitlistCard
-											orgSlug={props.slug}
-											festivalSlug={props.festivalSlug}
-											// biome-ignore lint/style/noNonNullAssertion: prescribed contract
-											classId={selectedClassId()!}
-											className={selectedClass()?.displayName ?? "Class"}
-											// biome-ignore lint/style/noNonNullAssertion: prescribed contract
-											childId={selectedChildId()!}
-											childName={
-												selectedChild()?.displayName ??
-												selectedChild()?.name ??
-												"Student"
-											}
-											isAuthenticated={Boolean(sessionProfile())}
-											csrfToken={csrfToken()}
-											initialProfile={{
-												name: sessionProfile()?.name ?? "",
-												email: sessionProfile()?.email ?? "",
-												phone: sessionProfile()?.phone ?? "",
-											}}
-											onSignInRequest={handleSignIn}
-											existingEntry={currentWaitlistEntry()}
-											onEntryChanged={handleWaitlistEntryChanged}
-										/>
-									</Show>
+										isAuthenticated={Boolean(sessionProfile())}
+										csrfToken={csrfToken()}
+										initialProfile={{
+											name: sessionProfile()?.name ?? "",
+											email: sessionProfile()?.email ?? "",
+											phone: sessionProfile()?.phone ?? "",
+										}}
+										onSignInRequest={handleSignIn}
+										existingEntry={currentWaitlistEntry()}
+										onEntryChanged={handleWaitlistEntryChanged}
+									/>
 								</Show>
 							</Show>
 						</div>
