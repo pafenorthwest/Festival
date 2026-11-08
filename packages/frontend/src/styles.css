@@ -3115,6 +3115,29 @@ button.availability-hour-slot.is-unavailable {
 	background: #edf3ee;
 }
 
+.warning {
+	padding: 0.875rem 1rem;
+	border: 1px solid #e9cdbb;
+	border-radius: 4px;
+	background: #fff7ef;
+	color: #8a4a28;
+	margin-bottom: 1.5rem;
+	font-size: 0.85rem;
+	line-height: 1.6;
+}
+
+.warning strong {
+	display: block;
+	font-size: 0.9rem;
+	margin-bottom: 0.25rem;
+}
+
+.page-footnote {
+	margin-top: 1.5rem;
+	font-size: 0.85rem;
+	color: var(--bullet-soft-ink, rgba(31, 36, 49, 0.7));
+}
+
 @media (max-width: 920px) {
 	.content-grid {
 		grid-template-columns: minmax(0, 1fr);

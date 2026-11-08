@@ -5,7 +5,11 @@ import {
 	getPublicOrganizationLanding,
 	logoutCustomer,
 } from "../lib/api.js";
-import { buildOrgPath, isOrganizationPageRoute } from "../lib/routes.js";
+import {
+	buildFestivalCartPath,
+	buildOrgPath,
+	isOrganizationPageRoute,
+} from "../lib/routes.js";
 import { Button } from "./Button.js";
 
 interface AppHeaderProps {
@@ -157,7 +161,10 @@ export function AppHeader(props: AppHeaderProps) {
 						class="cart-link"
 						href={
 							props.app.activeFestivalSlug()
-								? `/org/${slug() ?? ""}/festival/${props.app.activeFestivalSlug()}/register`
+								? buildFestivalCartPath(
+										slug() ?? "",
+										props.app.activeFestivalSlug() ?? "",
+									)
 								: `/org/${slug() ?? ""}`
 						}
 						aria-label="Registration Cart"

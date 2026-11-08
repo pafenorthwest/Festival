@@ -147,7 +147,7 @@ export function FestivalRegistrationCartView(
 				<div
 					class="panel flow-panel cart-ineligible-banner"
 					role="alert"
-					style="background: #fff3cd; border: 1px solid #ffeeba; color: #856404; padding: 0.75rem; margin-bottom: 0.75rem;"
+					style="background: #fff7ef; border: 1px solid #e9cdbb; color: #8a4a28; padding: 0.875rem 1rem; border-radius: 4px; margin-bottom: 1rem;"
 				>
 					<strong>Action Required:</strong> One or more items in your cart are
 					not eligible for registration. Please review prerequisites and remove
@@ -174,11 +174,11 @@ export function FestivalRegistrationCartView(
 						{(group) => (
 							<div
 								class="panel flow-panel cart-performer-group"
-								style="background: rgba(255, 255, 255, 0.45); border: 1px solid var(--bullet-panel-border); padding: 0.75rem; border-radius: 6px; display: grid; gap: 0.75rem;"
+								style="background: var(--bullet-panel, #ffffff); border: 1px solid var(--bullet-panel-border, #e9e8e2); padding: 1rem; border-radius: 8px; display: grid; gap: 0.75rem;"
 							>
 								<div
 									class="cart-performer-group-header"
-									style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--bullet-panel-border); padding-bottom: 0.5rem;"
+									style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--bullet-panel-border, #e9e8e2); padding-bottom: 0.5rem;"
 								>
 									<div>
 										<strong>Performer: {group.childName}</strong>
@@ -214,9 +214,9 @@ export function FestivalRegistrationCartView(
 											return (
 												<div
 													class="panel flow-panel"
-													style="background: rgba(255, 255, 255, 0.65); padding: 0.75rem;"
+													style="background: rgba(255, 255, 255, 0.85); border: 1px solid var(--bullet-panel-border, #e9e8e2); border-radius: 6px; padding: 0.875rem;"
 												>
-													<div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--bullet-panel-border); padding-bottom: 0.5rem; margin-bottom: 0.5rem;">
+													<div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--bullet-panel-border, #e9e8e2); padding-bottom: 0.5rem; margin-bottom: 0.5rem;">
 														<div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
 															<strong>{item.className}</strong>
 															<span class="muted">
@@ -341,7 +341,7 @@ export function FestivalRegistrationCartView(
 
 				<div
 					class="panel flow-panel cart-fee-breakdown-panel"
-					style="margin-top: 1rem; padding: 0.75rem; background: var(--surface-secondary, rgba(0, 0, 0, 0.03)); border: 1px solid var(--bullet-panel-border); border-radius: 6px;"
+					style="margin-top: 1.25rem; padding: 1rem; background: #f7f8f4; border: 1px solid #e1e5dc; border-radius: 8px;"
 				>
 					<div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.95rem; margin-bottom: 0.5rem;">
 						<span>
@@ -353,7 +353,7 @@ export function FestivalRegistrationCartView(
 							Registration Fee Subtotal: {props.cart.totalPriceFormatted()}
 						</span>
 					</div>
-					<div style="display: flex; justify-content: space-between; align-items: center; padding-top: 0.5rem; border-top: 1px solid var(--bullet-panel-border);">
+					<div style="display: flex; justify-content: space-between; align-items: center; padding-top: 0.5rem; border-top: 1px solid var(--bullet-panel-border, #e9e8e2);">
 						<span style="font-size: 1.1rem; font-weight: bold;">
 							Total: {props.cart.totalPriceFormatted()}
 						</span>
@@ -378,7 +378,7 @@ export function FestivalRegistrationCartView(
 				<div
 					class="panel flow-panel cart-checkout-error-banner"
 					role="alert"
-					style="margin-top: 0.75rem; padding: 0.75rem; background: #fff5f5; border: 1px solid #fed7d7; color: #c53030; border-radius: 6px;"
+					style="margin-top: 1rem; padding: 0.875rem 1rem; background: #fff5f5; border: 1px solid #fed7d7; color: #c53030; border-radius: 6px;"
 				>
 					<p
 						class="field-error"

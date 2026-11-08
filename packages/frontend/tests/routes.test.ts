@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
 	buildFestivalAdminClassesPath,
 	buildFestivalAdminPath,
+	buildFestivalCartPath,
 	buildFestivalRegistrationPath,
 	buildFestivalVolunteersPath,
 	buildInvitePath,
@@ -359,6 +360,25 @@ describe("route helpers", () => {
 				festivalSlug: "spring",
 			},
 		);
+	});
+
+	it("routes the festival cart page and marks it as organization page", () => {
+		expect(parseRoute("/org/pafe/festival/spring/cart")).toEqual({
+			kind: "festival-cart",
+			slug: "pafe",
+			festivalSlug: "spring",
+		});
+		expect(buildFestivalCartPath("pafe", "spring")).toBe(
+			"/org/pafe/festival/spring/cart",
+		);
+		expect(parseRoute(buildFestivalCartPath("pafe", "spring"))).toEqual({
+			kind: "festival-cart",
+			slug: "pafe",
+			festivalSlug: "spring",
+		});
+		expect(
+			isOrganizationPageRoute(parseRoute("/org/pafe/festival/spring/cart")),
+		).toBe(true);
 	});
 
 	it("routes the billing reconciliation admin page", () => {

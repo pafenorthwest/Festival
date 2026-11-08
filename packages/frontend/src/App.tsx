@@ -31,6 +31,7 @@ import {
 	CustomerChildrenPage,
 	FestivalAdminClassesPage,
 	FestivalAdminDashboardPage,
+	FestivalCartPage,
 	FestivalClassRegistrationPage,
 	FestivalLandingPage,
 	FestivalVolunteersPage,
@@ -146,6 +147,15 @@ export default function App() {
 								</Match>
 								<Match when={app.route().kind === "festival-register"}>
 									<FestivalClassRegistrationPage
+										app={app}
+										slug={(app.route() as { slug: string }).slug}
+										festivalSlug={
+											(app.route() as { festivalSlug: string }).festivalSlug
+										}
+									/>
+								</Match>
+								<Match when={app.route().kind === "festival-cart"}>
+									<FestivalCartPage
 										app={app}
 										slug={(app.route() as { slug: string }).slug}
 										festivalSlug={
