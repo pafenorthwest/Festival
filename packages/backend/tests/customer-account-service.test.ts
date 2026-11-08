@@ -948,6 +948,44 @@ describe("CustomerAccountService", () => {
 		).rejects.toThrow("Return target");
 	});
 
+	it("preserves exact festival registration and cart returns through OAuth and rejects invalid targets", async () => {
+		const f = await fixture();
+		const regReturn = "/org/festival/festival/festival-2026/register";
+		const regAuth = await f.begin(regReturn);
+		const regResult = await f.service.callback(
+			regAuth.searchParams.get("state") ?? "",
+			"code",
+		);
+		expect(regResult.returnTo).toBe(regReturn);
+
+		const cartReturn = "/org/festival/festival/festival_slug-123/cart";
+		const cartAuth = await f.begin(cartReturn);
+		const cartResult = await f.service.callback(
+			cartAuth.searchParams.get("state") ?? "",
+			"code",
+		);
+		expect(cartResult.returnTo).toBe(cartReturn);
+
+		await expect(
+			f.service.start(
+				"festival",
+				"/org/festival/festival/festival-2026/invalid",
+			),
+		).rejects.toThrow("Return target");
+		await expect(
+			f.service.start("festival", "/org/festival/festival/bad slug!/register"),
+		).rejects.toThrow("Return target");
+		await expect(
+			f.service.start("festival", "/org/other/festival/festival-2026/register"),
+		).rejects.toThrow("Return target");
+		await expect(
+			f.service.start(
+				"festival",
+				"/org/festival/festival/festival-2026/register?tab=details",
+			),
+		).rejects.toThrow("Return target");
+	});
+
 	it("preserves one bounded local offering in one-time tenant OAuth state", async () => {
 		const f = await fixture();
 		const authUrl = await f.begin(undefined, "offering_123");
@@ -1077,6 +1115,22 @@ describe("CustomerAccountService", () => {
 				auth.sessionId,
 				"wrong",
 				"https://festival.example.com",
+			),
+		).rejects.toThrow("CSRF");
+		await expect(
+			f.service.logout(
+				"festival",
+				auth.sessionId,
+				session.session.csrfToken,
+				"https://evil.example.com",
+			),
+		).rejects.toThrow("CSRF");
+		await expect(
+			f.service.logout(
+				"festival",
+				auth.sessionId,
+				session.session.csrfToken,
+				undefined,
 			),
 		).rejects.toThrow("CSRF");
 		const redirect = await f.service.logout(

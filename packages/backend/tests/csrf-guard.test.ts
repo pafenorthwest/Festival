@@ -94,10 +94,44 @@ describe("resolveRequestOrigin", () => {
 			}
 		});
 
-		it("returns undefined when neither Origin nor Referer is present", () => {
+		it("returns undefined when neither Origin, Referer, nor Host is present", () => {
 			const c = createMockContext({});
 			const result = resolveRequestOrigin(c);
 			expect(result).toBeUndefined();
+		});
+
+		it("falls back to Host header defaulting to https when Origin and Referer are absent", () => {
+			const c = createMockContext({ Host: "festival.example.com" });
+			const result = resolveRequestOrigin(c);
+			expect(result).toBe("https://festival.example.com");
+		});
+
+		it("falls back to Host header with custom port and X-Forwarded-Proto", () => {
+			const c = createMockContext({
+				Host: "localhost:3000",
+				"X-Forwarded-Proto": "http",
+			});
+			const result = resolveRequestOrigin(c);
+			expect(result).toBe("http://localhost:3000");
+		});
+
+		it("falls back to X-Forwarded-Host over Host when present", () => {
+			const c = createMockContext({
+				"X-Forwarded-Host": "festival.example.com, proxy.internal",
+				"X-Forwarded-Proto": "https",
+				Host: "internal-alb",
+			});
+			const result = resolveRequestOrigin(c);
+			expect(result).toBe("https://festival.example.com");
+		});
+
+		it("prefers Origin even when Host header is present", () => {
+			const c = createMockContext({
+				Origin: "https://evil.example.com",
+				Host: "festival.example.com",
+			});
+			const result = resolveRequestOrigin(c);
+			expect(result).toBe("https://evil.example.com");
 		});
 
 		it("returns Origin even if Referer is malformed", () => {
@@ -166,6 +200,20 @@ describe("resolveRequestOrigin", () => {
 			expect(response.status).toBe(200);
 			const body = await response.json();
 			expect(body).toEqual({ origin: null });
+		});
+
+		it("successfully extracts origin from Host when Origin and Referer are absent", async () => {
+			const app = createTestApp();
+			const response = await app.request("/test-csrf", {
+				method: "POST",
+				headers: {
+					Host: "festival.example.com",
+				},
+			});
+
+			expect(response.status).toBe(200);
+			const body = await response.json();
+			expect(body).toEqual({ origin: "https://festival.example.com" });
 		});
 
 		it("successfully extracts origin when Origin is present despite malformed Referer", async () => {
