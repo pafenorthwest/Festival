@@ -49,3 +49,26 @@ export function mapRepertoireToDrafts(pieces: RepertoirePiece[]): PieceDraft[] {
 		seconds: (p.durationSeconds ?? 0) % 60,
 	}));
 }
+
+export function isPieceDurationValid(
+	minutes: number,
+	seconds: number,
+): boolean {
+	return (
+		minutes >= 0 &&
+		Number.isInteger(minutes) &&
+		seconds >= 0 &&
+		seconds < 60 &&
+		Number.isInteger(seconds) &&
+		minutes * 60 + seconds > 0
+	);
+}
+
+export function isValidPieceDraft(p: PieceDraft): boolean {
+	return (
+		p.title.trim().length > 0 &&
+		p.composer.trim().length > 0 &&
+		isPieceDurationValid(p.minutes, p.seconds)
+	);
+}
+

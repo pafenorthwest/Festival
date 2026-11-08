@@ -16,7 +16,10 @@ import {
 	listRegistrationTeachers,
 	updateRegistrationMetadata,
 } from "../lib/api.js";
-import { buildOrgCustomerAccountClassesPath } from "../lib/routes.js";
+import {
+	buildOrgCustomerAccountClassesPath,
+} from "../lib/routes.js";
+import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import {
 	formatCutoffFull,
 	formatPieceTime,
@@ -28,14 +31,13 @@ import { CustomerAccountPageLayout } from "./CustomerAccountPageLayout.js";
 export function CustomerAccountClassEditPage(props: {
 	slug: string;
 	registrationId: string;
+	app?: FestivalAppController;
 }) {
 	const [reg, setReg] = createSignal<CustomerClassRegistrationItem | null>(null);
 	const [fest, setFest] = createSignal<FestivalSummary | null>(null);
 	const [div, setDiv] = createSignal<OrganizationDivision | null>(null);
 	const [teachers, setTeachers] = createSignal<RegistrationTeacherSummary[]>([]);
-	const [accompanists, setAccompanists] = createSignal<
-		RegistrationAccompanistSummary[]
-	>([]);
+	const [accompanists, setAccompanists] = createSignal<RegistrationAccompanistSummary[]>([]);
 	const [loading, setLoading] = createSignal(true);
 	const [error, setError] = createSignal("");
 	const [saving, setSaving] = createSignal(false);
@@ -48,7 +50,10 @@ export function CustomerAccountClassEditPage(props: {
 		const f = fest();
 		if (!f?.startDate) return null;
 		try {
-			return deriveFestivalMetadataCutoff(f.startDate, "America/Los_Angeles");
+			return deriveFestivalMetadataCutoff(
+				f.startDate,
+				props.app?.organization()?.timezone || "America/Los_Angeles",
+			);
 		} catch {
 			return null;
 		}
@@ -64,12 +69,8 @@ export function CustomerAccountClassEditPage(props: {
 		try {
 			const [rRes, lRes, dRes] = await Promise.all([
 				listCustomerClassRegistrations(props.slug),
-				getPublicOrganizationLanding(props.slug).catch(() => ({
-					festivals: [] as FestivalSummary[],
-				})),
-				getPublicDivisions(props.slug).catch(() => ({
-					divisions: [] as OrganizationDivision[],
-				})),
+				getPublicOrganizationLanding(props.slug).catch(() => ({ festivals: [] as FestivalSummary[] })),
+				getPublicDivisions(props.slug).catch(() => ({ divisions: [] as OrganizationDivision[] })),
 			]);
 			const match = rRes.registrations.find(
 				(r) =>
@@ -79,21 +80,15 @@ export function CustomerAccountClassEditPage(props: {
 			if (!match) return setError("Registration not found.");
 			setReg(match);
 
-			const f =
-				lRes.festivals.find((x) => x.id === match.entitlement.festivalId) ?? null;
+			const f = lRes.festivals.find((x) => x.id === match.entitlement.festivalId) ?? null;
 			setFest(f);
-			setDiv(
-				dRes.divisions.find((d) => d.id === match.festivalClass?.divisionId) ??
-					null,
-			);
+			setDiv(dRes.divisions.find((d) => d.id === match.festivalClass?.divisionId) ?? null);
 			setPieces(mapRepertoireToDrafts(match.metadata?.repertoireJson ?? []));
 			setAccompanistId(match.metadata?.accompanistMembershipId ?? "");
 
 			if (f?.shortName) {
 				const [accRes, tRes] = await Promise.all([
-					listRegistrationAccompanists(props.slug, f.shortName).catch(() => ({
-						accompanists: [],
-					})),
+					listRegistrationAccompanists(props.slug, f.shortName).catch(() => ({ accompanists: [] })),
 					listRegistrationTeachers(props.slug, f.shortName, {
 						childId: match.child?.id,
 						divisionId: match.festivalClass?.divisionId,
@@ -121,10 +116,7 @@ export function CustomerAccountClassEditPage(props: {
 	});
 
 	function handleBack(e: MouseEvent) {
-		if (
-			isDirty() &&
-			!window.confirm("You have unsaved changes. Discard changes?")
-		) {
+		if (isDirty() && !window.confirm("You have unsaved changes. Discard changes?")) {
 			e.preventDefault();
 		}
 	}
@@ -137,6 +129,7 @@ export function CustomerAccountClassEditPage(props: {
 			return n;
 		});
 		setIsDirty(true);
+		setSaveSuccess(false);
 	}
 
 	function addPiece() {
@@ -147,33 +140,71 @@ export function CustomerAccountClassEditPage(props: {
 			{ title: "", composer: "", movement: "", minutes: 0, seconds: 0 },
 		]);
 		setIsDirty(true);
+		setSaveSuccess(false);
 	}
+
+	const isValidPiece = (p: PieceDraft) =>
+		Boolean(p.title.trim() && p.composer.trim()) &&
+		p.minutes >= 0 &&
+		Number.isInteger(p.minutes) &&
+		p.seconds >= 0 &&
+		p.seconds < 60 &&
+		Number.isInteger(p.seconds) &&
+		(p.minutes * 60 + p.seconds) > 0;
 
 	async function save(csrfToken: string) {
 		const r = reg();
 		if (!r) return;
-		setSaving(true);
 		setError("");
 		setSaveSuccess(false);
 
-		const pList: RepertoirePiece[] = pieces()
-			.filter((p) => p.title.trim() && p.composer.trim())
-			.map((p) => ({
-				title: p.title.trim(),
-				composer: p.composer.trim(),
-				movement: p.movement.trim() || null,
-				durationSeconds: Number(p.minutes) * 60 + Number(p.seconds),
-				durationMinutes: Number(p.minutes),
-			}));
+		const validPieces = pieces().filter(isValidPiece);
+		if (validPieces.length === 0) {
+			setError("At least one valid repertoire piece is required.");
+			return;
+		}
+		if (pieces().some((p) => (p.title.trim() || p.composer.trim()) && !isValidPiece(p))) {
+			setError("Each piece must have a title, composer, and valid duration.");
+			return;
+		}
+
+		setSaving(true);
+		const pList: RepertoirePiece[] = validPieces.map((p) => ({
+			title: p.title.trim(),
+			composer: p.composer.trim(),
+			movement: p.movement.trim() || null,
+			durationSeconds: p.minutes * 60 + p.seconds,
+			durationMinutes: p.minutes,
+		}));
 
 		try {
-			await updateRegistrationMetadata(
+			const res = await updateRegistrationMetadata(
 				props.slug,
 				fest()?.shortName ?? "",
 				r.entitlement.id,
 				csrfToken,
 				{ pieces: pList, accompanistId: accompanistId() || null },
 			);
+			const savedPieces = res?.metadata?.repertoireJson ?? pList;
+			const savedAccompanist =
+				res?.metadata?.accompanistMembershipId !== undefined
+					? res.metadata.accompanistMembershipId
+					: accompanistId() || null;
+
+			setReg((prev) =>
+				prev?.metadata
+					? {
+							...prev,
+							metadata: {
+								...prev.metadata,
+								accompanistMembershipId: savedAccompanist,
+								repertoireJson: savedPieces,
+							},
+						}
+					: prev,
+			);
+			setPieces(mapRepertoireToDrafts(savedPieces));
+			setAccompanistId(savedAccompanist ?? "");
 			setIsDirty(false);
 			setSaveSuccess(true);
 		} catch (err) {
@@ -185,10 +216,7 @@ export function CustomerAccountClassEditPage(props: {
 
 	const teacherName = () => {
 		const tid = reg()?.metadata?.teacherMembershipId;
-		return (
-			teachers().find((t) => t.id === tid)?.name ??
-			"Historical name unavailable"
-		);
+		return teachers().find((t) => t.id === tid)?.name ?? "Historical name unavailable";
 	};
 	const ageRange = () => {
 		const fc = reg()?.festivalClass;
@@ -230,7 +258,13 @@ export function CustomerAccountClassEditPage(props: {
 									Editing is open until{" "}
 									{(() => {
 										const c = cutoff();
-										return c ? formatCutoffFull(c) : "cutoff date";
+										return c
+											? formatCutoffFull(
+													c,
+													props.app?.organization()?.timezone ||
+														"America/Los_Angeles",
+												)
+											: "cutoff date";
 									})()}
 									.
 								</strong>

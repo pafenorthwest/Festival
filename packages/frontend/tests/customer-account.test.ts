@@ -7,6 +7,10 @@ import {
 	buildOrgCustomerAccountClassEditPath,
 	buildOrgCustomerAccountClassesPath,
 } from "../src/lib/routes.js";
+import {
+	isPieceDurationValid,
+	isValidPieceDraft,
+} from "../src/pages/customerAccountClassEditHelpers.js";
 
 const membershipsPage = await Bun.file(
 	new URL("../src/pages/CustomerAccountMembershipsPage.tsx", import.meta.url),
@@ -235,5 +239,81 @@ describe("customer account frontend boundary", () => {
 		expect(classEditPage).toContain("data-confirm-discard");
 		expect(classEditPage).toContain("Discard changes?");
 		expect(classEditPage).toContain("data-edit-performer");
+	});
+
+	it("enforces organization timezone parity for cutoff checks across class list and edit pages", () => {
+		expect(classesPage).toContain(
+			'props.app?.organization()?.timezone || "America/Los_Angeles"',
+		);
+		expect(classEditPage).toContain(
+			'props.app?.organization()?.timezone || "America/Los_Angeles"',
+		);
+	});
+
+	it("validates piece duration requiring non-negative integer minutes, valid seconds, and total duration > 0", () => {
+		expect(isPieceDurationValid(3, 30)).toBe(true);
+		expect(isPieceDurationValid(0, 45)).toBe(true);
+		expect(isPieceDurationValid(5, 0)).toBe(true);
+
+		// Negative or non-integer minutes
+		expect(isPieceDurationValid(-1, 30)).toBe(false);
+		expect(isPieceDurationValid(1.5, 30)).toBe(false);
+
+		// Negative, >= 60, or non-integer seconds
+		expect(isPieceDurationValid(2, -5)).toBe(false);
+		expect(isPieceDurationValid(2, 60)).toBe(false);
+		expect(isPieceDurationValid(2, 75)).toBe(false);
+		expect(isPieceDurationValid(2, 30.5)).toBe(false);
+
+		// Total duration must be > 0
+		expect(isPieceDurationValid(0, 0)).toBe(false);
+
+		// Piece draft validation
+		expect(
+			isValidPieceDraft({
+				title: "Sonata",
+				composer: "Mozart",
+				movement: "Allegro",
+				minutes: 3,
+				seconds: 15,
+			}),
+		).toBe(true);
+		expect(
+			isValidPieceDraft({
+				title: "",
+				composer: "Mozart",
+				movement: "",
+				minutes: 3,
+				seconds: 15,
+			}),
+		).toBe(false);
+		expect(
+			isValidPieceDraft({
+				title: "Sonata",
+				composer: "",
+				movement: "",
+				minutes: 3,
+				seconds: 15,
+			}),
+		).toBe(false);
+		expect(
+			isValidPieceDraft({
+				title: "Sonata",
+				composer: "Mozart",
+				movement: "",
+				minutes: 0,
+				seconds: 0,
+			}),
+		).toBe(false);
+	});
+
+	it("guards edit submission against 0 valid pieces and synchronizes state on save", () => {
+		expect(classEditPage).toContain(
+			"At least one valid repertoire piece is required.",
+		);
+		expect(classEditPage).toContain("mapRepertoireToDrafts(savedPieces)");
+		expect(classEditPage).toContain("setIsDirty(false)");
+		expect(classEditPage).toContain("setSaveSuccess(true)");
+		expect(classEditPage).toContain("Changes saved successfully.");
 	});
 });

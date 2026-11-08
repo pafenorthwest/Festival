@@ -19,6 +19,7 @@ import {
 	buildOrgCustomerAccountClassEditPath,
 	buildOrgRootPath,
 } from "../lib/routes.js";
+import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import {
 	formatCutoffDateTime,
 	formatCutoffShort,
@@ -40,7 +41,10 @@ function formatPaidAt(paidAtIso: string | null): string {
 	});
 }
 
-export function CustomerAccountClassesPage(props: { slug: string }) {
+export function CustomerAccountClassesPage(props: {
+	slug: string;
+	app?: FestivalAppController;
+}) {
 	const [registrations, setRegistrations] = createSignal<
 		CustomerClassRegistrationItem[]
 	>([]);
@@ -132,7 +136,10 @@ export function CustomerAccountClassesPage(props: { slug: string }) {
 		const f = activeFestival();
 		if (!f?.startDate) return null;
 		try {
-			return deriveFestivalMetadataCutoff(f.startDate, "America/Los_Angeles");
+			return deriveFestivalMetadataCutoff(
+				f.startDate,
+				props.app?.organization()?.timezone || "America/Los_Angeles",
+			);
 		} catch {
 			return null;
 		}
@@ -150,7 +157,10 @@ export function CustomerAccountClassesPage(props: { slug: string }) {
 		const f = festivals().find((x) => x.id === festId);
 		if (!f?.startDate) return { cutoff: null, isPassed: false };
 		try {
-			const c = deriveFestivalMetadataCutoff(f.startDate, "America/Los_Angeles");
+			const c = deriveFestivalMetadataCutoff(
+				f.startDate,
+				props.app?.organization()?.timezone || "America/Los_Angeles",
+			);
 			return { cutoff: c, isPassed: Date.now() >= c.getTime() };
 		} catch {
 			return { cutoff: null, isPassed: false };
