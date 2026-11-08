@@ -2896,7 +2896,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			 LEFT JOIN ${this.schema}.membership_identity_emails identity
 			   ON identity.organization_id = c.organization_id AND identity.customer_id = c.id
 			 WHERE c.organization_id = $1 AND c.id = ANY($2::text[])`,
-			[organizationId, uniqueIds],
+			[organizationId, sql.array(uniqueIds, "text")],
 		)) as Array<{
 			customer_id: string;
 			name: string | null;

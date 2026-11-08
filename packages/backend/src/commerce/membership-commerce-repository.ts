@@ -575,6 +575,28 @@ export class InMemoryMembershipCommerceRepository
 	private async finalizeDecisionAtomicallyUnlocked(
 		input: Parameters<MembershipCommerceRepository["finalizeDecision"]>[0],
 	) {
+		const execution = input.decision.checkoutIntentId
+			? await this.checkout?.classExecutions?.get(
+					input.decision.organizationId,
+					input.decision.checkoutIntentId,
+				)
+			: null;
+		if (
+			execution &&
+			(execution.checkpoint !== "attached" || execution.state === "rejected")
+		) {
+			input = {
+				...input,
+				decision: {
+					...input.decision,
+					status: "needs_review",
+					reasonCode: "upstream_invalid",
+				},
+				grant: undefined,
+				classEntitlement: undefined,
+				classEntitlements: undefined,
+			};
+		}
 		const classEntitlementInputs =
 			input.classEntitlements ??
 			(input.classEntitlement ? [input.classEntitlement] : []);
@@ -652,7 +674,16 @@ export class InMemoryMembershipCommerceRepository
 			delivery: delivery ? { ...delivery } : undefined,
 		};
 		try {
-			return await this.finalizeDecisionInternal(input);
+			const result = await this.finalizeDecisionInternal(input);
+			if (execution && !result.existing && input.decision.checkoutIntentId) {
+				await this.checkout?.classExecutions?.observePayment({
+					organizationId: input.decision.organizationId,
+					intentId: input.decision.checkoutIntentId,
+					shopifyOrderGid: input.decision.shopifyOrderGid,
+					approved: result.decision.status === "approved",
+				});
+			}
+			return result;
 		} catch (error) {
 			for (const line of classLineSnapshots) {
 				if (!line.hadValue) {

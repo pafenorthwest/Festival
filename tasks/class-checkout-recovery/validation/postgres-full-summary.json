@@ -1,0 +1,18 @@
+{
+  "schema": "it_checkout_full_fdc6c2aae4c04570b5d14a7bbad19b03",
+  "configuredApplicationSchemaModified": false,
+  "initializedOnlyDisposableTarget": true,
+  "cleaned": true,
+  "failed": false,
+  "passedFiles": 17,
+  "failedFiles": 0,
+  "selectedFiles": 17,
+  "notRunFiles": 0,
+  "testsPassed": 61,
+  "testsFailed": 0,
+  "testsSkipped": 0,
+  "currentSchemaInitializations": 8,
+  "applicationRollbacks": 10,
+  "includedPaymentSuite": true,
+  "wallTimeMs": 5661
+}

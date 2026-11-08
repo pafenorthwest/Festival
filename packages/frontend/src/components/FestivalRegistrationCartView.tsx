@@ -13,6 +13,8 @@ export interface FestivalRegistrationCartViewProps {
 	isSubmitting: boolean;
 	error: string | null;
 	onSubmitCheckout: () => void;
+	onRefreshCheckout?: () => void;
+	onRestartCheckout?: () => void;
 }
 
 export function FestivalRegistrationCartView(
@@ -33,9 +35,53 @@ export function FestivalRegistrationCartView(
 	const disabled = () =>
 		props.isSubmitting ||
 		props.cart.itemCount() === 0 ||
-		!props.eligibility?.isCartEligible();
+		Boolean(
+			props.cart.checkoutRecovery() &&
+				!props.cart.checkoutRecovery()?.retryAllowed,
+		) ||
+		(!props.cart.checkoutSubmission() && !props.eligibility?.isCartEligible());
 	return (
 		<section aria-label="Registration cart">
+			<Show when={props.cart.checkoutRecovery()}>
+				{(recovery) => (
+					<div class="parent-note parent-warning" role="status">
+						<p>
+							Your registrations are saved while we check the existing checkout.
+							Please keep this reference when contacting the festival office:{" "}
+							{recovery().recoveryReference}.
+						</p>
+						<Button
+							type="button"
+							variant="secondary"
+							disabled={props.isSubmitting}
+							onClick={props.onRefreshCheckout}
+						>
+							Check checkout status
+						</Button>
+						<Show
+							when={
+								recovery().status === "resolved" &&
+								["abandoned_unknown", "checkout_abandoned"].includes(
+									recovery().reasonCode,
+								)
+							}
+						>
+							<p>
+								The festival office has closed the previous attempt. Your
+								registrations remain here so you can start a new checkout.
+							</p>
+							<Button
+								type="button"
+								variant="secondary"
+								disabled={props.isSubmitting}
+								onClick={props.onRestartCheckout}
+							>
+								Start a new checkout
+							</Button>
+						</Show>
+					</div>
+				)}
+			</Show>
 			<Show when={props.eligibility?.hasIneligibleItems()}>
 				<div
 					class="parent-note parent-warning cart-ineligible-banner"
@@ -121,7 +167,10 @@ export function FestivalRegistrationCartView(
 											<Button
 												type="button"
 												variant="secondary"
-												disabled={props.isSubmitting}
+												disabled={
+													props.isSubmitting ||
+													Boolean(props.cart.checkoutSubmission())
+												}
 												onClick={() => props.cart.removeItem(item.lineId)}
 											>
 												Remove

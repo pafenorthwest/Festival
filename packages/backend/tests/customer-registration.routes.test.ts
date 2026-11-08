@@ -1,7 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import { Hono } from "hono";
 import { InMemoryCheckoutRepository } from "../src/checkout/checkout-repository.js";
-import { ClassCheckoutService } from "../src/checkout/class-checkout-service.js";
+import { InMemoryClassCheckoutExecutionRepository } from "../src/checkout/class-checkout-execution.js";
+import {
+	ClassCheckoutRecoveryRequiredError,
+	ClassCheckoutService,
+} from "../src/checkout/class-checkout-service.js";
 import { InMemoryMembershipCommerceRepository } from "../src/commerce/membership-commerce-repository.js";
 import {
 	CUSTOMER_SESSION_COOKIE,
@@ -28,6 +32,7 @@ function createFakeServices() {
 		listAccompanists: [],
 		listClassRegistrations: [],
 		checkoutAccess: [],
+		formAccess: [],
 		customerSession: [],
 		startCheckout: [],
 		evaluateEligibility: [],
@@ -148,6 +153,16 @@ function createFakeServices() {
 					createdAtIso: "2026-01-01T00:00:00.000Z",
 				},
 			};
+		},
+		formAccess: async (
+			slug: string,
+			sessionId?: string,
+			csrfToken?: string,
+			origin?: string,
+		) => {
+			calls.formAccess.push({ slug, sessionId, csrfToken, origin });
+			if (!sessionId) throw new AppError("Customer session is invalid.", 401);
+			return { organizationId: "org_1", customerId: "cust_1" };
 		},
 		checkoutAccess: async (
 			slug: string,
@@ -287,6 +302,166 @@ function req(
 		body,
 	});
 }
+
+describe("deterministic class checkout recovery routes", () => {
+	const path = "/festivals/spring-2026/registration/checkout/status";
+	const reference = "12345678-1234-4234-8234-123456789abc";
+	const headers = {
+		...AUTH,
+		...JSON_HDR,
+		"X-CSRF-Token": "csrf",
+		"Idempotency-Key": VALID_UUID,
+		Origin: "https://festival.example",
+	};
+	it("authenticates status lookup and projects only customer-safe recovery fields", async () => {
+		const { customerAccountService, classCheckoutService, calls } =
+			createFakeServices();
+		let received: unknown;
+		Object.assign(classCheckoutService, {
+			recoveryStatus: async (input: unknown) => {
+				received = input;
+				return {
+					status: "recovery_required",
+					recoveryReference: reference,
+					reasonCode: "shopify_outcome_unknown",
+					retryAllowed: false,
+					shopifyCartId: "secret-cart",
+					idempotencyKey: "secret-key",
+					buyerAccessToken: "secret-token",
+				};
+			},
+		});
+		const result = await req(
+			createTestApp({ customerAccountService, classCheckoutService }),
+			"POST",
+			path,
+			headers,
+			JSON.stringify({ recoveryReference: reference }),
+		);
+		expect(result.status).toBe(200);
+		expect(result.headers.get("Cache-Control")).toBe("no-store");
+		expect(await result.json()).toEqual({
+			status: "recovery_required",
+			recoveryReference: reference,
+			reasonCode: "shopify_outcome_unknown",
+			retryAllowed: false,
+		});
+		expect(calls.formAccess).toHaveLength(1);
+		expect(calls.checkoutAccess).toHaveLength(0);
+		expect(received).toMatchObject({
+			organizationId: "org_1",
+			customerId: "cust_1",
+			festivalShortName: "spring-2026",
+			recoveryReference: reference,
+			idempotencyKey: VALID_UUID,
+		});
+	});
+	it("rejects missing authentication, bearer principals, keys, and extra payload fields", async () => {
+		const { customerAccountService, classCheckoutService } =
+			createFakeServices();
+		const app = createTestApp({ customerAccountService, classCheckoutService });
+		const body = JSON.stringify({ recoveryReference: reference });
+		expect((await req(app, "POST", path, JSON_HDR, body)).status).toBe(401);
+		expect(
+			(
+				await req(
+					app,
+					"POST",
+					path,
+					{ ...headers, Authorization: "Bearer principal" },
+					body,
+				)
+			).status,
+		).toBe(400);
+		expect(
+			(await req(app, "POST", path, { ...AUTH, ...JSON_HDR }, body)).status,
+		).toBe(400);
+		expect(
+			(
+				await req(
+					app,
+					"POST",
+					path,
+					headers,
+					JSON.stringify({
+						recoveryReference: reference,
+						shopifyCartId: "injected",
+					}),
+				)
+			).status,
+		).toBe(400);
+	});
+	it("replays recorded recovery before OAuth access even when the provider is unavailable", async () => {
+		const repository = new InMemoryClassCheckoutExecutionRepository();
+		await repository.prepare({
+			organizationId: "org_1",
+			customerId: "cust_1",
+			intentId: "intent",
+			fingerprint: "fingerprint",
+			requestSnapshot: {},
+		});
+		const claimed = await repository.claim({
+			organizationId: "org_1",
+			intentId: "intent",
+			owner: "worker",
+		});
+		if (!claimed) throw new Error("Expected worker claim");
+		await repository.recordRecoveryRequired({
+			claim: {
+				organizationId: "org_1",
+				intentId: "intent",
+				owner: "worker",
+				generation: claimed.generation,
+			},
+			reason: "shopify_outcome_unknown",
+			evidence: { message: "internal-evidence" },
+		});
+		const record = await repository.get("org_1", "intent");
+		if (!record) throw new Error("Expected recorded recovery");
+		const { customerAccountService, classCheckoutService, calls } =
+			createFakeServices();
+		Object.assign(customerAccountService, {
+			checkoutAccess: async () => {
+				calls.checkoutAccess.push("unexpected-provider-access");
+				throw new AppError("Provider unavailable", 503);
+			},
+		});
+		Object.assign(classCheckoutService, {
+			preflightRecovery: async () => {
+				throw new ClassCheckoutRecoveryRequiredError(record);
+			},
+		});
+		const result = await req(
+			createTestApp({ customerAccountService, classCheckoutService }),
+			"POST",
+			"/festivals/spring-2026/registration/checkout",
+			headers,
+			JSON.stringify({
+				lineItems: [
+					{
+						childId: "child",
+						festivalClassId: "class",
+						teacherId: "teacher",
+						pieces: [],
+					},
+				],
+			}),
+		);
+		expect(result.status).toBe(409);
+		const body = await result.json();
+		expect(body.code).toBe("checkout_recovery_required");
+		expect(body.recovery).toMatchObject({
+			status: "recovery_required",
+			recoveryReference: record.recoveryReference,
+			retryAllowed: false,
+		});
+		expect(JSON.stringify(body)).not.toContain("internal-evidence");
+		expect(result.headers.get("Cache-Control")).toBe("no-store");
+		expect(calls.checkoutAccess).toHaveLength(0);
+		expect(calls.startCheckout).toHaveLength(0);
+		expect(calls.formAccess).toHaveLength(1);
+	});
+});
 
 describe("Customer Registration Routes", () => {
 	describe("GET /festivals/:festivalShortName/registration/teachers", () => {
@@ -2097,6 +2272,10 @@ describe("Customer Registration Routes", () => {
 				() => now,
 			);
 			const customerAccountService = {
+				formAccess: async () => ({
+					organizationId: org.id,
+					customerId: customer.id,
+				}),
 				checkoutAccess: async () => ({
 					organizationId: org.id,
 					customerId: customer.id,
