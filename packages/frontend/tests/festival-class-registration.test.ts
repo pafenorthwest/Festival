@@ -465,6 +465,28 @@ describe("Festival Repertoire Modal", () => {
 			);
 		}
 	});
+
+	it("provides next/prev pagination controls when multiple pieces exist (Issue #339)", () => {
+		expect(repertoireModal).toContain("activePieceIndex");
+		expect(repertoireModal).toContain(
+			"Piece {activePieceIndex() + 1} of {pieces().length}",
+		);
+		expect(repertoireModal).toContain("Previous");
+		expect(repertoireModal).toContain("Next");
+		expect(repertoireModal).toContain('data-testid="modal-repertoire-title"');
+		expect(repertoireModal).toContain('data-testid="btn-add-piece"');
+		expect(repertoireModal).toContain('data-testid="btn-save-repertoire"');
+		expect(repertoireModal).toContain('data-testid="btn-cancel-repertoire"');
+		expect(repertoireModal).toContain(
+			"data-testid={`input-piece-title-${" + "index}`}",
+		);
+		expect(repertoireModal).toContain(
+			"data-testid={`input-piece-composer-${" + "index}`}",
+		);
+		expect(repertoireModal).toContain(
+			"data-testid={`btn-remove-piece-${" + "index}`}",
+		);
+	});
 });
 
 describe("Festival Registration Cart Card & Checkout Gate", () => {
