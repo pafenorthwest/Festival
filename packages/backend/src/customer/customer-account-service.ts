@@ -238,6 +238,7 @@ function toCustomerMetadataSummary(
 		festivalId: metadata.festivalId,
 		classEntitlementId: metadata.classEntitlementId,
 		teacherMembershipId: metadata.teacherMembershipId,
+		teacherName: metadata.registrationSnapshot?.teacher.name ?? null,
 		accompanistMembershipId: metadata.accompanistMembershipId,
 		repertoireJson: metadata.repertoireJson,
 		repertoireItems: metadata.repertoireItems,
@@ -1217,6 +1218,23 @@ export class CustomerAccountService {
 			parentCustomerId: session.customerId,
 			festivalId: festival?.id,
 		});
+		const [organization, festivals] = await Promise.all([
+			this.organizations.findOrganizationBySlug(slug),
+			festival
+				? Promise.resolve([festival])
+				: this.organizations.listFestivals(session.organizationId),
+		]);
+		if (!organization) throw new AppError("Organization not found.", 404);
+		const editCutoffs = new Map(
+			festivals.map((entry) => [
+				entry.id,
+				deriveFestivalMetadataCutoff(
+					entry.startDate,
+					organization.timezone || "UTC",
+				),
+			]),
+		);
+		const nowMs = this.now().getTime();
 
 		const projections = await this.commerce.listOrderProjectionsByGids(
 			session.organizationId,
@@ -1272,6 +1290,7 @@ export class CustomerAccountService {
 					session.organizationId,
 					entitlement.id,
 				);
+				const editCutoff = editCutoffs.get(entitlement.festivalId);
 				return {
 					entitlement: toCustomerEntitlementSummary(entitlement),
 					festivalClass: festivalClass
@@ -1280,6 +1299,13 @@ export class CustomerAccountService {
 					child,
 					metadata: metadata ? toCustomerMetadataSummary(metadata) : null,
 					paidAtIso: paidAtByOrderGid.get(entitlement.shopifyOrderGid) ?? null,
+					metadataEditCutoffIso: editCutoff?.toISOString() ?? null,
+					canEditMetadata: Boolean(
+						metadata &&
+							festivalClass &&
+							editCutoff &&
+							nowMs < editCutoff.getTime(),
+					),
 				};
 			}),
 		);

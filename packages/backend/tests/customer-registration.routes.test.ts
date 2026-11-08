@@ -1614,6 +1614,33 @@ describe("Customer Registration Routes", () => {
 				checkoutIntentLineId: "intent-line-secret-1",
 				teacherMembershipId: "teacher-mem-1",
 				accompanistMembershipId: "acc-mem-1",
+				registrationSnapshot: {
+					version: 1,
+					capturedAtIso: "2026-03-01T00:00:00.000Z",
+					class: {
+						id: classConfig.id,
+						festivalId: festival.id,
+						displayName: classConfig.displayName,
+						classSubtypeId: classConfig.classSubtypeId,
+						classSubtypeName: "Piano",
+						minimumAge: 5,
+						maximumAge: 18,
+						price: "40.00",
+						currencyCode: "USD",
+						maximumPerformancePieces: 2,
+						performanceMinutes: 10,
+						capacity: 20,
+					},
+					division: { id: "div-1", name: "Piano" },
+					instrument: "unknown",
+					teacher: {
+						customerId: "teacher-customer-private",
+						membershipId: "teacher-mem-1",
+						name: "Jane Teacher",
+					},
+					accompanist: null,
+					repertoire: [],
+				},
 				repertoireJson: [
 					{
 						title: "Sonata in C",
@@ -1671,6 +1698,8 @@ describe("Customer Registration Routes", () => {
 				expect(rawText).not.toContain("gid://shopify/Order/secret-1");
 				expect(rawText).not.toContain("intent-secret-1");
 				expect(rawText).not.toContain("intent-line-secret-1");
+				expect(rawText).not.toContain("registrationSnapshot");
+				expect(rawText).not.toContain("teacher-customer-private");
 
 				const body = (await res.json()) as {
 					registrations: Array<Record<string, unknown>>;
@@ -1710,6 +1739,7 @@ describe("Customer Registration Routes", () => {
 						festivalId: festival.id,
 						classEntitlementId: entitlement.id,
 						teacherMembershipId: "teacher-mem-1",
+						teacherName: "Jane Teacher",
 						accompanistMembershipId: "acc-mem-1",
 						repertoireJson: [
 							{
@@ -1721,6 +1751,8 @@ describe("Customer Registration Routes", () => {
 						repertoireItems: meta.repertoireItems,
 					},
 					paidAtIso: "2026-05-01T10:30:00.000Z",
+					metadataEditCutoffIso: "2026-04-03T00:00:00.000Z",
+					canEditMetadata: false,
 				});
 			}
 		});
