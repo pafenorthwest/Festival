@@ -13,7 +13,8 @@
 		"lint": "tsc -p tsconfig.json --noEmit",
 		"build": "tsc -p tsconfig.json",
 		"test": "bun test",
-		"seed:test-data": "bun run scripts/load-test-data.ts"
+		"seed:test-data": "bun run scripts/load-test-data.ts",
+		"perf:children": "bun run ./scripts/perf-500-children.ts"
 	},
 	"type": "module"
 }

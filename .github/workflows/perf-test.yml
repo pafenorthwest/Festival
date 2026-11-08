@@ -1,0 +1,81 @@
+name: Performance Benchmark (500 Parents)
+
+on:
+  workflow_dispatch:
+    inputs:
+      concurrency:
+        description: 'Concurrent parent requests'
+        required: true
+        default: '500'
+      apply_seed:
+        description: 'Seed perf-test org and sessions'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  seed-remote:
+    if: ${{ inputs.apply_seed }}
+    runs-on: ubuntu-latest
+    environment: integration
+
+    steps:
+      - name: Seed database on Integration Host via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          DEPLOY_SHA: ${{ github.sha }}
+        with:
+          host: ${{ secrets.DO_INTEGRATION_HOST }}
+          username: ${{ secrets.DO_INTEGRATION_USER || 'webadmin' }}
+          key: ${{ secrets.DO_SSH_PRIVATE_KEY }}
+          passphrase: ${{ secrets.DO_SSH_PASSPHRASE }}
+          envs: DEPLOY_SHA
+          command_timeout: 30m
+          script: |
+            set -euo pipefail
+            [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+            cd /opt/Festival
+            git fetch origin "$DEPLOY_SHA"
+            git checkout --detach "$DEPLOY_SHA"
+            docker compose --env-file cloud-setup/.env -f cloud-setup/compose.yml exec -T postgres psql -U festivaladmin -d festival_sepv2_db < database/seeds/04-perf-test.sql
+
+  benchmark:
+    needs: [seed-remote]
+    if: always() && (needs.seed-remote.result == 'success' || needs.seed-remote.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment: integration
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify perf-test landing
+        run: |
+          for i in {1..12}; do
+            if curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
+              https://int.artsfestival.online/api/organizations/perf-test/landing > /dev/null; then
+              echo "perf-test landing endpoint is reachable and healthy on attempt $i"
+              exit 0
+            fi
+            if [ "$i" -lt 12 ]; then
+              echo "Attempt $i failed, retrying in 5s..."
+              sleep 5
+            fi
+          done
+          echo "perf-test landing check failed after 12 attempts"
+          exit 1
+
+      - name: Run benchmark
+        run: BASE_URL=https://int.artsfestival.online CONCURRENCY=${{ inputs.concurrency }} bun run --cwd packages/backend perf:children
