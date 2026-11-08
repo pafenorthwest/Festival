@@ -526,7 +526,7 @@ describe("Festival Class Registration Page workflow", () => {
 
 	it("initiates class checkout with idempotency key and redirects", () => {
 		expect(regPage).toContain("startClassCheckout");
-		expect(regPage).toContain("crypto.randomUUID()");
+		expect(regPage).toContain("idempotencyKey");
 		expect(regPage).toContain("window.location.assign");
 	});
 

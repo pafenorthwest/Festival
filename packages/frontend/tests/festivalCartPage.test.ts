@@ -43,9 +43,8 @@ describe("FestivalCartPage contract & specification", () => {
 		expect(cartPageSource).toContain("← Continue registration");
 	});
 
-	it("uses payload-cached idempotency manager on checkout", () => {
-		expect(cartPageSource).toContain("createPayloadCachedIdempotency");
-		expect(cartPageSource).toContain("idempotencyManager.getOrGenerateKey");
+	it("uses persistent cart checkout idempotency key helper on checkout", () => {
+		expect(cartPageSource).toContain("getOrCreateCartCheckoutIdempotencyKey");
 		expect(cartPageSource).toContain("idempotencyKey");
 	});
 });
