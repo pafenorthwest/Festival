@@ -3,6 +3,15 @@ import {
 	createRegistrationCart,
 	type RegistrationCartState,
 } from "../pages/registrationCartState.js";
+import {
+	clearCartCheckoutIdempotencyKey,
+	getOrCreateCartCheckoutIdempotencyKey,
+} from "../pages/checkoutIdempotency.js";
+
+export {
+	clearCartCheckoutIdempotencyKey,
+	getOrCreateCartCheckoutIdempotencyKey,
+};
 
 export interface ParentRegistrationWorkspace {
 	cart: RegistrationCartState;
@@ -30,7 +39,7 @@ export function createParentRegistrationState() {
 			const [divisionId, setDivisionId] = createSignal("");
 			const [teacherId, setTeacherId] = createSignal("");
 			current = {
-				cart: createRegistrationCart(),
+				cart: createRegistrationCart([], { slug, festivalSlug }),
 				childId,
 				setChildId,
 				divisionId,

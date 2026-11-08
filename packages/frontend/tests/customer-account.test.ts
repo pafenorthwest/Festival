@@ -4,6 +4,7 @@ import {
 	getCustomerMembershipStatus,
 } from "../src/lib/api.js";
 import { buildOrgCustomerAccountClassesPath } from "../src/lib/routes.js";
+import { formatPurchasedCutoff } from "../src/pages/PurchasedRegistrationHelpers.js";
 
 const membershipsPage = await Bun.file(
 	new URL("../src/pages/CustomerAccountMembershipsPage.tsx", import.meta.url),
@@ -203,5 +204,15 @@ describe("customer account frontend boundary", () => {
 		expect(classesPage).toContain("Waitlisted (Paid)");
 		expect(ordersPage).toContain("Placed / Confirmed");
 		expect(ordersPage).toContain("Waitlisted (Paid)");
+	});
+
+	it("formats cutoff date with organization timezone when provided", () => {
+		expect(classesPage).toContain("props.app?.organization()?.timezone");
+		const iso = "2026-12-01T20:00:00.000Z";
+		const formattedUtc = formatPurchasedCutoff(iso, "UTC");
+		expect(formattedUtc).toContain("2026");
+		expect(formattedUtc).toContain("UTC");
+		const formattedLa = formatPurchasedCutoff(iso, "America/Los_Angeles");
+		expect(formattedLa).toContain("2026");
 	});
 });

@@ -272,6 +272,7 @@ export default function App() {
 											when={app.route().kind === "org-customer-account-classes"}
 										>
 											<CustomerAccountClassesPage
+												app={app}
 												slug={(app.route() as { slug: string }).slug}
 											/>
 										</Match>

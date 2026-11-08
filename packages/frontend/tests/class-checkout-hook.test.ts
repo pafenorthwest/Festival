@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { expect, it } from "bun:test";
 
 for (const scenario of ["handoff", "network", "recovery", "abandonment"]) {
@@ -6,7 +7,7 @@ for (const scenario of ["handoff", "network", "recovery", "abandonment"]) {
 		const process = Bun.spawn(
 			[
 				Bun.which("bun") ?? "bun",
-				new URL("./fixtures/class-checkout-hook.ts", import.meta.url).pathname,
+				fileURLToPath(new URL("./fixtures/class-checkout-hook.ts", import.meta.url)),
 				scenario,
 			],
 			{ stdout: "pipe", stderr: "pipe" },

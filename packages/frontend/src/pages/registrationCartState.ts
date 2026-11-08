@@ -4,6 +4,15 @@ import type {
 	RepertoirePiece,
 } from "@festival/common";
 import { createSignal } from "solid-js";
+import {
+	clearCartCheckoutIdempotencyKey,
+	getOrCreateCartCheckoutIdempotencyKey,
+} from "./checkoutIdempotency.js";
+
+export {
+	clearCartCheckoutIdempotencyKey,
+	getOrCreateCartCheckoutIdempotencyKey,
+};
 
 export interface RegistrationCartItem {
 	lineId: string;
@@ -144,8 +153,14 @@ export interface RegistrationCheckoutSubmission {
 	lineIds: string[];
 }
 
+export interface RegistrationCartOptions {
+	slug?: string;
+	festivalSlug?: string;
+}
+
 export function createRegistrationCart(
 	initialItems: RegistrationCartItem[] = [],
+	options?: RegistrationCartOptions,
 ): RegistrationCartState {
 	const [items, setItems] = createSignal<RegistrationCartItem[]>(initialItems);
 	let checkoutPayload = "";
@@ -179,6 +194,9 @@ export function createRegistrationCart(
 		releaseCheckout();
 		checkoutPayload = "";
 		checkoutKey = "";
+		if (options?.slug && options?.festivalSlug) {
+			clearCartCheckoutIdempotencyKey(options.slug, options.festivalSlug);
+		}
 		return true;
 	}
 	function completeCheckout(submission: RegistrationCheckoutSubmission) {
@@ -189,6 +207,9 @@ export function createRegistrationCart(
 		if (checkoutSubmission() === submission) releaseCheckout();
 		checkoutPayload = "";
 		checkoutKey = "";
+		if (options?.slug && options?.festivalSlug) {
+			clearCartCheckoutIdempotencyKey(options.slug, options.festivalSlug);
+		}
 	}
 	function assertEditable() {
 		if (checkoutSubmission())
@@ -199,7 +220,16 @@ export function createRegistrationCart(
 	function getCheckoutIdempotencyKey() {
 		const submission = checkoutSubmission();
 		if (submission) return submission.idempotencyKey;
-		const payload = JSON.stringify(cartItemsToLineItemInputs(items()));
+		const lineItems = cartItemsToLineItemInputs(items());
+		if (options?.slug && options?.festivalSlug) {
+			checkoutKey = getOrCreateCartCheckoutIdempotencyKey(
+				options.slug,
+				options.festivalSlug,
+				lineItems,
+			);
+			return checkoutKey;
+		}
+		const payload = JSON.stringify(lineItems);
 		if (payload !== checkoutPayload || !checkoutKey) {
 			checkoutPayload = payload;
 			checkoutKey = crypto.randomUUID();

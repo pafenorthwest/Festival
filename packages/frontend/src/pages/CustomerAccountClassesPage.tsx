@@ -1,4 +1,5 @@
 import type { FestivalSummary } from "@festival/common";
+import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import {
 	createMemo,
 	createSignal,
@@ -39,7 +40,10 @@ function pieceDuration(seconds: number): string {
 	return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-export function CustomerAccountClassesPage(props: { slug: string }) {
+export function CustomerAccountClassesPage(props: {
+	slug: string;
+	app?: FestivalAppController;
+}) {
 	const [registrations, setRegistrations] = createSignal<
 		CustomerClassRegistrationItem[]
 	>([]);
@@ -348,6 +352,7 @@ export function CustomerAccountClassesPage(props: { slug: string }) {
 																			Edits close{" "}
 																			{formatPurchasedCutoff(
 																				registration.metadataEditCutoffIso,
+																				props.app?.organization()?.timezone,
 																			)}
 																		</span>
 																	</Show>

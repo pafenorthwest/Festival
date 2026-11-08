@@ -101,7 +101,10 @@ export function purchasedRegistrationUpdate(
 	};
 }
 
-export function formatPurchasedCutoff(cutoffIso: string | null): string {
+export function formatPurchasedCutoff(
+	cutoffIso: string | null,
+	orgTimezone?: string,
+): string {
 	if (!cutoffIso || !Number.isFinite(Date.parse(cutoffIso)))
 		return "Date unavailable";
 	return new Date(cutoffIso).toLocaleString(undefined, {
@@ -111,5 +114,6 @@ export function formatPurchasedCutoff(cutoffIso: string | null): string {
 		hour: "numeric",
 		minute: "2-digit",
 		timeZoneName: "short",
+		...(orgTimezone ? { timeZone: orgTimezone } : {}),
 	});
 }

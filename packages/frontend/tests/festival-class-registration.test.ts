@@ -92,6 +92,32 @@ describe("Repertoire validation & transformation helpers", () => {
 		expect(validatePieceDuration(4, 15)).toBeNull();
 	});
 
+	it("enforces non-negative minutes and 0-59 seconds range for repertoire duration", () => {
+		expect(validatePieceDuration(-1, 30)).toBe(
+			"Minutes must be a non-negative integer.",
+		);
+		expect(validatePieceDuration(1.5, 30)).toBe(
+			"Minutes must be a non-negative integer.",
+		);
+		expect(validatePieceDuration(1, -1)).toBe(
+			"Seconds must be between 0 and 59.",
+		);
+		expect(validatePieceDuration(1, 60)).toBe(
+			"Seconds must be between 0 and 59.",
+		);
+		expect(validatePieceDuration(1, 75)).toBe(
+			"Seconds must be between 0 and 59.",
+		);
+		expect(validatePieceDuration(1, 20.5)).toBe(
+			"Seconds must be between 0 and 59.",
+		);
+		expect(validatePieceDuration(0, 0)).toBe(
+			"Duration must be greater than 0 seconds.",
+		);
+		expect(validatePieceDuration(0, 30)).toBeNull();
+		expect(validatePieceDuration(4, 15)).toBeNull();
+	});
+
 	it("evaluates arePiecesValid correctly", () => {
 		expect(arePiecesValid([])).toBe(false);
 		expect(
@@ -435,6 +461,28 @@ describe("Festival Repertoire Modal", () => {
 				`name={\`repertoire-piece-\${index}-${field}\`}`,
 			);
 		}
+	});
+
+	it("provides next/prev pagination controls when multiple pieces exist (Issue #339)", () => {
+		expect(repertoireModal).toContain("activePieceIndex");
+		expect(repertoireModal).toContain(
+			"Piece {activePieceIndex() + 1} of {pieces().length}",
+		);
+		expect(repertoireModal).toContain("Previous");
+		expect(repertoireModal).toContain("Next");
+		expect(repertoireModal).toContain('data-testid="modal-repertoire-title"');
+		expect(repertoireModal).toContain('data-testid="btn-add-piece"');
+		expect(repertoireModal).toContain('data-testid="btn-save-repertoire"');
+		expect(repertoireModal).toContain('data-testid="btn-cancel-repertoire"');
+		expect(repertoireModal).toContain(
+			"data-testid={`input-piece-title-${" + "index}`}",
+		);
+		expect(repertoireModal).toContain(
+			"data-testid={`input-piece-composer-${" + "index}`}",
+		);
+		expect(repertoireModal).toContain(
+			"data-testid={`btn-remove-piece-${" + "index}`}",
+		);
 	});
 });
 
