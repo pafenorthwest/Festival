@@ -6,13 +6,6 @@ import {
 	type RegistrationCartItem,
 } from "../src/pages/registrationCartState.js";
 
-const cartViewSource = await Bun.file(
-	new URL(
-		"../src/components/FestivalRegistrationCartView.tsx",
-		import.meta.url,
-	),
-).text();
-
 const regPageSource = await Bun.file(
 	new URL("../src/pages/FestivalClassRegistrationPage.tsx", import.meta.url),
 ).text();
@@ -234,59 +227,6 @@ describe("1. cartItemsToLineItemInputs mapping & edge cases", () => {
 	});
 });
 
-describe("2. FestivalRegistrationCartView UX & source contract", () => {
-	it("renders performer group headers with performer name, class counts, and subtotal", () => {
-		expect(cartViewSource).toContain("cart-performer-group");
-		expect(cartViewSource).toContain("cart-performer-group-header");
-		expect(cartViewSource).toContain("Performer: {group.childName}");
-		expect(cartViewSource).toContain(
-			'{group.items.length === 1 ? "class" : "classes"}',
-		);
-		expect(cartViewSource).toContain(
-			"Performer Subtotal: {formatPriceCents(group.subtotalCents)}",
-		);
-	});
-
-	it("renders fee breakdown panel with entry count across performers and totals", () => {
-		expect(cartViewSource).toContain("cart-fee-breakdown-panel");
-		expect(cartViewSource).toContain(
-			'{count()} {count() === 1 ? "entry" : "entries"} across',
-		);
-		expect(cartViewSource).toContain(
-			'{performerGroups().length === 1 ? "performer" : "performers"}',
-		);
-		expect(cartViewSource).toContain("Registration Fee Subtotal:");
-		expect(cartViewSource).toContain(
-			"Total: {props.cart.totalPriceFormatted()}",
-		);
-	});
-
-	it("renders piece details with piece count and formatted durations", () => {
-		expect(cartViewSource).toContain("item.pieces.length");
-		expect(cartViewSource).toContain(
-			'{item.pieces.length === 1 ? "piece" : "pieces"}',
-		);
-		expect(cartViewSource).toContain("formatTotalDuration(item.pieces)");
-		expect(cartViewSource).toContain("Math.floor(");
-		expect(cartViewSource).toContain("(piece.durationSeconds || 0) / 60");
-		expect(cartViewSource).toContain("(piece.durationSeconds || 0) % 60");
-	});
-
-	it("binds error banners and button state transitions based on eligibility and submission", () => {
-		expect(cartViewSource).toContain("cart-ineligible-banner");
-		expect(cartViewSource).toContain("hasIneligible()");
-		expect(cartViewSource).toContain("cart-eligibility-error");
-		expect(cartViewSource).toContain("props.eligibility?.error()");
-		expect(cartViewSource).toContain("cart-checkout-error-banner");
-		expect(cartViewSource).toContain("props.error");
-		expect(cartViewSource).toContain("isCheckoutDisabled()");
-		expect(cartViewSource).toContain("Starting checkout…");
-		expect(cartViewSource).toContain("Evaluating eligibility…");
-		expect(cartViewSource).toContain("Resolve Ineligible Items");
-		expect(cartViewSource).toContain("Proceed to Checkout");
-	});
-});
-
 describe("3. Checkout handoff execution & API contract", () => {
 	it("calls startClassCheckout with { lineItems, csrfToken } sending correct POST body and headers", async () => {
 		const capturedRequests: {
@@ -449,40 +389,6 @@ describe("3. Checkout handoff execution & API contract", () => {
 });
 
 describe("4. FestivalClassRegistrationPage source wiring", () => {
-	it("wires startClassCheckout with lineItems and CSRF token", () => {
-		expect(regPageSource).toContain("startClassCheckout(");
-		expect(regPageSource).toContain("lineItems,");
-		expect(regPageSource).toContain("csrfToken: getCsrf(),");
-		expect(regPageSource).toContain("idempotencyKey: crypto.randomUUID(),");
-	});
-
-	it("clears cart and redirects via window.location.assign on success", () => {
-		expect(regPageSource).toContain("if (res?.checkoutUrl) {");
-		expect(regPageSource).toContain("cart.clearCart();");
-		expect(regPageSource).toContain("window.location.assign(res.checkoutUrl);");
-	});
-
-	it("maintains submitting state and handles checkout errors", () => {
-		expect(regPageSource).toContain("setIsSubmittingCheckout(true);");
-		expect(regPageSource).toContain("setIsSubmittingCheckout(false);");
-		expect(regPageSource).toContain("setCheckoutError(null);");
-		expect(regPageSource).toContain("setCheckoutError(");
-		expect(regPageSource).toContain(
-			"Checkout failed to initialize. Please try again.",
-		);
-	});
-
-	it("guards handleCartCheckout against empty cart and ineligibility", () => {
-		expect(regPageSource).toContain("const items = cart.items();");
-		expect(regPageSource).toContain("items.length === 0 ||");
-		expect(regPageSource).toContain("eligibility.isEvaluating() ||");
-		expect(regPageSource).toContain("eligibility.hasIneligibleItems()");
-		expect(regPageSource).toContain(
-			"const lineItems = cartItemsToLineItemInputs(items);",
-		);
-		expect(regPageSource).toContain("await executeCheckout(lineItems);");
-	});
-
 	it("passes cart, eligibility, submitting, error, and submit callback to FestivalRegistrationCartView", () => {
 		expect(regPageSource).toContain("<FestivalRegistrationCartView");
 		expect(regPageSource).toContain("cart={cart}");

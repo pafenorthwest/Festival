@@ -17,14 +17,14 @@ const ordersPage = await Bun.file(
 const classesPage = await Bun.file(
 	new URL("../src/pages/CustomerAccountClassesPage.tsx", import.meta.url),
 ).text();
+const purchasedHelpers = await Bun.file(
+	new URL("../src/pages/PurchasedRegistrationHelpers.ts", import.meta.url),
+).text();
 const layout = await Bun.file(
 	new URL("../src/pages/CustomerAccountPageLayout.tsx", import.meta.url),
 ).text();
 const admin = await Bun.file(
 	new URL("../src/components/CustomerAccountAdminCard.tsx", import.meta.url),
-).text();
-const navigation = await Bun.file(
-	new URL("../src/pages/CustomerAccountNavigation.tsx", import.meta.url),
 ).text();
 const sideNavigation = await Bun.file(
 	new URL("../src/components/OrganizationSideNavigation.tsx", import.meta.url),
@@ -161,12 +161,12 @@ describe("customer account frontend boundary", () => {
 		);
 	});
 
-	it("is reachable from account navigation with a graduation-hat icon and accessible name", () => {
-		expect(navigation).toContain("buildOrgCustomerAccountClassesPath");
-		expect(navigation).toContain("Classes");
+	it("exposes My Registrations in the single sidebar with a graduation-hat icon and accessible name", () => {
 		expect(sideNavigation).toContain("buildOrgCustomerAccountClassesPath");
-		expect(sideNavigation).toContain('aria-label="Classes"');
+		expect(sideNavigation).toContain('label: "My Registrations"');
+		expect(sideNavigation).toContain("aria-label={link.label}");
 		expect(sideNavigation).toContain("school");
+		expect(layout).not.toContain("<CustomerAccountNavigation");
 	});
 
 	it("loads purchased classes through the allowlisted registration DTO and defines loading, empty, and error states", () => {
@@ -180,8 +180,11 @@ describe("customer account frontend boundary", () => {
 		expect(classesPage).toContain('role="status"');
 		expect(classesPage).toContain('role="alert"');
 		expect(classesPage).toContain("registration.paidAtIso");
-		expect(classesPage).toContain("registration.festivalClass?.displayName");
-		expect(classesPage).toContain("registration.child?.name");
+		expect(classesPage).toMatch(
+			/registration\.festivalClass\s*\?\.displayName/,
+		);
+		expect(classesPage).toContain("groupPurchasedRegistrations");
+		expect(purchasedHelpers).toContain("registration.child?.name");
 		expect(classesPage).not.toMatch(
 			/shopifyOrderGid|shopifyOrderLineGid|checkoutIntentId|accessToken|refreshToken|idToken/,
 		);

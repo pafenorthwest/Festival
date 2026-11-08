@@ -36,86 +36,151 @@ export function useRegistrationOptions(input: RegistrationOptionsInput) {
 	const [accompanists, setAccompanists] = createSignal<
 		Array<{ id: string; name: string }>
 	>([]);
-
+	const [childrenLoaded, setChildrenLoaded] = createSignal(false);
+	const [childrenLoading, setChildrenLoading] = createSignal(false);
+	const [teachersLoading, setTeachersLoading] = createSignal(false);
+	const [classesLoading, setClassesLoading] = createSignal(false);
+	const [childrenError, setChildrenError] = createSignal<string | null>(null);
+	const [teachersError, setTeachersError] = createSignal<string | null>(null);
+	const [classesError, setClassesError] = createSignal<string | null>(null);
+	const [accompanistsError, setAccompanistsError] = createSignal<string | null>(
+		null,
+	);
+	const [optionsRetry, setOptionsRetry] = createSignal(0);
+	let childrenRequest = 0;
+	let accompanistsRequest = 0;
+	onCleanup(() => {
+		childrenRequest++;
+		accompanistsRequest++;
+	});
 	async function loadChildren() {
+		const request = ++childrenRequest;
+		setChildrenLoading(true);
+		setChildrenError(null);
 		try {
 			const res = await getCustomerChildren(input.slug);
+			if (request !== childrenRequest) return;
 			setChildren(res.children);
-			if (res.children.length === 1 && res.children[0]) {
+			setChildrenLoaded(true);
+			if (!input.childId() && res.children.length === 1 && res.children[0])
 				input.onAutoSelectChild?.(res.children[0].id);
-			}
 		} catch {
-			// Handled gracefully in UI
+			if (request === childrenRequest)
+				setChildrenError("Performers could not be loaded. Please try again.");
+		} finally {
+			if (request === childrenRequest) setChildrenLoading(false);
 		}
 	}
-
 	async function loadAccompanists() {
+		const request = ++accompanistsRequest;
+		setAccompanistsError(null);
 		try {
 			const res = await listRegistrationAccompanists(
 				input.slug,
 				input.festivalSlug,
 			);
-			setAccompanists(res.accompanists);
+			if (request === accompanistsRequest) setAccompanists(res.accompanists);
 		} catch {
-			// Handled gracefully in UI
+			if (request === accompanistsRequest)
+				setAccompanistsError(
+					"Accompanists could not be loaded. Please try again.",
+				);
 		}
 	}
-
 	createEffect(() => {
 		if (input.isAuthenticated()) {
 			void loadChildren();
 			void loadAccompanists();
-		}
-	});
-
-	createEffect(async () => {
-		const cid = input.childId();
-		const did = input.divisionId();
-		if (!cid || !did) {
+		} else {
+			childrenRequest++;
+			accompanistsRequest++;
+			setChildren([]);
+			setChildrenLoaded(false);
 			setTeachers([]);
-			return;
-		}
-		try {
-			const res = await listRegistrationTeachers(
-				input.slug,
-				input.festivalSlug,
-				cid,
-				did,
-			);
-			setTeachers(res.teachers);
-		} catch {
-			setTeachers([]);
+			setEligibleClasses([]);
+			setAccompanists([]);
 		}
 	});
-
-	createEffect(async () => {
-		const cid = input.childId();
-		const did = input.divisionId();
-		const tid = input.teacherId();
-		if (!cid || !did || !tid) {
-			setEligibleClasses([]);
-			return;
-		}
-		try {
-			const res = await listRegistrationEligibleClasses(
-				input.slug,
-				input.festivalSlug,
-				cid,
-				did,
-				tid,
-			);
-			setEligibleClasses(res.classes);
-		} catch {
-			setEligibleClasses([]);
-		}
+	createEffect(() => {
+		const authenticated = input.isAuthenticated();
+		optionsRetry();
+		const childId = input.childId();
+		const divisionId = input.divisionId();
+		let cancelled = false;
+		onCleanup(() => {
+			cancelled = true;
+		});
+		setTeachers([]);
+		setTeachersError(null);
+		setTeachersLoading(Boolean(authenticated && childId && divisionId));
+		if (!authenticated || !childId || !divisionId) return;
+		void listRegistrationTeachers(
+			input.slug,
+			input.festivalSlug,
+			childId,
+			divisionId,
+		)
+			.then((res) => {
+				if (!cancelled) setTeachers(res.teachers);
+			})
+			.catch(() => {
+				if (!cancelled)
+					setTeachersError("Teachers could not be loaded. Please try again.");
+			})
+			.finally(() => {
+				if (!cancelled) setTeachersLoading(false);
+			});
 	});
-
+	createEffect(() => {
+		const authenticated = input.isAuthenticated();
+		optionsRetry();
+		const childId = input.childId();
+		const divisionId = input.divisionId();
+		const teacherId = input.teacherId();
+		let cancelled = false;
+		onCleanup(() => {
+			cancelled = true;
+		});
+		setEligibleClasses([]);
+		setClassesError(null);
+		setClassesLoading(
+			Boolean(authenticated && childId && divisionId && teacherId),
+		);
+		if (!authenticated || !childId || !divisionId || !teacherId) return;
+		void listRegistrationEligibleClasses(
+			input.slug,
+			input.festivalSlug,
+			childId,
+			divisionId,
+			teacherId,
+		)
+			.then((res) => {
+				if (!cancelled) setEligibleClasses(res.classes);
+			})
+			.catch(() => {
+				if (!cancelled)
+					setClassesError("Classes could not be loaded. Please try again.");
+			})
+			.finally(() => {
+				if (!cancelled) setClassesLoading(false);
+			});
+	});
 	return {
 		children,
 		teachers,
 		eligibleClasses,
 		accompanists,
 		loadChildren,
+		loadAccompanists,
+		childrenLoaded,
+		childrenLoading,
+		teachersLoading,
+		classesLoading,
+		childrenError,
+		teachersError,
+		classesError,
+		accompanistsError,
+		retryOptions: () => setOptionsRetry((count) => count + 1),
 	};
 }
 

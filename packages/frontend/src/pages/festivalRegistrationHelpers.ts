@@ -44,6 +44,52 @@ export function validatePieceDuration(
 	if (!Number.isFinite(total) || total <= 0) {
 		return "Duration must be greater than 0 seconds.";
 	}
+	if (
+		!Number.isSafeInteger(minutes) ||
+		minutes < 0 ||
+		!Number.isSafeInteger(seconds) ||
+		seconds < 0 ||
+		seconds > 59 ||
+		!Number.isSafeInteger(total)
+	) {
+		return "Use whole minutes and seconds between 0 and 59.";
+	}
+	return null;
+}
+
+export function hasPieceDraftContent(draft: RepertoirePieceDraft): boolean {
+	return Boolean(
+		draft.title.trim() ||
+			draft.composer.trim() ||
+			draft.movement.trim() ||
+			draft.catalogWorkId?.trim() ||
+			draft.durationMinutes ||
+			draft.durationSeconds,
+	);
+}
+
+export function getRepertoirePolicyError(
+	pieces: readonly RepertoirePiece[],
+	maximumPieces: number,
+	performanceMinutes?: number,
+): string | null {
+	if (pieces.length === 0) return "Save at least one piece before continuing.";
+	if (pieces.length > maximumPieces)
+		return `This class allows at most ${maximumPieces} pieces.`;
+	if (
+		pieces.some(
+			(piece) =>
+				!Number.isSafeInteger(piece.durationSeconds) ||
+				piece.durationSeconds <= 0,
+		)
+	)
+		return "Every piece needs a positive whole-number duration.";
+	if (
+		performanceMinutes !== undefined &&
+		pieces.reduce((sum, piece) => sum + piece.durationSeconds, 0) >
+			performanceMinutes * 60
+	)
+		return `Total repertoire must be no more than ${performanceMinutes} minutes.`;
 	return null;
 }
 
@@ -195,6 +241,7 @@ export function isRegistrationSelectionValid(
 	child: { hasCurrentValidAgeSnapshot?: boolean } | null,
 	classConfig: {
 		maximumPerformancePieces: number;
+		performanceMinutes?: number;
 		isRegistrationOpen?: boolean;
 		requiresConcerto?: boolean;
 		classSubtypeName?: string | null;
@@ -219,8 +266,11 @@ export function isRegistrationSelectionValid(
 	}
 	const requiresConcerto = doesClassRequireConcerto(classConfig);
 	return (
-		pieces.every((piece) => piece.durationSeconds > 0) &&
-		validatePieceDrafts(pieces, { requiresConcerto, catalogWorks })
+		!getRepertoirePolicyError(
+			pieces,
+			classConfig.maximumPerformancePieces,
+			classConfig.performanceMinutes,
+		) && validatePieceDrafts(pieces, { requiresConcerto, catalogWorks })
 	);
 }
 
@@ -275,7 +325,13 @@ export function createRegistrationSelectHandlers(
 	setInstrument: (id: string) => void = () => {},
 ) {
 	return {
-		onChildChange: createSelectHandler(setChild, [setClass, setInstrument]),
+		onChildChange: createSelectHandler(setChild, [
+			setDivision,
+			setTeacher,
+			setClass,
+			setAccompanist,
+			setInstrument,
+		]),
 		onDivisionChange: createSelectHandler(setDivision, [
 			setTeacher,
 			setClass,

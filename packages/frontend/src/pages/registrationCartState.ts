@@ -110,6 +110,7 @@ export function cartItemsToLineItemInputs(
 			title: piece.title,
 			composer: piece.composer,
 			movement: piece.movement?.trim() || null,
+			...(piece.catalogWorkId ? { catalogWorkId: piece.catalogWorkId } : {}),
 			durationMinutes: Math.floor((piece.durationSeconds || 0) / 60),
 			durationSeconds: Math.max(1, piece.durationSeconds || 0),
 		})),
@@ -126,12 +127,23 @@ export interface RegistrationCartState {
 	removeItem: (lineId: string) => void;
 	removeItems: (lineIds: string[]) => void;
 	clearCart: () => void;
+	getCheckoutIdempotencyKey: () => string;
 }
 
 export function createRegistrationCart(
 	initialItems: RegistrationCartItem[] = [],
 ): RegistrationCartState {
 	const [items, setItems] = createSignal<RegistrationCartItem[]>(initialItems);
+	let checkoutPayload = "";
+	let checkoutKey = "";
+	function getCheckoutIdempotencyKey() {
+		const payload = JSON.stringify(cartItemsToLineItemInputs(items()));
+		if (payload !== checkoutPayload || !checkoutKey) {
+			checkoutPayload = payload;
+			checkoutKey = crypto.randomUUID();
+		}
+		return checkoutKey;
+	}
 
 	const itemCount = () => items().length;
 
@@ -179,6 +191,8 @@ export function createRegistrationCart(
 
 	function clearCart(): void {
 		setItems([]);
+		checkoutPayload = "";
+		checkoutKey = "";
 	}
 
 	return {
@@ -191,5 +205,6 @@ export function createRegistrationCart(
 		removeItem,
 		removeItems,
 		clearCart,
+		getCheckoutIdempotencyKey,
 	};
 }

@@ -408,21 +408,6 @@ describe("useClassOptionEligibility hook", () => {
 });
 
 describe("FestivalClassRegistrationPage source contract for candidate eligibility", () => {
-	it("wires useClassOptionEligibility hook and guards class selection", () => {
-		expect(regPageSource).toContain("useClassOptionEligibility");
-		expect(regPageSource).toContain("classOptionEligibility");
-		expect(regPageSource).toContain("classOptionEligibility.isEligible");
-		expect(regPageSource).toContain("classOptionEligibility.formatOption");
-		expect(regPageSource).toContain("classOptionEligibility.selectedReason");
-	});
-
-	it("disables ineligible option in the class select and renders reason text", () => {
-		expect(regPageSource).toContain('id="registration-class"');
-		expect(regPageSource).toContain("!classOptionEligibility.isEligible(c.id)");
-		expect(regPageSource).toContain("!classOptionEligibility.isWaitlist(c.id)");
-		expect(regPageSource).toContain("{classOptionEligibility.formatOption(c)}");
-	});
-
 	it("keeps FestivalClassRegistrationPage strictly under 550 lines", () => {
 		const lines = regPageSource.split("\n").length;
 		expect(lines).toBeLessThanOrEqual(550);

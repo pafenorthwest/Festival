@@ -2,6 +2,8 @@ import { describe, expect, it } from "bun:test";
 import {
 	buildFestivalAdminClassesPath,
 	buildFestivalAdminPath,
+	buildFestivalCartPath,
+	buildFestivalRegistrationClassPath,
 	buildFestivalRegistrationPath,
 	buildFestivalVolunteersPath,
 	buildInvitePath,
@@ -31,6 +33,30 @@ import {
 } from "../src/lib/routes.js";
 
 describe("route helpers", () => {
+	it("keeps class entry and cart inside the authenticated festival area", () => {
+		const classPath = buildFestivalRegistrationClassPath(
+			"pafe",
+			"spring",
+			"solo class",
+		);
+		expect(parseRoute(classPath)).toEqual({
+			kind: "festival-register-class",
+			slug: "pafe",
+			festivalSlug: "spring",
+			classId: "solo class",
+		});
+		const cartRoute = parseRoute(buildFestivalCartPath("pafe", "spring"));
+		expect(cartRoute).toEqual({
+			kind: "festival-cart",
+			slug: "pafe",
+			festivalSlug: "spring",
+		});
+		expect(isOrganizationPageRoute(cartRoute)).toBe(true);
+		expect(isOrganizationPageRoute(parseRoute(classPath))).toBe(true);
+		expect(() =>
+			parseRoute("/org/pafe/festival/spring/register/class/%invalid"),
+		).not.toThrow();
+	});
 	it("parses onboarding routes", () => {
 		expect(parseRoute("/")).toEqual({ kind: "home" });
 		expect(parseRoute("/privacy-policy")).toEqual({

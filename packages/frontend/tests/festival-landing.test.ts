@@ -6,13 +6,13 @@ const page = await Bun.file(
 const app = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
 
 describe("public festival landing page", () => {
-	it("renders the audience banners and all memberships link", () => {
-		expect(page).toContain('class="role-banners"');
+	it("renders the four audience choices without a duplicate membership action", () => {
+		expect(page).toContain('class="role-banners festival-home-banners"');
 		expect(page).toContain("Teachers");
 		expect(page).toContain("Parents");
 		expect(page).toContain("Volunteers");
 		expect(page).toContain("Accompanists");
-		expect(page).toContain("All Memberships");
+		expect(page).not.toContain("All Memberships");
 	});
 
 	it("sends volunteers to that festival's volunteer page, not a generic sign-up", () => {
