@@ -5,12 +5,8 @@ import { FestivalCartItemRow } from "../components/FestivalCartItemRow.js";
 import { getPublicFestival, startClassCheckout } from "../lib/api.js";
 import { buildFestivalRegistrationPath } from "../lib/routes.js";
 import { findDependentCartItems } from "./cascadingRemoval.js";
-import { createPayloadCachedIdempotency } from "./checkoutIdempotency.js";
-import {
-	cartItemsToLineItemInputs,
-	formatPriceCents,
-	type RegistrationCartItem,
-} from "./registrationCartState.js";
+import { clearCartCheckoutIdempotencyKey, getOrCreateCartCheckoutIdempotencyKey } from "./checkoutIdempotency.js";
+import { cartItemsToLineItemInputs, formatPriceCents, type RegistrationCartItem } from "./registrationCartState.js";
 import { useCartEligibility } from "./useCartEligibility.js";
 
 export interface FestivalCartPageProps {
@@ -40,7 +36,6 @@ export function FestivalCartPage(props: FestivalCartPageProps) {
 
 	const [isSubmitting, setIsSubmitting] = createSignal(false);
 	const [checkoutError, setCheckoutError] = createSignal<string | null>(null);
-	const idempotencyManager = createPayloadCachedIdempotency();
 	const [cascadingTarget, setCascadingTarget] =
 		createSignal<RegistrationCartItem | null>(null);
 	const [cascadingDependents, setCascadingDependents] = createSignal<
@@ -107,10 +102,7 @@ export function FestivalCartPage(props: FestivalCartPageProps) {
 	function handleConfirmRemoveAll() {
 		const target = cascadingTarget();
 		if (target) {
-			const ids = [
-				target.lineId,
-				...cascadingDependents().map((d) => d.lineId),
-			];
+			const ids = [target.lineId, ...cascadingDependents().map((d) => d.lineId)];
 			if (typeof cart.removeItems === "function") cart.removeItems(ids);
 			else {
 				for (const id of ids) cart.removeItem(id);
@@ -135,14 +127,18 @@ export function FestivalCartPage(props: FestivalCartPageProps) {
 		setCheckoutError(null);
 		try {
 			const lineItems = cartItemsToLineItemInputs(items);
-			const idempotencyKey = idempotencyManager.getOrGenerateKey(lineItems);
+			const idempotencyKey = getOrCreateCartCheckoutIdempotencyKey(
+				props.slug,
+				props.festivalSlug,
+				lineItems,
+			);
 			const res = await startClassCheckout(props.slug, props.festivalSlug, {
 				lineItems,
 				csrfToken: getCsrf(),
 				idempotencyKey,
 			});
 			if (res?.checkoutUrl) {
-				idempotencyManager.clear();
+				clearCartCheckoutIdempotencyKey(props.slug, props.festivalSlug);
 				cart.clearCart();
 				if (typeof window !== "undefined" && window.location?.assign)
 					window.location.assign(res.checkoutUrl);

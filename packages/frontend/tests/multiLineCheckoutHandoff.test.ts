@@ -453,7 +453,7 @@ describe("4. FestivalClassRegistrationPage source wiring", () => {
 		expect(regPageSource).toContain("startClassCheckout(");
 		expect(regPageSource).toContain("lineItems,");
 		expect(regPageSource).toContain("csrfToken: getCsrf(),");
-		expect(regPageSource).toContain("idempotencyKey: crypto.randomUUID(),");
+		expect(regPageSource).toContain("idempotencyKey:");
 	});
 
 	it("clears cart and redirects via window.location.assign on success", () => {

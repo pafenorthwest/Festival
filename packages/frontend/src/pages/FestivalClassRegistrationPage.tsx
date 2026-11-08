@@ -18,6 +18,10 @@ import {
 	startClassCheckout,
 } from "../lib/api.js";
 import {
+	clearCartCheckoutIdempotencyKey,
+	getOrCreateCartCheckoutIdempotencyKey,
+} from "./checkoutIdempotency.js";
+import {
 	createRegistrationSelectHandlers,
 	doesClassRequireConcerto,
 	findById,
@@ -233,9 +237,14 @@ export function FestivalClassRegistrationPage(
 			const res = await startClassCheckout(props.slug, props.festivalSlug, {
 				lineItems,
 				csrfToken: getCsrf(),
-				idempotencyKey: crypto.randomUUID(),
+				idempotencyKey: getOrCreateCartCheckoutIdempotencyKey(
+					props.slug,
+					props.festivalSlug,
+					lineItems,
+				),
 			});
 			if (res?.checkoutUrl) {
+				clearCartCheckoutIdempotencyKey(props.slug, props.festivalSlug);
 				cart.clearCart();
 				if (typeof window !== "undefined" && window.location?.assign)
 					window.location.assign(res.checkoutUrl);
