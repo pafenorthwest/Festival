@@ -148,6 +148,12 @@ export function FestivalClassRegistrationPage(
 					</Button>
 				</Show>
 				<Show when={view() !== "cart"}>
+					<Show when={purchased.error}>
+						<p class="muted" role="status">
+							Purchased registrations could not be loaded. Existing eligibility
+							checks will still prevent duplicate registrations.
+						</p>
+					</Show>
 					<Show when={options.childrenLoading()}>
 						<p role="status">Loading performers…</p>
 					</Show>
@@ -188,12 +194,6 @@ export function FestivalClassRegistrationPage(
 								>
 									Retry eligibility
 								</Button>
-							</Show>
-							<Show when={purchased.error}>
-								<p class="muted">
-									Purchased registrations could not be loaded. Existing
-									eligibility checks will still prevent duplicate registrations.
-								</p>
 							</Show>
 							<section class="parent-panel">
 								<For each={eligibleClasses()}>

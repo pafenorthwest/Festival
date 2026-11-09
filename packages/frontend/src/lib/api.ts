@@ -1921,13 +1921,14 @@ export type {
 export function listCustomerClassRegistrations(
 	slug: string,
 	festivalSlug?: string,
+	init?: { signal?: AbortSignal },
 ): Promise<CustomerClassRegistrationsResponse> {
 	const path = festivalSlug
 		? `/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/registration/class-registrations`
 		: `/api/organizations/${encodeURIComponent(slug)}/customer/class-registrations`;
 	return requestJson<CustomerClassRegistrationsResponse>(
 		path,
-		undefined,
+		init,
 		undefined,
 		"",
 	);

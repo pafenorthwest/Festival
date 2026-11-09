@@ -41,6 +41,8 @@ import {
 import { useCartEligibility } from "./useCartEligibility.js";
 import { useClassOptionEligibility } from "./useClassOptionEligibility.js";
 
+const PURCHASED_HISTORY_TIMEOUT_MS = 5_000;
+
 export interface FestivalClassRegistrationPageProps {
 	app: FestivalAppController;
 	slug: string;
@@ -86,7 +88,20 @@ export function useFestivalRegistrationPage(
 	const [purchased] = createResource(
 		() =>
 			authenticated() ? ([props.slug, props.festivalSlug] as const) : false,
-		([slug, shortName]) => listCustomerClassRegistrations(slug, shortName),
+		async ([slug, shortName]) => {
+			const controller = new AbortController();
+			const timer = setTimeout(
+				() => controller.abort(),
+				PURCHASED_HISTORY_TIMEOUT_MS,
+			);
+			try {
+				return await listCustomerClassRegistrations(slug, shortName, {
+					signal: controller.signal,
+				});
+			} finally {
+				clearTimeout(timer);
+			}
+		},
 	);
 	const [waitlistClassId, setWaitlistClassId] = createSignal("");
 	const selectedClassId = () => props.classId ?? waitlistClassId();
@@ -279,6 +294,7 @@ export function useFestivalRegistrationPage(
 		}
 	});
 	const isPurchased = (classId: string) =>
+		purchased.state === "ready" &&
 		(purchased()?.registrations ?? []).some(
 			(item) =>
 				item.entitlement.childId === selectedChildId() &&
