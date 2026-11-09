@@ -16,6 +16,7 @@ import type {
 	CheckoutIntentOutcome,
 	CheckoutIntentRecord,
 	CheckoutRepository,
+	ClassCheckoutReplayState,
 	CreateCheckoutIntentInput,
 } from "./checkout-repository.js";
 import {
@@ -427,6 +428,22 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 		const intent = this.intent(rows[0]);
 		intent.lines = await this.getIntentLines(sql, intent.id);
 		return intent;
+	}
+	async getClassCheckoutReplayState(
+		organizationId: string,
+		intentId: string,
+	): Promise<ClassCheckoutReplayState | null> {
+		// Read both records from the same statement snapshot after the remote lookup.
+		const rows = await sql.unsafe<ClassCheckoutReplayState[]>(
+			`SELECT intent.status AS "intentStatus", execution.state, execution.generation, execution.result_code AS "resultCode"
+			FROM ${this.schema}.checkout_intents intent
+			JOIN ${this.schema}.class_checkout_executions execution
+				ON execution.organization_id = intent.organization_id AND execution.intent_id = intent.id
+			WHERE intent.organization_id = $1 AND intent.id = $2`,
+			[organizationId, intentId],
+		);
+		const row = rows[0];
+		return row ? { ...row, generation: Number(row.generation) } : null;
 	}
 	async hasProcessingIntent(
 		organizationId: string,

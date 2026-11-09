@@ -40,6 +40,7 @@ import type {
 	CheckoutIntentLineItemRecord,
 	CheckoutIntentOutcome,
 	CheckoutIntentRecord,
+	CheckoutIntentStatus,
 	CheckoutRepository,
 	CreateCheckoutIntentLineInput,
 } from "./checkout-repository.js";
@@ -109,7 +110,43 @@ export interface ClassCheckoutStorefront {
 		organizationId: string;
 		shopifyCartId: string;
 		expectedStorefrontBinding?: ClassCheckoutStorefrontBinding;
+		signal?: AbortSignal;
 	}): Promise<{ checkoutUrl: string }>;
+}
+
+const CHECKOUT_REPLAY_TIMEOUT_MS = 3_000;
+
+class ClassCheckoutReplayResolvedError extends AppError {
+	constructor(readonly recovery: ClassCheckoutRecoveryStatus) {
+		super("This checkout has already been resolved.", 409, recovery.reasonCode);
+	}
+}
+
+function resolvedCheckoutStatus(
+	intentStatus: CheckoutIntentStatus,
+	record: ClassCheckoutExecution,
+): ClassCheckoutRecoveryStatus | undefined {
+	const status = recoveryStatusFor(record);
+	if (intentStatus === "needs_review" && record.state === "recovery_required")
+		return { ...status, retryAllowed: false };
+	if (
+		!["approved", "rejected", "needs_review", "superseded"].includes(
+			intentStatus,
+		)
+	)
+		return;
+	return {
+		...status,
+		status: "resolved",
+		retryAllowed: false,
+		reasonCode:
+			record.resultCode === "abandoned_unknown" ||
+			record.resultCode === "checkout_abandoned"
+				? record.resultCode
+				: intentStatus === "approved"
+					? "checkout_already_completed"
+					: "checkout_closed",
+	};
 }
 
 /** Provider observation retained server-side even when the returned cart is invalid. */
@@ -1899,6 +1936,8 @@ export class ClassCheckoutService {
 				error,
 			});
 		const checkpoint = managed.record.checkpoint;
+		const replayTimedOut =
+			error instanceof AppError && error.code === "checkout_replay_timeout";
 		const verificationUnavailable =
 			error instanceof AppError &&
 			error.code === "checkout_storefront_verification_unavailable";
@@ -1996,16 +2035,22 @@ export class ClassCheckoutService {
 			resultCode:
 				terminal && error instanceof AppError
 					? (error.code ?? "checkout_rejected")
-					: verificationUnavailable
-						? "checkout_storefront_verification_unavailable"
-						: checkpoint === "attached"
-							? "checkout_url_unavailable"
-							: "checkout_preparation_unavailable",
+					: replayTimedOut
+						? "checkout_replay_timeout"
+						: verificationUnavailable
+							? "checkout_storefront_verification_unavailable"
+							: checkpoint === "attached"
+								? "checkout_url_unavailable"
+								: "checkout_preparation_unavailable",
 			releaseLease: true,
 			eventType: "execution_failed",
 			evidence: {
 				stage,
-				code: terminal ? "checkout_rejected" : "checkout_retryable",
+				code: replayTimedOut
+					? "checkout_replay_timeout"
+					: terminal
+						? "checkout_rejected"
+						: "checkout_retryable",
 			},
 		});
 		if (
@@ -2019,6 +2064,7 @@ export class ClassCheckoutService {
 			);
 		if (
 			terminal ||
+			replayTimedOut ||
 			(error instanceof AppError &&
 				error.code === "checkout_restart_payment_uncertain")
 		)
@@ -2055,6 +2101,64 @@ export class ClassCheckoutService {
 			if (current?.state === "recovery_required") return current;
 		} catch {
 			throw new ClassCheckoutPersistenceUnavailableError();
+		}
+		throw new AppError(
+			"Checkout execution has changed. Check its status before continuing.",
+			409,
+			"checkout_execution_changed",
+		);
+	}
+
+	private async lookupCompletedCartUrl(
+		input: Parameters<ClassCheckoutStorefront["checkout"]>[0],
+	) {
+		const controller = new AbortController();
+		const error = new AppError(
+			"Shopify took too long to return the checkout link. Check its status or try again.",
+			503,
+			"checkout_replay_timeout",
+		);
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const deadline = new Promise<never>((_, reject) => {
+			timer = setTimeout(() => {
+				controller.abort(error);
+				reject(error);
+			}, CHECKOUT_REPLAY_TIMEOUT_MS);
+		});
+		try {
+			return await Promise.race([
+				this.storefront.checkout({ ...input, signal: controller.signal }),
+				deadline,
+			]);
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+
+	private async assertCompletedCartReplayCurrent(
+		record: ClassCheckoutExecution,
+	) {
+		const current = await this.checkout
+			.getClassCheckoutReplayState(record.organizationId, record.intentId)
+			.catch(() => {
+				throw new ClassCheckoutPersistenceUnavailableError();
+			});
+		if (current) {
+			const currentRecord = { ...record, ...current };
+			const resolved = resolvedCheckoutStatus(
+				current.intentStatus,
+				currentRecord,
+			);
+			if (resolved?.status === "resolved")
+				throw new ClassCheckoutReplayResolvedError(resolved);
+			if (current.state === "recovery_required")
+				throw new ClassCheckoutRecoveryRequiredError(currentRecord);
+			if (
+				current.intentStatus === "checkout_started" &&
+				current.state === "completed" &&
+				current.generation === record.generation
+			)
+				return;
 		}
 		throw new AppError(
 			"Checkout execution has changed. Check its status before continuing.",
@@ -2122,12 +2226,16 @@ export class ClassCheckoutService {
 				await this.verifyTrackedCartBinding(managed, intent, binding);
 			}
 			await this.checkout.markCheckoutStarted(intent.id);
-			const result = await this.storefront.checkout({
+			const lookup = {
 				organizationId: intent.organizationId,
 				shopifyCartId:
 					managed?.record.shopifyCartId ?? record.shopifyCartId ?? "",
 				expectedStorefrontBinding: binding,
-			});
+			};
+			const result =
+				record.state === "completed"
+					? await this.lookupCompletedCartUrl(lookup)
+					: await this.storefront.checkout(lookup);
 			const current = await this.organizations.getShopifyIntegration(
 				intent.organizationId,
 			);
@@ -2138,19 +2246,23 @@ export class ClassCheckoutService {
 			)
 				throw new AppError("Shopify checkout is unavailable.", 503);
 			await this.requireSafeReplacement(intent);
-			if (Date.parse(intent.expiresAtIso) <= this.now().getTime()) {
-				if (managed)
+			if (managed) {
+				if (Date.parse(intent.expiresAtIso) <= this.now().getTime())
 					return this.requireTrackedCartRecovery(managed, "checkout_expired");
-				throw new ClassCheckoutRecoveryRequiredError(
-					await this.recordKnownCartExpiry(intent, record),
-				);
-			}
-			if (managed)
 				await this.advanceExecution(managed, {
 					state: "completed",
 					releaseLease: true,
 					eventType: "checkout_ready",
 				});
+			}
+			if (record.state === "completed") {
+				const completed = managed?.record ?? record;
+				await this.assertCompletedCartReplayCurrent(completed);
+				if (Date.parse(intent.expiresAtIso) <= this.now().getTime())
+					throw new ClassCheckoutRecoveryRequiredError(
+						await this.recordKnownCartExpiry(intent, completed),
+					);
+			}
 			return {
 				checkoutUrl: result.checkoutUrl,
 				intentId: intent.id,
@@ -2158,6 +2270,11 @@ export class ClassCheckoutService {
 				intent,
 			};
 		} catch (error) {
+			if (
+				error instanceof ClassCheckoutReplayResolvedError ||
+				error instanceof ClassCheckoutPersistenceUnavailableError
+			)
+				throw error;
 			if (managed)
 				return this.handleExecutionFailure(
 					managed,
@@ -2174,6 +2291,8 @@ export class ClassCheckoutService {
 					].includes(error.code ?? ""))
 			)
 				throw error;
+			const replayTimedOut =
+				error instanceof AppError && error.code === "checkout_replay_timeout";
 			try {
 				await this.checkout.classExecutions?.appendLateEvidence({
 					organizationId: intent.organizationId,
@@ -2182,12 +2301,15 @@ export class ClassCheckoutService {
 					eventType: "checkout_url_unavailable",
 					evidence: {
 						stage: "resume_checkout_url",
-						code: "checkout_retryable",
+						code: replayTimedOut
+							? "checkout_replay_timeout"
+							: "checkout_retryable",
 					},
 				});
 			} catch {
 				throw new ClassCheckoutPersistenceUnavailableError();
 			}
+			if (replayTimedOut) throw error;
 			throw checkoutFailureError(error);
 		}
 	}
@@ -2235,28 +2357,8 @@ export class ClassCheckoutService {
 		if (legacyInvalid) return legacyInvalid.recovery;
 		record = await this.recordKnownCartExpiry(intent, record);
 		const status = recoveryStatusFor(record);
-		if (
-			intent.status === "needs_review" &&
-			record.state === "recovery_required"
-		)
-			return { ...status, retryAllowed: false };
-		if (
-			["approved", "rejected", "needs_review", "superseded"].includes(
-				intent.status,
-			)
-		)
-			return {
-				...status,
-				status: "resolved",
-				retryAllowed: false,
-				reasonCode:
-					record.resultCode === "abandoned_unknown" ||
-					record.resultCode === "checkout_abandoned"
-						? record.resultCode
-						: intent.status === "approved"
-							? "checkout_already_completed"
-							: "checkout_closed",
-			};
+		const resolved = resolvedCheckoutStatus(intent.status, record);
+		if (resolved) return resolved;
 		if (
 			input.idempotencyKey !== intent.idempotencyKey ||
 			input.sessionId !== intent.sessionId
@@ -2276,7 +2378,10 @@ export class ClassCheckoutService {
 					correlationId: ready.correlationId,
 				};
 			} catch (error) {
-				if (error instanceof ClassCheckoutRecoveryRequiredError)
+				if (
+					error instanceof ClassCheckoutRecoveryRequiredError ||
+					error instanceof ClassCheckoutReplayResolvedError
+				)
 					return error.recovery;
 				if (error instanceof ClassCheckoutPersistenceUnavailableError)
 					throw error;

@@ -81,12 +81,14 @@ export class ShopifyMembershipCheckoutClient
 		organizationId: string;
 		shopifyCartId: string;
 		expectedStorefrontBinding?: ClassCheckoutStorefrontBinding;
+		signal?: AbortSignal;
 	}) {
 		const payload = await this.call(
 			input.organizationId,
 			`query FestivalCartCheckout($id: ID!) { cart(id: $id) { id checkoutUrl } }`,
 			{ id: input.shopifyCartId },
 			input.expectedStorefrontBinding,
+			input.signal,
 		);
 		const cart =
 			record(payload.data) && record(payload.data.cart)
@@ -163,7 +165,9 @@ export class ShopifyMembershipCheckoutClient
 		query: string,
 		variables: Record<string, unknown>,
 		expectedStorefrontBinding?: ClassCheckoutStorefrontBinding,
+		signal?: AbortSignal,
 	): Promise<Record<string, unknown>> {
+		signal?.throwIfAborted();
 		const integration =
 			await this.organizations.getShopifyIntegration(organizationId);
 		if (
@@ -198,6 +202,7 @@ export class ShopifyMembershipCheckoutClient
 						"User-Agent": "Festival-Membership-Checkout/1.0",
 					},
 					body: JSON.stringify({ query, variables }),
+					signal,
 				},
 			);
 			if (!record(payload)) throw unavailable();
@@ -216,6 +221,7 @@ export class ShopifyMembershipCheckoutClient
 			}
 			return payload;
 		} catch (error) {
+			signal?.throwIfAborted();
 			if (error instanceof AppError) throw error;
 			throw unavailable();
 		}

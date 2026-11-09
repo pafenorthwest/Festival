@@ -892,6 +892,166 @@ describe("ClassCheckoutService", () => {
 		expect(checkout).not.toHaveBeenCalled();
 	});
 
+	for (const entryPoint of ["start", "recovery status"] as const) {
+		it(`withholds a completed cart URL on ${entryPoint} when payment is approved during Shopify lookup`, async () => {
+			const f = await createFixture();
+			const first = await f.service.start(f.defaultInput);
+			const record = required(
+				await f.checkout.classExecutions.get(f.organization.id, first.intentId),
+			);
+			expect(record).toMatchObject({
+				state: "completed",
+				checkpoint: "attached",
+			});
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<{ checkoutUrl: string }>();
+			const create = spyOn(f.storefront, "createCart");
+			spyOn(f.storefront, "checkout").mockImplementationOnce(() => {
+				entered.resolve();
+				return release.promise;
+			});
+			const replay =
+				entryPoint === "start"
+					? f.service.start(f.defaultInput)
+					: f.service.recoveryStatus({
+							organizationId: f.organization.id,
+							customerId: f.customer.id,
+							sessionId: f.session.sessionId,
+							recoveryReference: record.recoveryReference,
+							idempotencyKey: f.defaultInput.idempotencyKey,
+						});
+			void replay.catch(() => undefined);
+			await entered.promise;
+			try {
+				await f.checkout.resolveIntent(first.intentId, "approved");
+			} finally {
+				release.resolve({ checkoutUrl: first.checkoutUrl });
+			}
+			if (entryPoint === "start") {
+				await expect(replay).rejects.toBeInstanceOf(AppError);
+				await expect(replay).rejects.toMatchObject({
+					status: 409,
+					code: "checkout_already_completed",
+				});
+			} else {
+				const status = await replay;
+				expect(status).toMatchObject({
+					status: "resolved",
+					reasonCode: "checkout_already_completed",
+					retryAllowed: false,
+				});
+				expect(status.checkoutUrl).toBeUndefined();
+			}
+			expect(create).not.toHaveBeenCalled();
+		});
+	}
+
+	it("withholds a completed cart URL when another worker changes its execution generation during Shopify lookup", async () => {
+		const f = await createFixture();
+		const first = await f.service.start(f.defaultInput);
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<{ checkoutUrl: string }>();
+		spyOn(f.storefront, "checkout").mockImplementationOnce(() => {
+			entered.resolve();
+			return release.promise;
+		});
+		const replay = f.service.start(f.defaultInput);
+		void replay.catch(() => undefined);
+		await entered.promise;
+		try {
+			const claim = {
+				organizationId: f.organization.id,
+				intentId: first.intentId,
+				owner: "revalidating-worker",
+			};
+			const claimed = required(
+				await f.checkout.classExecutions.claim({
+					...claim,
+					allowCompleted: true,
+				}),
+			);
+			expect(
+				await f.checkout.classExecutions.transition({
+					claim: { ...claim, generation: claimed.generation },
+					state: "completed",
+					releaseLease: true,
+				}),
+			).toBe(true);
+		} finally {
+			release.resolve({ checkoutUrl: first.checkoutUrl });
+		}
+		await expect(replay).rejects.toMatchObject({
+			status: 409,
+			code: "checkout_execution_changed",
+		});
+	});
+
+	it("withholds a completed cart URL when it expires during the final replay-state read", async () => {
+		const f = await createFixture();
+		const first = await f.service.start(f.defaultInput);
+		const expiresAt = Date.parse(first.intent.expiresAtIso);
+		f.now.setTime(expiresAt - 1);
+		const readState = f.checkout.getClassCheckoutReplayState.bind(f.checkout);
+		const snapshot = spyOn(f.checkout, "getClassCheckoutReplayState");
+		snapshot.mockImplementationOnce(async (organizationId, intentId) => {
+			const state = await readState(organizationId, intentId);
+			f.now.setTime(expiresAt);
+			return state;
+		});
+
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			code: "checkout_recovery_required",
+			recovery: { reasonCode: "checkout_expired", retryAllowed: false },
+		});
+		expect(snapshot).toHaveBeenCalledTimes(1);
+		expect(
+			await f.checkout.classExecutions.get(f.organization.id, first.intentId),
+		).toMatchObject({
+			state: "recovery_required",
+			resultCode: "checkout_expired",
+		});
+	});
+
+	it("times out a stalled completed cart replay and retries the same cart with the same key", async () => {
+		const f = await createFixture();
+		const create = spyOn(f.storefront, "createCart");
+		const checkout = spyOn(f.storefront, "checkout");
+		const first = await f.service.start(f.defaultInput);
+		expect(checkout.mock.calls[0][0].signal).toBeUndefined();
+		const record = required(
+			await f.checkout.classExecutions.get(f.organization.id, first.intentId),
+		);
+		checkout.mockImplementationOnce(() => new Promise(() => {}));
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			status: 503,
+			code: "checkout_replay_timeout",
+		});
+		expect(checkout.mock.calls[1][0].signal?.aborted).toBe(true);
+		expect(
+			await f.checkout.classExecutions.get(f.organization.id, first.intentId),
+		).toEqual(record);
+		expect(
+			await f.checkout.classExecutions.events(
+				f.organization.id,
+				first.intentId,
+			),
+		).toContainEqual(
+			expect.objectContaining({
+				eventType: "checkout_url_unavailable",
+				evidence: {
+					stage: "resume_checkout_url",
+					code: "checkout_replay_timeout",
+				},
+			}),
+		);
+		await expect(f.service.start(f.defaultInput)).resolves.toMatchObject({
+			intentId: first.intentId,
+			checkoutUrl: first.checkoutUrl,
+		});
+		expect(checkout.mock.calls[2][0].shopifyCartId).toBe(record.shopifyCartId);
+		expect(create).toHaveBeenCalledTimes(1);
+	}, 6_000);
+
 	it("reuses the admitted Shopify cart after transient checkout URL failure", async () => {
 		const f = await createFixture();
 		const create = spyOn(f.storefront, "createCart");

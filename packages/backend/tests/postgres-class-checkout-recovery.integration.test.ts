@@ -239,6 +239,14 @@ postgresTest(
 			state: "completed",
 		});
 		expect(
+			await f.checkout.getClassCheckoutReplayState("org", "intent"),
+		).toEqual({
+			intentStatus: "creating",
+			state: "completed",
+			generation: worker.generation,
+			resultCode: null,
+		});
+		expect(
 			await f.repository.claim({ ...f.input, owner: "without-opt-in" }),
 		).toBeNull();
 		const resumed = await Promise.all(
@@ -255,6 +263,16 @@ postgresTest(
 		expect(
 			await f.repository.transition({ claim, storefrontBinding: null }),
 		).toBe(false);
+		await f.checkout.resolveIntent("intent", "approved");
+		expect(
+			await f.checkout.getClassCheckoutReplayState("org", "intent"),
+		).toMatchObject({
+			intentStatus: "approved",
+			generation: worker.generation + 1,
+		});
+		expect(
+			await f.checkout.getClassCheckoutReplayState("other-org", "intent"),
+		).toBeNull();
 	},
 );
 

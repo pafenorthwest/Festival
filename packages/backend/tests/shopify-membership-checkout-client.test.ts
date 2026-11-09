@@ -102,6 +102,41 @@ describe("ShopifyMembershipCheckoutClient", () => {
 		expect(requester).not.toHaveBeenCalled();
 	});
 
+	it("passes checkout URL cancellation to the requester and preserves its reason", async () => {
+		const started = Promise.withResolvers<AbortSignal | null | undefined>();
+		const transport = new CustomerAccountTransport({
+			resolver: async () => [{ address: "8.8.8.8", family: 4, ttlSeconds: 60 }],
+			requester: async (_url, _answer, _agent, init) => {
+				const signal = init?.signal;
+				started.resolve(signal);
+				return new Promise((_, reject) => {
+					const onAbort = () => reject(new Error("Aborted"));
+					signal?.addEventListener("abort", onAbort, { once: true });
+				});
+			},
+		});
+		const client = new ShopifyMembershipCheckoutClient(
+			{
+				getShopifyIntegration: async () => ({
+					storeDomain: "festival.myshopify.com",
+					encryptedStorefrontPrivateToken: "ciphertext",
+				}),
+			} as never,
+			{ decrypt: () => "private-token" } as never,
+			transport,
+		);
+		const controller = new AbortController();
+		const result = client.checkout({
+			organizationId: "org",
+			shopifyCartId: "gid://shopify/Cart/private",
+			signal: controller.signal,
+		});
+		expect(await started.promise).toBe(controller.signal);
+		const reason = new Error("Checkout lookup timed out.");
+		controller.abort(reason);
+		await expect(result).rejects.toBe(reason);
+	});
+
 	it("reads complete correlation, buyer and line evidence without forwarding Festival request keys", async () => {
 		let requestBody = "";
 		const transport = new CustomerAccountTransport({

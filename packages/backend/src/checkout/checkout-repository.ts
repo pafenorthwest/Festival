@@ -14,6 +14,7 @@ import {
 import {
 	assertSafeExecutionSnapshot,
 	type ClassCheckoutClaim,
+	type ClassCheckoutExecution,
 	type ClassCheckoutExecutionRepository,
 	executionClaimMatches,
 	InMemoryClassCheckoutExecutionRepository,
@@ -111,6 +112,11 @@ export type CheckoutIntentOutcome =
 	| { kind: "expired" }
 	| { kind: "failed" };
 
+export type ClassCheckoutReplayState = Pick<
+	ClassCheckoutExecution,
+	"state" | "generation" | "resultCode"
+> & { intentStatus: CheckoutIntentStatus };
+
 export interface CheckoutRepository {
 	classExecutions?: ClassCheckoutExecutionRepository;
 	setClassCheckoutPaymentEvidenceLookup?(
@@ -171,6 +177,10 @@ export interface CheckoutRepository {
 		organizationId: string,
 		intentId: string,
 	): Promise<CheckoutIntentRecord | null>;
+	getClassCheckoutReplayState(
+		organizationId: string,
+		intentId: string,
+	): Promise<ClassCheckoutReplayState | null>;
 	hasProcessingIntent(
 		organizationId: string,
 		customerId: string,
@@ -626,6 +636,21 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		const intent = this.intents.get(intentId);
 		if (!intent || intent.organizationId !== organizationId) return null;
 		return { ...intent };
+	}
+
+	async getClassCheckoutReplayState(organizationId: string, intentId: string) {
+		const execution = this.classExecutions.getSnapshot(
+			organizationId,
+			intentId,
+		);
+		const intent = this.intents.get(intentId);
+		if (!execution || intent?.organizationId !== organizationId) return null;
+		return {
+			intentStatus: intent.status,
+			state: execution.state,
+			generation: execution.generation,
+			resultCode: execution.resultCode,
+		};
 	}
 
 	async hasProcessingIntent(

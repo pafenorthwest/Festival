@@ -434,6 +434,9 @@ export class InMemoryClassCheckoutExecutionRepository
 		});
 	}
 	async get(org: string, intent: string) {
+		return this.getSnapshot(org, intent);
+	}
+	getSnapshot(org: string, intent: string) {
 		return structuredClone(this.records.get(this.key(org, intent)) ?? null);
 	}
 	markAttached(claim: ClassCheckoutClaim): boolean {
