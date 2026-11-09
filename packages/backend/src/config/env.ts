@@ -5,6 +5,7 @@ export interface AppEnv {
 	port: number;
 	databaseUrl?: string;
 	databaseSchema?: string;
+	databasePoolMax: number;
 	firebaseProjectId?: string;
 	firebaseClientEmail?: string;
 	firebasePrivateKey?: string;
@@ -31,6 +32,8 @@ export interface AppEnv {
 	enableDropTransfer?: boolean;
 	shopifyAdminAuditPath?: string;
 }
+
+export type BackendEnv = AppEnv;
 
 const LOCAL_API_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
 const LOCAL_API_PORTS = [5172, 5173, 8080];
@@ -150,9 +153,8 @@ export function buildDatabaseUrl(): string {
 	const port = parseRequiredEnv("DB_PORT");
 	const database = encodeURIComponent(parseRequiredEnv("DATABASE"));
 	const sslmode = parseDatabaseSsl(process.env.DB_SSL);
-	const poolMax = parseDatabasePoolMax(process.env.DB_POOL_MAX) ?? 80;
 
-	return `postgresql://${user}:${password}@${host}:${port}/${database}?sslmode=${sslmode}&max=${poolMax}`;
+	return `postgresql://${user}:${password}@${host}:${port}/${database}?sslmode=${sslmode}`;
 }
 
 export function loadEnv(options?: {
@@ -180,6 +182,7 @@ export function loadEnv(options?: {
 		port,
 		databaseUrl,
 		databaseSchema,
+		databasePoolMax: parseDatabasePoolMax(process.env.DB_POOL_MAX) ?? 80,
 		firebaseProjectId,
 		firebaseClientEmail: process.env.FIREBASE_CLIENT_EMAIL?.trim(),
 		firebasePrivateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),

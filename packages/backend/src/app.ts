@@ -1,3 +1,4 @@
+import { sql } from "bun";
 import { getAuth } from "firebase-admin/auth";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -179,6 +180,10 @@ export async function createApp(options: CreateAppOptions = {}) {
 
 	if (env.databaseUrl) {
 		process.env.DATABASE_URL = env.databaseUrl;
+	}
+
+	if (sql.options && env.databasePoolMax) {
+		sql.options.max = env.databasePoolMax;
 	}
 
 	const repository =

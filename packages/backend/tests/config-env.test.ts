@@ -144,28 +144,40 @@ describe("buildDatabaseUrl", () => {
 		process.env.DB_SSL = "false";
 	}
 
-	it("defaults max connection pool size to 80 when DB_POOL_MAX is unset", () => {
+	it("builds a clean database url with sslmode", () => {
 		setDbEnv();
-		delete process.env.DB_POOL_MAX;
 
 		expect(buildDatabaseUrl()).toBe(
-			"postgresql://testuser:testpassword@localhost:5432/testdb?sslmode=disable&max=80",
+			"postgresql://testuser:testpassword@localhost:5432/testdb?sslmode=disable",
 		);
 	});
 
-	it("appends configured max connection pool size from DB_POOL_MAX", () => {
+	it("respects sslmode require when DB_SSL is enabled", () => {
 		setDbEnv();
-		process.env.DB_POOL_MAX = "40";
+		process.env.DB_SSL = "true";
 
 		expect(buildDatabaseUrl()).toBe(
-			"postgresql://testuser:testpassword@localhost:5432/testdb?sslmode=disable&max=40",
+			"postgresql://testuser:testpassword@localhost:5432/testdb?sslmode=require",
 		);
+	});
+});
+
+describe("loadEnv databasePoolMax", () => {
+	it("defaults max connection pool size to 80 when DB_POOL_MAX is unset", () => {
+		delete process.env.DB_POOL_MAX;
+
+		expect(loadTestEnv().databasePoolMax).toBe(80);
+	});
+
+	it("loads configured max connection pool size from DB_POOL_MAX", () => {
+		process.env.DB_POOL_MAX = "40";
+
+		expect(loadTestEnv().databasePoolMax).toBe(40);
 	});
 
 	it("rejects invalid DB_POOL_MAX values", () => {
-		setDbEnv();
 		process.env.DB_POOL_MAX = "not-a-number";
 
-		expect(buildDatabaseUrl).toThrow("Invalid DB_POOL_MAX value: not-a-number");
+		expect(loadTestEnv).toThrow("Invalid DB_POOL_MAX value: not-a-number");
 	});
 });
