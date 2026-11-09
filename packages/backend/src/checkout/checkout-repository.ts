@@ -185,6 +185,7 @@ export interface CheckoutRepository {
 		organizationId: string,
 		customerId: string,
 		nowIso: string,
+		intentType?: CheckoutIntentType,
 	): Promise<boolean>;
 	resolveIntent(
 		intentId: string,
@@ -441,10 +442,11 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 				);
 				if (existing) return this.outcomeFor(existing);
 				if (
-					await this.classExecutions.findBlocking(
+					record.intentType === "class_entry" &&
+					(await this.classExecutions.findBlocking(
 						record.organizationId,
 						record.customerId,
-					)
+					))
 				)
 					return { kind: "in_progress" as const };
 				const nowIso = this.now().toISOString();
@@ -657,8 +659,12 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		organizationId: string,
 		customerId: string,
 		nowIso: string,
+		intentType: CheckoutIntentType = "class_entry",
 	) {
-		if (await this.classExecutions.findBlocking(organizationId, customerId))
+		if (
+			intentType === "class_entry" &&
+			(await this.classExecutions.findBlocking(organizationId, customerId))
+		)
 			return true;
 		return [...this.intents.values()].some(
 			(intent) =>

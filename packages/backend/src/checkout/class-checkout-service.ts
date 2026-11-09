@@ -581,6 +581,7 @@ export class ClassCheckoutService {
 					input.organizationId,
 					input.customerId,
 					currentTime.toISOString(),
+					"class_entry",
 				))
 			) {
 				throw new AppError(

@@ -8,7 +8,7 @@ import { PublicMembershipProductService } from "../src/shopify/public-membership
 import type { ShopifyPublicCatalogClient } from "../src/shopify/shopify-public-catalog-client.js";
 
 describe("membership checkout service", () => {
-	it("allows independent Customer Account and Shopify versions and reuses the cart", async () => {
+	async function membershipCheckoutFixture() {
 		const organizations = new InMemoryOrganizationRepository();
 		const organization = await organizations.createOrganization({
 			name: "Festival",
@@ -65,7 +65,8 @@ describe("membership checkout service", () => {
 				};
 			},
 		};
-		const checkout = new InMemoryCheckoutRepository();
+		const now = new Date();
+		const checkout = new InMemoryCheckoutRepository(() => now);
 		let cartCreated = 0;
 		let checkoutRequests = 0;
 		const service = new MembershipCheckoutService(
@@ -89,6 +90,8 @@ describe("membership checkout service", () => {
 					};
 				},
 			},
+			undefined,
+			() => now,
 		);
 		const input = {
 			organizationId: organization.id,
@@ -102,19 +105,88 @@ describe("membership checkout service", () => {
 			divisionId: division.id,
 			staffAccessConsent: true,
 		};
+		return { checkout, input, now, service, cartCreated: () => cartCreated };
+	}
+
+	it("allows independent Customer Account and Shopify versions and reuses the cart", async () => {
+		const { service, input, cartCreated } = await membershipCheckoutFixture();
 		await expect(service.start(input)).resolves.toEqual({
 			checkoutUrl: "https://festival.myshopify.com/checkouts/fresh",
 		});
 		await expect(service.start(input)).resolves.toEqual({
 			checkoutUrl: "https://festival.myshopify.com/checkouts/fresh",
 		});
-		expect(cartCreated).toBe(1);
+		expect(cartCreated()).toBe(1);
 		await expect(
 			service.start({
 				...input,
 				idempotencyKey: "00000000-0000-4000-8000-000000000003",
 			}),
 		).rejects.toMatchObject({ code: "checkout_in_progress" });
+	});
+
+	it("blocks membership checkout while a class checkout is active and allows it after class expiry despite unresolved recovery", async () => {
+		const { checkout, input, now, service, cartCreated } =
+			await membershipCheckoutFixture();
+		const classExpiresAt = now.getTime() + 60_000;
+		const classIntent = await checkout.createIntent({
+			organizationId: input.organizationId,
+			customerId: input.customerId,
+			sessionId: input.sessionId,
+			idempotencyKey: "00000000-0000-4000-8000-000000000004",
+			intentType: "class_entry",
+			shopifyProductGid: "gid://shopify/Product/2",
+			shopifyVariantGid: "gid://shopify/ProductVariant/2",
+			amount: "50.00",
+			currencyCode: "USD",
+			expiresAtIso: new Date(classExpiresAt).toISOString(),
+			classExecution: { fingerprint: "class-checkout", requestSnapshot: {} },
+		});
+		if (classIntent.kind !== "created")
+			throw new Error("Expected class intent");
+		const executionKey = {
+			organizationId: input.organizationId,
+			intentId: classIntent.intent.id,
+		};
+		const claim = { ...executionKey, owner: "class-worker" };
+		const execution = await checkout.classExecutions.claim(claim);
+		if (!execution) throw new Error("Expected class execution claim");
+		const claimed = { ...claim, generation: execution.generation };
+		await checkout.classExecutions.transition({
+			claim: claimed,
+			checkpoint: "create_dispatched",
+		});
+		await checkout.classExecutions.recordRecoveryRequired({
+			claim: claimed,
+			reason: "checkout_creation_unknown",
+		});
+
+		await expect(service.start(input)).rejects.toMatchObject({
+			code: "checkout_in_progress",
+		});
+		expect(cartCreated()).toBe(0);
+
+		now.setTime(classExpiresAt + 1);
+		const recovery = await checkout.classExecutions.get(
+			executionKey.organizationId,
+			executionKey.intentId,
+		);
+		expect(recovery).toMatchObject({
+			state: "recovery_required",
+			resultCode: "checkout_creation_unknown",
+		});
+		const first = await service.start(input);
+		expect(first.checkoutUrl).toBe(
+			"https://festival.myshopify.com/checkouts/fresh",
+		);
+		await expect(service.start(input)).resolves.toEqual(first);
+		expect(cartCreated()).toBe(1);
+		expect(
+			await checkout.classExecutions.get(
+				executionKey.organizationId,
+				executionKey.intentId,
+			),
+		).toEqual(recovery);
 	});
 
 	it("records a terminal failure and never redirects when cart persistence fails", async () => {

@@ -15,6 +15,7 @@ import type {
 	CheckoutIntentLineItemRecord,
 	CheckoutIntentOutcome,
 	CheckoutIntentRecord,
+	CheckoutIntentType,
 	CheckoutRepository,
 	ClassCheckoutReplayState,
 	CreateCheckoutIntentInput,
@@ -130,11 +131,13 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 				}
 				return { kind: "failed" };
 			}
-			const blocked = await tx.unsafe(
-				`SELECT 1 FROM ${this.schema}.class_checkout_executions execution JOIN ${this.schema}.checkout_intents intent ON intent.id=execution.intent_id AND intent.organization_id=execution.organization_id WHERE execution.organization_id=$1 AND execution.customer_id=$2 AND intent.status NOT IN ('approved','rejected','needs_review','superseded') AND (execution.state='recovery_required' OR (execution.state='running' AND execution.lease_expires_at>clock_timestamp()) OR (execution.checkpoint IN ('create_dispatched','remote_cart_known') AND execution.state NOT IN ('completed','rejected')) OR (execution.checkpoint='attached' AND execution.state IN ('ready','retryable','completed') AND intent.expires_at<=clock_timestamp())) LIMIT 1`,
-				[record.organizationId, record.customerId],
-			);
-			if ((blocked as unknown[]).length) return { kind: "in_progress" };
+			if (record.intentType === "class_entry") {
+				const blocked = await tx.unsafe(
+					`SELECT 1 FROM ${this.schema}.class_checkout_executions execution JOIN ${this.schema}.checkout_intents intent ON intent.id=execution.intent_id AND intent.organization_id=execution.organization_id WHERE execution.organization_id=$1 AND execution.customer_id=$2 AND intent.status NOT IN ('approved','rejected','needs_review','superseded') AND (execution.state='recovery_required' OR (execution.state='running' AND execution.lease_expires_at>clock_timestamp()) OR (execution.checkpoint IN ('create_dispatched','remote_cart_known') AND execution.state NOT IN ('completed','rejected')) OR (execution.checkpoint='attached' AND execution.state IN ('ready','retryable','completed') AND intent.expires_at<=clock_timestamp())) LIMIT 1`,
+					[record.organizationId, record.customerId],
+				);
+				if (blocked.length) return { kind: "in_progress" };
+			}
 			const creating = (await tx.unsafe(
 				`SELECT id FROM ${this.schema}.checkout_intents WHERE organization_id = $1 AND customer_id = $2 AND status IN ('creating', 'ready', 'checkout_started') AND expires_at > NOW() LIMIT 1 FOR UPDATE`,
 				[record.organizationId, record.customerId],
@@ -449,8 +452,12 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 		organizationId: string,
 		customerId: string,
 		nowIso: string,
+		intentType: CheckoutIntentType = "class_entry",
 	) {
-		if (await this.classExecutions.findBlocking(organizationId, customerId))
+		if (
+			intentType === "class_entry" &&
+			(await this.classExecutions.findBlocking(organizationId, customerId))
+		)
 			return true;
 		const rows = (await sql.unsafe(
 			`SELECT id FROM ${this.schema}.checkout_intents WHERE organization_id = $1 AND customer_id = $2 AND expires_at > $3::timestamptz AND status IN ('creating', 'ready', 'checkout_started') LIMIT 1`,

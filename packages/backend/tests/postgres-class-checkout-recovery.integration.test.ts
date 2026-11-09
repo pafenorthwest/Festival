@@ -524,7 +524,7 @@ postgresTest(
 );
 
 postgresTest(
-	"expired uncertain intent blocks fresh keys and sessions without retaining a lease",
+	"expired uncertain class intent blocks new class checkout but allows membership",
 	async () => {
 		const f = await fixture();
 		const worker = await f.repository.claim({ ...f.input, owner: "worker" });
@@ -538,6 +538,30 @@ postgresTest(
 			claim,
 			reason: "checkout_creation_unknown",
 		});
+		const newPurchase = {
+			organizationId: "org",
+			customerId: "customer",
+			sessionId: "new-session",
+			idempotencyKey: "new-key",
+			shopifyProductGid: "product",
+			shopifyVariantGid: "variant",
+			amount: "50.00",
+			currencyCode: "USD",
+			expiresAtIso: new Date(Date.now() + 3_600_000).toISOString(),
+		};
+		const membership = { ...newPurchase, intentType: "membership" as const };
+		const membershipIsBlocked = () =>
+			f.checkout.hasProcessingIntent(
+				"org",
+				"customer",
+				new Date().toISOString(),
+				"membership",
+			);
+		expect(await membershipIsBlocked()).toBe(true);
+		expect(await f.checkout.createIntent(membership)).toMatchObject({
+			kind: "in_progress",
+		});
+
 		await sql.unsafe(
 			`UPDATE ${f.schema}.checkout_intents SET expires_at=NOW()-INTERVAL '1 hour' WHERE id='intent'`,
 		);
@@ -549,19 +573,26 @@ postgresTest(
 			),
 		).toBe(true);
 		const result = await f.checkout.createIntent({
-			organizationId: "org",
-			customerId: "customer",
-			sessionId: "new-session",
-			idempotencyKey: "new-key",
+			...newPurchase,
 			intentType: "class_entry",
-			shopifyProductGid: "product",
-			shopifyVariantGid: "variant",
-			amount: "50.00",
-			currencyCode: "USD",
-			expiresAtIso: new Date(Date.now() + 3_600_000).toISOString(),
 		});
 		expect(result.kind).toBe("in_progress");
-		expect((await f.repository.get("org", "intent"))?.leaseOwner).toBeNull();
+		expect(await membershipIsBlocked()).toBe(false);
+		expect(await f.checkout.createIntent(membership)).toMatchObject({
+			kind: "created",
+			intent: { intentType: "membership", status: "creating" },
+		});
+		expect(await membershipIsBlocked()).toBe(true);
+		expect(
+			await f.checkout.createIntent({
+				...membership,
+				idempotencyKey: "second-membership-key",
+			}),
+		).toMatchObject({ kind: "in_progress" });
+		expect(await f.repository.get("org", "intent")).toMatchObject({
+			state: "recovery_required",
+			leaseOwner: null,
+		});
 	},
 );
 

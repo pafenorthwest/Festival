@@ -73,6 +73,7 @@ export class MembershipCheckoutService {
 				input.organizationId,
 				input.customerId,
 				this.now().toISOString(),
+				"membership",
 			)
 		) {
 			throw new AppError(
