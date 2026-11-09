@@ -1,6 +1,10 @@
 -- 04-perf-test.sql: Pure Postgres seed records for performance test environment.
 -- Idempotent: safe to run multiple times without duplication or errors.
 
+-- Reset previous test children and snapshots for isolated perf runs
+DELETE FROM orgs.festival_child_age_snapshots WHERE organization_id = 'perf-test';
+DELETE FROM orgs.festival_children WHERE organization_id = 'perf-test';
+
 -- 1. Organization
 INSERT INTO orgs.organizations (id, name, slug, timezone, default_currency_code)
 VALUES ('perf-test', 'Performance Test Organization', 'perf-test', 'America/Los_Angeles', 'USD')
