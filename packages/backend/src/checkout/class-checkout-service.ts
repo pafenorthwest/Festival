@@ -243,7 +243,8 @@ function checkoutRejectionCode(record: ClassCheckoutExecution): string | null {
 	if (
 		record.checkpoint === "prepared" &&
 		record.state === "rejected" &&
-		record.resultCode === "checkout_integration_changed"
+		(record.resultCode === "checkout_integration_changed" ||
+			record.resultCode === "checkout_expired")
 	)
 		return "checkout_pre_dispatch_rejected";
 	return record.resultCode;
@@ -478,30 +479,9 @@ export class ClassCheckoutService {
 				input.festivalShortName,
 			);
 		}
-		let managed: ManagedClassCheckoutExecution | undefined;
-		if (priorExecution && executions) {
-			const owner = randomUUID();
-			const claimed = await executions.claim({
-				organizationId: input.organizationId,
-				intentId: priorExecution.intentId,
-				owner,
-			});
-			if (!claimed)
-				throw new AppError(
-					"Checkout is already in progress.",
-					409,
-					"checkout_in_progress",
-				);
-			managed = {
-				record: claimed,
-				claim: {
-					organizationId: input.organizationId,
-					intentId: claimed.intentId,
-					owner,
-					generation: claimed.generation,
-				},
-			};
-		}
+		let managed = priorExecution
+			? await this.claimCheckoutExecution(priorExecution)
+			: undefined;
 		try {
 			if (
 				managed &&
@@ -723,6 +703,15 @@ export class ClassCheckoutService {
 					409,
 					"checkout_in_progress",
 				);
+			if (
+				record.checkpoint === "prepared" &&
+				Date.parse(intent.expiresAtIso) <= this.now().getTime()
+			)
+				return this.handleExecutionFailure(
+					await this.claimCheckoutExecution(record),
+					"registration_window",
+					new AppError("Checkout has expired.", 409, "checkout_expired"),
+				);
 			return;
 		}
 		await this.assertNoBlockingExecution(
@@ -730,6 +719,32 @@ export class ClassCheckoutService {
 			input.customerId,
 			input.festivalShortName,
 		);
+	}
+
+	private async claimCheckoutExecution(
+		record: ClassCheckoutExecution,
+	): Promise<ManagedClassCheckoutExecution> {
+		const owner = randomUUID();
+		const claimed = await this.checkout.classExecutions?.claim({
+			organizationId: record.organizationId,
+			intentId: record.intentId,
+			owner,
+		});
+		if (!claimed)
+			throw new AppError(
+				"Checkout is already in progress.",
+				409,
+				"checkout_in_progress",
+			);
+		return {
+			record: claimed,
+			claim: {
+				organizationId: claimed.organizationId,
+				intentId: claimed.intentId,
+				owner,
+				generation: claimed.generation,
+			},
+		};
 	}
 
 	private async assertNoBlockingExecution(
@@ -1693,6 +1708,9 @@ export class ClassCheckoutService {
 			...(change.checkpoint ? { checkpoint: change.checkpoint } : {}),
 			...(change.state ? { state: change.state } : {}),
 			...(change.shopifyCartId ? { shopifyCartId: change.shopifyCartId } : {}),
+			...(change.resultCode !== undefined
+				? { resultCode: change.resultCode }
+				: {}),
 			...(change.storefrontBinding !== undefined
 				? { storefrontBinding: change.storefrontBinding }
 				: {}),
@@ -1990,6 +2008,15 @@ export class ClassCheckoutService {
 				code: terminal ? "checkout_rejected" : "checkout_retryable",
 			},
 		});
+		if (
+			terminal &&
+			checkoutRejectionCode(managed.record) === "checkout_pre_dispatch_rejected"
+		)
+			throw new AppError(
+				error.message,
+				error.status,
+				"checkout_pre_dispatch_rejected",
+			);
 		if (
 			terminal ||
 			(error instanceof AppError &&

@@ -33,6 +33,12 @@ const replacementKey = "restored-checkout-key";
 const requests: { key: string | null; payload: unknown }[] = [];
 let unavailable = false;
 let mode = process.argv[2];
+const recoveryAfterExpiry = {
+	status: "recovery_required",
+	recoveryReference,
+	reasonCode: "checkout_expired",
+	retryAllowed: false,
+};
 let discoverableRestart =
 	mode === "restore-checkout" || mode === "network" ? recoveryReference : null;
 let eligibilityCalls = 0;
@@ -83,6 +89,7 @@ globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
 				reasonCode: "abandoned_unknown",
 				retryAllowed: false,
 			});
+		if (mode === "recovery-expiry") return json(recoveryAfterExpiry);
 		return json({
 			status: "ready",
 			recoveryReference,
@@ -97,30 +104,51 @@ globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
 			key: new Headers(init?.headers).get("Idempotency-Key"),
 			payload: JSON.parse(String(init?.body)),
 		});
-		if (["recovery", "abandonment", "restart-blocked"].includes(mode))
+		if (
+			[
+				"recovery",
+				"recovery-expiry",
+				"abandonment",
+				"restart-blocked",
+			].includes(mode)
+		)
 			return json(
 				{
 					error: "Checkout needs recovery.",
 					code: "checkout_recovery_required",
-					recovery: {
-						status: "recovery_required",
-						recoveryReference,
-						reasonCode: "shopify_outcome_unknown",
-						retryAllowed: false,
-						restartAllowed: mode === "restart-blocked",
-					},
+					recovery:
+						mode === "recovery-expiry"
+							? recoveryAfterExpiry
+							: {
+									status: "recovery_required",
+									recoveryReference,
+									reasonCode: "shopify_outcome_unknown",
+									retryAllowed: false,
+									restartAllowed: mode === "restart-blocked",
+								},
 				},
 				409,
 			);
 		if (mode === "network" && requests.length === 1)
 			throw new Error("Response lost");
-		if (mode === "pre-dispatch-rejection") {
+		if (mode === "pre-dispatch-expiry" && requests.length === 1)
+			return json(
+				{
+					error: "Shopify is temporarily unavailable.",
+					code: "checkout_retryable_upstream",
+				},
+				503,
+			);
+		if (mode === "pre-dispatch-rejection" || mode === "pre-dispatch-expiry") {
 			if (requests.length === 1)
 				return json({ error: "Checkout is in progress." }, 409);
 			if (requests.length === 2)
 				return json(
 					{
-						error: "The previous checkout was rejected before dispatch.",
+						error:
+							mode === "pre-dispatch-expiry"
+								? "The previous checkout expired before dispatch."
+								: "The previous checkout was rejected before dispatch.",
 						code: "checkout_pre_dispatch_rejected",
 					},
 					409,
@@ -241,10 +269,14 @@ if (mode === "restore-checkout") {
 	dispose?.();
 	console.log("CHECKOUT_HOOK_OK");
 	process.exit(0);
-} else if (mode === "recovery" || mode === "abandonment") {
+} else if (["recovery", "recovery-expiry", "abandonment"].includes(mode)) {
 	assert.equal(state.isSubmittingCheckout(), false);
 	assert.equal(cart.checkoutRecovery()?.recoveryReference, recoveryReference);
 	const key = cart.getCheckoutIdempotencyKey();
+	const frozenSubmission = cart.checkoutSubmission();
+	const persistentKey = [...storedCheckoutKeys.values()][0];
+	assert.ok(frozenSubmission);
+	assert.ok(persistentKey);
 	await state.handleCartCheckout();
 	assert.equal(
 		requests.length,
@@ -252,10 +284,24 @@ if (mode === "restore-checkout") {
 		"recovery does not automatically recreate a cart",
 	);
 	assert.equal(cart.getCheckoutIdempotencyKey(), key);
+	await state.handleRestoreCheckout();
+	state.handleRestartCheckout();
+	assert.equal(restartCalls, 0);
+	assert.equal(cart.checkoutSubmission(), frozenSubmission);
+	assert.deepEqual([...storedCheckoutKeys.values()], [persistentKey]);
 	assert.throws(() => cart.removeItem(cart.items()[0].lineId));
 	await state.handleRefreshCheckout();
 	assert.equal(statusCalls, 1);
 	assert.equal(requests.length, 1, "status only resumes the known cart");
+	if (mode === "recovery-expiry") {
+		assert.deepEqual(cart.checkoutRecovery(), recoveryAfterExpiry);
+		assert.equal(cart.checkoutSubmission(), frozenSubmission);
+		assert.deepEqual([...storedCheckoutKeys.values()], [persistentKey]);
+		assert.deepEqual(assigned, []);
+		dispose?.();
+		console.log("CHECKOUT_HOOK_OK");
+		process.exit(0);
+	}
 	if (mode === "abandonment") {
 		assert.equal(cart.checkoutRecovery()?.status, "resolved");
 		state.handleRestartCheckout();
@@ -289,7 +335,10 @@ if (mode === "restore-checkout") {
 	assert.equal(requests.length, 2);
 	assert.equal(requests[0].key, requests[1].key);
 	assert.deepEqual(requests[0].payload, requests[1].payload);
-} else if (mode === "pre-dispatch-rejection") {
+} else if (
+	mode === "pre-dispatch-rejection" ||
+	mode === "pre-dispatch-expiry"
+) {
 	assert.equal(cart.checkoutSubmission()?.idempotencyKey, requests[0].key);
 	assert.equal(storedCheckoutKeys.size, 1);
 	const originalLine = cart.items()[0];

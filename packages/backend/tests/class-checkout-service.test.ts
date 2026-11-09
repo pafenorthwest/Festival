@@ -2953,6 +2953,102 @@ describe("ClassCheckoutService", () => {
 		});
 	});
 
+	for (const firstRetry of ["start", "preflightRecovery"] as const) {
+		it(`allows a fresh checkout after ${firstRetry} confirms pre-dispatch expiry`, async () => {
+			const f = await createFixture();
+			const create = spyOn(f.storefront, "createCart");
+			const checkout = spyOn(f.storefront, "checkout");
+			const integration = spyOn(
+				f.organizations,
+				"getShopifyIntegration",
+			).mockResolvedValueOnce(null);
+
+			await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+				status: 503,
+			});
+			const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+			const executions = f.checkout.classExecutions;
+			expect(await executions.get(f.organization.id, intent.id)).toMatchObject({
+				checkpoint: "prepared",
+				state: "retryable",
+				shopifyCartId: null,
+			});
+			f.now.setTime(Date.parse(intent.expiresAtIso) + 1);
+
+			const safeRejection = {
+				status: 409,
+				code: "checkout_pre_dispatch_rejected",
+			};
+			const preflightInput = { ...f.defaultInput, buyerAccessToken: "" };
+			await expect(
+				f.service[firstRetry](
+					firstRetry === "start" ? f.defaultInput : preflightInput,
+				),
+			).rejects.toMatchObject(safeRejection);
+			await expect(
+				f.service.preflightRecovery(preflightInput),
+			).rejects.toMatchObject(safeRejection);
+			await expect(f.service.start(f.defaultInput)).rejects.toMatchObject(
+				safeRejection,
+			);
+			expect(await executions.get(f.organization.id, intent.id)).toMatchObject({
+				checkpoint: "prepared",
+				state: "rejected",
+				resultCode: "checkout_expired",
+				leaseOwner: null,
+				shopifyCartId: null,
+			});
+			expect(await f.checkout.findIntentByKey(f.defaultInput)).toMatchObject({
+				status: "superseded",
+				cartReference: null,
+			});
+			expect(create).not.toHaveBeenCalled();
+			expect(checkout).not.toHaveBeenCalled();
+			expect(integration).toHaveBeenCalledTimes(1);
+
+			await expect(
+				f.service.start({
+					...f.defaultInput,
+					idempotencyKey: crypto.randomUUID(),
+				}),
+			).resolves.toMatchObject({
+				checkoutUrl: `https://${f.storeDomain}/checkouts/c123`,
+			});
+			expect(create).toHaveBeenCalledTimes(1);
+			expect(checkout).toHaveBeenCalledTimes(1);
+		});
+	}
+
+	it("does not release an expired prepared checkout when its terminal write fails", async () => {
+		const f = await createFixture();
+		spyOn(f.organizations, "getShopifyIntegration").mockResolvedValueOnce(null);
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			status: 503,
+		});
+		const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+		f.now.setTime(Date.parse(intent.expiresAtIso) + 1);
+		const executions = f.checkout.classExecutions;
+		const transition = executions.transition.bind(executions);
+		const failedWrite = spyOn(executions, "transition").mockImplementation(
+			async (input) => {
+				if (input.state === "rejected") throw new Error("Write unavailable");
+				return transition(input);
+			},
+		);
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			status: 503,
+			code: "checkout_persistence_unavailable",
+		});
+		failedWrite.mockRestore();
+		expect(await executions.get(f.organization.id, intent.id)).toMatchObject({
+			checkpoint: "prepared",
+			state: "running",
+		});
+		expect(await f.checkout.findIntentByKey(f.defaultInput)).toMatchObject({
+			status: "creating",
+		});
+	});
+
 	it("keeps a legacy pre-dispatch rejection terminal under a safe result code", async () => {
 		const f = await createFixture();
 		const create = spyOn(f.storefront, "createCart");

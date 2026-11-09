@@ -5,8 +5,10 @@ for (const scenario of [
 	"handoff",
 	"network",
 	"recovery",
+	"recovery-expiry",
 	"abandonment",
 	"pre-dispatch-rejection",
+	"pre-dispatch-expiry",
 	"restore-checkout",
 	"restart-blocked",
 ]) {
