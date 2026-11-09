@@ -220,6 +220,11 @@ describe("repository nginx security policy", () => {
 					registered.filter((route) => !isPrivate(route)),
 				),
 			).toEqual([]);
+			const restartPath =
+				"/api/organizations/festival/customer/festivals/spring/registration/checkout/restart";
+			expect(proxiesRoute(locations, "GET", restartPath)).toBe(true);
+			expect(proxiesRoute(locations, "POST", restartPath)).toBe(true);
+			expect(proxiesRoute(locations, "PATCH", restartPath)).toBe(false);
 			for (const route of privateRoutes) {
 				const block = selectLocation(locations, route.path);
 				expect(

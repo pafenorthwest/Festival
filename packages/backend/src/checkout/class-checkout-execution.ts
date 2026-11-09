@@ -91,6 +91,37 @@ export interface ResolveClassCheckoutExecution {
 	shopifyCartId?: string;
 	storefrontBinding?: ClassCheckoutStorefrontBinding;
 }
+export interface RestartUnissuedInvalidCartInput {
+	organizationId: string;
+	customerId: string;
+	intentId: string;
+}
+export interface FindUnissuedInvalidCartRestartInput {
+	organizationId: string;
+	customerId: string;
+	festivalShortName: string;
+}
+export interface UnissuedCartReplacementInput {
+	organizationId: string;
+	customerId: string;
+	replacementKey: string;
+}
+interface InMemoryClassCheckoutRestartLookup {
+	intent(input: RestartUnissuedInvalidCartInput): {
+		status: string;
+		cartReference?: string | null;
+		paymentObserved: boolean;
+	} | null;
+	hasNewerCheckout(
+		input: RestartUnissuedInvalidCartInput &
+			FindUnissuedInvalidCartRestartInput,
+		replacementKey: string,
+	): Promise<boolean>;
+	replacementClosed(
+		input: RestartUnissuedInvalidCartInput,
+		key: string,
+	): boolean;
+}
 export interface ClassCheckoutExecutionRepository {
 	get(
 		organizationId: string,
@@ -139,6 +170,15 @@ export interface ClassCheckoutExecutionRepository {
 	resolve(
 		input: ResolveClassCheckoutExecution,
 	): Promise<ClassCheckoutExecution | null>;
+	restartUnissuedInvalidCart(
+		input: RestartUnissuedInvalidCartInput,
+	): Promise<{ replacementKey: string } | null>;
+	findUnissuedInvalidCartRestart(
+		input: FindUnissuedInvalidCartRestartInput,
+	): Promise<ClassCheckoutExecution | null>;
+	isUnissuedCartReplacementBlocked(
+		input: UnissuedCartReplacementInput,
+	): Promise<boolean>;
 	observePayment(input: {
 		organizationId: string;
 		intentId: string;
@@ -205,6 +245,54 @@ export function copyStorefrontBinding({
 	integrationVersion,
 }: ClassCheckoutStorefrontBinding): ClassCheckoutStorefrontBinding {
 	return { shopDomain, integrationVersion };
+}
+export function isLegacyInvalidCartObservation(
+	event: ClassCheckoutExecutionEvent,
+) {
+	return (
+		event.eventType === "invalid_remote_cart_observed" &&
+		!event.evidence.shopifyCartId &&
+		!event.evidence.code
+	);
+}
+function hasUnissuedInvalidCartEvidence(
+	value: ClassCheckoutExecution,
+	events: readonly ClassCheckoutExecutionEvent[],
+): boolean {
+	return (
+		value.checkpoint === "remote_cart_known" &&
+		Boolean(value.shopifyCartId) &&
+		events.some(isLegacyInvalidCartObservation) &&
+		!events.some(
+			(event) =>
+				["cart_attached", "checkout_ready", "paid_order_observed"].includes(
+					event.eventType,
+				) ||
+				Boolean(event.evidence.shopifyOrderGid) ||
+				event.evidence.resolution === "resume_known_cart",
+		)
+	);
+}
+export function unissuedInvalidCartRestartDecision(
+	value: ClassCheckoutExecution,
+	intentStatus: string,
+	events: readonly ClassCheckoutExecutionEvent[],
+): { replacementKey: string } | "restartable" | null {
+	if (!hasUnissuedInvalidCartEvidence(value, events)) return null;
+	if (
+		intentStatus === "superseded" &&
+		value.state === "rejected" &&
+		value.resultCode === "checkout_restarted_unissued"
+	) {
+		const restart = events.find(
+			(event) => event.eventType === "customer_restarted_unissued",
+		);
+		return restart ? { replacementKey: restart.id } : null;
+	}
+	return intentStatus === "creating" &&
+		["running", "retryable", "recovery_required"].includes(value.state)
+		? "restartable"
+		: null;
 }
 export function resolvedExecution(
 	value: ClassCheckoutExecution,
@@ -313,6 +401,7 @@ export class InMemoryClassCheckoutExecutionRepository
 			organizationId: string,
 			intentId: string,
 		) => string | null = () => null,
+		private readonly restartLookup?: InMemoryClassCheckoutRestartLookup,
 	) {}
 	private blocks(value: ClassCheckoutExecution): boolean {
 		if (this.isTerminal(value.organizationId, value.intentId)) return false;
@@ -603,6 +692,120 @@ export class InMemoryClassCheckoutExecutionRepository
 			});
 			return structuredClone(next);
 		});
+	}
+	private restartDecision(input: RestartUnissuedInvalidCartInput) {
+		const value = this.records.get(
+			this.key(input.organizationId, input.intentId),
+		);
+		const intent = this.restartLookup?.intent(input);
+		if (
+			!value ||
+			value.customerId !== input.customerId ||
+			!intent ||
+			intent.cartReference ||
+			intent.paymentObserved
+		)
+			return null;
+		const events = this.history.filter(
+			(event) =>
+				event.organizationId === input.organizationId &&
+				event.intentId === input.intentId,
+		);
+		const decision = unissuedInvalidCartRestartDecision(
+			value,
+			intent.status,
+			events,
+		);
+		return decision ? { value, decision } : null;
+	}
+	async restartUnissuedInvalidCart(input: RestartUnissuedInvalidCartInput) {
+		return withInMemoryCapacityLock(() =>
+			withInMemoryCheckoutAdmissionLock(
+				input.organizationId,
+				input.customerId,
+				async () => {
+					const candidate = this.restartDecision(input);
+					if (!candidate) return null;
+					if (candidate.decision !== "restartable")
+						return this.restartLookup?.replacementClosed(
+							input,
+							candidate.decision.replacementKey,
+						)
+							? null
+							: candidate.decision;
+					const { value } = candidate;
+					const replacementKey = randomUUID();
+					this.abandonIntent(input.organizationId, input.intentId);
+					value.generation++;
+					value.state = "rejected";
+					value.resultCode = "checkout_restarted_unissued";
+					value.leaseOwner = null;
+					value.leaseExpiresAtIso = null;
+					value.updatedAtIso = this.now().toISOString();
+					this.event(
+						value,
+						"customer_restarted_unissued",
+						{ actorId: input.customerId, code: value.resultCode },
+						replacementKey,
+					);
+					return { replacementKey };
+				},
+			),
+		);
+	}
+	async findUnissuedInvalidCartRestart(
+		input: FindUnissuedInvalidCartRestartInput,
+	) {
+		for (const value of [...this.records.values()].reverse()) {
+			const snapshot = value.requestSnapshot as {
+				festivalShortName?: string;
+			};
+			if (
+				value.organizationId !== input.organizationId ||
+				value.customerId !== input.customerId ||
+				snapshot?.festivalShortName?.toLowerCase() !==
+					input.festivalShortName.toLowerCase()
+			)
+				continue;
+			const candidateInput = { ...input, intentId: value.intentId };
+			const candidate = this.restartDecision(candidateInput);
+			if (
+				candidate &&
+				(candidate.decision === "restartable" ||
+					(!this.restartLookup?.replacementClosed(
+						candidateInput,
+						candidate.decision.replacementKey,
+					) &&
+						!(await this.restartLookup?.hasNewerCheckout(
+							candidateInput,
+							candidate.decision.replacementKey,
+						))))
+			)
+				return structuredClone(value);
+		}
+		return null;
+	}
+	async isUnissuedCartReplacementBlocked(input: UnissuedCartReplacementInput) {
+		const event = this.history.find(
+			(event) =>
+				event.organizationId === input.organizationId &&
+				event.id === input.replacementKey &&
+				event.eventType === "customer_restarted_unissued",
+		);
+		if (!event) return false;
+		const value = this.records.get(
+			this.key(input.organizationId, event.intentId),
+		);
+		if (!value || value.customerId !== input.customerId) return false;
+		const candidate = this.restartDecision({
+			...input,
+			intentId: event.intentId,
+		});
+		return (
+			!candidate ||
+			candidate.decision === "restartable" ||
+			candidate.decision.replacementKey !== input.replacementKey
+		);
 	}
 	async observePayment(input: {
 		organizationId: string;

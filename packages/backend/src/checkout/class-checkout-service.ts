@@ -3,6 +3,8 @@ import type {
 	AccompanistMembershipGrant,
 	CanonicalWork,
 	ClassCheckoutLineItemInput,
+	ClassCheckoutRestartDto,
+	ClassCheckoutRestartRegistration,
 	ClassEligibilityResult,
 	ClassEntitlement,
 	ClassRegistrationSnapshot,
@@ -46,6 +48,7 @@ import {
 	assertExecutionFingerprint,
 	type ClassCheckoutExecution,
 	type ClassCheckoutStorefrontBinding,
+	isLegacyInvalidCartObservation,
 	type TransitionClassCheckoutExecution,
 } from "./class-checkout-execution.js";
 import {
@@ -397,6 +400,7 @@ export class ClassCheckoutService {
 			input,
 			currentTime,
 		);
+		await this.requireSafeReplacement(input);
 		const executions = this.checkout.classExecutions;
 		const priorIntent =
 			executions && this.checkout.findIntentByKey
@@ -436,6 +440,11 @@ export class ClassCheckoutService {
 			priorExecution =
 				(await executions.get(input.organizationId, priorExecution.intentId)) ??
 				priorExecution;
+			const legacyInvalid = await this.legacyInvalidCartRecovery(
+				priorExecution,
+				input.festivalShortName,
+			);
+			if (legacyInvalid) throw legacyInvalid;
 			if (priorIntent)
 				priorExecution = await this.recordKnownCartExpiry(
 					priorIntent,
@@ -466,6 +475,7 @@ export class ClassCheckoutService {
 			await this.assertNoBlockingExecution(
 				input.organizationId,
 				input.customerId,
+				input.festivalShortName,
 			);
 		}
 		let managed: ManagedClassCheckoutExecution | undefined;
@@ -674,6 +684,7 @@ export class ClassCheckoutService {
 			{ ...input, buyerAccessToken: "local-preflight" },
 			this.now(),
 		);
+		await this.requireSafeReplacement(input);
 		const executions = this.checkout.classExecutions;
 		if (!executions || !this.checkout.findIntentByKey) return;
 		const intent = await this.checkout.findIntentByKey(input);
@@ -687,6 +698,11 @@ export class ClassCheckoutService {
 			await executions.reapExpired(input.organizationId, intent.id);
 			record =
 				(await executions.get(input.organizationId, intent.id)) ?? record;
+			const legacyInvalid = await this.legacyInvalidCartRecovery(
+				record,
+				input.festivalShortName,
+			);
+			if (legacyInvalid) throw legacyInvalid;
 			record = await this.recordKnownCartExpiry(intent, record);
 			if (record.state === "recovery_required")
 				throw new ClassCheckoutRecoveryRequiredError(record);
@@ -712,18 +728,25 @@ export class ClassCheckoutService {
 		await this.assertNoBlockingExecution(
 			input.organizationId,
 			input.customerId,
+			input.festivalShortName,
 		);
 	}
 
 	private async assertNoBlockingExecution(
 		organizationId: string,
 		customerId: string,
+		festivalShortName?: string,
 	): Promise<void> {
 		let blocking = await this.checkout.classExecutions?.findBlocking(
 			organizationId,
 			customerId,
 		);
 		if (!blocking) return;
+		const legacyInvalid = await this.legacyInvalidCartRecovery(
+			blocking,
+			festivalShortName,
+		);
+		if (legacyInvalid) throw legacyInvalid;
 		if (blocking.state === "running")
 			throw new AppError(
 				"Checkout is already in progress.",
@@ -744,6 +767,61 @@ export class ClassCheckoutService {
 			return;
 		if (intent) blocking = await this.recordKnownCartExpiry(intent, blocking);
 		throw new ClassCheckoutRecoveryRequiredError(blocking, false);
+	}
+
+	private async legacyInvalidCartRecovery(
+		record: ClassCheckoutExecution,
+		festivalShortName?: string,
+	): Promise<ClassCheckoutRecoveryRequiredError | null> {
+		if (
+			record.checkpoint !== "remote_cart_known" ||
+			record.state === "rejected" ||
+			record.state === "completed"
+		)
+			return null;
+		const events = await this.checkout.classExecutions?.events(
+			record.organizationId,
+			record.intentId,
+		);
+		if (
+			!events?.some(isLegacyInvalidCartObservation) ||
+			events.some(
+				(event) =>
+					event.evidence.resolution === "resume_known_cart" ||
+					event.eventType === "paid_order_observed" ||
+					Boolean(event.evidence.shopifyOrderGid),
+			)
+		)
+			return null;
+		const available = festivalShortName
+			? await this.findUnissuedCartRestart({
+					organizationId: record.organizationId,
+					customerId: record.customerId,
+					festivalShortName,
+				})
+			: null;
+		return new ClassCheckoutRecoveryRequiredError(record, false, {
+			restartAllowed: available?.recoveryReference === record.recoveryReference,
+		});
+	}
+
+	private async requireSafeReplacement(input: {
+		organizationId: string;
+		customerId: string;
+		idempotencyKey: string;
+	}): Promise<void> {
+		if (
+			await this.checkout.classExecutions?.isUnissuedCartReplacementBlocked({
+				organizationId: input.organizationId,
+				customerId: input.customerId,
+				replacementKey: input.idempotencyKey,
+			})
+		)
+			throw new AppError(
+				"The previous checkout has a payment under review. Your registrations are still saved.",
+				409,
+				"checkout_restart_payment_uncertain",
+			);
 	}
 
 	private async validateSessionAndCustomer(
@@ -1478,6 +1556,7 @@ export class ClassCheckoutService {
 		) {
 			throw new AppError("Shopify checkout is unavailable.", 503);
 		}
+		await this.requireSafeReplacement(input);
 		if (params.managed) {
 			if (Date.parse(expiresAtIso) <= this.now().getTime())
 				return this.requireTrackedCartRecovery(
@@ -1911,7 +1990,12 @@ export class ClassCheckoutService {
 				code: terminal ? "checkout_rejected" : "checkout_retryable",
 			},
 		});
-		if (terminal) throw error;
+		if (
+			terminal ||
+			(error instanceof AppError &&
+				error.code === "checkout_restart_payment_uncertain")
+		)
+			throw error;
 		throw checkoutFailureError(error);
 	}
 
@@ -1956,6 +2040,7 @@ export class ClassCheckoutService {
 		intent: CheckoutIntentRecord,
 		record: ClassCheckoutExecution,
 	): Promise<ClassCheckoutResult> {
+		await this.requireSafeReplacement(intent);
 		if (
 			["approved", "rejected", "needs_review", "superseded"].includes(
 				intent.status,
@@ -2025,6 +2110,7 @@ export class ClassCheckoutService {
 				!isAllowedCheckoutUrl(result.checkoutUrl, current.storeDomain)
 			)
 				throw new AppError("Shopify checkout is unavailable.", 503);
+			await this.requireSafeReplacement(intent);
 			if (Date.parse(intent.expiresAtIso) <= this.now().getTime()) {
 				if (managed)
 					return this.requireTrackedCartRecovery(managed, "checkout_expired");
@@ -2054,9 +2140,11 @@ export class ClassCheckoutService {
 			if (
 				error instanceof ClassCheckoutRecoveryRequiredError ||
 				(error instanceof AppError &&
-					["checkout_in_progress", "checkout_execution_changed"].includes(
-						error.code ?? "",
-					))
+					[
+						"checkout_in_progress",
+						"checkout_execution_changed",
+						"checkout_restart_payment_uncertain",
+					].includes(error.code ?? ""))
 			)
 				throw error;
 			try {
@@ -2113,6 +2201,11 @@ export class ClassCheckoutService {
 		await executions.reapExpired(input.organizationId, record.intentId);
 		record =
 			(await executions.get(input.organizationId, record.intentId)) ?? record;
+		const legacyInvalid = await this.legacyInvalidCartRecovery(
+			record,
+			input.festivalShortName,
+		);
+		if (legacyInvalid) return legacyInvalid.recovery;
 		record = await this.recordKnownCartExpiry(intent, record);
 		const status = recoveryStatusFor(record);
 		if (
@@ -2160,6 +2253,16 @@ export class ClassCheckoutService {
 					return error.recovery;
 				if (error instanceof ClassCheckoutPersistenceUnavailableError)
 					throw error;
+				if (
+					error instanceof AppError &&
+					error.code === "checkout_restart_payment_uncertain"
+				)
+					return {
+						...status,
+						status: "recovery_required",
+						retryAllowed: false,
+						reasonCode: error.code,
+					};
 				return {
 					...status,
 					reasonCode:
@@ -2170,6 +2273,143 @@ export class ClassCheckoutService {
 			}
 		}
 		return status;
+	}
+
+	async findUnissuedCartRestart(input: {
+		organizationId: string;
+		customerId: string;
+		festivalShortName: string;
+	}): Promise<{ recoveryReference: string | null }> {
+		const record =
+			await this.checkout.classExecutions?.findUnissuedInvalidCartRestart({
+				...input,
+				festivalShortName: input.festivalShortName.trim().toLowerCase(),
+			});
+		return { recoveryReference: record?.recoveryReference ?? null };
+	}
+
+	async restartUnissuedCart(input: {
+		organizationId: string;
+		customerId: string;
+		festivalShortName: string;
+		recoveryReference: string;
+	}): Promise<ClassCheckoutRestartDto> {
+		const executions = this.checkout.classExecutions;
+		if (!executions || !this.checkout.listCheckoutRegistrationSnapshots)
+			throw new AppError("Checkout restart is unavailable.", 503);
+		const { organizationId, customerId } = input;
+		const record = await executions.getByRecoveryReference(
+			organizationId,
+			input.recoveryReference,
+		);
+		const intent =
+			record &&
+			(await this.checkout.findIntentById?.(organizationId, record.intentId));
+		if (
+			!record ||
+			!intent ||
+			record.customerId !== customerId ||
+			intent.customerId !== customerId
+		)
+			throw new AppError("Checkout recovery was not found.", 404);
+
+		const festival = await this.organizations.findFestivalByShortName(
+			organizationId,
+			input.festivalShortName.trim(),
+		);
+		const saved = await this.checkout.listCheckoutRegistrationSnapshots(
+			organizationId,
+			intent.id,
+		);
+		if (
+			!festival ||
+			(saved.length > 0 &&
+				saved.some(
+					({ registrationSnapshot }) =>
+						registrationSnapshot.class.festivalId !== festival.id,
+				))
+		)
+			throw new AppError("Checkout recovery was not found.", 404);
+		const lines = intent.lines ?? [];
+		const snapshots = new Map(
+			saved.map(({ checkoutIntentLineId, registrationSnapshot }) => [
+				checkoutIntentLineId,
+				registrationSnapshot,
+			]),
+		);
+		if (!lines.length || snapshots.size !== lines.length)
+			throw new AppError(
+				"The previous registrations could not be restored.",
+				409,
+				"checkout_restart_unavailable",
+			);
+
+		const [children, classes] = await Promise.all([
+			this.customers.listChildren(organizationId, customerId),
+			this.organizations.listFestivalClassConfigurations(
+				organizationId,
+				festival.id,
+			),
+		]);
+		const registrations = lines.map(
+			(line): ClassCheckoutRestartRegistration => {
+				const selection = snapshots.get(line.id);
+				if (
+					!line.childId ||
+					!selection ||
+					selection.class.id !== line.festivalClassId
+				)
+					throw new AppError(
+						"The previous registrations could not be restored.",
+						409,
+						"checkout_restart_unavailable",
+					);
+				const currentClass = classes.find(
+					(entry) => entry.id === selection.class.id,
+				);
+				return {
+					lineId: line.id,
+					childId: line.childId,
+					childName:
+						children.find((child) => child.id === line.childId)?.displayName ??
+						"Performer",
+					divisionId: selection.division.id,
+					divisionName: selection.division.name ?? "Division",
+					teacherId: selection.teacher.customerId,
+					teacherName: selection.teacher.name ?? "Teacher",
+					classId: selection.class.id,
+					className: selection.class.displayName,
+					classSubtypeId: selection.class.classSubtypeId,
+					classSubtypeName: selection.class.classSubtypeName,
+					minimumAge: selection.class.minimumAge,
+					maximumAge: selection.class.maximumAge,
+					priceCents: Math.round(
+						Number(currentClass?.price ?? selection.class.price) * 100,
+					),
+					accompanistId: selection.accompanist?.customerId ?? null,
+					accompanistName: selection.accompanist?.name ?? null,
+					...(selection.instrument === "unknown"
+						? {}
+						: {
+								instrumentId: selection.instrument.id,
+								instrumentName: selection.instrument.name,
+							}),
+					pieces: selection.repertoire,
+				};
+			},
+		);
+		const replacement = await executions.restartUnissuedInvalidCart({
+			organizationId,
+			customerId,
+			intentId: intent.id,
+		});
+		if (!replacement)
+			throw new AppError(
+				"The previous checkout may still accept payment. Its registrations are saved while the payment status is checked.",
+				409,
+				"checkout_restart_unavailable",
+			);
+		return { replacementKey: replacement.replacementKey, registrations };
 	}
 
 	async getRecoveryStatus(input: {

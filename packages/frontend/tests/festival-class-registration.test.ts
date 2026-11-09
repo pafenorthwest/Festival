@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import {
+	customerFestivalRegistrationSignInPath,
 	evaluateRegistrationEligibility,
 	getPublicDivisions,
 	searchRegistrationConcertoCatalog,
@@ -36,6 +37,16 @@ describe("Festival Class Registration routing & landing entry", () => {
 	it("mounts FestivalClassRegistrationPage for festival-register route", () => {
 		expect(app).toContain('app.route().kind === "festival-register"');
 		expect(app).toContain("<FestivalClassRegistrationPage");
+	});
+	it("returns a signed-out parent directly to their festival cart after sign-in", () => {
+		const path = customerFestivalRegistrationSignInPath(
+			"org",
+			"spring",
+			"cart",
+		);
+		expect(
+			new URL(path, "https://festival.example").searchParams.get("returnTo"),
+		).toBe("/org/org/festival/spring/register/cart");
 	});
 });
 

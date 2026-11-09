@@ -7,6 +7,8 @@ for (const scenario of [
 	"recovery",
 	"abandonment",
 	"pre-dispatch-rejection",
+	"restore-checkout",
+	"restart-blocked",
 ]) {
 	it(`actual registration hook preserves deterministic ${scenario} behavior`, async () => {
 		// Isolate router module mocks from other frontend suites.

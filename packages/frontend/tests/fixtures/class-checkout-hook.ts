@@ -29,11 +29,15 @@ Object.assign(globalThis, {
 });
 
 const recoveryReference = "12345678-1234-4234-8234-123456789abc";
+const replacementKey = "restored-checkout-key";
 const requests: { key: string | null; payload: unknown }[] = [];
 let unavailable = false;
 let mode = process.argv[2];
+let discoverableRestart =
+	mode === "restore-checkout" || mode === "network" ? recoveryReference : null;
 let eligibilityCalls = 0;
 let statusCalls = 0;
+let restartCalls = 0;
 globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
 	const path = String(url);
 	const json = (payload: unknown, status = 200) =>
@@ -41,6 +45,31 @@ globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
 			status,
 			headers: { "Content-Type": "application/json" },
 		});
+	if (path.endsWith("/checkout/restart")) {
+		assert.equal(init?.credentials, "include");
+		const headers = new Headers(init?.headers);
+		assert.equal(headers.has("Idempotency-Key"), false);
+		if (init?.method !== "POST")
+			return json({ recoveryReference: discoverableRestart });
+		restartCalls++;
+		assert.equal(headers.get("X-CSRF-Token"), "csrf");
+		assert.deepEqual(JSON.parse(String(init.body)), { recoveryReference });
+		if (mode === "restart-blocked")
+			return json(
+				{
+					error: "The original checkout still needs review.",
+					recovery: {
+						status: "recovery_required",
+						recoveryReference,
+						reasonCode: "paid_order_requires_review",
+						retryAllowed: false,
+						restartAllowed: false,
+					},
+				},
+				409,
+			);
+		return json({ replacementKey, registrations: [restoredLine] });
+	}
 	if (path.endsWith("/checkout/status")) {
 		statusCalls++;
 		assert.equal(
@@ -68,7 +97,7 @@ globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
 			key: new Headers(init?.headers).get("Idempotency-Key"),
 			payload: JSON.parse(String(init?.body)),
 		});
-		if (mode === "recovery" || mode === "abandonment")
+		if (["recovery", "abandonment", "restart-blocked"].includes(mode))
 			return json(
 				{
 					error: "Checkout needs recovery.",
@@ -78,6 +107,7 @@ globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
 						recoveryReference,
 						reasonCode: "shopify_outcome_unknown",
 						retryAllowed: false,
+						restartAllowed: mode === "restart-blocked",
 					},
 				},
 				409,
@@ -147,7 +177,14 @@ const line = {
 	priceCents: 100,
 	pieces: [{ title: "Piece", composer: "Composer", durationSeconds: 60 }],
 };
-cart.addItem(line);
+const restoredLine = {
+	...line,
+	lineId: "durable-line",
+	pieces: [
+		{ title: "Restored piece", composer: "Composer", durationSeconds: 90 },
+	],
+};
+if (mode !== "restore-checkout") cart.addItem(line);
 let dispose: (() => void) | undefined;
 const state = solid.createRoot((cleanup) => {
 	dispose = cleanup;
@@ -163,11 +200,48 @@ const state = solid.createRoot((cleanup) => {
 	});
 });
 await new Promise((resolve) => setTimeout(resolve, 0));
+if (mode === "restore-checkout") {
+	assert.equal(cart.itemCount(), 0);
+	assert.equal(state.checkoutRestartReference(), recoveryReference);
+	const count = eligibilityCalls;
+	await state.handleRestoreCheckout();
+	assert.equal(restartCalls, 1);
+	assert.deepEqual(cart.items(), [restoredLine]);
+	assert.equal(cart.checkoutSubmission(), null);
+	assert.equal(state.checkoutRestartReference(), null);
+	assert.deepEqual(requests, []);
+	assert.deepEqual(assigned, []);
+	assert.equal(storedCheckoutKeys.size, 0);
+	assert.ok(eligibilityCalls > count, "restoration refreshes eligibility");
+}
+if (mode === "network")
+	assert.equal(state.checkoutRestartReference(), recoveryReference);
 await state.handleCartCheckout();
 assert.equal(requests.length, 1);
 assert.equal(cart.itemCount(), 1);
 
-if (mode === "recovery" || mode === "abandonment") {
+if (mode === "restore-checkout") {
+	assert.equal(requests[0].key, replacementKey);
+} else if (mode === "restart-blocked") {
+	const frozenSubmission = cart.checkoutSubmission();
+	const originalLine = cart.items()[0];
+	assert.equal(state.checkoutRestartReference(), recoveryReference);
+	await state.handleRestoreCheckout();
+	assert.equal(restartCalls, 1);
+	assert.equal(cart.checkoutSubmission(), frozenSubmission);
+	assert.deepEqual(cart.items(), [originalLine]);
+	assert.equal(state.checkoutRestartReference(), null);
+	assert.equal(
+		cart.checkoutRecovery()?.reasonCode,
+		"paid_order_requires_review",
+	);
+	assert.match(state.checkoutError() ?? "", /still needs review/);
+	assert.throws(() => cart.removeItem(originalLine.lineId));
+	assert.deepEqual(assigned, []);
+	dispose?.();
+	console.log("CHECKOUT_HOOK_OK");
+	process.exit(0);
+} else if (mode === "recovery" || mode === "abandonment") {
 	assert.equal(state.isSubmittingCheckout(), false);
 	assert.equal(cart.checkoutRecovery()?.recoveryReference, recoveryReference);
 	const key = cart.getCheckoutIdempotencyKey();
@@ -200,6 +274,10 @@ if (mode === "recovery" || mode === "abandonment") {
 	}
 } else if (mode === "network") {
 	assert.equal(state.isSubmittingCheckout(), false);
+	assert.equal(state.checkoutRestartReference(), null);
+	await state.handleRestoreCheckout();
+	assert.equal(restartCalls, 0);
+	assert.equal(cart.checkoutSubmission()?.idempotencyKey, requests[0].key);
 	const count = eligibilityCalls;
 	unavailable = true;
 	await state.handleCartCheckout();
@@ -253,5 +331,20 @@ assert.deepEqual(
 );
 assert.equal(state.isSubmittingCheckout(), false);
 assert.equal(cart.checkoutSubmission(), null);
+if (mode === "restore-checkout") {
+	assert.equal(state.checkoutRestartReference(), null);
+	const returnFromCheckout = () =>
+		events.dispatchEvent(
+			Object.assign(new Event("pageshow"), { persisted: true }),
+		);
+	returnFromCheckout();
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	assert.equal(state.checkoutRestartReference(), recoveryReference);
+	discoverableRestart = null;
+	returnFromCheckout();
+	assert.equal(state.checkoutRestartReference(), null);
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	assert.equal(state.checkoutRestartReference(), null);
+}
 dispose?.();
 console.log("CHECKOUT_HOOK_OK");

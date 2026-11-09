@@ -113,6 +113,9 @@ export type CheckoutIntentOutcome =
 
 export interface CheckoutRepository {
 	classExecutions?: ClassCheckoutExecutionRepository;
+	setClassCheckoutPaymentEvidenceLookup?(
+		lookup: (intent: CheckoutIntentRecord) => boolean,
+	): void;
 	findIntentByKey?(input: {
 		organizationId: string;
 		customerId: string;
@@ -189,6 +192,15 @@ export interface CheckoutRepository {
 		repertoireSnapshotPieces?: RepertoirePiece[];
 		registrationSnapshot?: ClassRegistrationSnapshot | null;
 	}): Promise<ClassRegistrationMetadata>;
+	listCheckoutRegistrationSnapshots?(
+		organizationId: string,
+		intentId: string,
+	): Promise<
+		Array<{
+			checkoutIntentLineId: string;
+			registrationSnapshot: ClassRegistrationSnapshot;
+		}>
+	>;
 	linkRegistrationMetadataToEntitlement(params: {
 		checkoutIntentId?: string;
 		checkoutIntentLineId?: string;
@@ -265,6 +277,8 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		string,
 		ClassRegistrationMetadata
 	>();
+	private hasClassCheckoutPaymentEvidence = (_intent: CheckoutIntentRecord) =>
+		false;
 
 	constructor(private readonly now: () => Date = () => new Date()) {
 		this.classExecutions = new InMemoryClassCheckoutExecutionRepository(
@@ -296,7 +310,78 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 				const intent = this.intents.get(intentId);
 				return intent?.organizationId === org ? intent.expiresAtIso : null;
 			},
+			{
+				intent: ({ organizationId, customerId, intentId }) => {
+					const intent = this.intents.get(intentId);
+					return intent?.organizationId === organizationId &&
+						intent.customerId === customerId &&
+						intent.intentType === "class_entry"
+						? {
+								status: intent.status,
+								cartReference: intent.cartReference,
+								paymentObserved: this.hasClassCheckoutPaymentEvidence(intent),
+							}
+						: null;
+				},
+				replacementClosed: (input, replacementKey) =>
+					[...this.intents.values()].some(
+						(intent) =>
+							intent.organizationId === input.organizationId &&
+							intent.customerId === input.customerId &&
+							intent.intentType === "class_entry" &&
+							intent.idempotencyKey === replacementKey &&
+							(!["creating", "ready", "checkout_started"].includes(
+								intent.status,
+							) ||
+								this.hasClassCheckoutPaymentEvidence(intent)),
+					),
+				hasNewerCheckout: async (input, replacementKey) => {
+					const original = this.intents.get(input.intentId);
+					if (!original) return false;
+					const originalMetadata = this.registrationMetadata.get(original.id);
+					let newer = false;
+					for (const intent of this.intents.values()) {
+						if (intent.id === original.id) {
+							newer = true;
+							continue;
+						}
+						if (
+							intent.organizationId !== input.organizationId ||
+							intent.customerId !== input.customerId ||
+							intent.intentType !== "class_entry"
+						)
+							continue;
+						if (intent.idempotencyKey === replacementKey) continue;
+						if (!newer) continue;
+						const metadata = this.registrationMetadata.get(intent.id);
+						const execution = await this.classExecutions.get(
+							input.organizationId,
+							intent.id,
+						);
+						const snapshot = execution?.requestSnapshot as
+							| {
+									festivalShortName?: string;
+							  }
+							| undefined;
+						if (
+							(original.festivalClassId &&
+								original.festivalClassId === intent.festivalClassId) ||
+							(originalMetadata &&
+								metadata?.festivalId === originalMetadata.festivalId) ||
+							snapshot?.festivalShortName?.toLowerCase() ===
+								input.festivalShortName.toLowerCase()
+						)
+							return true;
+					}
+					return false;
+				},
+			},
 		);
+	}
+	setClassCheckoutPaymentEvidenceLookup(
+		lookup: (intent: CheckoutIntentRecord) => boolean,
+	) {
+		this.hasClassCheckoutPaymentEvidence = lookup;
 	}
 	async findIntentByKey(input: {
 		organizationId: string;
@@ -567,6 +652,28 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 	) {
 		const intent = this.intents.get(intentId);
 		if (intent) intent.status = resolution;
+	}
+
+	async listCheckoutRegistrationSnapshots(
+		organizationId: string,
+		intentId: string,
+	) {
+		return [...new Set(this.registrationMetadata.values())].flatMap(
+			(metadata) =>
+				metadata.organizationId === organizationId &&
+				metadata.checkoutIntentId === intentId &&
+				metadata.checkoutIntentLineId &&
+				metadata.registrationSnapshot
+					? [
+							{
+								checkoutIntentLineId: metadata.checkoutIntentLineId,
+								registrationSnapshot: structuredClone(
+									metadata.registrationSnapshot,
+								),
+							},
+						]
+					: [],
+		);
 	}
 
 	async insertRegistrationMetadata(params: {

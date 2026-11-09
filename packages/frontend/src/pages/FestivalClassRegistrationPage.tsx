@@ -70,6 +70,8 @@ export function FestivalClassRegistrationPage(
 		handleCartCheckout,
 		handleRefreshCheckout,
 		handleRestartCheckout,
+		checkoutRestartReference,
+		handleRestoreCheckout,
 		cart,
 	} = state;
 	return (
@@ -90,11 +92,14 @@ export function FestivalClassRegistrationPage(
 									customerFestivalRegistrationSignInPath(
 										props.slug,
 										props.festivalSlug,
+										view() === "cart" ? "cart" : "register",
 									),
 								)
 							}
 						>
-							Sign in to Register
+							{view() === "cart"
+								? "Sign in to View Cart"
+								: "Sign in to Register"}
 						</Button>
 					</section>
 				}
@@ -127,6 +132,8 @@ export function FestivalClassRegistrationPage(
 						onSubmitCheckout={handleCartCheckout}
 						onRefreshCheckout={handleRefreshCheckout}
 						onRestartCheckout={handleRestartCheckout}
+						canRestoreCheckout={Boolean(checkoutRestartReference())}
+						onRestoreCheckout={handleRestoreCheckout}
 					/>
 					<p class="parent-note">
 						Need to change a registration before payment? Remove it and register

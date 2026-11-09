@@ -57,6 +57,16 @@ export const CURRENT_ROUTE_SECURITY = [
 	},
 	{
 		method: "GET",
+		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/registration/checkout/restart",
+		authenticationClass: "customer",
+	},
+	{
+		method: "POST",
+		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/registration/checkout/restart",
+		authenticationClass: "customer",
+	},
+	{
+		method: "GET",
 		path: "/api/organizations/:slug/admin/class-checkout-recoveries",
 		authenticationClass: "admin",
 	},

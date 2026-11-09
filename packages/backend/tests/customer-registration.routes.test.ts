@@ -325,6 +325,7 @@ describe("deterministic class checkout recovery routes", () => {
 					recoveryReference: reference,
 					reasonCode: "shopify_outcome_unknown",
 					retryAllowed: false,
+					restartAllowed: true,
 					shopifyCartId: "secret-cart",
 					idempotencyKey: "secret-key",
 					buyerAccessToken: "secret-token",
@@ -345,6 +346,7 @@ describe("deterministic class checkout recovery routes", () => {
 			recoveryReference: reference,
 			reasonCode: "shopify_outcome_unknown",
 			retryAllowed: false,
+			restartAllowed: true,
 		});
 		expect(calls.formAccess).toHaveLength(1);
 		expect(calls.checkoutAccess).toHaveLength(0);
@@ -460,6 +462,162 @@ describe("deterministic class checkout recovery routes", () => {
 		expect(calls.checkoutAccess).toHaveLength(0);
 		expect(calls.startCheckout).toHaveLength(0);
 		expect(calls.formAccess).toHaveLength(1);
+	});
+});
+
+describe("unissued class checkout restart routes", () => {
+	const path = "/festivals/spring-2026/registration/checkout/restart";
+	const reference = "12345678-1234-4234-8234-123456789abc";
+	const headers = {
+		...AUTH,
+		...JSON_HDR,
+		"X-CSRF-Token": "csrf",
+		Origin: "https://festival.example",
+	};
+	const scope = {
+		organizationId: "org_1",
+		customerId: "cust_1",
+		festivalShortName: "spring-2026",
+	};
+
+	it("discovers a restart reference using only the tenant customer session", async () => {
+		const { customerAccountService, classCheckoutService, calls } =
+			createFakeServices();
+		const lookups: unknown[] = [];
+		Object.assign(customerAccountService, {
+			customerReadAccess: async (slug: string, sessionId?: string) => {
+				expect(slug).toBe("fest");
+				if (!sessionId) throw new AppError("Customer session is invalid.", 401);
+				expect(sessionId).toBe("sess_1");
+				return scope;
+			},
+		});
+		let availableReference: string | null = reference;
+		Object.assign(classCheckoutService, {
+			findUnissuedCartRestart: async (input: unknown) => {
+				lookups.push(input);
+				return { recoveryReference: availableReference };
+			},
+		});
+		const app = createTestApp({ customerAccountService, classCheckoutService });
+		const found = await req(app, "GET", path, AUTH);
+		expect(found.status).toBe(200);
+		expect(found.headers.get("Cache-Control")).toBe("no-store");
+		expect(await found.json()).toEqual({ recoveryReference: reference });
+		availableReference = null;
+		const empty = await req(app, "GET", path, AUTH);
+		expect(await empty.json()).toEqual({ recoveryReference: null });
+		expect((await req(app, "GET", path)).status).toBe(401);
+		expect(
+			(await req(app, "GET", path, { ...AUTH, Authorization: "Bearer admin" }))
+				.status,
+		).toBe(400);
+		expect(lookups).toEqual([scope, scope]);
+		expect(calls.formAccess).toHaveLength(0);
+		expect(calls.checkoutAccess).toHaveLength(0);
+	});
+
+	it("restores the saved registrations with a replacement key and omits internal fields", async () => {
+		const { customerAccountService, classCheckoutService, calls } =
+			createFakeServices();
+		const piece = {
+			title: "Sonatina",
+			composer: "Clementi",
+			durationSeconds: 90,
+			catalogWorkId: "work_1",
+		};
+		const registration = {
+			lineId: "intent_line_1",
+			childId: "child_1",
+			childName: "Alex",
+			divisionId: "division_1",
+			divisionName: "Piano",
+			teacherId: "teacher_1",
+			teacherName: "Jamie",
+			classId: "class_1",
+			className: "Solo Piano",
+			priceCents: 4500,
+			accompanistId: null,
+			pieces: [piece],
+		};
+		let received: unknown;
+		Object.assign(classCheckoutService, {
+			restartUnissuedCart: async (input: unknown) => {
+				received = input;
+				return {
+					replacementKey: VALID_UUID,
+					oldIdempotencyKey: "internal-key",
+					shopifyCartId: "internal-cart",
+					registrations: [
+						{
+							...registration,
+							shopifyVariantGid: "internal-variant",
+							pieces: [{ ...piece, accessToken: "internal-token" }],
+						},
+					],
+				};
+			},
+		});
+		const result = await req(
+			createTestApp({ customerAccountService, classCheckoutService }),
+			"POST",
+			path,
+			headers,
+			JSON.stringify({ recoveryReference: reference }),
+		);
+		expect(result.status).toBe(200);
+		expect(result.headers.get("Cache-Control")).toBe("no-store");
+		expect(await result.json()).toEqual({
+			replacementKey: VALID_UUID,
+			registrations: [registration],
+		});
+		expect(received).toEqual({ ...scope, recoveryReference: reference });
+		expect(calls.formAccess).toEqual([
+			{
+				slug: "fest",
+				sessionId: "sess_1",
+				csrfToken: "csrf",
+				origin: "https://festival.example",
+			},
+		]);
+		expect(calls.checkoutAccess).toHaveLength(0);
+	});
+
+	it("rejects unauthenticated, cross-origin, and malformed restart submissions", async () => {
+		const { customerAccountService, classCheckoutService } =
+			createFakeServices();
+		const formAccess = customerAccountService.formAccess;
+		customerAccountService.formAccess = async (
+			slug,
+			sessionId,
+			csrf,
+			origin,
+		) => {
+			const access = await formAccess(slug, sessionId, csrf, origin);
+			if (csrf !== "csrf" || origin !== "https://festival.example")
+				throw new AppError("CSRF validation failed.", 403);
+			return access;
+		};
+		const app = createTestApp({ customerAccountService, classCheckoutService });
+		const body = { recoveryReference: reference };
+		for (const [requestHeaders, payload, status] of [
+			[JSON_HDR, body, 401],
+			[{ ...headers, Authorization: "Bearer admin" }, body, 400],
+			[{ ...headers, "X-CSRF-Token": "" }, body, 403],
+			[{ ...headers, Origin: "https://other.example" }, body, 403],
+			[headers, { recoveryReference: "invalid" }, 400],
+			[headers, { ...body, customerId: "other-customer" }, 400],
+		] as const) {
+			const response = await req(
+				app,
+				"POST",
+				path,
+				requestHeaders,
+				JSON.stringify(payload),
+			);
+			expect(response.status).toBe(status);
+			expect(response.headers.get("Cache-Control")).toBe("no-store");
+		}
 	});
 });
 

@@ -15,6 +15,8 @@ export interface FestivalRegistrationCartViewProps {
 	onSubmitCheckout: () => void;
 	onRefreshCheckout?: () => void;
 	onRestartCheckout?: () => void;
+	canRestoreCheckout?: boolean;
+	onRestoreCheckout?: () => void;
 }
 
 export function FestivalRegistrationCartView(
@@ -60,6 +62,7 @@ export function FestivalRegistrationCartView(
 						</Button>
 						<Show
 							when={
+								!props.canRestoreCheckout &&
 								recovery().status === "resolved" &&
 								["abandoned_unknown", "checkout_abandoned"].includes(
 									recovery().reasonCode,
@@ -81,6 +84,21 @@ export function FestivalRegistrationCartView(
 						</Show>
 					</div>
 				)}
+			</Show>
+			<Show when={props.canRestoreCheckout}>
+				<div class="parent-note parent-warning">
+					<p>Restore your saved registrations to review before checking out.</p>
+					<Button
+						type="button"
+						variant="secondary"
+						disabled={props.isSubmitting}
+						onClick={props.onRestoreCheckout}
+					>
+						{props.cart.checkoutRecovery()?.restartAllowed
+							? "Start a new checkout"
+							: "Restore saved registrations"}
+					</Button>
+				</div>
 			</Show>
 			<Show when={props.eligibility?.hasIneligibleItems()}>
 				<div

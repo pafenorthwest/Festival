@@ -538,7 +538,7 @@ export class CustomerAccountService {
 			}
 		}
 		const festivalPattern = new RegExp(
-			`^/org/${slug.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")}/festival/([A-Za-z0-9_-]{1,128})/(register|cart)$`,
+			`^/org/${slug.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")}/festival/[A-Za-z0-9_-]{1,128}/(?:register(?:/cart)?|cart)$`,
 		);
 		if (!offeringId && returnTo && festivalPattern.test(returnTo)) {
 			expected = returnTo;

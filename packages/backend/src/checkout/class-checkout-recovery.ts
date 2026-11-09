@@ -11,6 +11,7 @@ export interface ClassCheckoutRecoveryStatus {
 	recoveryReference: string;
 	reasonCode: string;
 	retryAllowed: boolean;
+	restartAllowed?: boolean;
 	recordedAtIso?: string;
 	checkoutUrl?: string;
 	correlationId?: string;
@@ -18,17 +19,31 @@ export interface ClassCheckoutRecoveryStatus {
 
 export class ClassCheckoutRecoveryRequiredError extends AppError {
 	readonly recovery: ClassCheckoutRecoveryStatus;
-	constructor(record: ClassCheckoutExecution, matchesSubmission = true) {
+	constructor(
+		record: ClassCheckoutExecution,
+		matchesSubmission = true,
+		legacyInvalidCart?: { restartAllowed: boolean },
+	) {
 		super(
 			"This checkout needs recovery before it can continue.",
 			409,
-			record.state === "recovery_required"
+			record.state === "recovery_required" || legacyInvalidCart
 				? "checkout_recovery_required"
 				: "checkout_previous_operation_pending",
 		);
 		this.recovery = {
 			...recoveryStatusFor(record),
 			...(matchesSubmission ? {} : { retryAllowed: false }),
+			...(legacyInvalidCart
+				? {
+						status: "recovery_required",
+						reasonCode: "checkout_legacy_invalid_cart",
+						retryAllowed: false,
+						...(legacyInvalidCart.restartAllowed
+							? { restartAllowed: true }
+							: {}),
+					}
+				: {}),
 		};
 	}
 }

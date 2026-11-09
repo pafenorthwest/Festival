@@ -9,12 +9,14 @@ import {
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import {
 	ApiError,
+	discoverClassCheckoutRestart,
 	evaluateRegistrationEligibility,
 	getClassCheckoutRecoveryStatus,
 	getPublicDivisions,
 	getPublicFestival,
 	listCustomerClassRegistrations,
 	refreshCustomerChildAgeSnapshot,
+	restartClassCheckout,
 	startClassCheckout,
 } from "../lib/api.js";
 import { buildFestivalRegistrationPath } from "../lib/routes.js";
@@ -95,6 +97,20 @@ export function useFestivalRegistrationPage(
 	const [isSubmittingCheckout, setIsSubmittingCheckout] = createSignal(false);
 	const [isAdding, setIsAdding] = createSignal(false);
 	const [checkoutError, setCheckoutError] = createSignal<string | null>(null);
+	const [discoveredRestart, setDiscoveredRestart] = createSignal<string | null>(
+		null,
+	);
+	const checkoutRestartReference = () => {
+		const recovery = cart.checkoutRecovery();
+		const reference = recovery?.restartAllowed
+			? recovery.recoveryReference
+			: recovery || cart.checkoutSubmission()
+				? null
+				: discoveredRestart();
+		return reference === cart.lastRestoredRecoveryReference()
+			? null
+			: reference;
+	};
 	const [capacityChanged, setCapacityChanged] = createSignal(false);
 	const [birthdayDraft, setBirthdayDraft] = createSignal("");
 	const [isRefreshingSnapshot, setIsRefreshingSnapshot] = createSignal(false);
@@ -108,6 +124,33 @@ export function useFestivalRegistrationPage(
 		disposed = true;
 		if (completeHandoff)
 			window.removeEventListener("pagehide", completeHandoff);
+	});
+	createEffect(() => {
+		if (view() !== "cart" || !authenticated()) {
+			setDiscoveredRestart(null);
+			return;
+		}
+		let active = true;
+		let request = 0;
+		function discoverRestart() {
+			const current = ++request;
+			setDiscoveredRestart(null);
+			void discoverClassCheckoutRestart(props.slug, props.festivalSlug)
+				.then(({ recoveryReference }) => {
+					if (active && request === current)
+						setDiscoveredRestart(recoveryReference);
+				})
+				.catch(() => {});
+		}
+		function pageShow(event: PageTransitionEvent) {
+			if (event.persisted) discoverRestart();
+		}
+		window.addEventListener("pageshow", pageShow);
+		onCleanup(() => {
+			active = false;
+			window.removeEventListener("pageshow", pageShow);
+		});
+		discoverRestart();
 	});
 	const options = useRegistrationOptions({
 		slug: props.slug,
@@ -380,6 +423,7 @@ export function useFestivalRegistrationPage(
 	) {
 		handingOff = true;
 		completeHandoff = () => {
+			setDiscoveredRestart(null);
 			cart.completeCheckout(submission);
 			handingOff = false;
 			setIsSubmittingCheckout(false);
@@ -444,6 +488,27 @@ export function useFestivalRegistrationPage(
 	function handleRestartCheckout() {
 		if (isSubmittingCheckout()) return;
 		if (cart.restartAbandonedCheckout()) setCheckoutError(null);
+	}
+	async function handleRestoreCheckout() {
+		const recoveryReference = checkoutRestartReference();
+		if (!recoveryReference || isSubmittingCheckout()) return;
+		const csrfToken = getCsrf();
+		setCheckoutError(null);
+		setIsSubmittingCheckout(true);
+		try {
+			const restart = await restartClassCheckout(
+				props.slug,
+				props.festivalSlug,
+				recoveryReference,
+				csrfToken,
+			);
+			if (!disposed && getCsrf() === csrfToken)
+				cart.restoreCheckout(recoveryReference, restart);
+		} catch (error) {
+			if (!disposed && getCsrf() === csrfToken) handleCheckoutError(error);
+		} finally {
+			setIsSubmittingCheckout(false);
+		}
 	}
 	async function handleCartCheckout() {
 		if (cart.itemCount() === 0 || isSubmittingCheckout()) return;
@@ -533,6 +598,8 @@ export function useFestivalRegistrationPage(
 		handleCartCheckout,
 		handleRefreshCheckout,
 		handleRestartCheckout,
+		checkoutRestartReference,
+		handleRestoreCheckout,
 		cart,
 	};
 }

@@ -958,13 +958,17 @@ describe("CustomerAccountService", () => {
 		);
 		expect(regResult.returnTo).toBe(regReturn);
 
-		const cartReturn = "/org/festival/festival/festival_slug-123/cart";
-		const cartAuth = await f.begin(cartReturn);
-		const cartResult = await f.service.callback(
-			cartAuth.searchParams.get("state") ?? "",
-			"code",
-		);
-		expect(cartResult.returnTo).toBe(cartReturn);
+		for (const cartReturn of [
+			"/org/festival/festival/festival_slug-123/register/cart",
+			"/org/festival/festival/festival_slug-123/cart",
+		]) {
+			const cartAuth = await f.begin(cartReturn);
+			const cartResult = await f.service.callback(
+				cartAuth.searchParams.get("state") ?? "",
+				"code",
+			);
+			expect(cartResult.returnTo).toBe(cartReturn);
+		}
 
 		await expect(
 			f.service.start(
@@ -977,6 +981,12 @@ describe("CustomerAccountService", () => {
 		).rejects.toThrow("Return target");
 		await expect(
 			f.service.start("festival", "/org/other/festival/festival-2026/register"),
+		).rejects.toThrow("Return target");
+		await expect(
+			f.service.start(
+				"festival",
+				"/org/other/festival/festival-2026/register/cart",
+			),
 		).rejects.toThrow("Return target");
 		await expect(
 			f.service.start(

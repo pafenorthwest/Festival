@@ -1,6 +1,7 @@
 import {
 	type ClassCheckoutLineItemInput,
 	type ClassCheckoutRecoveryStatusDto,
+	type ClassCheckoutRestartDto,
 	type ProposedPurchaseLineItem,
 	type RepertoirePiece,
 	stripCandidateMarker,
@@ -39,9 +40,44 @@ function recoveryDto(
 		recoveryReference: result.recoveryReference,
 		reasonCode: result.reasonCode,
 		retryAllowed: result.retryAllowed,
+		...(result.restartAllowed === true ? { restartAllowed: true } : {}),
 		...(result.checkoutUrl ? { checkoutUrl: result.checkoutUrl } : {}),
 		...(result.correlationId ? { correlationId: result.correlationId } : {}),
 		...(result.recordedAtIso ? { recordedAtIso: result.recordedAtIso } : {}),
+	};
+}
+
+function restartDto(result: ClassCheckoutRestartDto): ClassCheckoutRestartDto {
+	return {
+		replacementKey: result.replacementKey,
+		registrations: result.registrations.map((line) => ({
+			lineId: line.lineId,
+			childId: line.childId,
+			childName: line.childName,
+			divisionId: line.divisionId,
+			divisionName: line.divisionName,
+			teacherId: line.teacherId,
+			teacherName: line.teacherName,
+			classId: line.classId,
+			className: line.className,
+			classSubtypeId: line.classSubtypeId,
+			classSubtypeName: line.classSubtypeName,
+			minimumAge: line.minimumAge,
+			maximumAge: line.maximumAge,
+			priceCents: line.priceCents,
+			accompanistId: line.accompanistId,
+			accompanistName: line.accompanistName,
+			instrumentId: line.instrumentId,
+			instrumentName: line.instrumentName,
+			pieces: line.pieces.map((piece) => ({
+				title: piece.title,
+				composer: piece.composer,
+				movement: piece.movement,
+				durationSeconds: piece.durationSeconds,
+				durationMinutes: piece.durationMinutes,
+				catalogWorkId: piece.catalogWorkId,
+			})),
+		})),
 	};
 }
 
@@ -304,6 +340,72 @@ export async function handleClassCheckoutStatus(
 	}
 }
 
+async function handleClassCheckoutRestart(
+	c: Context<CustomerEnv>,
+	accountService?: CustomerAccountService,
+	checkoutService?: ClassCheckoutService,
+): Promise<Response> {
+	c.header("Cache-Control", "no-store");
+	try {
+		assertNoBearerPrincipal(c.req.header("Authorization"));
+		if (!accountService || !checkoutService)
+			throw new AppError("Class checkout is unavailable.", 503);
+		const access = await accountService.formAccess(
+			requireSlug(c),
+			getCookie(c, CUSTOMER_SESSION_COOKIE),
+			c.req.header("X-CSRF-Token"),
+			resolveRequestOrigin(c),
+		);
+		const payload = parseCheckoutPayload(await readJsonBody(c));
+		assertAllowedFields(
+			payload,
+			["recoveryReference"],
+			"Checkout restart request",
+		);
+		if (
+			typeof payload.recoveryReference !== "string" ||
+			!UUID_REGEX.test(payload.recoveryReference)
+		)
+			throw new AppError("Checkout restart request is invalid.", 400);
+		const result = await checkoutService.restartUnissuedCart({
+			organizationId: access.organizationId,
+			customerId: access.customerId,
+			festivalShortName: c.req.param("festivalShortName") ?? "",
+			recoveryReference: payload.recoveryReference,
+		});
+		return c.json(restartDto(result));
+	} catch (error) {
+		return checkoutError(c, error);
+	}
+}
+
+async function handleFindClassCheckoutRestart(
+	c: Context<CustomerEnv>,
+	accountService?: CustomerAccountService,
+	checkoutService?: ClassCheckoutService,
+): Promise<Response> {
+	c.header("Cache-Control", "no-store");
+	try {
+		assertNoBearerPrincipal(c.req.header("Authorization"));
+		if (!accountService || !checkoutService)
+			throw new AppError("Class checkout is unavailable.", 503);
+		const access = await accountService.customerReadAccess(
+			requireSlug(c),
+			getCookie(c, CUSTOMER_SESSION_COOKIE),
+		);
+		const { recoveryReference } = await checkoutService.findUnissuedCartRestart(
+			{
+				organizationId: access.organizationId,
+				customerId: access.customerId,
+				festivalShortName: c.req.param("festivalShortName") ?? "",
+			},
+		);
+		return c.json({ recoveryReference });
+	} catch (error) {
+		return toJsonError(c, error);
+	}
+}
+
 function parseEligibilityPayload(raw: unknown): {
 	items: ProposedPurchaseLineItem[];
 } {
@@ -421,6 +523,12 @@ export function buildCustomerRegistrationRoutes(
 	router.post(`${reg}/checkout`, (c) => handleClassCheckout(c, cas, ccs));
 	router.post(`${reg}/checkout/status`, (c) =>
 		handleClassCheckoutStatus(c, cas, ccs),
+	);
+	router.get(`${reg}/checkout/restart`, (c) =>
+		handleFindClassCheckoutRestart(c, cas, ccs),
+	);
+	router.post(`${reg}/checkout/restart`, (c) =>
+		handleClassCheckoutRestart(c, cas, ccs),
 	);
 	router.post(`${reg}/eligibility`, (c) =>
 		handleEvaluateEligibility(c, cas, ccs),

@@ -9,6 +9,49 @@ import {
 } from "../src/pages/registrationCartState.js";
 
 describe("registrationCartState", () => {
+	it("uses the replacement key only for the exact unedited restored cart", () => {
+		const saved = {
+			lineId: "saved-line",
+			childId: "child",
+			childName: "Performer",
+			divisionId: "division",
+			divisionName: "Division",
+			teacherId: "teacher",
+			teacherName: "Teacher",
+			classId: "class",
+			className: "Class",
+			priceCents: 100,
+			pieces: [{ title: "Piece", composer: "Composer", durationSeconds: 60 }],
+		};
+		const restored = { registrations: [saved], replacementKey: "replacement" };
+		const cart = createRegistrationCart([{ ...saved, lineId: "local-copy" }]);
+		const anotherTab = createRegistrationCart();
+		cart.restoreCheckout("reference", restored);
+		anotherTab.restoreCheckout("reference", restored);
+		expect(cart.items()).toEqual([saved]);
+		expect(cart.getCheckoutIdempotencyKey()).toBe(restored.replacementKey);
+		expect(anotherTab.getCheckoutIdempotencyKey()).toBe(
+			restored.replacementKey,
+		);
+		cart.removeItem(saved.lineId);
+		cart.addItem(saved);
+		expect(cart.getCheckoutIdempotencyKey()).not.toBe(restored.replacementKey);
+
+		const unrelated = {
+			...saved,
+			classId: "another-class",
+			lineId: "unrelated",
+		};
+		const mergedCart = createRegistrationCart([unrelated, saved]);
+		mergedCart.beginCheckout();
+		mergedCart.restoreCheckout("reference", restored);
+		expect(mergedCart.items()).toEqual([saved, unrelated]);
+		expect(mergedCart.checkoutSubmission()).toBeNull();
+		expect(mergedCart.getCheckoutIdempotencyKey()).not.toBe(
+			restored.replacementKey,
+		);
+	});
+
 	it("permits explicit identity replacement only after recorded abandonment while retaining registrations", () => {
 		const cart = createRegistrationCart();
 		cart.addItem({

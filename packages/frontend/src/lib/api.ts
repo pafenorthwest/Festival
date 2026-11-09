@@ -170,7 +170,11 @@ import {
 	validateUpdateMessageTemplateInput,
 } from "@festival/common";
 import { getFirebaseAuth } from "./firebase-auth.js";
-import { buildOrgCheckoutRecoveryPath } from "./routes.js";
+import {
+	buildFestivalCartPath,
+	buildFestivalRegistrationPath,
+	buildOrgCheckoutRecoveryPath,
+} from "./routes.js";
 
 const API_BASE = import.meta.env.FRONT_API_BASE ?? "";
 
@@ -674,9 +678,14 @@ export function customerLandingSignInPath(slug: string) {
 export function customerFestivalRegistrationSignInPath(
 	slug: string,
 	festivalSlug: string,
+	target: "register" | "cart" = "register",
 ) {
 	const encodedSlug = encodeURIComponent(slug);
-	const returnTo = `/org/${encodedSlug}/festival/${encodeURIComponent(festivalSlug)}/register`;
+	const encodedFestivalSlug = encodeURIComponent(festivalSlug);
+	const returnTo =
+		target === "cart"
+			? buildFestivalCartPath(encodedSlug, encodedFestivalSlug)
+			: buildFestivalRegistrationPath(encodedSlug, encodedFestivalSlug);
 	return `/api/organizations/${encodedSlug}/customer-auth/start?returnTo=${encodeURIComponent(returnTo)}`;
 }
 
@@ -1792,6 +1801,36 @@ export function getClassCheckoutRecoveryStatus(
 		{
 			method: "POST",
 			headers: { "X-CSRF-Token": csrfToken, "Idempotency-Key": idempotencyKey },
+			body: JSON.stringify({ recoveryReference }),
+		},
+		undefined,
+		"",
+	);
+}
+
+export function discoverClassCheckoutRestart(
+	slug: string,
+	festivalSlug: string,
+): Promise<{ recoveryReference: string | null }> {
+	return requestJson(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/registration/checkout/restart`,
+		undefined,
+		undefined,
+		"",
+	);
+}
+
+export function restartClassCheckout(
+	slug: string,
+	festivalSlug: string,
+	recoveryReference: string,
+	csrfToken: string,
+): Promise<import("@festival/common").ClassCheckoutRestartDto> {
+	return requestJson(
+		`/api/organizations/${encodeURIComponent(slug)}/customer/festivals/${encodeURIComponent(festivalSlug)}/registration/checkout/restart`,
+		{
+			method: "POST",
+			headers: { "X-CSRF-Token": csrfToken },
 			body: JSON.stringify({ recoveryReference }),
 		},
 		undefined,

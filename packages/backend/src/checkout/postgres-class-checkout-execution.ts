@@ -9,11 +9,15 @@ import {
 	type ClassCheckoutExecutionRepository,
 	copyStorefrontBinding,
 	executionClaimMatches,
+	type FindUnissuedInvalidCartRestartInput,
 	lateEvidenceId,
 	type PrepareClassCheckoutExecution,
 	type ResolveClassCheckoutExecution,
+	type RestartUnissuedInvalidCartInput,
 	resolvedExecution,
 	type TransitionClassCheckoutExecution,
+	type UnissuedCartReplacementInput,
+	unissuedInvalidCartRestartDecision,
 } from "./class-checkout-execution.js";
 import { schemaName } from "./postgres-checkout-helpers.js";
 
@@ -116,6 +120,7 @@ export class PostgresClassCheckoutExecutionRepository
 		value: ClassCheckoutExecution,
 		eventType: string,
 		evidence?: ClassCheckoutEvidence,
+		eventId?: string,
 	) {
 		value.updatedAtIso = await this.now(runner);
 		await runner.unsafe(
@@ -137,7 +142,7 @@ export class PostgresClassCheckoutExecutionRepository
 				value.updatedAtIso,
 			],
 		);
-		await this.event(runner, value, eventType, evidence);
+		await this.event(runner, value, eventType, evidence, eventId);
 	}
 	async prepare(input: PrepareClassCheckoutExecution) {
 		return sql.begin((tx) => this.prepareUsing(tx, input));
@@ -292,8 +297,8 @@ export class PostgresClassCheckoutExecutionRepository
 				lateEvidenceId(input),
 			);
 	}
-	async events(org: string, intent: string) {
-		const rows = (await sql.unsafe(
+	private async readEvents(runner: Runner, org: string, intent: string) {
+		const rows = (await runner.unsafe(
 			`SELECT id, organization_id, intent_id, generation, event_type, evidence, created_at::text FROM ${this.schema}.class_checkout_execution_events WHERE organization_id=$1 AND intent_id=$2 ORDER BY created_at,id`,
 			[org, intent],
 		)) as Record<string, unknown>[];
@@ -308,6 +313,9 @@ export class PostgresClassCheckoutExecutionRepository
 				: row.evidence) as ClassCheckoutEvidence,
 			createdAtIso: new Date(String(row.created_at)).toISOString(),
 		}));
+	}
+	async events(org: string, intent: string) {
+		return this.readEvents(sql, org, intent);
 	}
 	async findBlocking(org: string, customer: string) {
 		const rows = (await sql.unsafe(
@@ -390,6 +398,158 @@ export class PostgresClassCheckoutExecutionRepository
 			});
 			return next;
 		});
+	}
+	private async restartDecision(
+		runner: Runner,
+		value: ClassCheckoutExecution,
+		lock: boolean,
+	) {
+		const [intent] = (await runner.unsafe(
+			`SELECT intent.status, intent.cart_reference, intent.created_at::text,
+				EXISTS (SELECT 1 FROM ${this.schema}.membership_validation_decisions decision WHERE decision.organization_id=intent.organization_id AND decision.checkout_intent_id=intent.id)
+				OR EXISTS (SELECT 1 FROM ${this.schema}.shopify_order_projections projection WHERE projection.organization_id=intent.organization_id AND projection.correlation_id=intent.correlation_id)
+				OR EXISTS (SELECT 1 FROM ${this.schema}.class_entitlements entitlement WHERE entitlement.organization_id=intent.organization_id AND entitlement.checkout_intent_id=intent.id) AS payment_observed
+			 FROM ${this.schema}.checkout_intents intent
+			 WHERE intent.organization_id=$1 AND intent.customer_id=$2 AND intent.id=$3 AND intent.intent_type='class_entry'${lock ? " FOR UPDATE" : ""}`,
+			[value.organizationId, value.customerId, value.intentId],
+		)) as {
+			status: string;
+			cart_reference: string | null;
+			created_at: string;
+			payment_observed: boolean;
+		}[];
+		if (!intent || intent.cart_reference || intent.payment_observed)
+			return null;
+		const decision = unissuedInvalidCartRestartDecision(
+			value,
+			intent.status,
+			await this.readEvents(runner, value.organizationId, value.intentId),
+		);
+		return decision ? { intent, decision } : null;
+	}
+	private async replacementClosed(
+		runner: Runner,
+		value: ClassCheckoutExecution,
+		replacementKey: string,
+	) {
+		const rows = await runner.unsafe(
+			`SELECT 1 FROM ${this.schema}.checkout_intents intent
+			 WHERE intent.organization_id=$1 AND intent.customer_id=$2 AND intent.idempotency_key=$3 AND intent.intent_type='class_entry'
+			   AND (intent.status NOT IN ('creating','ready','checkout_started')
+			     OR EXISTS (SELECT 1 FROM ${this.schema}.membership_validation_decisions decision WHERE decision.organization_id=intent.organization_id AND decision.checkout_intent_id=intent.id)
+			     OR EXISTS (SELECT 1 FROM ${this.schema}.shopify_order_projections projection WHERE projection.organization_id=intent.organization_id AND projection.correlation_id=intent.correlation_id)
+			     OR EXISTS (SELECT 1 FROM ${this.schema}.class_entitlements entitlement WHERE entitlement.organization_id=intent.organization_id AND entitlement.checkout_intent_id=intent.id))
+			 LIMIT 1`,
+			[value.organizationId, value.customerId, replacementKey],
+		);
+		return (rows as unknown[]).length > 0;
+	}
+	async restartUnissuedInvalidCart(input: RestartUnissuedInvalidCartInput) {
+		return sql.begin(async (tx) => {
+			await tx.unsafe("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+				`${input.organizationId}:${input.customerId}`,
+			]);
+			await this.lock(tx, input.organizationId, input.intentId);
+			const value = await this.read(
+				tx,
+				input.organizationId,
+				input.intentId,
+				true,
+			);
+			if (!value || value.customerId !== input.customerId) return null;
+			const candidate = await this.restartDecision(tx, value, true);
+			if (!candidate) return null;
+			if (candidate.decision !== "restartable")
+				return (await this.replacementClosed(
+					tx,
+					value,
+					candidate.decision.replacementKey,
+				))
+					? null
+					: candidate.decision;
+			const replacementKey = randomUUID();
+			await tx.unsafe(
+				`UPDATE ${this.schema}.checkout_intents SET status='superseded' WHERE organization_id=$1 AND customer_id=$2 AND id=$3`,
+				[input.organizationId, input.customerId, input.intentId],
+			);
+			value.generation++;
+			value.state = "rejected";
+			value.resultCode = "checkout_restarted_unissued";
+			value.leaseOwner = null;
+			value.leaseExpiresAtIso = null;
+			await this.write(
+				tx,
+				value,
+				"customer_restarted_unissued",
+				{ actorId: input.customerId, code: value.resultCode },
+				replacementKey,
+			);
+			return { replacementKey };
+		});
+	}
+	async findUnissuedInvalidCartRestart(
+		input: FindUnissuedInvalidCartRestartInput,
+	) {
+		const rows = (await sql.unsafe(
+			`SELECT execution.*, execution.lease_expires_at::text, execution.recovery_recorded_at::text, execution.created_at::text, execution.updated_at::text
+			 FROM ${this.schema}.class_checkout_executions execution JOIN ${this.schema}.checkout_intents intent ON intent.id=execution.intent_id AND intent.organization_id=execution.organization_id
+			 WHERE execution.organization_id=$1 AND execution.customer_id=$2 AND intent.customer_id=$2 AND intent.intent_type='class_entry' AND intent.cart_reference IS NULL
+			   AND execution.checkpoint='remote_cart_known' AND execution.shopify_cart_id IS NOT NULL
+			   AND (intent.status='creating' OR (intent.status='superseded' AND execution.result_code='checkout_restarted_unissued'))
+			   AND (lower((CASE jsonb_typeof(execution.request_snapshot) WHEN 'string' THEN (execution.request_snapshot#>>'{}')::jsonb ELSE execution.request_snapshot END)->>'festivalShortName')=lower($3)
+			     OR EXISTS (SELECT 1 FROM ${this.schema}.registration_metadata metadata JOIN ${this.schema}.festivals festival ON festival.id=metadata.festival_id AND festival.organization_id=metadata.organization_id WHERE metadata.organization_id=intent.organization_id AND metadata.checkout_intent_id=intent.id AND lower(festival.short_name)=lower($3)))
+			 ORDER BY (intent.status='creating') DESC, intent.created_at DESC, intent.id`,
+			[input.organizationId, input.customerId, input.festivalShortName],
+		)) as Record<string, unknown>[];
+		for (const row of rows) {
+			const value = fromRow(row);
+			const candidate = await this.restartDecision(sql, value, false);
+			if (!candidate) continue;
+			if (candidate.decision === "restartable") return value;
+			if (
+				await this.replacementClosed(
+					sql,
+					value,
+					candidate.decision.replacementKey,
+				)
+			)
+				continue;
+			const newer = await sql.unsafe(
+				`SELECT 1 FROM ${this.schema}.checkout_intents intent
+				 LEFT JOIN ${this.schema}.class_checkout_executions execution ON execution.intent_id=intent.id AND execution.organization_id=intent.organization_id
+				 LEFT JOIN ${this.schema}.festival_class_configurations cfg ON cfg.id=intent.festival_class_id AND cfg.organization_id=intent.organization_id
+				 LEFT JOIN ${this.schema}.festivals festival ON festival.id=cfg.festival_id AND festival.organization_id=cfg.organization_id
+				 WHERE intent.organization_id=$1 AND intent.customer_id=$2 AND intent.id<>$3 AND intent.intent_type='class_entry'
+				   AND intent.idempotency_key<>$6 AND intent.created_at>$4::timestamptz
+				   AND (lower((CASE jsonb_typeof(execution.request_snapshot) WHEN 'string' THEN (execution.request_snapshot#>>'{}')::jsonb ELSE execution.request_snapshot END)->>'festivalShortName')=lower($5) OR lower(festival.short_name)=lower($5))
+				 LIMIT 1`,
+				[
+					input.organizationId,
+					input.customerId,
+					value.intentId,
+					candidate.intent.created_at,
+					input.festivalShortName,
+					candidate.decision.replacementKey,
+				],
+			);
+			if (!(newer as unknown[]).length) return value;
+		}
+		return null;
+	}
+	async isUnissuedCartReplacementBlocked(input: UnissuedCartReplacementInput) {
+		const [row] = (await sql.unsafe(
+			`SELECT execution.*, execution.lease_expires_at::text, execution.recovery_recorded_at::text, execution.created_at::text, execution.updated_at::text
+			 FROM ${this.schema}.class_checkout_execution_events event JOIN ${this.schema}.class_checkout_executions execution ON execution.intent_id=event.intent_id AND execution.organization_id=event.organization_id
+			 WHERE event.id=$1 AND event.event_type='customer_restarted_unissued' AND execution.organization_id=$2 AND execution.customer_id=$3`,
+			[input.replacementKey, input.organizationId, input.customerId],
+		)) as Record<string, unknown>[];
+		if (!row) return false;
+		const candidate = await this.restartDecision(sql, fromRow(row), false);
+		return (
+			!candidate ||
+			candidate.decision === "restartable" ||
+			candidate.decision.replacementKey !== input.replacementKey
+		);
 	}
 	async observePayment(input: {
 		organizationId: string;

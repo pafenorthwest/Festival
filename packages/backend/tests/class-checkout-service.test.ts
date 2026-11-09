@@ -522,6 +522,186 @@ describe("ClassCheckoutService", () => {
 		expect(checkout).not.toHaveBeenCalled();
 	});
 
+	async function strandLegacyInvalidCart() {
+		const f = await createFixture();
+		const create = spyOn(f.storefront, "createCart").mockRejectedValueOnce(
+			new ClassCheckoutCartObservationError(
+				"gid://shopify/Cart/legacy-invalid",
+			),
+		);
+		const checkout = spyOn(f.storefront, "checkout");
+		const executions = f.checkout.classExecutions;
+		const transition = executions.transition.bind(executions);
+		const legacyWrite = spyOn(executions, "transition").mockImplementation(
+			async (input) => {
+				if (input.eventType === "create_dispatched")
+					return transition({ ...input, storefrontBinding: undefined });
+				if (input.eventType === "invalid_remote_cart_observed") {
+					await transition({
+						claim: input.claim,
+						checkpoint: input.checkpoint,
+						shopifyCartId: input.shopifyCartId,
+						eventType: input.eventType,
+					});
+					throw new Error(
+						"Worker interrupted before its separate recovery write",
+					);
+				}
+				return transition(input);
+			},
+		);
+		const submission = {
+			...f.defaultInput,
+			festivalShortName: required(f.festival).shortName,
+		};
+		await expect(f.service.start(submission)).rejects.toMatchObject({
+			code: "checkout_persistence_unavailable",
+		});
+		legacyWrite.mockRestore();
+		f.now.setTime(f.now.getTime() + 31_000);
+		const intent = required(await f.checkout.findIntentByKey(submission));
+		const execution = required(
+			await executions.get(f.organization.id, intent.id),
+		);
+		const recovery = {
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			festivalShortName: submission.festivalShortName,
+			recoveryReference: execution.recoveryReference,
+		};
+		return { ...f, create, handoff: checkout, intent, recovery, submission };
+	}
+
+	it("restores a legacy invalid submission and converges concurrent parent restarts", async () => {
+		const f = await strandLegacyInvalidCart();
+		await expect(f.service.start(f.submission)).rejects.toMatchObject({
+			code: "checkout_recovery_required",
+			recovery: { retryAllowed: false, restartAllowed: true },
+		});
+		expect(f.handoff).not.toHaveBeenCalled();
+		await expect(
+			f.service.findUnissuedCartRestart(f.recovery),
+		).resolves.toEqual({
+			recoveryReference: f.recovery.recoveryReference,
+		});
+		const [first, second] = await Promise.all([
+			f.service.restartUnissuedCart(f.recovery),
+			f.service.restartUnissuedCart(f.recovery),
+		]);
+		expect(first).toEqual(second);
+		expect(first.replacementKey).not.toBe(f.submission.idempotencyKey);
+		expect(first.registrations).toMatchObject([
+			{
+				childId: f.child.id,
+				childName: f.child.displayName,
+				classId: f.classConfig.id,
+				teacherId: f.teacherId,
+				priceCents: 4500,
+				pieces: f.defaultPieces,
+			},
+		]);
+		expect(f.create).toHaveBeenCalledTimes(1);
+		const replacement = {
+			...f.submission,
+			idempotencyKey: first.replacementKey,
+		};
+		const starts = await Promise.allSettled([
+			f.service.start(replacement),
+			f.service.start(replacement),
+		]);
+		expect(starts.some((attempt) => attempt.status === "fulfilled")).toBe(true);
+		await expect(f.service.start(replacement)).resolves.toMatchObject({
+			checkoutUrl: `https://${f.storeDomain}/checkouts/c123`,
+		});
+		expect(f.create).toHaveBeenCalledTimes(2);
+		await expect(f.service.start(f.submission)).rejects.toMatchObject({
+			status: 409,
+		});
+	});
+
+	it("keeps replacement blocked if payment evidence appears before restart", async () => {
+		const f = await strandLegacyInvalidCart();
+		await f.checkout.classExecutions.observePayment({
+			organizationId: f.organization.id,
+			intentId: f.intent.id,
+			shopifyOrderGid: "gid://shopify/Order/unconfirmed",
+			approved: false,
+		});
+		await expect(
+			f.service.findUnissuedCartRestart(f.recovery),
+		).resolves.toEqual({
+			recoveryReference: null,
+		});
+		await expect(
+			f.service.restartUnissuedCart(f.recovery),
+		).rejects.toMatchObject({
+			status: 409,
+			code: "checkout_restart_unavailable",
+		});
+		expect(f.create).toHaveBeenCalledTimes(1);
+		expect(f.handoff).not.toHaveBeenCalled();
+	});
+
+	it("withholds a replacement payment link when late payment evidence appears during handoff", async () => {
+		const f = await strandLegacyInvalidCart();
+		const { replacementKey } = await f.service.restartUnissuedCart(f.recovery);
+		f.handoff.mockImplementationOnce(async () => {
+			await f.checkout.classExecutions.observePayment({
+				organizationId: f.organization.id,
+				intentId: f.intent.id,
+				shopifyOrderGid: "gid://shopify/Order/late",
+				approved: false,
+			});
+			return { checkoutUrl: `https://${f.storeDomain}/checkouts/c123` };
+		});
+		const replacement = { ...f.submission, idempotencyKey: replacementKey };
+		const blocked = { status: 409, code: "checkout_restart_payment_uncertain" };
+		await expect(f.service.start(replacement)).rejects.toMatchObject(blocked);
+		await expect(
+			f.service.preflightRecovery(replacement),
+		).rejects.toMatchObject(blocked);
+		await expect(
+			f.service.restartUnissuedCart(f.recovery),
+		).rejects.toMatchObject({
+			status: 409,
+		});
+		expect(f.create).toHaveBeenCalledTimes(2);
+		expect(f.handoff).toHaveBeenCalledTimes(1);
+	});
+
+	it("resumes an invalid legacy cart after an operator verifies and adopts it", async () => {
+		const f = await strandLegacyInvalidCart();
+		const executions = f.checkout.classExecutions;
+		await executions.reapExpired(f.organization.id, f.intent.id);
+		const claim = {
+			organizationId: f.organization.id,
+			intentId: f.intent.id,
+			owner: "worker",
+		};
+		const claimed = required(await executions.claim(claim));
+		await executions.recordRecoveryRequired({
+			claim: { ...claim, generation: claimed.generation },
+			reason: "checkout_attachment_incomplete",
+		});
+		f.storefront.inspectCart = async () =>
+			cartEvidence(f.intent, f.customer.shopifyCustomerGid);
+		await f.service.resolveRecovery({
+			organizationId: f.organization.id,
+			recoveryReference: f.recovery.recoveryReference,
+			expectedGeneration: claimed.generation,
+			actorId: "admin",
+			reason: "Verified the original Shopify cart",
+			action: "adopt_cart",
+		});
+		await expect(
+			f.service.preflightRecovery(f.submission),
+		).resolves.toBeUndefined();
+		await expect(f.service.start(f.submission)).resolves.toMatchObject({
+			intentId: f.intent.id,
+		});
+		expect(f.create).toHaveBeenCalledTimes(1);
+	});
+
 	for (const matchingEvidence of [true, false]) {
 		it(`${matchingEvidence ? "resumes" : "blocks"} a legacy attached cart based on its Shopify evidence`, async () => {
 			const f = await createFixture();

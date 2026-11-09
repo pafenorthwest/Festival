@@ -641,6 +641,34 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 			);
 		}
 	}
+	async listCheckoutRegistrationSnapshots(
+		organizationId: string,
+		intentId: string,
+	) {
+		const rows = (await sql.unsafe(
+			`SELECT checkout_intent_line_id, registration_snapshot FROM ${this.schema}.registration_metadata WHERE organization_id=$1 AND checkout_intent_id=$2 AND checkout_intent_line_id IS NOT NULL AND registration_snapshot IS NOT NULL`,
+			[organizationId, intentId],
+		)) as Array<{
+			checkout_intent_line_id: string;
+			registration_snapshot: string | ClassRegistrationSnapshot;
+		}>;
+		return rows.flatMap((row) => {
+			const snapshot = normalizeClassRegistrationSnapshot(
+				typeof row.registration_snapshot === "string"
+					? JSON.parse(row.registration_snapshot)
+					: row.registration_snapshot,
+			);
+			return snapshot
+				? [
+						{
+							checkoutIntentLineId: row.checkout_intent_line_id,
+							registrationSnapshot: snapshot,
+						},
+					]
+				: [];
+		});
+	}
+
 	async getRegistrationMetadataByEntitlementId(
 		organizationId: string,
 		classEntitlementId: string,

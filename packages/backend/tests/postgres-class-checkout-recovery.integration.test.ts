@@ -29,10 +29,29 @@ async function fixture() {
 		customerId: "customer",
 		intentId: "intent",
 		fingerprint: "fingerprint",
-		requestSnapshot: { lineItems: [{ classId: "class" }] },
+		requestSnapshot: {
+			festivalShortName: "fest",
+			lineItems: [{ classId: "class" }],
+		},
 	};
 	await repository.prepare(input);
 	return { schema, checkout, repository, input };
+}
+
+async function recordLegacyInvalidCart(f: Awaited<ReturnType<typeof fixture>>) {
+	const worker = required(
+		await f.repository.claim({ ...f.input, owner: "worker" }),
+	);
+	const claim = { ...f.input, owner: "worker", generation: worker.generation };
+	await f.repository.transition({ claim, checkpoint: "create_dispatched" });
+	expect(await f.repository.restartUnissuedInvalidCart(f.input)).toBeNull();
+	await f.repository.transition({
+		claim,
+		checkpoint: "remote_cart_known",
+		shopifyCartId: "invalid-cart",
+		eventType: "invalid_remote_cart_observed",
+	});
+	return claim;
 }
 
 postgresTest(
@@ -236,6 +255,198 @@ postgresTest(
 		expect(
 			await f.repository.transition({ claim, storefrontBinding: null }),
 		).toBe(false);
+	},
+);
+
+postgresTest(
+	"self-service restart fences attachment and returns one replacement for a legacy unissued cart",
+	async () => {
+		const f = await fixture();
+		const claim = await recordLegacyInvalidCart(f);
+		await f.repository.transition({
+			claim,
+			storefrontBinding: {
+				shopDomain: "festival.myshopify.com",
+				integrationVersion: 4,
+			},
+			eventType: "storefront_binding_verified",
+		});
+		const discovery = {
+			organizationId: "org",
+			customerId: "customer",
+			festivalShortName: "fest",
+		};
+		expect(
+			await f.repository.findUnissuedInvalidCartRestart(discovery),
+		).toMatchObject({
+			intentId: "intent",
+		});
+		expect(
+			await f.repository.findUnissuedInvalidCartRestart({
+				...discovery,
+				festivalShortName: "other-festival",
+			}),
+		).toBeNull();
+		expect(
+			await f.repository.restartUnissuedInvalidCart({
+				...f.input,
+				customerId: "other-customer",
+			}),
+		).toBeNull();
+		const [first, second] = await Promise.all([
+			f.repository.restartUnissuedInvalidCart(f.input),
+			f.repository.restartUnissuedInvalidCart(f.input),
+		]);
+		expect(first).toEqual(second);
+		const { replacementKey } = required(first);
+		expect(await f.repository.get("org", "intent")).toMatchObject({
+			state: "rejected",
+			resultCode: "checkout_restarted_unissued",
+			generation: claim.generation + 1,
+			leaseOwner: null,
+		});
+		expect(await f.checkout.findIntentById("org", "intent")).toMatchObject({
+			status: "superseded",
+		});
+		expect(
+			(await f.repository.events("org", "intent")).filter(
+				(event) => event.eventType === "customer_restarted_unissued",
+			),
+		).toMatchObject([
+			{ id: replacementKey, evidence: { actorId: "customer" } },
+		]);
+		await expect(
+			f.checkout.attachCart({
+				...f.input,
+				shopifyCartId: "invalid-cart",
+				sessionId: "session",
+				integrationVersion: 1,
+				expiresAtIso: new Date(Date.now() + 3600000).toISOString(),
+				executionClaim: claim,
+			}),
+		).rejects.toThrow("claim is stale");
+		expect(
+			await f.repository.findUnissuedInvalidCartRestart(discovery),
+		).toMatchObject({
+			intentId: "intent",
+			resultCode: "checkout_restarted_unissued",
+		});
+		const replacement = await f.checkout.createIntent({
+			organizationId: "org",
+			customerId: "customer",
+			sessionId: "session",
+			idempotencyKey: replacementKey,
+			intentType: "class_entry",
+			shopifyProductGid: "product",
+			shopifyVariantGid: "variant",
+			amount: "50.00",
+			currencyCode: "USD",
+			expiresAtIso: new Date(Date.now() + 3600000).toISOString(),
+		});
+		expect(replacement.kind).toBe("created");
+		expect(
+			await f.repository.findUnissuedInvalidCartRestart(discovery),
+		).toMatchObject({
+			intentId: "intent",
+		});
+		if (replacement.kind !== "created")
+			throw new Error("Expected replacement intent.");
+		expect(await f.repository.restartUnissuedInvalidCart(f.input)).toEqual(
+			first,
+		);
+		await sql.unsafe(
+			`INSERT INTO ${f.schema}.shopify_order_projections (organization_id,shopify_order_gid,correlation_id,created_at,updated_at) VALUES ('org','replacement-order',$1,NOW(),NOW())`,
+			[replacement.intent.correlationId],
+		);
+		expect(await f.repository.restartUnissuedInvalidCart(f.input)).toBeNull();
+		await sql.unsafe(
+			`DELETE FROM ${f.schema}.shopify_order_projections WHERE shopify_order_gid='replacement-order'`,
+		);
+		await f.checkout.resolveIntent(replacement.intent.id, "approved");
+		expect(
+			await f.repository.findUnissuedInvalidCartRestart(discovery),
+		).toBeNull();
+		expect(await f.repository.restartUnissuedInvalidCart(f.input)).toBeNull();
+		const replacementInput = { ...f.input, replacementKey };
+		expect(
+			await f.repository.isUnissuedCartReplacementBlocked(replacementInput),
+		).toBe(false);
+		await f.repository.observePayment({
+			...f.input,
+			shopifyOrderGid: "gid://shopify/Order/1",
+			approved: false,
+		});
+		expect(await f.repository.restartUnissuedInvalidCart(f.input)).toBeNull();
+		expect(
+			await f.repository.isUnissuedCartReplacementBlocked(replacementInput),
+		).toBe(true);
+		expect(
+			await f.repository.isUnissuedCartReplacementBlocked({
+				...replacementInput,
+				replacementKey: "unknown-key",
+			}),
+		).toBe(false);
+	},
+);
+
+postgresTest(
+	"self-service restart rejects matched unpaid evidence and prior attachment",
+	async () => {
+		const f = await fixture();
+		const claim = await recordLegacyInvalidCart(f);
+		await sql.unsafe(
+			`INSERT INTO ${f.schema}.membership_validation_decisions (id,organization_id,customer_id,checkout_intent_id,shopify_order_gid,status,created_at,updated_at) VALUES ('decision','org','customer','intent','order','pending_validation',NOW(),NOW())`,
+		);
+		expect(await f.repository.restartUnissuedInvalidCart(f.input)).toBeNull();
+		await sql.unsafe(
+			`DELETE FROM ${f.schema}.membership_validation_decisions WHERE id='decision'`,
+		);
+		await sql.unsafe(
+			`INSERT INTO ${f.schema}.shopify_order_projections (organization_id,shopify_order_gid,correlation_id,created_at,updated_at) VALUES ('org','order','correlation',NOW(),NOW())`,
+		);
+		expect(await f.repository.restartUnissuedInvalidCart(f.input)).toBeNull();
+		await sql.unsafe(
+			`DELETE FROM ${f.schema}.shopify_order_projections WHERE shopify_order_gid='order'`,
+		);
+		await f.repository.transition({ claim, eventType: "cart_attached" });
+		expect(await f.repository.restartUnissuedInvalidCart(f.input)).toBeNull();
+		expect(await f.checkout.findIntentById("org", "intent")).toMatchObject({
+			status: "creating",
+		});
+	},
+);
+
+postgresTest(
+	"self-service restart leaves modern invalid cart recovery alone",
+	async () => {
+		const f = await fixture();
+		const worker = required(
+			await f.repository.claim({ ...f.input, owner: "worker" }),
+		);
+		const claim = {
+			...f.input,
+			owner: "worker",
+			generation: worker.generation,
+		};
+		await f.repository.transition({
+			claim,
+			checkpoint: "remote_cart_known",
+			shopifyCartId: "invalid-cart",
+			state: "recovery_required",
+			eventType: "invalid_remote_cart_observed",
+			evidence: {
+				code: "checkout_attachment_incomplete",
+				shopifyCartId: "invalid-cart",
+			},
+		});
+		expect(await f.repository.restartUnissuedInvalidCart(f.input)).toBeNull();
+		expect(
+			await f.repository.findUnissuedInvalidCartRestart({
+				organizationId: "org",
+				customerId: "customer",
+				festivalShortName: "fest",
+			}),
+		).toBeNull();
 	},
 );
 

@@ -362,7 +362,22 @@ export class InMemoryMembershipCommerceRepository
 		private readonly organizations: OrganizationRepository,
 		private readonly checkout?: CheckoutRepository,
 		private readonly now: () => Date = () => new Date(),
-	) {}
+	) {
+		checkout?.setClassCheckoutPaymentEvidenceLookup?.(
+			(intent) =>
+				this.decisionsByCheckoutIntent.has(
+					`${intent.organizationId}\u0000${intent.id}`,
+				) ||
+				this.classEntitlementsByIntent.has(
+					`${intent.organizationId}\u0000${intent.id}`,
+				) ||
+				[...this.projections.values()].some(
+					(projection) =>
+						projection.organizationId === intent.organizationId &&
+						projection.correlationId === intent.correlationId,
+				),
+		);
+	}
 
 	async ensureReady(): Promise<void> {}
 
