@@ -45,6 +45,7 @@ import { CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL } from "./checkout-repository.js"
 import {
 	assertExecutionFingerprint,
 	type ClassCheckoutExecution,
+	type ClassCheckoutStorefrontBinding,
 	type TransitionClassCheckoutExecution,
 } from "./class-checkout-execution.js";
 import {
@@ -78,6 +79,7 @@ export interface ClassCheckoutStorefront {
 	inspectCart?(input: {
 		organizationId: string;
 		shopifyCartId: string;
+		expectedStorefrontBinding?: ClassCheckoutStorefrontBinding;
 	}): Promise<{
 		correlationId: string | null;
 		customerGid: string | null;
@@ -89,6 +91,7 @@ export interface ClassCheckoutStorefront {
 	}>;
 	createCart(input: {
 		organizationId: string;
+		expectedStorefrontBinding?: ClassCheckoutStorefrontBinding;
 		shopifyVariantGid?: string;
 		buyerAccessToken: string;
 		correlationId: string;
@@ -102,6 +105,7 @@ export interface ClassCheckoutStorefront {
 	checkout(input: {
 		organizationId: string;
 		shopifyCartId: string;
+		expectedStorefrontBinding?: ClassCheckoutStorefrontBinding;
 	}): Promise<{ checkoutUrl: string }>;
 }
 
@@ -109,6 +113,16 @@ export interface ClassCheckoutStorefront {
 export class ClassCheckoutCartObservationError extends AppError {
 	constructor(readonly observedShopifyCartId: string) {
 		super("Shopify checkout is temporarily unavailable.", 503);
+	}
+}
+
+export class ClassCheckoutStorefrontChangedBeforeRequestError extends AppError {
+	constructor() {
+		super(
+			"Shopify Storefront configuration changed before the request.",
+			503,
+			"checkout_storefront_binding_changed",
+		);
 	}
 }
 
@@ -211,6 +225,26 @@ const silentClassCheckoutFailureLogger: ClassCheckoutFailureLogger = {
 export const consoleClassCheckoutFailureLogger: ClassCheckoutFailureLogger = {
 	error: (message, context) => console.error(message, context),
 };
+
+function sameStorefrontBinding(
+	saved: ClassCheckoutStorefrontBinding | null,
+	current: ClassCheckoutStorefrontBinding,
+): boolean {
+	return (
+		saved?.shopDomain === current.shopDomain &&
+		saved.integrationVersion === current.integrationVersion
+	);
+}
+
+function checkoutRejectionCode(record: ClassCheckoutExecution): string | null {
+	if (
+		record.checkpoint === "prepared" &&
+		record.state === "rejected" &&
+		record.resultCode === "checkout_integration_changed"
+	)
+		return "checkout_pre_dispatch_rejected";
+	return record.resultCode;
+}
 
 export class ClassCheckoutService {
 	constructor(
@@ -392,7 +426,8 @@ export class ClassCheckoutService {
 					409,
 					priorIntent.status === "approved"
 						? "checkout_already_completed"
-						: (priorExecution.resultCode ?? "checkout_terminal_failure"),
+						: (checkoutRejectionCode(priorExecution) ??
+								"checkout_terminal_failure"),
 				);
 			await executions.reapExpired(
 				input.organizationId,
@@ -412,7 +447,7 @@ export class ClassCheckoutService {
 				throw new AppError(
 					"This checkout has been closed.",
 					409,
-					priorExecution.resultCode ?? "checkout_terminal_failure",
+					checkoutRejectionCode(priorExecution) ?? "checkout_terminal_failure",
 				);
 			if (priorExecution.state === "running")
 				throw new AppError(
@@ -664,7 +699,7 @@ export class ClassCheckoutService {
 				throw new AppError(
 					"This checkout has already been resolved.",
 					409,
-					record.resultCode ?? "checkout_terminal_failure",
+					checkoutRejectionCode(record) ?? "checkout_terminal_failure",
 				);
 			if (record.state === "running")
 				throw new AppError(
@@ -1283,16 +1318,7 @@ export class ClassCheckoutService {
 		if (!storefrontIntegration) {
 			throw new AppError("Shopify checkout is unavailable.", 503);
 		}
-		if (
-			params.managed &&
-			(params.managed.record.requestSnapshot as { integrationVersion?: number })
-				.integrationVersion !== storefrontIntegration.integrationVersion
-		)
-			throw new AppError(
-				"Shopify integration changed. Checkout needs review.",
-				409,
-				"checkout_integration_changed",
-			);
+		const storefrontBinding = this.storefrontBinding(storefrontIntegration);
 
 		const cartLines = validatedLines.map((vl, index) => {
 			const lineRecord = intentLines[index];
@@ -1315,11 +1341,23 @@ export class ClassCheckoutService {
 			params.eligibilityResults,
 		);
 		setStage("create_cart");
-		if (params.managed && !params.managed.record.shopifyCartId)
-			await this.advanceExecution(params.managed, {
-				checkpoint: "create_dispatched",
-				eventType: "create_dispatched",
-			});
+		if (params.managed) {
+			if (params.managed.record.shopifyCartId) {
+				await this.verifyTrackedCartBinding(
+					params.managed,
+					intent,
+					storefrontBinding,
+				);
+			} else {
+				if (params.managed.record.checkpoint !== "prepared")
+					throw new AppError("Shopify cart creation needs recovery.", 503);
+				await this.advanceExecution(params.managed, {
+					checkpoint: "create_dispatched",
+					storefrontBinding,
+					eventType: "create_dispatched",
+				});
+			}
+		}
 		let cartResponse: { shopifyCartId: string };
 		try {
 			cartResponse = params.managed?.record.shopifyCartId
@@ -1331,14 +1369,17 @@ export class ClassCheckoutService {
 						buyerAccessToken: input.buyerAccessToken,
 						correlationId: intent.correlationId,
 						currencyCode,
+						...(params.managed
+							? { expectedStorefrontBinding: storefrontBinding }
+							: {}),
 					});
 		} catch (error) {
 			if (params.managed && error instanceof ClassCheckoutCartObservationError)
-				await this.advanceExecution(params.managed, {
-					checkpoint: "remote_cart_known",
-					shopifyCartId: error.observedShopifyCartId,
-					eventType: "invalid_remote_cart_observed",
-				});
+				return this.requireTrackedCartRecovery(
+					params.managed,
+					"checkout_attachment_incomplete",
+					error.observedShopifyCartId,
+				);
 			throw error;
 		}
 		if (params.managed)
@@ -1418,6 +1459,9 @@ export class ClassCheckoutService {
 		const checkout = await this.storefront.checkout({
 			organizationId: input.organizationId,
 			shopifyCartId: cart.shopifyCartId,
+			...(params.managed
+				? { expectedStorefrontBinding: storefrontBinding }
+				: {}),
 		});
 
 		setStage("verify_checkout_url");
@@ -1426,18 +1470,26 @@ export class ClassCheckoutService {
 		);
 		if (
 			!integration ||
-			integration.integrationVersion !==
-				storefrontIntegration.integrationVersion ||
+			!sameStorefrontBinding(
+				storefrontBinding,
+				this.storefrontBinding(integration),
+			) ||
 			!isAllowedCheckoutUrl(checkout.checkoutUrl, integration.storeDomain)
 		) {
 			throw new AppError("Shopify checkout is unavailable.", 503);
 		}
-		if (params.managed)
+		if (params.managed) {
+			if (Date.parse(expiresAtIso) <= this.now().getTime())
+				return this.requireTrackedCartRecovery(
+					params.managed,
+					"checkout_expired",
+				);
 			await this.advanceExecution(params.managed, {
 				state: "completed",
 				releaseLease: true,
 				eventType: "checkout_ready",
 			});
+		}
 
 		return {
 			checkoutUrl: checkout.checkoutUrl,
@@ -1562,7 +1614,166 @@ export class ClassCheckoutService {
 			...(change.checkpoint ? { checkpoint: change.checkpoint } : {}),
 			...(change.state ? { state: change.state } : {}),
 			...(change.shopifyCartId ? { shopifyCartId: change.shopifyCartId } : {}),
+			...(change.storefrontBinding !== undefined
+				? { storefrontBinding: change.storefrontBinding }
+				: {}),
 		};
+	}
+
+	private storefrontBinding(integration: {
+		storeDomain: string;
+		integrationVersion: number;
+	}): ClassCheckoutStorefrontBinding {
+		return {
+			shopDomain: integration.storeDomain.toLowerCase(),
+			integrationVersion: integration.integrationVersion,
+		};
+	}
+
+	private async verifyShopifyCartEvidence(
+		intent: CheckoutIntentRecord,
+		cartId: string,
+		binding: ClassCheckoutStorefrontBinding,
+		previousBinding: ClassCheckoutStorefrontBinding | null,
+	): Promise<void> {
+		if (!this.storefront.inspectCart)
+			throw new AppError(
+				"A verifiable Shopify cart is required.",
+				409,
+				"checkout_recovery_evidence_required",
+			);
+		if (previousBinding && previousBinding.shopDomain !== binding.shopDomain)
+			throw new AppError(
+				"The Shopify shop changed; cart evidence cannot be verified.",
+				409,
+				"checkout_recovery_evidence_invalid",
+			);
+		const observed = await this.storefront.inspectCart({
+			organizationId: intent.organizationId,
+			shopifyCartId: cartId,
+			expectedStorefrontBinding: binding,
+		});
+		const customer = await this.customers.getCustomer(
+			intent.organizationId,
+			intent.customerId,
+		);
+		const expected = new Map(
+			(intent.lines ?? []).map((line) => [line.id, line]),
+		);
+		const seen = new Set<string>();
+		const current = await this.organizations.getShopifyIntegration(
+			intent.organizationId,
+		);
+		if (
+			!current ||
+			!sameStorefrontBinding(binding, this.storefrontBinding(current))
+		)
+			throw new AppError(
+				"Shopify Storefront configuration changed during cart verification.",
+				503,
+				"checkout_storefront_verification_unavailable",
+			);
+		if (
+			!customer ||
+			observed.customerGid !== customer.shopifyCustomerGid ||
+			observed.correlationId !== intent.correlationId ||
+			observed.lines.length !== expected.size ||
+			expected.size === 0 ||
+			observed.lines.some((line) => {
+				const match = line.intentLineId
+					? expected.get(line.intentLineId)
+					: null;
+				if (
+					!line.intentLineId ||
+					seen.has(line.intentLineId) ||
+					!match ||
+					match.shopifyVariantGid !== line.variantGid ||
+					line.quantity !== 1
+				)
+					return true;
+				seen.add(line.intentLineId);
+				return false;
+			})
+		)
+			throw new AppError(
+				"Shopify cart evidence does not match this checkout.",
+				409,
+				"checkout_recovery_evidence_invalid",
+			);
+	}
+
+	private async verifyTrackedCartBinding(
+		managed: ManagedClassCheckoutExecution,
+		intent: CheckoutIntentRecord,
+		binding: ClassCheckoutStorefrontBinding,
+	): Promise<void> {
+		const { storefrontBinding, shopifyCartId } = managed.record;
+		if (sameStorefrontBinding(storefrontBinding, binding)) return;
+		try {
+			if (!shopifyCartId) throw new Error("Expected an existing Shopify cart.");
+			await this.verifyShopifyCartEvidence(
+				intent,
+				shopifyCartId,
+				binding,
+				storefrontBinding,
+			);
+		} catch (error) {
+			if (
+				error instanceof AppError &&
+				[
+					"checkout_recovery_evidence_invalid",
+					"checkout_recovery_evidence_required",
+				].includes(error.code ?? "")
+			)
+				return this.requireTrackedCartRecovery(
+					managed,
+					"checkout_storefront_verification_required",
+				);
+			throw new AppError(
+				"Shopify cart verification is temporarily unavailable.",
+				503,
+				"checkout_storefront_verification_unavailable",
+			);
+		}
+		if (Date.parse(intent.expiresAtIso) <= this.now().getTime())
+			return this.requireTrackedCartRecovery(managed, "checkout_expired");
+		await this.advanceExecution(managed, {
+			storefrontBinding: binding,
+			eventType: "storefront_binding_verified",
+		});
+	}
+
+	private async requireTrackedCartRecovery(
+		managed: ManagedClassCheckoutExecution,
+		reason: string,
+		invalidCartId?: string,
+	): Promise<never> {
+		await this.advanceExecution(managed, {
+			state: "recovery_required",
+			resultCode: reason,
+			eventType: invalidCartId
+				? "invalid_remote_cart_observed"
+				: "recovery_required",
+			evidence: {
+				code: reason,
+				...(invalidCartId ? { shopifyCartId: invalidCartId } : {}),
+			},
+			...(invalidCartId
+				? { checkpoint: "remote_cart_known", shopifyCartId: invalidCartId }
+				: {}),
+		});
+		const recorded = await this.checkout.classExecutions?.get(
+			managed.claim.organizationId,
+			managed.claim.intentId,
+		);
+		if (!recorded) throw new ClassCheckoutPersistenceUnavailableError();
+		if (recorded.state !== "recovery_required")
+			throw new AppError(
+				"Checkout execution has changed. Check its status before continuing.",
+				409,
+				"checkout_execution_changed",
+			);
+		throw new ClassCheckoutRecoveryRequiredError(recorded);
 	}
 
 	private async handleExecutionFailure(
@@ -1591,9 +1802,26 @@ export class ClassCheckoutService {
 				error,
 			});
 		const checkpoint = managed.record.checkpoint;
+		const verificationUnavailable =
+			error instanceof AppError &&
+			error.code === "checkout_storefront_verification_unavailable";
 		if (
-			checkpoint === "create_dispatched" ||
-			checkpoint === "remote_cart_known"
+			stage === "create_cart" &&
+			checkpoint === "create_dispatched" &&
+			error instanceof ClassCheckoutStorefrontChangedBeforeRequestError
+		) {
+			await this.advanceExecution(managed, {
+				checkpoint: "prepared",
+				state: "retryable",
+				storefrontBinding: null,
+				resultCode: "checkout_preparation_unavailable",
+				eventType: "storefront_changed_before_dispatch",
+			});
+			throw checkoutFailureError(error);
+		}
+		if (
+			!verificationUnavailable &&
+			(checkpoint === "create_dispatched" || checkpoint === "remote_cart_known")
 		) {
 			let recorded: boolean;
 			try {
@@ -1671,9 +1899,11 @@ export class ClassCheckoutService {
 			resultCode:
 				terminal && error instanceof AppError
 					? (error.code ?? "checkout_rejected")
-					: checkpoint === "attached"
-						? "checkout_url_unavailable"
-						: "checkout_preparation_unavailable",
+					: verificationUnavailable
+						? "checkout_storefront_verification_unavailable"
+						: checkpoint === "attached"
+							? "checkout_url_unavailable"
+							: "checkout_preparation_unavailable",
 			releaseLease: true,
 			eventType: "execution_failed",
 			evidence: {
@@ -1743,49 +1973,65 @@ export class ClassCheckoutService {
 			throw new AppError("Checkout has expired.", 409, "checkout_expired");
 		}
 		let managed: ManagedClassCheckoutExecution | undefined;
-		if (record.state !== "completed") {
-			const owner = randomUUID();
-			const claimed = await this.checkout.classExecutions?.claim({
-				organizationId: intent.organizationId,
-				intentId: intent.id,
-				owner,
-			});
-			if (!claimed)
-				throw new AppError(
-					"Checkout is already in progress.",
-					409,
-					"checkout_in_progress",
-				);
-			managed = {
-				record: claimed,
-				claim: {
-					organizationId: intent.organizationId,
-					intentId: intent.id,
-					owner,
-					generation: claimed.generation,
-				},
-			};
-		}
 		try {
 			const integration = await this.organizations.getShopifyIntegration(
 				intent.organizationId,
 			);
 			if (!integration)
 				throw new AppError("Shopify checkout is unavailable.", 503);
+			const binding = this.storefrontBinding(integration);
+			const needsVerification = !sameStorefrontBinding(
+				record.storefrontBinding,
+				binding,
+			);
+			if (record.state !== "completed" || needsVerification) {
+				const owner = randomUUID();
+				const claimed = await this.checkout.classExecutions?.claim({
+					organizationId: intent.organizationId,
+					intentId: intent.id,
+					owner,
+					allowCompleted: needsVerification,
+				});
+				if (!claimed)
+					throw new AppError(
+						"Checkout is already in progress.",
+						409,
+						"checkout_in_progress",
+					);
+				managed = {
+					record: claimed,
+					claim: {
+						organizationId: intent.organizationId,
+						intentId: intent.id,
+						owner,
+						generation: claimed.generation,
+					},
+				};
+				await this.verifyTrackedCartBinding(managed, intent, binding);
+			}
 			await this.checkout.markCheckoutStarted(intent.id);
 			const result = await this.storefront.checkout({
 				organizationId: intent.organizationId,
-				shopifyCartId: record.shopifyCartId ?? "",
+				shopifyCartId:
+					managed?.record.shopifyCartId ?? record.shopifyCartId ?? "",
+				expectedStorefrontBinding: binding,
 			});
 			const current = await this.organizations.getShopifyIntegration(
 				intent.organizationId,
 			);
 			if (
 				!current ||
-				current.integrationVersion !== integration.integrationVersion ||
+				!sameStorefrontBinding(binding, this.storefrontBinding(current)) ||
 				!isAllowedCheckoutUrl(result.checkoutUrl, current.storeDomain)
 			)
 				throw new AppError("Shopify checkout is unavailable.", 503);
+			if (Date.parse(intent.expiresAtIso) <= this.now().getTime()) {
+				if (managed)
+					return this.requireTrackedCartRecovery(managed, "checkout_expired");
+				throw new ClassCheckoutRecoveryRequiredError(
+					await this.recordKnownCartExpiry(intent, record),
+				);
+			}
 			if (managed)
 				await this.advanceExecution(managed, {
 					state: "completed",
@@ -1805,6 +2051,14 @@ export class ClassCheckoutService {
 					"resume_checkout_url",
 					error,
 				);
+			if (
+				error instanceof ClassCheckoutRecoveryRequiredError ||
+				(error instanceof AppError &&
+					["checkout_in_progress", "checkout_execution_changed"].includes(
+						error.code ?? "",
+					))
+			)
+				throw error;
 			try {
 				await this.checkout.classExecutions?.appendLateEvidence({
 					organizationId: intent.organizationId,
@@ -2022,8 +2276,11 @@ export class ClassCheckoutService {
 				400,
 				"checkout_recovery_acknowledgement_required",
 			);
+		let storefrontBinding: ClassCheckoutStorefrontBinding | undefined;
 		let cartId = input.shopifyCartId ?? record.shopifyCartId ?? undefined;
 		if (input.action === "adopt_cart") {
+			if (Date.parse(intent.expiresAtIso) <= this.now().getTime())
+				throw new AppError("Checkout has expired.", 409, "checkout_expired");
 			if (input.evidenceEventId || !cartId) {
 				const observations = (
 					await executions.events(input.organizationId, intent.id)
@@ -2047,7 +2304,7 @@ export class ClassCheckoutService {
 					);
 				cartId = observedIds[0];
 			}
-			if (!cartId || !this.storefront.inspectCart)
+			if (!cartId)
 				throw new AppError(
 					"A verifiable Shopify cart is required.",
 					409,
@@ -2056,55 +2313,17 @@ export class ClassCheckoutService {
 			const integration = await this.organizations.getShopifyIntegration(
 				input.organizationId,
 			);
-			if (
-				!integration ||
-				(record.requestSnapshot as { integrationVersion?: number })
-					.integrationVersion !== integration.integrationVersion
-			)
-				throw new AppError(
-					"Shopify integration changed; cart evidence cannot be adopted.",
-					409,
-					"checkout_recovery_evidence_invalid",
-				);
-			const observed = await this.storefront.inspectCart({
-				organizationId: input.organizationId,
-				shopifyCartId: cartId,
-			});
-			const customer = await this.customers.getCustomer(
-				input.organizationId,
-				intent.customerId,
+			if (!integration)
+				throw new AppError("Shopify checkout is unavailable.", 503);
+			storefrontBinding = this.storefrontBinding(integration);
+			await this.verifyShopifyCartEvidence(
+				intent,
+				cartId,
+				storefrontBinding,
+				record.storefrontBinding,
 			);
-			const expected = new Map(
-				(intent.lines ?? []).map((line) => [line.id, line]),
-			);
-			const seen = new Set<string>();
-			if (
-				!customer ||
-				observed.customerGid !== customer.shopifyCustomerGid ||
-				observed.correlationId !== intent.correlationId ||
-				observed.lines.length !== expected.size ||
-				expected.size === 0 ||
-				observed.lines.some((line) => {
-					const match = line.intentLineId
-						? expected.get(line.intentLineId)
-						: null;
-					if (
-						!line.intentLineId ||
-						seen.has(line.intentLineId) ||
-						!match ||
-						match.shopifyVariantGid !== line.variantGid ||
-						line.quantity !== 1
-					)
-						return true;
-					seen.add(line.intentLineId);
-					return false;
-				})
-			)
-				throw new AppError(
-					"Shopify cart evidence does not match this checkout.",
-					409,
-					"checkout_recovery_evidence_invalid",
-				);
+			if (Date.parse(intent.expiresAtIso) <= this.now().getTime())
+				throw new AppError("Checkout has expired.", 409, "checkout_expired");
 		} else cartId = undefined;
 		const resolved = await executions.resolve({
 			organizationId: input.organizationId,
@@ -2119,6 +2338,7 @@ export class ClassCheckoutService {
 						? "abandon"
 						: "retry_pre_dispatch",
 			...(cartId ? { shopifyCartId: cartId } : {}),
+			...(storefrontBinding ? { storefrontBinding } : {}),
 		});
 		if (!resolved)
 			throw new AppError(

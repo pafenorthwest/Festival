@@ -5,7 +5,11 @@ import {
 	SHOPIFY_STOREFRONT_PRIVATE_TOKEN_PURPOSE,
 	type ShopifySecretKeyring,
 } from "../shopify/encryption.js";
-import { ClassCheckoutCartObservationError } from "./class-checkout-service.js";
+import type { ClassCheckoutStorefrontBinding } from "./class-checkout-execution.js";
+import {
+	ClassCheckoutCartObservationError,
+	ClassCheckoutStorefrontChangedBeforeRequestError,
+} from "./class-checkout-service.js";
 import type { MembershipCheckoutStorefront } from "./membership-checkout-service.js";
 
 const API_VERSION = "2026-07";
@@ -29,6 +33,7 @@ export class ShopifyMembershipCheckoutClient
 
 	async createCart(input: {
 		organizationId: string;
+		expectedStorefrontBinding?: ClassCheckoutStorefrontBinding;
 		shopifyVariantGid?: string;
 		buyerAccessToken: string;
 		correlationId: string;
@@ -52,6 +57,7 @@ export class ShopifyMembershipCheckoutClient
 					buyerIdentity: { customerAccessToken: input.buyerAccessToken },
 				},
 			},
+			input.expectedStorefrontBinding,
 		);
 		const result =
 			record(payload.data) && record(payload.data.cartCreate)
@@ -71,11 +77,16 @@ export class ShopifyMembershipCheckoutClient
 		return { shopifyCartId: result.cart.id };
 	}
 
-	async checkout(input: { organizationId: string; shopifyCartId: string }) {
+	async checkout(input: {
+		organizationId: string;
+		shopifyCartId: string;
+		expectedStorefrontBinding?: ClassCheckoutStorefrontBinding;
+	}) {
 		const payload = await this.call(
 			input.organizationId,
 			`query FestivalCartCheckout($id: ID!) { cart(id: $id) { id checkoutUrl } }`,
 			{ id: input.shopifyCartId },
+			input.expectedStorefrontBinding,
 		);
 		const cart =
 			record(payload.data) && record(payload.data.cart)
@@ -86,11 +97,16 @@ export class ShopifyMembershipCheckoutClient
 	}
 
 	/** Read-only evidence verification; Festival request identities are never sent. */
-	async inspectCart(input: { organizationId: string; shopifyCartId: string }) {
+	async inspectCart(input: {
+		organizationId: string;
+		shopifyCartId: string;
+		expectedStorefrontBinding?: ClassCheckoutStorefrontBinding;
+	}) {
 		const payload = await this.call(
 			input.organizationId,
 			`query FestivalCartEvidence($id: ID!) { cart(id: $id) { attributes { key value } buyerIdentity { customer { id } } lines(first: 250) { pageInfo { hasNextPage } nodes { quantity attributes { key value } merchandise { ... on ProductVariant { id } } } } } }`,
 			{ id: input.shopifyCartId },
+			input.expectedStorefrontBinding,
 		);
 		const cart =
 			record(payload.data) && record(payload.data.cart)
@@ -146,9 +162,19 @@ export class ShopifyMembershipCheckoutClient
 		organizationId: string,
 		query: string,
 		variables: Record<string, unknown>,
+		expectedStorefrontBinding?: ClassCheckoutStorefrontBinding,
 	): Promise<Record<string, unknown>> {
 		const integration =
 			await this.organizations.getShopifyIntegration(organizationId);
+		if (
+			expectedStorefrontBinding &&
+			(!integration ||
+				integration.storeDomain.toLowerCase() !==
+					expectedStorefrontBinding.shopDomain ||
+				integration.integrationVersion !==
+					expectedStorefrontBinding.integrationVersion)
+		)
+			throw new ClassCheckoutStorefrontChangedBeforeRequestError();
 		if (
 			!integration?.encryptedStorefrontPrivateToken ||
 			!DOMAIN.test(integration.storeDomain.toLowerCase())

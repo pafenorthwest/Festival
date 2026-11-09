@@ -13,14 +13,17 @@ import {
 } from "../src/checkout/checkout-line-helpers.js";
 import {
 	type CheckoutIntentLineItemRecord,
+	type CheckoutIntentRecord,
 	CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL,
 	InMemoryCheckoutRepository,
 } from "../src/checkout/checkout-repository.js";
 import {
+	ClassCheckoutCartObservationError,
 	type ClassCheckoutFailureLogger,
 	ClassCheckoutRecoveryRequiredError,
 	ClassCheckoutService,
 	type ClassCheckoutStorefront,
+	ClassCheckoutStorefrontChangedBeforeRequestError,
 	type StartClassCheckoutInput,
 } from "../src/checkout/class-checkout-service.js";
 import { InMemoryMembershipCommerceRepository } from "../src/commerce/membership-commerce-repository.js";
@@ -31,6 +34,7 @@ import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organizati
 
 interface FixtureOptions {
 	legacyCheckout?: boolean;
+	customerAccountIntegrationVersion?: number;
 	now?: Date;
 	classMinAge?: number;
 	classMaxAge?: number;
@@ -93,11 +97,12 @@ async function createFixture(options: FixtureOptions = {}) {
 	});
 
 	const storeDomain = options.storeDomain ?? "festival.myshopify.com";
-	await organizations.upsertShopifyIntegration({
+	const storefrontIntegration = await organizations.upsertShopifyIntegration({
 		organizationId: organization.id,
 		storeDomain,
 		clientId: "client-id",
 		encryptedClientSecret: "encrypted-secret",
+		encryptedStorefrontPrivateToken: "encrypted-storefront-token",
 	});
 
 	const subtype = await organizations.createRegistrationCatalogValue({
@@ -163,7 +168,7 @@ async function createFixture(options: FixtureOptions = {}) {
 		shopifyCustomerGid: "gid://shopify/Customer/999",
 		encryptedTokens: "encrypted-token-test",
 		csrfToken: "csrf-token-12345",
-		integrationVersion: 1,
+		integrationVersion: options.customerAccountIntegrationVersion ?? 1,
 		createdAtIso: now.toISOString(),
 		lastSeenAtIso: now.toISOString(),
 		expiresAtIso: new Date(now.getTime() + 8 * 3600_000).toISOString(),
@@ -322,6 +327,7 @@ async function createFixture(options: FixtureOptions = {}) {
 		accompanistGrant,
 		storefront,
 		storeDomain,
+		storefrontIntegration,
 		service,
 		defaultPieces,
 		defaultInput,
@@ -329,7 +335,323 @@ async function createFixture(options: FixtureOptions = {}) {
 	};
 }
 
+function omitLegacyStorefrontBinding(checkout: InMemoryCheckoutRepository) {
+	const transition = checkout.classExecutions.transition.bind(
+		checkout.classExecutions,
+	);
+	checkout.classExecutions.transition = (input) =>
+		transition(
+			input.checkpoint === "create_dispatched"
+				? { ...input, storefrontBinding: undefined }
+				: input,
+		);
+}
+
+function cartEvidence(intent: CheckoutIntentRecord, customerGid: string) {
+	return {
+		correlationId: intent.correlationId,
+		customerGid,
+		lines: required(intent.lines).map((line) => ({
+			intentLineId: line.id,
+			variantGid: line.shopifyVariantGid,
+			quantity: 1,
+		})),
+	};
+}
+
 describe("ClassCheckoutService", () => {
+	for (const [accountVersion, storefrontVersion] of [
+		[1, 2],
+		[2, 1],
+	] as const) {
+		it(`binds Storefront version ${storefrontVersion} independently of Customer Account version ${accountVersion}`, async () => {
+			const f = await createFixture({
+				customerAccountIntegrationVersion: accountVersion,
+			});
+			if (storefrontVersion === 2) {
+				await f.organizations.upsertShopifyIntegration({
+					...f.storefrontIntegration,
+					encryptedStorefrontPrivateToken: "rotated-storefront-token",
+				});
+			}
+			const binding = {
+				shopDomain: f.storeDomain,
+				integrationVersion: storefrontVersion,
+			};
+			const checkout = spyOn(f.storefront, "checkout");
+			f.storefront.createCart = async (input) => {
+				const intent = required(
+					await f.checkout.findIntentByKey(f.defaultInput),
+				);
+				expect(
+					await f.checkout.classExecutions.get(f.organization.id, intent.id),
+				).toMatchObject({
+					checkpoint: "create_dispatched",
+					storefrontBinding: binding,
+				});
+				expect(input.expectedStorefrontBinding).toEqual(binding);
+				return { shopifyCartId: "gid://shopify/Cart/bound-cart" };
+			};
+
+			const result = await f.service.start({
+				...f.defaultInput,
+				integrationVersion: accountVersion,
+			});
+			expect(checkout).toHaveBeenCalledWith(
+				expect.objectContaining({ expectedStorefrontBinding: binding }),
+			);
+			expect(
+				await f.checkout.classExecutions.get(
+					f.organization.id,
+					result.intentId,
+				),
+			).toMatchObject({ checkpoint: "attached", storefrontBinding: binding });
+		});
+	}
+
+	it("retries after the adapter proves a Storefront rotation prevented dispatch", async () => {
+		const f = await createFixture();
+		const create = spyOn(f.storefront, "createCart");
+		create.mockImplementationOnce(async () => {
+			await f.organizations.upsertShopifyIntegration({
+				...f.storefrontIntegration,
+				encryptedStorefrontPrivateToken: "rotated-storefront-token",
+			});
+			throw new ClassCheckoutStorefrontChangedBeforeRequestError();
+		});
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			code: "checkout_retryable_upstream",
+		});
+		const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+		expect(
+			await f.checkout.classExecutions.get(f.organization.id, intent.id),
+		).toMatchObject({
+			checkpoint: "prepared",
+			state: "retryable",
+			storefrontBinding: null,
+			leaseOwner: null,
+		});
+		await expect(f.service.start(f.defaultInput)).resolves.toMatchObject({
+			intentId: intent.id,
+		});
+		expect(create).toHaveBeenNthCalledWith(
+			2,
+			expect.objectContaining({
+				expectedStorefrontBinding: {
+					shopDomain: f.storeDomain,
+					integrationVersion: 2,
+				},
+			}),
+		);
+	});
+
+	it("keeps a legacy dispatched checkout with unknown outcome from creating another cart", async () => {
+		const f = await createFixture({
+			mockStorefront: {
+				createCart: async () => {
+					throw new AppError(
+						"Adapter could not prove no dispatch",
+						503,
+						"checkout_storefront_binding_changed",
+					);
+				},
+			},
+		});
+		omitLegacyStorefrontBinding(f.checkout);
+		const create = spyOn(f.storefront, "createCart");
+		const unknownCreation = {
+			code: "checkout_recovery_required",
+			recovery: {
+				reasonCode: "checkout_creation_unknown",
+				retryAllowed: false,
+			},
+		};
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject(
+			unknownCreation,
+		);
+		const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+		expect(
+			await f.checkout.classExecutions.get(f.organization.id, intent.id),
+		).toMatchObject({
+			checkpoint: "create_dispatched",
+			storefrontBinding: null,
+		});
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject(
+			unknownCreation,
+		);
+		expect(create).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps an invalid Shopify cart unresumable if its recovery write fails", async () => {
+		const f = await createFixture({
+			mockStorefront: {
+				createCart: async () => {
+					throw new ClassCheckoutCartObservationError(
+						"gid://shopify/Cart/invalid",
+					);
+				},
+			},
+		});
+		const create = spyOn(f.storefront, "createCart");
+		const checkout = spyOn(f.storefront, "checkout");
+		const executions = f.checkout.classExecutions;
+		const transition = executions.transition.bind(executions);
+		const failRecoveryWrite = spyOn(
+			executions,
+			"transition",
+		).mockImplementation(async (input) => {
+			if (input.eventType === "invalid_remote_cart_observed")
+				throw new Error("Recovery storage unavailable");
+			return transition(input);
+		});
+
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			code: "checkout_persistence_unavailable",
+		});
+		const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+		expect(await executions.get(f.organization.id, intent.id)).toMatchObject({
+			checkpoint: "create_dispatched",
+			shopifyCartId: null,
+		});
+		failRecoveryWrite.mockRestore();
+		f.now.setTime(f.now.getTime() + 31_000);
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			code: "checkout_recovery_required",
+		});
+		expect(create).toHaveBeenCalledTimes(1);
+		expect(checkout).not.toHaveBeenCalled();
+	});
+
+	for (const matchingEvidence of [true, false]) {
+		it(`${matchingEvidence ? "resumes" : "blocks"} a legacy attached cart based on its Shopify evidence`, async () => {
+			const f = await createFixture();
+			omitLegacyStorefrontBinding(f.checkout);
+			const create = spyOn(f.storefront, "createCart");
+			const result = await f.service.start(f.defaultInput);
+			const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+			expect(
+				await f.checkout.classExecutions.get(f.organization.id, intent.id),
+			).toMatchObject({ checkpoint: "attached", storefrontBinding: null });
+			const evidence = cartEvidence(intent, f.customer.shopifyCustomerGid);
+			if (!matchingEvidence) evidence.lines[0].quantity = 2;
+			const inspect = mock(async () => evidence);
+			f.storefront.inspectCart = inspect;
+			const checkout = spyOn(f.storefront, "checkout");
+			const replay = f.service.start(f.defaultInput);
+
+			if (matchingEvidence) {
+				await expect(replay).resolves.toMatchObject({
+					intentId: intent.id,
+					checkoutUrl: result.checkoutUrl,
+				});
+				expect(checkout).toHaveBeenCalledTimes(1);
+				expect(
+					await f.checkout.classExecutions.get(f.organization.id, intent.id),
+				).toMatchObject({
+					storefrontBinding: {
+						shopDomain: f.storeDomain,
+						integrationVersion: 1,
+					},
+				});
+			} else {
+				await expect(replay).rejects.toMatchObject({
+					code: "checkout_recovery_required",
+					recovery: { reasonCode: "checkout_storefront_verification_required" },
+				});
+				expect(checkout).not.toHaveBeenCalled();
+			}
+			expect(inspect).toHaveBeenCalledTimes(1);
+			expect(create).toHaveBeenCalledTimes(1);
+		});
+	}
+
+	it("retries a legacy cart after a temporary evidence lookup failure", async () => {
+		const f = await createFixture();
+		omitLegacyStorefrontBinding(f.checkout);
+		const create = spyOn(f.storefront, "createCart");
+		const first = await f.service.start(f.defaultInput);
+		const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+		f.storefront.inspectCart = async () =>
+			cartEvidence(intent, f.customer.shopifyCustomerGid);
+		const inspect = spyOn(f.storefront, "inspectCart").mockRejectedValueOnce(
+			new Error("Temporary Shopify outage"),
+		);
+		const checkout = spyOn(f.storefront, "checkout");
+
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			status: 503,
+		});
+		expect(checkout).not.toHaveBeenCalled();
+		expect(
+			await f.checkout.classExecutions.get(f.organization.id, intent.id),
+		).toMatchObject({
+			state: "retryable",
+			checkpoint: "attached",
+			storefrontBinding: null,
+		});
+		await expect(f.service.start(f.defaultInput)).resolves.toMatchObject({
+			intentId: intent.id,
+			checkoutUrl: first.checkoutUrl,
+		});
+		expect(inspect).toHaveBeenCalledTimes(2);
+		expect(create).toHaveBeenCalledTimes(1);
+	});
+
+	it("verifies a legacy known cart before retrying an interrupted attachment", async () => {
+		const f = await createFixture();
+		omitLegacyStorefrontBinding(f.checkout);
+		const create = spyOn(f.storefront, "createCart");
+		spyOn(f.checkout, "markIntentReady").mockImplementationOnce(async () => {
+			f.now.setTime(f.now.getTime() + 31_000);
+			throw new Error("Attachment interrupted");
+		});
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			code: "checkout_execution_changed",
+		});
+		const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+		const record = required(
+			await f.checkout.classExecutions.get(f.organization.id, intent.id),
+		);
+		expect(record).toMatchObject({
+			checkpoint: "remote_cart_known",
+			storefrontBinding: null,
+		});
+		expect(intent.cartReference).toBeNull();
+		f.storefront.inspectCart = async () =>
+			cartEvidence(intent, f.customer.shopifyCustomerGid);
+		const inspect = spyOn(f.storefront, "inspectCart");
+
+		await expect(f.service.start(f.defaultInput)).resolves.toMatchObject({
+			intentId: intent.id,
+		});
+		expect(inspect).toHaveBeenCalledWith({
+			organizationId: f.organization.id,
+			shopifyCartId: record.shopifyCartId,
+			expectedStorefrontBinding: {
+				shopDomain: f.storeDomain,
+				integrationVersion: 1,
+			},
+		});
+		expect(create).toHaveBeenCalledTimes(1);
+	});
+
+	it("preserves checkout and replay without a managed execution repository", async () => {
+		const f = await createFixture({
+			legacyCheckout: true,
+			customerAccountIntegrationVersion: 2,
+		});
+		const create = spyOn(f.storefront, "createCart");
+		const first = await f.service.start(f.defaultInput);
+		await expect(f.service.start(f.defaultInput)).resolves.toMatchObject({
+			intentId: first.intentId,
+			checkoutUrl: first.checkoutUrl,
+		});
+		expect(create).toHaveBeenCalledTimes(1);
+		expect(
+			await f.checkout.classExecutions.get(f.organization.id, first.intentId),
+		).toBeNull();
+	});
+
 	it("records unknown creation before returning recovery, clears its lease, and deterministically replays without another mutation", async () => {
 		const f = await createFixture({
 			mockStorefront: {
@@ -560,7 +882,7 @@ describe("ClassCheckoutService", () => {
 		expect(create).toHaveBeenCalledTimes(1);
 	});
 
-	it("adopts only independently verified cart evidence and resumes without repeating creation", async () => {
+	it("adopts verified legacy cart evidence against the current Storefront binding", async () => {
 		const f = await createFixture({
 			mockStorefront: {
 				createCart: async () => {
@@ -568,21 +890,22 @@ describe("ClassCheckoutService", () => {
 				},
 			},
 		});
+		omitLegacyStorefrontBinding(f.checkout);
 		const error = await f.service.start(f.defaultInput).catch((error) => error);
 		const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
 		const execution = required(
 			await f.checkout.classExecutions.get(f.organization.id, intent.id),
 		);
-		const create = spyOn(f.storefront, "createCart");
-		f.storefront.inspectCart = async () => ({
-			correlationId: intent.correlationId,
-			customerGid: f.customer.shopifyCustomerGid,
-			lines: required(intent.lines).map((line) => ({
-				intentLineId: line.id,
-				variantGid: line.shopifyVariantGid,
-				quantity: 1,
-			})),
+		expect(execution.storefrontBinding).toBeNull();
+		await f.organizations.upsertShopifyIntegration({
+			...f.storefrontIntegration,
+			encryptedStorefrontPrivateToken: "rotated-storefront-token",
 		});
+		const binding = { shopDomain: f.storeDomain, integrationVersion: 2 };
+		const create = spyOn(f.storefront, "createCart");
+		f.storefront.inspectCart = async () =>
+			cartEvidence(intent, f.customer.shopifyCustomerGid);
+		const inspect = spyOn(f.storefront, "inspectCart");
 		const resolved = await f.service.resolveRecovery({
 			organizationId: f.organization.id,
 			recoveryReference: error.recovery.recoveryReference,
@@ -593,6 +916,14 @@ describe("ClassCheckoutService", () => {
 			shopifyCartId: "gid://shopify/Cart/recovered",
 		});
 		expect(resolved.retryAllowed).toBe(true);
+		expect(inspect).toHaveBeenCalledWith({
+			organizationId: f.organization.id,
+			shopifyCartId: "gid://shopify/Cart/recovered",
+			expectedStorefrontBinding: binding,
+		});
+		expect(
+			await f.checkout.classExecutions.get(f.organization.id, intent.id),
+		).toMatchObject({ storefrontBinding: binding });
 		f.now.setTime(f.now.getTime() + 15 * 60_000);
 		await expect(f.service.start(f.defaultInput)).resolves.toMatchObject({
 			intentId: intent.id,
@@ -2373,6 +2704,17 @@ describe("ClassCheckoutService", () => {
 	it("retries local metadata preparation under the original checkout identity", async () => {
 		const f = await createFixture();
 		const markFailedSpy = spyOn(f.checkout, "markFailed");
+		const prepare = f.checkout.classExecutions.prepare.bind(
+			f.checkout.classExecutions,
+		);
+		f.checkout.classExecutions.prepare = (input) =>
+			prepare({
+				...input,
+				requestSnapshot: {
+					...(input.requestSnapshot as Record<string, unknown>),
+					integrationVersion: 1,
+				},
+			});
 
 		const originalInsert = f.checkout.insertRegistrationMetadata.bind(
 			f.checkout,
@@ -2401,50 +2743,116 @@ describe("ClassCheckoutService", () => {
 		expect(createdIntent).toBeDefined();
 		expect(createdIntent?.status).toBe("creating");
 		expect(markFailedSpy).not.toHaveBeenCalled();
+		expect(
+			await f.checkout.classExecutions.get(
+				f.organization.id,
+				required(createdIntent).id,
+			),
+		).toMatchObject({ checkpoint: "prepared", storefrontBinding: null });
 
-		// Retry the same immutable operation after local preparation recovers.
+		await f.organizations.upsertShopifyIntegration({
+			...f.storefrontIntegration,
+			encryptedStorefrontPrivateToken: "rotated-storefront-token",
+		});
 		f.checkout.insertRegistrationMetadata = originalInsert;
 		const retryResult = await f.service.start({
 			...f.defaultInput,
 			idempotencyKey: f.defaultInput.idempotencyKey,
 		});
-		expect(retryResult).toBeDefined();
+		expect(retryResult.intentId).toBe(required(createdIntent).id);
 		expect(retryResult.checkoutUrl).toBe(
 			`https://${f.storeDomain}/checkouts/c123`,
 		);
+		expect(
+			await f.checkout.classExecutions.get(
+				f.organization.id,
+				retryResult.intentId,
+			),
+		).toMatchObject({
+			storefrontBinding: { shopDomain: f.storeDomain, integrationVersion: 2 },
+		});
+	});
+
+	it("keeps a legacy pre-dispatch rejection terminal under a safe result code", async () => {
+		const f = await createFixture();
+		const create = spyOn(f.storefront, "createCart");
+		const originalInsert = f.checkout.insertRegistrationMetadata;
+		f.checkout.insertRegistrationMetadata = async () => {
+			throw new AppError(
+				"Legacy version mismatch",
+				409,
+				"checkout_integration_changed",
+			);
+		};
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			status: 409,
+		});
+		f.checkout.insertRegistrationMetadata = originalInsert;
+		const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+		expect(
+			await f.checkout.classExecutions.get(f.organization.id, intent.id),
+		).toMatchObject({
+			checkpoint: "prepared",
+			state: "rejected",
+			storefrontBinding: null,
+			resultCode: "checkout_integration_changed",
+		});
+		const replayError = { status: 409, code: "checkout_pre_dispatch_rejected" };
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject(
+			replayError,
+		);
+		await expect(
+			f.service.preflightRecovery(f.defaultInput),
+		).rejects.toMatchObject(replayError);
+		expect(create).not.toHaveBeenCalled();
 	});
 
 	it("keeps the admitted cart retryable when integration changes during URL retrieval", async () => {
 		const f = await createFixture();
-
-		let readCount = 0;
-		const originalGetShopifyIntegration =
-			f.organizations.getShopifyIntegration.bind(f.organizations);
-		f.organizations.getShopifyIntegration = async (organizationId: string) => {
-			const record = await originalGetShopifyIntegration(organizationId);
-			readCount++;
-			if (readCount === 2 && record) {
-				return {
-					...record,
-					integrationVersion: record.integrationVersion + 1,
-				};
-			}
-			return record;
-		};
+		const create = spyOn(f.storefront, "createCart");
+		const checkout = spyOn(f.storefront, "checkout");
+		checkout.mockImplementationOnce(async () => {
+			await f.organizations.upsertShopifyIntegration({
+				...f.storefrontIntegration,
+				encryptedStorefrontPrivateToken: "rotated-storefront-token",
+			});
+			return { checkoutUrl: `https://${f.storeDomain}/checkouts/stale` };
+		});
 
 		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
 			status: 503,
 			code: "checkout_retryable_upstream",
 		});
 
-		const intents = (
-			f.checkout as unknown as {
-				intents: Map<string, { status: string }>;
-			}
-		).intents;
-		const createdIntent = [...intents.values()][0];
-		expect(createdIntent).toBeDefined();
-		expect(createdIntent?.status).toBe("checkout_started");
+		const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+		expect(intent.status).toBe("checkout_started");
+		const record = required(
+			await f.checkout.classExecutions.get(f.organization.id, intent.id),
+		);
+		expect(record).toMatchObject({
+			checkpoint: "attached",
+			state: "retryable",
+			storefrontBinding: { shopDomain: f.storeDomain, integrationVersion: 1 },
+		});
+		f.storefront.inspectCart = async () =>
+			cartEvidence(intent, f.customer.shopifyCustomerGid);
+		const inspect = spyOn(f.storefront, "inspectCart");
+		const binding = { shopDomain: f.storeDomain, integrationVersion: 2 };
+		await expect(f.service.start(f.defaultInput)).resolves.toMatchObject({
+			intentId: intent.id,
+			checkoutUrl: `https://${f.storeDomain}/checkouts/c123`,
+		});
+		expect(inspect).toHaveBeenCalledWith({
+			organizationId: f.organization.id,
+			shopifyCartId: record.shopifyCartId,
+			expectedStorefrontBinding: binding,
+		});
+		expect(checkout).toHaveBeenLastCalledWith({
+			organizationId: f.organization.id,
+			shopifyCartId: record.shopifyCartId,
+			expectedStorefrontBinding: binding,
+		});
+		expect(create).toHaveBeenCalledTimes(1);
 	});
 
 	it("fails with 404 when organization is not found", async () => {

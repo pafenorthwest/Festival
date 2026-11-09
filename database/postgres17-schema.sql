@@ -4600,6 +4600,7 @@ ALTER TABLE ONLY orgs.volunteers
 CREATE TABLE IF NOT EXISTS orgs.class_checkout_executions (
     intent_id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, customer_id TEXT NOT NULL,
     fingerprint TEXT NOT NULL, request_snapshot JSONB NOT NULL,
+    storefront_binding JSONB NULL,
     state TEXT NOT NULL DEFAULT 'ready' CHECK (state IN ('ready','running','retryable','recovery_required','completed','rejected')),
     checkpoint TEXT NOT NULL DEFAULT 'prepared' CHECK (checkpoint IN ('prepared','create_dispatched','remote_cart_known','attached')),
     generation BIGINT NOT NULL DEFAULT 0 CHECK (generation >= 0),

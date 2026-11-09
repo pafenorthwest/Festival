@@ -1,7 +1,13 @@
 import { expect, it } from "bun:test";
 import { fileURLToPath } from "node:url";
 
-for (const scenario of ["handoff", "network", "recovery", "abandonment"]) {
+for (const scenario of [
+	"handoff",
+	"network",
+	"recovery",
+	"abandonment",
+	"pre-dispatch-rejection",
+]) {
 	it(`actual registration hook preserves deterministic ${scenario} behavior`, async () => {
 		// Isolate router module mocks from other frontend suites.
 		const process = Bun.spawn(

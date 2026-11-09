@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, mock } from "bun:test";
 import { ShopifyMembershipCheckoutClient } from "../src/checkout/shopify-membership-checkout-client.js";
 import { CustomerAccountTransport } from "../src/customer/customer-account-transport.js";
 
@@ -33,6 +33,7 @@ describe("ShopifyMembershipCheckoutClient", () => {
 			{
 				getShopifyIntegration: async () => ({
 					storeDomain: "festival.myshopify.com",
+					integrationVersion: 3,
 					encryptedStorefrontPrivateToken: "ciphertext",
 				}),
 			} as never,
@@ -45,6 +46,10 @@ describe("ShopifyMembershipCheckoutClient", () => {
 				shopifyVariantGid: "gid://shopify/ProductVariant/1",
 				buyerAccessToken: "customer-token",
 				correlationId: "opaque-intent",
+				expectedStorefrontBinding: {
+					shopDomain: "festival.myshopify.com",
+					integrationVersion: 3,
+				},
 				idempotencyKey: "festival-only-do-not-forward",
 			} as never),
 		).resolves.toEqual({ shopifyCartId: "gid://shopify/Cart/private" });
@@ -53,6 +58,48 @@ describe("ShopifyMembershipCheckoutClient", () => {
 		expect(body).not.toContain("private-token");
 		expect(body).not.toContain("festival-only-do-not-forward");
 		expect(new Headers(headers).has("Idempotency-Key")).toBe(false);
+	});
+
+	it("rejects a changed Storefront version or shop at the credential read before contacting Shopify", async () => {
+		const decrypt = mock(() => "private-token");
+		const requester = mock(async () => {
+			throw new Error("Unexpected Storefront request");
+		});
+		const transport = new CustomerAccountTransport({
+			resolver: async () => [{ address: "8.8.8.8", family: 4, ttlSeconds: 60 }],
+			requester,
+		});
+		const client = new ShopifyMembershipCheckoutClient(
+			{
+				getShopifyIntegration: async () => ({
+					storeDomain: "festival.myshopify.com",
+					integrationVersion: 2,
+					encryptedStorefrontPrivateToken: "ciphertext",
+				}),
+			} as never,
+			{ decrypt } as never,
+			transport,
+		);
+		for (const expectedStorefrontBinding of [
+			{ shopDomain: "festival.myshopify.com", integrationVersion: 1 },
+			{ shopDomain: "other-festival.myshopify.com", integrationVersion: 2 },
+		]) {
+			const input = { organizationId: "org", expectedStorefrontBinding };
+			const cart = { ...input, shopifyCartId: "gid://shopify/Cart/private" };
+			const error = { code: "checkout_storefront_binding_changed" };
+			await expect(
+				client.createCart({
+					...input,
+					shopifyVariantGid: "gid://shopify/ProductVariant/1",
+					buyerAccessToken: "customer-token",
+					correlationId: "opaque-intent",
+				}),
+			).rejects.toMatchObject(error);
+			await expect(client.checkout(cart)).rejects.toMatchObject(error);
+			await expect(client.inspectCart(cart)).rejects.toMatchObject(error);
+		}
+		expect(decrypt).not.toHaveBeenCalled();
+		expect(requester).not.toHaveBeenCalled();
 	});
 
 	it("reads complete correlation, buyer and line evidence without forwarding Festival request keys", async () => {

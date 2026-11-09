@@ -31,12 +31,17 @@ export interface ClassCheckoutEvidence {
 	actorId?: string;
 	resolution?: string;
 }
+export interface ClassCheckoutStorefrontBinding {
+	shopDomain: string;
+	integrationVersion: number;
+}
 export interface ClassCheckoutExecution {
 	organizationId: string;
 	customerId: string;
 	intentId: string;
 	fingerprint: string;
 	requestSnapshot: unknown;
+	storefrontBinding: ClassCheckoutStorefrontBinding | null;
 	state: ClassCheckoutExecutionState;
 	checkpoint: ClassCheckoutCheckpoint;
 	generation: number;
@@ -70,6 +75,7 @@ export interface TransitionClassCheckoutExecution {
 	checkpoint?: ClassCheckoutCheckpoint;
 	state?: ClassCheckoutExecutionState;
 	shopifyCartId?: string;
+	storefrontBinding?: ClassCheckoutStorefrontBinding | null;
 	resultCode?: string;
 	releaseLease?: boolean;
 	eventType?: string;
@@ -83,6 +89,7 @@ export interface ResolveClassCheckoutExecution {
 	reason: string;
 	action: "resume_known_cart" | "retry_pre_dispatch" | "abandon";
 	shopifyCartId?: string;
+	storefrontBinding?: ClassCheckoutStorefrontBinding;
 }
 export interface ClassCheckoutExecutionRepository {
 	get(
@@ -101,6 +108,7 @@ export interface ClassCheckoutExecutionRepository {
 		intentId: string;
 		owner: string;
 		leaseMs?: number;
+		allowCompleted?: boolean;
 	}): Promise<ClassCheckoutExecution | null>;
 	transition(input: TransitionClassCheckoutExecution): Promise<boolean>;
 	recordRecoveryRequired(input: {
@@ -192,6 +200,12 @@ export function isBlockingExecution(value: ClassCheckoutExecution): boolean {
 			value.state !== "rejected")
 	);
 }
+export function copyStorefrontBinding({
+	shopDomain,
+	integrationVersion,
+}: ClassCheckoutStorefrontBinding): ClassCheckoutStorefrontBinding {
+	return { shopDomain, integrationVersion };
+}
 export function resolvedExecution(
 	value: ClassCheckoutExecution,
 	input: ResolveClassCheckoutExecution,
@@ -237,6 +251,9 @@ export function resolvedExecution(
 					: "remote_cart_known"
 				: value.checkpoint,
 		shopifyCartId: input.shopifyCartId || value.shopifyCartId,
+		storefrontBinding: input.storefrontBinding
+			? copyStorefrontBinding(input.storefrontBinding)
+			: value.storefrontBinding,
 		generation: value.generation + 1,
 		leaseOwner: null,
 		leaseExpiresAtIso: null,
@@ -364,6 +381,7 @@ export class InMemoryClassCheckoutExecutionRepository
 		const now = this.now().toISOString();
 		const value: ClassCheckoutExecution = {
 			...structuredClone(input),
+			storefrontBinding: null,
 			state: "ready",
 			checkpoint: "prepared",
 			generation: 0,
@@ -385,6 +403,7 @@ export class InMemoryClassCheckoutExecutionRepository
 		intentId: string;
 		owner: string;
 		leaseMs?: number;
+		allowCompleted?: boolean;
 	}) {
 		const existing = this.records.get(
 			this.key(input.organizationId, input.intentId),
@@ -416,7 +435,8 @@ export class InMemoryClassCheckoutExecutionRepository
 								this.blocks(other),
 						) ||
 						value.state === "recovery_required" ||
-						value.state === "completed" ||
+						(value.state === "completed" &&
+							!(input.allowCompleted && value.checkpoint === "attached")) ||
 						value.state === "rejected" ||
 						(value.leaseExpiresAtIso &&
 							value.leaseExpiresAtIso > now.toISOString()) ||
@@ -453,6 +473,10 @@ export class InMemoryClassCheckoutExecutionRepository
 		if (input.checkpoint) value.checkpoint = input.checkpoint;
 		if (input.state) value.state = input.state;
 		if (input.shopifyCartId) value.shopifyCartId = input.shopifyCartId;
+		if (input.storefrontBinding !== undefined)
+			value.storefrontBinding = input.storefrontBinding
+				? copyStorefrontBinding(input.storefrontBinding)
+				: null;
 		if (input.resultCode !== undefined) value.resultCode = input.resultCode;
 		if (input.releaseLease || (input.state && input.state !== "running")) {
 			value.leaseOwner = null;

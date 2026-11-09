@@ -325,6 +325,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 CREATE TABLE IF NOT EXISTS ${safeSchema}.class_checkout_executions (
     intent_id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, customer_id TEXT NOT NULL,
     fingerprint TEXT NOT NULL, request_snapshot JSONB NOT NULL,
+    storefront_binding JSONB NULL,
     state TEXT NOT NULL DEFAULT 'ready' CHECK (state IN ('ready','running','retryable','recovery_required','completed','rejected')),
     checkpoint TEXT NOT NULL DEFAULT 'prepared' CHECK (checkpoint IN ('prepared','create_dispatched','remote_cart_known','attached')),
     generation BIGINT NOT NULL DEFAULT 0 CHECK (generation >= 0),
@@ -1082,6 +1083,9 @@ export async function initializePostgresSchema(schema: string): Promise<void> {
 			[safeSchema],
 		);
 		await transaction.unsafe(`CREATE SCHEMA IF NOT EXISTS ${safeSchema};`);
+		await transaction.unsafe(
+			`ALTER TABLE IF EXISTS ${safeSchema}.class_checkout_executions ADD COLUMN IF NOT EXISTS storefront_binding JSONB;`,
+		);
 		await transaction.unsafe(
 			`ALTER TABLE IF EXISTS ${safeSchema}.registration_metadata ADD COLUMN IF NOT EXISTS checkout_intent_line_id TEXT;`,
 		);

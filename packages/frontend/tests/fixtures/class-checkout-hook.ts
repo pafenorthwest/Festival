@@ -12,12 +12,19 @@ mock.module("@solidjs/router", () => ({
 
 const events = new EventTarget();
 const assigned: string[] = [];
+const storedCheckoutKeys = new Map<string, string>();
 Object.assign(globalThis, {
 	window: {
 		addEventListener: events.addEventListener.bind(events),
 		removeEventListener: events.removeEventListener.bind(events),
 		location: { assign: (url: string) => assigned.push(url) },
 		confirm: () => true,
+		sessionStorage: {
+			getItem: (key: string) => storedCheckoutKeys.get(key) ?? null,
+			setItem: (key: string, value: string) =>
+				storedCheckoutKeys.set(key, value),
+			removeItem: (key: string) => storedCheckoutKeys.delete(key),
+		},
 	},
 });
 
@@ -77,6 +84,18 @@ globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
 			);
 		if (mode === "network" && requests.length === 1)
 			throw new Error("Response lost");
+		if (mode === "pre-dispatch-rejection") {
+			if (requests.length === 1)
+				return json({ error: "Checkout is in progress." }, 409);
+			if (requests.length === 2)
+				return json(
+					{
+						error: "The previous checkout was rejected before dispatch.",
+						code: "checkout_pre_dispatch_rejected",
+					},
+					409,
+				);
+		}
 		return json({
 			checkoutUrl: "https://shop.example/checkout",
 			correlationId: "correlation",
@@ -192,6 +211,23 @@ if (mode === "recovery" || mode === "abandonment") {
 	assert.equal(requests.length, 2);
 	assert.equal(requests[0].key, requests[1].key);
 	assert.deepEqual(requests[0].payload, requests[1].payload);
+} else if (mode === "pre-dispatch-rejection") {
+	assert.equal(cart.checkoutSubmission()?.idempotencyKey, requests[0].key);
+	assert.equal(storedCheckoutKeys.size, 1);
+	const originalLine = cart.items()[0];
+	await state.handleCartCheckout();
+	assert.equal(requests.length, 2);
+	assert.equal(requests[0].key, requests[1].key);
+	assert.equal(cart.checkoutSubmission(), null);
+	assert.deepEqual(cart.items(), [originalLine]);
+	assert.equal(storedCheckoutKeys.size, 0);
+	assert.equal(state.isSubmittingCheckout(), false);
+	assert.match(state.checkoutError() ?? "", /try checking out again/i);
+	assert.deepEqual(assigned, []);
+	await state.handleCartCheckout();
+	assert.equal(requests.length, 3);
+	assert.notEqual(requests[2].key, requests[0].key);
+	assert.deepEqual(requests[2].payload, requests[0].payload);
 }
 
 assert.deepEqual(assigned, ["https://shop.example/checkout"]);

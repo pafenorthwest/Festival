@@ -7,6 +7,7 @@ import {
 	type ClassCheckoutEvidence,
 	type ClassCheckoutExecution,
 	type ClassCheckoutExecutionRepository,
+	copyStorefrontBinding,
 	executionClaimMatches,
 	lateEvidenceId,
 	type PrepareClassCheckoutExecution,
@@ -28,6 +29,10 @@ function fromRow(row: Record<string, unknown>): ClassCheckoutExecution {
 			typeof row.request_snapshot === "string"
 				? JSON.parse(row.request_snapshot)
 				: row.request_snapshot,
+		storefrontBinding: (typeof row.storefront_binding === "string"
+			? JSON.parse(row.storefront_binding)
+			: (row.storefront_binding ??
+				null)) as ClassCheckoutExecution["storefrontBinding"],
 		state: row.state as ClassCheckoutExecution["state"],
 		checkpoint: row.checkpoint as ClassCheckoutExecution["checkpoint"],
 		generation: Number(row.generation),
@@ -114,7 +119,7 @@ export class PostgresClassCheckoutExecutionRepository
 	) {
 		value.updatedAtIso = await this.now(runner);
 		await runner.unsafe(
-			`UPDATE ${this.schema}.class_checkout_executions SET state=$3, checkpoint=$4, generation=$5, lease_owner=$6, lease_expires_at=$7::timestamptz, shopify_cart_id=$8, result_code=$9, recovery_recorded_at=$10::timestamptz, updated_at=clock_timestamp() WHERE organization_id=$1 AND intent_id=$2`,
+			`UPDATE ${this.schema}.class_checkout_executions SET state=$3, checkpoint=$4, generation=$5, lease_owner=$6, lease_expires_at=$7::timestamptz, shopify_cart_id=$8, result_code=$9, recovery_recorded_at=$10::timestamptz, storefront_binding=$11::jsonb, updated_at=$12::timestamptz WHERE organization_id=$1 AND intent_id=$2`,
 			[
 				value.organizationId,
 				value.intentId,
@@ -126,6 +131,10 @@ export class PostgresClassCheckoutExecutionRepository
 				value.shopifyCartId,
 				value.resultCode,
 				value.recoveryRecordedAtIso,
+				value.storefrontBinding
+					? JSON.stringify(value.storefrontBinding)
+					: null,
+				value.updatedAtIso,
 			],
 		);
 		await this.event(runner, value, eventType, evidence);
@@ -163,6 +172,7 @@ export class PostgresClassCheckoutExecutionRepository
 		intentId: string;
 		owner: string;
 		leaseMs?: number;
+		allowCompleted?: boolean;
 	}) {
 		return sql.begin(async (tx) => {
 			const current = await this.read(tx, input.organizationId, input.intentId);
@@ -180,7 +190,9 @@ export class PostgresClassCheckoutExecutionRepository
 			const now = await this.now(tx);
 			if (
 				!value ||
-				["recovery_required", "completed", "rejected"].includes(value.state) ||
+				["recovery_required", "rejected"].includes(value.state) ||
+				(value.state === "completed" &&
+					!(input.allowCompleted && value.checkpoint === "attached")) ||
 				(value.leaseExpiresAtIso && value.leaseExpiresAtIso > now) ||
 				(value.state === "running" && value.checkpoint === "create_dispatched")
 			)
@@ -224,6 +236,10 @@ export class PostgresClassCheckoutExecutionRepository
 			if (input.checkpoint) value.checkpoint = input.checkpoint;
 			if (input.state) value.state = input.state;
 			if (input.shopifyCartId) value.shopifyCartId = input.shopifyCartId;
+			if (input.storefrontBinding !== undefined)
+				value.storefrontBinding = input.storefrontBinding
+					? copyStorefrontBinding(input.storefrontBinding)
+					: null;
 			if (input.resultCode !== undefined) value.resultCode = input.resultCode;
 			if (input.releaseLease || (input.state && input.state !== "running")) {
 				value.leaseOwner = null;

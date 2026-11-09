@@ -396,6 +396,17 @@ export function useFestivalRegistrationPage(
 		} else if (
 			validationMayRelease &&
 			error instanceof ApiError &&
+			error.status === 409 &&
+			error.code === "checkout_pre_dispatch_rejected"
+		) {
+			cart.releaseCheckout({ retireKey: true });
+			setCheckoutError(
+				"Your registrations are still in your cart. Please try checking out again.",
+			);
+			return;
+		} else if (
+			validationMayRelease &&
+			error instanceof ApiError &&
 			[400, 404, 422].includes(error.status)
 		) {
 			// These are definitive validation rejections before external dispatch.

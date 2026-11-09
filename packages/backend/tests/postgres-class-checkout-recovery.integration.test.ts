@@ -166,6 +166,80 @@ postgresTest(
 );
 
 postgresTest(
+	"stores the dispatch binding and fences opt-in claims of a completed attachment",
+	async () => {
+		const f = await fixture();
+		const storefrontBinding = {
+			shopDomain: "festival.myshopify.com",
+			integrationVersion: 4,
+		};
+		const worker = required(
+			await f.repository.claim({ ...f.input, owner: "worker" }),
+		);
+		const claim = {
+			...f.input,
+			owner: "worker",
+			generation: worker.generation,
+		};
+		expect(worker.storefrontBinding).toBeNull();
+		expect(
+			await f.repository.transition({
+				claim,
+				checkpoint: "create_dispatched",
+				storefrontBinding,
+			}),
+		).toBe(true);
+		expect(await f.repository.get("org", "intent")).toMatchObject({
+			checkpoint: "create_dispatched",
+			storefrontBinding,
+		});
+		expect(
+			await f.repository.transition({
+				claim,
+				checkpoint: "prepared",
+				storefrontBinding: null,
+			}),
+		).toBe(true);
+		expect(await f.repository.get("org", "intent")).toMatchObject({
+			checkpoint: "prepared",
+			storefrontBinding: null,
+		});
+		await f.repository.transition({
+			claim,
+			checkpoint: "create_dispatched",
+			storefrontBinding,
+		});
+		await f.repository.transition({
+			claim,
+			checkpoint: "remote_cart_known",
+			shopifyCartId: "remote",
+		});
+		await f.repository.transition({
+			claim,
+			checkpoint: "attached",
+			state: "completed",
+		});
+		expect(
+			await f.repository.claim({ ...f.input, owner: "without-opt-in" }),
+		).toBeNull();
+		const resumed = await Promise.all(
+			["one", "two"].map((owner) =>
+				f.repository.claim({ ...f.input, owner, allowCompleted: true }),
+			),
+		);
+		expect(resumed.filter(Boolean)).toHaveLength(1);
+		expect(resumed.find(Boolean)).toMatchObject({
+			generation: worker.generation + 1,
+			checkpoint: "attached",
+			storefrontBinding,
+		});
+		expect(
+			await f.repository.transition({ claim, storefrontBinding: null }),
+		).toBe(false);
+	},
+);
+
+postgresTest(
 	"recovery outcome, evidence and lease release commit together or all roll back",
 	async () => {
 		const f = await fixture();

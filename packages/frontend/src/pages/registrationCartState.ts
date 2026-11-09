@@ -140,7 +140,7 @@ export interface RegistrationCartState {
 	getCheckoutIdempotencyKey: () => string;
 	checkoutSubmission: () => RegistrationCheckoutSubmission | null;
 	beginCheckout: () => RegistrationCheckoutSubmission;
-	releaseCheckout: () => void;
+	releaseCheckout: (options?: { retireKey?: boolean }) => void;
 	restartAbandonedCheckout: () => boolean;
 	completeCheckout: (submission: RegistrationCheckoutSubmission) => void;
 	checkoutRecovery: () => ClassCheckoutRecoveryStatusDto | null;
@@ -180,7 +180,15 @@ export function createRegistrationCart(
 		setCheckoutSubmission(submission);
 		return submission;
 	}
-	function releaseCheckout() {
+	function clearCheckoutKey() {
+		checkoutPayload = "";
+		checkoutKey = "";
+		if (options?.slug && options?.festivalSlug) {
+			clearCartCheckoutIdempotencyKey(options.slug, options.festivalSlug);
+		}
+	}
+	function releaseCheckout({ retireKey = false } = {}) {
+		if (retireKey) clearCheckoutKey();
 		setCheckoutSubmission(null);
 		setCheckoutRecovery(null);
 	}
@@ -191,12 +199,7 @@ export function createRegistrationCart(
 			!["abandoned_unknown", "checkout_abandoned"].includes(recovery.reasonCode)
 		)
 			return false;
-		releaseCheckout();
-		checkoutPayload = "";
-		checkoutKey = "";
-		if (options?.slug && options?.festivalSlug) {
-			clearCartCheckoutIdempotencyKey(options.slug, options.festivalSlug);
-		}
+		releaseCheckout({ retireKey: true });
 		return true;
 	}
 	function completeCheckout(submission: RegistrationCheckoutSubmission) {
@@ -205,11 +208,7 @@ export function createRegistrationCart(
 			current.filter((item) => !submitted.has(item.lineId)),
 		);
 		if (checkoutSubmission() === submission) releaseCheckout();
-		checkoutPayload = "";
-		checkoutKey = "";
-		if (options?.slug && options?.festivalSlug) {
-			clearCartCheckoutIdempotencyKey(options.slug, options.festivalSlug);
-		}
+		clearCheckoutKey();
 	}
 	function assertEditable() {
 		if (checkoutSubmission())
