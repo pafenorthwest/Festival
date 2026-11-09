@@ -23,7 +23,9 @@ import type {
 	CustomerSessionResponse,
 	FestivalClassConfiguration,
 	FestivalRecord,
+	OrganizationRecord,
 	RegistrationAccompanistSummary,
+	RegistrationAgeConfiguration,
 	RegistrationEligibleClass,
 	RegistrationTeacherSummary,
 	RepertoirePiece,
@@ -275,6 +277,14 @@ export class CustomerAccountService {
 		{ oidc: Discovery; api: ApiDiscovery }
 	>;
 	private jwksCache: BoundedAsyncCache<string, readonly JsonRecord[]>;
+	private organizationBySlugCache: BoundedAsyncCache<
+		string,
+		OrganizationRecord | null
+	>;
+	private registrationAgeConfigCache: BoundedAsyncCache<
+		string,
+		RegistrationAgeConfiguration | null
+	>;
 	private readonly repertoire?: RepertoireRepository;
 	private get customers(): CustomerAccountRepository {
 		return this.repository;
@@ -327,7 +337,20 @@ export class CustomerAccountService {
 			maxTotalBytes: options.jwksCacheMaxTotalBytes ?? DEFAULT_JWKS_CACHE_BYTES,
 			now: () => this.now().getTime(),
 		});
+		this.organizationBySlugCache = new BoundedAsyncCache({
+			maxEntries: 256,
+			maxEntryBytes: 64 * 1024,
+			maxTotalBytes: 1024 * 1024,
+			now: this.nowMs,
+		});
+		this.registrationAgeConfigCache = new BoundedAsyncCache({
+			maxEntries: 256,
+			maxEntryBytes: 64 * 1024,
+			maxTotalBytes: 1024 * 1024,
+			now: this.nowMs,
+		});
 	}
+	private nowMs = () => this.now().getTime();
 	private urls(slug: string) {
 		return {
 			callbackUrl: `${this.publicOrigin}/api/customer-auth/callback`,
@@ -506,8 +529,28 @@ export class CustomerAccountService {
 			throw safeError();
 		}
 	}
+	private async loadOrganizationBySlug(slug: string) {
+		const value = await this.organizations.findOrganizationBySlug(slug);
+		return {
+			value,
+			ttlMs: DEFAULT_CACHE_TTL_MS,
+			bytes: Buffer.byteLength(JSON.stringify(value ?? null)),
+		};
+	}
+	private async loadRegistrationAgeConfiguration(organizationId: string) {
+		const value =
+			await this.organizations.getRegistrationAgeConfiguration(organizationId);
+		return {
+			value,
+			ttlMs: DEFAULT_CACHE_TTL_MS,
+			bytes: Buffer.byteLength(JSON.stringify(value ?? null)),
+		};
+	}
 	async start(slug: string, returnTo?: string, offeringId?: string) {
-		const organization = await this.organizations.findOrganizationBySlug(slug);
+		const organization = await this.organizationBySlugCache.getOrLoad(
+			slug,
+			async () => this.loadOrganizationBySlug(slug),
+		);
 		if (!organization) throw new AppError("Organization not found.", 404);
 		const integration = await this.repository.getIntegration(organization.id);
 		if (!integration || integration.readiness !== "ready") throw safeError();
@@ -704,11 +747,15 @@ export class CustomerAccountService {
 		dns: CacheMetrics;
 		discovery: CacheMetrics;
 		jwks: CacheMetrics;
+		organizationBySlug: CacheMetrics;
+		registrationAgeConfig: CacheMetrics;
 	} {
 		return {
 			dns: this.transport.metrics(),
 			discovery: this.discoveryCache.metrics(),
 			jwks: this.jwksCache.metrics(),
+			organizationBySlug: this.organizationBySlugCache.metrics(),
+			registrationAgeConfig: this.registrationAgeConfigCache.metrics(),
 		};
 	}
 	private async customerGid(
@@ -767,8 +814,9 @@ export class CustomerAccountService {
 			state.organizationId,
 		);
 		if (!integration) throw safeError();
-		const org = await this.organizations.findOrganizationBySlug(
-			state.returnTo.split("/")[2] ?? "",
+		const slug = state.returnTo.split("/")[2] ?? "";
+		const org = await this.organizationBySlugCache.getOrLoad(slug, async () =>
+			this.loadOrganizationBySlug(slug),
 		);
 		if (!org || org.id !== state.organizationId)
 			throw new AppError("Customer authentication response is invalid.", 401);
@@ -857,7 +905,10 @@ export class CustomerAccountService {
 			throw new AppError("Customer authentication response is invalid.", 400);
 		}
 		const slug = state.returnTo.split("/")[2] ?? "";
-		const organization = await this.organizations.findOrganizationBySlug(slug);
+		const organization = await this.organizationBySlugCache.getOrLoad(
+			slug,
+			async () => this.loadOrganizationBySlug(slug),
+		);
 		if (!organization || organization.id !== state.organizationId) {
 			throw new AppError("Customer authentication response is invalid.", 401);
 		}
@@ -878,8 +929,38 @@ export class CustomerAccountService {
 		}
 	}
 	private async validSession(sessionId: string, organizationId: string) {
-		const s = await this.repository.getSession(sessionId),
-			now = this.now();
+		const now = this.now();
+		if (this.repository.findSessionCustomerAndIntegration) {
+			const res = await this.repository.findSessionCustomerAndIntegration(
+				sessionId,
+				organizationId,
+			);
+			if (!res || "organizationMismatch" in res) {
+				throw new AppError("Customer session is invalid.", 401);
+			}
+			const { session: s, customer, integration } = res;
+			if (
+				s.revokedAtIso ||
+				new Date(s.expiresAtIso) <= now ||
+				new Date(s.lastSeenAtIso).getTime() + this.idleMs <= now.getTime()
+			) {
+				await this.repository.revokeSession(s.sessionId, now.toISOString());
+				throw new AppError("Customer session is invalid.", 401);
+			}
+			if (!customer || customer.shopifyCustomerGid !== s.shopifyCustomerGid) {
+				await this.repository.revokeSession(s.sessionId, now.toISOString());
+				throw new AppError("Customer session is invalid.", 401);
+			}
+			if (
+				!integration ||
+				integration.integrationVersion !== s.integrationVersion
+			) {
+				await this.repository.revokeSession(s.sessionId, now.toISOString());
+				throw new AppError("Customer session is invalid.", 401);
+			}
+			return { session: s, integration, customer };
+		}
+		const s = await this.repository.getSession(sessionId);
 		if (s && s.organizationId !== organizationId) {
 			throw new AppError("Customer session is invalid.", 401);
 		}
@@ -997,7 +1078,9 @@ export class CustomerAccountService {
 		slug: string,
 		sessionId?: string,
 	): Promise<CustomerSessionResponse> {
-		const org = await this.organizations.findOrganizationBySlug(slug);
+		const org = await this.organizationBySlugCache.getOrLoad(slug, async () =>
+			this.loadOrganizationBySlug(slug),
+		);
 		if (!org || !sessionId) return { session: { authenticated: false } };
 		try {
 			const { session } = await this.validSession(sessionId, org.id);
@@ -1028,7 +1111,9 @@ export class CustomerAccountService {
 		csrf: string | undefined,
 		origin: string | undefined,
 	) {
-		const org = await this.organizations.findOrganizationBySlug(slug);
+		const org = await this.organizationBySlugCache.getOrLoad(slug, async () =>
+			this.loadOrganizationBySlug(slug),
+		);
 		if (!org || !sessionId)
 			throw new AppError("Customer session is invalid.", 401);
 		const valid = await this.validSession(sessionId, org.id);
@@ -1073,7 +1158,9 @@ export class CustomerAccountService {
 		csrf: string | undefined,
 		origin: string | undefined,
 	) {
-		const org = await this.organizations.findOrganizationBySlug(slug);
+		const org = await this.organizationBySlugCache.getOrLoad(slug, async () =>
+			this.loadOrganizationBySlug(slug),
+		);
 		if (!org || !sessionId)
 			throw new AppError("Customer session is invalid.", 401);
 		const valid = await this.validSession(sessionId, org.id);
@@ -1115,7 +1202,9 @@ export class CustomerAccountService {
 
 	/** Internal ownership boundary for customer-owned read DTOs. */
 	async customerReadAccess(slug: string, sessionId: string | undefined) {
-		const org = await this.organizations.findOrganizationBySlug(slug);
+		const org = await this.organizationBySlugCache.getOrLoad(slug, async () =>
+			this.loadOrganizationBySlug(slug),
+		);
 		if (!org || !sessionId)
 			throw new AppError("Customer session is invalid.", 401);
 		const valid = await this.validSession(sessionId, org.id);
@@ -1128,7 +1217,9 @@ export class CustomerAccountService {
 
 	/** Internal ownership and token boundary for customer checkout recovery. */
 	async customerCheckoutSession(slug: string, sessionId: string | undefined) {
-		const org = await this.organizations.findOrganizationBySlug(slug);
+		const org = await this.organizationBySlugCache.getOrLoad(slug, async () =>
+			this.loadOrganizationBySlug(slug),
+		);
 		if (!org || !sessionId)
 			throw new AppError("Customer session is invalid.", 401);
 		const valid = await this.validSession(sessionId, org.id);
@@ -1423,7 +1514,10 @@ export class CustomerAccountService {
 			csrfToken,
 			origin,
 		);
-		const organization = await this.organizations.findOrganizationBySlug(slug);
+		const organization = await this.organizationBySlugCache.getOrLoad(
+			slug,
+			async () => this.loadOrganizationBySlug(slug),
+		);
 		if (!organization) throw new AppError("Organization not found.", 404);
 		if (!this.commerce || !this.checkout) {
 			throw new AppError(
@@ -1502,8 +1596,9 @@ export class CustomerAccountService {
 		const birth = birthdayDate(birthday);
 		if (!birth)
 			throw new AppError("Birthday must be a valid YYYY-MM-DD date.", 400);
-		const config = await this.organizations.getRegistrationAgeConfiguration(
+		const config = await this.registrationAgeConfigCache.getOrLoad(
 			access.organizationId,
+			async () => this.loadRegistrationAgeConfiguration(access.organizationId),
 		);
 		if (!config)
 			throw new AppError(
@@ -1523,13 +1618,26 @@ export class CustomerAccountService {
 				reference.getUTCDate() < birth.getUTCDate())
 		)
 			age -= 1;
+		const validUntil = new Date(this.now());
+		validUntil.setUTCDate(validUntil.getUTCDate() + 90);
+		if (this.repository.createChildWithAgeSnapshot) {
+			return await this.repository.createChildWithAgeSnapshot({
+				child: {
+					organizationId: access.organizationId,
+					parentCustomerId: access.customerId,
+					displayName: displayName.trim(),
+				},
+				snapshot: {
+					age,
+					validUntilIso: validUntil.toISOString(),
+				},
+			});
+		}
 		const child = await this.repository.createChild({
 			organizationId: access.organizationId,
 			parentCustomerId: access.customerId,
 			displayName: displayName.trim(),
 		});
-		const validUntil = new Date(this.now());
-		validUntil.setUTCDate(validUntil.getUTCDate() + 90);
 		const ageSnapshot = await this.repository.createChildAgeSnapshot({
 			organizationId: access.organizationId,
 			childId: child.id,
@@ -1558,8 +1666,9 @@ export class CustomerAccountService {
 		const birth = birthdayDate(birthday);
 		if (!birth)
 			throw new AppError("Birthday must be a valid YYYY-MM-DD date.", 400);
-		const config = await this.organizations.getRegistrationAgeConfiguration(
+		const config = await this.registrationAgeConfigCache.getOrLoad(
 			access.organizationId,
+			async () => this.loadRegistrationAgeConfiguration(access.organizationId),
 		);
 		if (!config)
 			throw new AppError(
@@ -1594,7 +1703,9 @@ export class CustomerAccountService {
 		slug: string,
 		sessionId: string | undefined,
 	): Promise<CustomerProfileResponse> {
-		const org = await this.organizations.findOrganizationBySlug(slug);
+		const org = await this.organizationBySlugCache.getOrLoad(slug, async () =>
+			this.loadOrganizationBySlug(slug),
+		);
 		if (!org || !sessionId)
 			throw new AppError("Customer session is invalid.", 401);
 		const valid = await this.validSession(sessionId, org.id);
@@ -1611,7 +1722,9 @@ export class CustomerAccountService {
 		origin: string | undefined,
 		input: unknown,
 	): Promise<CustomerProfileResponse> {
-		const org = await this.organizations.findOrganizationBySlug(slug);
+		const org = await this.organizationBySlugCache.getOrLoad(slug, async () =>
+			this.loadOrganizationBySlug(slug),
+		);
 		if (!org || !sessionId)
 			throw new AppError("Customer session is invalid.", 401);
 		const valid = await this.validSession(sessionId, org.id);
@@ -1651,7 +1764,9 @@ export class CustomerAccountService {
 		csrf: string | undefined,
 		origin: string | undefined,
 	) {
-		const org = await this.organizations.findOrganizationBySlug(slug);
+		const org = await this.organizationBySlugCache.getOrLoad(slug, async () =>
+			this.loadOrganizationBySlug(slug),
+		);
 		if (!org || !sessionId)
 			throw new AppError("Customer session is invalid.", 401);
 		const valid = await this.validSession(sessionId, org.id);
@@ -1737,7 +1852,9 @@ export class CustomerAccountService {
 		sessionId: string | undefined,
 		after?: string,
 	): Promise<CustomerOrdersResponse> {
-		const org = await this.organizations.findOrganizationBySlug(slug);
+		const org = await this.organizationBySlugCache.getOrLoad(slug, async () =>
+			this.loadOrganizationBySlug(slug),
+		);
 		if (!org || !sessionId)
 			throw new AppError("Customer session is invalid.", 401);
 		const valid = await this.validSession(sessionId, org.id);
@@ -1837,7 +1954,9 @@ export class CustomerAccountService {
 		csrf: string | undefined,
 		origin: string | undefined,
 	) {
-		const org = await this.organizations.findOrganizationBySlug(slug);
+		const org = await this.organizationBySlugCache.getOrLoad(slug, async () =>
+			this.loadOrganizationBySlug(slug),
+		);
 		if (!org || !sessionId)
 			throw new AppError("Customer session is invalid.", 401);
 		const { session, integration } = await this.validSession(sessionId, org.id);

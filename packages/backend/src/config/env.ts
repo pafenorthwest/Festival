@@ -84,6 +84,22 @@ function parseDatabaseSsl(value: string | undefined): string {
 	return "require";
 }
 
+export function parseDatabasePoolMax(
+	raw: string | undefined,
+): number | undefined {
+	const trimmed = raw?.trim();
+	if (!trimmed) {
+		return undefined;
+	}
+
+	const value = Number(trimmed);
+	if (!Number.isInteger(value) || value <= 0) {
+		throw new Error(`Invalid DB_POOL_MAX value: ${trimmed}`);
+	}
+
+	return value;
+}
+
 function parseShopifyAdminAuditPath(value: string | undefined): string {
 	const auditPath = value?.trim();
 	if (!auditPath) return DEFAULT_SHOPIFY_ADMIN_AUDIT_PATH;
@@ -134,8 +150,9 @@ export function buildDatabaseUrl(): string {
 	const port = parseRequiredEnv("DB_PORT");
 	const database = encodeURIComponent(parseRequiredEnv("DATABASE"));
 	const sslmode = parseDatabaseSsl(process.env.DB_SSL);
+	const poolMax = parseDatabasePoolMax(process.env.DB_POOL_MAX) ?? 80;
 
-	return `postgresql://${user}:${password}@${host}:${port}/${database}?sslmode=${sslmode}`;
+	return `postgresql://${user}:${password}@${host}:${port}/${database}?sslmode=${sslmode}&max=${poolMax}`;
 }
 
 export function loadEnv(options?: {
