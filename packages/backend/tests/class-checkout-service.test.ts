@@ -1329,10 +1329,51 @@ describe("ClassCheckoutService", () => {
 		).toHaveLength(1);
 	});
 
-	it("records expired unfulfilled known carts before allowing replacement keys or sessions, while approved operations do not block", async () => {
+	it("routes a checkout blocked by an expired cart to its festival, while approved operations do not block", async () => {
 		const f = await createFixture();
-		await f.service.start(f.defaultInput);
-		const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+		const original = {
+			...f.defaultInput,
+			festivalShortName: required(f.festival).shortName,
+		};
+		const firstCheckout = await f.service.start(original);
+		const execution = required(
+			await f.checkout.classExecutions.get(
+				f.organization.id,
+				firstCheckout.intentId,
+			),
+		);
+		const secondFestival = await f.organizations.createFestival({
+			id: "fest-2027",
+			organizationId: f.organization.id,
+			code: "PNW2027",
+			shortName: "pnw2027",
+			name: "PNW Festival 2027",
+			startDate: "2027-11-01",
+			endDate: "2027-11-10",
+			registrationOpensAt: "2026-01-01T00:00:00.000Z",
+			registrationClosesAt: "2027-12-31T23:59:59.999Z",
+		});
+		const originalClass = required(
+			await f.organizations.findActiveFestivalClassByShortName(
+				f.organization.id,
+				original.festivalShortName,
+				original.festivalClassId,
+			),
+		);
+		const secondClass = await f.organizations.createFestivalClassConfiguration({
+			organizationId: f.organization.id,
+			festivalId: secondFestival.id,
+			displayName: "Junior Solo Piano 2027",
+			classSubtypeId: originalClass.classSubtypeId,
+			divisionId: f.division.id,
+			minimumAge: originalClass.minimumAge,
+			maximumAge: originalClass.maximumAge,
+			price: originalClass.price,
+			maximumPerformancePieces: originalClass.maximumPerformancePieces,
+			performanceMinutes: originalClass.performanceMinutes,
+			shopifyProductGid: "gid://shopify/Product/101",
+			shopifyVariantGid: "gid://shopify/ProductVariant/201",
+		});
 		f.now.setTime(f.now.getTime() + 31 * 60_000);
 		const replacement = await f.customers.createCustomerSession({
 			sessionId: "replacement-session",
@@ -1348,6 +1389,8 @@ describe("ClassCheckoutService", () => {
 		expect(replacement.customer.id).toBe(f.customer.id);
 		const submission = {
 			...f.defaultInput,
+			festivalShortName: secondFestival.shortName,
+			festivalClassId: secondClass.id,
 			sessionId: replacement.session.sessionId,
 			idempotencyKey: "replacement-key",
 		};
@@ -1359,13 +1402,38 @@ describe("ClassCheckoutService", () => {
 		expect(first.recovery).toMatchObject({
 			status: "recovery_required",
 			reasonCode: "checkout_expired",
+			festivalShortName: original.festivalShortName,
+			recoveryReference: execution.recoveryReference,
 			retryAllowed: false,
 		});
+		expect(first.recovery.checkoutUrl).toBeUndefined();
 		const replay = await f.service.start(submission).catch((error) => error);
 		expect(replay.recovery).toEqual(first.recovery);
+		const statusRequest = {
+			organizationId: submission.organizationId,
+			customerId: submission.customerId,
+			sessionId: submission.sessionId,
+			idempotencyKey: submission.idempotencyKey,
+			recoveryReference: execution.recoveryReference,
+		};
+		await expect(
+			f.service.recoveryStatus({
+				...statusRequest,
+				festivalShortName: original.festivalShortName,
+			}),
+		).resolves.toEqual(first.recovery);
+		await expect(
+			f.service.recoveryStatus({
+				...statusRequest,
+				festivalShortName: secondFestival.shortName,
+			}),
+		).rejects.toMatchObject({ status: 404 });
 		expect(create).not.toHaveBeenCalled();
 		expect(
-			await f.checkout.classExecutions.get(f.organization.id, intent.id),
+			await f.checkout.classExecutions.get(
+				f.organization.id,
+				firstCheckout.intentId,
+			),
 		).toMatchObject({
 			state: "recovery_required",
 			checkpoint: "attached",
@@ -1658,31 +1726,58 @@ describe("ClassCheckoutService", () => {
 		});
 	});
 
-	it("permits same-owner recovery reads across sessions but never returns a different submission's checkout URL", async () => {
+	it("requires the original festival, owner, session, and key for a recovery checkout URL", async () => {
 		const f = await createFixture();
-		await f.service.start(f.defaultInput);
-		const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+		const festivalShortName = required(f.festival).shortName;
+		const first = await f.service.start({
+			...f.defaultInput,
+			festivalShortName,
+		});
 		const record = required(
-			await f.checkout.classExecutions.get(f.organization.id, intent.id),
+			await f.checkout.classExecutions.get(f.organization.id, first.intentId),
 		);
-		const status = await f.service.recoveryStatus({
+		const statusRequest = {
 			organizationId: f.organization.id,
 			customerId: f.customer.id,
-			sessionId: "new-session",
+			sessionId: f.session.sessionId,
 			recoveryReference: record.recoveryReference,
-			idempotencyKey: "different-submission",
-		});
-		expect(status.retryAllowed).toBe(false);
-		expect(status.checkoutUrl).toBeUndefined();
+			idempotencyKey: f.defaultInput.idempotencyKey,
+			festivalShortName,
+		};
+		const lookup = spyOn(f.storefront, "checkout");
+		for (const mismatch of [
+			{ sessionId: "new-session" },
+			{ idempotencyKey: "different-submission" },
+		]) {
+			const status = await f.service.recoveryStatus({
+				...statusRequest,
+				...mismatch,
+			});
+			expect(status).toMatchObject({ festivalShortName, retryAllowed: false });
+			expect(status.checkoutUrl).toBeUndefined();
+		}
 		await expect(
 			f.service.recoveryStatus({
-				organizationId: f.organization.id,
+				...statusRequest,
 				customerId: "other-customer",
-				sessionId: f.session.sessionId,
-				recoveryReference: record.recoveryReference,
-				idempotencyKey: f.defaultInput.idempotencyKey,
 			}),
 		).rejects.toMatchObject({ status: 404 });
+		await expect(
+			f.service.recoveryStatus({
+				...statusRequest,
+				festivalShortName: "pnw2027",
+			}),
+		).rejects.toMatchObject({ status: 404 });
+		expect(lookup).not.toHaveBeenCalled();
+		await expect(
+			f.service.recoveryStatus(statusRequest),
+		).resolves.toMatchObject({
+			status: "ready",
+			festivalShortName,
+			retryAllowed: true,
+			checkoutUrl: first.checkoutUrl,
+		});
+		expect(lookup).toHaveBeenCalledTimes(1);
 	});
 	it("captures an explicit unknown instrument when an existing client omits selection", async () => {
 		const f = await createFixture();

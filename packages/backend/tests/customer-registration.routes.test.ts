@@ -323,6 +323,7 @@ describe("deterministic class checkout recovery routes", () => {
 				return {
 					status: "recovery_required",
 					recoveryReference: reference,
+					festivalShortName: "spring-2026",
 					reasonCode: "shopify_outcome_unknown",
 					retryAllowed: false,
 					restartAllowed: true,
@@ -344,6 +345,7 @@ describe("deterministic class checkout recovery routes", () => {
 		expect(await result.json()).toEqual({
 			status: "recovery_required",
 			recoveryReference: reference,
+			festivalShortName: "spring-2026",
 			reasonCode: "shopify_outcome_unknown",
 			retryAllowed: false,
 			restartAllowed: true,
@@ -393,14 +395,17 @@ describe("deterministic class checkout recovery routes", () => {
 			).status,
 		).toBe(400);
 	});
-	it("replays recorded recovery before OAuth access even when the provider is unavailable", async () => {
+	it("returns the blocking festival from recorded recovery before OAuth access", async () => {
 		const repository = new InMemoryClassCheckoutExecutionRepository();
 		await repository.prepare({
 			organizationId: "org_1",
 			customerId: "cust_1",
 			intentId: "intent",
 			fingerprint: "fingerprint",
-			requestSnapshot: {},
+			requestSnapshot: {
+				festivalId: "internal-festival-id",
+				festivalShortName: "fall-2026",
+			},
 		});
 		const claimed = await repository.claim({
 			organizationId: "org_1",
@@ -430,7 +435,7 @@ describe("deterministic class checkout recovery routes", () => {
 		});
 		Object.assign(classCheckoutService, {
 			preflightRecovery: async () => {
-				throw new ClassCheckoutRecoveryRequiredError(record);
+				throw new ClassCheckoutRecoveryRequiredError(record, false);
 			},
 		});
 		const result = await req(
@@ -452,10 +457,13 @@ describe("deterministic class checkout recovery routes", () => {
 		expect(result.status).toBe(409);
 		const body = await result.json();
 		expect(body.code).toBe("checkout_recovery_required");
-		expect(body.recovery).toMatchObject({
+		expect(body.recovery).toEqual({
 			status: "recovery_required",
 			recoveryReference: record.recoveryReference,
+			festivalShortName: "fall-2026",
+			reasonCode: "shopify_outcome_unknown",
 			retryAllowed: false,
+			recordedAtIso: record.recoveryRecordedAtIso,
 		});
 		expect(JSON.stringify(body)).not.toContain("internal-evidence");
 		expect(result.headers.get("Cache-Control")).toBe("no-store");

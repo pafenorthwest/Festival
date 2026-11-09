@@ -33,6 +33,16 @@ const replacementKey = "restored-checkout-key";
 const requests: { key: string | null; payload: unknown }[] = [];
 let unavailable = false;
 let mode = process.argv[2];
+const checkoutFestival =
+	mode === "cross-festival-recovery" ? "festival-b" : "festival";
+const crossFestivalRecovery = {
+	status: "recovery_required",
+	recoveryReference,
+	reasonCode: "checkout_attachment_incomplete",
+	retryAllowed: false,
+	festivalShortName: "festival-a",
+};
+const crossFestivalStatus = { ...crossFestivalRecovery, restartAllowed: true };
 const recoveryAfterExpiry = {
 	status: "recovery_required",
 	recoveryReference,
@@ -78,10 +88,16 @@ globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
 	}
 	if (path.endsWith("/checkout/status")) {
 		statusCalls++;
+		const statusFestival =
+			mode === "cross-festival-recovery"
+				? crossFestivalRecovery.festivalShortName
+				: checkoutFestival;
 		assert.equal(
-			new Headers(init?.headers).get("Idempotency-Key"),
-			requests[0].key,
+			path,
+			`/api/organizations/org/customer/festivals/${statusFestival}/registration/checkout/status`,
 		);
+		const headers = new Headers(init?.headers);
+		assert.equal(headers.get("Idempotency-Key"), requests[0].key);
 		if (mode === "abandonment")
 			return json({
 				status: "resolved",
@@ -90,6 +106,13 @@ globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
 				retryAllowed: false,
 			});
 		if (mode === "recovery-expiry") return json(recoveryAfterExpiry);
+		if (mode === "cross-festival-recovery") {
+			assert.equal(init?.method, "POST");
+			assert.equal(init?.credentials, "include");
+			assert.equal(headers.get("X-CSRF-Token"), "csrf");
+			assert.deepEqual(JSON.parse(String(init?.body)), { recoveryReference });
+			return json(crossFestivalStatus);
+		}
 		return json({
 			status: "ready",
 			recoveryReference,
@@ -104,6 +127,22 @@ globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
 			key: new Headers(init?.headers).get("Idempotency-Key"),
 			payload: JSON.parse(String(init?.body)),
 		});
+		if (mode === "cross-festival-recovery") {
+			assert.equal(
+				path,
+				"/api/organizations/org/customer/festivals/festival-b/registration/checkout",
+			);
+			assert.equal(init?.credentials, "include");
+			assert.equal(new Headers(init?.headers).get("X-CSRF-Token"), "csrf");
+			return json(
+				{
+					error: "Another festival checkout needs recovery.",
+					code: "checkout_recovery_required",
+					recovery: crossFestivalRecovery,
+				},
+				409,
+			);
+		}
 		if (
 			[
 				"recovery",
@@ -192,7 +231,7 @@ const { useFestivalRegistrationPage } = await import(
 	"../../src/pages/useFestivalRegistrationPage.js"
 );
 const parentRegistration = createParentRegistrationState();
-const cart = parentRegistration.workspace("org", "festival").cart;
+const cart = parentRegistration.workspace("org", checkoutFestival).cart;
 const line = {
 	childId: "child",
 	childName: "Performer",
@@ -218,7 +257,7 @@ const state = solid.createRoot((cleanup) => {
 	dispose = cleanup;
 	return useFestivalRegistrationPage({
 		slug: "org",
-		festivalSlug: "festival",
+		festivalSlug: checkoutFestival,
 		view: "cart",
 		app: {
 			parentRegistration,
@@ -250,6 +289,26 @@ assert.equal(cart.itemCount(), 1);
 
 if (mode === "restore-checkout") {
 	assert.equal(requests[0].key, replacementKey);
+} else if (mode === "cross-festival-recovery") {
+	assert.deepEqual(cart.checkoutRecovery(), crossFestivalRecovery);
+	const submission = cart.checkoutSubmission();
+	assert.ok(submission);
+	assert.equal(submission.idempotencyKey, requests[0].key);
+	await state.handleRefreshCheckout();
+	assert.equal(state.checkoutError(), null);
+	assert.deepEqual(cart.checkoutRecovery(), crossFestivalStatus);
+	assert.equal(state.checkoutRestartReference(), null);
+	await state.handleRestoreCheckout();
+	assert.equal(restartCalls, 0);
+	await state.handleRefreshCheckout();
+	assert.equal(state.checkoutError(), null);
+	assert.equal(statusCalls, 2);
+	assert.equal(requests.length, 1);
+	assert.equal(cart.checkoutSubmission(), submission);
+	assert.deepEqual(assigned, []);
+	dispose?.();
+	console.log("CHECKOUT_HOOK_OK");
+	process.exit(0);
 } else if (mode === "restart-blocked") {
 	const frozenSubmission = cart.checkoutSubmission();
 	const originalLine = cart.items()[0];

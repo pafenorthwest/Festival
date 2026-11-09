@@ -38,6 +38,9 @@ function recoveryDto(
 	return {
 		status: result.status,
 		recoveryReference: result.recoveryReference,
+		...(result.festivalShortName
+			? { festivalShortName: result.festivalShortName }
+			: {}),
 		reasonCode: result.reasonCode,
 		retryAllowed: result.retryAllowed,
 		...(result.restartAllowed === true ? { restartAllowed: true } : {}),

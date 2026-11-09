@@ -4,6 +4,8 @@ import type { RepertoirePiece } from "./registration.js";
 export interface ClassCheckoutRecoveryStatusDto {
 	status: "recovery_required" | "processing" | "ready" | "resolved";
 	recoveryReference: string;
+	/** Festival that owns the recovery attempt, which may differ from the current cart. */
+	festivalShortName?: string;
 	reasonCode: string;
 	retryAllowed: boolean;
 	restartAllowed?: boolean;

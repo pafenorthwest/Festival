@@ -9,6 +9,7 @@ import type { StartClassCheckoutInput } from "./class-checkout-service.js";
 export interface ClassCheckoutRecoveryStatus {
 	status: "recovery_required" | "processing" | "ready" | "resolved";
 	recoveryReference: string;
+	festivalShortName?: string;
 	reasonCode: string;
 	retryAllowed: boolean;
 	restartAllowed?: boolean;
@@ -61,6 +62,10 @@ export class ClassCheckoutPersistenceUnavailableError extends AppError {
 export function recoveryStatusFor(
 	record: ClassCheckoutExecution,
 ): ClassCheckoutRecoveryStatus {
+	const snapshot = record.requestSnapshot as {
+		festivalShortName?: unknown;
+	} | null;
+	const festivalShortName = snapshot?.festivalShortName;
 	return {
 		status:
 			record.state === "recovery_required"
@@ -71,6 +76,9 @@ export function recoveryStatusFor(
 						? "resolved"
 						: "ready",
 		recoveryReference: record.recoveryReference,
+		...(typeof festivalShortName === "string" && festivalShortName
+			? { festivalShortName }
+			: {}),
 		reasonCode:
 			record.resultCode ??
 			(record.state === "running"

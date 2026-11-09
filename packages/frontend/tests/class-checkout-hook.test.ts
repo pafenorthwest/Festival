@@ -6,6 +6,7 @@ const scenarios = {
 		"handoff",
 		"network",
 		"recovery",
+		"cross-festival-recovery",
 		"recovery-expiry",
 		"abandonment",
 		"pre-dispatch-rejection",

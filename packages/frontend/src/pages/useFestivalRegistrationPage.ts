@@ -117,6 +117,11 @@ export function useFestivalRegistrationPage(
 	);
 	const checkoutRestartReference = () => {
 		const recovery = cart.checkoutRecovery();
+		if (
+			recovery?.festivalShortName &&
+			recovery.festivalShortName !== props.festivalSlug
+		)
+			return null;
 		const reference = recovery?.restartAllowed
 			? recovery.recoveryReference
 			: recovery || cart.checkoutSubmission()
@@ -487,7 +492,7 @@ export function useFestivalRegistrationPage(
 		try {
 			const result = await getClassCheckoutRecoveryStatus(
 				props.slug,
-				props.festivalSlug,
+				recovery.festivalShortName ?? props.festivalSlug,
 				recovery.recoveryReference,
 				getCsrf(),
 				submission.idempotencyKey,
