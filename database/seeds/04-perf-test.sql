@@ -2,6 +2,8 @@
 -- Idempotent: safe to run multiple times without duplication or errors.
 
 -- Reset previous test children and snapshots for isolated perf runs
+DELETE FROM orgs.festival_class_waitlist_events WHERE organization_id = 'perf-test';
+DELETE FROM orgs.festival_class_waitlist_entries WHERE organization_id = 'perf-test';
 DELETE FROM orgs.festival_child_age_snapshots WHERE organization_id = 'perf-test';
 DELETE FROM orgs.festival_children WHERE organization_id = 'perf-test';
 DELETE FROM orgs.shopify_customer_sessions WHERE organization_id = 'perf-test';
@@ -79,6 +81,38 @@ ON CONFLICT (id) DO UPDATE SET
   name = EXCLUDED.name,
   start_date = EXCLUDED.start_date,
   end_date = EXCLUDED.end_date;
+
+-- 4b. Divisions, Subtypes, and Classes for Performance Testing
+INSERT INTO orgs.organization_divisions (id, organization_id, display_name, normalized_name, is_active, display_order)
+VALUES ('perf-div-piano', 'perf-test', 'Piano', 'piano', true, 1)
+ON CONFLICT (id) DO UPDATE SET
+  display_name = EXCLUDED.display_name,
+  is_active = EXCLUDED.is_active;
+
+INSERT INTO orgs.registration_catalog_values (id, organization_id, kind, display_name, normalized_name, is_active, display_order)
+VALUES ('perf-subtype-solo', 'perf-test', 'class_subtype', 'Solo', 'solo', true, 1)
+ON CONFLICT (id) DO UPDATE SET
+  display_name = EXCLUDED.display_name,
+  is_active = EXCLUDED.is_active;
+
+INSERT INTO orgs.festival_class_subtypes (organization_id, festival_id, class_subtype_id)
+VALUES ('perf-test', 'seed-fest-perf-2026', 'perf-subtype-solo')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO orgs.festival_class_configurations (
+  id, organization_id, festival_id, display_name, class_subtype_id, division_id,
+  minimum_age, maximum_age, price, maximum_performance_pieces, performance_minutes,
+  capacity, is_active, shopify_product_gid, shopify_variant_gid
+)
+VALUES (
+  'perf-class-01', 'perf-test', 'seed-fest-perf-2026', 'Performance Test Piano Solo',
+  'perf-subtype-solo', 'perf-div-piano', 5, 18, '30.00', 1, 5,
+  0, true, 'gid://shopify/Product/990099', 'gid://shopify/ProductVariant/99009901'
+)
+ON CONFLICT (id) DO UPDATE SET
+  display_name = EXCLUDED.display_name,
+  capacity = EXCLUDED.capacity,
+  is_active = EXCLUDED.is_active;
 
 -- 5. 5,000 Festival Customers
 INSERT INTO orgs.festival_customers (
