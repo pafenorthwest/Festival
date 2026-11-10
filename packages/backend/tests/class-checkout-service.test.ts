@@ -892,6 +892,75 @@ describe("ClassCheckoutService", () => {
 		expect(checkout).not.toHaveBeenCalled();
 	});
 
+	for (const discovery of [
+		"findIntentByKey",
+		"getOutcome",
+		"createIntent",
+		"legacy getOutcome",
+	] as const) {
+		it(`rejects a ready membership checkout discovered by ${discovery} on class checkout`, async () => {
+			const f = await createFixture({
+				legacyCheckout: discovery === "legacy getOutcome",
+			});
+			const { organizationId, customerId, sessionId, idempotencyKey } =
+				f.defaultInput;
+			const expiresAtIso = new Date(
+				f.now.getTime() + 30 * 60_000,
+			).toISOString();
+			const outcome = await f.checkout.createIntent({
+				organizationId,
+				customerId,
+				sessionId,
+				idempotencyKey,
+				intentType: "membership",
+				shopifyProductGid: "gid://shopify/Product/membership",
+				shopifyVariantGid: "gid://shopify/ProductVariant/membership",
+				amount: "30.00",
+				currencyCode: "USD",
+				expiresAtIso,
+			});
+			if (outcome.kind !== "created")
+				throw new Error("Expected membership intent");
+			await f.checkout.attachCart({
+				intentId: outcome.intent.id,
+				organizationId,
+				customerId,
+				sessionId,
+				shopifyCartId: "gid://shopify/Cart/membership",
+				integrationVersion: 1,
+				expiresAtIso,
+			});
+			// A concurrent membership attempt may become visible only on a later lookup.
+			if (discovery === "getOutcome" || discovery === "createIntent")
+				spyOn(f.checkout, "findIntentByKey").mockResolvedValueOnce(null);
+			if (discovery === "createIntent") {
+				spyOn(f.checkout, "getOutcome").mockResolvedValueOnce(null);
+				spyOn(f.checkout, "hasProcessingIntent").mockResolvedValueOnce(false);
+			}
+			const markStarted = spyOn(f.checkout, "markCheckoutStarted");
+			const prepare = spyOn(f.checkout.classExecutions, "prepare");
+			const createCart = spyOn(f.storefront, "createCart");
+			const checkout = spyOn(f.storefront, "checkout");
+			const conflict = { status: 409, code: "checkout_payload_conflict" };
+			if (discovery === "findIntentByKey")
+				await expect(
+					f.service.preflightRecovery(f.defaultInput),
+				).rejects.toMatchObject(conflict);
+			await expect(f.service.start(f.defaultInput)).rejects.toMatchObject(
+				conflict,
+			);
+			expect(markStarted).not.toHaveBeenCalled();
+			expect(prepare).not.toHaveBeenCalled();
+			expect(createCart).not.toHaveBeenCalled();
+			expect(checkout).not.toHaveBeenCalled();
+			expect(await f.checkout.findIntentByKey(f.defaultInput)).toMatchObject({
+				id: outcome.intent.id,
+				intentType: "membership",
+				status: "ready",
+			});
+		});
+	}
+
 	for (const lookup of ["getOutcome", "createIntent"] as const) {
 		for (const replay of ["changed", "matching", "recovery"] as const) {
 			it(`uses managed checkout for a concurrent ${replay} replay discovered by ${lookup}`, async () => {

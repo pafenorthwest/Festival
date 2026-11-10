@@ -44,7 +44,10 @@ import type {
 	CheckoutRepository,
 	CreateCheckoutIntentLineInput,
 } from "./checkout-repository.js";
-import { CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL } from "./checkout-repository.js";
+import {
+	assertCheckoutIntentType,
+	CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL,
+} from "./checkout-repository.js";
 import {
 	assertExecutionFingerprint,
 	type ClassCheckoutExecution,
@@ -451,6 +454,7 @@ export class ClassCheckoutService {
 			executions && this.checkout.findIntentByKey
 				? await this.checkout.findIntentByKey(input)
 				: null;
+		if (priorIntent) assertCheckoutIntentType(priorIntent, "class_entry");
 		let priorExecution =
 			priorIntent && executions
 				? await executions.get(input.organizationId, priorIntent.id)
@@ -723,6 +727,7 @@ export class ClassCheckoutService {
 		if (!executions || !this.checkout.findIntentByKey) return;
 		const intent = await this.checkout.findIntentByKey(input);
 		if (intent) {
+			assertCheckoutIntentType(intent, "class_entry");
 			let record = await executions.get(input.organizationId, intent.id);
 			if (!record) return;
 			assertExecutionFingerprint(
@@ -2742,6 +2747,7 @@ export class ClassCheckoutService {
 		},
 		input: StartClassCheckoutInput,
 	): Promise<ClassCheckoutResult> {
+		assertCheckoutIntentType(outcome.intent, "class_entry");
 		const executions = this.checkout.classExecutions;
 		const record = await executions?.get(
 			input.organizationId,

@@ -5,7 +5,7 @@ import type {
 	RepertoirePiece,
 } from "@festival/common";
 import { normalizeClassRegistrationSnapshot } from "@festival/common";
-import type { AppError } from "../errors/app-error.js";
+import { AppError } from "../errors/app-error.js";
 import { withInMemoryCapacityLock } from "../repo/in-memory-capacity-lock.js";
 import {
 	buildIntentLineRecords,
@@ -102,6 +102,18 @@ export interface CheckoutIntentRecord {
 	/** Null is reserved for pre-protocol historical checkout intents. */
 	lineIdentityProtocol?: string | null;
 	lines?: CheckoutIntentLineItemRecord[];
+}
+
+export function assertCheckoutIntentType(
+	intent: CheckoutIntentRecord,
+	expectedType: CheckoutIntentType,
+): void {
+	if (intent.intentType !== expectedType)
+		throw new AppError(
+			"This checkout key is already associated with another purchase type.",
+			409,
+			"checkout_payload_conflict",
+		);
 }
 
 export type CheckoutIntentOutcome =

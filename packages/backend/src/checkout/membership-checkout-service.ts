@@ -9,9 +9,10 @@ import type { MembershipCommerceRepository } from "../commerce/membership-commer
 import { AppError } from "../errors/app-error.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
 import type { PublicMembershipProductService } from "../shopify/public-membership-product-service.js";
-import type {
-	CheckoutIntentOutcome,
-	CheckoutRepository,
+import {
+	assertCheckoutIntentType,
+	type CheckoutIntentOutcome,
+	type CheckoutRepository,
 } from "./checkout-repository.js";
 
 export interface MembershipCheckoutStorefront {
@@ -103,6 +104,7 @@ export class MembershipCheckoutService {
 			customerId: input.customerId,
 			sessionId: input.sessionId,
 			idempotencyKey: input.idempotencyKey,
+			intentType: "membership",
 			offeringId: offering.id,
 			entitlementClass: "teacher_membership",
 			durationDays: offering.durationDays,
@@ -116,26 +118,7 @@ export class MembershipCheckoutService {
 			currencyCode: displayed.price.currencyCode,
 			expiresAtIso,
 		});
-		if (outcome.kind === "in_progress")
-			throw new AppError(
-				"Checkout is already in progress.",
-				409,
-				"checkout_in_progress",
-			);
-		if (outcome.kind === "active")
-			throw new AppError(
-				"Teacher Membership already exists.",
-				409,
-				"membership_active",
-			);
-		if (outcome.kind === "expired")
-			throw new AppError("Checkout has expired.", 409, "checkout_expired");
-		if (outcome.kind === "failed")
-			throw new AppError(
-				"This checkout attempt cannot continue.",
-				409,
-				"checkout_terminal_failure",
-			);
+		if (outcome.kind !== "created") return this.resume(outcome, input);
 		const intent = outcome.intent;
 		try {
 			// This is the Storefront configuration version. input.integrationVersion
@@ -144,10 +127,7 @@ export class MembershipCheckoutService {
 				await this.organizations.getShopifyIntegration(input.organizationId);
 			if (!storefrontIntegration)
 				throw new AppError("Shopify checkout is unavailable.", 503);
-			const cart =
-				outcome.kind === "ready"
-					? outcome.cart
-					: await this.createCart(intent, input, expiresAtIso);
+			const cart = await this.createCart(intent, input, expiresAtIso);
 			if (cart.integrationVersion !== input.integrationVersion)
 				throw new AppError("Customer checkout context has changed.", 503);
 			await this.checkout.markCheckoutStarted(intent.id);
@@ -241,6 +221,7 @@ export class MembershipCheckoutService {
 				409,
 				"checkout_terminal_failure",
 			);
+		assertCheckoutIntentType(outcome.intent, "membership");
 		try {
 			const storefrontIntegration =
 				await this.organizations.getShopifyIntegration(input.organizationId);

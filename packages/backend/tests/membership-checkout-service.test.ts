@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import { InMemoryCheckoutRecoveryRepository } from "../src/checkout/checkout-recovery-repository.js";
 import { CheckoutRecoveryService } from "../src/checkout/checkout-recovery-service.js";
 import { InMemoryCheckoutRepository } from "../src/checkout/checkout-repository.js";
@@ -105,11 +105,19 @@ describe("membership checkout service", () => {
 			divisionId: division.id,
 			staffAccessConsent: true,
 		};
-		return { checkout, input, now, service, cartCreated: () => cartCreated };
+		return {
+			checkout,
+			input,
+			now,
+			service,
+			cartCreated: () => cartCreated,
+			checkoutRequests: () => checkoutRequests,
+		};
 	}
 
 	it("allows independent Customer Account and Shopify versions and reuses the cart", async () => {
-		const { service, input, cartCreated } = await membershipCheckoutFixture();
+		const { service, input, cartCreated, checkoutRequests } =
+			await membershipCheckoutFixture();
 		await expect(service.start(input)).resolves.toEqual({
 			checkoutUrl: "https://festival.myshopify.com/checkouts/fresh",
 		});
@@ -117,6 +125,7 @@ describe("membership checkout service", () => {
 			checkoutUrl: "https://festival.myshopify.com/checkouts/fresh",
 		});
 		expect(cartCreated()).toBe(1);
+		expect(checkoutRequests()).toBe(2);
 		await expect(
 			service.start({
 				...input,
@@ -124,6 +133,73 @@ describe("membership checkout service", () => {
 			}),
 		).rejects.toMatchObject({ code: "checkout_in_progress" });
 	});
+
+	for (const lookup of ["getOutcome", "createIntent"] as const) {
+		it(`rejects a class cart found by membership ${lookup} without changing it`, async () => {
+			const { checkout, input, now, service, cartCreated, checkoutRequests } =
+				await membershipCheckoutFixture();
+			const { organizationId, customerId, sessionId, idempotencyKey } = input;
+			const identity = {
+				organizationId,
+				customerId,
+				sessionId,
+				idempotencyKey,
+			};
+			const createIntent = checkout.createIntent.bind(checkout);
+			const markStarted = spyOn(checkout, "markCheckoutStarted");
+			const markFailed = spyOn(checkout, "markFailed");
+			const seedClassCart = async () => {
+				const expiresAtIso = new Date(now.getTime() + 60_000).toISOString();
+				const created = await createIntent({
+					...identity,
+					intentType: "class_entry",
+					festivalClassId: "class",
+					childId: "child",
+					shopifyProductGid: "gid://shopify/Product/2",
+					shopifyVariantGid: "gid://shopify/ProductVariant/2",
+					amount: "50.00",
+					currencyCode: "USD",
+					expiresAtIso,
+				});
+				if (created.kind !== "created")
+					throw new Error("Expected class intent");
+				await checkout.attachCart({
+					organizationId,
+					customerId,
+					sessionId,
+					intentId: created.intent.id,
+					shopifyCartId: "gid://shopify/Cart/class",
+					integrationVersion: input.integrationVersion,
+					expiresAtIso,
+				});
+			};
+			if (lookup === "getOutcome") {
+				await seedClassCart();
+			} else {
+				// A competing class checkout becomes ready after membership admission.
+				spyOn(checkout, "createIntent").mockImplementationOnce(
+					async (record) => {
+						await seedClassCart();
+						return createIntent(record);
+					},
+				);
+			}
+
+			await expect(service.start(input)).rejects.toMatchObject({
+				status: 409,
+				code: "checkout_payload_conflict",
+			});
+			expect(markStarted).not.toHaveBeenCalled();
+			expect(markFailed).not.toHaveBeenCalled();
+			expect(cartCreated()).toBe(0);
+			expect(checkoutRequests()).toBe(0);
+			expect(await checkout.getOutcome(identity)).toMatchObject({
+				kind: "ready",
+				intent: { intentType: "class_entry", status: "ready" },
+				cart: { shopifyCartId: "gid://shopify/Cart/class", status: "ready" },
+			});
+		});
+	}
 
 	it("blocks membership checkout while a class checkout is active and allows it after class expiry despite unresolved recovery", async () => {
 		const { checkout, input, now, service, cartCreated } =
@@ -333,7 +409,7 @@ describe("membership checkout service", () => {
 			{
 				getOutcome: async () => ({
 					kind: "ready",
-					intent: { id: "intent" },
+					intent: { id: "intent", intentType: "membership" },
 					cart: { integrationVersion: 14, shopifyCartId: "cart" },
 				}),
 				markCheckoutStarted: async () => {},
