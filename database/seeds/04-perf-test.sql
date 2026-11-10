@@ -4,6 +4,8 @@
 -- Reset previous test children and snapshots for isolated perf runs
 DELETE FROM orgs.festival_child_age_snapshots WHERE organization_id = 'perf-test';
 DELETE FROM orgs.festival_children WHERE organization_id = 'perf-test';
+DELETE FROM orgs.shopify_customer_sessions WHERE organization_id = 'perf-test';
+DELETE FROM orgs.festival_customers WHERE organization_id = 'perf-test';
 
 -- 1. Organization
 INSERT INTO orgs.organizations (id, name, slug, timezone, default_currency_code)
@@ -78,7 +80,7 @@ ON CONFLICT (id) DO UPDATE SET
   start_date = EXCLUDED.start_date,
   end_date = EXCLUDED.end_date;
 
--- 5. 500 Festival Customers
+-- 5. 2,000 Festival Customers
 INSERT INTO orgs.festival_customers (
   id,
   organization_id,
@@ -95,7 +97,7 @@ INSERT INTO orgs.festival_customers (
   updated_at
 )
 SELECT
-  'perf-cust-' || lpad(i::text, 3, '0'),
+  'perf-cust-' || lpad(i::text, 4, '0'),
   'perf-test',
   'gid://shopify/Customer/' || (99000000 + i)::text,
   'Perf Parent ' || i::text,
@@ -108,7 +110,7 @@ SELECT
   'festival',
   now(),
   now()
-FROM generate_series(1, 500) AS s(i)
+FROM generate_series(1, 2000) AS s(i)
 ON CONFLICT (id) DO UPDATE SET
   organization_id = EXCLUDED.organization_id,
   shopify_customer_gid = EXCLUDED.shopify_customer_gid,
@@ -122,7 +124,7 @@ ON CONFLICT (id) DO UPDATE SET
   mailing_address_source = EXCLUDED.mailing_address_source,
   updated_at = now();
 
--- 6. 500 Customer Sessions
+-- 6. 2,000 Customer Sessions
 INSERT INTO orgs.shopify_customer_sessions (
   session_id,
   organization_id,
@@ -137,18 +139,18 @@ INSERT INTO orgs.shopify_customer_sessions (
   revoked_at
 )
 SELECT
-  'perf-sess-' || lpad(i::text, 3, '0'),
+  'perf-sess-' || lpad(i::text, 4, '0'),
   'perf-test',
-  'perf-cust-' || lpad(i::text, 3, '0'),
+  'perf-cust-' || lpad(i::text, 4, '0'),
   'gid://shopify/Customer/' || (99000000 + i)::text,
   'seed-token',
-  'perf-csrf-' || lpad(i::text, 3, '0'),
+  'perf-csrf-' || lpad(i::text, 4, '0'),
   1,
   now(),
   now(),
   now() + interval '30 days',
   NULL
-FROM generate_series(1, 500) AS s(i)
+FROM generate_series(1, 2000) AS s(i)
 ON CONFLICT (session_id) DO UPDATE SET
   organization_id = EXCLUDED.organization_id,
   customer_id = EXCLUDED.customer_id,
