@@ -78,10 +78,10 @@ export class PostgresClassCheckoutExecutionRepository
 	}
 	async getByRecoveryReference(org: string, reference: string) {
 		const rows = (await sql.unsafe(
-			`SELECT intent_id FROM ${this.schema}.class_checkout_executions WHERE organization_id = $1 AND recovery_reference = $2`,
+			`SELECT *, lease_expires_at::text, recovery_recorded_at::text, created_at::text, updated_at::text FROM ${this.schema}.class_checkout_executions WHERE organization_id = $1 AND recovery_reference = $2`,
 			[org, reference],
-		)) as { intent_id: string }[];
-		return rows[0] ? this.get(org, rows[0].intent_id) : null;
+		)) as Record<string, unknown>[];
+		return rows[0] ? fromRow(rows[0]) : null;
 	}
 	private async lock(runner: Runner, org: string, intent: string) {
 		await runner.unsafe(

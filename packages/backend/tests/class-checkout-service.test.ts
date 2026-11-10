@@ -892,6 +892,103 @@ describe("ClassCheckoutService", () => {
 		expect(checkout).not.toHaveBeenCalled();
 	});
 
+	for (const lookup of ["getOutcome", "createIntent"] as const) {
+		for (const replay of ["changed", "matching", "recovery"] as const) {
+			it(`uses managed checkout for a concurrent ${replay} replay discovered by ${lookup}`, async () => {
+				const f = await createFixture();
+				const entered = Promise.withResolvers<void>();
+				const release = Promise.withResolvers<void>();
+				const pause =
+					<Input, Result>(run: (input: Input) => Promise<Result>) =>
+					async (input: Input) => {
+						entered.resolve();
+						await release.promise;
+						return run(input);
+					};
+				if (lookup === "getOutcome") {
+					const getOutcome = f.checkout.getOutcome.bind(f.checkout);
+					spyOn(f.checkout, "getOutcome").mockImplementationOnce(
+						pause(getOutcome),
+					);
+				} else {
+					const createIntent = f.checkout.createIntent.bind(f.checkout);
+					spyOn(f.checkout, "createIntent").mockImplementationOnce(
+						pause(createIntent),
+					);
+				}
+				const create = spyOn(f.storefront, "createCart");
+				const checkout = spyOn(f.storefront, "checkout");
+				const input =
+					replay === "changed"
+						? {
+								...f.defaultInput,
+								pieces: [
+									{ ...f.defaultPieces[0], title: "Different submission" },
+								],
+							}
+						: f.defaultInput;
+				const pending = f.service.start(input);
+				void pending.catch(() => undefined);
+				await entered.promise;
+
+				const first = await f.service
+					.start(f.defaultInput)
+					.catch((error: unknown) => {
+						release.resolve();
+						throw error;
+					});
+				try {
+					if (replay === "recovery") {
+						const executions = f.checkout.classExecutions;
+						const claim = {
+							organizationId: f.organization.id,
+							intentId: first.intentId,
+							owner: "verification-worker",
+						};
+						const worker = required(
+							await executions.claim({ ...claim, allowCompleted: true }),
+						);
+						expect(
+							await executions.recordRecoveryRequired({
+								claim: { ...claim, generation: worker.generation },
+								reason: "checkout_storefront_verification_required",
+							}),
+						).toBe(true);
+					}
+				} finally {
+					release.resolve();
+				}
+				if (replay === "matching") {
+					await expect(pending).resolves.toMatchObject({
+						intentId: first.intentId,
+						checkoutUrl: first.checkoutUrl,
+					});
+					expect(checkout).toHaveBeenCalledTimes(2);
+					expect(checkout.mock.calls[1]?.[0]).toMatchObject({
+						expectedStorefrontBinding: {
+							shopDomain: f.storeDomain,
+							integrationVersion: 1,
+						},
+					});
+				} else {
+					await expect(pending).rejects.toMatchObject(
+						replay === "changed"
+							? { status: 409, code: "checkout_payload_conflict" }
+							: {
+									status: 409,
+									code: "checkout_recovery_required",
+									recovery: {
+										reasonCode: "checkout_storefront_verification_required",
+									},
+								},
+					);
+					expect(checkout).toHaveBeenCalledTimes(1);
+				}
+				expect(create).toHaveBeenCalledTimes(1);
+			});
+		}
+	}
+
 	for (const entryPoint of ["start", "recovery status"] as const) {
 		it(`withholds a completed cart URL on ${entryPoint} when payment is approved during Shopify lookup`, async () => {
 			const f = await createFixture();
@@ -3190,11 +3287,15 @@ describe("ClassCheckoutService", () => {
 			encryptedStorefrontPrivateToken: "rotated-storefront-token",
 		});
 		f.checkout.insertRegistrationMetadata = originalInsert;
+		const outcomeLookup = spyOn(f.checkout, "getOutcome");
+		const reapExpired = spyOn(f.checkout.classExecutions, "reapExpired");
 		const retryResult = await f.service.start({
 			...f.defaultInput,
 			idempotencyKey: f.defaultInput.idempotencyKey,
 		});
 		expect(retryResult.intentId).toBe(required(createdIntent).id);
+		expect(outcomeLookup).not.toHaveBeenCalled();
+		expect(reapExpired).not.toHaveBeenCalled();
 		expect(retryResult.checkoutUrl).toBe(
 			`https://${f.storeDomain}/checkouts/c123`,
 		);
@@ -4516,6 +4617,12 @@ describe("ClassCheckoutService", () => {
 			f.organizations,
 			"findFestivalClassConfigurationsByIds",
 		);
+		const catalogLookup = spyOn(
+			f.organizations,
+			"listRegistrationCatalogValues",
+		);
+		const timezoneLookup = spyOn(f.organizations, "getOrganizationTimezone");
+		const festivalLookup = spyOn(f.organizations, "listFestivals");
 
 		const result = await f.service.start({
 			organizationId: f.organization.id,
@@ -4547,6 +4654,11 @@ describe("ClassCheckoutService", () => {
 		expect(findActiveTeacherEntitlementGrantSpy).toHaveBeenCalledTimes(1);
 		expect(findCurrentAccompanistMembershipGrantSpy).toHaveBeenCalledTimes(1);
 		expect(findFestivalClassConfigurationByIdSpy).toHaveBeenCalledTimes(2);
+		expect(
+			catalogLookup.mock.calls.filter(([, kind]) => kind === "class_subtype"),
+		).toHaveLength(1);
+		expect(timezoneLookup).toHaveBeenCalledTimes(1);
+		expect(festivalLookup).toHaveBeenCalledTimes(2);
 		expect(bulkClassLookup).toHaveBeenCalledTimes(1);
 		expect(bulkClassLookup).toHaveBeenCalledWith(
 			f.organization.id,

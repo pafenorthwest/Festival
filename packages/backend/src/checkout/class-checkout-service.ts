@@ -48,6 +48,7 @@ import { CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL } from "./checkout-repository.js"
 import {
 	assertExecutionFingerprint,
 	type ClassCheckoutExecution,
+	type ClassCheckoutExecutionRepository,
 	type ClassCheckoutStorefrontBinding,
 	isLegacyInvalidCartObservation,
 	type TransitionClassCheckoutExecution,
@@ -222,6 +223,14 @@ interface LineValidationCaches {
 	catalogWorks?: Map<string, CanonicalWork | null>;
 }
 
+interface EligibilityLookups {
+	targetFestival?: FestivalRecord;
+	children?: Map<string, FestivalChildRecord | null>;
+	classes?: Map<string, FestivalClassConfiguration>;
+	subtypes?: RegistrationCatalogValue[];
+	timezone?: string;
+}
+
 export type ClassCheckoutFailureStage =
 	| "registration_metadata"
 	| "registration_window"
@@ -301,11 +310,7 @@ export class ClassCheckoutService {
 
 	async evaluateEligibility(
 		input: EvaluatePurchaseEligibilityInput,
-		preloaded?: {
-			targetFestival?: FestivalRecord;
-			children?: Map<string, FestivalChildRecord | null>;
-			classes?: Map<string, FestivalClassConfiguration>;
-		},
+		preloaded?: EligibilityLookups,
 	): Promise<EvaluatePurchaseEligibilityResponse> {
 		if (!input.customerId?.trim()) {
 			throw new AppError("Customer ID is required.", 400);
@@ -353,19 +358,21 @@ export class ClassCheckoutService {
 			for (const cfg of configs) classes.set(cfg.id, cfg);
 		}
 
-		const activeEntitlements = await this.loadTargetedEntitlements({
-			organizationId: input.organizationId,
-			festivalId: targetFestival.id,
-			uniqueClassIds,
-			uniqueChildIds,
-			classes,
-		});
-		const [subtypes, timezone] = await Promise.all([
-			this.organizations.listRegistrationCatalogValues(
-				input.organizationId,
-				"class_subtype",
-			),
-			this.organizations.getOrganizationTimezone(input.organizationId),
+		const [activeEntitlements, subtypes, timezone] = await Promise.all([
+			this.loadTargetedEntitlements({
+				organizationId: input.organizationId,
+				festivalId: targetFestival.id,
+				uniqueClassIds,
+				uniqueChildIds,
+				classes,
+			}),
+			preloaded?.subtypes ??
+				this.organizations.listRegistrationCatalogValues(
+					input.organizationId,
+					"class_subtype",
+				),
+			preloaded?.timezone ??
+				this.organizations.getOrganizationTimezone(input.organizationId),
 		]);
 		const isRegistrationOpen = isFestivalRegistrationOpen(
 			targetFestival,
@@ -448,64 +455,16 @@ export class ClassCheckoutService {
 			priorIntent && executions
 				? await executions.get(input.organizationId, priorIntent.id)
 				: null;
-		if (priorExecution && executions) {
-			assertExecutionFingerprint(
+		if (priorIntent && priorExecution && executions) {
+			priorExecution = await this.checkExistingExecution(
+				executions,
+				input,
+				priorIntent,
 				priorExecution,
-				classCheckoutRequestFingerprint(input),
 			);
-			if (
-				priorIntent &&
-				!(
-					priorIntent.status === "needs_review" &&
-					priorExecution.state === "recovery_required"
-				) &&
-				["approved", "rejected", "needs_review", "superseded"].includes(
-					priorIntent.status,
-				)
-			)
-				throw new AppError(
-					"This checkout has already been resolved.",
-					409,
-					priorIntent.status === "approved"
-						? "checkout_already_completed"
-						: (checkoutRejectionCode(priorExecution) ??
-								"checkout_terminal_failure"),
-				);
-			await executions.reapExpired(
-				input.organizationId,
-				priorExecution.intentId,
-			);
-			priorExecution =
-				(await executions.get(input.organizationId, priorExecution.intentId)) ??
-				priorExecution;
-			const legacyInvalid = await this.legacyInvalidCartRecovery(
-				priorExecution,
-				input.festivalShortName,
-			);
-			if (legacyInvalid) throw legacyInvalid;
-			if (priorIntent)
-				priorExecution = await this.recordKnownCartExpiry(
-					priorIntent,
-					priorExecution,
-				);
-			if (priorExecution.state === "recovery_required")
-				throw new ClassCheckoutRecoveryRequiredError(priorExecution);
-			if (priorExecution.state === "rejected")
-				throw new AppError(
-					"This checkout has been closed.",
-					409,
-					checkoutRejectionCode(priorExecution) ?? "checkout_terminal_failure",
-				);
-			if (priorExecution.state === "running")
-				throw new AppError(
-					"Checkout is already in progress.",
-					409,
-					"checkout_in_progress",
-				);
 			if (
 				priorExecution.checkpoint === "attached" &&
-				priorExecution.shopifyCartId &&
-				priorIntent
+				priorExecution.shopifyCartId
 			)
 				return this.resumeTrackedCart(priorIntent, priorExecution);
 		}
@@ -526,15 +485,15 @@ export class ClassCheckoutService {
 				Date.parse(priorIntent.expiresAtIso) <= currentTime.getTime()
 			)
 				throw new AppError("Checkout has expired.", 409, "checkout_expired");
-			const existing = await this.checkout.getOutcome({
-				organizationId: input.organizationId,
-				customerId: input.customerId,
-				sessionId: input.sessionId,
-				idempotencyKey: input.idempotencyKey,
-			});
-			if (existing && !priorExecution) {
-				if (existing.kind === "ready") return this.resume(existing, input);
-				this.handleOutcome(existing);
+			if (!priorExecution) {
+				const existing = await this.checkout.getOutcome({
+					organizationId: input.organizationId,
+					customerId: input.customerId,
+					sessionId: input.sessionId,
+					idempotencyKey: input.idempotencyKey,
+				});
+				if (existing?.kind === "ready") return this.resume(existing, input);
+				if (existing) this.handleOutcome(existing);
 			}
 			const namedFestival = input.festivalShortName?.trim();
 			const festivals = namedFestival
@@ -603,7 +562,13 @@ export class ClassCheckoutService {
 				input.customerId,
 				targetFestivalId,
 				lineItems,
-				caches,
+				{
+					targetFestival,
+					children: caches.children,
+					classes: caches.classConfigs,
+					subtypes: caches.subtypes,
+					timezone: organization.timezone,
+				},
 			);
 			await this.captureRegistrationSnapshots(
 				input.organizationId,
@@ -694,6 +659,57 @@ export class ClassCheckoutService {
 				);
 			throw error;
 		}
+	}
+
+	private async checkExistingExecution(
+		executions: ClassCheckoutExecutionRepository,
+		input: StartClassCheckoutInput,
+		intent: CheckoutIntentRecord,
+		record: ClassCheckoutExecution,
+	) {
+		assertExecutionFingerprint(record, classCheckoutRequestFingerprint(input));
+		if (
+			!(
+				intent.status === "needs_review" && record.state === "recovery_required"
+			) &&
+			["approved", "rejected", "needs_review", "superseded"].includes(
+				intent.status,
+			)
+		)
+			throw new AppError(
+				"This checkout has already been resolved.",
+				409,
+				intent.status === "approved"
+					? "checkout_already_completed"
+					: (checkoutRejectionCode(record) ?? "checkout_terminal_failure"),
+			);
+		let refreshed = record;
+		if (record.state === "running") {
+			await executions.reapExpired(intent.organizationId, intent.id);
+			refreshed =
+				(await executions.get(intent.organizationId, intent.id)) ?? record;
+		}
+		const legacyInvalid = await this.legacyInvalidCartRecovery(
+			refreshed,
+			input.festivalShortName,
+		);
+		if (legacyInvalid) throw legacyInvalid;
+		const current = await this.recordKnownCartExpiry(intent, refreshed);
+		if (current.state === "recovery_required")
+			throw new ClassCheckoutRecoveryRequiredError(current);
+		if (current.state === "rejected")
+			throw new AppError(
+				"This checkout has been closed.",
+				409,
+				checkoutRejectionCode(current) ?? "checkout_terminal_failure",
+			);
+		if (current.state === "running")
+			throw new AppError(
+				"Checkout is already in progress.",
+				409,
+				"checkout_in_progress",
+			);
+		return current;
 	}
 
 	/** Replay durable local outcomes before any OAuth refresh or Shopify call. */
@@ -1181,7 +1197,7 @@ export class ClassCheckoutService {
 		customerId: string,
 		festivalId: string,
 		lineItems: ClassCheckoutLineItemInput[],
-		caches: LineValidationCaches,
+		preloaded: EligibilityLookups,
 	): Promise<ClassEligibilityResult[]> {
 		const eligibility = await this.evaluateEligibility(
 			{
@@ -1193,10 +1209,7 @@ export class ClassCheckoutService {
 				),
 				mode: "cart",
 			},
-			{
-				children: caches.children,
-				classes: caches.classConfigs,
-			},
+			preloaded,
 		);
 		if (
 			!eligibility.isEligible ||
@@ -2727,8 +2740,28 @@ export class ClassCheckoutService {
 			intent: CheckoutIntentRecord;
 			cart: CheckoutCartRecord | { shopifyCartId: string };
 		},
-		input: { organizationId: string },
+		input: StartClassCheckoutInput,
 	): Promise<ClassCheckoutResult> {
+		const executions = this.checkout.classExecutions;
+		const record = await executions?.get(
+			input.organizationId,
+			outcome.intent.id,
+		);
+		if (record && executions) {
+			const current = await this.checkExistingExecution(
+				executions,
+				input,
+				outcome.intent,
+				record,
+			);
+			if (current.checkpoint === "attached" && current.shopifyCartId)
+				return this.resumeTrackedCart(outcome.intent, current);
+			throw new AppError(
+				"Checkout execution has changed. Check its status before continuing.",
+				409,
+				"checkout_execution_changed",
+			);
+		}
 		let stage: ClassCheckoutFailureStage = "resume_load_integration";
 		try {
 			const storefrontIntegration =

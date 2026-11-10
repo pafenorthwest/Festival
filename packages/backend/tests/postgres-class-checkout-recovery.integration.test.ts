@@ -150,6 +150,13 @@ postgresTest(
 			}),
 		).toBeNull();
 		expect(await f.repository.get("org", "intent")).toEqual(result);
+		const recoveryReference = required(result).recoveryReference;
+		expect(
+			await f.repository.getByRecoveryReference("org", recoveryReference),
+		).toEqual(result);
+		expect(
+			await f.repository.getByRecoveryReference("other-org", recoveryReference),
+		).toBeNull();
 		expect(await f.repository.findBlocking("org", "customer")).toBeNull();
 		expect((await f.checkout.createIntent(fresh)).kind).toBe("created");
 	},
