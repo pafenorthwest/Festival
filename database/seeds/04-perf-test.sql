@@ -80,7 +80,7 @@ ON CONFLICT (id) DO UPDATE SET
   start_date = EXCLUDED.start_date,
   end_date = EXCLUDED.end_date;
 
--- 5. 2,000 Festival Customers
+-- 5. 5,000 Festival Customers
 INSERT INTO orgs.festival_customers (
   id,
   organization_id,
@@ -110,7 +110,7 @@ SELECT
   'festival',
   now(),
   now()
-FROM generate_series(1, 2000) AS s(i)
+FROM generate_series(1, 5000) AS s(i)
 ON CONFLICT (id) DO UPDATE SET
   organization_id = EXCLUDED.organization_id,
   shopify_customer_gid = EXCLUDED.shopify_customer_gid,
@@ -124,7 +124,7 @@ ON CONFLICT (id) DO UPDATE SET
   mailing_address_source = EXCLUDED.mailing_address_source,
   updated_at = now();
 
--- 6. 2,000 Customer Sessions
+-- 6. 5,000 Customer Sessions
 INSERT INTO orgs.shopify_customer_sessions (
   session_id,
   organization_id,
@@ -150,7 +150,7 @@ SELECT
   now(),
   now() + interval '30 days',
   NULL
-FROM generate_series(1, 2000) AS s(i)
+FROM generate_series(1, 5000) AS s(i)
 ON CONFLICT (session_id) DO UPDATE SET
   organization_id = EXCLUDED.organization_id,
   customer_id = EXCLUDED.customer_id,
