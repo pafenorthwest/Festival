@@ -1,4 +1,7 @@
-import type { RepertoirePiece } from "@festival/common";
+import {
+	evaluateClassCapacityStatus,
+	type RepertoirePiece,
+} from "@festival/common";
 import { useBeforeLeave } from "@solidjs/router";
 import {
 	createEffect,
@@ -35,6 +38,7 @@ import {
 import {
 	buildCartItemInput,
 	cartItemsToLineItemInputs,
+	type RegistrationCartItem,
 	type RegistrationCheckoutSubmission,
 	resetClassFormSelection,
 } from "./registrationCartState.js";
@@ -50,6 +54,11 @@ export interface FestivalClassRegistrationPageProps {
 	view?: "workspace" | "class" | "cart";
 	classId?: string;
 }
+
+type WaitlistTarget = Pick<
+	RegistrationCartItem,
+	"childId" | "childName" | "classId" | "className"
+> & { lineId?: string };
 
 export function useFestivalRegistrationPage(
 	props: FestivalClassRegistrationPageProps,
@@ -103,8 +112,19 @@ export function useFestivalRegistrationPage(
 			}
 		},
 	);
-	const [waitlistClassId, setWaitlistClassId] = createSignal("");
-	const selectedClassId = () => props.classId ?? waitlistClassId();
+	const [selectedWaitlistTarget, setWaitlistTarget] =
+		createSignal<WaitlistTarget | null>(null);
+	const waitlistTarget = () => {
+		const target = selectedWaitlistTarget();
+		if (
+			target?.lineId &&
+			!cart.items().some((item) => item.lineId === target.lineId)
+		)
+			return null;
+		return target;
+	};
+	const selectedClassId = () =>
+		props.classId ?? waitlistTarget()?.classId ?? "";
 	const [selectedAccompanistId, setSelectedAccompanistId] = createSignal("");
 	const [selectedInstrumentId, setSelectedInstrumentId] = createSignal("");
 	const [pieces, setPieces] = createSignal<RepertoirePiece[]>([]);
@@ -213,8 +233,8 @@ export function useFestivalRegistrationPage(
 			slug: props.slug,
 			festivalSlug: props.festivalSlug,
 			isAuthenticated: authenticated,
-			selectedClassId: waitlistClassId,
-			selectedChildId,
+			selectedClassId: () => waitlistTarget()?.classId ?? "",
+			selectedChildId: () => waitlistTarget()?.childId ?? "",
 		});
 	const catalogSearch = useConcertoCatalogSearch(
 		() => props.slug,
@@ -225,7 +245,7 @@ export function useFestivalRegistrationPage(
 		setSelectedChildId,
 		setSelectedDivisionId,
 		setSelectedTeacherId,
-		setWaitlistClassId,
+		closeWaitlist,
 		setSelectedAccompanistId,
 		setSelectedInstrumentId,
 	);
@@ -243,7 +263,7 @@ export function useFestivalRegistrationPage(
 	function clearForm() {
 		formRevision++;
 		resetClassFormSelection({
-			setSelectedClassId: setWaitlistClassId,
+			setSelectedClassId: closeWaitlist,
 			setPieces,
 			setSelectedAccompanistId,
 			setSelectedInstrumentId,
@@ -322,7 +342,32 @@ export function useFestivalRegistrationPage(
 	function openWaitlist(classId: string) {
 		if (!confirmDiscard()) return;
 		clearForm();
-		setWaitlistClassId(classId);
+		setWaitlistTarget({
+			classId,
+			className: findById(eligibleClasses(), classId)?.displayName ?? "Class",
+			childId: selectedChildId(),
+			childName: selectedChild()?.displayName ?? "Performer",
+		});
+	}
+	function closeWaitlist() {
+		setWaitlistTarget(null);
+	}
+	function canJoinCartWaitlist(item: RegistrationCartItem) {
+		const result = eligibility.getResult(item.childId, item.classId);
+		return (
+			!isSubmittingCheckout() &&
+			!cart.checkoutSubmission() &&
+			!eligibility.isEvaluating() &&
+			!eligibility.error() &&
+			result?.reasonCode === "SOLD_OUT" &&
+			typeof result.capacity === "number" &&
+			typeof result.placedCount === "number" &&
+			evaluateClassCapacityStatus(result.capacity, result.placedCount)
+				.availability === "waitlist"
+		);
+	}
+	function openCartWaitlist(item: RegistrationCartItem) {
+		if (canJoinCartWaitlist(item)) setWaitlistTarget(item);
 	}
 	async function handleRefreshSnapshot(event: Event) {
 		event.preventDefault();
@@ -572,8 +617,8 @@ export function useFestivalRegistrationPage(
 		divisions,
 		retryDivisions,
 		purchased,
-		waitlistClassId,
-		setWaitlistClassId,
+		waitlistTarget,
+		closeWaitlist,
 		selectedChildId,
 		selectedDivisionId,
 		selectedTeacherId,
@@ -613,6 +658,8 @@ export function useFestivalRegistrationPage(
 		isPurchased,
 		status,
 		openWaitlist,
+		canJoinCartWaitlist,
+		openCartWaitlist,
 		handleRefreshSnapshot,
 		localSelectionValid,
 		handleAddToCart,

@@ -12,7 +12,6 @@ import {
 } from "../lib/routes.js";
 import {
 	doesClassRequireConcerto,
-	findById,
 	formatTotalDuration,
 	normalizeMaxPieces,
 } from "./festivalRegistrationHelpers.js";
@@ -31,8 +30,8 @@ export function FestivalClassRegistrationPage(
 		authenticated,
 		festival,
 		purchased,
-		waitlistClassId,
-		setWaitlistClassId,
+		waitlistTarget,
+		closeWaitlist,
 		selectedChildId,
 		selectedTeacherId,
 		selectedAccompanistId,
@@ -65,6 +64,8 @@ export function FestivalClassRegistrationPage(
 		isPurchased,
 		status,
 		openWaitlist,
+		canJoinCartWaitlist,
+		openCartWaitlist,
 		localSelectionValid,
 		handleAddToCart,
 		handleCartCheckout,
@@ -130,6 +131,8 @@ export function FestivalClassRegistrationPage(
 						isSubmitting={isSubmittingCheckout()}
 						error={checkoutError()}
 						onSubmitCheckout={handleCartCheckout}
+						canJoinWaitlist={canJoinCartWaitlist}
+						onJoinWaitlist={openCartWaitlist}
 						onRefreshCheckout={handleRefreshCheckout}
 						onRestartCheckout={handleRestartCheckout}
 						canRestoreCheckout={Boolean(checkoutRestartReference())}
@@ -324,7 +327,7 @@ export function FestivalClassRegistrationPage(
 							does not reserve a place.
 						</p>
 					</Show>
-					<Show when={view() === "class" && !waitlistClassId()}>
+					<Show when={view() === "class" && !waitlistTarget()}>
 						<Button
 							type="button"
 							variant="secondary"
@@ -466,25 +469,29 @@ export function FestivalClassRegistrationPage(
 							)}
 						</Show>
 					</Show>
-					<Show when={waitlistClassId()}>
+				</Show>
+				<Show when={waitlistTarget()} keyed>
+					{(target) => (
 						<div class="parent-panel">
-							<Button
-								type="button"
-								variant="secondary"
-								onClick={() => setWaitlistClassId("")}
-							>
+							<Show when={view() === "cart"}>
+								<p
+									class="parent-eyebrow"
+									tabIndex={-1}
+									ref={(label) => queueMicrotask(() => label.focus())}
+								>
+									Waitlist for {target.childName}
+								</p>
+							</Show>
+							<Button type="button" variant="secondary" onClick={closeWaitlist}>
 								Close waitlist
 							</Button>
 							<FestivalWaitlistCard
 								orgSlug={props.slug}
 								festivalSlug={props.festivalSlug}
-								classId={waitlistClassId()}
-								className={
-									findById(eligibleClasses(), waitlistClassId())?.displayName ??
-									"Class"
-								}
-								childId={selectedChildId()}
-								childName={selectedChild()?.displayName ?? "Performer"}
+								classId={target.classId}
+								className={target.className}
+								childId={target.childId}
+								childName={target.childName}
 								isAuthenticated={authenticated()}
 								csrfToken={getCsrf()}
 								initialProfile={{
@@ -504,7 +511,7 @@ export function FestivalClassRegistrationPage(
 								onEntryChanged={handleWaitlistEntryChanged}
 							/>
 						</div>
-					</Show>
+					)}
 				</Show>
 			</Show>
 		</Show>

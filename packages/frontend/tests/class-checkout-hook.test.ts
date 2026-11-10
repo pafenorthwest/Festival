@@ -13,6 +13,7 @@ const scenarios = {
 		"pre-dispatch-expiry",
 		"restore-checkout",
 		"restart-blocked",
+		"sold-out-cart-waitlist",
 	],
 	"purchased-history-hook.ts": [
 		"purchased-history-503",

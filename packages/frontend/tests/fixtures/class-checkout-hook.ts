@@ -54,6 +54,26 @@ let discoverableRestart =
 let eligibilityCalls = 0;
 let statusCalls = 0;
 let restartCalls = 0;
+const waitlistEntries = [
+	{
+		id: "wrong-child",
+		childId: "sibling",
+		festivalClassId: "class",
+		status: "active",
+	},
+	{
+		id: "wrong-class",
+		childId: "child",
+		festivalClassId: "cart-shortage",
+		status: "active",
+	},
+	{
+		id: "matching-entry",
+		childId: "child",
+		festivalClassId: "class",
+		status: "active",
+	},
+];
 globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
 	const path = String(url);
 	const json = (payload: unknown, status = 200) =>
@@ -201,6 +221,32 @@ globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
 	if (path.endsWith("/eligibility")) {
 		eligibilityCalls++;
 		const { items } = JSON.parse(String(init?.body));
+		if (mode === "sold-out-cart-waitlist")
+			return json({
+				results: items.map(
+					(item: { childId: string; festivalClassId: string }) => {
+						const classId = item.festivalClassId;
+						const eligible =
+							classId === "cart-shortage" && item.childId === "sibling";
+						return {
+							...item,
+							eligible,
+							isEligible: eligible,
+							reasonCode: eligible
+								? "AVAILABLE"
+								: classId === "prerequisite"
+									? "MISSING_PREREQUISITE"
+									: "SOLD_OUT",
+							...(classId !== "unconfirmed"
+								? {
+										capacity: 2,
+										placedCount: classId === "cart-shortage" ? 1 : 2,
+									}
+								: {}),
+						};
+					},
+				),
+			});
 		return json({
 			results: items.map(
 				(item: { childId: string; festivalClassId: string }) => ({
@@ -213,11 +259,21 @@ globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
 		});
 	}
 	if (path.endsWith("/children"))
-		return json({ children: [{ id: "child", displayName: "Performer" }] });
+		return json({
+			children: [
+				{ id: "child", displayName: "Performer" },
+				...(mode === "sold-out-cart-waitlist"
+					? [{ id: "sibling", displayName: "Sibling" }]
+					: []),
+			],
+		});
 	if (path.includes("/class-registrations")) return json({ registrations: [] });
 	if (path.endsWith("/accompanists")) return json({ accompanists: [] });
 	if (path.endsWith("/teachers")) return json({ teachers: [] });
-	if (path.includes("/waitlist")) return json({ entries: [] });
+	if (path.includes("/waitlist"))
+		return json({
+			entries: mode === "sold-out-cart-waitlist" ? waitlistEntries : [],
+		});
 	if (path.endsWith("/profile")) return json({ profile: {} });
 	if (path.endsWith("/divisions"))
 		return json({ divisions: [], instruments: [] });
@@ -231,7 +287,8 @@ const { useFestivalRegistrationPage } = await import(
 	"../../src/pages/useFestivalRegistrationPage.js"
 );
 const parentRegistration = createParentRegistrationState();
-const cart = parentRegistration.workspace("org", checkoutFestival).cart;
+const workspace = parentRegistration.workspace("org", checkoutFestival);
+const cart = workspace.cart;
 const line = {
 	childId: "child",
 	childName: "Performer",
@@ -251,7 +308,19 @@ const restoredLine = {
 		{ title: "Restored piece", composer: "Composer", durationSeconds: 90 },
 	],
 };
-if (mode !== "restore-checkout") cart.addItem(line);
+if (mode === "sold-out-cart-waitlist") {
+	workspace.setChildId("sibling");
+	cart.addItem(line);
+	cart.addItem({
+		...line,
+		childId: "sibling",
+		childName: "Sibling",
+		classId: "cart-shortage",
+	});
+	cart.addItem({ ...line, classId: "cart-shortage" });
+	cart.addItem({ ...line, classId: "prerequisite" });
+	cart.addItem({ ...line, classId: "unconfirmed" });
+} else if (mode !== "restore-checkout") cart.addItem(line);
 let dispose: (() => void) | undefined;
 const state = solid.createRoot((cleanup) => {
 	dispose = cleanup;
@@ -266,6 +335,44 @@ const state = solid.createRoot((cleanup) => {
 		} as Parameters<typeof useFestivalRegistrationPage>[0]["app"],
 	});
 });
+if (mode === "sold-out-cart-waitlist") {
+	const [soldOut, sibling, cartShortage, prerequisite, unconfirmed] =
+		cart.items();
+	assert.equal(state.canJoinCartWaitlist(soldOut), false);
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	assert.equal(state.canJoinCartWaitlist(soldOut), true);
+	for (const item of [sibling, cartShortage, prerequisite, unconfirmed]) {
+		assert.equal(state.canJoinCartWaitlist(item), false);
+		state.openCartWaitlist(item);
+		assert.equal(state.waitlistTarget(), null);
+	}
+	const recheck = state.eligibility.recheck();
+	assert.equal(state.canJoinCartWaitlist(soldOut), false);
+	await recheck;
+	assert.equal(state.canJoinCartWaitlist(soldOut), true);
+	const originalCart = cart.items().slice();
+	state.openCartWaitlist(soldOut);
+	const target = state.waitlistTarget();
+	assert.ok(target);
+	assert.equal(target.childId, soldOut.childId);
+	assert.equal(target.childName, soldOut.childName);
+	assert.equal(target.classId, soldOut.classId);
+	assert.equal(target.className, soldOut.className);
+	assert.equal(state.currentWaitlistEntry()?.id, "matching-entry");
+	assert.equal(workspace.childId(), "sibling");
+	assert.deepEqual(cart.items(), originalCart);
+	state.closeWaitlist();
+	assert.equal(state.waitlistTarget(), null);
+	assert.equal(state.eligibility.isCartEligible(), false);
+	await state.handleCartCheckout();
+	assert.deepEqual(requests, []);
+	assert.deepEqual(cart.items(), originalCart);
+	cart.beginCheckout();
+	assert.equal(state.canJoinCartWaitlist(soldOut), false);
+	dispose?.();
+	console.log("CHECKOUT_HOOK_OK");
+	process.exit(0);
+}
 await new Promise((resolve) => setTimeout(resolve, 0));
 if (mode === "restore-checkout") {
 	assert.equal(cart.itemCount(), 0);

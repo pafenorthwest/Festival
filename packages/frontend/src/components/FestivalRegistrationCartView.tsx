@@ -2,6 +2,7 @@ import { For, Show } from "solid-js";
 import { formatTotalDuration } from "../pages/festivalRegistrationHelpers.js";
 import {
 	formatPriceCents,
+	type RegistrationCartItem,
 	type RegistrationCartState,
 } from "../pages/registrationCartState.js";
 import type { CartEligibilityState } from "../pages/useCartEligibility.js";
@@ -13,6 +14,8 @@ export interface FestivalRegistrationCartViewProps {
 	isSubmitting: boolean;
 	error: string | null;
 	onSubmitCheckout: () => void;
+	canJoinWaitlist: (item: RegistrationCartItem) => boolean;
+	onJoinWaitlist: (item: RegistrationCartItem) => void;
 	onRefreshCheckout?: () => void;
 	onRestartCheckout?: () => void;
 	canRestoreCheckout?: boolean;
@@ -182,6 +185,15 @@ export function FestivalRegistrationCartView(
 										</div>
 										<div class="parent-row-actions">
 											<strong>{formatPriceCents(item.priceCents)}</strong>
+											<Show when={props.canJoinWaitlist(item)}>
+												<Button
+													type="button"
+													variant="secondary"
+													onClick={() => props.onJoinWaitlist(item)}
+												>
+													Join Waitlist
+												</Button>
+											</Show>
 											<Button
 												type="button"
 												variant="secondary"
