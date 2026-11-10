@@ -1,4 +1,11 @@
-import { createResource, createSignal, Show } from "solid-js";
+import {
+	createEffect,
+	createResource,
+	createSignal,
+	on,
+	onCleanup,
+	Show,
+} from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { getCustomerChildren, getPublicFestival } from "../lib/api.js";
 import {
@@ -17,6 +24,21 @@ export function FestivalLandingPage(props: FestivalLandingPageProps) {
 	const membershipPath = `/org/${props.slug}/membership`;
 	const [entryError, setEntryError] = createSignal("");
 	const [entering, setEntering] = createSignal(false);
+	let entryRequest = 0;
+	createEffect(
+		on(
+			() => props.app?.route(),
+			() => {
+				entryRequest++;
+				setEntering(false);
+				setEntryError("");
+			},
+			{ defer: true },
+		),
+	);
+	onCleanup(() => {
+		entryRequest++;
+	});
 	const [festival] = createResource(
 		() => [props.slug, props.festivalSlug] as const,
 		([slug, festivalSlug]) => getPublicFestival(slug, festivalSlug),
@@ -35,8 +57,9 @@ export function FestivalLandingPage(props: FestivalLandingPageProps) {
 		props.app.navigate(path);
 	}
 	async function enterRegistration(event: MouseEvent) {
+		const { app, slug, festivalSlug } = props;
 		if (
-			!props.app ||
+			!app ||
 			event.button !== 0 ||
 			event.metaKey ||
 			event.ctrlKey ||
@@ -46,29 +69,30 @@ export function FestivalLandingPage(props: FestivalLandingPageProps) {
 			return;
 		event.preventDefault();
 		if (entering()) return;
-		props.app.parentRegistration.setActiveFestival(
-			props.slug,
-			props.festivalSlug,
-		);
-		if (!props.app.customerSession().authenticated) {
-			props.app.navigate(
-				buildFestivalRegistrationPath(props.slug, props.festivalSlug),
-			);
+		const registrationPath = buildFestivalRegistrationPath(slug, festivalSlug);
+		app.parentRegistration.setActiveFestival(slug, festivalSlug);
+		if (!app.customerSession().authenticated) {
+			app.navigate(registrationPath);
 			return;
 		}
+		const route = app.route();
+		const request = ++entryRequest;
+		const isCurrent = () => request === entryRequest && app.route() === route;
 		setEntering(true);
 		setEntryError("");
 		try {
-			const { children } = await getCustomerChildren(props.slug);
-			props.app.navigate(
+			const { children } = await getCustomerChildren(slug);
+			if (!isCurrent()) return;
+			app.navigate(
 				children.length > 0
-					? buildFestivalRegistrationPath(props.slug, props.festivalSlug)
-					: buildOrgCustomerAccountChildrenPath(props.slug),
+					? registrationPath
+					: buildOrgCustomerAccountChildrenPath(slug),
 			);
 		} catch {
-			setEntryError("Could not load your performers. Please try again.");
+			if (isCurrent())
+				setEntryError("Could not load your performers. Please try again.");
 		} finally {
-			setEntering(false);
+			if (isCurrent()) setEntering(false);
 		}
 	}
 	return (

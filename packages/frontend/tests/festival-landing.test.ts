@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { fileURLToPath } from "node:url";
 
 const page = await Bun.file(
 	new URL("../src/pages/FestivalLandingPage.tsx", import.meta.url),
@@ -29,5 +30,23 @@ describe("public festival landing page", () => {
 		expect(page).toContain("getPublicFestival");
 		expect(page).toContain("Festival not found.");
 		expect(app).toContain("<FestivalAdminDashboardPage");
+	});
+
+	it("ignores stale Parents lookups while keeping the normal registration destinations", async () => {
+		const fixture = fileURLToPath(
+			new URL("./fixtures/festival-landing-navigation.ts", import.meta.url),
+		);
+		const process = Bun.spawn([Bun.which("bun") ?? "bun", fixture], {
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [code, output, errors] = await Promise.all([
+			process.exited,
+			new Response(process.stdout).text(),
+			new Response(process.stderr).text(),
+		]);
+		expect(errors).toBe("");
+		expect(code).toBe(0);
+		expect(output).toContain("FESTIVAL_LANDING_NAVIGATION_OK");
 	});
 });
