@@ -65,7 +65,9 @@ async function createTestApp() {
 	return { ...app, repository, volunteerRepository };
 }
 
-async function createOrgAndFestival(app: { fetch: typeof fetch }) {
+async function createOrgAndFestival(app: {
+	fetch: (request: Request) => Response | Promise<Response>;
+}) {
 	await app.fetch(
 		new Request(
 			"http://test/api/organizations",
@@ -313,7 +315,7 @@ describe("requireAdminIntent", () => {
 		return { router, repository, organization, user };
 	}
 
-	it.each(VOLUNTEER_ADMIN_ROLES)("allows the %s role", async (role) => {
+	it.each([...VOLUNTEER_ADMIN_ROLES])("allows the %s role", async (role) => {
 		const { router, repository, organization, user } =
 			await createTestAppWithGuardedRoute();
 		await repository.createMembership({

@@ -171,8 +171,9 @@ postgresTest(
 				await sql.unsafe(`SELECT id FROM ${f.schema}.class_entitlements`),
 			).toHaveLength(0);
 			const value = await f.checkout.classExecutions.get("org", "intent");
-			expect(["rejected", "recovery_required"]).toContain(value?.state);
-			expect(value?.leaseOwner).toBeNull();
+			if (!value) throw new Error("Expected checkout execution.");
+			expect(["rejected", "recovery_required"]).toContain(value.state);
+			expect(value.leaseOwner).toBeNull();
 			expect(
 				(await f.checkout.classExecutions.events("org", "intent")).some(
 					(event) => event.eventType === "paid_order_observed",

@@ -43,6 +43,7 @@ async function createTestContext(
 		durationDays: 365,
 		shopifyProductGid: "gid://shopify/Product/1",
 		shopifyVariantGid: "gid://shopify/ProductVariant/1",
+		productNameSnapshot: "Teacher Membership",
 		isActive: true,
 	});
 
@@ -211,9 +212,8 @@ async function seedRecovery(ctx: {
 		organizationId: ctx.org.id,
 		sourceCheckoutIntentId: intent.id,
 		customerId,
-		recoveryUrl: `https://festival.test/org/pafe/checkout-recovery/${rawToken}`,
 		tokenHash,
-		createdByUid: "uid-admin",
+		requestedByActorUid: "uid-admin",
 		expiresAtIso: ctx.expiresAtIso ?? "2030-01-01T00:00:00.000Z",
 	});
 

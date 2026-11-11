@@ -220,8 +220,8 @@ describe("WaitlistService", () => {
 
 		const division = await orgRepo.createDivision({
 			organizationId: org.id,
-			name: "Piano Division",
-			sortOrder: 1,
+			displayName: "Piano Division",
+			normalizedName: "piano division",
 		});
 
 		const subtype = await orgRepo.createRegistrationCatalogValue({
@@ -239,14 +239,16 @@ describe("WaitlistService", () => {
 			divisionId: division.id,
 			minimumAge: 10,
 			maximumAge: 18,
-			priceInCents: 3000,
 			price: "30.00",
 			capacity: 2,
 			maximumPerformancePieces: 1,
 			performanceMinutes: 10,
+			shopifyProductGid: "gid://shopify/Product/class-1",
+			shopifyVariantGid: "gid://shopify/ProductVariant/class-1",
 		});
 
 		const session = await customerRepo.createCustomerSession({
+			sessionId: "sess-1",
 			organizationId: org.id,
 			shopifyCustomerGid: "gid://shopify/Customer/1001",
 			encryptedTokens: "tokens",
@@ -262,8 +264,6 @@ describe("WaitlistService", () => {
 			organizationId: org.id,
 			parentCustomerId: parentCustomer.id,
 			displayName: "Emma Watson",
-			firstName: "Emma",
-			lastName: "Watson",
 		});
 
 		let placedEntitlementCount = 2; // class is full by default (capacity: 2)

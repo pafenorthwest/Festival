@@ -72,7 +72,7 @@ describe("resolveRequestOrigin", () => {
 
 			try {
 				resolveRequestOrigin(c);
-				expect().unreachable("Expected resolveRequestOrigin to throw");
+				expect.unreachable("Expected resolveRequestOrigin to throw");
 			} catch (error) {
 				expect(error).toBeInstanceOf(AppError);
 				const appError = error as AppError;
@@ -85,7 +85,7 @@ describe("resolveRequestOrigin", () => {
 			const c = createMockContext({ Referer: "/relative/path/only" });
 			try {
 				resolveRequestOrigin(c);
-				expect().unreachable("Expected resolveRequestOrigin to throw");
+				expect.unreachable("Expected resolveRequestOrigin to throw");
 			} catch (error) {
 				expect(error).toBeInstanceOf(AppError);
 				const appError = error as AppError;

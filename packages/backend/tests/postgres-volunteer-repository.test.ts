@@ -229,14 +229,14 @@ describe("PostgresVolunteerRepository", () => {
 		});
 
 		it("bookShifts returns conflict when volunteer does not exist", async () => {
-			const beginSpy = spyOn(sql, "begin").mockImplementation(
-				async (callback) => {
-					const tx = {
-						unsafe: async () => [],
-					};
-					return callback(tx as never);
-				},
-			);
+			const beginSpy = spyOn(sql, "begin").mockImplementation(((
+				callback: (tx: never) => Promise<unknown>,
+			) => {
+				const tx = {
+					unsafe: async () => [],
+				};
+				return callback(tx as never);
+			}) as unknown as typeof sql.begin);
 
 			const result = await repo.bookShifts({
 				organizationId: "org-1",
@@ -249,14 +249,14 @@ describe("PostgresVolunteerRepository", () => {
 		});
 
 		it("bookShifts returns booked when shiftIds is empty", async () => {
-			const beginSpy = spyOn(sql, "begin").mockImplementation(
-				async (callback) => {
-					const tx = {
-						unsafe: async () => [{ id: "vol-1" }],
-					};
-					return callback(tx as never);
-				},
-			);
+			const beginSpy = spyOn(sql, "begin").mockImplementation(((
+				callback: (tx: never) => Promise<unknown>,
+			) => {
+				const tx = {
+					unsafe: async () => [{ id: "vol-1" }],
+				};
+				return callback(tx as never);
+			}) as unknown as typeof sql.begin);
 
 			const result = await repo.bookShifts({
 				organizationId: "org-1",
@@ -269,61 +269,61 @@ describe("PostgresVolunteerRepository", () => {
 		});
 
 		it("bookShifts books shifts successfully through SQL transaction", async () => {
-			const beginSpy = spyOn(sql, "begin").mockImplementation(
-				async (callback) => {
-					let callCount = 0;
-					const tx = {
-						unsafe: async () => {
-							callCount += 1;
-							if (callCount === 1) {
-								// volunteer lock check
-								return [{ id: "vol-1" }];
-							}
-							if (callCount === 2) {
-								// locked shifts query
-								return [
-									{
-										id: "shift-1",
-										organization_id: "org-1",
-										festival_id: "fest-1",
-										role_id: "role-1",
-										date: "2027-03-31",
-										period: "AM",
-										time_text: null,
-										division: null,
-										adjudicator: null,
-										created_at: "2026-03-01T00:00:00.000Z",
-									},
-								];
-							}
-							if (callCount === 3) {
-								// active assignments for shifts
-								return [];
-							}
-							if (callCount === 4) {
-								// existing volunteer active assignments
-								return [];
-							}
-							if (callCount === 5) {
-								// insert assignment
-								return [
-									{
-										id: "assign-new-1",
-										organization_id: "org-1",
-										shift_id: "shift-1",
-										volunteer_id: "vol-1",
-										status: "active",
-										created_at: "2026-03-01T12:00:00.000Z",
-										cancelled_at: null,
-									},
-								];
-							}
+			const beginSpy = spyOn(sql, "begin").mockImplementation(((
+				callback: (tx: never) => Promise<unknown>,
+			) => {
+				let callCount = 0;
+				const tx = {
+					unsafe: async () => {
+						callCount += 1;
+						if (callCount === 1) {
+							// volunteer lock check
+							return [{ id: "vol-1" }];
+						}
+						if (callCount === 2) {
+							// locked shifts query
+							return [
+								{
+									id: "shift-1",
+									organization_id: "org-1",
+									festival_id: "fest-1",
+									role_id: "role-1",
+									date: "2027-03-31",
+									period: "AM",
+									time_text: null,
+									division: null,
+									adjudicator: null,
+									created_at: "2026-03-01T00:00:00.000Z",
+								},
+							];
+						}
+						if (callCount === 3) {
+							// active assignments for shifts
 							return [];
-						},
-					};
-					return callback(tx as never);
-				},
-			);
+						}
+						if (callCount === 4) {
+							// existing volunteer active assignments
+							return [];
+						}
+						if (callCount === 5) {
+							// insert assignment
+							return [
+								{
+									id: "assign-new-1",
+									organization_id: "org-1",
+									shift_id: "shift-1",
+									volunteer_id: "vol-1",
+									status: "active",
+									created_at: "2026-03-01T12:00:00.000Z",
+									cancelled_at: null,
+								},
+							];
+						}
+						return [];
+					},
+				};
+				return callback(tx as never);
+			}) as unknown as typeof sql.begin);
 
 			const result = await repo.bookShifts({
 				organizationId: "org-1",

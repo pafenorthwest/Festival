@@ -444,7 +444,6 @@ describe("InMemoryOrganizationRepository - Profiles", () => {
 				startsOn: "2026-01-01",
 				endsOn: "2027-01-01",
 				offeringId: product.id,
-				source: "shopify_order",
 				status: "active",
 				verifiedIdentityEmail: "identity@example.com",
 			});
@@ -627,7 +626,6 @@ describe("InMemoryOrganizationRepository - Profiles", () => {
 				startsOn: "2026-01-01",
 				endsOn: "2027-01-01",
 				offeringId: product.id,
-				source: "shopify_order",
 				status: "active",
 				verifiedIdentityEmail: "active@example.com",
 			});
@@ -690,7 +688,8 @@ describe("InMemoryOrganizationRepository - Profiles", () => {
 		});
 
 		it("strictly matches PublicDirectoryProfileDto without leaking private fields", async () => {
-			repo.setCustomerContact("cust-acc-privacy", {
+			repo.setCustomerContact(orgAId, {
+				customerId: "cust-acc-privacy",
 				phone: "555-999-8888",
 				email: "private@example.com",
 			});
@@ -889,11 +888,11 @@ describe("PostgresOrganizationRepository - Profile Queries", () => {
 				return [];
 			},
 		};
-		const beginSpy = spyOn(sql, "begin").mockImplementation(
-			async (callback: (tx: typeof mockTransaction) => Promise<unknown>) => {
-				return callback(mockTransaction);
-			},
-		);
+		const beginSpy = spyOn(sql, "begin").mockImplementation((async (
+			callback: (tx: typeof mockTransaction) => Promise<unknown>,
+		) => {
+			return callback(mockTransaction);
+		}) as unknown as typeof sql.begin);
 
 		// getTeacherProfileById return
 		unsafeSpy.mockResolvedValueOnce([
@@ -962,10 +961,9 @@ describe("PostgresOrganizationRepository - Profile Queries", () => {
 				return [];
 			},
 		};
-		const beginSpy = spyOn(sql, "begin").mockImplementation(
-			async (callback: (tx: typeof transaction) => Promise<unknown>) =>
-				callback(transaction),
-		);
+		const beginSpy = spyOn(sql, "begin").mockImplementation((async (
+			callback: (tx: typeof transaction) => Promise<unknown>,
+		) => callback(transaction)) as unknown as typeof sql.begin);
 		return { calls, beginSpy };
 	}
 

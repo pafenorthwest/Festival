@@ -6,11 +6,11 @@ import {
 	type OrganizationDivision,
 	type OrganizationRecord,
 	type OrganizationRole,
-	type ProductRecord,
 } from "@festival/common";
 import { sql } from "bun";
 import { Hono } from "hono";
 import type { AuthVerifier } from "../src/auth/types.js";
+import type { ProductRecord } from "../src/repo/organization-repository.js";
 import { PostgresOrganizationRepository } from "../src/repo/postgres-organization-repository.js";
 import { buildStaffRoutes } from "../src/routes/staff/staff.routes.js";
 import { AccompanistMembershipService } from "../src/services/accompanist-membership-service.js";
@@ -198,12 +198,12 @@ async function seedAccompanistGrant(
 	});
 }
 
-function requestReport(
+async function requestReport(
 	app: Hono,
 	slug: string,
 	options: { token?: string; query?: string } = {},
 ): Promise<Response> {
-	const headers = options.token
+	const headers: Record<string, string> = options.token
 		? { Authorization: `Bearer ${options.token}` }
 		: {};
 	return app.request(

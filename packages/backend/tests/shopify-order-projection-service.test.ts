@@ -161,14 +161,12 @@ async function fixture() {
 		organizationId: organization.id,
 		parentCustomerId: customer.id,
 		displayName: "Alice Violinist",
-		createdAtIso: NOW.toISOString(),
 	});
 
 	const child2 = await customers.createChild({
 		organizationId: organization.id,
 		parentCustomerId: customer.id,
 		displayName: "Bob Violinist",
-		createdAtIso: NOW.toISOString(),
 	});
 
 	const checkout = new InMemoryCheckoutRepository();

@@ -2,8 +2,8 @@ import type { OrganizationRecord } from "@festival/common";
 import type { TenantContext } from "../../src/auth/tenant-context.js";
 import { InMemoryOrganizationRepository } from "../../src/repo/in-memory-organization-repository.js";
 import type {
+	OrganizationRepository,
 	ProductRecord,
-	UpdateMembershipProductRecordInput,
 } from "../../src/repo/organization-repository.js";
 import type {
 	ShopifyMutationAuditInput,
@@ -189,7 +189,9 @@ export class FakeFailureLogger implements ShopifyCleanupFailureLogger {
 
 export class FailingUpdateProductRepository extends InMemoryOrganizationRepository {
 	override async updateMembershipProductRecord(
-		_input: UpdateMembershipProductRecordInput,
+		_input: Parameters<
+			OrganizationRepository["updateMembershipProductRecord"]
+		>[0],
 	): Promise<ProductRecord | null> {
 		throw new Error(
 			"database write failure client-secret-canary bearer-canary",

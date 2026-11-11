@@ -1,6 +1,7 @@
 import { describe, expect, it, spyOn } from "bun:test";
 import {
 	type CustomClaimsLock,
+	type CustomClaimsWriter,
 	type FirebaseAuthLike,
 	FirebaseCustomClaimsWriter,
 	NoopCustomClaimsWriter,
@@ -54,8 +55,8 @@ class FakeFirebaseAuth implements FirebaseAuthLike {
 		this.claims[uid] = (claims ?? {}) as VolunteerIntentClaims;
 	}
 
-	get(uid: string): VolunteerIntentClaims | undefined {
-		return this.claims[uid];
+	get(uid: string): Record<string, unknown> | undefined {
+		return this.claims[uid] as Record<string, unknown> | undefined;
 	}
 }
 
@@ -323,7 +324,7 @@ describe("FirebaseCustomClaimsWriter", () => {
 
 describe("NoopCustomClaimsWriter", () => {
 	it("never throws and does nothing", async () => {
-		const writer = new NoopCustomClaimsWriter();
+		const writer: CustomClaimsWriter = new NoopCustomClaimsWriter();
 
 		await expect(
 			writer.setOrgRole("uid-1", "org-a", "Admin"),

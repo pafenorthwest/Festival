@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { AuthenticatedUser } from "@festival/common";
+import type { AuthenticatedUser, OrganizationRole } from "@festival/common";
 import { Hono } from "hono";
 import { createApp } from "../src/app.js";
 import type { AuthVerifier } from "../src/auth/types.js";
@@ -546,7 +546,7 @@ describe("buildAdminWaitlistRoutes", () => {
 		await f.orgRepo.createMembership({
 			organizationId: f.org.id,
 			userId: user.id,
-			role: "Adjudicator",
+			role: "Adjudicator" as OrganizationRole,
 			origin: "invite",
 		});
 		f.setAuthPrincipal({

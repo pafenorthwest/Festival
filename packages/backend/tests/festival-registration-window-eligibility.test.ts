@@ -40,7 +40,7 @@ async function createRegistrationWindowFixture(
 	const organizations = new InMemoryOrganizationRepository(nowFn);
 	const customers = new InMemoryCustomerAccountRepository();
 	const checkout = new InMemoryCheckoutRepository(nowFn);
-	const commerce = new InMemoryMembershipCommerceRepository();
+	const commerce = new InMemoryMembershipCommerceRepository(organizations);
 
 	const keyring = ShopifySecretKeyring.fromEnvironment(
 		JSON.stringify({ test: Buffer.alloc(32, 7).toString("base64") }),
@@ -79,11 +79,6 @@ async function createRegistrationWindowFixture(
 			organizationId: organization.id,
 			purpose: SHOPIFY_CUSTOMER_CLIENT_SECRET_PURPOSE,
 		}),
-		apiVersion: "2026-07",
-		readiness: "ready",
-		canReadOrders: true,
-		integrationVersion: 1,
-		updatedAtIso: currentNow.toISOString(),
 	});
 
 	const division = await organizations.createDivision({
@@ -162,15 +157,8 @@ async function createRegistrationWindowFixture(
 		csrfToken: "csrf-token-window",
 		integrationVersion: 1,
 		createdAtIso: currentNow.toISOString(),
-		touchedAtIso: currentNow.toISOString(),
 		lastSeenAtIso: currentNow.toISOString(),
 		expiresAtIso: new Date(
-			currentNow.getTime() + 30 * 86_400_000,
-		).toISOString(),
-		absoluteExpiresAtIso: new Date(
-			currentNow.getTime() + 60 * 86_400_000,
-		).toISOString(),
-		tokenExpiresAtIso: new Date(
 			currentNow.getTime() + 30 * 86_400_000,
 		).toISOString(),
 	});

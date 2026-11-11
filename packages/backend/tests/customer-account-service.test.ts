@@ -50,7 +50,12 @@ function response(value: unknown, status = 200) {
 	});
 }
 
-function transportFor(fetcher: typeof fetch, now: () => Date) {
+type MockFetcher = (
+	input: URL | RequestInfo,
+	init?: RequestInit,
+) => Promise<Response>;
+
+function transportFor(fetcher: MockFetcher, now: () => Date) {
 	return new CustomerAccountTransport({
 		resolver: async () => [{ address: "8.8.8.8", family: 4, ttlSeconds: 60 }],
 		now: () => now().getTime(),
@@ -128,7 +133,7 @@ async function fixture(
 	let graphqlApi = "https://accounts.shopify.com/customer/api/2026-07/graphql";
 	const graphqlRequests: { method: string | undefined; url: string }[] = [];
 	let now = new Date();
-	const fetcher: typeof fetch = async (input, init) => {
+	const fetcher: MockFetcher = async (input, init) => {
 		const url = new URL(input.toString());
 		if (url.pathname === "/.well-known/openid-configuration") {
 			discoveryCalls++;
@@ -649,7 +654,7 @@ describe("CustomerAccountService", () => {
 				email: null,
 				mailingAddress: null,
 				phone: null,
-				updatedAtIso: customer?.updatedAtIso,
+				updatedAtIso: customer?.updatedAtIso ?? null,
 			},
 		});
 		expect(initial).not.toHaveProperty("customerId");
@@ -1219,10 +1224,12 @@ describe("CustomerAccountService", () => {
 			divisionId: "div_1",
 			minimumAge: 5,
 			maximumAge: 18,
-			price: 30,
+			price: "30.00",
 			maximumPerformancePieces: 2,
 			performanceMinutes: 10,
 			capacity: 20,
+			shopifyProductGid: "gid://shopify/Product/1",
+			shopifyVariantGid: "gid://shopify/ProductVariant/1",
 		});
 
 		const auth = await f.authenticate();
@@ -1230,6 +1237,7 @@ describe("CustomerAccountService", () => {
 		const storedSession = await f.repository.getSession(auth.sessionId);
 		if (!storedSession) throw new Error("session");
 		const customerId = storedSession.customerId;
+		if (!session.authenticated) throw new Error("Expected authenticated");
 		const csrfToken = session.csrfToken;
 		const origin = "https://festival.example.com";
 
@@ -1250,9 +1258,8 @@ describe("CustomerAccountService", () => {
 		await f.checkout.insertRegistrationMetadata({
 			id: "reg-meta-1",
 			organizationId: f.org.id,
-			festivalClassId: classConfig.id,
+			festivalId: festival.id,
 			checkoutIntentId: "intent-1",
-			childId: "child-1",
 			teacherMembershipId: "teacher-1",
 			accompanistMembershipId: null,
 			repertoireJson: [
@@ -1274,10 +1281,12 @@ describe("CustomerAccountService", () => {
 				customerId: "acc-customer-1",
 				normalizedEmail: "accompanist@example.com",
 				offeringNameSnapshot: "Accompanist Annual",
-				source: "admin_grant",
+				source: "accompanist_form",
 				contact: {
 					name: "Jane Accompanist",
 					email: "accompanist@example.com",
+					city: "Seattle",
+					phone: "555-0100",
 				},
 				divisions: [],
 				startsOn: "2026-01-01",
@@ -1601,10 +1610,12 @@ describe("CustomerAccountService", () => {
 			divisionId: "div_1",
 			minimumAge: 5,
 			maximumAge: 18,
-			price: 30,
+			price: "30.00",
 			maximumPerformancePieces: 2,
 			performanceMinutes: 10,
 			capacity: 20,
+			shopifyProductGid: "gid://shopify/Product/2",
+			shopifyVariantGid: "gid://shopify/ProductVariant/2",
 		});
 		const auth = await f.authenticate();
 
@@ -1648,10 +1659,12 @@ describe("CustomerAccountService", () => {
 			divisionId: "div_1",
 			minimumAge: 5,
 			maximumAge: 18,
-			price: 30,
+			price: "30.00",
 			maximumPerformancePieces: 2,
 			performanceMinutes: 10,
 			capacity: 20,
+			shopifyProductGid: "gid://shopify/Product/3",
+			shopifyVariantGid: "gid://shopify/ProductVariant/3",
 		});
 		const auth = await f.authenticate();
 		const storedSession = await f.repository.getSession(auth.sessionId);
@@ -1757,10 +1770,12 @@ describe("CustomerAccountService", () => {
 				divisionId: "div_1",
 				minimumAge: 5,
 				maximumAge: 18,
-				price: 45,
+				price: "45.00",
 				maximumPerformancePieces: 1,
 				performanceMinutes: 15,
 				capacity: 20,
+				shopifyProductGid: "gid://shopify/Product/4",
+				shopifyVariantGid: "gid://shopify/ProductVariant/4",
 			});
 
 		const auth = await f.authenticate();
@@ -1768,6 +1783,7 @@ describe("CustomerAccountService", () => {
 		const storedSession = await f.repository.getSession(auth.sessionId);
 		if (!storedSession) throw new Error("session");
 		const customerId = storedSession.customerId;
+		if (!session.authenticated) throw new Error("Expected authenticated");
 		const csrfToken = session.csrfToken;
 		const origin = "https://festival.example.com";
 
@@ -1788,9 +1804,8 @@ describe("CustomerAccountService", () => {
 		await f.checkout.insertRegistrationMetadata({
 			id: "reg-meta-concerto-1",
 			organizationId: f.org.id,
-			festivalClassId: concertoClass.id,
+			festivalId: festival.id,
 			checkoutIntentId: "intent-concerto-1",
-			childId: "child-1",
 			teacherMembershipId: "teacher-1",
 			accompanistMembershipId: null,
 			repertoireJson: [

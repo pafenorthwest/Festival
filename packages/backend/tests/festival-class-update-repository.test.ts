@@ -103,6 +103,7 @@ describe("festival class updates and registration metadata repository lookups", 
 				{
 					title: "Moonlight Sonata",
 					composer: "Beethoven",
+					durationSeconds: 360,
 					durationMinutes: 6,
 				},
 			],
@@ -136,6 +137,7 @@ describe("festival class updates and registration metadata repository lookups", 
 			{
 				title: "Moonlight Sonata",
 				composer: "Beethoven",
+				durationSeconds: 360,
 				durationMinutes: 6,
 			},
 		]);

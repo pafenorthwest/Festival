@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { AuthenticatedUser } from "@festival/common";
+import type { AuthenticatedUser, OrganizationRole } from "@festival/common";
 import { Hono } from "hono";
 import type { ClassCheckoutService } from "../src/checkout/class-checkout-service.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
@@ -52,7 +52,7 @@ async function fixture(
 		await repository.createMembership({
 			organizationId: organization.id,
 			userId: user.id,
-			role,
+			role: role as unknown as OrganizationRole,
 			origin: "creator",
 		});
 	}

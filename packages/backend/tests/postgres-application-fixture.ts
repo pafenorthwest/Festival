@@ -1,7 +1,41 @@
 import { spyOn } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { sql, type TransactionSQL } from "bun";
+import { initializePostgresSchema } from "../src/repo/postgres-schema.js";
 import { assertApplicationFixtureSql } from "./postgres-application-sql-guard.js";
+
+if (process.env.POSTGRES_INTEGRATION_URL && !process.env.DATABASE_URL) {
+	process.env.DATABASE_URL = process.env.POSTGRES_INTEGRATION_URL;
+}
+
+let applicationSchemaInitPromise: Promise<void> | undefined;
+
+export async function ensureApplicationSchemaReady(
+	schema?: string,
+): Promise<string> {
+	if (!process.env.POSTGRES_INTEGRATION_URL)
+		throw new Error(
+			"Run the PostgreSQL runner: application catalog preflight is required.",
+		);
+	if (!process.env.DATABASE_URL) {
+		process.env.DATABASE_URL = process.env.POSTGRES_INTEGRATION_URL;
+	}
+	const resolvedSchema =
+		schema?.trim() || process.env.DB_SCHEMA?.trim() || "orgs";
+	if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(resolvedSchema))
+		throw new Error("Invalid application schema.");
+	if (process.env.POSTGRES_APPLICATION_CATALOG_VERIFIED !== "1") {
+		applicationSchemaInitPromise ??= initializePostgresSchema(resolvedSchema)
+			.then(() => {
+				process.env.POSTGRES_APPLICATION_CATALOG_VERIFIED = "1";
+			})
+			.finally(() => {
+				applicationSchemaInitPromise = undefined;
+			});
+		await applicationSchemaInitPromise;
+	}
+	return resolvedSchema;
+}
 
 export interface ApplicationPostgresFixture {
 	schema: string;
@@ -15,16 +49,11 @@ export interface ApplicationPostgresFixture {
 export async function withApplicationRollback(
 	callback: (fixture: ApplicationPostgresFixture) => Promise<void>,
 ): Promise<void> {
-	if (
-		!process.env.POSTGRES_INTEGRATION_URL ||
-		process.env.POSTGRES_APPLICATION_CATALOG_VERIFIED !== "1"
-	)
+	if (!process.env.POSTGRES_INTEGRATION_URL)
 		throw new Error(
 			"Run the PostgreSQL runner: application catalog preflight is required.",
 		);
-	const schema = process.env.DB_SCHEMA?.trim() || "orgs";
-	if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(schema))
-		throw new Error("Invalid application schema.");
+	const schema = await ensureApplicationSchemaReady();
 	const prefix = randomUUID();
 	const organizationIds = new Set<string>();
 	const rollback = new Error("Intentional application fixture rollback");
@@ -39,10 +68,12 @@ export async function withApplicationRollback(
 	if (current[0]?.columns !== 2 || current[0]?.checks !== 2)
 		throw new Error("Application schema current columns/checks are required.");
 	const restorers: Array<() => void> = [];
-	const guarded = (transaction: TransactionSQL) => ({
-		unsafe: ((query: string, ...args: unknown[]) => {
+	const guarded = (transaction: Pick<TransactionSQL, "unsafe">) => ({
+		unsafe: ((query: string, values?: unknown[]) => {
 			assertApplicationFixtureSql(query);
-			return transaction.unsafe(query, ...args);
+			return values === undefined
+				? transaction.unsafe(query)
+				: transaction.unsafe(query, values);
 		}) as typeof sql.unsafe,
 	});
 	let failed = false;
@@ -79,9 +110,10 @@ export async function withApplicationRollback(
 						organizationIds.add(id);
 					},
 					repository(repository) {
-						const ready = spyOn(repository, "ensureReady").mockResolvedValue(
-							undefined,
-						);
+						const ready = spyOn(
+							repository as { ensureReady(): Promise<void> },
+							"ensureReady",
+						).mockImplementation(async () => {});
 						restorers.push(() => ready.mockRestore());
 						return repository;
 					},
