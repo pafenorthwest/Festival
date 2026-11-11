@@ -11,6 +11,8 @@
 - `.github/workflows/pr-checks.yml`
 - `.github/workflows/deploy.yml`
 - `packages/backend/tsconfig.json`
+- `packages/backend/tsconfig.build.json`
+- `packages/backend/package.json` (`build` script target only: `tsc -p tsconfig.build.json`)
 - `packages/backend/tests/**/*.ts` (strict type-annotation fixes only if surfaced by adding `tests/**/*.ts` to `packages/backend/tsconfig.json`, plus new `packages/backend/tests/architecture-boundaries.test.ts` and `check-sql` unit tests)
 - `scripts/check-sql.ts`
 - `tasks/s02-ci-postgres-tsc-and-boundary-gates/spec.md` and `tasks/s02-ci-postgres-tsc-and-boundary-gates/code-review.md`
@@ -50,7 +52,28 @@ bun run check:sql
 ```
 
 ## Delivery
-Pending execution.
+- **`[G1]` CI PostgreSQL 17 Service & Zero-Skip Integration Suites**:
+  - Added a `postgres:17-alpine` service container (`pg_isready -U postgres -d festival_test` health check, port `5432`, `POSTGRES_DB=festival_test`) and wired `DATABASE_URL` plus `POSTGRES_INTEGRATION_URL` in `.github/workflows/pr-checks.yml` and `.github/workflows/deploy.yml` with zero `continue-on-error: true` overrides, covered by workflow contract assertions in `packages/backend/tests/cd-workflow.test.ts`.
+  - Updated PostgreSQL test fixtures (`packages/backend/tests/postgres-application-fixture.ts`, `packages/backend/tests/postgres-test-fixture.ts`, `packages/backend/tests/postgres-application-catalog.integration.test.ts`, `packages/backend/tests/postgres-initializer-existing-schema.integration.test.ts`, and `packages/backend/tests/postgres-profile-postal-code.integration.test.ts`) to self-bootstrap `DATABASE_URL` from `POSTGRES_INTEGRATION_URL` and initialize the `orgs` schema on fresh databases so all `14` `*.integration.test.ts` suites (plus `3` PostgreSQL-gated `*.test.ts` suites) execute actively with `0` skips.
+- **`[G2]` Blocking Frontend & Backend+Test `tsc --noEmit` Gates**:
+  - Included `"tests/**/*.ts"` in `packages/backend/tsconfig.json` and added `packages/backend/tsconfig.build.json` (`"build": "tsc -p tsconfig.build.json"` in `packages/backend/package.json`) so `packages/backend/dist/index.js` continues to emit cleanly without `dist/src/` or `dist/tests/` nesting.
+  - Resolved all `208` strict TypeScript diagnostics across `50` backend test files without changing runtime behavior or assertions, and added blocking `bun run --cwd packages/frontend check:types` and `bunx --bun tsc -p packages/backend/tsconfig.json --noEmit` steps to `.github/workflows/pr-checks.yml` and `.github/workflows/deploy.yml`.
+- **`[G3]` `scripts/check-sql.ts` `tx.unsafe` AST Validation & Blocking CI Gate**:
+  - Extended `scripts/check-sql.ts` static AST and SQL lexer validation to cover `tx.unsafe(...)` alongside `sql.unsafe(...)`, `transaction`, `runner`, `database`, `client`, and property-chained receivers (including `${this.schema}` `ThisKeyword` support, unparameterized `$1` single-argument detection, `+` string concatenation bans, and single-quoted interpolation bans).
+  - Added comprehensive unit tests in `packages/backend/tests/check-sql.test.ts` and promoted `bun run check:sql` to a blocking step in `.github/workflows/pr-checks.yml` and `.github/workflows/deploy.yml`.
+- **`[G4]` Mechanical DDD Bounded-Context Gate (`architecture-boundaries.test.ts`)**:
+  - Added `packages/backend/tests/architecture-boundaries.test.ts` enforcing the 7 bounded contexts (`tenant-org`, `catalog-repertoire`, `customer-identity`, `teacher-directory`, `class-checkout`, `commerce-projection`, `volunteers-comms`), the acyclic `ALLOWED_UPSTREAM_CONTEXTS` DAG, public `index` barrel imports, permitted backend layers, and the `<=500`-line file ceiling across domain directories per `specs/bounded-contexts-2026.md`.
+- **Exceptions**: None.
+- **Deferred work**: None.
 
 ## Quality gate results
-Pending execution.
+- Packet validator (`validate-packet.ps1 -TaskName s02-ci-postgres-tsc-and-boundary-gates -RequireCodeReview`): `PASS` — `PACKET VALID: task=s02-ci-postgres-tsc-and-boundary-gates iteration=v0 state=locked goals=4 codeReview=valid(none)` (`exit=0`)
+- `bun run verify:toolchain`: `PASS` — Bun `1.4.2` and TypeScript `5.9.3` (`exit=0`)
+- `bun run format:check`: `PASS` — `523` files checked, `0` issues (`exit=0`)
+- `bun run lint`: `PASS` — `523` files checked, `0` warnings, `0` errors (`exit=0`)
+- `bun run build`: `PASS` — clean `packages/backend/dist/index.js` emission with no `dist/src/` or `dist/tests/` artifacts (`exit=0`)
+- `bun run --cwd packages/frontend check:types`: `PASS` — `0` errors (`exit=0`)
+- `bunx --bun tsc -p packages/backend/tsconfig.json --noEmit`: `PASS` — `0` errors across `src/**/*.ts` and `tests/**/*.ts` (`exit=0`)
+- `bun run test` (with `POSTGRES_INTEGRATION_URL`): `PASS` — `2,409 pass / 0 skip / 0 fail` across `204` test files, including all `14` `*.integration.test.ts` suites (`exit=0`)
+- `bun run check:sql`: `PASS` — `279` backend TypeScript files validated, `0` errors (`exit=0`)
+- Code review (`tasks/s02-ci-postgres-tsc-and-boundary-gates/code-review.md`): `PASS` — `Findings status: none`, `Findings JSON: []`, `Verdict: patch is correct` (`high` confidence)
