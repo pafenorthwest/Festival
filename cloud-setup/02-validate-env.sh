@@ -85,8 +85,8 @@ if values.get("TRUST_PROXY_HEADERS") != "true":
     errors.append("TRUST_PROXY_HEADERS must be true for this cloud deployment")
 
 reconciliation_token = values.get("FESTIVAL_RECONCILIATION_TOKEN", "").strip()
-if reconciliation_token and not re.fullmatch(r"[A-Za-z0-9_-]{32,}", reconciliation_token):
-    errors.append("FESTIVAL_RECONCILIATION_TOKEN must contain at least 32 base64url-safe characters (letters, digits, _, or -)")
+if reconciliation_token and not re.fullmatch(r"[A-Za-z0-9_+=/-]{32,}", reconciliation_token):
+    errors.append("FESTIVAL_RECONCILIATION_TOKEN must contain at least 32 base64 or base64url characters")
 elif not reconciliation_token:
     errors.append("FESTIVAL_RECONCILIATION_TOKEN is required")
 elif reconciliation_token == password:

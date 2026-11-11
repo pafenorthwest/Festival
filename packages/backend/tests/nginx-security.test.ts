@@ -452,4 +452,42 @@ describe("repository nginx security policy", () => {
 		expect(host).toContain("proxy_pass http://127.0.0.1:3000");
 		expect(container).toContain("proxy_pass http://backend:3000");
 	});
+
+	it("emits same-origin Referrer-Policy in server and /healthz blocks without no-referrer", async () => {
+		const directive = 'add_header Referrer-Policy "same-origin" always;';
+		for (const path of ["nginx/festival.conf", "docker/nginx.festival.conf"]) {
+			const config = await readConfig(path);
+			const locations = readLocations(config);
+			expect(config).not.toContain("no-referrer");
+			expect(config.split(directive).length - 1).toBe(2);
+			expect(selectLocation(locations, "/healthz")?.children).toContainEqual({
+				name: "add_header",
+				args: ["Referrer-Policy", "same-origin", "always"],
+			});
+			expect(
+				locations.filter((loc) =>
+					loc.children?.some((d) => d.args[0] === "Referrer-Policy"),
+				),
+			).toHaveLength(1);
+		}
+	});
+
+	it("accepts standard base64 and base64url reconciliation tokens in 02-validate-env.sh", async () => {
+		const script = await readConfig("cloud-setup/02-validate-env.sh");
+		const raw = script.match(
+			/re\.fullmatch\(r"([^"]+)",\s*reconciliation_token\)/,
+		)?.[1];
+		expect(raw).toBeDefined();
+		const pattern = new RegExp(`^(?:${raw})$`);
+		expect(pattern.test("k9x+A1b2/C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S8=")).toBe(
+			true,
+		);
+		expect(pattern.test("k9x_A1b2-C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S8")).toBe(
+			true,
+		);
+		expect(pattern.test("short+base64/token==")).toBe(false);
+		expect(pattern.test("a".repeat(31))).toBe(false);
+		expect(pattern.test(`${"a".repeat(31)} `)).toBe(false);
+		expect(pattern.test(`${"a".repeat(16)} ${"b".repeat(16)}`)).toBe(false);
+	});
 });

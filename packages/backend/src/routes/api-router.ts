@@ -79,6 +79,7 @@ export interface ApiRouterOptions {
 	checkoutRecoveryService?: CheckoutRecoveryService;
 	participantProfileService?: ParticipantProfileService;
 	waitlistService?: WaitlistService;
+	publicOrigin?: string;
 }
 
 export function buildApiRouter(
@@ -112,6 +113,7 @@ export function buildApiRouter(
 		checkoutRecoveryService: providedRecoveryService,
 		participantProfileService,
 		waitlistService,
+		publicOrigin,
 	} = options;
 	const repository = organizationService.repository;
 	router.route(
@@ -120,6 +122,7 @@ export function buildApiRouter(
 			authVerifier,
 			repository,
 			classCheckoutService,
+			publicOrigin,
 		}),
 	);
 

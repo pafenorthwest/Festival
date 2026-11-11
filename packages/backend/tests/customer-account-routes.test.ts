@@ -398,43 +398,6 @@ describe("customer account routes", () => {
 			"festival_customer_session=",
 		);
 	});
-	it("performs logout when Origin and Referer are omitted but Host matches publicOrigin", async () => {
-		let receivedOrigin: string | undefined;
-		const a = await app(
-			service({
-				logout: async (
-					_slug: string,
-					_sessionId: string | undefined,
-					_csrf: string | undefined,
-					origin: string | undefined,
-				) => {
-					receivedOrigin = origin;
-					if (origin !== "https://festival.example.com") {
-						throw new AppError("CSRF validation failed.", 403);
-					}
-					return "https://accounts.shopify.com/logout";
-				},
-			}),
-		);
-		const response = await a.request(
-			"/api/organizations/festival/customer/logout",
-			{
-				method: "POST",
-				headers: {
-					"Content-Type": "application/x-www-form-urlencoded",
-					Cookie: "festival_customer_session=opaque-session",
-					Host: "festival.example.com",
-					"X-Forwarded-Proto": "https",
-				},
-				body: "csrfToken=csrf",
-			},
-		);
-		expect(response.status).toBe(302);
-		expect(response.headers.get("location")).toBe(
-			"https://accounts.shopify.com/logout",
-		);
-		expect(receivedOrigin).toBe("https://festival.example.com");
-	});
 	it("rejects logout when evil origin is sent even if Host matches publicOrigin", async () => {
 		let receivedOrigin: string | undefined;
 		const a = await app(
