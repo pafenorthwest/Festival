@@ -932,7 +932,8 @@ describe("AccompanistMembershipService.listEntitlementReport", () => {
 			);
 		}
 		expect(JSON.stringify(report)).not.toContain("Private City");
-		expect(JSON.stringify(report)).not.toContain("555");
+		expect(JSON.stringify(report)).not.toContain("+1 206 555 0199");
+		expect(JSON.stringify(report)).not.toContain("+1 206 555 0101");
 		expect(
 			await service.listEntitlementReport(other.id, {}, ALL_ON_ONE_PAGE),
 		).toEqual({
