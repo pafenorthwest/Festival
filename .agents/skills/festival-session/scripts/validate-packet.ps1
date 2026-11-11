@@ -217,6 +217,9 @@ if ($RequireCodeReview -and -not (Test-Path -LiteralPath $reviewPath -PathType L
 }
 if (Test-Path -LiteralPath $reviewPath -PathType Leaf) {
   $reviewStatus = Test-CodeReviewFile -ReviewPath $reviewPath -ReviewRel $reviewRel -Name $TaskName
+  if ($RequireCodeReview -and $reviewStatus -cne 'none') {
+    Stop-Validation "$reviewRel must have no findings when -RequireCodeReview is specified"
+  }
   $reviewSummary = "valid($reviewStatus)"
 }
 
