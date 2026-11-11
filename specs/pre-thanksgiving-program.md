@@ -22,8 +22,8 @@ flowchart TD
 
 ### Open Decisions Checklist (`D1`–`D4`)
 - [x] **D1 (#361 Approval Policy — DECIDED 2026-11-11)**: Active paid Teacher Membership + checked opt-in box **auto-creates / auto-approves** public directory visibility immediately (`approved`), with Admin retaining a one-click visibility toggle. *(`S03` unblocked -> `READY`.)*
-- [ ] **D2 (`#357` Checkout Edge Cases `B1`/`B2`)**: Keep `B1`/`B2` in the December Week 1 bug-fix sprint (since November live traffic is teacher memberships), or fold into Wave 2?
-- [ ] **D3 (`#354` QA Dump Cleanup)**: Strip `+8,592` lines of `tasks/festival-registration-ui/validation/browser-*results.json` before merging `#354`, or retain?
+- [x] **D2 (#357 Checkout Edge Cases B1/B2 — DECIDED 2026-11-11)**: Defer `B1`/`B2` to the December Week 1 bug-fix sprint (since November live traffic is teacher memberships).
+- [x] **D3 (#354 QA Dump Cleanup — DECIDED 2026-11-11)**: Stripped `+8,592` lines of `tasks/festival-registration-ui/validation/browser-*results.json` (5 files) on `ericp/registration-flow-redesign` prior to merging `#354`.
 - [ ] **D4 (Production Infrastructure)**: Confirm target `<prod-domain>`, Ubuntu 24.04 host access, and production Shopify organization ownership so Live Ops (`S05`) starts Nov 14 without delay. *(Blocks `S05` execution until confirmed.)*
 
 ---
@@ -68,7 +68,7 @@ Every Antigravity session follows 4 strict context-management commitments plus t
 | ID | Packet Slug | Status | Wave / Dates | Bounded Context | Owned Paths (Disjoint Lock) | Depends On | Parallel Group | Deliverable / Exit Gate |
 |---|---|---|---|---|---|---|---|---|
 | **`S00`** | `s00-sdd-bounded-context-harness` | `DONE` | Prep (`Nov 11 AM`) | Architecture / SDD | `specs/bounded-contexts-2026.md`, `specs/pre-thanksgiving-program.md`, `.agents/skills/festival-session/SKILL.md`, `goals/s00..s14/*`, `tasks/s00..s14/spec.md` | — | Solo Kickoff | Context map + all 15 session packets + `festival-session` skill committed on `main`. |
-| **`S01`** | `s01-pr354-logout-csrf-and-pr360-merge` | `DRAFT` | Wave 1 (`Nov 11`) | `customer-identity` / Edge | `#354` branch: `nginx/festival.conf`, `docker/nginx.festival.conf`, `csrf-guard.ts`, `admin-class-checkout-recovery.routes.ts`, `02-validate-env.sh` + `#360` | `S00` | Group W1-A | Logout `Origin: null` fixed, frontend `tsc` verified, `#354` (`--no-ff`) & `#360` merged (`#353`/`#356` closed). |
+| **`S01`** | `s01-pr354-logout-csrf-and-pr360-merge` | `DONE` | Wave 1 (`Nov 11`) | `customer-identity` / Edge | `#354` branch: `nginx/festival.conf`, `docker/nginx.festival.conf`, `csrf-guard.ts`, `admin-class-checkout-recovery.routes.ts`, `api-router.ts`, `app.ts`, `02-validate-env.sh` + `#360` | `S00` | Group W1-A | Logout `Origin: null` & recovery origin guards fixed, QA dumps stripped (`D3`), frontend `tsc` verified, `#354` (`95d2dd0`, `--no-ff`) & `#360` (`b00d1bd`) merged (`#353`/`#356` closed). |
 | **`S02`** | `s02-ci-postgres-tsc-and-boundary-gates` | `READY` | Wave 1 (`Nov 11–12`) | CI / Infra | `.github/workflows/pr-checks.yml`, `deploy.yml`, `packages/backend/tsconfig.json`, `scripts/check-sql.ts`, `architecture-boundaries.test.ts` | `S01` | Group W1-B *(parallel w/ `S03`)* | **Track 1**: Postgres 17 service active in CI (12 integration suites live), frontend/test `tsc` & `tx.unsafe` blocking. |
 | **`S03`** | `s03-issue-361-public-teacher-directory` | `READY` | Wave 1 (`Nov 12–13`) | `teacher-directory` | `participant-profile.routes.ts`, `PublicDirectoryPage.tsx`, Membership/Admin directory toggle components + tests | `S01` | Group W1-B *(parallel w/ `S02`)* | **Issue `#361`** merged; active & new teachers opt in + admin toggle verified in Postgres CI. |
 | **`S04`** | `s04-release-v0-3-0-cutover` | `READY` | Wave 1 (`Nov 13 PM`) | Release `v0.3.0` | 5 `package.json` versions, `CHANGELOG.md`, `release` branch, tag `v0.3.0` | `S02`, `S03` | Milestone Gate | **Release `v0.3.0` published**; GHCR images built. |
