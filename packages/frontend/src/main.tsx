@@ -2,6 +2,7 @@ import { Route, Router } from "@solidjs/router";
 import { render } from "solid-js/web";
 import App from "./App.js";
 import "./styles.css";
+import "./parent-registration.css";
 
 const root = document.getElementById("app");
 

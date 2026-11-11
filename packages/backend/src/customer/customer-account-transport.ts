@@ -153,6 +153,10 @@ async function defaultRequester(
 			if (headers["content-length"] === undefined)
 				headers["content-length"] = String(Buffer.byteLength(body));
 		}
+		const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+		const signal = init?.signal
+			? AbortSignal.any([init.signal, timeout])
+			: timeout;
 		const request = httpsRequest(
 			{
 				hostname: answer.address,
@@ -163,7 +167,7 @@ async function defaultRequester(
 				method: init?.method ?? "GET",
 				headers,
 				agent,
-				signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+				signal,
 			},
 			(response) => {
 				resolve({
@@ -260,8 +264,9 @@ export class CustomerAccountTransport {
 			throw new Error("Unsafe Customer Account destination.");
 	}
 
-	private async lease(hostname: string) {
-		return this.dns.getOrLoad(hostname, async () => {
+	private async lease(hostname: string, signal?: AbortSignal | null) {
+		signal?.throwIfAborted();
+		const pending = this.dns.getOrLoad(hostname, async () => {
 			const answers = [...(await this.resolver(hostname))];
 			if (!answers.length || answers.some((answer) => !isGlobalAddress(answer)))
 				throw new Error("Unsafe Customer Account DNS response.");
@@ -283,11 +288,30 @@ export class CustomerAccountTransport {
 				bytes,
 			};
 		});
+		if (!signal) return pending;
+		// DNS work is shared, so only cancel this caller's wait.
+		return new Promise<DnsLease>((resolve, reject) => {
+			const onAbort = () => reject(signal.reason);
+			if (signal.aborted) onAbort();
+			else signal.addEventListener("abort", onAbort, { once: true });
+			void pending.then(
+				(lease) => {
+					signal.removeEventListener("abort", onAbort);
+					resolve(lease);
+				},
+				(error: unknown) => {
+					signal.removeEventListener("abort", onAbort);
+					reject(error);
+				},
+			);
+		});
 	}
 
 	async json(url: URL, configuredDomain: string, init?: RequestInit) {
 		this.assertDestination(url, configuredDomain);
-		const lease = await this.lease(url.hostname.toLowerCase());
+		const signal = init?.signal;
+		const lease = await this.lease(url.hostname.toLowerCase(), signal);
+		signal?.throwIfAborted();
 		this.acquireLease(lease);
 		try {
 			/*
@@ -299,6 +323,10 @@ export class CustomerAccountTransport {
 			const answer = lease.answers[lease.next++ % lease.answers.length];
 			if (!answer) throw new Error("Unsafe Customer Account DNS response.");
 			const response = await this.requester(url, answer, lease.agent, init);
+			if (signal?.aborted) {
+				response.cancel?.();
+				signal.throwIfAborted();
+			}
 			if (response.status < 200 || response.status >= 300) {
 				response.cancel?.();
 				throw new Error("Customer Account upstream request failed.");
@@ -320,6 +348,7 @@ export class CustomerAccountTransport {
 				}
 				chunks.push(chunk);
 			}
+			signal?.throwIfAborted();
 			const parsed: unknown = JSON.parse(
 				Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString(
 					"utf8",

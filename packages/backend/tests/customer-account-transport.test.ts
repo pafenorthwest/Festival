@@ -258,6 +258,32 @@ describe("CustomerAccountTransport", () => {
 		expect(transport.metrics().coalesced).toBe(7);
 	});
 
+	it("cancels one DNS wait without disrupting another caller", async () => {
+		const lookup = Promise.withResolvers<DnsAnswer[]>();
+		let requests = 0;
+		const transport = new CustomerAccountTransport({
+			resolver: () => lookup.promise,
+			requester: async () => {
+				requests++;
+				return raw({ ok: true });
+			},
+		});
+		const url = new URL("https://store.example.com/metadata");
+		const controller = new AbortController();
+		const cancelled = transport.json(url, url.hostname, {
+			signal: controller.signal,
+		});
+		const active = transport.json(url, url.hostname);
+		const reason = new Error("Checkout lookup timed out.");
+		controller.abort(reason);
+		await expect(cancelled).rejects.toBe(reason);
+		expect(requests).toBe(0);
+		lookup.resolve([{ address: "8.8.8.8", family: 4, ttlSeconds: 60 }]);
+		await expect(active).resolves.toEqual({ ok: true });
+		expect(requests).toBe(1);
+		expect(transport.metrics().coalesced).toBe(1);
+	});
+
 	it("enforces the response limit while streaming", async () => {
 		const transport = new CustomerAccountTransport({
 			resolver: async () => [{ address: "8.8.8.8", family: 4, ttlSeconds: 60 }],

@@ -13,13 +13,17 @@ import {
 } from "../src/checkout/checkout-line-helpers.js";
 import {
 	type CheckoutIntentLineItemRecord,
+	type CheckoutIntentRecord,
 	CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL,
 	InMemoryCheckoutRepository,
 } from "../src/checkout/checkout-repository.js";
 import {
+	ClassCheckoutCartObservationError,
 	type ClassCheckoutFailureLogger,
+	ClassCheckoutRecoveryRequiredError,
 	ClassCheckoutService,
 	type ClassCheckoutStorefront,
+	ClassCheckoutStorefrontChangedBeforeRequestError,
 	type StartClassCheckoutInput,
 } from "../src/checkout/class-checkout-service.js";
 import { InMemoryMembershipCommerceRepository } from "../src/commerce/membership-commerce-repository.js";
@@ -29,6 +33,8 @@ import { InMemoryRepertoireRepository } from "../src/repertoire/index.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
 
 interface FixtureOptions {
+	legacyCheckout?: boolean;
+	customerAccountIntegrationVersion?: number;
 	now?: Date;
 	classMinAge?: number;
 	classMaxAge?: number;
@@ -64,6 +70,12 @@ class CapturingClassCheckoutFailureLogger
 	}
 }
 
+function required<T>(value: T | null | undefined): T {
+	if (value === null || value === undefined)
+		throw new Error("Expected persisted checkout test evidence.");
+	return value;
+}
+
 async function createFixture(options: FixtureOptions = {}) {
 	const now = options.now ?? new Date("2026-09-21T12:00:00.000Z");
 	const nowFn = () => now;
@@ -85,11 +97,12 @@ async function createFixture(options: FixtureOptions = {}) {
 	});
 
 	const storeDomain = options.storeDomain ?? "festival.myshopify.com";
-	await organizations.upsertShopifyIntegration({
+	const storefrontIntegration = await organizations.upsertShopifyIntegration({
 		organizationId: organization.id,
 		storeDomain,
 		clientId: "client-id",
 		encryptedClientSecret: "encrypted-secret",
+		encryptedStorefrontPrivateToken: "encrypted-storefront-token",
 	});
 
 	const subtype = await organizations.createRegistrationCatalogValue({
@@ -155,7 +168,7 @@ async function createFixture(options: FixtureOptions = {}) {
 		shopifyCustomerGid: "gid://shopify/Customer/999",
 		encryptedTokens: "encrypted-token-test",
 		csrfToken: "csrf-token-12345",
-		integrationVersion: 1,
+		integrationVersion: options.customerAccountIntegrationVersion ?? 1,
 		createdAtIso: now.toISOString(),
 		lastSeenAtIso: now.toISOString(),
 		expiresAtIso: new Date(now.getTime() + 8 * 3600_000).toISOString(),
@@ -259,7 +272,15 @@ async function createFixture(options: FixtureOptions = {}) {
 	)(
 		organizations,
 		customers,
-		checkout,
+		options.legacyCheckout
+			? new Proxy(checkout, {
+					get(target, key) {
+						if (key === "classExecutions") return undefined;
+						const value = Reflect.get(target, key);
+						return typeof value === "function" ? value.bind(target) : value;
+					},
+				})
+			: checkout,
 		storefront,
 		commerce,
 		nowFn,
@@ -306,6 +327,7 @@ async function createFixture(options: FixtureOptions = {}) {
 		accompanistGrant,
 		storefront,
 		storeDomain,
+		storefrontIntegration,
 		service,
 		defaultPieces,
 		defaultInput,
@@ -313,7 +335,1616 @@ async function createFixture(options: FixtureOptions = {}) {
 	};
 }
 
+function omitLegacyStorefrontBinding(checkout: InMemoryCheckoutRepository) {
+	const transition = checkout.classExecutions.transition.bind(
+		checkout.classExecutions,
+	);
+	checkout.classExecutions.transition = (input) =>
+		transition(
+			input.checkpoint === "create_dispatched"
+				? { ...input, storefrontBinding: undefined }
+				: input,
+		);
+}
+
+function cartEvidence(intent: CheckoutIntentRecord, customerGid: string) {
+	return {
+		correlationId: intent.correlationId,
+		customerGid,
+		lines: required(intent.lines).map((line) => ({
+			intentLineId: line.id,
+			variantGid: line.shopifyVariantGid,
+			quantity: 1,
+		})),
+	};
+}
+
 describe("ClassCheckoutService", () => {
+	for (const [accountVersion, storefrontVersion] of [
+		[1, 2],
+		[2, 1],
+	] as const) {
+		it(`binds Storefront version ${storefrontVersion} independently of Customer Account version ${accountVersion}`, async () => {
+			const f = await createFixture({
+				customerAccountIntegrationVersion: accountVersion,
+			});
+			if (storefrontVersion === 2) {
+				await f.organizations.upsertShopifyIntegration({
+					...f.storefrontIntegration,
+					encryptedStorefrontPrivateToken: "rotated-storefront-token",
+				});
+			}
+			const binding = {
+				shopDomain: f.storeDomain,
+				integrationVersion: storefrontVersion,
+			};
+			const checkout = spyOn(f.storefront, "checkout");
+			f.storefront.createCart = async (input) => {
+				const intent = required(
+					await f.checkout.findIntentByKey(f.defaultInput),
+				);
+				expect(
+					await f.checkout.classExecutions.get(f.organization.id, intent.id),
+				).toMatchObject({
+					checkpoint: "create_dispatched",
+					storefrontBinding: binding,
+				});
+				expect(input.expectedStorefrontBinding).toEqual(binding);
+				return { shopifyCartId: "gid://shopify/Cart/bound-cart" };
+			};
+
+			const result = await f.service.start({
+				...f.defaultInput,
+				integrationVersion: accountVersion,
+			});
+			expect(checkout).toHaveBeenCalledWith(
+				expect.objectContaining({ expectedStorefrontBinding: binding }),
+			);
+			expect(
+				await f.checkout.classExecutions.get(
+					f.organization.id,
+					result.intentId,
+				),
+			).toMatchObject({ checkpoint: "attached", storefrontBinding: binding });
+		});
+	}
+
+	it("retries after the adapter proves a Storefront rotation prevented dispatch", async () => {
+		const f = await createFixture();
+		const create = spyOn(f.storefront, "createCart");
+		create.mockImplementationOnce(async () => {
+			await f.organizations.upsertShopifyIntegration({
+				...f.storefrontIntegration,
+				encryptedStorefrontPrivateToken: "rotated-storefront-token",
+			});
+			throw new ClassCheckoutStorefrontChangedBeforeRequestError();
+		});
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			code: "checkout_retryable_upstream",
+		});
+		const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+		expect(
+			await f.checkout.classExecutions.get(f.organization.id, intent.id),
+		).toMatchObject({
+			checkpoint: "prepared",
+			state: "retryable",
+			storefrontBinding: null,
+			leaseOwner: null,
+		});
+		await expect(f.service.start(f.defaultInput)).resolves.toMatchObject({
+			intentId: intent.id,
+		});
+		expect(create).toHaveBeenNthCalledWith(
+			2,
+			expect.objectContaining({
+				expectedStorefrontBinding: {
+					shopDomain: f.storeDomain,
+					integrationVersion: 2,
+				},
+			}),
+		);
+	});
+
+	it("keeps a legacy dispatched checkout with unknown outcome from creating another cart", async () => {
+		const f = await createFixture({
+			mockStorefront: {
+				createCart: async () => {
+					throw new AppError(
+						"Adapter could not prove no dispatch",
+						503,
+						"checkout_storefront_binding_changed",
+					);
+				},
+			},
+		});
+		omitLegacyStorefrontBinding(f.checkout);
+		const create = spyOn(f.storefront, "createCart");
+		const unknownCreation = {
+			code: "checkout_recovery_required",
+			recovery: {
+				reasonCode: "checkout_creation_unknown",
+				retryAllowed: false,
+			},
+		};
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject(
+			unknownCreation,
+		);
+		const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+		expect(
+			await f.checkout.classExecutions.get(f.organization.id, intent.id),
+		).toMatchObject({
+			checkpoint: "create_dispatched",
+			storefrontBinding: null,
+		});
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject(
+			unknownCreation,
+		);
+		expect(create).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps an invalid Shopify cart unresumable if its recovery write fails", async () => {
+		const f = await createFixture({
+			mockStorefront: {
+				createCart: async () => {
+					throw new ClassCheckoutCartObservationError(
+						"gid://shopify/Cart/invalid",
+					);
+				},
+			},
+		});
+		const create = spyOn(f.storefront, "createCart");
+		const checkout = spyOn(f.storefront, "checkout");
+		const executions = f.checkout.classExecutions;
+		const transition = executions.transition.bind(executions);
+		const failRecoveryWrite = spyOn(
+			executions,
+			"transition",
+		).mockImplementation(async (input) => {
+			if (input.eventType === "invalid_remote_cart_observed")
+				throw new Error("Recovery storage unavailable");
+			return transition(input);
+		});
+
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			code: "checkout_persistence_unavailable",
+		});
+		const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+		expect(await executions.get(f.organization.id, intent.id)).toMatchObject({
+			checkpoint: "create_dispatched",
+			shopifyCartId: null,
+		});
+		failRecoveryWrite.mockRestore();
+		f.now.setTime(f.now.getTime() + 31_000);
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			code: "checkout_recovery_required",
+		});
+		expect(create).toHaveBeenCalledTimes(1);
+		expect(checkout).not.toHaveBeenCalled();
+	});
+
+	async function strandLegacyInvalidCart() {
+		const f = await createFixture();
+		const create = spyOn(f.storefront, "createCart").mockRejectedValueOnce(
+			new ClassCheckoutCartObservationError(
+				"gid://shopify/Cart/legacy-invalid",
+			),
+		);
+		const checkout = spyOn(f.storefront, "checkout");
+		const executions = f.checkout.classExecutions;
+		const transition = executions.transition.bind(executions);
+		const legacyWrite = spyOn(executions, "transition").mockImplementation(
+			async (input) => {
+				if (input.eventType === "create_dispatched")
+					return transition({ ...input, storefrontBinding: undefined });
+				if (input.eventType === "invalid_remote_cart_observed") {
+					await transition({
+						claim: input.claim,
+						checkpoint: input.checkpoint,
+						shopifyCartId: input.shopifyCartId,
+						eventType: input.eventType,
+					});
+					throw new Error(
+						"Worker interrupted before its separate recovery write",
+					);
+				}
+				return transition(input);
+			},
+		);
+		const submission = {
+			...f.defaultInput,
+			festivalShortName: required(f.festival).shortName,
+		};
+		await expect(f.service.start(submission)).rejects.toMatchObject({
+			code: "checkout_persistence_unavailable",
+		});
+		legacyWrite.mockRestore();
+		f.now.setTime(f.now.getTime() + 31_000);
+		const intent = required(await f.checkout.findIntentByKey(submission));
+		const execution = required(
+			await executions.get(f.organization.id, intent.id),
+		);
+		const recovery = {
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			festivalShortName: submission.festivalShortName,
+			recoveryReference: execution.recoveryReference,
+		};
+		return { ...f, create, handoff: checkout, intent, recovery, submission };
+	}
+
+	it("restores a legacy invalid submission and converges concurrent parent restarts", async () => {
+		const f = await strandLegacyInvalidCart();
+		await expect(f.service.start(f.submission)).rejects.toMatchObject({
+			code: "checkout_recovery_required",
+			recovery: { retryAllowed: false, restartAllowed: true },
+		});
+		expect(f.handoff).not.toHaveBeenCalled();
+		await expect(
+			f.service.findUnissuedCartRestart(f.recovery),
+		).resolves.toEqual({
+			recoveryReference: f.recovery.recoveryReference,
+		});
+		const [first, second] = await Promise.all([
+			f.service.restartUnissuedCart(f.recovery),
+			f.service.restartUnissuedCart(f.recovery),
+		]);
+		expect(first).toEqual(second);
+		expect(first.replacementKey).not.toBe(f.submission.idempotencyKey);
+		expect(first.registrations).toMatchObject([
+			{
+				childId: f.child.id,
+				childName: f.child.displayName,
+				classId: f.classConfig.id,
+				teacherId: f.teacherId,
+				priceCents: 4500,
+				pieces: f.defaultPieces,
+			},
+		]);
+		expect(f.create).toHaveBeenCalledTimes(1);
+		const replacement = {
+			...f.submission,
+			idempotencyKey: first.replacementKey,
+		};
+		const starts = await Promise.allSettled([
+			f.service.start(replacement),
+			f.service.start(replacement),
+		]);
+		expect(starts.some((attempt) => attempt.status === "fulfilled")).toBe(true);
+		await expect(f.service.start(replacement)).resolves.toMatchObject({
+			checkoutUrl: `https://${f.storeDomain}/checkouts/c123`,
+		});
+		expect(f.create).toHaveBeenCalledTimes(2);
+		await expect(f.service.start(f.submission)).rejects.toMatchObject({
+			status: 409,
+		});
+	});
+
+	it("keeps replacement blocked if payment evidence appears before restart", async () => {
+		const f = await strandLegacyInvalidCart();
+		await f.checkout.classExecutions.observePayment({
+			organizationId: f.organization.id,
+			intentId: f.intent.id,
+			shopifyOrderGid: "gid://shopify/Order/unconfirmed",
+			approved: false,
+		});
+		await expect(
+			f.service.findUnissuedCartRestart(f.recovery),
+		).resolves.toEqual({
+			recoveryReference: null,
+		});
+		await expect(
+			f.service.restartUnissuedCart(f.recovery),
+		).rejects.toMatchObject({
+			status: 409,
+			code: "checkout_restart_unavailable",
+		});
+		expect(f.create).toHaveBeenCalledTimes(1);
+		expect(f.handoff).not.toHaveBeenCalled();
+	});
+
+	it("withholds a replacement payment link when late payment evidence appears during handoff", async () => {
+		const f = await strandLegacyInvalidCart();
+		const { replacementKey } = await f.service.restartUnissuedCart(f.recovery);
+		f.handoff.mockImplementationOnce(async () => {
+			await f.checkout.classExecutions.observePayment({
+				organizationId: f.organization.id,
+				intentId: f.intent.id,
+				shopifyOrderGid: "gid://shopify/Order/late",
+				approved: false,
+			});
+			return { checkoutUrl: `https://${f.storeDomain}/checkouts/c123` };
+		});
+		const replacement = { ...f.submission, idempotencyKey: replacementKey };
+		const blocked = { status: 409, code: "checkout_restart_payment_uncertain" };
+		await expect(f.service.start(replacement)).rejects.toMatchObject(blocked);
+		await expect(
+			f.service.preflightRecovery(replacement),
+		).rejects.toMatchObject(blocked);
+		await expect(
+			f.service.restartUnissuedCart(f.recovery),
+		).rejects.toMatchObject({
+			status: 409,
+		});
+		expect(f.create).toHaveBeenCalledTimes(2);
+		expect(f.handoff).toHaveBeenCalledTimes(1);
+	});
+
+	it("resumes an invalid legacy cart after an operator verifies and adopts it", async () => {
+		const f = await strandLegacyInvalidCart();
+		const executions = f.checkout.classExecutions;
+		await executions.reapExpired(f.organization.id, f.intent.id);
+		const claim = {
+			organizationId: f.organization.id,
+			intentId: f.intent.id,
+			owner: "worker",
+		};
+		const claimed = required(await executions.claim(claim));
+		await executions.recordRecoveryRequired({
+			claim: { ...claim, generation: claimed.generation },
+			reason: "checkout_attachment_incomplete",
+		});
+		f.storefront.inspectCart = async () =>
+			cartEvidence(f.intent, f.customer.shopifyCustomerGid);
+		await f.service.resolveRecovery({
+			organizationId: f.organization.id,
+			recoveryReference: f.recovery.recoveryReference,
+			expectedGeneration: claimed.generation,
+			actorId: "admin",
+			reason: "Verified the original Shopify cart",
+			action: "adopt_cart",
+		});
+		await expect(
+			f.service.preflightRecovery(f.submission),
+		).resolves.toBeUndefined();
+		await expect(f.service.start(f.submission)).resolves.toMatchObject({
+			intentId: f.intent.id,
+		});
+		expect(f.create).toHaveBeenCalledTimes(1);
+	});
+
+	for (const matchingEvidence of [true, false]) {
+		it(`${matchingEvidence ? "resumes" : "blocks"} a legacy attached cart based on its Shopify evidence`, async () => {
+			const f = await createFixture();
+			omitLegacyStorefrontBinding(f.checkout);
+			const create = spyOn(f.storefront, "createCart");
+			const result = await f.service.start(f.defaultInput);
+			const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+			expect(
+				await f.checkout.classExecutions.get(f.organization.id, intent.id),
+			).toMatchObject({ checkpoint: "attached", storefrontBinding: null });
+			const evidence = cartEvidence(intent, f.customer.shopifyCustomerGid);
+			if (!matchingEvidence) evidence.lines[0].quantity = 2;
+			const inspect = mock(async () => evidence);
+			f.storefront.inspectCart = inspect;
+			const checkout = spyOn(f.storefront, "checkout");
+			const replay = f.service.start(f.defaultInput);
+
+			if (matchingEvidence) {
+				await expect(replay).resolves.toMatchObject({
+					intentId: intent.id,
+					checkoutUrl: result.checkoutUrl,
+				});
+				expect(checkout).toHaveBeenCalledTimes(1);
+				expect(
+					await f.checkout.classExecutions.get(f.organization.id, intent.id),
+				).toMatchObject({
+					storefrontBinding: {
+						shopDomain: f.storeDomain,
+						integrationVersion: 1,
+					},
+				});
+			} else {
+				await expect(replay).rejects.toMatchObject({
+					code: "checkout_recovery_required",
+					recovery: { reasonCode: "checkout_storefront_verification_required" },
+				});
+				expect(checkout).not.toHaveBeenCalled();
+			}
+			expect(inspect).toHaveBeenCalledTimes(1);
+			expect(create).toHaveBeenCalledTimes(1);
+		});
+	}
+
+	it("retries a legacy cart after a temporary evidence lookup failure", async () => {
+		const f = await createFixture();
+		omitLegacyStorefrontBinding(f.checkout);
+		const create = spyOn(f.storefront, "createCart");
+		const first = await f.service.start(f.defaultInput);
+		const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+		f.storefront.inspectCart = async () =>
+			cartEvidence(intent, f.customer.shopifyCustomerGid);
+		const inspect = spyOn(f.storefront, "inspectCart").mockRejectedValueOnce(
+			new Error("Temporary Shopify outage"),
+		);
+		const checkout = spyOn(f.storefront, "checkout");
+
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			status: 503,
+		});
+		expect(checkout).not.toHaveBeenCalled();
+		expect(
+			await f.checkout.classExecutions.get(f.organization.id, intent.id),
+		).toMatchObject({
+			state: "retryable",
+			checkpoint: "attached",
+			storefrontBinding: null,
+		});
+		await expect(f.service.start(f.defaultInput)).resolves.toMatchObject({
+			intentId: intent.id,
+			checkoutUrl: first.checkoutUrl,
+		});
+		expect(inspect).toHaveBeenCalledTimes(2);
+		expect(create).toHaveBeenCalledTimes(1);
+	});
+
+	it("verifies a legacy known cart before retrying an interrupted attachment", async () => {
+		const f = await createFixture();
+		omitLegacyStorefrontBinding(f.checkout);
+		const create = spyOn(f.storefront, "createCart");
+		spyOn(f.checkout, "markIntentReady").mockImplementationOnce(async () => {
+			f.now.setTime(f.now.getTime() + 31_000);
+			throw new Error("Attachment interrupted");
+		});
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			code: "checkout_execution_changed",
+		});
+		const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+		const record = required(
+			await f.checkout.classExecutions.get(f.organization.id, intent.id),
+		);
+		expect(record).toMatchObject({
+			checkpoint: "remote_cart_known",
+			storefrontBinding: null,
+		});
+		expect(intent.cartReference).toBeNull();
+		f.storefront.inspectCart = async () =>
+			cartEvidence(intent, f.customer.shopifyCustomerGid);
+		const inspect = spyOn(f.storefront, "inspectCart");
+
+		await expect(f.service.start(f.defaultInput)).resolves.toMatchObject({
+			intentId: intent.id,
+		});
+		expect(inspect).toHaveBeenCalledWith({
+			organizationId: f.organization.id,
+			shopifyCartId: record.shopifyCartId,
+			expectedStorefrontBinding: {
+				shopDomain: f.storeDomain,
+				integrationVersion: 1,
+			},
+		});
+		expect(create).toHaveBeenCalledTimes(1);
+	});
+
+	it("preserves checkout and replay without a managed execution repository", async () => {
+		const f = await createFixture({
+			legacyCheckout: true,
+			customerAccountIntegrationVersion: 2,
+		});
+		const create = spyOn(f.storefront, "createCart");
+		const first = await f.service.start(f.defaultInput);
+		await expect(f.service.start(f.defaultInput)).resolves.toMatchObject({
+			intentId: first.intentId,
+			checkoutUrl: first.checkoutUrl,
+		});
+		expect(create).toHaveBeenCalledTimes(1);
+		expect(
+			await f.checkout.classExecutions.get(f.organization.id, first.intentId),
+		).toBeNull();
+	});
+
+	it("records unknown creation before returning recovery, clears its lease, and deterministically replays without another mutation", async () => {
+		const f = await createFixture({
+			mockStorefront: {
+				createCart: async () => {
+					throw new Error("response lost after remote acceptance");
+				},
+			},
+		});
+		const create = spyOn(f.storefront, "createCart");
+		const first = await f.service.start(f.defaultInput).catch((error) => error);
+		expect(first).toBeInstanceOf(ClassCheckoutRecoveryRequiredError);
+		const intent = await f.checkout.findIntentByKey(f.defaultInput);
+		const record = await f.checkout.classExecutions.get(
+			f.organization.id,
+			required(intent).id,
+		);
+		expect(record).toMatchObject({
+			state: "recovery_required",
+			checkpoint: "create_dispatched",
+			leaseOwner: null,
+			leaseExpiresAtIso: null,
+		});
+		expect(first.recovery.recoveryReference).toBe(
+			required(record).recoveryReference,
+		);
+		const second = await f.service
+			.start(f.defaultInput)
+			.catch((error) => error);
+		expect(second.recovery).toEqual(first.recovery);
+		expect(create).toHaveBeenCalledTimes(1);
+		const evidence = JSON.stringify(
+			await f.checkout.classExecutions.events(
+				f.organization.id,
+				required(intent).id,
+			),
+		);
+		expect(evidence).toContain("create_dispatched");
+		expect(evidence).toContain("recovery_required");
+		expect(evidence).not.toContain("response lost after remote acceptance");
+		expect(JSON.stringify(required(record).requestSnapshot)).not.toContain(
+			f.defaultInput.buyerAccessToken,
+		);
+		expect(JSON.stringify(required(record).requestSnapshot)).not.toContain(
+			f.defaultInput.idempotencyKey,
+		);
+	});
+
+	it("rejects changed-payload identity reuse before either failed or successful replay", async () => {
+		const f = await createFixture();
+		await f.service.start(f.defaultInput);
+		const checkout = spyOn(f.storefront, "checkout");
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				pieces: [{ ...f.defaultPieces[0], title: "Different submission" }],
+			}),
+		).rejects.toMatchObject({ status: 409, code: "checkout_payload_conflict" });
+		expect(checkout).not.toHaveBeenCalled();
+	});
+
+	for (const discovery of [
+		"findIntentByKey",
+		"getOutcome",
+		"createIntent",
+		"legacy getOutcome",
+	] as const) {
+		it(`rejects a ready membership checkout discovered by ${discovery} on class checkout`, async () => {
+			const f = await createFixture({
+				legacyCheckout: discovery === "legacy getOutcome",
+			});
+			const { organizationId, customerId, sessionId, idempotencyKey } =
+				f.defaultInput;
+			const expiresAtIso = new Date(
+				f.now.getTime() + 30 * 60_000,
+			).toISOString();
+			const outcome = await f.checkout.createIntent({
+				organizationId,
+				customerId,
+				sessionId,
+				idempotencyKey,
+				intentType: "membership",
+				shopifyProductGid: "gid://shopify/Product/membership",
+				shopifyVariantGid: "gid://shopify/ProductVariant/membership",
+				amount: "30.00",
+				currencyCode: "USD",
+				expiresAtIso,
+			});
+			if (outcome.kind !== "created")
+				throw new Error("Expected membership intent");
+			await f.checkout.attachCart({
+				intentId: outcome.intent.id,
+				organizationId,
+				customerId,
+				sessionId,
+				shopifyCartId: "gid://shopify/Cart/membership",
+				integrationVersion: 1,
+				expiresAtIso,
+			});
+			// A concurrent membership attempt may become visible only on a later lookup.
+			if (discovery === "getOutcome" || discovery === "createIntent")
+				spyOn(f.checkout, "findIntentByKey").mockResolvedValueOnce(null);
+			if (discovery === "createIntent") {
+				spyOn(f.checkout, "getOutcome").mockResolvedValueOnce(null);
+				spyOn(f.checkout, "hasProcessingIntent").mockResolvedValueOnce(false);
+			}
+			const markStarted = spyOn(f.checkout, "markCheckoutStarted");
+			const prepare = spyOn(f.checkout.classExecutions, "prepare");
+			const createCart = spyOn(f.storefront, "createCart");
+			const checkout = spyOn(f.storefront, "checkout");
+			const conflict = { status: 409, code: "checkout_payload_conflict" };
+			if (discovery === "findIntentByKey")
+				await expect(
+					f.service.preflightRecovery(f.defaultInput),
+				).rejects.toMatchObject(conflict);
+			await expect(f.service.start(f.defaultInput)).rejects.toMatchObject(
+				conflict,
+			);
+			expect(markStarted).not.toHaveBeenCalled();
+			expect(prepare).not.toHaveBeenCalled();
+			expect(createCart).not.toHaveBeenCalled();
+			expect(checkout).not.toHaveBeenCalled();
+			expect(await f.checkout.findIntentByKey(f.defaultInput)).toMatchObject({
+				id: outcome.intent.id,
+				intentType: "membership",
+				status: "ready",
+			});
+		});
+	}
+
+	for (const lookup of ["getOutcome", "createIntent"] as const) {
+		for (const replay of ["changed", "matching", "recovery"] as const) {
+			it(`uses managed checkout for a concurrent ${replay} replay discovered by ${lookup}`, async () => {
+				const f = await createFixture();
+				const entered = Promise.withResolvers<void>();
+				const release = Promise.withResolvers<void>();
+				const pause =
+					<Input, Result>(run: (input: Input) => Promise<Result>) =>
+					async (input: Input) => {
+						entered.resolve();
+						await release.promise;
+						return run(input);
+					};
+				if (lookup === "getOutcome") {
+					const getOutcome = f.checkout.getOutcome.bind(f.checkout);
+					spyOn(f.checkout, "getOutcome").mockImplementationOnce(
+						pause(getOutcome),
+					);
+				} else {
+					const createIntent = f.checkout.createIntent.bind(f.checkout);
+					spyOn(f.checkout, "createIntent").mockImplementationOnce(
+						pause(createIntent),
+					);
+				}
+				const create = spyOn(f.storefront, "createCart");
+				const checkout = spyOn(f.storefront, "checkout");
+				const input =
+					replay === "changed"
+						? {
+								...f.defaultInput,
+								pieces: [
+									{ ...f.defaultPieces[0], title: "Different submission" },
+								],
+							}
+						: f.defaultInput;
+				const pending = f.service.start(input);
+				void pending.catch(() => undefined);
+				await entered.promise;
+
+				const first = await f.service
+					.start(f.defaultInput)
+					.catch((error: unknown) => {
+						release.resolve();
+						throw error;
+					});
+				try {
+					if (replay === "recovery") {
+						const executions = f.checkout.classExecutions;
+						const claim = {
+							organizationId: f.organization.id,
+							intentId: first.intentId,
+							owner: "verification-worker",
+						};
+						const worker = required(
+							await executions.claim({ ...claim, allowCompleted: true }),
+						);
+						expect(
+							await executions.recordRecoveryRequired({
+								claim: { ...claim, generation: worker.generation },
+								reason: "checkout_storefront_verification_required",
+							}),
+						).toBe(true);
+					}
+				} finally {
+					release.resolve();
+				}
+				if (replay === "matching") {
+					await expect(pending).resolves.toMatchObject({
+						intentId: first.intentId,
+						checkoutUrl: first.checkoutUrl,
+					});
+					expect(checkout).toHaveBeenCalledTimes(2);
+					expect(checkout.mock.calls[1]?.[0]).toMatchObject({
+						expectedStorefrontBinding: {
+							shopDomain: f.storeDomain,
+							integrationVersion: 1,
+						},
+					});
+				} else {
+					await expect(pending).rejects.toMatchObject(
+						replay === "changed"
+							? { status: 409, code: "checkout_payload_conflict" }
+							: {
+									status: 409,
+									code: "checkout_recovery_required",
+									recovery: {
+										reasonCode: "checkout_storefront_verification_required",
+									},
+								},
+					);
+					expect(checkout).toHaveBeenCalledTimes(1);
+				}
+				expect(create).toHaveBeenCalledTimes(1);
+			});
+		}
+	}
+
+	for (const entryPoint of ["start", "recovery status"] as const) {
+		it(`withholds a completed cart URL on ${entryPoint} when payment is approved during Shopify lookup`, async () => {
+			const f = await createFixture();
+			const first = await f.service.start(f.defaultInput);
+			const record = required(
+				await f.checkout.classExecutions.get(f.organization.id, first.intentId),
+			);
+			expect(record).toMatchObject({
+				state: "completed",
+				checkpoint: "attached",
+			});
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<{ checkoutUrl: string }>();
+			const create = spyOn(f.storefront, "createCart");
+			spyOn(f.storefront, "checkout").mockImplementationOnce(() => {
+				entered.resolve();
+				return release.promise;
+			});
+			const replay =
+				entryPoint === "start"
+					? f.service.start(f.defaultInput)
+					: f.service.recoveryStatus({
+							organizationId: f.organization.id,
+							customerId: f.customer.id,
+							sessionId: f.session.sessionId,
+							recoveryReference: record.recoveryReference,
+							idempotencyKey: f.defaultInput.idempotencyKey,
+						});
+			void replay.catch(() => undefined);
+			await entered.promise;
+			try {
+				await f.checkout.resolveIntent(first.intentId, "approved");
+			} finally {
+				release.resolve({ checkoutUrl: first.checkoutUrl });
+			}
+			if (entryPoint === "start") {
+				await expect(replay).rejects.toBeInstanceOf(AppError);
+				await expect(replay).rejects.toMatchObject({
+					status: 409,
+					code: "checkout_already_completed",
+				});
+			} else {
+				const status = await replay;
+				expect(status).toMatchObject({
+					status: "resolved",
+					reasonCode: "checkout_already_completed",
+					retryAllowed: false,
+				});
+				expect(status.checkoutUrl).toBeUndefined();
+			}
+			expect(create).not.toHaveBeenCalled();
+		});
+	}
+
+	it("withholds a completed cart URL when another worker changes its execution generation during Shopify lookup", async () => {
+		const f = await createFixture();
+		const first = await f.service.start(f.defaultInput);
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<{ checkoutUrl: string }>();
+		spyOn(f.storefront, "checkout").mockImplementationOnce(() => {
+			entered.resolve();
+			return release.promise;
+		});
+		const replay = f.service.start(f.defaultInput);
+		void replay.catch(() => undefined);
+		await entered.promise;
+		try {
+			const claim = {
+				organizationId: f.organization.id,
+				intentId: first.intentId,
+				owner: "revalidating-worker",
+			};
+			const claimed = required(
+				await f.checkout.classExecutions.claim({
+					...claim,
+					allowCompleted: true,
+				}),
+			);
+			expect(
+				await f.checkout.classExecutions.transition({
+					claim: { ...claim, generation: claimed.generation },
+					state: "completed",
+					releaseLease: true,
+				}),
+			).toBe(true);
+		} finally {
+			release.resolve({ checkoutUrl: first.checkoutUrl });
+		}
+		await expect(replay).rejects.toMatchObject({
+			status: 409,
+			code: "checkout_execution_changed",
+		});
+	});
+
+	it("withholds a completed cart URL when it expires during the final replay-state read", async () => {
+		const f = await createFixture();
+		const first = await f.service.start(f.defaultInput);
+		const expiresAt = Date.parse(first.intent.expiresAtIso);
+		f.now.setTime(expiresAt - 1);
+		const readState = f.checkout.getClassCheckoutReplayState.bind(f.checkout);
+		const snapshot = spyOn(f.checkout, "getClassCheckoutReplayState");
+		snapshot.mockImplementationOnce(async (organizationId, intentId) => {
+			const state = await readState(organizationId, intentId);
+			f.now.setTime(expiresAt);
+			return state;
+		});
+
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			code: "checkout_recovery_required",
+			recovery: { reasonCode: "checkout_expired", retryAllowed: false },
+		});
+		expect(snapshot).toHaveBeenCalledTimes(1);
+		expect(
+			await f.checkout.classExecutions.get(f.organization.id, first.intentId),
+		).toMatchObject({
+			state: "recovery_required",
+			resultCode: "checkout_expired",
+		});
+	});
+
+	it("times out a stalled completed cart replay and retries the same cart with the same key", async () => {
+		const f = await createFixture();
+		const create = spyOn(f.storefront, "createCart");
+		const checkout = spyOn(f.storefront, "checkout");
+		const first = await f.service.start(f.defaultInput);
+		expect(checkout.mock.calls[0][0].signal).toBeUndefined();
+		const record = required(
+			await f.checkout.classExecutions.get(f.organization.id, first.intentId),
+		);
+		checkout.mockImplementationOnce(() => new Promise(() => {}));
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			status: 503,
+			code: "checkout_replay_timeout",
+		});
+		expect(checkout.mock.calls[1][0].signal?.aborted).toBe(true);
+		expect(
+			await f.checkout.classExecutions.get(f.organization.id, first.intentId),
+		).toEqual(record);
+		expect(
+			await f.checkout.classExecutions.events(
+				f.organization.id,
+				first.intentId,
+			),
+		).toContainEqual(
+			expect.objectContaining({
+				eventType: "checkout_url_unavailable",
+				evidence: {
+					stage: "resume_checkout_url",
+					code: "checkout_replay_timeout",
+				},
+			}),
+		);
+		await expect(f.service.start(f.defaultInput)).resolves.toMatchObject({
+			intentId: first.intentId,
+			checkoutUrl: first.checkoutUrl,
+		});
+		expect(checkout.mock.calls[2][0].shopifyCartId).toBe(record.shopifyCartId);
+		expect(create).toHaveBeenCalledTimes(1);
+	}, 6_000);
+
+	it("reuses the admitted Shopify cart after transient checkout URL failure", async () => {
+		const f = await createFixture();
+		const create = spyOn(f.storefront, "createCart");
+		const original = f.storefront.checkout;
+		f.storefront.checkout = async () => {
+			throw new Error("temporary read failure");
+		};
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			status: 503,
+		});
+		const intent = await f.checkout.findIntentByKey(f.defaultInput);
+		expect(
+			await f.checkout.classExecutions.get(
+				f.organization.id,
+				required(intent).id,
+			),
+		).toMatchObject({
+			state: "retryable",
+			checkpoint: "attached",
+			leaseOwner: null,
+		});
+		f.storefront.checkout = original;
+		await expect(f.service.start(f.defaultInput)).resolves.toMatchObject({
+			intentId: required(intent).id,
+		});
+		expect(create).toHaveBeenCalledTimes(1);
+	});
+
+	it("reports persistence unavailable rather than claiming unrecorded recovery, then reaps the dispatch checkpoint", async () => {
+		const f = await createFixture({
+			mockStorefront: {
+				createCart: async () => {
+					throw new Error("unknown");
+				},
+			},
+		});
+		const original = f.checkout.classExecutions.recordRecoveryRequired.bind(
+			f.checkout.classExecutions,
+		);
+		f.checkout.classExecutions.recordRecoveryRequired = async () => {
+			throw new Error("database unavailable");
+		};
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			status: 503,
+			code: "checkout_persistence_unavailable",
+		});
+		const intent = await f.checkout.findIntentByKey(f.defaultInput);
+		expect(
+			await f.checkout.classExecutions.get(
+				f.organization.id,
+				required(intent).id,
+			),
+		).toMatchObject({ state: "running", checkpoint: "create_dispatched" });
+		f.checkout.classExecutions.recordRecoveryRequired = original;
+		f.now.setTime(f.now.getTime() + 31_000);
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			code: "checkout_recovery_required",
+		});
+		expect(
+			await f.checkout.classExecutions.get(
+				f.organization.id,
+				required(intent).id,
+			),
+		).toMatchObject({ state: "recovery_required", leaseOwner: null });
+	});
+
+	it("blocks alternate keys while creation remains unknown, even after application expiry", async () => {
+		const f = await createFixture({
+			mockStorefront: {
+				createCart: async () => {
+					throw new Error("unknown");
+				},
+			},
+		});
+		await f.service.start(f.defaultInput).catch(() => undefined);
+		f.now.setTime(f.now.getTime() + 31 * 60_000);
+		const create = spyOn(f.storefront, "createCart");
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				idempotencyKey: "another-submission",
+			}),
+		).rejects.toMatchObject({ code: "checkout_recovery_required" });
+		expect(create).not.toHaveBeenCalled();
+	});
+
+	it("records a late cart observation without allowing a stale worker to attach it", async () => {
+		let release!: (cart: { shopifyCartId: string }) => void;
+		let created!: () => void;
+		const started = new Promise<void>((resolve) => {
+			created = resolve;
+		});
+		const deferred = new Promise<{ shopifyCartId: string }>((resolve) => {
+			release = resolve;
+		});
+		const f = await createFixture({
+			mockStorefront: {
+				createCart: () => {
+					created();
+					return deferred;
+				},
+			},
+		});
+		const create = spyOn(f.storefront, "createCart");
+		const pending = f.service.start(f.defaultInput).catch((error) => error);
+		await started;
+		const intent = await f.checkout.findIntentByKey(f.defaultInput);
+		expect(intent).not.toBeNull();
+		f.now.setTime(f.now.getTime() + 31_000);
+		await f.checkout.classExecutions.reapExpired(
+			f.organization.id,
+			required(intent).id,
+		);
+		release({ shopifyCartId: "gid://shopify/Cart/late-result" });
+		await expect(pending).resolves.toBeInstanceOf(
+			ClassCheckoutRecoveryRequiredError,
+		);
+		expect(
+			required(await f.checkout.findIntentByKey(f.defaultInput)).cartReference,
+		).toBeNull();
+		expect(
+			await f.checkout.classExecutions.events(
+				f.organization.id,
+				required(intent).id,
+			),
+		).toContainEqual(
+			expect.objectContaining({
+				eventType: "late_remote_cart_observed",
+				evidence: {
+					shopifyCartId: "gid://shopify/Cart/late-result",
+					stage: "create_cart",
+				},
+			}),
+		);
+		const listing = await f.service.listRecoveries({
+			organizationId: f.organization.id,
+		});
+		const observation = required(
+			listing[0].events.find(
+				(event) => event.eventType === "late_remote_cart_observed",
+			),
+		);
+		expect(observation.hasCartEvidence).toBe(true);
+		expect(JSON.stringify(listing)).not.toContain(
+			"gid://shopify/Cart/late-result",
+		);
+		f.storefront.inspectCart = async () => ({
+			correlationId: required(intent).correlationId,
+			customerGid: f.customer.shopifyCustomerGid,
+			lines: required(required(intent).lines).map((line) => ({
+				intentLineId: line.id,
+				variantGid: line.shopifyVariantGid,
+				quantity: 1,
+			})),
+		});
+		await f.service.resolveRecovery({
+			organizationId: f.organization.id,
+			recoveryReference: listing[0].recoveryReference,
+			expectedGeneration: listing[0].generation,
+			actorId: "admin",
+			reason: "Validate late observation",
+			action: "adopt_cart",
+			evidenceEventId: observation.id,
+		});
+		await expect(f.service.start(f.defaultInput)).resolves.toMatchObject({
+			intentId: required(intent).id,
+		});
+		expect(create).toHaveBeenCalledTimes(1);
+	});
+
+	it("adopts verified legacy cart evidence against the current Storefront binding", async () => {
+		const f = await createFixture({
+			mockStorefront: {
+				createCart: async () => {
+					throw new Error("unknown");
+				},
+			},
+		});
+		omitLegacyStorefrontBinding(f.checkout);
+		const error = await f.service.start(f.defaultInput).catch((error) => error);
+		const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+		const execution = required(
+			await f.checkout.classExecutions.get(f.organization.id, intent.id),
+		);
+		expect(execution.storefrontBinding).toBeNull();
+		await f.organizations.upsertShopifyIntegration({
+			...f.storefrontIntegration,
+			encryptedStorefrontPrivateToken: "rotated-storefront-token",
+		});
+		const binding = { shopDomain: f.storeDomain, integrationVersion: 2 };
+		const create = spyOn(f.storefront, "createCart");
+		f.storefront.inspectCart = async () =>
+			cartEvidence(intent, f.customer.shopifyCustomerGid);
+		const inspect = spyOn(f.storefront, "inspectCart");
+		const resolved = await f.service.resolveRecovery({
+			organizationId: f.organization.id,
+			recoveryReference: error.recovery.recoveryReference,
+			expectedGeneration: execution.generation,
+			actorId: "admin",
+			reason: "Verified cart evidence",
+			action: "adopt_cart",
+			shopifyCartId: "gid://shopify/Cart/recovered",
+		});
+		expect(resolved.retryAllowed).toBe(true);
+		expect(inspect).toHaveBeenCalledWith({
+			organizationId: f.organization.id,
+			shopifyCartId: "gid://shopify/Cart/recovered",
+			expectedStorefrontBinding: binding,
+		});
+		expect(
+			await f.checkout.classExecutions.get(f.organization.id, intent.id),
+		).toMatchObject({ storefrontBinding: binding });
+		f.now.setTime(f.now.getTime() + 15 * 60_000);
+		await expect(f.service.start(f.defaultInput)).resolves.toMatchObject({
+			intentId: intent.id,
+		});
+		expect(create).not.toHaveBeenCalled();
+		const attachedIntent = required(
+			await f.checkout.findIntentByKey(f.defaultInput),
+		);
+		const cart = await f.checkout.getCart(
+			required(attachedIntent.cartReference),
+			f.organization.id,
+			f.customer.id,
+			f.now.toISOString(),
+		);
+		expect(cart?.expiresAtIso).toBe(intent.expiresAtIso);
+	});
+
+	it("records application expiry of an admitted cart without extending its window or querying Shopify", async () => {
+		const f = await createFixture();
+		await f.service.start(f.defaultInput);
+		const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+		const before = required(
+			await f.checkout.classExecutions.get(f.organization.id, intent.id),
+		);
+		f.now.setTime(f.now.getTime() + 31 * 60_000);
+		const create = spyOn(f.storefront, "createCart");
+		const checkout = spyOn(f.storefront, "checkout");
+		const status = await f.service.recoveryStatus({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			sessionId: f.session.sessionId,
+			recoveryReference: before.recoveryReference,
+			idempotencyKey: f.defaultInput.idempotencyKey,
+		});
+		expect(status).toMatchObject({
+			status: "recovery_required",
+			reasonCode: "checkout_expired",
+			retryAllowed: false,
+		});
+		expect(status.checkoutUrl).toBeUndefined();
+		const replay = await f.service
+			.preflightRecovery({ ...f.defaultInput, buyerAccessToken: "" })
+			.catch((error) => error);
+		expect(replay.recovery).toEqual(status);
+		expect(create).not.toHaveBeenCalled();
+		expect(checkout).not.toHaveBeenCalled();
+		expect(
+			required(await f.checkout.findIntentByKey(f.defaultInput)).expiresAtIso,
+		).toBe(intent.expiresAtIso);
+		expect(
+			await f.checkout.classExecutions.get(f.organization.id, intent.id),
+		).toMatchObject({
+			state: "recovery_required",
+			checkpoint: "attached",
+			shopifyCartId: before.shopifyCartId,
+			leaseOwner: null,
+			leaseExpiresAtIso: null,
+		});
+		expect(
+			(
+				await f.checkout.classExecutions.events(f.organization.id, intent.id)
+			).filter((event) => event.eventType === "application_checkout_expired"),
+		).toHaveLength(1);
+	});
+
+	it("routes a checkout blocked by an expired cart to its festival, while approved operations do not block", async () => {
+		const f = await createFixture();
+		const original = {
+			...f.defaultInput,
+			festivalShortName: required(f.festival).shortName,
+		};
+		const firstCheckout = await f.service.start(original);
+		const execution = required(
+			await f.checkout.classExecutions.get(
+				f.organization.id,
+				firstCheckout.intentId,
+			),
+		);
+		const secondFestival = await f.organizations.createFestival({
+			id: "fest-2027",
+			organizationId: f.organization.id,
+			code: "PNW2027",
+			shortName: "pnw2027",
+			name: "PNW Festival 2027",
+			startDate: "2027-11-01",
+			endDate: "2027-11-10",
+			registrationOpensAt: "2026-01-01T00:00:00.000Z",
+			registrationClosesAt: "2027-12-31T23:59:59.999Z",
+		});
+		const originalClass = required(
+			await f.organizations.findActiveFestivalClassByShortName(
+				f.organization.id,
+				original.festivalShortName,
+				original.festivalClassId,
+			),
+		);
+		const secondClass = await f.organizations.createFestivalClassConfiguration({
+			organizationId: f.organization.id,
+			festivalId: secondFestival.id,
+			displayName: "Junior Solo Piano 2027",
+			classSubtypeId: originalClass.classSubtypeId,
+			divisionId: f.division.id,
+			minimumAge: originalClass.minimumAge,
+			maximumAge: originalClass.maximumAge,
+			price: originalClass.price,
+			maximumPerformancePieces: originalClass.maximumPerformancePieces,
+			performanceMinutes: originalClass.performanceMinutes,
+			shopifyProductGid: "gid://shopify/Product/101",
+			shopifyVariantGid: "gid://shopify/ProductVariant/201",
+		});
+		f.now.setTime(f.now.getTime() + 31 * 60_000);
+		const replacement = await f.customers.createCustomerSession({
+			sessionId: "replacement-session",
+			organizationId: f.organization.id,
+			shopifyCustomerGid: f.customer.shopifyCustomerGid,
+			encryptedTokens: "replacement-token",
+			csrfToken: "replacement-csrf",
+			integrationVersion: 1,
+			createdAtIso: f.now.toISOString(),
+			lastSeenAtIso: f.now.toISOString(),
+			expiresAtIso: new Date(f.now.getTime() + 8 * 3600_000).toISOString(),
+		});
+		expect(replacement.customer.id).toBe(f.customer.id);
+		const submission = {
+			...f.defaultInput,
+			festivalShortName: secondFestival.shortName,
+			festivalClassId: secondClass.id,
+			sessionId: replacement.session.sessionId,
+			idempotencyKey: "replacement-key",
+		};
+		const create = spyOn(f.storefront, "createCart");
+		const first = await f.service
+			.preflightRecovery({ ...submission, buyerAccessToken: "" })
+			.catch((error) => error);
+		expect(first).toBeInstanceOf(ClassCheckoutRecoveryRequiredError);
+		expect(first.recovery).toMatchObject({
+			status: "recovery_required",
+			reasonCode: "checkout_expired",
+			festivalShortName: original.festivalShortName,
+			recoveryReference: execution.recoveryReference,
+			retryAllowed: false,
+		});
+		expect(first.recovery.checkoutUrl).toBeUndefined();
+		const replay = await f.service.start(submission).catch((error) => error);
+		expect(replay.recovery).toEqual(first.recovery);
+		const statusRequest = {
+			organizationId: submission.organizationId,
+			customerId: submission.customerId,
+			sessionId: submission.sessionId,
+			idempotencyKey: submission.idempotencyKey,
+			recoveryReference: execution.recoveryReference,
+		};
+		await expect(
+			f.service.recoveryStatus({
+				...statusRequest,
+				festivalShortName: original.festivalShortName,
+			}),
+		).resolves.toEqual(first.recovery);
+		await expect(
+			f.service.recoveryStatus({
+				...statusRequest,
+				festivalShortName: secondFestival.shortName,
+			}),
+		).rejects.toMatchObject({ status: 404 });
+		expect(create).not.toHaveBeenCalled();
+		expect(
+			await f.checkout.classExecutions.get(
+				f.organization.id,
+				firstCheckout.intentId,
+			),
+		).toMatchObject({
+			state: "recovery_required",
+			checkpoint: "attached",
+			leaseOwner: null,
+			leaseExpiresAtIso: null,
+		});
+
+		const approved = await createFixture();
+		await approved.service.start(approved.defaultInput);
+		const paidIntent = required(
+			await approved.checkout.findIntentByKey(approved.defaultInput),
+		);
+		await approved.checkout.resolveIntent(paidIntent.id, "approved");
+		approved.now.setTime(approved.now.getTime() + 31 * 60_000);
+		await expect(
+			approved.service.preflightRecovery({
+				...approved.defaultInput,
+				idempotencyKey: "new-work-after-completion",
+				buyerAccessToken: "",
+			}),
+		).resolves.toBeUndefined();
+	});
+
+	it("rejects mismatching operator cart evidence without changing recovery", async () => {
+		const f = await createFixture({
+			mockStorefront: {
+				createCart: async () => {
+					throw new Error("unknown");
+				},
+				inspectCart: async () => ({
+					correlationId: "wrong",
+					customerGid: "another-buyer",
+					lines: [],
+				}),
+			},
+		});
+		const error = await f.service.start(f.defaultInput).catch((error) => error);
+		const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+		const record = required(
+			await f.checkout.classExecutions.get(f.organization.id, intent.id),
+		);
+		await expect(
+			f.service.resolveRecovery({
+				organizationId: f.organization.id,
+				recoveryReference: error.recovery.recoveryReference,
+				expectedGeneration: record.generation,
+				actorId: "admin",
+				reason: "Verified evidence",
+				action: "adopt_cart",
+				shopifyCartId: "gid://shopify/Cart/wrong",
+			}),
+		).rejects.toMatchObject({ code: "checkout_recovery_evidence_invalid" });
+		expect(
+			await f.checkout.classExecutions.get(f.organization.id, intent.id),
+		).toEqual(record);
+	});
+
+	it("requires audited acknowledgement to abandon unknown work and preserves the closed operation when a new one starts", async () => {
+		const f = await createFixture({
+			mockStorefront: {
+				createCart: async () => {
+					throw new Error("unknown");
+				},
+			},
+		});
+		const error = await f.service.start(f.defaultInput).catch((error) => error);
+		const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+		const record = required(
+			await f.checkout.classExecutions.get(f.organization.id, intent.id),
+		);
+		const resolution = {
+			organizationId: f.organization.id,
+			recoveryReference: error.recovery.recoveryReference,
+			expectedGeneration: record.generation,
+			actorId: "admin",
+			reason: "Close unresolved checkout with retained evidence",
+			action: "abandon_unknown" as const,
+		};
+		await expect(f.service.resolveRecovery(resolution)).rejects.toMatchObject({
+			code: "checkout_recovery_acknowledgement_required",
+		});
+		await expect(
+			f.service.resolveRecovery({ ...resolution, acknowledgeUnknown: true }),
+		).resolves.toMatchObject({
+			status: "resolved",
+			reasonCode: "abandoned_unknown",
+			retryAllowed: false,
+		});
+		await expect(
+			f.service.recoveryStatus({
+				organizationId: f.organization.id,
+				customerId: f.customer.id,
+				sessionId: f.session.sessionId,
+				recoveryReference: error.recovery.recoveryReference,
+				idempotencyKey: f.defaultInput.idempotencyKey,
+			}),
+		).resolves.toMatchObject({
+			status: "resolved",
+			reasonCode: "abandoned_unknown",
+			retryAllowed: false,
+		});
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			code: "abandoned_unknown",
+		});
+		f.storefront.createCart = async () => ({
+			shopifyCartId: "gid://shopify/Cart/explicitly-new-operation",
+		});
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				idempotencyKey: "explicitly-new-operation",
+			}),
+		).resolves.toHaveProperty("checkoutUrl");
+		expect(
+			await f.checkout.classExecutions.get(f.organization.id, intent.id),
+		).toMatchObject({ state: "rejected", checkpoint: "create_dispatched" });
+		expect(
+			await f.checkout.classExecutions.events(f.organization.id, intent.id),
+		).toContainEqual(
+			expect.objectContaining({
+				eventType: "resolved",
+				evidence: expect.objectContaining({
+					actorId: "admin",
+					resolution: "abandon",
+				}),
+			}),
+		);
+	});
+
+	it("replays the recorded recovery result in local preflight without a provider token", async () => {
+		const f = await createFixture({
+			mockStorefront: {
+				createCart: async () => {
+					throw new Error("unknown");
+				},
+			},
+		});
+		const first = await f.service.start(f.defaultInput).catch((error) => error);
+		const create = spyOn(f.storefront, "createCart");
+		const replay = await f.service
+			.preflightRecovery({ ...f.defaultInput, buyerAccessToken: "" })
+			.catch((error) => error);
+		expect(replay.recovery).toEqual(first.recovery);
+		expect(create).not.toHaveBeenCalled();
+	});
+
+	it("preserves paid-order review evidence consistently across status reads and checkout replay", async () => {
+		const f = await createFixture({
+			mockStorefront: {
+				createCart: async () => {
+					throw new Error("unknown");
+				},
+			},
+		});
+		await f.service.start(f.defaultInput).catch(() => undefined);
+		const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+		await f.checkout.classExecutions.observePayment({
+			organizationId: f.organization.id,
+			intentId: intent.id,
+			shopifyOrderGid: "gid://shopify/Order/review-evidence",
+			approved: false,
+		});
+		await f.checkout.resolveIntent(intent.id, "needs_review");
+		const record = required(
+			await f.checkout.classExecutions.get(f.organization.id, intent.id),
+		);
+		const status = await f.service.recoveryStatus({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			sessionId: f.session.sessionId,
+			recoveryReference: record.recoveryReference,
+			idempotencyKey: f.defaultInput.idempotencyKey,
+		});
+		expect(status).toMatchObject({
+			status: "recovery_required",
+			reasonCode: "paid_order_requires_review",
+			retryAllowed: false,
+		});
+		const replay = await f.service
+			.start(f.defaultInput)
+			.catch((error) => error);
+		expect(replay.recovery).toEqual(status);
+		expect(status.checkoutUrl).toBeUndefined();
+	});
+
+	it("serializes simultaneous same-key and alternate-key requests around one external creation", async () => {
+		let release!: (value: { shopifyCartId: string }) => void;
+		let dispatch!: () => void;
+		const dispatched = new Promise<void>((resolve) => {
+			dispatch = resolve;
+		});
+		const remote = new Promise<{ shopifyCartId: string }>((resolve) => {
+			release = resolve;
+		});
+		const f = await createFixture({
+			mockStorefront: {
+				createCart: () => {
+					dispatch();
+					return remote;
+				},
+			},
+		});
+		const create = spyOn(f.storefront, "createCart");
+		const first = f.service.start(f.defaultInput);
+		await dispatched;
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			code: "checkout_in_progress",
+		});
+		await expect(
+			f.service.start({
+				...f.defaultInput,
+				idempotencyKey: "competing-submission",
+			}),
+		).rejects.toMatchObject({ code: "checkout_in_progress" });
+		release({ shopifyCartId: "gid://shopify/Cart/one-creation" });
+		await expect(first).resolves.toHaveProperty("checkoutUrl");
+		expect(create).toHaveBeenCalledTimes(1);
+	});
+
+	it("rechecks current capacity for a recovered remote cart and records recovery again without grandfathering it", async () => {
+		const f = await createFixture({
+			mockStorefront: {
+				createCart: async () => {
+					throw new Error("unknown");
+				},
+			},
+		});
+		const failure = await f.service
+			.start(f.defaultInput)
+			.catch((error) => error);
+		const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+		const record = required(
+			await f.checkout.classExecutions.get(f.organization.id, intent.id),
+		);
+		f.storefront.inspectCart = async () => ({
+			correlationId: intent.correlationId,
+			customerGid: f.customer.shopifyCustomerGid,
+			lines: required(intent.lines).map((line) => ({
+				intentLineId: line.id,
+				variantGid: line.shopifyVariantGid,
+				quantity: 1,
+			})),
+		});
+		await f.service.resolveRecovery({
+			organizationId: f.organization.id,
+			recoveryReference: record.recoveryReference,
+			expectedGeneration: record.generation,
+			actorId: "admin",
+			reason: "Verified remote cart",
+			action: "adopt_cart",
+			shopifyCartId: "gid://shopify/Cart/recovered-unadmitted",
+		});
+		await f.organizations.updateFestivalClassConfiguration({
+			organizationId: f.organization.id,
+			festivalId: required(f.festival).id,
+			id: f.classConfig.id,
+			capacity: 1,
+		});
+		await f.commerce.createClassEntitlement({
+			organizationId: f.organization.id,
+			festivalId: required(f.festival).id,
+			festivalClassId: f.classConfig.id,
+			parentCustomerId: "other-parent",
+			childId: "other-child",
+			checkoutIntentId: "other-intent",
+			shopifyOrderGid: "gid://shopify/Order/other",
+			shopifyOrderLineGid: "gid://shopify/LineItem/other",
+			paidAmountCents: 4500,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+		const create = spyOn(f.storefront, "createCart");
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			code: "checkout_recovery_required",
+			recovery: {
+				recoveryReference: failure.recovery.recoveryReference,
+				reasonCode: "checkout_attachment_incomplete",
+			},
+		});
+		expect(create).not.toHaveBeenCalled();
+		expect(
+			required(await f.checkout.findIntentByKey(f.defaultInput)).cartReference,
+		).toBeNull();
+		expect(
+			await f.checkout.classExecutions.get(f.organization.id, intent.id),
+		).toMatchObject({
+			state: "recovery_required",
+			checkpoint: "remote_cart_known",
+			leaseOwner: null,
+		});
+	});
+
+	it("requires the original festival, owner, session, and key for a recovery checkout URL", async () => {
+		const f = await createFixture();
+		const festivalShortName = required(f.festival).shortName;
+		const first = await f.service.start({
+			...f.defaultInput,
+			festivalShortName,
+		});
+		const record = required(
+			await f.checkout.classExecutions.get(f.organization.id, first.intentId),
+		);
+		const statusRequest = {
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			sessionId: f.session.sessionId,
+			recoveryReference: record.recoveryReference,
+			idempotencyKey: f.defaultInput.idempotencyKey,
+			festivalShortName,
+		};
+		const lookup = spyOn(f.storefront, "checkout");
+		for (const mismatch of [
+			{ sessionId: "new-session" },
+			{ idempotencyKey: "different-submission" },
+		]) {
+			const status = await f.service.recoveryStatus({
+				...statusRequest,
+				...mismatch,
+			});
+			expect(status).toMatchObject({ festivalShortName, retryAllowed: false });
+			expect(status.checkoutUrl).toBeUndefined();
+		}
+		await expect(
+			f.service.recoveryStatus({
+				...statusRequest,
+				customerId: "other-customer",
+			}),
+		).rejects.toMatchObject({ status: 404 });
+		await expect(
+			f.service.recoveryStatus({
+				...statusRequest,
+				festivalShortName: "pnw2027",
+			}),
+		).rejects.toMatchObject({ status: 404 });
+		expect(lookup).not.toHaveBeenCalled();
+		await expect(
+			f.service.recoveryStatus(statusRequest),
+		).resolves.toMatchObject({
+			status: "ready",
+			festivalShortName,
+			retryAllowed: true,
+			checkoutUrl: first.checkoutUrl,
+		});
+		expect(lookup).toHaveBeenCalledTimes(1);
+	});
 	it("captures an explicit unknown instrument when an existing client omits selection", async () => {
 		const f = await createFixture();
 		const insert = spyOn(f.checkout, "insertRegistrationMetadata");
@@ -614,7 +2245,7 @@ describe("ClassCheckoutService", () => {
 			return attached;
 		};
 		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
-			code: "sold_out",
+			code: "checkout_recovery_required",
 		});
 		await update;
 	});
@@ -1463,7 +3094,7 @@ describe("ClassCheckoutService", () => {
 		expect(metadata?.repertoireJson).toEqual(f.defaultPieces);
 	});
 
-	it("triggers markFailed compensation and throws 503 on upstream storefront failure", async () => {
+	it("preserves the admitted cart when checkout URL retrieval fails", async () => {
 		const failureLogger = new CapturingClassCheckoutFailureLogger();
 		const rawErrorText = "storefront provider detail";
 		const f = await createFixture({
@@ -1480,7 +3111,7 @@ describe("ClassCheckoutService", () => {
 			code: "checkout_retryable_upstream",
 		});
 
-		// Intent should be marked failed in repository
+		// The admitted cart remains available for a same-operation retry.
 		const intents = (
 			f.checkout as unknown as {
 				intents: Map<string, { status: string }>;
@@ -1488,7 +3119,7 @@ describe("ClassCheckoutService", () => {
 		).intents;
 		const createdIntent = [...intents.values()][0];
 		expect(createdIntent).toBeDefined();
-		expect(createdIntent?.status).toBe("failed");
+		expect(createdIntent?.status).toBe("checkout_started");
 		expect(failureLogger.entries[0]).toEqual({
 			message: "Class checkout failed.",
 			context: expect.objectContaining({
@@ -1499,7 +3130,7 @@ describe("ClassCheckoutService", () => {
 		expect(JSON.stringify(failureLogger.entries)).not.toContain(rawErrorText);
 	});
 
-	it("triggers markFailed compensation and throws 503 on disallowed checkout URL domain", async () => {
+	it("preserves the admitted cart when checkout URL verification fails", async () => {
 		const f = await createFixture({
 			mockStorefront: {
 				checkout: async () => ({
@@ -1513,7 +3144,7 @@ describe("ClassCheckoutService", () => {
 			code: "checkout_retryable_upstream",
 		});
 
-		// Intent should be marked failed in repository
+		// The admitted cart remains available for a same-operation retry.
 		const intents = (
 			f.checkout as unknown as {
 				intents: Map<string, { status: string }>;
@@ -1521,7 +3152,7 @@ describe("ClassCheckoutService", () => {
 		).intents;
 		const createdIntent = [...intents.values()][0];
 		expect(createdIntent).toBeDefined();
-		expect(createdIntent?.status).toBe("failed");
+		expect(createdIntent?.status).toBe("checkout_started");
 	});
 
 	it("returns a safe database failure and records SQLSTATE for metadata persistence errors", async () => {
@@ -1551,7 +3182,7 @@ describe("ClassCheckoutService", () => {
 		).intents;
 		const createdIntent = [...intents.values()][0];
 		expect(createdIntent).toBeDefined();
-		expect(createdIntent?.status).toBe("failed");
+		expect(createdIntent?.status).toBe("creating");
 		expect(failureLogger.entries).toEqual([
 			{
 				message: "Class checkout failed.",
@@ -1624,8 +3255,8 @@ describe("ClassCheckoutService", () => {
 				}
 			).intents;
 			const createdIntent = [...intents.values()][0];
-			expect(markFailedSpy).toHaveBeenCalledWith(createdIntent.id);
-			expect(createdIntent.status).toBe("failed");
+			expect(markFailedSpy).not.toHaveBeenCalled();
+			expect(createdIntent.status).toBe("creating");
 		});
 	}
 
@@ -1671,9 +3302,20 @@ describe("ClassCheckoutService", () => {
 		).toThrow("Checkout intent line persistence");
 	});
 
-	it("compensates class-registration metadata write failures, marking intent failed and allowing retry", async () => {
+	it("retries local metadata preparation under the original checkout identity", async () => {
 		const f = await createFixture();
 		const markFailedSpy = spyOn(f.checkout, "markFailed");
+		const prepare = f.checkout.classExecutions.prepare.bind(
+			f.checkout.classExecutions,
+		);
+		f.checkout.classExecutions.prepare = (input) =>
+			prepare({
+				...input,
+				requestSnapshot: {
+					...(input.requestSnapshot as Record<string, unknown>),
+					integrationVersion: 1,
+				},
+			});
 
 		const originalInsert = f.checkout.insertRegistrationMetadata.bind(
 			f.checkout,
@@ -1700,52 +3342,218 @@ describe("ClassCheckoutService", () => {
 		).intents;
 		const createdIntent = [...intents.values()][0];
 		expect(createdIntent).toBeDefined();
-		expect(createdIntent?.status).toBe("failed");
-		expect(markFailedSpy).toHaveBeenCalledWith(createdIntent.id);
+		expect(createdIntent?.status).toBe("creating");
+		expect(markFailedSpy).not.toHaveBeenCalled();
+		expect(
+			await f.checkout.classExecutions.get(
+				f.organization.id,
+				required(createdIntent).id,
+			),
+		).toMatchObject({ checkpoint: "prepared", storefrontBinding: null });
 
-		// Verify subsequent call with a new idempotency key is allowed (not blocked with 409 checkout_in_progress)
+		await f.organizations.upsertShopifyIntegration({
+			...f.storefrontIntegration,
+			encryptedStorefrontPrivateToken: "rotated-storefront-token",
+		});
 		f.checkout.insertRegistrationMetadata = originalInsert;
+		const outcomeLookup = spyOn(f.checkout, "getOutcome");
+		const reapExpired = spyOn(f.checkout.classExecutions, "reapExpired");
 		const retryResult = await f.service.start({
 			...f.defaultInput,
-			idempotencyKey: "22222222-3333-4444-5555-666666666666",
+			idempotencyKey: f.defaultInput.idempotencyKey,
 		});
-		expect(retryResult).toBeDefined();
+		expect(retryResult.intentId).toBe(required(createdIntent).id);
+		expect(outcomeLookup).not.toHaveBeenCalled();
+		expect(reapExpired).not.toHaveBeenCalled();
 		expect(retryResult.checkoutUrl).toBe(
 			`https://${f.storeDomain}/checkouts/c123`,
 		);
+		expect(
+			await f.checkout.classExecutions.get(
+				f.organization.id,
+				retryResult.intentId,
+			),
+		).toMatchObject({
+			storefrontBinding: { shopDomain: f.storeDomain, integrationVersion: 2 },
+		});
 	});
 
-	it("aborts with 503 retryableCheckoutError and marks intent failed when second getShopifyIntegration read returns incremented integrationVersion", async () => {
-		const f = await createFixture();
+	for (const firstRetry of ["start", "preflightRecovery"] as const) {
+		it(`allows a fresh checkout after ${firstRetry} confirms pre-dispatch expiry`, async () => {
+			const f = await createFixture();
+			const create = spyOn(f.storefront, "createCart");
+			const checkout = spyOn(f.storefront, "checkout");
+			const integration = spyOn(
+				f.organizations,
+				"getShopifyIntegration",
+			).mockResolvedValueOnce(null);
 
-		let readCount = 0;
-		const originalGetShopifyIntegration =
-			f.organizations.getShopifyIntegration.bind(f.organizations);
-		f.organizations.getShopifyIntegration = async (organizationId: string) => {
-			const record = await originalGetShopifyIntegration(organizationId);
-			readCount++;
-			if (readCount === 2 && record) {
-				return {
-					...record,
-					integrationVersion: record.integrationVersion + 1,
-				};
-			}
-			return record;
+			await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+				status: 503,
+			});
+			const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+			const executions = f.checkout.classExecutions;
+			expect(await executions.get(f.organization.id, intent.id)).toMatchObject({
+				checkpoint: "prepared",
+				state: "retryable",
+				shopifyCartId: null,
+			});
+			f.now.setTime(Date.parse(intent.expiresAtIso) + 1);
+
+			const safeRejection = {
+				status: 409,
+				code: "checkout_pre_dispatch_rejected",
+			};
+			const preflightInput = { ...f.defaultInput, buyerAccessToken: "" };
+			await expect(
+				f.service[firstRetry](
+					firstRetry === "start" ? f.defaultInput : preflightInput,
+				),
+			).rejects.toMatchObject(safeRejection);
+			await expect(
+				f.service.preflightRecovery(preflightInput),
+			).rejects.toMatchObject(safeRejection);
+			await expect(f.service.start(f.defaultInput)).rejects.toMatchObject(
+				safeRejection,
+			);
+			expect(await executions.get(f.organization.id, intent.id)).toMatchObject({
+				checkpoint: "prepared",
+				state: "rejected",
+				resultCode: "checkout_expired",
+				leaseOwner: null,
+				shopifyCartId: null,
+			});
+			expect(await f.checkout.findIntentByKey(f.defaultInput)).toMatchObject({
+				status: "superseded",
+				cartReference: null,
+			});
+			expect(create).not.toHaveBeenCalled();
+			expect(checkout).not.toHaveBeenCalled();
+			expect(integration).toHaveBeenCalledTimes(1);
+
+			await expect(
+				f.service.start({
+					...f.defaultInput,
+					idempotencyKey: crypto.randomUUID(),
+				}),
+			).resolves.toMatchObject({
+				checkoutUrl: `https://${f.storeDomain}/checkouts/c123`,
+			});
+			expect(create).toHaveBeenCalledTimes(1);
+			expect(checkout).toHaveBeenCalledTimes(1);
+		});
+	}
+
+	it("does not release an expired prepared checkout when its terminal write fails", async () => {
+		const f = await createFixture();
+		spyOn(f.organizations, "getShopifyIntegration").mockResolvedValueOnce(null);
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			status: 503,
+		});
+		const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+		f.now.setTime(Date.parse(intent.expiresAtIso) + 1);
+		const executions = f.checkout.classExecutions;
+		const transition = executions.transition.bind(executions);
+		const failedWrite = spyOn(executions, "transition").mockImplementation(
+			async (input) => {
+				if (input.state === "rejected") throw new Error("Write unavailable");
+				return transition(input);
+			},
+		);
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			status: 503,
+			code: "checkout_persistence_unavailable",
+		});
+		failedWrite.mockRestore();
+		expect(await executions.get(f.organization.id, intent.id)).toMatchObject({
+			checkpoint: "prepared",
+			state: "running",
+		});
+		expect(await f.checkout.findIntentByKey(f.defaultInput)).toMatchObject({
+			status: "creating",
+		});
+	});
+
+	it("keeps a legacy pre-dispatch rejection terminal under a safe result code", async () => {
+		const f = await createFixture();
+		const create = spyOn(f.storefront, "createCart");
+		const originalInsert = f.checkout.insertRegistrationMetadata;
+		f.checkout.insertRegistrationMetadata = async () => {
+			throw new AppError(
+				"Legacy version mismatch",
+				409,
+				"checkout_integration_changed",
+			);
 		};
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			status: 409,
+		});
+		f.checkout.insertRegistrationMetadata = originalInsert;
+		const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+		expect(
+			await f.checkout.classExecutions.get(f.organization.id, intent.id),
+		).toMatchObject({
+			checkpoint: "prepared",
+			state: "rejected",
+			storefrontBinding: null,
+			resultCode: "checkout_integration_changed",
+		});
+		const replayError = { status: 409, code: "checkout_pre_dispatch_rejected" };
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject(
+			replayError,
+		);
+		await expect(
+			f.service.preflightRecovery(f.defaultInput),
+		).rejects.toMatchObject(replayError);
+		expect(create).not.toHaveBeenCalled();
+	});
+
+	it("keeps the admitted cart retryable when integration changes during URL retrieval", async () => {
+		const f = await createFixture();
+		const create = spyOn(f.storefront, "createCart");
+		const checkout = spyOn(f.storefront, "checkout");
+		checkout.mockImplementationOnce(async () => {
+			await f.organizations.upsertShopifyIntegration({
+				...f.storefrontIntegration,
+				encryptedStorefrontPrivateToken: "rotated-storefront-token",
+			});
+			return { checkoutUrl: `https://${f.storeDomain}/checkouts/stale` };
+		});
 
 		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
 			status: 503,
 			code: "checkout_retryable_upstream",
 		});
 
-		const intents = (
-			f.checkout as unknown as {
-				intents: Map<string, { status: string }>;
-			}
-		).intents;
-		const createdIntent = [...intents.values()][0];
-		expect(createdIntent).toBeDefined();
-		expect(createdIntent?.status).toBe("failed");
+		const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+		expect(intent.status).toBe("checkout_started");
+		const record = required(
+			await f.checkout.classExecutions.get(f.organization.id, intent.id),
+		);
+		expect(record).toMatchObject({
+			checkpoint: "attached",
+			state: "retryable",
+			storefrontBinding: { shopDomain: f.storeDomain, integrationVersion: 1 },
+		});
+		f.storefront.inspectCart = async () =>
+			cartEvidence(intent, f.customer.shopifyCustomerGid);
+		const inspect = spyOn(f.storefront, "inspectCart");
+		const binding = { shopDomain: f.storeDomain, integrationVersion: 2 };
+		await expect(f.service.start(f.defaultInput)).resolves.toMatchObject({
+			intentId: intent.id,
+			checkoutUrl: `https://${f.storeDomain}/checkouts/c123`,
+		});
+		expect(inspect).toHaveBeenCalledWith({
+			organizationId: f.organization.id,
+			shopifyCartId: record.shopifyCartId,
+			expectedStorefrontBinding: binding,
+		});
+		expect(checkout).toHaveBeenLastCalledWith({
+			organizationId: f.organization.id,
+			shopifyCartId: record.shopifyCartId,
+			expectedStorefrontBinding: binding,
+		});
+		expect(create).toHaveBeenCalledTimes(1);
 	});
 
 	it("fails with 404 when organization is not found", async () => {
@@ -2053,7 +3861,7 @@ describe("ClassCheckoutService", () => {
 		});
 	});
 
-	it("compensates and marks intent failed when insertRegistrationMetadata fails on second line", async () => {
+	it("preserves the operation when metadata preparation fails on the second line", async () => {
 		const f = await createFixture();
 		const secondChild = await f.customers.createChild({
 			organizationId: f.organization.id,
@@ -2115,7 +3923,7 @@ describe("ClassCheckoutService", () => {
 			}
 		).intents;
 		const createdIntent = [...intents.values()][0];
-		expect(createdIntent?.status).toBe("failed");
+		expect(createdIntent?.status).toBe("creating");
 	});
 
 	it("evaluateEligibility evaluates proposed items successfully when prerequisites are met", async () => {
@@ -2878,6 +4686,12 @@ describe("ClassCheckoutService", () => {
 			f.organizations,
 			"findFestivalClassConfigurationsByIds",
 		);
+		const catalogLookup = spyOn(
+			f.organizations,
+			"listRegistrationCatalogValues",
+		);
+		const timezoneLookup = spyOn(f.organizations, "getOrganizationTimezone");
+		const festivalLookup = spyOn(f.organizations, "listFestivals");
 
 		const result = await f.service.start({
 			organizationId: f.organization.id,
@@ -2909,6 +4723,11 @@ describe("ClassCheckoutService", () => {
 		expect(findActiveTeacherEntitlementGrantSpy).toHaveBeenCalledTimes(1);
 		expect(findCurrentAccompanistMembershipGrantSpy).toHaveBeenCalledTimes(1);
 		expect(findFestivalClassConfigurationByIdSpy).toHaveBeenCalledTimes(2);
+		expect(
+			catalogLookup.mock.calls.filter(([, kind]) => kind === "class_subtype"),
+		).toHaveLength(1);
+		expect(timezoneLookup).toHaveBeenCalledTimes(1);
+		expect(festivalLookup).toHaveBeenCalledTimes(2);
 		expect(bulkClassLookup).toHaveBeenCalledTimes(1);
 		expect(bulkClassLookup).toHaveBeenCalledWith(
 			f.organization.id,
@@ -3314,22 +5133,11 @@ describe("ClassCheckoutService", () => {
 		).toBe(0);
 		expect(thrownError).toBeInstanceOf(AppError);
 		const appErr = thrownError as AppError;
-		expect(appErr.status).toBe(400);
-		expect(appErr.code).toBe("sold_out");
-		expect(appErr.message).toMatch(/capacity|sold_out|waitlist/i);
-		expect(appErr.details).toMatchObject({
-			waitlistedClassIds: [raceClass.id],
-			failures: [
-				{
-					childId: f.child.id,
-					festivalClassId: raceClass.id,
-					reasonCode: "SOLD_OUT",
-					availability: "waitlist",
-					capacity: 2,
-					placedCount: 2,
-				},
-			],
-		});
+		expect(appErr.status).toBe(409);
+		expect(appErr.code).toBe("checkout_recovery_required");
+		expect(
+			(appErr as ClassCheckoutRecoveryRequiredError).recovery.reasonCode,
+		).toBe("checkout_attachment_incomplete");
 
 		const intents = (
 			f.checkout as unknown as {
@@ -3337,7 +5145,7 @@ describe("ClassCheckoutService", () => {
 			}
 		).intents;
 		const createdIntent = [...intents.values()][0];
-		expect(createdIntent?.status).toBe("failed");
+		expect(createdIntent?.status).toBe("creating");
 		expect(createdIntent?.cartReference).toBeNull();
 	});
 
@@ -3411,22 +5219,11 @@ describe("ClassCheckoutService", () => {
 		).toBe(0);
 		expect(thrownError).toBeInstanceOf(AppError);
 		const appErr = thrownError as AppError;
-		expect(appErr.status).toBe(400);
-		expect(appErr.code).toBe("sold_out");
-		expect(appErr.message).toMatch(/capacity|sold_out|waitlist/i);
-		expect(appErr.details).toMatchObject({
-			waitlistedClassIds: [adminClass.id],
-			failures: [
-				{
-					childId: f.child.id,
-					festivalClassId: adminClass.id,
-					reasonCode: "SOLD_OUT",
-					availability: "waitlist",
-					capacity: 1,
-					placedCount: 1,
-				},
-			],
-		});
+		expect(appErr.status).toBe(409);
+		expect(appErr.code).toBe("checkout_recovery_required");
+		expect(
+			(appErr as ClassCheckoutRecoveryRequiredError).recovery.reasonCode,
+		).toBe("checkout_attachment_incomplete");
 
 		const intents = (
 			f.checkout as unknown as {
@@ -3434,7 +5231,7 @@ describe("ClassCheckoutService", () => {
 			}
 		).intents;
 		const createdIntent = [...intents.values()][0];
-		expect(createdIntent?.status).toBe("failed");
+		expect(createdIntent?.status).toBe("creating");
 		expect(createdIntent?.cartReference).toBeNull();
 	});
 
@@ -3493,7 +5290,7 @@ describe("ClassCheckoutService", () => {
 			};
 			const checkoutUrl = spyOn(f.storefront, "checkout");
 			await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
-				code: "sold_out",
+				code: "checkout_recovery_required",
 			});
 			expect(checkoutUrl).not.toHaveBeenCalled();
 			const intents = (
@@ -3506,7 +5303,7 @@ describe("ClassCheckoutService", () => {
 			).intents;
 			expect([...intents.values()]).toHaveLength(1);
 			expect([...intents.values()][0]).toMatchObject({
-				status: "failed",
+				status: "creating",
 				cartReference: null,
 			});
 		});
@@ -3631,8 +5428,8 @@ describe("ClassCheckoutService", () => {
 		});
 	});
 
-	it("never grandfathers a bare/failed intent when class subsequently reaches capacity (#284)", async () => {
-		const f = await createFixture();
+	it("never reopens a historical bare/failed intent after capacity fills (#284)", async () => {
+		const f = await createFixture({ legacyCheckout: true });
 		const festivalId = f.festival?.id ?? "";
 		const bareSubtype = await f.organizations.createRegistrationCatalogValue({
 			organizationId: f.organization.id,

@@ -1,8 +1,7 @@
 import type { CustomerSessionProfile } from "@festival/common";
 import type { JSX } from "solid-js";
-import { createSignal, onMount, Show } from "solid-js";
+import { createEffect, createSignal, onCleanup, Show } from "solid-js";
 import { getCustomerSession } from "../lib/api.js";
-import { CustomerAccountNavigation } from "./CustomerAccountNavigation.js";
 
 export function CustomerAccountPageLayout(props: {
 	slug: string;
@@ -15,21 +14,32 @@ export function CustomerAccountPageLayout(props: {
 	const [loading, setLoading] = createSignal(true);
 	const [error, setError] = createSignal("");
 
-	onMount(() => {
+	createEffect(() => {
+		let active = true;
+		setLoading(true);
+		setSession(null);
+		setError("");
 		void getCustomerSession(props.slug)
 			.then((response) => {
+				if (!active) return;
 				if (response.session.authenticated) {
 					setSession(response.session);
 					props.onAuthenticated?.(response.session);
 				}
 			})
-			.catch((error) => setError((error as Error).message))
-			.finally(() => setLoading(false));
+			.catch((error) => {
+				if (active) setError((error as Error).message);
+			})
+			.finally(() => {
+				if (active) setLoading(false);
+			});
+		onCleanup(() => {
+			active = false;
+		});
 	});
 
 	return (
-		<section class="panel flow-panel customer-account-page">
-			<CustomerAccountNavigation slug={props.slug} />
+		<section class="customer-account-page parent-account-page">
 			<Show when={!loading()} fallback={<p>Loading customer session…</p>}>
 				<Show
 					when={session()}

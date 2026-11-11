@@ -948,6 +948,54 @@ describe("CustomerAccountService", () => {
 		).rejects.toThrow("Return target");
 	});
 
+	it("preserves exact festival registration and cart returns through OAuth and rejects invalid targets", async () => {
+		const f = await fixture();
+		const regReturn = "/org/festival/festival/festival-2026/register";
+		const regAuth = await f.begin(regReturn);
+		const regResult = await f.service.callback(
+			regAuth.searchParams.get("state") ?? "",
+			"code",
+		);
+		expect(regResult.returnTo).toBe(regReturn);
+
+		for (const cartReturn of [
+			"/org/festival/festival/festival_slug-123/register/cart",
+			"/org/festival/festival/festival_slug-123/cart",
+		]) {
+			const cartAuth = await f.begin(cartReturn);
+			const cartResult = await f.service.callback(
+				cartAuth.searchParams.get("state") ?? "",
+				"code",
+			);
+			expect(cartResult.returnTo).toBe(cartReturn);
+		}
+
+		await expect(
+			f.service.start(
+				"festival",
+				"/org/festival/festival/festival-2026/invalid",
+			),
+		).rejects.toThrow("Return target");
+		await expect(
+			f.service.start("festival", "/org/festival/festival/bad slug!/register"),
+		).rejects.toThrow("Return target");
+		await expect(
+			f.service.start("festival", "/org/other/festival/festival-2026/register"),
+		).rejects.toThrow("Return target");
+		await expect(
+			f.service.start(
+				"festival",
+				"/org/other/festival/festival-2026/register/cart",
+			),
+		).rejects.toThrow("Return target");
+		await expect(
+			f.service.start(
+				"festival",
+				"/org/festival/festival/festival-2026/register?tab=details",
+			),
+		).rejects.toThrow("Return target");
+	});
+
 	it("preserves one bounded local offering in one-time tenant OAuth state", async () => {
 		const f = await fixture();
 		const authUrl = await f.begin(undefined, "offering_123");
@@ -1077,6 +1125,22 @@ describe("CustomerAccountService", () => {
 				auth.sessionId,
 				"wrong",
 				"https://festival.example.com",
+			),
+		).rejects.toThrow("CSRF");
+		await expect(
+			f.service.logout(
+				"festival",
+				auth.sessionId,
+				session.session.csrfToken,
+				"https://evil.example.com",
+			),
+		).rejects.toThrow("CSRF");
+		await expect(
+			f.service.logout(
+				"festival",
+				auth.sessionId,
+				session.session.csrfToken,
+				undefined,
 			),
 		).rejects.toThrow("CSRF");
 		const redirect = await f.service.logout(
@@ -1234,6 +1298,16 @@ describe("CustomerAccountService", () => {
 
 		// 1. Cutoff boundary: before cutoff succeeds
 		f.setNow(new Date(cutoff.getTime() - 1000));
+		const beforeCutoff = await f.service.listClassRegistrations(
+			"festival",
+			auth.sessionId,
+			"spring-2026",
+		);
+		expect(beforeCutoff.registrations[0]).toMatchObject({
+			metadata: { teacherName: null },
+			metadataEditCutoffIso: "2026-04-03T07:00:00.000Z",
+			canEditMetadata: true,
+		});
 		const successRes = await f.service.updateRegistrationMetadata(
 			"festival",
 			"spring-2026",
@@ -1248,6 +1322,11 @@ describe("CustomerAccountService", () => {
 
 		// 1b. Cutoff boundary: at cutoff throws 422
 		f.setNow(new Date(cutoff.getTime()));
+		const atCutoff = await f.service.listClassRegistrations(
+			"festival",
+			auth.sessionId,
+		);
+		expect(atCutoff.registrations[0].canEditMetadata).toBe(false);
 		await expect(
 			f.service.updateRegistrationMetadata(
 				"festival",
@@ -1264,6 +1343,12 @@ describe("CustomerAccountService", () => {
 
 		// 1c. Cutoff boundary: after cutoff throws 422
 		f.setNow(new Date(cutoff.getTime() + 1000));
+		const afterCutoff = await f.service.listClassRegistrations(
+			"festival",
+			auth.sessionId,
+			"spring-2026",
+		);
+		expect(afterCutoff.registrations[0].canEditMetadata).toBe(false);
 		await expect(
 			f.service.updateRegistrationMetadata(
 				"festival",
@@ -1456,6 +1541,26 @@ describe("CustomerAccountService", () => {
 			{ pieces: validPieces },
 		);
 		expect(noFestRes.metadata.id).toBe("reg-meta-1");
+
+		// Historical registrations remain listable when their class/festival is absent.
+		f.organizations.listFestivalClassConfigurations = async () => [];
+		const missingClass = await f.service.listClassRegistrations(
+			"festival",
+			auth.sessionId,
+		);
+		expect(missingClass.registrations[0]).toMatchObject({
+			metadataEditCutoffIso: "2026-04-03T07:00:00.000Z",
+			canEditMetadata: false,
+		});
+		f.organizations.listFestivals = async () => [];
+		const missingFestival = await f.service.listClassRegistrations(
+			"festival",
+			auth.sessionId,
+		);
+		expect(missingFestival.registrations[0]).toMatchObject({
+			metadataEditCutoffIso: null,
+			canEditMetadata: false,
+		});
 	});
 
 	it("does not allow reading Shopify order history without a session, or across tenants", async () => {
@@ -1593,6 +1698,7 @@ describe("CustomerAccountService", () => {
 			status: "confirmed",
 		});
 
+		f.setNow(new Date("2026-04-02T00:00:00.000Z"));
 		const result = await f.service.listClassRegistrations(
 			"festival",
 			auth.sessionId,
@@ -1605,6 +1711,10 @@ describe("CustomerAccountService", () => {
 		);
 		expect(paid?.paidAtIso).toBe("2026-05-01T12:00:00.000Z");
 		expect(noProjection?.paidAtIso).toBeNull();
+		expect(noProjection?.canEditMetadata).toBe(false);
+		expect(noProjection?.metadataEditCutoffIso).toBe(
+			"2026-04-03T00:00:00.000Z",
+		);
 		for (const item of result.registrations) {
 			expect(item.entitlement).not.toHaveProperty("shopifyOrderGid");
 			expect(item.entitlement).not.toHaveProperty("shopifyOrderLineGid");

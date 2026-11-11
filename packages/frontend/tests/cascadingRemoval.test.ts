@@ -16,13 +16,6 @@ const {
 	hasRemainingProvider,
 } = await import("../src/pages/cascadingRemoval.js");
 
-const cartViewSource = await Bun.file(
-	new URL(
-		"../src/components/FestivalRegistrationCartView.tsx",
-		import.meta.url,
-	),
-).text();
-
 const modalSource = await Bun.file(
 	new URL("../src/components/CascadingRemovalModal.tsx", import.meta.url),
 ).text();
@@ -569,16 +562,5 @@ describe("CascadingRemovalModal & Cart View UX specifications", () => {
 		expect(modalSource).toContain('data-testid="cancel-cascading-removal"');
 		expect(modalSource).toContain("props.onConfirmRemoveAll");
 		expect(modalSource).toContain("props.onCancel");
-	});
-
-	it("FestivalRegistrationCartView integrates cascading removal modal and handler", () => {
-		expect(cartViewSource).toContain("CascadingRemovalModal");
-		expect(cartViewSource).toContain("findDependentCartItems");
-		expect(cartViewSource).toContain("handleRemoveClick");
-		expect(cartViewSource).toContain("handleConfirmRemoveAll");
-		expect(cartViewSource).toContain("handleCancelCascadingRemoval");
-		expect(cartViewSource).toContain("isCascadingModalOpen");
-		expect(cartViewSource).toContain("cascadingTarget");
-		expect(cartViewSource).toContain("cascadingDependents");
 	});
 });

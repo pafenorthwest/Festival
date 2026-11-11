@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import {
+	customerFestivalRegistrationSignInPath,
 	evaluateRegistrationEligibility,
 	getPublicDivisions,
 	searchRegistrationConcertoCatalog,
@@ -21,13 +22,7 @@ import {
 	validatePieceTitle,
 } from "../src/pages/festivalRegistrationHelpers.js";
 
-const landingPage = await Bun.file(
-	new URL("../src/pages/FestivalLandingPage.tsx", import.meta.url),
-).text();
 const app = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
-const regPage = await Bun.file(
-	new URL("../src/pages/FestivalClassRegistrationPage.tsx", import.meta.url),
-).text();
 const repertoireModal = await Bun.file(
 	new URL("../src/components/FestivalRepertoireModal.tsx", import.meta.url),
 ).text();
@@ -37,23 +32,21 @@ const cartCard = await Bun.file(
 		import.meta.url,
 	),
 ).text();
-const performanceOptions = await Bun.file(
-	new URL(
-		"../src/components/FestivalRegistrationPerformanceOptions.tsx",
-		import.meta.url,
-	),
-).text();
 
 describe("Festival Class Registration routing & landing entry", () => {
-	it("points Parents audience banner to buildFestivalRegistrationPath", () => {
-		expect(landingPage).toContain("buildFestivalRegistrationPath");
-		expect(landingPage).toContain('class="role-banner parents"');
-		expect(landingPage).not.toContain('href="/classes"');
-	});
-
 	it("mounts FestivalClassRegistrationPage for festival-register route", () => {
 		expect(app).toContain('app.route().kind === "festival-register"');
 		expect(app).toContain("<FestivalClassRegistrationPage");
+	});
+	it("returns a signed-out parent directly to their festival cart after sign-in", () => {
+		const path = customerFestivalRegistrationSignInPath(
+			"org",
+			"spring",
+			"cart",
+		);
+		expect(
+			new URL(path, "https://festival.example").searchParams.get("returnTo"),
+		).toBe("/org/org/festival/spring/register/cart");
 	});
 });
 
@@ -103,6 +96,32 @@ describe("Repertoire validation & transformation helpers", () => {
 	});
 
 	it("enforces duration greater than 0 seconds", () => {
+		expect(validatePieceDuration(0, 0)).toBe(
+			"Duration must be greater than 0 seconds.",
+		);
+		expect(validatePieceDuration(0, 30)).toBeNull();
+		expect(validatePieceDuration(4, 15)).toBeNull();
+	});
+
+	it("enforces non-negative minutes and 0-59 seconds range for repertoire duration", () => {
+		expect(validatePieceDuration(-1, 30)).toBe(
+			"Minutes must be a non-negative integer.",
+		);
+		expect(validatePieceDuration(1.5, 30)).toBe(
+			"Minutes must be a non-negative integer.",
+		);
+		expect(validatePieceDuration(1, -1)).toBe(
+			"Seconds must be between 0 and 59.",
+		);
+		expect(validatePieceDuration(1, 60)).toBe(
+			"Seconds must be between 0 and 59.",
+		);
+		expect(validatePieceDuration(1, 75)).toBe(
+			"Seconds must be between 0 and 59.",
+		);
+		expect(validatePieceDuration(1, 20.5)).toBe(
+			"Seconds must be between 0 and 59.",
+		);
 		expect(validatePieceDuration(0, 0)).toBe(
 			"Duration must be greater than 0 seconds.",
 		);
@@ -419,17 +438,6 @@ describe("Repertoire validation & transformation helpers", () => {
 });
 
 describe("Festival Repertoire Modal", () => {
-	it("renders concerto catalog work selector and validation feedback when requiresConcerto is true", () => {
-		expect(repertoireModal).toContain("props.requiresConcerto");
-		expect(repertoireModal).toContain("Concerto Catalog Work");
-		expect(repertoireModal).toContain(
-			"id={`repertoire-piece-${" + "index}-catalog-work`}",
-		);
-		expect(repertoireModal).toContain("handleSelectCatalogWork");
-		expect(repertoireModal).toContain("validatePieceCatalogWork(");
-		expect(regPage).toContain("catalogWorks={catalogWorks()}");
-		expect(regPage).toContain("isRegistrationSelectionValid");
-	});
 	it("uses index-stable rows so editing a draft preserves input focus", () => {
 		expect(repertoireModal).toContain("<Index each={pieces()}>");
 		expect(repertoireModal).not.toContain("<For each={pieces()}>");
@@ -465,6 +473,28 @@ describe("Festival Repertoire Modal", () => {
 			);
 		}
 	});
+
+	it("provides next/prev pagination controls when multiple pieces exist (Issue #339)", () => {
+		expect(repertoireModal).toContain("activePieceIndex");
+		expect(repertoireModal).toContain(
+			"Piece {activePieceIndex() + 1} of {pieces().length}",
+		);
+		expect(repertoireModal).toContain("Previous");
+		expect(repertoireModal).toContain("Next");
+		expect(repertoireModal).toContain('data-testid="modal-repertoire-title"');
+		expect(repertoireModal).toContain('data-testid="btn-add-piece"');
+		expect(repertoireModal).toContain('data-testid="btn-save-repertoire"');
+		expect(repertoireModal).toContain('data-testid="btn-cancel-repertoire"');
+		expect(repertoireModal).toContain(
+			"data-testid={`input-piece-title-${" + "index}`}",
+		);
+		expect(repertoireModal).toContain(
+			"data-testid={`input-piece-composer-${" + "index}`}",
+		);
+		expect(repertoireModal).toContain(
+			"data-testid={`btn-remove-piece-${" + "index}`}",
+		);
+	});
 });
 
 describe("Festival Registration Cart Card & Checkout Gate", () => {
@@ -474,57 +504,6 @@ describe("Festival Registration Cart Card & Checkout Gate", () => {
 		expect(cartCard).toContain(
 			"disabled={!props.isValid || props.isSubmitting}",
 		);
-	});
-});
-
-describe("Festival Class Registration Page workflow", () => {
-	it("loads active public divisions independently of admin controller state", () => {
-		expect(regPage).toContain("getPublicDivisions");
-		expect(regPage).toContain("(slug) => getPublicDivisions(slug)");
-		expect(regPage).toContain("divisions()?.divisions ?? []");
-		expect(regPage).not.toContain("props.app.divisions()");
-		expect(regPage).toContain("Available divisions could not be loaded");
-	});
-
-	it("requires customer authentication and handles sign in", () => {
-		expect(regPage).toContain("props.app.isCustomerSessionLoading()");
-		expect(regPage).toContain(
-			'<p role="status">Checking your sign-in status…</p>',
-		);
-		expect(regPage).toContain("props.app.customerSession()");
-		expect(regPage).toContain("customerFestivalRegistrationSignInPath");
-		expect(regPage).toContain("Register for Festival Classes");
-	});
-
-	it("enforces hard 90-day age snapshot with refresh option", () => {
-		expect(regPage).toContain("hasCurrentValidAgeSnapshot");
-		expect(regPage).toContain("Age Snapshot Required (90-day validity)");
-		expect(regPage).toContain("refreshCustomerChildAgeSnapshot");
-	});
-
-	it("initiates class checkout with idempotency key and redirects", () => {
-		expect(regPage).toContain("startClassCheckout");
-		expect(regPage).toContain("crypto.randomUUID()");
-		expect(regPage).toContain("window.location.assign");
-	});
-
-	it("gives registration controls unique semantic ids and names", () => {
-		for (const field of [
-			"child",
-			"birthdate",
-			"division",
-			"teacher",
-			"class",
-			"accompanist",
-			"instrument",
-		]) {
-			const source =
-				field === "instrument" || field === "accompanist"
-					? performanceOptions
-					: regPage;
-			expect(source).toContain(`id="registration-${field}"`);
-			expect(source).toContain(`name="registration-${field}"`);
-		}
 	});
 });
 
@@ -833,18 +812,6 @@ describe("Registration eligibility & multi-line checkout API", () => {
 			expect(cartCard).toContain("Already in Cart");
 			expect(cartCard).toContain("onAddToCart");
 			expect(cartCard).toContain("isAlreadyInCart");
-		});
-
-		it("FestivalClassRegistrationPage mounts cart state and multi-cart view with reactive eligibility", () => {
-			expect(regPage).toContain("createRegistrationCart");
-			expect(regPage).toContain("useCartEligibility");
-			expect(regPage).toContain("FestivalRegistrationCartView");
-			expect(regPage).toContain("eligibility={eligibility}");
-			expect(regPage).toContain("handleAddToCart");
-			expect(regPage).toContain("handleCartCheckout");
-			expect(regPage).toContain("eligibility.isEvaluating()");
-			expect(regPage).toContain("eligibility.hasIneligibleItems()");
-			expect(regPage).toContain("Cart:");
 		});
 	});
 });

@@ -7,9 +7,9 @@ images and their build cache, while the 2 GB RAM makes serial image builds
 important. The host scripts use Bash, which is available on Ubuntu without
 installing PowerShell first.
 
-The scripts do not start Festival containers. The only Docker image actions are
-pulling `postgres:17-alpine` and building the backend and frontend images from
-this checkout.
+The initial preparation steps pull `postgres:17-alpine` and build the backend
+and frontend images from this checkout. The rebuild script below starts and
+validates the application services.
 
 ## Run in order
 
@@ -39,6 +39,15 @@ this checkout.
 6. Run `bash cloud-setup/04-service-commands.sh` to **print** the exact
    start, status, stop, restart, and down commands. This last script only
    prints text.
+
+For later source updates, run `bash cloud-setup/05-rebuild-and-validate.sh`
+from your checkout. It rebuilds and recreates the application services, checks
+nginx, Bun, and the configured database, then runs format, build, test, and SQL
+checks in a temporary Bun 1.4.2 container using the current source files. The
+PostgreSQL service and its data volume are preserved. Pass a public origin as
+the optional argument to test ingress, for example
+`bash cloud-setup/05-rebuild-and-validate.sh https://int.artsfestival.online`.
+PostgreSQL-gated integration tests require separate test-database configuration.
 
 The cloud Compose file is independent of the repository's development
 `docker-compose.yml`. It fixes the database role, database, and schema to

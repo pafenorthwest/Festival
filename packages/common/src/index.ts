@@ -2,6 +2,7 @@ export * from "./accompanist.js";
 export * from "./availability.js";
 export * from "./billing.js";
 export * from "./catalog.js";
+export * from "./class-checkout-recovery.js";
 export * from "./communication.js";
 export * from "./customer-account.js";
 export * from "./domain.js";

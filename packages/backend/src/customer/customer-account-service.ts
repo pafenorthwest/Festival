@@ -238,6 +238,7 @@ function toCustomerMetadataSummary(
 		festivalId: metadata.festivalId,
 		classEntitlementId: metadata.classEntitlementId,
 		teacherMembershipId: metadata.teacherMembershipId,
+		teacherName: metadata.registrationSnapshot?.teacher.name ?? null,
 		accompanistMembershipId: metadata.accompanistMembershipId,
 		repertoireJson: metadata.repertoireJson,
 		repertoireItems: metadata.repertoireItems,
@@ -535,6 +536,12 @@ export class CustomerAccountService {
 			if (/^[A-Za-z0-9_-]{1,128}$/.test(recoveryToken)) {
 				expected = returnTo;
 			}
+		}
+		const festivalPattern = new RegExp(
+			`^/org/${slug.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")}/festival/[A-Za-z0-9_-]{1,128}/(?:register(?:/cart)?|cart)$`,
+		);
+		if (!offeringId && returnTo && festivalPattern.test(returnTo)) {
+			expected = returnTo;
 		}
 		if (returnTo && returnTo !== expected)
 			throw new AppError("Return target is invalid.", 400);
@@ -1217,6 +1224,23 @@ export class CustomerAccountService {
 			parentCustomerId: session.customerId,
 			festivalId: festival?.id,
 		});
+		const [organization, festivals] = await Promise.all([
+			this.organizations.findOrganizationBySlug(slug),
+			festival
+				? Promise.resolve([festival])
+				: this.organizations.listFestivals(session.organizationId),
+		]);
+		if (!organization) throw new AppError("Organization not found.", 404);
+		const editCutoffs = new Map(
+			festivals.map((entry) => [
+				entry.id,
+				deriveFestivalMetadataCutoff(
+					entry.startDate,
+					organization.timezone || "UTC",
+				),
+			]),
+		);
+		const nowMs = this.now().getTime();
 
 		const projections = await this.commerce.listOrderProjectionsByGids(
 			session.organizationId,
@@ -1272,6 +1296,7 @@ export class CustomerAccountService {
 					session.organizationId,
 					entitlement.id,
 				);
+				const editCutoff = editCutoffs.get(entitlement.festivalId);
 				return {
 					entitlement: toCustomerEntitlementSummary(entitlement),
 					festivalClass: festivalClass
@@ -1280,6 +1305,13 @@ export class CustomerAccountService {
 					child,
 					metadata: metadata ? toCustomerMetadataSummary(metadata) : null,
 					paidAtIso: paidAtByOrderGid.get(entitlement.shopifyOrderGid) ?? null,
+					metadataEditCutoffIso: editCutoff?.toISOString() ?? null,
+					canEditMetadata: Boolean(
+						metadata &&
+							festivalClass &&
+							editCutoff &&
+							nowMs < editCutoff.getTime(),
+					),
 				};
 			}),
 		);

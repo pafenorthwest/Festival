@@ -137,14 +137,18 @@ export function useClassOptionEligibility(
 		}
 
 		const serverResult = results().get(classId);
-		if (!serverResult) {
+		if (isEvaluating() || error() || !serverResult) {
 			const base = formatClassOption(cls);
 			return {
 				classId,
-				isEligible: true,
-				reasonCode: "AVAILABLE",
-				reasonText: "",
-				badgeText: "",
+				isEligible: false,
+				reasonCode: "CLASS_NOT_AVAILABLE",
+				reasonText: isEvaluating()
+					? "Checking eligibility…"
+					: "Eligibility could not be verified.",
+				badgeText: isEvaluating()
+					? "Checking eligibility…"
+					: "Eligibility unavailable",
 				formattedOption: base,
 			};
 		}
@@ -192,11 +196,12 @@ export function useClassOptionEligibility(
 		const classList = options.classes();
 		const cls = classList.find((c) => c.id === classId);
 		const serverResult = results().get(classId);
+		if (!cls) return false;
 		if (
 			serverResult &&
 			!serverResult.eligible &&
 			serverResult.reasonCode !== "SOLD_OUT" &&
-			serverResult.availability !== "waitlist"
+			serverResult.reasonCode !== "REGISTRATION_CLOSED"
 		) {
 			return false;
 		}
@@ -210,7 +215,7 @@ export function useClassOptionEligibility(
 	function isEligible(classId: string): boolean {
 		if (!classId) return false;
 		const opt = getOption(classId);
-		return opt ? opt.isEligible : true;
+		return opt ? opt.isEligible : false;
 	}
 
 	function selectedReason(classId: string): string | null {

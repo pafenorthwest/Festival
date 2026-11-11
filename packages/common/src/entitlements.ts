@@ -507,6 +507,8 @@ export interface CustomerClassRegistrationMetadataSummary {
 	readonly festivalId: string;
 	readonly classEntitlementId: string | null;
 	readonly teacherMembershipId: string;
+	/** Teacher name captured at registration; null for historical records without a snapshot. */
+	readonly teacherName: string | null;
 	readonly accompanistMembershipId: string | null;
 	readonly repertoireJson: RepertoirePiece[];
 	readonly repertoireItems: RegistrationRepertoireItem[];
@@ -519,6 +521,10 @@ export interface CustomerClassRegistrationItem {
 	readonly metadata?: CustomerClassRegistrationMetadataSummary | null;
 	/** Verified Shopify payment time from the order projection; null when no matching projection exists yet. */
 	readonly paidAtIso: string | null;
+	/** Existing repertoire/accompanist edit cutoff in the organization's timezone. */
+	readonly metadataEditCutoffIso: string | null;
+	/** Whether repertoire and accompanist metadata can currently be edited. */
+	readonly canEditMetadata: boolean;
 }
 
 export interface CustomerClassRegistrationsResponse {

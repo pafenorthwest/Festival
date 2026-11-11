@@ -1,11 +1,17 @@
-import { createResource, Show } from "solid-js";
+import { createEffect, createResource, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import {
 	customerLandingSignInPath,
 	getPublicOrganizationLanding,
 	logoutCustomer,
 } from "../lib/api.js";
-import { buildOrgPath, isOrganizationPageRoute } from "../lib/routes.js";
+import {
+	buildFestivalCartPath,
+	buildOrgCustomerAccountMembershipsPath,
+	buildOrgPath,
+	buildOrgRootPath,
+	isOrganizationPageRoute,
+} from "../lib/routes.js";
 import { Button } from "./Button.js";
 
 interface AppHeaderProps {
@@ -20,12 +26,70 @@ export function AppHeader(props: AppHeaderProps) {
 			: null;
 	};
 	const [landing] = createResource(slug, getPublicOrganizationLanding);
+	const currentLanding = () =>
+		landing()?.organization.slug === slug() ? landing() : undefined;
+	const festivalSlug = () => {
+		const route = props.app.route();
+		return "festivalSlug" in route
+			? route.festivalSlug
+			: props.app.parentRegistration.activeFestival(slug() ?? "");
+	};
+	createEffect(() => {
+		const organizationSlug = slug();
+		const primary = currentLanding()?.festivals.find(
+			(festival) => festival.isPrimary,
+		);
+		if (
+			organizationSlug &&
+			primary &&
+			!props.app.parentRegistration.activeFestival(organizationSlug)
+		) {
+			props.app.parentRegistration.setActiveFestival(
+				organizationSlug,
+				primary.shortName,
+			);
+		}
+	});
+	const festival = () =>
+		currentLanding()?.festivals.find(
+			(entry) => entry.shortName === festivalSlug(),
+		);
+	const homePath = () =>
+		festivalSlug()
+			? `/org/${slug()}/festival/${festivalSlug()}`
+			: buildOrgRootPath(slug() ?? "");
+	const cartCount = () =>
+		festivalSlug()
+			? props.app.parentRegistration
+					.workspace(slug() ?? "", festivalSlug() ?? "")
+					.cart.itemCount()
+			: 0;
+	function follow(event: MouseEvent, path: string) {
+		if (
+			event.button !== 0 ||
+			event.metaKey ||
+			event.ctrlKey ||
+			event.shiftKey ||
+			event.altKey
+		)
+			return;
+		event.preventDefault();
+		props.app.navigate(path);
+	}
 
 	function logout() {
 		const organizationSlug = slug();
 		const session = props.app.customerSession();
-		if (organizationSlug && session.authenticated && session.csrfToken)
+		if (organizationSlug && session.authenticated && session.csrfToken) {
+			if (
+				!window.dispatchEvent(
+					new Event("festival:request-sign-out", { cancelable: true }),
+				)
+			)
+				return;
+			props.app.parentRegistration.clear(organizationSlug);
 			logoutCustomer(organizationSlug, session.csrfToken);
+		}
 	}
 
 	function login() {
@@ -97,28 +161,67 @@ export function AppHeader(props: AppHeaderProps) {
 				</header>
 			}
 		>
-			<header class="org-landing-header">
-				<div>
-					<p class="eyebrow">Music festival</p>
-					<h1>{landing()?.organization.name ?? "Organization"}</h1>
-				</div>
-				<div class="org-landing-actions">
-					<a class="org-landing-home-link" href={`/org/${slug() ?? ""}`}>
-						Home
-					</a>
-					<a
-						class="customer-account-link"
-						classList={{
-							"is-authenticated": props.app.customerSession().authenticated,
-						}}
-						href={`/org/${slug() ?? ""}/account/memberships`}
+			<header class="org-landing-header parent-header">
+				<a
+					class="parent-brand"
+					href={homePath()}
+					onClick={(event) => follow(event, homePath())}
+					aria-label="Festival Home"
+				>
+					<span class="parent-brand-mark">
+						{(slug() ?? "PAFE").slice(0, 5).toUpperCase()}
+					</span>
+					<span class="parent-brand-copy">
+						{currentLanding()?.organization.name ?? "Music Festival"}
+					</span>
+				</a>
+				<Show when={festival()}>
+					{(current) => (
+						<div class="parent-header-festival">
+							<span class="eyebrow">Current festival</span>
+							<span>{current().name}</span>
+						</div>
+					)}
+				</Show>
+				<div class="org-landing-actions parent-header-actions">
+					<Show when={festivalSlug()}>
+						<a
+							class="parent-header-button parent-cart-link"
+							classList={{ active: props.app.route().kind === "festival-cart" }}
+							href={buildFestivalCartPath(slug() ?? "", festivalSlug() ?? "")}
+							onClick={(event) =>
+								follow(
+									event,
+									buildFestivalCartPath(slug() ?? "", festivalSlug() ?? ""),
+								)
+							}
+							aria-label={`Cart, ${cartCount()} registrations`}
+							aria-current={
+								props.app.route().kind === "festival-cart" ? "page" : undefined
+							}
+						>
+							<span class="material-symbols-outlined" aria-hidden="true">
+								shopping_cart
+							</span>
+							<span class="parent-header-label">Cart</span>
+							<span class="parent-cart-count">{cartCount()}</span>
+						</a>
+					</Show>
+					<button
+						class="parent-header-button parent-account-button"
+						type="button"
 						aria-label="Customer account"
+						onClick={() =>
+							props.app.navigate(
+								buildOrgCustomerAccountMembershipsPath(slug() ?? ""),
+							)
+						}
 					>
 						<span class="material-symbols-outlined" aria-hidden="true">
 							person
 						</span>
-						<span class="sr-only">Customer account</span>
-					</a>
+						<span class="parent-header-label">Account</span>
+					</button>
 					<Show when={!props.app.isCustomerSessionLoading()}>
 						<Show
 							when={props.app.customerSession().authenticated}
@@ -126,23 +229,47 @@ export function AppHeader(props: AppHeaderProps) {
 								<Button
 									type="button"
 									variant="compact-header"
-									class="customer-auth-button"
+									class="customer-auth-button parent-header-button"
 									onClick={login}
+									aria-label="Sign in"
 								>
-									Login
+									<span class="material-symbols-outlined" aria-hidden="true">
+										login
+									</span>
+									<span class="parent-header-label">Sign in</span>
 								</Button>
 							}
 						>
 							<Button
 								type="button"
 								variant="compact-header"
-								class="customer-auth-button"
+								class="customer-auth-button parent-header-button"
 								onClick={logout}
+								aria-label="Sign out"
 							>
-								Logout
+								<span class="material-symbols-outlined" aria-hidden="true">
+									logout
+								</span>
+								<span class="parent-header-label">Sign out</span>
 							</Button>
 						</Show>
 					</Show>
+					<button
+						class="parent-header-button parent-menu-toggle"
+						type="button"
+						aria-label={
+							props.app.parentNavigationOpen()
+								? "Close navigation"
+								: "Open navigation"
+						}
+						aria-expanded={props.app.parentNavigationOpen()}
+						aria-controls="parent-navigation"
+						onClick={() => props.app.setParentNavigationOpen((open) => !open)}
+					>
+						<span class="material-symbols-outlined" aria-hidden="true">
+							menu
+						</span>
+					</button>
 				</div>
 			</header>
 		</Show>

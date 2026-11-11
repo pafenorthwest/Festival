@@ -1,8 +1,19 @@
 import type {
 	ClassCheckoutLineItemInput,
+	ClassCheckoutRecoveryStatusDto,
+	ClassCheckoutRestartDto,
 	RepertoirePiece,
 } from "@festival/common";
-import { createSignal } from "solid-js";
+import { batch, createSignal } from "solid-js";
+import {
+	clearCartCheckoutIdempotencyKey,
+	getOrCreateCartCheckoutIdempotencyKey,
+} from "./checkoutIdempotency.js";
+
+export {
+	clearCartCheckoutIdempotencyKey,
+	getOrCreateCartCheckoutIdempotencyKey,
+};
 
 export interface RegistrationCartItem {
 	lineId: string;
@@ -110,6 +121,7 @@ export function cartItemsToLineItemInputs(
 			title: piece.title,
 			composer: piece.composer,
 			movement: piece.movement?.trim() || null,
+			...(piece.catalogWorkId ? { catalogWorkId: piece.catalogWorkId } : {}),
 			durationMinutes: Math.floor((piece.durationSeconds || 0) / 60),
 			durationSeconds: Math.max(1, piece.durationSeconds || 0),
 		})),
@@ -126,12 +138,150 @@ export interface RegistrationCartState {
 	removeItem: (lineId: string) => void;
 	removeItems: (lineIds: string[]) => void;
 	clearCart: () => void;
+	getCheckoutIdempotencyKey: () => string;
+	checkoutSubmission: () => RegistrationCheckoutSubmission | null;
+	beginCheckout: () => RegistrationCheckoutSubmission;
+	releaseCheckout: (options?: { retireKey?: boolean }) => void;
+	restartAbandonedCheckout: () => boolean;
+	lastRestoredRecoveryReference: () => string | null;
+	restoreCheckout: (
+		recoveryReference: string,
+		restart: ClassCheckoutRestartDto,
+	) => void;
+	completeCheckout: (submission: RegistrationCheckoutSubmission) => void;
+	checkoutRecovery: () => ClassCheckoutRecoveryStatusDto | null;
+	setCheckoutRecovery: (recovery: ClassCheckoutRecoveryStatusDto) => void;
+}
+
+export interface RegistrationCheckoutSubmission {
+	idempotencyKey: string;
+	lineItems: ReturnType<typeof cartItemsToLineItemInputs>;
+	lineIds: string[];
+}
+
+export interface RegistrationCartOptions {
+	slug?: string;
+	festivalSlug?: string;
 }
 
 export function createRegistrationCart(
 	initialItems: RegistrationCartItem[] = [],
+	options?: RegistrationCartOptions,
 ): RegistrationCartState {
 	const [items, setItems] = createSignal<RegistrationCartItem[]>(initialItems);
+	let checkoutPayload = "";
+	let checkoutKey = "";
+	let replacementCheckout: { payload: string; key: string } | null = null;
+	const [lastRestoredRecoveryReference, setLastRestoredRecoveryReference] =
+		createSignal<string | null>(null);
+	const [checkoutSubmission, setCheckoutSubmission] =
+		createSignal<RegistrationCheckoutSubmission | null>(null);
+	const [checkoutRecovery, setCheckoutRecovery] =
+		createSignal<ClassCheckoutRecoveryStatusDto | null>(null);
+	function beginCheckout() {
+		const current = checkoutSubmission();
+		if (current) return current;
+		const submission = {
+			idempotencyKey: getCheckoutIdempotencyKey(),
+			lineItems: structuredClone(cartItemsToLineItemInputs(items())),
+			lineIds: items().map((item) => item.lineId),
+		};
+		setCheckoutSubmission(submission);
+		return submission;
+	}
+	function clearCheckoutKey() {
+		checkoutPayload = "";
+		checkoutKey = "";
+		replacementCheckout = null;
+		if (options?.slug && options?.festivalSlug) {
+			clearCartCheckoutIdempotencyKey(options.slug, options.festivalSlug);
+		}
+	}
+	function releaseCheckout({ retireKey = false } = {}) {
+		if (retireKey) clearCheckoutKey();
+		setCheckoutSubmission(null);
+		setCheckoutRecovery(null);
+	}
+	function restartAbandonedCheckout() {
+		const recovery = checkoutRecovery();
+		if (
+			recovery?.status !== "resolved" ||
+			!["abandoned_unknown", "checkout_abandoned"].includes(recovery.reasonCode)
+		)
+			return false;
+		releaseCheckout({ retireKey: true });
+		return true;
+	}
+	function restoreCheckout(
+		recoveryReference: string,
+		{ registrations, replacementKey }: ClassCheckoutRestartDto,
+	) {
+		const registrationKey = (item: RegistrationCartItem) =>
+			JSON.stringify([item.childId, item.classId]);
+		const restoredKeys = new Set(registrations.map(registrationKey));
+		const unrelated = items().filter(
+			(item) => !restoredKeys.has(registrationKey(item)),
+		);
+		batch(() => {
+			releaseCheckout({ retireKey: true });
+			if (unrelated.length === 0) {
+				replacementCheckout = {
+					payload: JSON.stringify(cartItemsToLineItemInputs(registrations)),
+					key: replacementKey,
+				};
+			}
+			setLastRestoredRecoveryReference(recoveryReference);
+			setItems([...registrations, ...unrelated]);
+		});
+	}
+	function completeCheckout(submission: RegistrationCheckoutSubmission) {
+		const submitted = new Set(submission.lineIds);
+		setItems((current) =>
+			current.filter((item) => !submitted.has(item.lineId)),
+		);
+		if (checkoutSubmission() === submission) releaseCheckout();
+		clearCheckoutKey();
+		setLastRestoredRecoveryReference(null);
+	}
+	function assertEditable() {
+		if (checkoutSubmission())
+			throw new Error(
+				"Check the existing checkout before changing these registrations.",
+			);
+	}
+	function getCheckoutIdempotencyKey() {
+		const submission = checkoutSubmission();
+		if (submission) return submission.idempotencyKey;
+		const lineItems = cartItemsToLineItemInputs(items());
+		if (replacementCheckout) {
+			if (replacementCheckout.payload === JSON.stringify(lineItems))
+				return replacementCheckout.key;
+			replacementCheckout = null;
+		}
+		if (options?.slug && options?.festivalSlug) {
+			checkoutKey = getOrCreateCartCheckoutIdempotencyKey(
+				options.slug,
+				options.festivalSlug,
+				lineItems,
+			);
+			return checkoutKey;
+		}
+		const payload = JSON.stringify(lineItems);
+		if (payload !== checkoutPayload || !checkoutKey) {
+			checkoutPayload = payload;
+			checkoutKey = crypto.randomUUID();
+		}
+		return checkoutKey;
+	}
+	function updateItems(next: RegistrationCartItem[]) {
+		if (
+			replacementCheckout &&
+			replacementCheckout.payload !==
+				JSON.stringify(cartItemsToLineItemInputs(next))
+		)
+			replacementCheckout = null;
+		setItems(next);
+	}
 
 	const itemCount = () => items().length;
 
@@ -148,6 +298,7 @@ export function createRegistrationCart(
 	}
 
 	function addItem(input: AddRegistrationCartItemInput): RegistrationCartItem {
+		assertEditable();
 		if (hasItem(input.childId, input.classId)) {
 			throw new Error(
 				`Class "${input.className}" is already in the cart for ${input.childName}.`,
@@ -163,22 +314,29 @@ export function createRegistrationCart(
 			...input,
 			lineId,
 		};
-		setItems((prev) => [...prev, newItem]);
+		updateItems([...items(), newItem]);
 		return newItem;
 	}
 
 	function removeItem(lineId: string): void {
-		setItems((prev) => prev.filter((item) => item.lineId !== lineId));
+		assertEditable();
+		updateItems(items().filter((item) => item.lineId !== lineId));
 	}
 
 	function removeItems(lineIds: string[]): void {
+		assertEditable();
 		if (lineIds.length === 0) return;
 		const idSet = new Set(lineIds);
-		setItems((prev) => prev.filter((item) => !idSet.has(item.lineId)));
+		updateItems(items().filter((item) => !idSet.has(item.lineId)));
 	}
 
 	function clearCart(): void {
 		setItems([]);
+		releaseCheckout();
+		checkoutPayload = "";
+		checkoutKey = "";
+		replacementCheckout = null;
+		setLastRestoredRecoveryReference(null);
 	}
 
 	return {
@@ -191,5 +349,15 @@ export function createRegistrationCart(
 		removeItem,
 		removeItems,
 		clearCart,
+		getCheckoutIdempotencyKey,
+		checkoutSubmission,
+		beginCheckout,
+		releaseCheckout,
+		restartAbandonedCheckout,
+		lastRestoredRecoveryReference,
+		restoreCheckout,
+		completeCheckout,
+		checkoutRecovery,
+		setCheckoutRecovery,
 	};
 }
