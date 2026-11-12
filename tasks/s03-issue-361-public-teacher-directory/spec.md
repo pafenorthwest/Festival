@@ -37,7 +37,10 @@
 ## Verification commands
 ```powershell
 pwsh -NoProfile -File .agents/skills/festival-session/scripts/validate-packet.ps1 -TaskName s03-issue-361-public-teacher-directory
+pwsh -NoProfile -File .agents/skills/festival-session/scripts/validate-packet.ps1 -TaskName s03-issue-361-public-teacher-directory -RequireCodeReview
 $env:POSTGRES_INTEGRATION_URL = "postgres://postgres:postgres@127.0.0.1:5432/festival_test"
+$env:DATABASE_URL = $env:POSTGRES_INTEGRATION_URL
+$env:POSTGRES_APPLICATION_CATALOG_VERIFIED = "1"
 bun run verify:toolchain
 bun run format:check
 bun run lint
@@ -48,7 +51,29 @@ bun run check:sql
 ```
 
 ## Delivery
-Pending execution.
+- **`[G1]` Backend Teacher Directory Auto-Approval, Entitlement Gating & Moderation (`81ff7ee74b5130d61a880ebe9c77aeff5285b8b5`)**:
+  - Updated `packages/backend/src/repo/profile-moderation.ts`, `packages/backend/src/services/participant-profile-service.ts`, `packages/backend/src/repo/postgres-organization-repository.ts`, and `packages/backend/src/repo/in-memory-organization-repository.ts` so active paid `teacher_membership` holders opting in (`publicDirectoryOptIn: true`) immediately auto-create/auto-approve (`approved`) public directory visibility without waiting in `pending` (per locked decision `D1`), preserve `approved` across display-name and division edits, and cannot self-override an Admin `rejected` state.
+  - Enforced active paid `teacher_membership` gating on public directory listings (`getPublicDirectoryProfiles`) and customer opt-in while allowing immediate hiding on customer opt-out (`publicDirectoryOptIn: false`), membership expiry, or entitlement revocation, and preserved Admin one-click hide (`rejected`) / reinstate (`approved`) moderation via `PATCH /api/admin/orgs/:orgSlug/profiles/teachers/:profileId/approval`.
+  - Added `Cache-Control: no-store` on `GET /api/org-info/:orgSlug/directory/profiles` in `packages/backend/src/routes/participant-profile/participant-profile.routes.ts` so opt-out, revocation, and Admin moderation changes reflect immediately without stale HTTP caching, and fixed `PostgresOrganizationRepository.assertValidDivisionIds` to pass `sql.array(uniqueIds, "text")` for `ANY($2::text[])`.
+- **`[G2]` Customer Checkout & Account Opt-In Controls (`81ff7ee74b5130d61a880ebe9c77aeff5285b8b5`)**:
+  - Added typed participant-profile helpers (`getCustomerTeacherProfile`, `upsertCustomerTeacherProfile`, `listAdminTeacherProfiles`, `updateAdminTeacherProfileApproval`) in `packages/frontend/src/lib/api.ts`.
+  - Added a pre-selected (`true`) Public Teacher Directory opt-in checkbox on `packages/frontend/src/pages/MembershipPage.tsx` backed by `packages/frontend/src/pages/teacherDirectoryHelpers.ts`, preserving `entitlementClass` across OAuth `?purchase=` handoff so post-login checkout resumption retains and persists the selected directory preference.
+  - Added `packages/frontend/src/pages/CustomerTeacherDirectoryCard.tsx` on `packages/frontend/src/pages/CustomerAccountMembershipsPage.tsx` so newly returning purchasers auto-apply pending checkout opt-in preferences and existing active teacher members can edit display name, divisions, or opt-in/opt-out visibility directly.
+- **`[G3]` Public Directory Listing & Admin One-Click Moderation UI (`81ff7ee74b5130d61a880ebe9c77aeff5285b8b5`)**:
+  - Updated `packages/frontend/src/pages/PublicDirectoryPage.tsx` and `packages/frontend/src/pages/publicDirectoryHelpers.ts` with search and division filters, defense-in-depth `isActiveMember` filtering, and deterministic loading, empty, and error states.
+  - Added `packages/frontend/src/pages/AdminTeacherDirectoryPanel.tsx` and `packages/frontend/src/pages/adminTeacherDirectoryHelpers.ts` on `packages/frontend/src/pages/AdminMembershipProductsPage.tsx` providing one-click teacher directory visibility moderation (`approved` <-> `rejected`, `pending` -> `approved`) with in-flight request locking and deterministic sorting.
+- **`[G4]` Unit, Browser & PostgreSQL 17 Integration Coverage (`81ff7ee74b5130d61a880ebe9c77aeff5285b8b5`)**:
+  - Added and updated deterministic backend/frontend unit, browser, and real PostgreSQL 17 integration suites across `packages/backend/tests/public-teacher-directory.integration.test.ts`, `packages/backend/tests/participant-profile-membership.test.ts`, `packages/backend/tests/participant-profile-routes.test.ts`, `packages/backend/tests/profile-repository.test.ts`, `packages/frontend/tests/public-directory.test.ts`, `packages/frontend/tests/teacher-directory-management.test.ts`, and `packages/frontend/tests/browser/account-return.tsx`.
+- **Exceptions**: None.
+- **Deferred work**: Domain folder extraction into `packages/backend/src/domains/teacher-directory/**` and typed RPC/schema consolidation remain scheduled for Wave 3 packets `s10` and `s12` per `specs/pre-thanksgiving-program.md`.
 
 ## Quality gate results
-Pending execution.
+- Packet validator (`validate-packet.ps1 -TaskName s03-issue-361-public-teacher-directory -RequireCodeReview`): `PASS` — `PACKET VALID: task=s03-issue-361-public-teacher-directory iteration=v0 state=locked goals=4 codeReview=valid(none)` (`exit=0`)
+- `bun run verify:toolchain`: `PASS` — `Using Bun 1.4.2 and TypeScript 5.9.3.` (`exit=0`)
+- `bun run format:check`: `PASS` — `Checked 526 files` (`No fixes applied.`, `exit=0`)
+- `bun run lint`: `PASS` — `Checked 526 files` (`0` warnings, `0` errors, `exit=0`)
+- `bun run build`: `PASS` — built `@festival/common`, `@festival/backend`, `@festival/frontend`, and `@festival/shopify-confirmation` (`exit=0`)
+- `bun run --cwd packages/frontend check:types`: `PASS` — `tsc -p tsconfig.json --noEmit` clean (`exit=0`)
+- `bun run test`: `PASS` — `2,414 pass, 0 fail, 0 skip` across `204` test files (`common`: `353 pass`; `backend`: `1,586 pass` including live PostgreSQL 17 integration suites; `frontend`: `455 pass`; `shopify-confirmation`: `20 pass`; `exit=0`), plus browser harnesses `membership-purchase.html` (`19/19` passed) and `account-return.html` (`10/10` passed)
+- `bun run check:sql`: `PASS` — `Validated 278 backend TypeScript files.` (`exit=0`)
+- Code review (`tasks/s03-issue-361-public-teacher-directory/code-review.md`): `PASS` — `Findings status: none`, `Findings JSON: []`, `Verdict: patch is correct` (`0.98` confidence)

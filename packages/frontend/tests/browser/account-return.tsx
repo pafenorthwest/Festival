@@ -9,9 +9,10 @@ const checks: string[] = [];
 let authenticated = false;
 let memberships: Record<string, unknown>[] = [];
 let requestedMemberships = 0;
-window.fetch = async (input) => {
+window.fetch = async (input, init) => {
 	const url = String(input);
 	let body: unknown;
+	let status = 200;
 	if (url.endsWith("/customer/session"))
 		body = {
 			session: authenticated
@@ -25,8 +26,29 @@ window.fetch = async (input) => {
 	else if (url.endsWith("/customer/membership-status")) {
 		requestedMemberships++;
 		body = { memberships };
+	} else if (url.endsWith("/profiles/teacher")) {
+		if (init?.method === "PUT") {
+			body = {
+				id: "prof-fixture",
+				organization_id: "org-fixture",
+				customer_id: "cust-fixture",
+				display_name: "Teacher",
+				teacher_color: "#1D4ED8",
+				public_directory_opt_in: true,
+				approval_status: "approved",
+				division_ids: [],
+				created_at: "2026-01-01T00:00:00.000Z",
+				updated_at: "2026-01-01T00:00:00.000Z",
+			};
+		} else {
+			status = 404;
+			body = { error: "Teacher profile not found." };
+		}
+	} else if (url.endsWith("/divisions")) {
+		body = { divisions: [] };
 	} else throw new Error(`Unexpected fixture request: ${url}`);
 	return new Response(JSON.stringify(body), {
+		status,
 		headers: { "Content-Type": "application/json" },
 	});
 };
@@ -46,8 +68,8 @@ function mount() {
 	);
 	return render(() => <CustomerAccountMembershipsPage slug="pafe" />, root);
 }
-async function verify() {
-	let dispose = mount();
+async function verifyUnauthenticatedReturn() {
+	const dispose = mount();
 	await settle();
 	assert(
 		root?.textContent?.includes(
@@ -60,8 +82,11 @@ async function verify() {
 		"Unauthenticated return does not request membership data",
 	);
 	dispose();
+}
+async function verify() {
+	await verifyUnauthenticatedReturn();
 	authenticated = true;
-	dispose = mount();
+	const dispose = mount();
 	await settle();
 	assert(
 		requestedMemberships > 0,
@@ -80,8 +105,10 @@ async function verify() {
 		"Unconfirmed payment displays Processing",
 	);
 	assert(
-		root?.textContent?.includes("We’re importing your purchase details"),
-		"Pending return explains that profile import is in progress",
+		root?.textContent?.includes(
+			"Festival is waiting for Shopify payment evidence",
+		),
+		"Pending return explains that payment confirmation is in progress",
 	);
 	memberships = [
 		{
@@ -100,14 +127,15 @@ async function verify() {
 		root?.textContent?.includes("Active"),
 		"Confirmed server membership renders Active",
 	);
+	const heading = root?.querySelector(".customer-membership-card h3");
 	assert(
-		root?.textContent?.includes("Teacher") &&
-			!root?.textContent?.includes("Teacher Membership"),
+		heading?.textContent === "Teacher",
 		"Membership heading uses the capitalized entitlement type",
 	);
 	assert(
-		!window.location.search,
-		"Confirmed membership clears the processing handoff",
+		root?.textContent?.includes("Public Teacher Directory") &&
+			!window.location.search,
+		"Confirmed membership renders directory card and clears processing handoff",
 	);
 	if (results)
 		results.textContent = `PASS: ${checks.length} account return checks\n${checks.join("\n")}`;

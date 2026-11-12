@@ -81,6 +81,7 @@ import type {
 	OrganizationLandingResponse,
 	OrganizationMembershipListResponse,
 	OrganizationTimezoneResponse,
+	ProfileApprovalStatus,
 	ProposedPurchaseLineItem,
 	PublicDirectoryProfileDto,
 	PublicMembershipProductsListResponse,
@@ -114,6 +115,7 @@ import type {
 	ShiftCoverageStatus,
 	ShopifyIntegrationDiagnosticsResponse,
 	ShopifyIntegrationSettingsResponse,
+	TeacherProfileRecord,
 	TransferRegistrationInput,
 	TransferRegistrationResult,
 	TransferRegistrationValidationResult,
@@ -755,6 +757,78 @@ export function getPublicDirectoryProfiles(
 		undefined,
 		undefined,
 		"",
+	);
+}
+
+export interface UpsertCustomerTeacherProfileInput {
+	displayName: string;
+	publicDirectoryOptIn: boolean;
+	divisionIds: string[];
+}
+
+export async function getCustomerTeacherProfile(
+	orgSlug: string,
+): Promise<TeacherProfileRecord | null> {
+	try {
+		return await requestJson<TeacherProfileRecord>(
+			`/api/customer/orgs/${encodeURIComponent(orgSlug)}/profiles/teacher`,
+			undefined,
+			undefined,
+			"",
+		);
+	} catch (error) {
+		if (error instanceof ApiError && error.status === 404) {
+			return null;
+		}
+		throw error;
+	}
+}
+
+export function upsertCustomerTeacherProfile(
+	orgSlug: string,
+	csrfToken: string,
+	input: UpsertCustomerTeacherProfileInput,
+): Promise<TeacherProfileRecord> {
+	return requestJson<TeacherProfileRecord>(
+		`/api/customer/orgs/${encodeURIComponent(orgSlug)}/profiles/teacher`,
+		{
+			method: "PUT",
+			headers: { "X-CSRF-Token": csrfToken },
+			body: JSON.stringify(input),
+		},
+		undefined,
+		"",
+	);
+}
+
+export function listAdminTeacherProfiles(
+	idToken: string,
+	orgSlug: string,
+): Promise<TeacherProfileRecord[]> {
+	return requestJson<TeacherProfileRecord[]>(
+		`/api/admin/orgs/${encodeURIComponent(orgSlug)}/profiles/teachers`,
+		undefined,
+		idToken,
+	);
+}
+
+export interface UpdateAdminTeacherProfileApprovalInput {
+	profileId: string;
+	approvalStatus: ProfileApprovalStatus;
+}
+
+export function updateAdminTeacherProfileApproval(
+	idToken: string,
+	orgSlug: string,
+	input: UpdateAdminTeacherProfileApprovalInput,
+): Promise<TeacherProfileRecord> {
+	return requestJson<TeacherProfileRecord>(
+		`/api/admin/orgs/${encodeURIComponent(orgSlug)}/profiles/teachers/${encodeURIComponent(input.profileId)}/approval`,
+		{
+			method: "PATCH",
+			body: JSON.stringify({ approvalStatus: input.approvalStatus }),
+		},
+		idToken,
 	);
 }
 

@@ -184,6 +184,7 @@ describe("Participant profile membership prerequisite", () => {
 				organization_id: fixture.org.id,
 				customer_id: "customer-1",
 				public_directory_opt_in: true,
+				approval_status: role === "teacher" ? "approved" : "pending",
 			});
 			expect(await fixture.read(role)).toEqual(profile);
 		});
@@ -193,6 +194,13 @@ describe("Participant profile membership prerequisite", () => {
 				const fixture = await setup();
 				const membership = await fixture.grant(role);
 				const original = await fixture.save(role);
+				if (role === "teacher") {
+					await fixture.repository.updateTeacherProfileApproval(
+						fixture.org.id,
+						original.id,
+						"approved",
+					);
+				}
 				if (lapse === "expired") {
 					fixture.setNow("2026-06-15T12:00:00Z");
 				} else {
@@ -205,6 +213,15 @@ describe("Participant profile membership prerequisite", () => {
 					});
 				}
 				expect((await fixture.read(role)).id).toBe(original.id);
+				if (role === "teacher") {
+					expect(
+						await fixture.repository.getPublicDirectoryProfiles(fixture.org.id),
+					).toEqual([]);
+					await expect(fixture.save("teacher", true)).rejects.toMatchObject({
+						status: 403,
+						code: "active_membership_required",
+					});
+				}
 				expect(await fixture.save(role, false)).toMatchObject({
 					id: original.id,
 					public_directory_opt_in: false,
@@ -212,4 +229,21 @@ describe("Participant profile membership prerequisite", () => {
 			});
 		}
 	}
+
+	it("auto-approves existing opted-out or pending active teacher immediately on opt-in", async () => {
+		const fixture = await setup();
+		await fixture.grant("teacher");
+		const created = await fixture.save("teacher", false);
+		await fixture.repository.updateTeacherProfileApproval(
+			fixture.org.id,
+			created.id,
+			"pending",
+		);
+		const optedIn = await fixture.save("teacher", true);
+		expect(optedIn).toMatchObject({
+			id: created.id,
+			public_directory_opt_in: true,
+			approval_status: "approved",
+		});
+	});
 });
