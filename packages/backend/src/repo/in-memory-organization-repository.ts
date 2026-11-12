@@ -74,7 +74,10 @@ import {
 	assertValidSubtypeDependency,
 	ShopifyShopOwnershipError,
 } from "./organization-repository.js";
-import { profileEditRequiresReapproval } from "./profile-moderation.js";
+import {
+	profileEditRequiresReapproval,
+	resolveTeacherProfileApprovalStatus,
+} from "./profile-moderation.js";
 import {
 	compareCodePoint,
 	compareDivisionsByName,
@@ -2060,6 +2063,10 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 				p.customer_id === params.customerId,
 		);
 		const nowIso = this.now().toISOString();
+		const approvalStatus = resolveTeacherProfileApprovalStatus(
+			existing?.approval_status,
+			publicDirectoryOptIn,
+		);
 		if (existing) {
 			const updated: TeacherProfileRecord = {
 				...existing,
@@ -2067,15 +2074,7 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 				public_directory_opt_in: publicDirectoryOptIn,
 				division_ids: divisionIds,
 				teacher_color: getDeterministicTeacherColor(params.customerId),
-				approval_status: profileEditRequiresReapproval(
-					{
-						displayName: existing.display_name,
-						divisionIds: existing.division_ids,
-					},
-					{ displayName, divisionIds },
-				)
-					? "pending"
-					: existing.approval_status,
+				approval_status: approvalStatus,
 				updated_at: nowIso,
 			};
 			this.teacherProfiles.set(existing.id, updated);
@@ -2089,7 +2088,7 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 			display_name: displayName,
 			teacher_color: getDeterministicTeacherColor(params.customerId),
 			public_directory_opt_in: publicDirectoryOptIn,
-			approval_status: "pending",
+			approval_status: approvalStatus,
 			division_ids: divisionIds,
 			created_at: nowIso,
 			updated_at: nowIso,
@@ -2250,9 +2249,22 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 		};
 	}
 
-	async getPublicDirectoryProfiles(
+	private resolveDirectoryDivisions(
 		organizationId: string,
-	): Promise<PublicDirectoryProfileDto[]> {
+		divisionIds: readonly string[],
+	): PublicDirectoryDivisionDto[] {
+		return divisionIds
+			.map((id) => this.divisions.get(id))
+			.filter((d): d is OrganizationDivision & { normalizedName: string } =>
+				Boolean(d && d.organizationId === organizationId),
+			)
+			.map((d) => ({ id: d.id, name: d.displayName }))
+			.sort(compareDivisionsByName);
+	}
+
+	private listPublicDirectoryTeachers(
+		organizationId: string,
+	): PublicDirectoryProfileDto[] {
 		const activeTeacherCustomerIds = new Set(
 			[...this.entitlementGrants.values()]
 				.filter(
@@ -2264,34 +2276,32 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 				.filter((grant) => grant.status === "active")
 				.map((grant) => grant.customerId),
 		);
-
-		const teacherProfiles = [...this.teacherProfiles.values()]
+		return [...this.teacherProfiles.values()]
 			.filter(
 				(p) =>
 					p.organization_id === organizationId &&
 					p.public_directory_opt_in &&
-					p.approval_status === "approved",
+					p.approval_status === "approved" &&
+					activeTeacherCustomerIds.has(p.customer_id),
 			)
-			.sort(compareProfilesByName);
+			.sort(compareProfilesByName)
+			.map((tp) =>
+				validatePublicDirectoryProfileDto({
+					displayName: tp.display_name,
+					role: "Teacher",
+					approvedDivisions: this.resolveDirectoryDivisions(
+						organizationId,
+						tp.division_ids,
+					),
+					teacherColor: getDeterministicTeacherColor(tp.customer_id),
+					isActiveMember: true,
+				}),
+			);
+	}
 
-		const teachers: PublicDirectoryProfileDto[] = teacherProfiles.map((tp) => {
-			const approvedDivisions: PublicDirectoryDivisionDto[] = tp.division_ids
-				.map((id) => this.divisions.get(id))
-				.filter((d): d is OrganizationDivision & { normalizedName: string } =>
-					Boolean(d && d.organizationId === organizationId),
-				)
-				.map((d) => ({ id: d.id, name: d.displayName }))
-				.sort(compareDivisionsByName);
-
-			return validatePublicDirectoryProfileDto({
-				displayName: tp.display_name,
-				role: "Teacher",
-				approvedDivisions,
-				teacherColor: getDeterministicTeacherColor(tp.customer_id),
-				isActiveMember: activeTeacherCustomerIds.has(tp.customer_id),
-			});
-		});
-
+	private listPublicDirectoryAccompanists(
+		organizationId: string,
+	): PublicDirectoryProfileDto[] {
 		const activeAccompanistCustomerIds = new Set(
 			[...this.accompanistMembershipGrants.values()]
 				.filter((grant) => grant.organizationId === organizationId)
@@ -2299,35 +2309,33 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 				.filter((grant) => grant.status === "active")
 				.map((grant) => grant.customerId),
 		);
-
-		const accompanistProfiles = [...this.accompanistProfiles.values()]
+		return [...this.accompanistProfiles.values()]
 			.filter(
 				(p) =>
 					p.organization_id === organizationId &&
 					p.public_directory_opt_in &&
 					p.approval_status === "approved",
 			)
-			.sort(compareProfilesByName);
-
-		const accompanists: PublicDirectoryProfileDto[] = accompanistProfiles.map(
-			(ap) => {
-				const approvedDivisions: PublicDirectoryDivisionDto[] = ap.division_ids
-					.map((id) => this.divisions.get(id))
-					.filter((d): d is OrganizationDivision & { normalizedName: string } =>
-						Boolean(d && d.organizationId === organizationId),
-					)
-					.map((d) => ({ id: d.id, name: d.displayName }))
-					.sort(compareDivisionsByName);
-
-				return validatePublicDirectoryProfileDto({
+			.sort(compareProfilesByName)
+			.map((ap) =>
+				validatePublicDirectoryProfileDto({
 					displayName: ap.display_name,
 					role: "Accompanist",
-					approvedDivisions,
+					approvedDivisions: this.resolveDirectoryDivisions(
+						organizationId,
+						ap.division_ids,
+					),
 					isActiveMember: activeAccompanistCustomerIds.has(ap.customer_id),
-				});
-			},
-		);
+				}),
+			);
+	}
 
-		return [...teachers, ...accompanists];
+	async getPublicDirectoryProfiles(
+		organizationId: string,
+	): Promise<PublicDirectoryProfileDto[]> {
+		return [
+			...this.listPublicDirectoryTeachers(organizationId),
+			...this.listPublicDirectoryAccompanists(organizationId),
+		];
 	}
 }

@@ -440,3 +440,60 @@ describe("empty, loading, and error states", () => {
 		expect(publicDirectoryPageSource).toContain("Retry");
 	});
 });
+
+type DirList = readonly PublicDirectoryProfileDto[];
+interface DirectoryFilterHelpers {
+	filterDirectoryProfiles?: (
+		list?: DirList,
+		f?: { query?: string; divisionId?: string },
+	) => PublicDirectoryProfileDto[];
+	collectDirectoryDivisions?: (
+		list?: DirList,
+	) => Array<{ id: string; name: string }>;
+}
+
+describe("active-member teacher filtering and directory search/division filters", () => {
+	const piano = { id: "div-piano", name: "Piano" };
+	const strings = { id: "div-strings", name: "Strings" };
+	const names = (l?: PublicDirectoryProfileDto[]) =>
+		l?.map((p) => p.displayName);
+	const sample: PublicDirectoryProfileDto[] = [
+		{ ...profile("Clara Schumann", "Teacher"), approvedDivisions: [piano] },
+		{ ...profile("Lapsed Teacher", "Teacher"), isActiveMember: false },
+		{
+			...profile("Niccolo Paganini", "Teacher"),
+			approvedDivisions: [strings, piano],
+		},
+		{ ...profile("Gerald Moore", "Accompanist"), isActiveMember: false },
+	];
+
+	it("omits inactive Teachers and filters/collects divisions deterministically", async () => {
+		expect(names(partitionDirectoryProfiles(sample).teachers)).toEqual([
+			"Clara Schumann",
+			"Niccolo Paganini",
+		]);
+		const path = "../src/pages/publicDirectoryHelpers.js";
+		const h = (await import(path)) as DirectoryFilterHelpers;
+		expect(h.collectDirectoryDivisions?.(sample)).toEqual([piano, strings]);
+		expect(names(h.filterDirectoryProfiles?.(sample))).toEqual([
+			"Clara Schumann",
+			"Niccolo Paganini",
+			"Gerald Moore",
+		]);
+		const byQuery = h.filterDirectoryProfiles?.(sample, { query: " STRINGS " });
+		expect(names(byQuery)).toEqual(["Niccolo Paganini"]);
+		const byBoth = h.filterDirectoryProfiles?.(sample, {
+			query: "clara",
+			divisionId: "div-piano",
+		});
+		expect(names(byBoth)).toEqual(["Clara Schumann"]);
+	});
+
+	it("renders search/division filter controls and Clear filters in PublicDirectoryPage", () => {
+		expect(publicDirectoryPageSource).toContain("filterDirectoryProfiles");
+		expect(publicDirectoryPageSource).toContain("collectDirectoryDivisions");
+		expect(publicDirectoryPageSource).toContain('type="search"');
+		expect(publicDirectoryPageSource).toContain("All divisions");
+		expect(publicDirectoryPageSource).toContain("Clear filters");
+	});
+});

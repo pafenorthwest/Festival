@@ -122,7 +122,7 @@ describe("Participant Profiles API End-to-End", () => {
 			const created = await putRes.json();
 			expect(created.display_name).toBe("Alice Teacher");
 			expect(created.customer_id).toBe("cust-1");
-			expect(created.approval_status).toBe("pending");
+			expect(created.approval_status).toBe("approved");
 
 			// GET own profile -> 200
 			const getRes = await app.request(
@@ -448,7 +448,7 @@ describe("Participant Profiles API End-to-End", () => {
 		it("returns approved and opted-in profiles only with no private fields leaked", async () => {
 			const { app, divA1 } = await setupTestApp();
 
-			// Create teacher 1 (opted in, approved)
+			// Create teacher 1 (opted in -> auto-approved immediately under D1)
 			const t1Res = await app.request(
 				"/api/customer/orgs/org-a/profiles/teacher",
 				{
@@ -466,19 +466,9 @@ describe("Participant Profiles API End-to-End", () => {
 				},
 			);
 			const t1 = await t1Res.json();
-			await app.request(
-				`/api/admin/orgs/org-a/profiles/teachers/${t1.id}/approval`,
-				{
-					method: "PATCH",
-					headers: {
-						"Content-Type": "application/json",
-						Authorization: "Bearer admin-org-a",
-					},
-					body: JSON.stringify({ approvalStatus: "approved" }),
-				},
-			);
+			expect(t1.approval_status).toBe("approved");
 
-			// Create teacher 2 (pending approval)
+			// Create teacher 2 (opted out)
 			await app.request("/api/customer/orgs/org-a/profiles/teacher", {
 				method: "PUT",
 				headers: {
@@ -487,8 +477,8 @@ describe("Participant Profiles API End-to-End", () => {
 					"X-CSRF-Token": "csrf-token-2",
 				},
 				body: JSON.stringify({
-					displayName: "Charlie Pending",
-					publicDirectoryOptIn: true,
+					displayName: "Charlie OptedOut",
+					publicDirectoryOptIn: false,
 					divisionIds: [divA1.id],
 				}),
 			});
@@ -532,7 +522,7 @@ describe("Participant Profiles API End-to-End", () => {
 			expect(publicRes.status).toBe(200);
 			const profiles: PublicDirectoryProfileDto[] = await publicRes.json();
 
-			// Only approved + opted-in (Alice and Bob; Charlie is pending)
+			// Only approved + opted-in (Alice and Bob; Charlie opted out)
 			expect(profiles.length).toBe(2);
 
 			// Teachers first, then accompanists
@@ -554,9 +544,9 @@ describe("Participant Profiles API End-to-End", () => {
 			}
 		});
 
-		it("removes approved teacher from public directory after display name edit", async () => {
-			const { app, divA1 } = await setupTestApp();
-			const putTeacher = (displayName: string) =>
+		it("keeps approved teacher in public directory across name and division edits and enforces admin hide/reinstate", async () => {
+			const { app, divA1, divA2 } = await setupTestApp();
+			const putTeacher = (displayName: string, divisionIds = [divA1.id]) =>
 				app.request("/api/customer/orgs/org-a/profiles/teacher", {
 					method: "PUT",
 					headers: {
@@ -567,36 +557,49 @@ describe("Participant Profiles API End-to-End", () => {
 					body: JSON.stringify({
 						displayName,
 						publicDirectoryOptIn: true,
-						divisionIds: [divA1.id],
+						divisionIds,
 					}),
 				});
+			const patchTeacher = (profileId: string, approvalStatus: string) =>
+				app.request(
+					`/api/admin/orgs/org-a/profiles/teachers/${profileId}/approval`,
+					{
+						method: "PATCH",
+						headers: {
+							"Content-Type": "application/json",
+							Authorization: "Bearer admin-org-a",
+						},
+						body: JSON.stringify({ approvalStatus }),
+					},
+				);
+			const listDirectoryNames = async () => {
+				const items: PublicDirectoryProfileDto[] = await (
+					await app.request("/api/org-info/org-a/directory/profiles")
+				).json();
+				return items.map((p) => p.displayName);
+			};
 
 			const created = await (await putTeacher("Alice Teacher")).json();
-			await app.request(
-				`/api/admin/orgs/org-a/profiles/teachers/${created.id}/approval`,
-				{
-					method: "PATCH",
-					headers: {
-						"Content-Type": "application/json",
-						Authorization: "Bearer admin-org-a",
-					},
-					body: JSON.stringify({ approvalStatus: "approved" }),
-				},
-			);
-			const before: PublicDirectoryProfileDto[] = await (
-				await app.request("/api/org-info/org-a/directory/profiles")
-			).json();
-			expect(before.map((p) => p.displayName)).toEqual(["Alice Teacher"]);
+			expect(created.approval_status).toBe("approved");
+			expect(await listDirectoryNames()).toEqual(["Alice Teacher"]);
 
-			const editRes = await putTeacher("Alice Renamed");
+			const editRes = await putTeacher("Alice Renamed", [divA2.id]);
 			expect(editRes.status).toBe(200);
 			const edited = await editRes.json();
-			expect(edited.approval_status).toBe("pending");
+			expect(edited.approval_status).toBe("approved");
+			expect(await listDirectoryNames()).toEqual(["Alice Renamed"]);
 
-			const after: PublicDirectoryProfileDto[] = await (
-				await app.request("/api/org-info/org-a/directory/profiles")
-			).json();
-			expect(after).toEqual([]);
+			const hideRes = await patchTeacher(created.id, "rejected");
+			expect(hideRes.status).toBe(200);
+			expect(await listDirectoryNames()).toEqual([]);
+
+			const blockedBypass = await (await putTeacher("Alice Bypass")).json();
+			expect(blockedBypass.approval_status).toBe("rejected");
+			expect(await listDirectoryNames()).toEqual([]);
+
+			const reinstateRes = await patchTeacher(created.id, "approved");
+			expect(reinstateRes.status).toBe(200);
+			expect(await listDirectoryNames()).toEqual(["Alice Bypass"]);
 		});
 
 		it("returns 404 for nonexistent organization", async () => {
