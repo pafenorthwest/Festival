@@ -1,6 +1,7 @@
 import { describe, expect, it, mock, spyOn } from "bun:test";
 import type {
 	AccompanistMembershipGrant,
+	ClassCheckoutLineItemInput,
 	ClassRegistrationMetadata,
 	EntitlementGrantSnapshot,
 	FestivalRecord,
@@ -45,7 +46,7 @@ interface FixtureOptions {
 	isPrimaryFestival?: boolean;
 	registrationOpensAt?: string | null;
 	registrationClosesAt?: string | null;
-	maximumPerformancePieces?: number;
+	maximumPerformancePieces?: 1 | 2 | 3;
 	performanceMinutes?: number;
 	storeDomain?: string;
 	mockStorefront?: Partial<ClassCheckoutStorefront>;
@@ -115,11 +116,13 @@ async function createFixture(options: FixtureOptions = {}) {
 	let festival: FestivalRecord | undefined;
 	let classConfig: {
 		id: string;
+		classSubtypeId: string;
 		divisionId?: string;
-		maximumPerformancePieces: number;
+		maximumPerformancePieces: 1 | 2 | 3;
 		performanceMinutes: number;
 	} = {
 		id: "dummy-class-id",
+		classSubtypeId: subtype.id,
 		maximumPerformancePieces: options.maximumPerformancePieces ?? 2,
 		performanceMinutes: options.performanceMinutes ?? 10,
 	};
@@ -262,7 +265,7 @@ async function createFixture(options: FixtureOptions = {}) {
 	};
 
 	const commerce =
-		options.commerce ?? new InMemoryMembershipCommerceRepository();
+		options.commerce ?? new InMemoryMembershipCommerceRepository(organizations);
 	const repertoire = new InMemoryRepertoireRepository();
 
 	const service = new (
@@ -1155,7 +1158,7 @@ describe("ClassCheckoutService", () => {
 	it("withholds a completed cart URL when it expires during the final replay-state read", async () => {
 		const f = await createFixture();
 		const first = await f.service.start(f.defaultInput);
-		const expiresAt = Date.parse(first.intent.expiresAtIso);
+		const expiresAt = Date.parse(required(first.intent).expiresAtIso);
 		f.now.setTime(expiresAt - 1);
 		const readState = f.checkout.getClassCheckoutReplayState.bind(f.checkout);
 		const snapshot = spyOn(f.checkout, "getClassCheckoutReplayState");
@@ -1214,7 +1217,9 @@ describe("ClassCheckoutService", () => {
 			intentId: first.intentId,
 			checkoutUrl: first.checkoutUrl,
 		});
-		expect(checkout.mock.calls[2][0].shopifyCartId).toBe(record.shopifyCartId);
+		expect(checkout.mock.calls[2][0].shopifyCartId).toBe(
+			required(record.shopifyCartId),
+		);
 		expect(create).toHaveBeenCalledTimes(1);
 	}, 6_000);
 
@@ -1523,7 +1528,7 @@ describe("ClassCheckoutService", () => {
 			await f.organizations.findActiveFestivalClassByShortName(
 				f.organization.id,
 				original.festivalShortName,
-				original.festivalClassId,
+				required(original.festivalClassId),
 			),
 		);
 		const secondClass = await f.organizations.createFestivalClassConfiguration({
@@ -1537,6 +1542,7 @@ describe("ClassCheckoutService", () => {
 			price: originalClass.price,
 			maximumPerformancePieces: originalClass.maximumPerformancePieces,
 			performanceMinutes: originalClass.performanceMinutes,
+			capacity: originalClass.capacity,
 			shopifyProductGid: "gid://shopify/Product/101",
 			shopifyVariantGid: "gid://shopify/ProductVariant/201",
 		});
@@ -2558,6 +2564,9 @@ describe("ClassCheckoutService", () => {
 			price: "50.00",
 			maximumPerformancePieces: 2,
 			performanceMinutes: 10,
+			capacity: 25,
+			shopifyProductGid: "gid://shopify/Product/2550",
+			shopifyVariantGid: "gid://shopify/ProductVariant/2550",
 		});
 		await expect(
 			f.service.start({
@@ -2601,6 +2610,9 @@ describe("ClassCheckoutService", () => {
 			price: "50.00",
 			maximumPerformancePieces: 2,
 			performanceMinutes: 10,
+			capacity: 25,
+			shopifyProductGid: "gid://shopify/Product/2593",
+			shopifyVariantGid: "gid://shopify/ProductVariant/2593",
 		});
 
 		const result = await f.service.start({
@@ -2694,6 +2706,8 @@ describe("ClassCheckoutService", () => {
 			performanceMinutes: 10,
 			capacity: 25,
 			isActive: true,
+			shopifyProductGid: "gid://shopify/Product/2684",
+			shopifyVariantGid: "gid://shopify/ProductVariant/2684",
 		});
 
 		await expect(
@@ -3114,7 +3128,7 @@ describe("ClassCheckoutService", () => {
 		// The admitted cart remains available for a same-operation retry.
 		const intents = (
 			f.checkout as unknown as {
-				intents: Map<string, { status: string }>;
+				intents: Map<string, { id: string; status: string }>;
 			}
 		).intents;
 		const createdIntent = [...intents.values()][0];
@@ -3147,7 +3161,7 @@ describe("ClassCheckoutService", () => {
 		// The admitted cart remains available for a same-operation retry.
 		const intents = (
 			f.checkout as unknown as {
-				intents: Map<string, { status: string }>;
+				intents: Map<string, { id: string; status: string }>;
 			}
 		).intents;
 		const createdIntent = [...intents.values()][0];
@@ -3177,7 +3191,7 @@ describe("ClassCheckoutService", () => {
 
 		const intents = (
 			f.checkout as unknown as {
-				intents: Map<string, { status: string }>;
+				intents: Map<string, { id: string; status: string }>;
 			}
 		).intents;
 		const createdIntent = [...intents.values()][0];
@@ -3770,6 +3784,8 @@ describe("ClassCheckoutService", () => {
 			performanceMinutes: 10,
 			capacity: 25,
 			isActive: true,
+			shopifyProductGid: "gid://shopify/Product/3760",
+			shopifyVariantGid: "gid://shopify/ProductVariant/3760",
 		});
 		const createIntent = spyOn(f.checkout, "createIntent");
 		const createCart = spyOn(f.storefront, "createCart");
@@ -3919,7 +3935,7 @@ describe("ClassCheckoutService", () => {
 
 		const intents = (
 			f.checkout as unknown as {
-				intents: Map<string, { status: string }>;
+				intents: Map<string, { id: string; status: string }>;
 			}
 		).intents;
 		const createdIntent = [...intents.values()][0];
@@ -4383,7 +4399,7 @@ describe("ClassCheckoutService", () => {
 		await f.customers.createChildAgeSnapshot({
 			organizationId: f.organization.id,
 			childId: secondChild.id,
-			asOfDate: "2026-03-01",
+			validUntilIso: "2027-01-01T00:00:00.000Z",
 			age: 10,
 		});
 

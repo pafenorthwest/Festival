@@ -52,7 +52,7 @@ integrationTest(
 				`SELECT privacy_notice_version AS notice, consented_at FROM ${schema}.festival_customer_staff_consents WHERE organization_id='${fixture.id("org")}' AND customer_id='${fixture.id("customer")}' ORDER BY notice`,
 			);
 			expect(
-				consents.map((row) => [
+				consents.map((row: { notice: string; consented_at: string | Date }) => [
 					row.notice,
 					new Date(row.consented_at).toISOString(),
 				]),

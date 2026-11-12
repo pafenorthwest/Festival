@@ -167,7 +167,6 @@ async function fixture(
 		organizationId: organization.id,
 		parentCustomerId: customer.id,
 		displayName: "Alice Violinist",
-		createdAtIso: now.toISOString(),
 	});
 
 	await customers.createChildAgeSnapshot({
@@ -884,7 +883,6 @@ describe("Class Order Projection and Entitlements", () => {
 		expect(
 			await f.commerce.listClassEntitlements({
 				organizationId: f.organization.id,
-				checkoutIntentId: f.intent.id,
 			}),
 		).toEqual([
 			expect.objectContaining({
@@ -1336,7 +1334,6 @@ describe("Class Order Projection and Entitlements", () => {
 			organizationId: f.organization.id,
 			parentCustomerId: f.customer.id,
 			displayName: "Bob Violinist",
-			createdAtIso: NOW.toISOString(),
 		});
 
 		const { customer: multiCustomer } = await f.customers.createCustomerSession(
@@ -1506,13 +1503,11 @@ describe("Class Order Projection and Entitlements", () => {
 			organizationId: f.organization.id,
 			parentCustomerId: multiCustomer.id,
 			displayName: "Alice Violinist",
-			createdAtIso: NOW.toISOString(),
 		});
 		const child2 = await f.customers.createChild({
 			organizationId: f.organization.id,
 			parentCustomerId: multiCustomer.id,
 			displayName: "Bob Violinist",
-			createdAtIso: NOW.toISOString(),
 		});
 		const duplicateIntent = await f.checkout.createIntent({
 			organizationId: f.organization.id,
@@ -1614,7 +1609,6 @@ describe("Class Order Projection and Entitlements", () => {
 		expect(
 			await f.commerce.listClassEntitlements({
 				organizationId: f.organization.id,
-				checkoutIntentId: duplicateIntent.intent.id,
 			}),
 		).toEqual(
 			expect.arrayContaining([
@@ -1761,8 +1755,10 @@ describe("Class Order Projection and Entitlements", () => {
 			intentId: f.intent.id,
 			organizationId: f.organization.id,
 			customerId: f.customer.id,
-			cartReference: "gid://shopify/Cart/cart-a",
-			checkoutUrl: "https://seattle-fest.myshopify.com/cart/c/cart-a",
+			sessionId: "parent-session",
+			integrationVersion: 1,
+			shopifyCartId: "gid://shopify/Cart/cart-a",
+			expiresAtIso: "2030-01-01T00:00:00.000Z",
 		});
 
 		const { customer: secondCustomer } =
@@ -1781,7 +1777,6 @@ describe("Class Order Projection and Entitlements", () => {
 			organizationId: f.organization.id,
 			parentCustomerId: secondCustomer.id,
 			displayName: "Bob Violinist",
-			createdAtIso: NOW.toISOString(),
 		});
 		const secondLineId = "22222222-2222-4222-8222-222222222222";
 		const secondCreated = await f.checkout.createIntent({
@@ -1818,8 +1813,10 @@ describe("Class Order Projection and Entitlements", () => {
 			intentId: secondCreated.intent.id,
 			organizationId: f.organization.id,
 			customerId: secondCustomer.id,
-			cartReference: "gid://shopify/Cart/cart-b",
-			checkoutUrl: "https://seattle-fest.myshopify.com/cart/c/cart-b",
+			sessionId: "parent-session-2",
+			integrationVersion: 1,
+			shopifyCartId: "gid://shopify/Cart/cart-b",
+			expiresAtIso: "2030-01-01T00:00:00.000Z",
 		});
 
 		const firstOrder = paidClassOrder(f.intent.correlationId);

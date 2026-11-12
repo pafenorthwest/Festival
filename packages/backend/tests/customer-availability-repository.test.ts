@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import type { AvailabilitySubjectType } from "@festival/common";
 import { sql } from "bun";
 import {
 	CorruptAvailabilityDataError,
@@ -183,7 +184,7 @@ describe("PostgresCustomerAvailabilityRepository - upsertAvailability multi-row 
 				organizationId: "org-1",
 				festivalId: "fest-1",
 				customerId: "cust-1",
-				subjectType: "teacher" as const,
+				subjectType: "teacher" as unknown as AvailabilitySubjectType,
 				subjectId: "teacher-1",
 				festivalDate: "2026-07-16",
 				availableHours: [14, 15],

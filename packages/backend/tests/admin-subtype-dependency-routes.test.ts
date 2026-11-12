@@ -359,6 +359,8 @@ describe("admin subtype dependency routes", () => {
 	it("creates a festival class subtype with requiredSubtypeId", async () => {
 		const { app, organization, repository } = await createTestApp();
 		const festival = await repository.createFestival({
+			id: "fest-spring-2027",
+			code: "SPRING2027",
 			organizationId: organization.id,
 			name: "Spring Festival 2027",
 			shortName: "spring2027",

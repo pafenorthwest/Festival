@@ -179,7 +179,7 @@ describe("private Shopify reconciliation route and tenant-scoped worker credenti
 			{ Cookie: "festival_session=1" },
 			{ Authorization: "Bearer admin" },
 			{ "X-CSRF-Token": "csrf-123" },
-		]) {
+		] as Array<Record<string, string>>) {
 			const res = await app.request(path, {
 				method: "POST",
 				headers: {

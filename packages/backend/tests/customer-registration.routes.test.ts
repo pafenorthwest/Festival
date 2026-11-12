@@ -1599,9 +1599,8 @@ describe("Customer Registration Routes", () => {
 				displayName: "Solo",
 				normalizedName: "solo",
 			});
-			const division = await orgRepo.createRegistrationCatalogValue({
+			const division = await orgRepo.createDivision({
 				organizationId: org.id,
-				kind: "division",
 				displayName: "Junior",
 				normalizedName: "junior",
 			});
@@ -1624,7 +1623,7 @@ describe("Customer Registration Routes", () => {
 
 			const custRepo = new InMemoryCustomerAccountRepository();
 			const checkoutRepo = new InMemoryCheckoutRepository();
-			const commerceRepo = new InMemoryMembershipCommerceRepository();
+			const commerceRepo = new InMemoryMembershipCommerceRepository(orgRepo);
 			const storefront = {
 				createCart: async () => ({ shopifyCartId: "cart-1" }),
 				checkout: async () => ({ checkoutUrl: "https://fest.example.com" }),
@@ -2375,7 +2374,7 @@ describe("Customer Registration Routes", () => {
 
 			const custRepo = new InMemoryCustomerAccountRepository();
 			const checkoutRepo = new InMemoryCheckoutRepository();
-			const commerceRepo = new InMemoryMembershipCommerceRepository();
+			const commerceRepo = new InMemoryMembershipCommerceRepository(orgRepo);
 
 			await commerceRepo.createClassEntitlement({
 				organizationId: org.id,

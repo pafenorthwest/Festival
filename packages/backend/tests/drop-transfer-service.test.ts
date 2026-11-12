@@ -1264,8 +1264,16 @@ describe("DropTransferService", () => {
 				organizationId: org.id,
 				festivalId: fest.id,
 				displayName: "Piano Solo",
-				price: 50,
+				classSubtypeId: "sub-1",
+				divisionId: "div-1",
+				minimumAge: 5,
+				maximumAge: 18,
+				price: "50.00",
+				maximumPerformancePieces: 1,
+				performanceMinutes: 10,
 				capacity: 10,
+				shopifyProductGid: "gid://shopify/Product/1",
+				shopifyVariantGid: "gid://shopify/ProductVariant/1",
 			});
 
 			const with3Args = await orgRepo.findFestivalClassConfigurationById(
@@ -1305,21 +1313,27 @@ describe("DropTransferService", () => {
 				await expect(
 					client.createRefund({
 						orderId: "",
+						paymentIntentId: "pi_test",
 						amountCents: 5000,
+						reason: "Customer drop",
 					}),
 				).rejects.toThrow("Cannot create refund: missing Shopify order ID.");
 
 				await expect(
 					client.createRefund({
 						orderId: "   ",
+						paymentIntentId: "pi_test",
 						amountCents: 5000,
+						reason: "Customer drop",
 					}),
 				).rejects.toThrow("Cannot create refund: missing Shopify order ID.");
 
 				await expect(
 					client.createRefund({
 						orderId: undefined as unknown as string,
+						paymentIntentId: "pi_test",
 						amountCents: 5000,
+						reason: "Customer drop",
 					}),
 				).rejects.toThrow("Cannot create refund: missing Shopify order ID.");
 
@@ -1327,7 +1341,9 @@ describe("DropTransferService", () => {
 				await expect(
 					client.createRefund({
 						orderId: "gid://shopify/Order/1",
+						paymentIntentId: "pi_test",
 						amountCents: 0,
+						reason: "Customer drop",
 					}),
 				).rejects.toThrow(
 					"Cannot create refund: refund amount must be greater than zero.",
@@ -1336,7 +1352,9 @@ describe("DropTransferService", () => {
 				await expect(
 					client.createRefund({
 						orderId: "gid://shopify/Order/1",
+						paymentIntentId: "pi_test",
 						amountCents: -500,
+						reason: "Customer drop",
 					}),
 				).rejects.toThrow(
 					"Cannot create refund: refund amount must be greater than zero.",
@@ -1346,7 +1364,9 @@ describe("DropTransferService", () => {
 			// Verify successful refund execution in mock mode
 			const validMockRefund = await mockClient.createRefund({
 				orderId: "gid://shopify/Order/1",
+				paymentIntentId: "pi_test",
 				amountCents: 5000,
+				reason: "Customer drop",
 			});
 			expect(validMockRefund.providerMode).toBe("mock");
 			expect(validMockRefund.id).toContain("gid://shopify/Refund/mock-");

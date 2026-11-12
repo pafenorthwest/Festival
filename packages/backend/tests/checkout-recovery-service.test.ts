@@ -40,6 +40,7 @@ async function setupServiceTest() {
 		durationDays: 365,
 		shopifyProductGid: "gid://shopify/Product/1",
 		shopifyVariantGid: "gid://shopify/ProductVariant/1",
+		productNameSnapshot: "Teacher Membership",
 		isActive: true,
 	});
 

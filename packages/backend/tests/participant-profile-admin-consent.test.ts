@@ -112,7 +112,9 @@ async function fixture(role: Role) {
 			return p && { ...p, zip_code: postalCode };
 		};
 	}
-	const consent = (version = CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION) =>
+	const consent = (
+		version: string = CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION,
+	) =>
 		f.customerRepository.recordStaffAccessConsent({
 			organizationId: f.orgA.id,
 			customerId: customer.id,
@@ -146,7 +148,7 @@ async function fixture(role: Role) {
 	};
 }
 
-function expectRedacted(profile: Record<string, unknown>) {
+function expectRedacted(profile: object) {
 	for (const field of ["phone", "email", "zip_code"]) {
 		expect(profile).not.toHaveProperty(field);
 	}

@@ -1726,7 +1726,7 @@ describe("organization routes", () => {
 			organizationId: organization.id,
 			userId: reviewer.id,
 			role: "Music Reviewer",
-			origin: "direct",
+			origin: "invite",
 		});
 
 		const response = await app.fetch(
@@ -1759,7 +1759,7 @@ describe("organization routes", () => {
 			organizationId: organization.id,
 			userId: reviewer.id,
 			role: "Music Reviewer",
-			origin: "direct",
+			origin: "invite",
 		});
 		const shopifySpy = spyOn(shopifyProductClient, "readProductsByGid");
 
@@ -1926,7 +1926,7 @@ describe("organization routes", () => {
 			organizationId: organization.id,
 			userId: reviewer.id,
 			role: "Music Reviewer",
-			origin: "direct",
+			origin: "invite",
 		});
 		const offering = await repository.createMembershipProductRecord({
 			organizationId: organization.id,

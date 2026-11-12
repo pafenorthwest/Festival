@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
-import type { AuthenticatedUser } from "@festival/common";
+import type { AuthenticatedUser, OrganizationRole } from "@festival/common";
 import { Hono } from "hono";
 import type { AuthVerifier } from "../src/auth/types.js";
 import {
@@ -102,7 +102,7 @@ async function createTestContext() {
 	await orgRepo.createMembership({
 		organizationId: organization.id,
 		userId: readerUser.id,
-		role: "Reader",
+		role: "Reader" as unknown as OrganizationRole,
 		origin: "invite",
 	});
 

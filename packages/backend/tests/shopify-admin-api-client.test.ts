@@ -70,8 +70,10 @@ describe("ShopifyAdminApiClient", () => {
 	});
 
 	it("updates membership shipping through the inventory item with write_inventory", async () => {
-		let mutation: { query: string; variables: Record<string, unknown> } | null =
-			null;
+		let mutation = null as {
+			query: string;
+			variables: Record<string, unknown>;
+		} | null;
 		let tokenRequests = 0;
 		globalThis.fetch = (async (input, init) => {
 			const url = input instanceof Request ? input.url : input.toString();
@@ -807,10 +809,10 @@ describe("ShopifyAdminApiClient", () => {
 	});
 
 	it("reads a bounded, tenant-bound paid-order projection without customer PII", async () => {
-		let graphqlBody: {
+		let graphqlBody = null as {
 			query: string;
 			variables: Record<string, string>;
-		} | null = null;
+		} | null;
 		const client = new ShopifyAdminApiClient({
 			fetch: async (input, init) => {
 				if (input.toString().endsWith("/admin/oauth/access_token")) {
@@ -934,10 +936,10 @@ describe("ShopifyAdminApiClient", () => {
 	});
 
 	it("reads paid-order list line correlation attributes with the same strict projection", async () => {
-		let graphqlBody: {
+		let graphqlBody = null as {
 			query: string;
 			variables: { first: number; query: string };
-		} | null = null;
+		} | null;
 		const client = new ShopifyAdminApiClient({
 			now: () => Date.parse("2026-08-30T00:00:00.000Z"),
 			fetch: async (input, init) => {

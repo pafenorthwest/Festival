@@ -31,6 +31,20 @@ jobs:
   verify:
     name: Verify & Test
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: festival_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d festival_test"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
 
     steps:
       - name: Check out repository
@@ -49,14 +63,26 @@ jobs:
       - name: Format check
         run: bun run format:check
 
+      - name: Lint
+        run: bun run lint
+
       - name: Build
         run: bun run build
 
-      - name: Test
-        run: bun run test
+      - name: Frontend typecheck
+        run: bun run --cwd packages/frontend check:types
+
+      - name: Backend & test typecheck
+        run: bunx --bun tsc -p packages/backend/tsconfig.json --noEmit
 
       - name: SQL parameter check
         run: bun run check:sql
+
+      - name: Test
+        env:
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/festival_test
+          POSTGRES_INTEGRATION_URL: postgres://postgres:postgres@127.0.0.1:5432/festival_test
+        run: bun run test
 
   build-and-push:
     name: Build & Push Images

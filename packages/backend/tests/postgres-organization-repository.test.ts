@@ -44,7 +44,7 @@ const expectedClassConfig = {
 	minimumAge: 7,
 	maximumAge: 12,
 	price: "45.00",
-	maximumPerformancePieces: 2,
+	maximumPerformancePieces: 2 as const,
 	performanceMinutes: 8,
 	capacity: 20,
 	isActive: true,

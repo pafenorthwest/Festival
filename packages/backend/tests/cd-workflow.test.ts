@@ -7,6 +7,35 @@ async function readRepoFile(relativePath: string): Promise<string> {
 	return Bun.file(resolve(repositoryRoot, relativePath)).text();
 }
 
+function assertBlockingVerifyGates(workflowOrJob: string): void {
+	expect(workflowOrJob).toContain("services:");
+	expect(workflowOrJob).toContain("image: postgres:17-alpine");
+	expect(workflowOrJob).toContain("POSTGRES_DB: festival_test");
+	expect(workflowOrJob).toContain("5432:5432");
+	expect(workflowOrJob).toContain("pg_isready -U postgres -d festival_test");
+	expect(workflowOrJob).toContain("oven-sh/setup-bun@v2");
+	expect(workflowOrJob).toContain("bun-version: 1.4.2");
+	expect(workflowOrJob).toContain("bun install --frozen-lockfile");
+	expect(workflowOrJob).toContain("bun run format:check");
+	expect(workflowOrJob).toContain("bun run lint");
+	expect(workflowOrJob).toContain("bun run build");
+	expect(workflowOrJob).toContain(
+		"bun run --cwd packages/frontend check:types",
+	);
+	expect(workflowOrJob).toContain(
+		"bunx --bun tsc -p packages/backend/tsconfig.json --noEmit",
+	);
+	expect(workflowOrJob).toContain("bun run check:sql");
+	expect(workflowOrJob).toContain("bun run test");
+	expect(workflowOrJob).toContain(
+		"DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/festival_test",
+	);
+	expect(workflowOrJob).toContain(
+		"POSTGRES_INTEGRATION_URL: postgres://postgres:postgres@127.0.0.1:5432/festival_test",
+	);
+	expect(workflowOrJob).not.toContain("continue-on-error: true");
+}
+
 describe("Continuous Deployment & CI workflow contracts (#281)", () => {
 	it("configures .github/workflows/deploy.yml for automated release branch and tag triggers", async () => {
 		const deployWorkflow = await readRepoFile(".github/workflows/deploy.yml");
@@ -30,17 +59,13 @@ describe("Continuous Deployment & CI workflow contracts (#281)", () => {
 		expect(deployWorkflow).toContain("cancel-in-progress: false");
 	});
 
-	it("runs deterministic pre-deployment verification with pinned Bun 1.4.2", async () => {
+	it("runs deterministic pre-deployment verification with pinned Bun 1.4.2 and Postgres 17", async () => {
 		const deployWorkflow = await readRepoFile(".github/workflows/deploy.yml");
+		const [verifyJob = ""] = deployWorkflow.split("\n  build-and-push:");
 
-		expect(deployWorkflow).toContain("verify:");
-		expect(deployWorkflow).toContain("oven-sh/setup-bun@v2");
-		expect(deployWorkflow).toContain("bun-version: 1.4.2");
-		expect(deployWorkflow).toContain("bun install --frozen-lockfile");
-		expect(deployWorkflow).toContain("bun run format:check");
-		expect(deployWorkflow).toContain("bun run build");
-		expect(deployWorkflow).toContain("bun run test");
-		expect(deployWorkflow).toContain("bun run check:sql");
+		expect(verifyJob).toContain("verify:");
+		assertBlockingVerifyGates(verifyJob);
+		expect(deployWorkflow).not.toContain("continue-on-error: true");
 	});
 
 	it("builds and pushes multi-stage backend and frontend images to GHCR with GHA caching", async () => {
@@ -103,12 +128,13 @@ describe("Continuous Deployment & CI workflow contracts (#281)", () => {
 		expect(deployWorkflow).toContain("vars.DEPLOY_PUBLIC_URL");
 	});
 
-	it("preserves existing PR checks and manual integration deployment workflows", async () => {
+	it("enforces blocking PR checks with Postgres 17 and preserves manual integration deployment workflow", async () => {
 		const prChecks = await readRepoFile(".github/workflows/pr-checks.yml");
 		const integration = await readRepoFile(".github/workflows/integration.yml");
 
-		expect(prChecks).toContain("bun-version: 1.4.2");
-		expect(prChecks).toContain("bun run check:sql");
+		expect(prChecks).toContain("verify:");
+		assertBlockingVerifyGates(prChecks);
+		expect(prChecks).not.toContain("sql_parameter_check:");
 		expect(integration).toContain("bun-version: 1.4.2");
 		expect(integration).toContain("https://int.artsfestival.online/healthz");
 	});

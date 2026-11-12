@@ -54,7 +54,9 @@ function withAuth(token: string, init?: RequestInit): RequestInit {
 const VOLUNTEERS_BASE =
 	"http://test/api/organizations/pafe/festivals/spring/volunteers";
 
-async function createOrgAndFestivalAsAdmin(app: { fetch: typeof fetch }) {
+async function createOrgAndFestivalAsAdmin(app: {
+	fetch: (request: Request) => Response | Promise<Response>;
+}) {
 	await app.fetch(
 		new Request(
 			"http://test/api/organizations",

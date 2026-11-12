@@ -3,6 +3,10 @@ import { randomUUID } from "node:crypto";
 import { sql } from "bun";
 import { initializePostgresSchema } from "../src/repo/postgres-schema.js";
 
+if (process.env.POSTGRES_INTEGRATION_URL && !process.env.DATABASE_URL) {
+	process.env.DATABASE_URL = process.env.POSTGRES_INTEGRATION_URL;
+}
+
 const owned = new Set<string>();
 
 /** One latest, initially empty schema per file; never accepts an application schema. */
@@ -21,6 +25,9 @@ export function currentPostgresFixture(label: string): () => Promise<string> {
 		owned.delete(schema);
 	});
 	return async () => {
+		if (process.env.POSTGRES_INTEGRATION_URL && !process.env.DATABASE_URL) {
+			process.env.DATABASE_URL = process.env.POSTGRES_INTEGRATION_URL;
+		}
 		if (!ready) {
 			owned.add(schema);
 			ready = initializePostgresSchema(schema);
@@ -50,7 +57,8 @@ export async function resetPostgresFixture(schema: string): Promise<void> {
 	);
 	if (tables.length) {
 		const names = tables.map(
-			(row) => `${schema}."${String(row.tablename).replaceAll('"', '""')}"`,
+			(row: { tablename: unknown }) =>
+				`${schema}."${String(row.tablename).replaceAll('"', '""')}"`,
 		);
 		await sql.unsafe(`TRUNCATE ${names.join(", ")} CASCADE`);
 	}

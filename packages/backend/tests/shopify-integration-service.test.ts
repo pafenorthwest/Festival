@@ -69,6 +69,11 @@ async function createTenant(repository: InMemoryOrganizationRepository) {
 	});
 
 	return {
+		identity: {
+			uid: "uid-admin",
+			email: "admin@example.com",
+			displayName: "Admin User",
+		},
 		user: {
 			id: "user-1",
 			firebaseUid: "uid-admin",

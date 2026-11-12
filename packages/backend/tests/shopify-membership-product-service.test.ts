@@ -370,7 +370,7 @@ describe("ShopifyMembershipProductService", () => {
 		expect(
 			audit.records.map(({ operation, requestId, result }) => ({
 				operation,
-				requestId,
+				...(requestId ? { requestId } : {}),
 				result,
 			})),
 		).toEqual([
