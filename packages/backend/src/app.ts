@@ -622,6 +622,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 			checkoutRecoveryService,
 			participantProfileService,
 			waitlistService,
+			publicOrigin: env.publicOrigin,
 		}),
 	);
 	app.route(

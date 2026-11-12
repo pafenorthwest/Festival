@@ -167,7 +167,6 @@ async function fixture(
 		organizationId: organization.id,
 		parentCustomerId: customer.id,
 		displayName: "Alice Violinist",
-		createdAtIso: now.toISOString(),
 	});
 
 	await customers.createChildAgeSnapshot({
@@ -313,6 +312,204 @@ async function delivery(
 }
 
 describe("Class Order Projection and Entitlements", () => {
+	it("retains unknown-creation evidence and sends late payment to review without granting admission", async () => {
+		const f = await fixture();
+		await f.checkout.classExecutions.prepare({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			intentId: f.intent.id,
+			fingerprint: "snapshot",
+			requestSnapshot: { selections: [] },
+		});
+		const worker = await f.checkout.classExecutions.claim({
+			organizationId: f.organization.id,
+			intentId: f.intent.id,
+			owner: "worker",
+		});
+		if (!worker) throw new Error("Expected execution lease.");
+		const claim = {
+			organizationId: f.organization.id,
+			intentId: f.intent.id,
+			owner: "worker",
+			generation: worker.generation,
+		};
+		await f.checkout.classExecutions.transition({
+			claim,
+			checkpoint: "create_dispatched",
+		});
+		await f.checkout.classExecutions.recordRecoveryRequired({
+			claim,
+			reason: "checkout_creation_unknown",
+		});
+		const order = paidClassOrder(f.intent.correlationId);
+		f.orders.values.set(order.id, order);
+		const received = await delivery(
+			f.commerce,
+			f.organization.id,
+			"unknown-creation-paid",
+		);
+		expect(await f.service.processDelivery(received.id)).toBe("processed");
+		expect(
+			await f.commerce.listClassEntitlements({
+				organizationId: f.organization.id,
+			}),
+		).toHaveLength(0);
+		expect(
+			(
+				await f.commerce.listCustomerDecisions(f.organization.id, f.customer.id)
+			)[0].status,
+		).toBe("needs_review");
+		const recorded = await f.checkout.classExecutions.get(
+			f.organization.id,
+			f.intent.id,
+		);
+		expect(recorded).toMatchObject({
+			state: "recovery_required",
+			leaseOwner: null,
+			leaseExpiresAtIso: null,
+		});
+		expect(
+			(
+				await f.checkout.classExecutions.events(f.organization.id, f.intent.id)
+			).some(
+				(event) =>
+					event.eventType === "paid_order_observed" &&
+					event.evidence.shopifyOrderGid === order.id,
+			),
+		).toBe(true);
+		expect(
+			await f.checkout.classExecutions.transition({
+				claim,
+				state: "completed",
+			}),
+		).toBe(false);
+	});
+
+	it("keeps abandoned-unknown evidence terminal when a late paid order arrives", async () => {
+		const f = await fixture();
+		await f.checkout.classExecutions.prepare({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			intentId: f.intent.id,
+			fingerprint: "snapshot",
+			requestSnapshot: {},
+		});
+		const worker = await f.checkout.classExecutions.claim({
+			organizationId: f.organization.id,
+			intentId: f.intent.id,
+			owner: "worker",
+		});
+		if (!worker) throw new Error("Expected execution lease.");
+		const claim = {
+			organizationId: f.organization.id,
+			intentId: f.intent.id,
+			owner: "worker",
+			generation: worker.generation,
+		};
+		await f.checkout.classExecutions.transition({
+			claim,
+			checkpoint: "create_dispatched",
+		});
+		await f.checkout.classExecutions.recordRecoveryRequired({
+			claim,
+			reason: "checkout_creation_unknown",
+		});
+		const abandoned = await f.checkout.classExecutions.resolve({
+			organizationId: f.organization.id,
+			intentId: f.intent.id,
+			expectedGeneration: worker.generation,
+			actorId: "admin",
+			reason: "Reviewed uncertainty",
+			action: "abandon",
+		});
+		expect(abandoned?.state).toBe("rejected");
+		const order = paidClassOrder(f.intent.correlationId);
+		f.orders.values.set(order.id, order);
+		const received = await delivery(
+			f.commerce,
+			f.organization.id,
+			"abandoned-creation-paid",
+		);
+		await f.service.processDelivery(received.id);
+		expect(
+			await f.commerce.listClassEntitlements({
+				organizationId: f.organization.id,
+			}),
+		).toHaveLength(0);
+		expect(
+			(
+				await f.commerce.listCustomerDecisions(f.organization.id, f.customer.id)
+			)[0].status,
+		).toBe("needs_review");
+		expect(
+			(await f.checkout.classExecutions.get(f.organization.id, f.intent.id))
+				?.state,
+		).toBe("rejected");
+	});
+
+	it("fences a live checkout worker when admitted payment completes", async () => {
+		const f = await fixture();
+		await f.checkout.classExecutions.prepare({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			intentId: f.intent.id,
+			fingerprint: "snapshot",
+			requestSnapshot: {},
+		});
+		const worker = await f.checkout.classExecutions.claim({
+			organizationId: f.organization.id,
+			intentId: f.intent.id,
+			owner: "worker",
+		});
+		if (!worker) throw new Error("Expected execution lease.");
+		const claim = {
+			organizationId: f.organization.id,
+			intentId: f.intent.id,
+			owner: "worker",
+			generation: worker.generation,
+		};
+		await f.checkout.attachCart({
+			organizationId: f.organization.id,
+			customerId: f.customer.id,
+			sessionId: f.intent.sessionId,
+			intentId: f.intent.id,
+			shopifyCartId: "gid://shopify/Cart/admitted",
+			integrationVersion: 1,
+			expiresAtIso: f.intent.expiresAtIso,
+		});
+		await f.checkout.classExecutions.transition({
+			claim,
+			checkpoint: "attached",
+			shopifyCartId: "gid://shopify/Cart/admitted",
+		});
+		const order = paidClassOrder(f.intent.correlationId);
+		f.orders.values.set(order.id, order);
+		const received = await delivery(
+			f.commerce,
+			f.organization.id,
+			"admitted-creation-paid",
+		);
+		await f.service.processDelivery(received.id);
+		expect(
+			await f.commerce.listClassEntitlements({
+				organizationId: f.organization.id,
+			}),
+		).toHaveLength(1);
+		expect(
+			await f.checkout.classExecutions.get(f.organization.id, f.intent.id),
+		).toMatchObject({
+			state: "completed",
+			leaseOwner: null,
+			leaseExpiresAtIso: null,
+		});
+		expect(
+			await f.checkout.classExecutions.transition({
+				claim,
+				state: "retryable",
+			}),
+		).toBe(false);
+	});
+
 	it("links the original selection to the verified paid line and preserves it through edits, replay and reconciliation", async () => {
 		const f = await fixture();
 		const original: ClassRegistrationSnapshot = {
@@ -686,7 +883,6 @@ describe("Class Order Projection and Entitlements", () => {
 		expect(
 			await f.commerce.listClassEntitlements({
 				organizationId: f.organization.id,
-				checkoutIntentId: f.intent.id,
 			}),
 		).toEqual([
 			expect.objectContaining({
@@ -1138,7 +1334,6 @@ describe("Class Order Projection and Entitlements", () => {
 			organizationId: f.organization.id,
 			parentCustomerId: f.customer.id,
 			displayName: "Bob Violinist",
-			createdAtIso: NOW.toISOString(),
 		});
 
 		const { customer: multiCustomer } = await f.customers.createCustomerSession(
@@ -1308,13 +1503,11 @@ describe("Class Order Projection and Entitlements", () => {
 			organizationId: f.organization.id,
 			parentCustomerId: multiCustomer.id,
 			displayName: "Alice Violinist",
-			createdAtIso: NOW.toISOString(),
 		});
 		const child2 = await f.customers.createChild({
 			organizationId: f.organization.id,
 			parentCustomerId: multiCustomer.id,
 			displayName: "Bob Violinist",
-			createdAtIso: NOW.toISOString(),
 		});
 		const duplicateIntent = await f.checkout.createIntent({
 			organizationId: f.organization.id,
@@ -1416,7 +1609,6 @@ describe("Class Order Projection and Entitlements", () => {
 		expect(
 			await f.commerce.listClassEntitlements({
 				organizationId: f.organization.id,
-				checkoutIntentId: duplicateIntent.intent.id,
 			}),
 		).toEqual(
 			expect.arrayContaining([
@@ -1563,8 +1755,10 @@ describe("Class Order Projection and Entitlements", () => {
 			intentId: f.intent.id,
 			organizationId: f.organization.id,
 			customerId: f.customer.id,
-			cartReference: "gid://shopify/Cart/cart-a",
-			checkoutUrl: "https://seattle-fest.myshopify.com/cart/c/cart-a",
+			sessionId: "parent-session",
+			integrationVersion: 1,
+			shopifyCartId: "gid://shopify/Cart/cart-a",
+			expiresAtIso: "2030-01-01T00:00:00.000Z",
 		});
 
 		const { customer: secondCustomer } =
@@ -1583,7 +1777,6 @@ describe("Class Order Projection and Entitlements", () => {
 			organizationId: f.organization.id,
 			parentCustomerId: secondCustomer.id,
 			displayName: "Bob Violinist",
-			createdAtIso: NOW.toISOString(),
 		});
 		const secondLineId = "22222222-2222-4222-8222-222222222222";
 		const secondCreated = await f.checkout.createIntent({
@@ -1620,8 +1813,10 @@ describe("Class Order Projection and Entitlements", () => {
 			intentId: secondCreated.intent.id,
 			organizationId: f.organization.id,
 			customerId: secondCustomer.id,
-			cartReference: "gid://shopify/Cart/cart-b",
-			checkoutUrl: "https://seattle-fest.myshopify.com/cart/c/cart-b",
+			sessionId: "parent-session-2",
+			integrationVersion: 1,
+			shopifyCartId: "gid://shopify/Cart/cart-b",
+			expiresAtIso: "2030-01-01T00:00:00.000Z",
 		});
 
 		const firstOrder = paidClassOrder(f.intent.correlationId);

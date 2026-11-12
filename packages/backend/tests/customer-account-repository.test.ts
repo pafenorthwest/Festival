@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import type { FestivalChildAgeSnapshot } from "@festival/common";
 import { InMemoryCustomerAccountRepository } from "../src/customer/in-memory-customer-account-repository.js";
 
 function session(now: string) {
@@ -366,10 +367,7 @@ describe("customer account repository contract", () => {
 
 		const internalSnapshots = (
 			repo as unknown as {
-				childAgeSnapshots: Map<
-					string,
-					Awaited<ReturnType<typeof repo.createChildAgeSnapshot>>
-				>;
+				childAgeSnapshots: Map<string, FestivalChildAgeSnapshot>;
 			}
 		).childAgeSnapshots;
 		const olderUnsuperseded = {

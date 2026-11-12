@@ -15,13 +15,16 @@ import type {
 	CheckoutIntentLineItemRecord,
 	CheckoutIntentOutcome,
 	CheckoutIntentRecord,
+	CheckoutIntentType,
 	CheckoutRepository,
+	ClassCheckoutReplayState,
 	CreateCheckoutIntentInput,
 } from "./checkout-repository.js";
 import {
 	CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL,
 	repertoireItemsFromLegacyPieces,
 } from "./checkout-repository.js";
+import type { ClassCheckoutClaim } from "./class-checkout-execution.js";
 import { verifyPostCartCreateCapacityCutoff } from "./class-checkout-helpers.js";
 import {
 	cartFromRow,
@@ -31,11 +34,34 @@ import {
 	registrationMetadataFromRow,
 	schemaName,
 } from "./postgres-checkout-helpers.js";
+import { PostgresClassCheckoutExecutionRepository } from "./postgres-class-checkout-execution.js";
 
 export class PostgresCheckoutRepository implements CheckoutRepository {
 	private readonly schema: string;
+	readonly classExecutions: PostgresClassCheckoutExecutionRepository;
 	constructor(schema: string) {
 		this.schema = schemaName(schema);
+		this.classExecutions = new PostgresClassCheckoutExecutionRepository(schema);
+	}
+	async findIntentByKey(input: {
+		organizationId: string;
+		customerId: string;
+		sessionId: string;
+		idempotencyKey: string;
+	}) {
+		const rows = (await sql.unsafe(
+			`SELECT *, expires_at::text, created_at::text FROM ${this.schema}.checkout_intents WHERE organization_id=$1 AND customer_id=$2 AND session_id=$3 AND idempotency_key=$4`,
+			[
+				input.organizationId,
+				input.customerId,
+				input.sessionId,
+				input.idempotencyKey,
+			],
+		)) as Record<string, unknown>[];
+		if (!rows[0]) return null;
+		const intent = this.intent(rows[0]);
+		intent.lines = await this.getIntentLines(sql, intent.id);
+		return intent;
 	}
 	async ensureReady() {
 		await initializePostgresSchema(this.schema);
@@ -105,6 +131,13 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 				}
 				return { kind: "failed" };
 			}
+			if (record.intentType === "class_entry") {
+				const blocked = await tx.unsafe(
+					`SELECT 1 FROM ${this.schema}.class_checkout_executions execution JOIN ${this.schema}.checkout_intents intent ON intent.id=execution.intent_id AND intent.organization_id=execution.organization_id WHERE execution.organization_id=$1 AND execution.customer_id=$2 AND intent.status NOT IN ('approved','rejected','needs_review','superseded') AND (execution.state='recovery_required' OR (execution.state='running' AND execution.lease_expires_at>clock_timestamp()) OR (execution.checkpoint IN ('create_dispatched','remote_cart_known') AND execution.state NOT IN ('completed','rejected')) OR (execution.checkpoint='attached' AND execution.state IN ('ready','retryable','completed') AND intent.expires_at<=clock_timestamp())) LIMIT 1`,
+					[record.organizationId, record.customerId],
+				);
+				if (blocked.length) return { kind: "in_progress" };
+			}
 			const creating = (await tx.unsafe(
 				`SELECT id FROM ${this.schema}.checkout_intents WHERE organization_id = $1 AND customer_id = $2 AND status IN ('creating', 'ready', 'checkout_started') AND expires_at > NOW() LIMIT 1 FOR UPDATE`,
 				[record.organizationId, record.customerId],
@@ -145,6 +178,13 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 			const lines = buildIntentLineRecords(intent, record.lines);
 			await this.insertIntentLines(tx, lines);
 			intent.lines = lines;
+			if (record.classExecution)
+				await this.classExecutions.prepareUsing(tx, {
+					organizationId: record.organizationId,
+					customerId: record.customerId,
+					intentId: intent.id,
+					...record.classExecution,
+				});
 			return { kind: "created", intent };
 		}) as Promise<CheckoutIntentOutcome>;
 	}
@@ -176,6 +216,7 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 	async attachCart(
 		input: Omit<CheckoutCartRecord, "reference" | "createdAtIso" | "status"> & {
 			intentId: string;
+			executionClaim?: ClassCheckoutClaim;
 		},
 	) {
 		const reference = randomUUID();
@@ -185,11 +226,38 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 			await tx.unsafe("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
 				`${this.schema}:class-capacity-cutoff`,
 			]);
+			if (input.executionClaim)
+				await tx.unsafe(
+					"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+					[`${input.organizationId}:checkout:${input.intentId}`],
+				);
 			const intents = (await tx.unsafe(
-				`SELECT id, intent_type, festival_class_id, child_id FROM ${this.schema}.checkout_intents WHERE id = $1 AND organization_id = $2 AND status = 'creating' FOR UPDATE`,
+				`SELECT id, intent_type, festival_class_id, child_id, cart_reference, status FROM ${this.schema}.checkout_intents WHERE id = $1 AND organization_id = $2 FOR UPDATE`,
 				[input.intentId, input.organizationId],
 			)) as Array<Record<string, unknown>>;
 			if (!intents[0]) throw new Error("Checkout intent cannot accept a cart.");
+			if (input.executionClaim) {
+				const claims = await tx.unsafe(
+					`SELECT 1 FROM ${this.schema}.class_checkout_executions WHERE intent_id=$1 AND organization_id=$2 AND generation=$3 AND lease_owner=$4 AND lease_expires_at>clock_timestamp() AND state='running' FOR UPDATE`,
+					[
+						input.intentId,
+						input.organizationId,
+						input.executionClaim.generation,
+						input.executionClaim.owner,
+					],
+				);
+				if (!(claims as unknown[]).length)
+					throw new Error("Checkout execution claim is stale.");
+				if (intents[0].cart_reference) {
+					const existing = (await tx.unsafe(
+						`SELECT *, expires_at::text, created_at::text FROM ${this.schema}.checkout_carts WHERE reference=$1 AND shopify_cart_id=$2`,
+						[intents[0].cart_reference, input.shopifyCartId],
+					)) as Record<string, unknown>[];
+					if (existing[0]) return { existingCart: existing[0] };
+				}
+			}
+			if (intents[0].status !== "creating")
+				throw new Error("Checkout intent cannot accept a cart.");
 			if (intents[0].intent_type === "class_entry") {
 				const lineRows = (await tx.unsafe(
 					`SELECT festival_class_id, child_id FROM ${this.schema}.checkout_intent_lines WHERE checkout_intent_id = $1 AND line_type = 'class_entry' ORDER BY line_index ASC`,
@@ -245,12 +313,31 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 					input.expiresAtIso,
 				],
 			);
-			return await tx.unsafe(
+			const linked = await tx.unsafe(
 				`UPDATE ${this.schema}.checkout_intents SET cart_reference = $1, status = 'ready' WHERE id = $2 RETURNING id`,
 				[reference, input.intentId],
 			);
+			if (input.executionClaim) {
+				await tx.unsafe(
+					`UPDATE ${this.schema}.class_checkout_executions SET checkpoint='attached',updated_at=clock_timestamp() WHERE intent_id=$1 AND organization_id=$2`,
+					[input.intentId, input.organizationId],
+				);
+				await tx.unsafe(
+					`INSERT INTO ${this.schema}.class_checkout_execution_events (id,organization_id,intent_id,generation,event_type,evidence) VALUES ($1,$2,$3,$4,'cart_attached','{}'::jsonb)`,
+					[
+						randomUUID(),
+						input.organizationId,
+						input.intentId,
+						input.executionClaim.generation,
+					],
+				);
+			}
+			return { linked };
 		});
-		if (!rows[0]) throw new Error("Checkout cart persistence failed.");
+		if ("existingCart" in rows && rows.existingCart)
+			return this.cart(rows.existingCart);
+		if (!("linked" in rows) || !(rows.linked as unknown[])[0])
+			throw new Error("Checkout cart persistence failed.");
 		return {
 			reference,
 			shopifyCartId: input.shopifyCartId,
@@ -266,6 +353,7 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 	async markIntentReady(
 		input: Omit<CheckoutCartRecord, "reference" | "createdAtIso" | "status"> & {
 			intentId: string;
+			executionClaim?: ClassCheckoutClaim;
 		},
 	) {
 		return this.attachCart(input);
@@ -344,11 +432,33 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 		intent.lines = await this.getIntentLines(sql, intent.id);
 		return intent;
 	}
+	async getClassCheckoutReplayState(
+		organizationId: string,
+		intentId: string,
+	): Promise<ClassCheckoutReplayState | null> {
+		// Read both records from the same statement snapshot after the remote lookup.
+		const rows = await sql.unsafe<ClassCheckoutReplayState[]>(
+			`SELECT intent.status AS "intentStatus", execution.state, execution.generation, execution.result_code AS "resultCode"
+			FROM ${this.schema}.checkout_intents intent
+			JOIN ${this.schema}.class_checkout_executions execution
+				ON execution.organization_id = intent.organization_id AND execution.intent_id = intent.id
+			WHERE intent.organization_id = $1 AND intent.id = $2`,
+			[organizationId, intentId],
+		);
+		const row = rows[0];
+		return row ? { ...row, generation: Number(row.generation) } : null;
+	}
 	async hasProcessingIntent(
 		organizationId: string,
 		customerId: string,
 		nowIso: string,
+		intentType: CheckoutIntentType = "class_entry",
 	) {
+		if (
+			intentType === "class_entry" &&
+			(await this.classExecutions.findBlocking(organizationId, customerId))
+		)
+			return true;
 		const rows = (await sql.unsafe(
 			`SELECT id FROM ${this.schema}.checkout_intents WHERE organization_id = $1 AND customer_id = $2 AND expires_at > $3::timestamptz AND status IN ('creating', 'ready', 'checkout_started') LIMIT 1`,
 			[organizationId, customerId, nowIso],
@@ -423,6 +533,21 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 			params.repertoireSnapshotPieces ?? params.repertoireJson,
 		);
 		const rows = (await sql.begin(async (tx) => {
+			if (params.checkoutIntentLineId) {
+				await tx.unsafe(
+					"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+					[`${params.organizationId}:metadata:${params.checkoutIntentLineId}`],
+				);
+				const existing = (await tx.unsafe(
+					`SELECT metadata.* FROM ${this.schema}.registration_metadata metadata JOIN ${this.schema}.class_checkout_executions execution ON execution.intent_id=metadata.checkout_intent_id AND execution.organization_id=metadata.organization_id WHERE metadata.organization_id=$1 AND metadata.checkout_intent_id=$2 AND metadata.checkout_intent_line_id=$3`,
+					[
+						params.organizationId,
+						params.checkoutIntentId,
+						params.checkoutIntentLineId,
+					],
+				)) as Record<string, unknown>[];
+				if (existing[0]) return existing;
+			}
 			const metadataRows = (await tx.unsafe(
 				`INSERT INTO ${this.schema}.registration_metadata (id, organization_id, festival_id, checkout_intent_id, checkout_intent_line_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json, registration_snapshot) VALUES ($1,$2,$3,$4,$5,NULL,$6,$7,$8,$9) RETURNING id, organization_id, festival_id, checkout_intent_id, checkout_intent_line_id, class_entitlement_id, teacher_membership_id, accompanist_membership_id, repertoire_json, registration_snapshot, created_at`,
 				[
@@ -442,7 +567,15 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 		})) as Array<Record<string, unknown>>;
 		if (!rows[0])
 			throw new Error("Registration metadata could not be inserted.");
-		return registrationMetadataFromRow(rows[0], repertoireItems);
+		return registrationMetadataFromRow(
+			rows[0],
+			String(rows[0].id) === params.id
+				? repertoireItems
+				: await this.registrationRepertoireItems(
+						String(rows[0].id),
+						params.organizationId,
+					),
+		);
 	}
 	async updateRegistrationMetadata(
 		registrationMetadataId: string,
@@ -532,6 +665,34 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 			);
 		}
 	}
+	async listCheckoutRegistrationSnapshots(
+		organizationId: string,
+		intentId: string,
+	) {
+		const rows = (await sql.unsafe(
+			`SELECT checkout_intent_line_id, registration_snapshot FROM ${this.schema}.registration_metadata WHERE organization_id=$1 AND checkout_intent_id=$2 AND checkout_intent_line_id IS NOT NULL AND registration_snapshot IS NOT NULL`,
+			[organizationId, intentId],
+		)) as Array<{
+			checkout_intent_line_id: string;
+			registration_snapshot: string | ClassRegistrationSnapshot;
+		}>;
+		return rows.flatMap((row) => {
+			const snapshot = normalizeClassRegistrationSnapshot(
+				typeof row.registration_snapshot === "string"
+					? JSON.parse(row.registration_snapshot)
+					: row.registration_snapshot,
+			);
+			return snapshot
+				? [
+						{
+							checkoutIntentLineId: row.checkout_intent_line_id,
+							registrationSnapshot: snapshot,
+						},
+					]
+				: [];
+		});
+	}
+
 	async getRegistrationMetadataByEntitlementId(
 		organizationId: string,
 		classEntitlementId: string,

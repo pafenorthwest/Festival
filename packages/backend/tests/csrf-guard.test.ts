@@ -72,7 +72,7 @@ describe("resolveRequestOrigin", () => {
 
 			try {
 				resolveRequestOrigin(c);
-				expect().unreachable("Expected resolveRequestOrigin to throw");
+				expect.unreachable("Expected resolveRequestOrigin to throw");
 			} catch (error) {
 				expect(error).toBeInstanceOf(AppError);
 				const appError = error as AppError;
@@ -85,7 +85,7 @@ describe("resolveRequestOrigin", () => {
 			const c = createMockContext({ Referer: "/relative/path/only" });
 			try {
 				resolveRequestOrigin(c);
-				expect().unreachable("Expected resolveRequestOrigin to throw");
+				expect.unreachable("Expected resolveRequestOrigin to throw");
 			} catch (error) {
 				expect(error).toBeInstanceOf(AppError);
 				const appError = error as AppError;
@@ -94,10 +94,100 @@ describe("resolveRequestOrigin", () => {
 			}
 		});
 
-		it("returns undefined when neither Origin nor Referer is present", () => {
+		it("returns undefined when neither Origin, Referer, nor Host is present", () => {
 			const c = createMockContext({});
 			const result = resolveRequestOrigin(c);
 			expect(result).toBeUndefined();
+		});
+
+		it("returns undefined when Origin and Referer are absent even if Host header is present", () => {
+			const c = createMockContext({ Host: "festival.example.com" });
+			const result = resolveRequestOrigin(c);
+			expect(result).toBeUndefined();
+		});
+
+		it("returns undefined when Origin and Referer are absent even with Host port and X-Forwarded-Proto", () => {
+			const c = createMockContext({
+				Host: "localhost:3000",
+				"X-Forwarded-Proto": "http",
+			});
+			const result = resolveRequestOrigin(c);
+			expect(result).toBeUndefined();
+		});
+
+		it("returns undefined when Origin and Referer are absent even if X-Forwarded-Host and X-Forwarded-Proto are present", () => {
+			const c = createMockContext({
+				"X-Forwarded-Host": "festival.example.com, proxy.internal",
+				"X-Forwarded-Proto": "https",
+				Host: "internal-alb",
+			});
+			const result = resolveRequestOrigin(c);
+			expect(result).toBeUndefined();
+		});
+
+		it("throws AppError with status 403 when Origin is literal 'null'", () => {
+			const c = createMockContext({ Origin: "null" });
+			expect(() => resolveRequestOrigin(c)).toThrow(AppError);
+			try {
+				resolveRequestOrigin(c);
+			} catch (error) {
+				expect(error).toBeInstanceOf(AppError);
+				const appError = error as AppError;
+				expect(appError.status).toBe(403);
+				expect(appError.message).toBe("CSRF validation failed.");
+			}
+		});
+
+		it("throws AppError with status 403 when Origin is literal 'null' even if valid Referer and Host are present", () => {
+			const c = createMockContext({
+				Origin: "null",
+				Referer: "https://example.com/page",
+				Host: "example.com",
+			});
+			expect(() => resolveRequestOrigin(c)).toThrow(AppError);
+			try {
+				resolveRequestOrigin(c);
+			} catch (error) {
+				expect(error).toBeInstanceOf(AppError);
+				const appError = error as AppError;
+				expect(appError.status).toBe(403);
+				expect(appError.message).toBe("CSRF validation failed.");
+			}
+		});
+
+		it("throws AppError with status 403 when Origin is an opaque scheme", () => {
+			const c = createMockContext({ Origin: "file:///etc/passwd" });
+			expect(() => resolveRequestOrigin(c)).toThrow(AppError);
+			try {
+				resolveRequestOrigin(c);
+			} catch (error) {
+				expect(error).toBeInstanceOf(AppError);
+				const appError = error as AppError;
+				expect(appError.status).toBe(403);
+				expect(appError.message).toBe("CSRF validation failed.");
+			}
+		});
+
+		it("throws AppError with status 403 when Origin is malformed", () => {
+			const c = createMockContext({ Origin: "not-a-url" });
+			expect(() => resolveRequestOrigin(c)).toThrow(AppError);
+			try {
+				resolveRequestOrigin(c);
+			} catch (error) {
+				expect(error).toBeInstanceOf(AppError);
+				const appError = error as AppError;
+				expect(appError.status).toBe(403);
+				expect(appError.message).toBe("CSRF validation failed.");
+			}
+		});
+
+		it("prefers Origin even when Host header is present", () => {
+			const c = createMockContext({
+				Origin: "https://evil.example.com",
+				Host: "festival.example.com",
+			});
+			const result = resolveRequestOrigin(c);
+			expect(result).toBe("https://evil.example.com");
 		});
 
 		it("returns Origin even if Referer is malformed", () => {
@@ -166,6 +256,54 @@ describe("resolveRequestOrigin", () => {
 			expect(response.status).toBe(200);
 			const body = await response.json();
 			expect(body).toEqual({ origin: null });
+		});
+
+		it("returns null origin when Origin and Referer are absent even if Host, X-Forwarded-Host, and X-Forwarded-Proto are sent", async () => {
+			const app = createTestApp();
+			const response = await app.request("/test-csrf", {
+				method: "POST",
+				headers: {
+					Host: "festival.example.com",
+					"X-Forwarded-Host": "festival.example.com",
+					"X-Forwarded-Proto": "https",
+				},
+			});
+
+			expect(response.status).toBe(200);
+			const body = await response.json();
+			expect(body).toEqual({ origin: null });
+		});
+
+		it("returns 403 error when Origin is literal 'null' even if valid Referer and Host are sent", async () => {
+			const app = createTestApp();
+			const response = await app.request("/test-csrf", {
+				method: "POST",
+				headers: {
+					Origin: "null",
+					Referer: "https://example.com/page",
+					Host: "example.com",
+				},
+			});
+
+			expect(response.status).toBe(403);
+			const body = await response.json();
+			expect(body).toEqual({ error: "CSRF validation failed." });
+		});
+
+		it("returns 403 error when Origin is opaque or malformed", async () => {
+			const app = createTestApp();
+			for (const invalidOrigin of ["file:///etc/passwd", "not-a-url"]) {
+				const response = await app.request("/test-csrf", {
+					method: "POST",
+					headers: {
+						Origin: invalidOrigin,
+					},
+				});
+
+				expect(response.status).toBe(403);
+				const body = await response.json();
+				expect(body).toEqual({ error: "CSRF validation failed." });
+			}
 		});
 
 		it("successfully extracts origin when Origin is present despite malformed Referer", async () => {

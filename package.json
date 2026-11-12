@@ -1,7 +1,7 @@
 {
   "name": "festival",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "packageManager": "bun@1.4.2",
   "workspaces": [
@@ -23,6 +23,7 @@
     "format:frontend": "biome check --write packages/frontend",
     "format:check": "biome check packages",
     "verify:toolchain": "bun scripts/verify-toolchain.ts",
+    "reap:class-checkout": "bun packages/backend/scripts/reap-class-checkout-recovery.ts",
     "check:sql": "bun scripts/check-sql.ts",
     "build": "bun run verify:toolchain && bun run build:common && bun run build:backend && bun run build:frontend && bun run build:confirmation",
     "build:confirmation": "bun run --cwd packages/shopify-confirmation build",

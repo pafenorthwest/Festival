@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { AuthenticatedUser } from "@festival/common";
+import type { AuthenticatedUser, OrganizationRole } from "@festival/common";
 import { Hono } from "hono";
 import type { AuthVerifier } from "../src/auth/types.js";
 import { BillingReconciliationService } from "../src/billing/billing-reconciliation-service.js";
@@ -63,7 +63,7 @@ async function createTestApp() {
 	await repository.createMembership({
 		organizationId: organization.id,
 		userId: readerUser.id,
-		role: "Reader",
+		role: "Reader" as unknown as OrganizationRole,
 		origin: "invite",
 	});
 

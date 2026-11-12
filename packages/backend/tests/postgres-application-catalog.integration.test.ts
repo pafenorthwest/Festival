@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { sql } from "bun";
+import { ensureApplicationSchemaReady } from "./postgres-application-fixture.js";
 import { postgresCatalogContract } from "./postgres-catalog-contract.js";
 import { currentPostgresFixture } from "./postgres-test-fixture.js";
 
@@ -12,6 +13,7 @@ integrationTest(
 		const schema = await currentSchema();
 		const applicationSchema = process.env.DB_SCHEMA?.trim() || "orgs";
 		expect(applicationSchema).toMatch(/^[A-Za-z_][A-Za-z0-9_]{0,62}$/);
+		await ensureApplicationSchemaReady(applicationSchema);
 		const expected = await postgresCatalogContract(schema);
 		const actual = new Set(await postgresCatalogContract(applicationSchema));
 		expect(expected.length).toBeGreaterThan(100);

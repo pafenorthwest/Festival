@@ -5,7 +5,10 @@ import { InMemoryMembershipCommerceRepository } from "../src/commerce/membership
 import type { ShopifyOrderProjectionService } from "../src/commerce/shopify-order-projection-service.js";
 import { ShopifyWebhookService } from "../src/commerce/shopify-webhook-service.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
-import { ShopifySecretKeyring } from "../src/shopify/encryption.js";
+import {
+	type ShopifyClientSecretContext,
+	ShopifySecretKeyring,
+} from "../src/shopify/encryption.js";
 
 const AES_KEY = Buffer.alloc(32, 9).toString("base64");
 const SECRET = "shopify-webhook-secret";
@@ -212,7 +215,7 @@ describe("Shopify paid-order webhook ingress", () => {
 		const originalDecrypt = secrets.decrypt.bind(secrets);
 		secrets.decrypt = (
 			cipherText: string,
-			context: { organizationId: string; purpose: string },
+			context: ShopifyClientSecretContext,
 		) => {
 			secretDecrypts++;
 			return originalDecrypt(cipherText, context);

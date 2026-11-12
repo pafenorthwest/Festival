@@ -362,7 +362,22 @@ export class InMemoryMembershipCommerceRepository
 		private readonly organizations: OrganizationRepository,
 		private readonly checkout?: CheckoutRepository,
 		private readonly now: () => Date = () => new Date(),
-	) {}
+	) {
+		checkout?.setClassCheckoutPaymentEvidenceLookup?.(
+			(intent) =>
+				this.decisionsByCheckoutIntent.has(
+					`${intent.organizationId}\u0000${intent.id}`,
+				) ||
+				this.classEntitlementsByIntent.has(
+					`${intent.organizationId}\u0000${intent.id}`,
+				) ||
+				[...this.projections.values()].some(
+					(projection) =>
+						projection.organizationId === intent.organizationId &&
+						projection.correlationId === intent.correlationId,
+				),
+		);
+	}
 
 	async ensureReady(): Promise<void> {}
 
@@ -575,6 +590,28 @@ export class InMemoryMembershipCommerceRepository
 	private async finalizeDecisionAtomicallyUnlocked(
 		input: Parameters<MembershipCommerceRepository["finalizeDecision"]>[0],
 	) {
+		const execution = input.decision.checkoutIntentId
+			? await this.checkout?.classExecutions?.get(
+					input.decision.organizationId,
+					input.decision.checkoutIntentId,
+				)
+			: null;
+		if (
+			execution &&
+			(execution.checkpoint !== "attached" || execution.state === "rejected")
+		) {
+			input = {
+				...input,
+				decision: {
+					...input.decision,
+					status: "needs_review",
+					reasonCode: "upstream_invalid",
+				},
+				grant: undefined,
+				classEntitlement: undefined,
+				classEntitlements: undefined,
+			};
+		}
 		const classEntitlementInputs =
 			input.classEntitlements ??
 			(input.classEntitlement ? [input.classEntitlement] : []);
@@ -652,7 +689,16 @@ export class InMemoryMembershipCommerceRepository
 			delivery: delivery ? { ...delivery } : undefined,
 		};
 		try {
-			return await this.finalizeDecisionInternal(input);
+			const result = await this.finalizeDecisionInternal(input);
+			if (execution && !result.existing && input.decision.checkoutIntentId) {
+				await this.checkout?.classExecutions?.observePayment({
+					organizationId: input.decision.organizationId,
+					intentId: input.decision.checkoutIntentId,
+					shopifyOrderGid: input.decision.shopifyOrderGid,
+					approved: result.decision.status === "approved",
+				});
+			}
+			return result;
 		} catch (error) {
 			for (const line of classLineSnapshots) {
 				if (!line.hadValue) {

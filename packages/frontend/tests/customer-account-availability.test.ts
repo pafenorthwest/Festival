@@ -57,17 +57,15 @@ describe("customer account availability routes and navigation", () => {
 		).toBe(true);
 	});
 
-	it("wires Availability link into CustomerAccountNavigation, OrganizationSideNavigation, and App.tsx", async () => {
-		const nav = await read("../src/pages/CustomerAccountNavigation.tsx");
+	it("keeps Availability in the shared sidebar and routes it to the existing account page", async () => {
 		const sideNav = await read(
 			"../src/components/OrganizationSideNavigation.tsx",
 		);
 		const app = await read("../src/App.tsx");
 
-		expect(nav).toContain("buildOrgCustomerAccountAvailabilityPath");
-		expect(nav).toContain("Availability");
 		expect(sideNav).toContain("buildOrgCustomerAccountAvailabilityPath");
-		expect(sideNav).toContain('aria-label="Availability"');
+		expect(sideNav).toContain('label: "Availability"');
+		expect(sideNav).toContain("aria-label={link.label}");
 		expect(app).toContain(
 			'app.route().kind === "org-customer-account-availability"',
 		);

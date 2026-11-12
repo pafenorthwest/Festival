@@ -409,7 +409,7 @@ export class PostgresMembershipCommerceRepository
 				"Approved decision cannot specify both a class entitlement and class entitlements.",
 			);
 		}
-		const classEntitlementInputs =
+		let classEntitlementInputs =
 			input.classEntitlements ??
 			(input.classEntitlement ? [input.classEntitlement] : []);
 		if (input.decision.status === "approved") {
@@ -476,18 +476,20 @@ export class PostgresMembershipCommerceRepository
 					[`${this.schema}:class-capacity-cutoff`],
 				);
 			}
+			// Customer admission precedes checkout execution everywhere, including
+			// workers reclaiming a lease. Keep this order after the capacity lock.
+			if (input.decision.customerId) {
+				await tx.unsafe(
+					"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+					[`${input.decision.organizationId}:${input.decision.customerId}`],
+				);
+			}
 			if (input.decision.checkoutIntentId) {
 				await tx.unsafe(
 					"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
 					[
 						`${input.decision.organizationId}:checkout:${input.decision.checkoutIntentId}`,
 					],
-				);
-			}
-			if (input.decision.customerId) {
-				await tx.unsafe(
-					"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-					[`${input.decision.organizationId}:${input.decision.customerId}`],
 				);
 			}
 			await tx.unsafe("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
@@ -566,6 +568,35 @@ export class PostgresMembershipCommerceRepository
 			}
 			let finalDecision = input.decision;
 			let grantInput = input.grant;
+			// The checkout advisory lock above also serializes recovery decisions.
+			// Check admission inside this transaction, rather than trusting the
+			// projection service's earlier snapshot while an operator can abandon.
+			const executionRows =
+				input.decision.checkoutIntentId && !input.grant
+					? ((await tx.unsafe(
+							`SELECT intent_id, state, checkpoint, generation, result_code FROM ${this.schema}.class_checkout_executions WHERE organization_id=$1 AND intent_id=$2 FOR UPDATE`,
+							[input.decision.organizationId, input.decision.checkoutIntentId],
+						)) as Array<{
+							intent_id: string;
+							state: string;
+							checkpoint: string;
+							generation: number;
+							result_code: string | null;
+						}>)
+					: [];
+			const execution = executionRows[0];
+			if (
+				execution &&
+				(execution.checkpoint !== "attached" || execution.state === "rejected")
+			) {
+				finalDecision = {
+					...finalDecision,
+					status: "needs_review",
+					reasonCode: "upstream_invalid",
+				};
+				classEntitlementInputs = [];
+				grantInput = undefined;
+			}
 			let nextEntitlementId: string | undefined;
 			if (grantInput && finalDecision.customerId) {
 				if (!grantInput.verifiedIdentityEmail) {
@@ -881,6 +912,38 @@ export class PostgresMembershipCommerceRepository
 						],
 					)) as Array<Record<string, unknown>>);
 			if (finalDecision.checkoutIntentId) {
+				if (execution) {
+					const nextState =
+						execution.state === "rejected"
+							? "rejected"
+							: finalDecision.status === "approved"
+								? "completed"
+								: "recovery_required";
+					await tx.unsafe(
+						`UPDATE ${this.schema}.class_checkout_executions SET state=$3, generation=generation+1, lease_owner=NULL, lease_expires_at=NULL, result_code=CASE WHEN state='rejected' THEN result_code ELSE $4 END, recovery_recorded_at=CASE WHEN $3='recovery_required' THEN COALESCE(recovery_recorded_at,clock_timestamp()) ELSE recovery_recorded_at END, updated_at=clock_timestamp() WHERE organization_id=$1 AND intent_id=$2`,
+						[
+							finalDecision.organizationId,
+							finalDecision.checkoutIntentId,
+							nextState,
+							finalDecision.status === "approved"
+								? "checkout_completed"
+								: "paid_order_requires_review",
+						],
+					);
+					await tx.unsafe(
+						`INSERT INTO ${this.schema}.class_checkout_execution_events (id,organization_id,intent_id,generation,event_type,evidence) VALUES ($1,$2,$3,$4,'paid_order_observed',$5::jsonb)`,
+						[
+							randomUUID(),
+							finalDecision.organizationId,
+							finalDecision.checkoutIntentId,
+							Number(execution.generation) + 1,
+							JSON.stringify({
+								code: finalDecision.status,
+								shopifyOrderGid: finalDecision.shopifyOrderGid,
+							}),
+						],
+					);
+				}
 				const resolved = (await tx.unsafe(
 					`UPDATE ${this.schema}.checkout_intents SET status = $1 WHERE id = $2 AND organization_id = $3 RETURNING id`,
 					[

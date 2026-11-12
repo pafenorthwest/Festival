@@ -32,7 +32,7 @@ export async function postgresCatalogContract(
 		[schema],
 	);
 	return rows
-		.map((row) =>
+		.map((row: { kind: string; name: string; definition: string }) =>
 			`${row.kind}:${row.name}:${row.definition}`
 				.replaceAll(`"${schema}".`, "<schema>.")
 				.replaceAll(`${schema}.`, "<schema>.")

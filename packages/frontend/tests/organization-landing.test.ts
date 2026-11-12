@@ -31,29 +31,29 @@ describe("public organization landing page", () => {
 		expect(sideNavigation).toContain("buildOrgPublicDirectoryPath");
 		expect(sideNavigation).toContain('aria-label="Directory"');
 		expect(sideNavigation).toContain("org-public-directory");
-		expect(sideNavigation).toContain("Accounts");
+		expect(sideNavigation).toContain("Account");
 		expect(sideNavigation).toContain("Festival");
 	});
 
 	it("provides a non-persistent responsive icon-only sidebar toggle", () => {
 		expect(sideNavigation).toContain("window.matchMedia");
-		expect(sideNavigation).toContain("(max-width: 720px)");
+		expect(sideNavigation).toContain("(max-width: 760px)");
 		expect(sideNavigation).toContain("Expand navigation");
 		expect(sideNavigation).toContain("Collapse navigation");
 		expect(sideNavigation).toContain("card_membership");
 		expect(sideNavigation).toContain("contact_page");
 		expect(sideNavigation).toContain("receipt_long");
 		expect(sideNavigation).toContain("home");
-		expect(sideNavigation).toContain('aria-label="Memberships"');
-		expect(sideNavigation).toContain('aria-label="Contact Information"');
-		expect(sideNavigation).toContain('aria-label="Order History"');
-		expect(sideNavigation).toContain('aria-label="Home"');
+		expect(sideNavigation).toContain('label: "Memberships"');
+		expect(sideNavigation).toContain('label: "Contact Information"');
+		expect(sideNavigation).toContain('label: "Order History"');
+		expect(sideNavigation).toContain('label: "Festival Home"');
 		expect(styles).toContain(".organization-side-navigation.is-collapsed");
 	});
 
 	it("visually highlights active side navigation links with semantic aria-current and CSS styling", () => {
 		expect(sideNavigation).toContain("aria-current={");
-		expect(sideNavigation).toContain("active: isCurrent(");
+		expect(sideNavigation).toContain("active: link.active");
 		expect(styles).toContain(".organization-side-navigation a.active");
 		expect(styles).toContain(
 			'.organization-side-navigation a[aria-current="page"]',
@@ -72,8 +72,8 @@ describe("public organization landing page", () => {
 		expect(appHeader).toContain("logoutCustomer");
 		expect(appHeader).toContain("const route = props.app.route();");
 		expect(appHeader).toContain("? (route as { slug: string }).slug");
-		expect(appHeader).toContain('class="org-landing-header"');
-		expect(page).not.toContain('class="org-landing-header"');
+		expect(appHeader).toContain('class="org-landing-header parent-header"');
+		expect(page).not.toContain('class="org-landing-header parent-header"');
 		expect(page).not.toContain("handleLogout");
 	});
 
@@ -89,15 +89,19 @@ describe("public organization landing page", () => {
 	});
 
 	it("renders Home and the account icon before the customer auth control", () => {
-		const home = appHeader.indexOf('class="org-landing-home-link"');
-		const account = appHeader.indexOf('class="customer-account-link"');
-		const auth = appHeader.indexOf('class="customer-auth-button"');
+		const home = appHeader.indexOf('class="parent-brand"');
+		const account = appHeader.indexOf(
+			'class="parent-header-button parent-account-button"',
+		);
+		const auth = appHeader.indexOf(
+			'class="customer-auth-button parent-header-button"',
+		);
 
 		expect(home).toBeGreaterThan(-1);
 		expect(home).toBeLessThan(account);
 		expect(account).toBeLessThan(auth);
-		expect(appHeader).toContain("href={`/org/");
-		expect(appHeader).toContain("/account/memberships`}");
+		expect(appHeader).toContain("href={homePath()}");
+		expect(appHeader).toContain("buildOrgCustomerAccountMembershipsPath");
 		expect(appHeader).toContain('class="material-symbols-outlined"');
 		expect(appHeader).toContain("person");
 		expect(styles).toContain(".customer-account-link.is-authenticated");

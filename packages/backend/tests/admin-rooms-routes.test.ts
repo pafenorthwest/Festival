@@ -49,7 +49,9 @@ function withAuth(token: string, init?: RequestInit): RequestInit {
 const ROOMS_BASE =
 	"http://test/api/organizations/pafe/admin/festivals/spring/rooms";
 
-async function createOrgAndFestivalAsAdmin(app: { fetch: typeof fetch }) {
+async function createOrgAndFestivalAsAdmin(app: {
+	fetch: (request: Request) => Response | Promise<Response>;
+}) {
 	await app.fetch(
 		new Request(
 			"http://test/api/organizations",

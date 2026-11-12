@@ -212,7 +212,6 @@ export async function setupTestApp({ withMemberships = true } = {}) {
 				startsOn: "2026-01-01",
 				endsOn: "2027-01-01",
 				offeringId: product.id,
-				source: "shopify_order",
 				status: "active",
 				verifiedIdentityEmail: email,
 			});

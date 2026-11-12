@@ -18,6 +18,7 @@ describe("Issue #266: Class Entitlement Intent Line Invariant", () => {
 		shopifyOrderLineGid: "gid://shopify/LineItem/101",
 		paidAmountCents: 5000,
 		paidCurrencyCode: "USD",
+		status: "confirmed" as const,
 	};
 
 	describe("InMemoryClassEntitlementRepository", () => {

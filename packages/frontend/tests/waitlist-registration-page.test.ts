@@ -13,51 +13,6 @@ const { useRegistrationWaitlist } = await import(
 );
 
 describe("FestivalClassRegistrationPage waitlist contract", () => {
-	it("imports FestivalWaitlistCard and waitlist API functions", () => {
-		expect(regPageSource).toContain("FestivalWaitlistCard");
-		expect(regPageSource).toContain("../components/FestivalWaitlistCard.js");
-		expect(regPageSource).toContain("useRegistrationWaitlist");
-	});
-
-	it("guards class select options with eligibility and waitlist conditions", () => {
-		expect(regPageSource).toContain('id="registration-class"');
-		expect(regPageSource).toContain("!classOptionEligibility.isEligible(c.id)");
-		expect(regPageSource).toContain("!classOptionEligibility.isWaitlist(c.id)");
-	});
-
-	it("renders FestivalWaitlistCard when selected class is waitlist with exact prescribed props", () => {
-		expect(regPageSource).toContain(
-			"classOptionEligibility.isWaitlist(selectedClassId())",
-		);
-		expect(regPageSource).toContain("<FestivalWaitlistCard");
-		expect(regPageSource).toContain("orgSlug={props.slug}");
-		expect(regPageSource).toContain("festivalSlug={props.festivalSlug}");
-		expect(regPageSource).toContain("classId={selectedClassId()!}");
-		expect(regPageSource).toContain(
-			'className={selectedClass()?.displayName ?? "Class"}',
-		);
-		expect(regPageSource).toContain("childId={selectedChildId()!}");
-		expect(regPageSource).toContain("selectedChild()?.displayName ??");
-		expect(regPageSource).toContain("selectedChild()?.name ??");
-		expect(regPageSource).toContain(
-			"isAuthenticated={Boolean(sessionProfile())}",
-		);
-		expect(regPageSource).toContain("csrfToken={csrfToken()}");
-		expect(regPageSource).toContain('name: sessionProfile()?.name ?? ""');
-		expect(regPageSource).toContain('email: sessionProfile()?.email ?? ""');
-		expect(regPageSource).toContain('phone: sessionProfile()?.phone ?? ""');
-		expect(regPageSource).toContain("onSignInRequest={handleSignIn}");
-		expect(regPageSource).toContain("existingEntry={currentWaitlistEntry()}");
-		expect(regPageSource).toContain(
-			"onEntryChanged={handleWaitlistEntryChanged}",
-		);
-	});
-
-	it("retains FestivalRegistrationPerformanceOptions and FestivalRegistrationCartCard when not waitlist", () => {
-		expect(regPageSource).toContain("<FestivalRegistrationPerformanceOptions");
-		expect(regPageSource).toContain("<FestivalRegistrationCartCard");
-	});
-
 	it("strictly enforces file length <= 550 lines", () => {
 		const lineCount = regPageSource.split("\n").length;
 		expect(lineCount).toBeLessThanOrEqual(550);

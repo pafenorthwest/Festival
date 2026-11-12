@@ -76,18 +76,12 @@ integrationTest(
 				`SELECT subject_id, jsonb_typeof(available_hours) AS payload_type, available_hours FROM ${schema}.customer_festival_availability WHERE organization_id IN ('${fixture.id("org-a")}' , '${fixture.id("org-b")}') ORDER BY organization_id, subject_type, subject_id`,
 			);
 			expect(stored).toHaveLength(4);
-			expect(stored.map((row) => row.payload_type)).toEqual([
-				"array",
-				"array",
-				"array",
-				"array",
-			]);
-			expect(stored.map((row) => row.available_hours)).toEqual([
-				[],
-				[11],
-				[8, 10, 17],
-				[9, 12],
-			]);
+			expect(
+				stored.map((row: { payload_type: string }) => row.payload_type),
+			).toEqual(["array", "array", "array", "array"]);
+			expect(
+				stored.map((row: { available_hours: number[] }) => row.available_hours),
+			).toEqual([[], [11], [8, 10, 17], [9, 12]]);
 			await repository.upsertAvailability([
 				{ ...child, availableHours: [] },
 				{ ...accompanist, availableHours: [14, 12, 14] },
@@ -117,11 +111,14 @@ integrationTest(
 			const updated = await sql.unsafe(
 				`SELECT jsonb_typeof(available_hours) AS payload_type, available_hours FROM ${schema}.customer_festival_availability WHERE organization_id = '${fixture.id("org-a")}' AND customer_id = '${fixture.id("customer-a")}' ORDER BY subject_type`,
 			);
-			expect(updated.map((row) => row.payload_type)).toEqual([
-				"array",
-				"array",
-			]);
-			expect(updated.map((row) => row.available_hours)).toEqual([[12, 14], []]);
+			expect(
+				updated.map((row: { payload_type: string }) => row.payload_type),
+			).toEqual(["array", "array"]);
+			expect(
+				updated.map(
+					(row: { available_hours: number[] }) => row.available_hours,
+				),
+			).toEqual([[12, 14], []]);
 			// Exercise the actual database constraint that rejected the old string binding.
 			await expect(
 				fixture.savepoint(async () => {

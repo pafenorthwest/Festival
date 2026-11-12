@@ -211,6 +211,8 @@ export const routePages = {
 	"org-public-directory": PublicDirectoryPage,
 	"festival-public": FestivalLandingPage,
 	"festival-register": FestivalClassRegistrationPage,
+	"festival-register-class": FestivalClassRegistrationPage,
+	"festival-cart": FestivalClassRegistrationPage,
 	"festival-volunteers": FestivalVolunteersPage,
 	"festival-admin": FestivalAdminDashboardPage,
 	"festival-admin-classes": FestivalAdminClassesPage,

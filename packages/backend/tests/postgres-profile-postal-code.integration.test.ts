@@ -4,6 +4,10 @@ import type { CustomerMailingAddress } from "@festival/common";
 import { sql } from "bun";
 import { PostgresOrganizationRepository } from "../src/repo/postgres-organization-repository.js";
 
+if (process.env.POSTGRES_INTEGRATION_URL && !process.env.DATABASE_URL) {
+	process.env.DATABASE_URL = process.env.POSTGRES_INTEGRATION_URL;
+}
+
 const integrationTest = process.env.POSTGRES_INTEGRATION_URL ? test : test.skip;
 
 for (const role of ["teacher", "accompanist"] as const) {

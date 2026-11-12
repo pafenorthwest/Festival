@@ -17,6 +17,7 @@ import {
 import { useLocation, useNavigate } from "@solidjs/router";
 import type { User } from "firebase/auth";
 import { createMemo, createSignal } from "solid-js";
+import { createParentRegistrationState } from "../lib/parent-registration-state.js";
 import { type AppRoute, buildOrgPath, parseRoute } from "../lib/routes.js";
 import { shortUserLabel, toAuthenticatedUser } from "./appFormatting.js";
 import type {
@@ -55,6 +56,10 @@ export const INVITE_FEEDBACK_DURATION_MS = 2200;
 export const INVITE_CARD_SCROLL_DELAY_MS = 600;
 
 export function createFestivalAppState() {
+	const parentRegistration = createParentRegistrationState();
+	const [parentNavigationCollapsed, setParentNavigationCollapsed] =
+		createSignal(false);
+	const [parentNavigationOpen, setParentNavigationOpen] = createSignal(false);
 	const location = useLocation();
 	const routerNavigate = useNavigate();
 	const [firebaseUser, setFirebaseUser] = createSignal<User | null>(null);
@@ -510,6 +515,11 @@ export function createFestivalAppState() {
 		membershipProductsLoadError,
 		memberships,
 		navigate,
+		parentRegistration,
+		parentNavigationCollapsed,
+		setParentNavigationCollapsed,
+		parentNavigationOpen,
+		setParentNavigationOpen,
 		openSignInModal,
 		organization,
 		organizationCreated,

@@ -84,9 +84,22 @@ describe("AdminClassShopifySync", () => {
 			encryptedClientSecret,
 		});
 
+		const status = overrides.verificationStatus ?? "ok";
+		if (status === "unknown") {
+			return;
+		}
+		if (status === "failed") {
+			await repo.updateShopifyVerification({
+				organizationId: orgId,
+				verificationStatus: "failed",
+				lastTestedAtIso: new Date().toISOString(),
+			});
+			return;
+		}
+
 		await repo.updateShopifyVerification({
 			organizationId: orgId,
-			verificationStatus: overrides.verificationStatus ?? "ok",
+			verificationStatus: "ok",
 			verifiedAtIso: new Date().toISOString(),
 			lastTestedAtIso: new Date().toISOString(),
 			verifiedShopGid:

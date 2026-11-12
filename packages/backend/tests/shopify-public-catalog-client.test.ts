@@ -54,7 +54,7 @@ describe("tokenless Shopify public catalog client", () => {
 					],
 				},
 				{ status: 400 },
-			)) as typeof fetch);
+			)) as unknown as typeof fetch);
 		await expect(
 			locked.diagnosePublicStorefrontAccess("festival.myshopify.com"),
 		).resolves.toBe("locked");
@@ -67,7 +67,7 @@ describe("tokenless Shopify public catalog client", () => {
 					errors: [{ message: "unexpected sensitive-upstream-canary failure" }],
 				},
 				{ status: 500 },
-			)) as typeof fetch);
+			)) as unknown as typeof fetch);
 		try {
 			await client.diagnosePublicStorefrontAccess("festival.myshopify.com");
 			throw new Error("Expected diagnostic to reject.");
@@ -135,7 +135,7 @@ describe("tokenless Shopify public catalog client", () => {
 	it("fails closed for unsafe destinations, oversized payloads, and malformed Shopify data", async () => {
 		const never = new TokenlessShopifyPublicCatalogClient((async () => {
 			throw new Error("must not fetch");
-		}) as typeof fetch);
+		}) as unknown as typeof fetch);
 		await expect(
 			never.readProduct("127.0.0.1", "gid://shopify/Product/123"),
 		).rejects.toThrow("temporarily unavailable");
@@ -144,7 +144,7 @@ describe("tokenless Shopify public catalog client", () => {
 			(async () =>
 				new Response("{}", {
 					headers: { "Content-Length": String(64 * 1024 + 1) },
-				})) as typeof fetch,
+				})) as unknown as typeof fetch,
 		);
 		await expect(
 			oversized.readProduct(
@@ -158,7 +158,7 @@ describe("tokenless Shopify public catalog client", () => {
 				payload({
 					variants: { nodes: [] },
 				}),
-			)) as typeof fetch);
+			)) as unknown as typeof fetch);
 		await expect(
 			malformed.readProduct(
 				"festival.myshopify.com",

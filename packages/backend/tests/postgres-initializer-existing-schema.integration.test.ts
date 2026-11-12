@@ -6,6 +6,10 @@ import {
 	initializePostgresSchema,
 } from "../src/repo/postgres-schema.js";
 
+if (process.env.POSTGRES_INTEGRATION_URL && !process.env.DATABASE_URL) {
+	process.env.DATABASE_URL = process.env.POSTGRES_INTEGRATION_URL;
+}
+
 const schema = `it_initializer_${randomUUID().replaceAll("-", "")}`;
 const integrationTest = process.env.POSTGRES_INTEGRATION_URL ? test : test.skip;
 let schemaCreated = false;

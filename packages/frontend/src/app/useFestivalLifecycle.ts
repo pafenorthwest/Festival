@@ -115,6 +115,13 @@ export function useFestivalLifecycle(
 
 	createEffect(() => {
 		const currentRoute = state.route();
+		state.setParentNavigationOpen(false);
+		if ("festivalSlug" in currentRoute) {
+			state.parentRegistration.setActiveFestival(
+				currentRoute.slug,
+				currentRoute.festivalSlug,
+			);
+		}
 		if (!isOrganizationPageRoute(currentRoute)) {
 			state.setCustomerSession({ authenticated: false });
 			state.setIsCustomerSessionLoading(false);
@@ -126,7 +133,17 @@ export function useFestivalLifecycle(
 		state.setIsCustomerSessionLoading(true);
 		void getCustomerSession((currentRoute as { slug: string }).slug)
 			.then((response) => {
-				if (active) state.setCustomerSession(response.session);
+				if (!active) return;
+				const slug = (currentRoute as { slug: string }).slug;
+				if (response.session.authenticated) {
+					state.parentRegistration.bindSession(
+						slug,
+						response.session.csrfToken,
+					);
+				} else {
+					state.parentRegistration.clear(slug);
+				}
+				state.setCustomerSession(response.session);
 			})
 			.catch(() => {
 				if (active) state.setCustomerSession({ authenticated: false });

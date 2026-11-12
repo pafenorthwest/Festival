@@ -17,7 +17,11 @@ import {
 
 class MockAuthVerifier implements AuthVerifier {
 	async verify() {
-		return { uid: "test-user", email: "test@example.com" };
+		return {
+			uid: "test-user",
+			email: "test@example.com",
+			displayName: "Test User",
+		};
 	}
 }
 
@@ -27,11 +31,12 @@ async function createSelectionFixture() {
 
 	const organizations = new InMemoryOrganizationRepository(now);
 	const repository = new InMemoryCustomerAccountRepository();
-	const keyring = ShopifySecretKeyring.fromEnvironment(
+	const configuredKeyring = ShopifySecretKeyring.fromEnvironment(
 		JSON.stringify({ test: Buffer.alloc(32, 7).toString("base64") }),
 		"test",
 	);
-	if (!keyring) throw new Error("keyring");
+	if (!configuredKeyring) throw new Error("keyring");
+	const keyring = configuredKeyring;
 
 	const org = await organizations.createOrganization({
 		name: "Pacific Northwest Festival",
@@ -60,14 +65,15 @@ async function createSelectionFixture() {
 	});
 
 	const festival = await organizations.createFestival({
+		id: "fest-spring-2026",
 		organizationId: org.id,
+		code: "SPRING2026",
 		name: "Spring Festival 2026",
 		shortName: "spring-2026",
-		startsOn: "2026-06-01",
-		endsOn: "2026-06-10",
+		startDate: "2026-06-01",
+		endDate: "2026-06-10",
 		registrationOpensAt: "2026-01-01T00:00:00.000Z",
 		registrationClosesAt: "2026-12-31T23:59:59.999Z",
-		status: "draft",
 	});
 
 	const repertoire = new InMemoryRepertoireRepository();
@@ -85,7 +91,7 @@ async function createSelectionFixture() {
 	async function createCustomer(
 		name: string,
 		email: string,
-		shopifyGid = randomUUID(),
+		shopifyGid: string = randomUUID(),
 		orgId = org.id,
 	) {
 		const { customer } = await repository.createCustomerSession({
@@ -96,10 +102,8 @@ async function createSelectionFixture() {
 			csrfToken: "csrf",
 			integrationVersion: 1,
 			createdAtIso: now().toISOString(),
-			touchedAtIso: now().toISOString(),
+			lastSeenAtIso: now().toISOString(),
 			expiresAtIso: now().toISOString(),
-			absoluteExpiresAtIso: now().toISOString(),
-			tokenExpiresAtIso: now().toISOString(),
 		});
 		await repository.applyCustomerProfile({
 			organizationId: orgId,
@@ -134,11 +138,6 @@ async function createSelectionFixture() {
 					organizationId: orgId,
 					purpose: SHOPIFY_CUSTOMER_CLIENT_SECRET_PURPOSE,
 				}),
-				apiVersion: "2026-07",
-				readiness: "ready",
-				canReadOrders: true,
-				integrationVersion: 1,
-				updatedAtIso: createdAtIso,
 			});
 		}
 
@@ -153,12 +152,8 @@ async function createSelectionFixture() {
 			csrfToken,
 			integrationVersion: 1,
 			createdAtIso,
-			touchedAtIso: createdAtIso,
+			lastSeenAtIso: createdAtIso,
 			expiresAtIso,
-			absoluteExpiresAtIso: new Date(
-				now().getTime() + 30 * 86_400_000,
-			).toISOString(),
-			tokenExpiresAtIso: expiresAtIso,
 		});
 
 		await repository.applyCustomerProfile({

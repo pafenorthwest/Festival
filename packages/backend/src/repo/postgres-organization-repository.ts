@@ -80,7 +80,10 @@ import {
 	initializePostgresSchema,
 	postgresSchemaName,
 } from "./postgres-schema.js";
-import { profileEditRequiresReapproval } from "./profile-moderation.js";
+import {
+	profileEditRequiresReapproval,
+	resolveTeacherProfileApprovalStatus,
+} from "./profile-moderation.js";
 
 interface MembershipRow {
 	id: string;
@@ -397,6 +400,20 @@ function mapTeacherProfileRow(row: TeacherProfileRow): TeacherProfileRecord {
 		updated_at: new Date(row.updated_at).toISOString(),
 		...(row.zip_code ? { zip_code: row.zip_code } : {}),
 	};
+}
+
+interface DirectoryProfileRow {
+	id: string;
+	customer_id: string;
+	display_name: string;
+	divisions: unknown;
+}
+
+function parseApprovedDivisions(raw: unknown): PublicDirectoryDivisionDto[] {
+	const parsed = (
+		Array.isArray(raw) ? raw : typeof raw === "string" ? JSON.parse(raw) : []
+	) as Array<{ id: string; name: string }>;
+	return parsed.map((div) => ({ id: div.id, name: div.name }));
 }
 
 function mapAccompanistProfileRow(
@@ -2896,7 +2913,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			 LEFT JOIN ${this.schema}.membership_identity_emails identity
 			   ON identity.organization_id = c.organization_id AND identity.customer_id = c.id
 			 WHERE c.organization_id = $1 AND c.id = ANY($2::text[])`,
-			[organizationId, uniqueIds],
+			[organizationId, sql.array(uniqueIds, "text")],
 		)) as Array<{
 			customer_id: string;
 			name: string | null;
@@ -3061,7 +3078,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		}
 		const validRows = (await sql.unsafe(
 			`SELECT id FROM ${this.schema}.organization_divisions WHERE organization_id = $1 AND id = ANY($2::text[])`,
-			[organizationId, uniqueIds],
+			[organizationId, sql.array(uniqueIds, "text")],
 		)) as Array<{ id: string }>;
 		if (validRows.length !== uniqueIds.length) {
 			throw new AppError(
@@ -3175,6 +3192,55 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		return rows[0] ? mapTeacherProfileRow(rows[0]) : null;
 	}
 
+	private async persistTeacherProfile(params: {
+		organizationId: string;
+		customerId: string;
+		displayName: string;
+		publicDirectoryOptIn: boolean;
+		initialApprovalStatus: ProfileApprovalStatus;
+		divisionIds: readonly string[];
+	}): Promise<string> {
+		const row = await sql.begin(async (transaction) => {
+			const upserted = (await transaction.unsafe(
+				`INSERT INTO ${this.schema}.teacher_profiles (
+					id, organization_id, customer_id, display_name, public_directory_opt_in, approval_status, created_at, updated_at
+				 ) VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+				 ON CONFLICT (organization_id, customer_id) DO UPDATE SET
+					display_name = EXCLUDED.display_name,
+					public_directory_opt_in = EXCLUDED.public_directory_opt_in,
+					approval_status = CASE
+						WHEN ${this.schema}.teacher_profiles.approval_status = 'rejected' THEN 'rejected'
+						WHEN EXCLUDED.public_directory_opt_in THEN 'approved'
+						ELSE ${this.schema}.teacher_profiles.approval_status
+					END,
+					updated_at = NOW()
+				 RETURNING id`,
+				[
+					randomUUID(),
+					params.organizationId,
+					params.customerId,
+					params.displayName,
+					params.publicDirectoryOptIn,
+					params.initialApprovalStatus,
+				],
+			)) as Array<{ id: string }>;
+			const profileId = upserted[0].id;
+			await transaction.unsafe(
+				`DELETE FROM ${this.schema}.teacher_profile_divisions WHERE teacher_profile_id = $1 AND organization_id = $2`,
+				[profileId, params.organizationId],
+			);
+			for (const divisionId of params.divisionIds) {
+				await transaction.unsafe(
+					`INSERT INTO ${this.schema}.teacher_profile_divisions (teacher_profile_id, organization_id, division_id)
+					 VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+					[profileId, params.organizationId, divisionId],
+				);
+			}
+			return upserted[0];
+		});
+		return row.id;
+	}
+
 	async upsertTeacherProfile(
 		params: UpsertTeacherProfileInput,
 	): Promise<TeacherProfileRecord> {
@@ -3187,55 +3253,20 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			params.organizationId,
 			params.divisionIds,
 		);
-
-		const generatedId = randomUUID();
-		const row = await sql.begin(async (transaction) => {
-			const requiresReapproval = await this.lockedProfileRequiresReapproval(
-				transaction,
-				"teacher",
-				{ ...params, displayName, divisionIds },
-			);
-			const upserted = (await transaction.unsafe(
-				`INSERT INTO ${this.schema}.teacher_profiles (
-					id, organization_id, customer_id, display_name, public_directory_opt_in, approval_status, created_at, updated_at
-				 ) VALUES ($1, $2, $3, $4, $5, 'pending', NOW(), NOW())
-				 ON CONFLICT (organization_id, customer_id) DO UPDATE SET
-					display_name = EXCLUDED.display_name,
-					public_directory_opt_in = EXCLUDED.public_directory_opt_in,
-					approval_status = CASE WHEN $6::boolean THEN 'pending' ELSE ${this.schema}.teacher_profiles.approval_status END,
-					updated_at = NOW()
-				 RETURNING id`,
-				[
-					generatedId,
-					params.organizationId,
-					params.customerId,
-					displayName,
-					publicDirectoryOptIn,
-					requiresReapproval,
-				],
-			)) as Array<{ id: string }>;
-
-			const profileId = upserted[0].id;
-			await transaction.unsafe(
-				`DELETE FROM ${this.schema}.teacher_profile_divisions WHERE teacher_profile_id = $1 AND organization_id = $2`,
-				[profileId, params.organizationId],
-			);
-
-			for (const divisionId of divisionIds) {
-				await transaction.unsafe(
-					`INSERT INTO ${this.schema}.teacher_profile_divisions (teacher_profile_id, organization_id, division_id)
-					 VALUES ($1, $2, $3)
-					 ON CONFLICT DO NOTHING`,
-					[profileId, params.organizationId, divisionId],
-				);
-			}
-
-			return upserted[0];
+		const profileId = await this.persistTeacherProfile({
+			organizationId: params.organizationId,
+			customerId: params.customerId,
+			displayName,
+			publicDirectoryOptIn,
+			initialApprovalStatus: resolveTeacherProfileApprovalStatus(
+				null,
+				publicDirectoryOptIn,
+			),
+			divisionIds,
 		});
-
 		const result = await this.getTeacherProfileById(
 			params.organizationId,
-			row.id,
+			profileId,
 		);
 		if (!result) {
 			throw new Error("Unable to load upserted teacher profile.");
@@ -3487,11 +3518,9 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		return rows.map((row) => mapAccompanistProfileRow(row));
 	}
 
-	async getPublicDirectoryProfiles(
+	private async queryPublicDirectoryTeachers(
 		organizationId: string,
 	): Promise<PublicDirectoryProfileDto[]> {
-		await this.ensureReady();
-
 		const activeTeacherRows = (await sql.unsafe(
 			`SELECT DISTINCT e.customer_id
 			 FROM ${this.schema}.membership_entitlements e
@@ -3509,10 +3538,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		);
 
 		const teacherRows = (await sql.unsafe(
-			`SELECT
-				tp.id,
-				tp.customer_id,
-				tp.display_name,
+			`SELECT tp.id, tp.customer_id, tp.display_name,
 				COALESCE(
 					jsonb_agg(
 						jsonb_build_object('id', od.id, 'name', od.display_name)
@@ -3531,37 +3557,24 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			 GROUP BY tp.id, tp.customer_id, tp.display_name
 			 ORDER BY lower(tp.display_name) COLLATE "C" ASC, tp.display_name COLLATE "C" ASC, tp.id COLLATE "C" ASC`,
 			[organizationId],
-		)) as Array<{
-			id: string;
-			customer_id: string;
-			display_name: string;
-			divisions: unknown;
-		}>;
+		)) as DirectoryProfileRow[];
 
-		const teachers: PublicDirectoryProfileDto[] = teacherRows.map((row) => {
-			const rawDivisions = (
-				Array.isArray(row.divisions)
-					? row.divisions
-					: typeof row.divisions === "string"
-						? JSON.parse(row.divisions)
-						: []
-			) as Array<{ id: string; name: string }>;
-			const approvedDivisions: PublicDirectoryDivisionDto[] = rawDivisions.map(
-				(div) => ({
-					id: div.id,
-					name: div.name,
+		return teacherRows
+			.filter((row) => activeTeacherCustomerIds.has(row.customer_id))
+			.map((row) =>
+				validatePublicDirectoryProfileDto({
+					displayName: row.display_name,
+					role: "Teacher",
+					approvedDivisions: parseApprovedDivisions(row.divisions),
+					teacherColor: getDeterministicTeacherColor(row.customer_id),
+					isActiveMember: true,
 				}),
 			);
+	}
 
-			return validatePublicDirectoryProfileDto({
-				displayName: row.display_name,
-				role: "Teacher",
-				approvedDivisions,
-				teacherColor: getDeterministicTeacherColor(row.customer_id),
-				isActiveMember: activeTeacherCustomerIds.has(row.customer_id),
-			});
-		});
-
+	private async queryPublicDirectoryAccompanists(
+		organizationId: string,
+	): Promise<PublicDirectoryProfileDto[]> {
 		const activeAccompanistRows = (await sql.unsafe(
 			`SELECT DISTINCT e.customer_id
 			 FROM ${this.schema}.membership_entitlements e
@@ -3578,10 +3591,7 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 		);
 
 		const accompanistRows = (await sql.unsafe(
-			`SELECT
-				ap.id,
-				ap.customer_id,
-				ap.display_name,
+			`SELECT ap.id, ap.customer_id, ap.display_name,
 				COALESCE(
 					jsonb_agg(
 						jsonb_build_object('id', od.id, 'name', od.display_name)
@@ -3600,37 +3610,25 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
 			 GROUP BY ap.id, ap.customer_id, ap.display_name
 			 ORDER BY lower(ap.display_name) COLLATE "C" ASC, ap.display_name COLLATE "C" ASC, ap.id COLLATE "C" ASC`,
 			[organizationId],
-		)) as Array<{
-			id: string;
-			customer_id: string;
-			display_name: string;
-			divisions: unknown;
-		}>;
+		)) as DirectoryProfileRow[];
 
-		const accompanists: PublicDirectoryProfileDto[] = accompanistRows.map(
-			(row) => {
-				const rawDivisions = (
-					Array.isArray(row.divisions)
-						? row.divisions
-						: typeof row.divisions === "string"
-							? JSON.parse(row.divisions)
-							: []
-				) as Array<{ id: string; name: string }>;
-				const approvedDivisions: PublicDirectoryDivisionDto[] =
-					rawDivisions.map((div) => ({
-						id: div.id,
-						name: div.name,
-					}));
-
-				return validatePublicDirectoryProfileDto({
-					displayName: row.display_name,
-					role: "Accompanist",
-					approvedDivisions,
-					isActiveMember: activeAccompanistCustomerIds.has(row.customer_id),
-				});
-			},
+		return accompanistRows.map((row) =>
+			validatePublicDirectoryProfileDto({
+				displayName: row.display_name,
+				role: "Accompanist",
+				approvedDivisions: parseApprovedDivisions(row.divisions),
+				isActiveMember: activeAccompanistCustomerIds.has(row.customer_id),
+			}),
 		);
+	}
 
+	async getPublicDirectoryProfiles(
+		organizationId: string,
+	): Promise<PublicDirectoryProfileDto[]> {
+		await this.ensureReady();
+		const teachers = await this.queryPublicDirectoryTeachers(organizationId);
+		const accompanists =
+			await this.queryPublicDirectoryAccompanists(organizationId);
 		return [...teachers, ...accompanists];
 	}
 }

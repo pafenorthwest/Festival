@@ -27,10 +27,17 @@ export function FestivalRegistrationPerformanceOptions(
 						onChange={props.handlers.onInstrumentChange}
 						required
 					>
-						<option value="">Select an instrument…</option>
+						<option value="" selected={!props.instrumentId}>
+							Select an instrument…
+						</option>
 						<For each={props.instruments}>
 							{(instrument) => (
-								<option value={instrument.id}>{instrument.displayName}</option>
+								<option
+									value={instrument.id}
+									selected={props.instrumentId === instrument.id}
+								>
+									{instrument.displayName}
+								</option>
 							)}
 						</For>
 					</select>
@@ -44,10 +51,17 @@ export function FestivalRegistrationPerformanceOptions(
 					value={props.accompanistId}
 					onChange={props.handlers.onAccompanistChange}
 				>
-					<option value="">None (No accompanist needed)</option>
+					<option value="" selected={!props.accompanistId}>
+						None (No accompanist needed)
+					</option>
 					<For each={props.accompanists}>
 						{(accompanist) => (
-							<option value={accompanist.id}>{accompanist.name}</option>
+							<option
+								value={accompanist.id}
+								selected={props.accompanistId === accompanist.id}
+							>
+								{accompanist.name}
+							</option>
 						)}
 					</For>
 				</select>

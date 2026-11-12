@@ -36,7 +36,12 @@ function response(value: unknown, status = 200) {
 	});
 }
 
-function transportFor(fetcher: typeof fetch, now: () => Date) {
+type MockFetcher = (
+	input: URL | RequestInfo,
+	init?: RequestInit,
+) => Promise<Response>;
+
+function transportFor(fetcher: MockFetcher, now: () => Date) {
 	return new CustomerAccountTransport({
 		resolver: async () => [{ address: "8.8.8.8", family: 4, ttlSeconds: 60 }],
 		now: () => now().getTime(),
@@ -88,7 +93,7 @@ async function setupCustomerFixture() {
 
 	let nonce = "";
 	const now = new Date();
-	const fetcher: typeof fetch = async (input, init) => {
+	const fetcher: MockFetcher = async (input, init) => {
 		const url = new URL(input.toString());
 		if (url.pathname === "/.well-known/openid-configuration") {
 			return response({

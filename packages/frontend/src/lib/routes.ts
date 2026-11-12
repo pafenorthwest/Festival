@@ -9,6 +9,13 @@ export type AppRoute =
 	| { kind: "festival-admin-classes"; slug: string; festivalSlug: string }
 	| { kind: "festival-volunteers"; slug: string; festivalSlug: string }
 	| { kind: "festival-register"; slug: string; festivalSlug: string }
+	| {
+			kind: "festival-register-class";
+			slug: string;
+			festivalSlug: string;
+			classId: string;
+	  }
+	| { kind: "festival-cart"; slug: string; festivalSlug: string }
 	| { kind: "org-membership"; slug: string }
 	| { kind: "org-accompanist-membership"; slug: string }
 	| { kind: "org-customer-account-legacy"; slug: string }
@@ -90,6 +97,21 @@ export function buildFestivalRegistrationPath(
 	festivalSlug: string,
 ): string {
 	return `/org/${slug}/festival/${festivalSlug}/register`;
+}
+
+export function buildFestivalRegistrationClassPath(
+	slug: string,
+	festivalSlug: string,
+	classId: string,
+): string {
+	return `${buildFestivalRegistrationPath(slug, festivalSlug)}/class/${encodeURIComponent(classId)}`;
+}
+
+export function buildFestivalCartPath(
+	slug: string,
+	festivalSlug: string,
+): string {
+	return `${buildFestivalRegistrationPath(slug, festivalSlug)}/cart`;
 }
 
 export function buildFestivalAdminPath(
@@ -193,6 +215,8 @@ export function buildPrivacyPolicyPath(): string {
 export function isOrganizationPageRoute(route: AppRoute): boolean {
 	return (
 		route.kind === "festival-register" ||
+		route.kind === "festival-register-class" ||
+		route.kind === "festival-cart" ||
 		route.kind === "festival-volunteers" ||
 		route.kind === "org-root" ||
 		route.kind === "org-public-directory" ||
@@ -208,6 +232,14 @@ export function isOrganizationPageRoute(route: AppRoute): boolean {
 		route.kind === "org-customer-account-availability" ||
 		route.kind === "org-checkout-recovery"
 	);
+}
+
+function decodeRouteSegment(value: string): string {
+	try {
+		return decodeURIComponent(value);
+	} catch {
+		return value;
+	}
 }
 
 export function parseRoute(pathname: string): AppRoute {
@@ -268,6 +300,25 @@ export function parseRoute(pathname: string): AppRoute {
 			kind: "festival-volunteers",
 			slug: festivalVolunteersMatch[1] ?? "",
 			festivalSlug: festivalVolunteersMatch[2] ?? "",
+		};
+	const festivalClassMatch = pathname.match(
+		/^\/org\/([^/]+)\/festival\/([^/]+)\/register\/class\/([^/]+)\/?$/,
+	);
+	if (festivalClassMatch)
+		return {
+			kind: "festival-register-class",
+			slug: festivalClassMatch[1] ?? "",
+			festivalSlug: festivalClassMatch[2] ?? "",
+			classId: decodeRouteSegment(festivalClassMatch[3] ?? ""),
+		};
+	const festivalCartMatch = pathname.match(
+		/^\/org\/([^/]+)\/festival\/([^/]+)\/register\/cart\/?$/,
+	);
+	if (festivalCartMatch)
+		return {
+			kind: "festival-cart",
+			slug: festivalCartMatch[1] ?? "",
+			festivalSlug: festivalCartMatch[2] ?? "",
 		};
 	const festivalRegisterMatch = pathname.match(
 		/^\/org\/([^/]+)\/festival\/([^/]+)\/register$/,

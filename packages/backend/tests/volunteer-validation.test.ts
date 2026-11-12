@@ -12,6 +12,7 @@ function role(
 	return {
 		id: "role-1",
 		organizationId: "org-a",
+		festivalId: "fest-a",
 		slug: "general",
 		displayName: "General",
 		description: "General volunteer duties.",

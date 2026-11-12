@@ -24,11 +24,20 @@ export interface CustomerProfileSessionContext {
  * Validates customer-supplied profile fields, mapping shared validator
  * failures (plain Error) to AppError 400 so they never surface as 500s.
  */
-function parseProfileFields(body: Record<string, unknown>): {
+function parseProfilePayload(
+	payload: unknown,
+	label: string,
+): {
 	displayName: string;
 	publicDirectoryOptIn: boolean;
 	divisionIds: string[];
 } {
+	assertAllowedFields(
+		payload,
+		["displayName", "publicDirectoryOptIn", "divisionIds"],
+		label,
+	);
+	const body = payload as Record<string, unknown>;
 	try {
 		return {
 			displayName: validateDisplayName(body.displayName),
@@ -46,6 +55,41 @@ function parseProfileFields(body: Record<string, unknown>): {
 	}
 }
 
+function parseApprovalPayload(
+	payload: unknown,
+	label: string,
+): ProfileApprovalStatus {
+	assertAllowedFields(payload, ["approvalStatus"], label);
+	const body = payload as Record<string, unknown>;
+	try {
+		return validateProfileApprovalStatus(body.approvalStatus);
+	} catch (error) {
+		throw new AppError(
+			error instanceof Error ? error.message : "Invalid approval status.",
+			400,
+		);
+	}
+}
+
+function redactTeacherContact(
+	profile: TeacherProfileRecord,
+): TeacherProfileRecord {
+	const { zip_code: _zipCode, ...moderationProfile } = profile;
+	return moderationProfile;
+}
+
+function redactAccompanistContact(
+	profile: AccompanistProfileRecord,
+): AccompanistProfileRecord {
+	const {
+		phone: _phone,
+		email: _email,
+		zip_code: _zipCode,
+		...moderationProfile
+	} = profile;
+	return moderationProfile;
+}
+
 export class ParticipantProfileService {
 	constructor(
 		private readonly repository: OrganizationRepository,
@@ -60,6 +104,25 @@ export class ParticipantProfileService {
 			);
 		}
 		return this.customerAccountService;
+	}
+
+	private async requireActiveTeacherMembership(
+		organizationId: string,
+		customerId: string,
+		message: string,
+	): Promise<void> {
+		const grants = await this.repository.listEntitlementGrantSnapshots(
+			organizationId,
+			customerId,
+		);
+		const hasActive = grants.some(
+			(grant) =>
+				grant.entitlementClass === "teacher_membership" &&
+				grant.status === "active",
+		);
+		if (!hasActive) {
+			throw new AppError(message, 403, "active_membership_required");
+		}
 	}
 
 	async getTeacherProfile(
@@ -91,36 +154,20 @@ export class ParticipantProfileService {
 			context.csrfToken,
 			context.requestOrigin,
 		);
-		assertAllowedFields(
-			payload,
-			["displayName", "publicDirectoryOptIn", "divisionIds"],
-			"Teacher profile",
-		);
-		const body = payload as Record<string, unknown>;
 		const { displayName, publicDirectoryOptIn, divisionIds } =
-			parseProfileFields(body);
+			parseProfilePayload(payload, "Teacher profile");
 		const existing = await this.repository.getTeacherProfile(
 			access.organizationId,
 			access.customerId,
 		);
-		if (!existing) {
-			const grants = await this.repository.listEntitlementGrantSnapshots(
+		if (!existing || publicDirectoryOptIn) {
+			await this.requireActiveTeacherMembership(
 				access.organizationId,
 				access.customerId,
+				existing
+					? "An active Teacher membership is required to opt in to the public directory."
+					: "An active Teacher membership is required to create a profile.",
 			);
-			if (
-				!grants.some(
-					(grant) =>
-						grant.entitlementClass === "teacher_membership" &&
-						grant.status === "active",
-				)
-			) {
-				throw new AppError(
-					"An active Teacher membership is required to create a profile.",
-					403,
-					"active_membership_required",
-				);
-			}
 		}
 		return await this.repository.upsertTeacherProfile({
 			organizationId: access.organizationId,
@@ -160,14 +207,8 @@ export class ParticipantProfileService {
 			context.csrfToken,
 			context.requestOrigin,
 		);
-		assertAllowedFields(
-			payload,
-			["displayName", "publicDirectoryOptIn", "divisionIds"],
-			"Accompanist profile",
-		);
-		const body = payload as Record<string, unknown>;
 		const { displayName, publicDirectoryOptIn, divisionIds } =
-			parseProfileFields(body);
+			parseProfilePayload(payload, "Accompanist profile");
 		const existing = await this.repository.getAccompanistProfile(
 			access.organizationId,
 			access.customerId,
@@ -210,21 +251,10 @@ export class ParticipantProfileService {
 		payload: unknown,
 		actorUid: string,
 	): Promise<TeacherProfileRecord> {
-		assertAllowedFields(
+		const approvalStatus = parseApprovalPayload(
 			payload,
-			["approvalStatus"],
 			"Teacher profile approval",
 		);
-		const body = payload as Record<string, unknown>;
-		let approvalStatus: ProfileApprovalStatus;
-		try {
-			approvalStatus = validateProfileApprovalStatus(body.approvalStatus);
-		} catch (error) {
-			throw new AppError(
-				error instanceof Error ? error.message : "Invalid approval status.",
-				400,
-			);
-		}
 		const updated = await this.repository.updateTeacherProfileApproval(
 			organizationId,
 			profileId,
@@ -255,21 +285,10 @@ export class ParticipantProfileService {
 		payload: unknown,
 		actorUid: string,
 	): Promise<AccompanistProfileRecord> {
-		assertAllowedFields(
+		const approvalStatus = parseApprovalPayload(
 			payload,
-			["approvalStatus"],
 			"Accompanist profile approval",
 		);
-		const body = payload as Record<string, unknown>;
-		let approvalStatus: ProfileApprovalStatus;
-		try {
-			approvalStatus = validateProfileApprovalStatus(body.approvalStatus);
-		} catch (error) {
-			throw new AppError(
-				error instanceof Error ? error.message : "Invalid approval status.",
-				400,
-			);
-		}
 		const updated = await this.repository.updateAccompanistProfileApproval(
 			organizationId,
 			profileId,
@@ -291,9 +310,7 @@ export class ParticipantProfileService {
 				profile.customer_id,
 				actorUid,
 			);
-		if (customer) return profile;
-		const { zip_code: _zipCode, ...moderationProfile } = profile;
-		return moderationProfile;
+		return customer ? profile : redactTeacherContact(profile);
 	}
 
 	private async adminAccompanistProfile(
@@ -306,14 +323,7 @@ export class ParticipantProfileService {
 				profile.customer_id,
 				actorUid,
 			);
-		if (customer) return profile;
-		const {
-			phone: _phone,
-			email: _email,
-			zip_code: _zipCode,
-			...moderationProfile
-		} = profile;
-		return moderationProfile;
+		return customer ? profile : redactAccompanistContact(profile);
 	}
 
 	async getPublicDirectoryProfiles(
