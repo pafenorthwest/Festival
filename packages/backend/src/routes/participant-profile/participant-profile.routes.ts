@@ -12,7 +12,10 @@ import type { AuthVerifier } from "../../auth/types.js";
 import { CUSTOMER_SESSION_COOKIE } from "../../customer/customer-account-service.js";
 import { AppError } from "../../errors/app-error.js";
 import type { OrganizationRepository } from "../../repo/organization-repository.js";
-import type { ParticipantProfileService } from "../../services/participant-profile-service.js";
+import type {
+	CustomerProfileSessionContext,
+	ParticipantProfileService,
+} from "../../services/participant-profile-service.js";
 import { assertNoBearerPrincipal } from "../customer-auth/customer-auth.routes.js";
 import { resolveRequestOrigin } from "../shared/csrf-guard.js";
 
@@ -21,6 +24,8 @@ export interface ParticipantProfileRoutesOptions {
 	authVerifier: AuthVerifier;
 	repository: OrganizationRepository;
 }
+
+type ParticipantProfileRouter = Hono<{ Variables: Partial<ApiVariables> }>;
 
 function requireParam(c: Context, name: string): string {
 	const val = c.req.param(name);
@@ -38,12 +43,21 @@ async function readJsonBody(c: Context): Promise<unknown> {
 	}
 }
 
-export function buildParticipantProfileRoutes(
-	options: ParticipantProfileRoutesOptions,
-): Hono<{ Variables: Partial<ApiVariables> }> {
-	const router = new Hono<{ Variables: Partial<ApiVariables> }>();
-	const { profileService, authVerifier, repository } = options;
+function readCustomerWriteContext(c: Context): CustomerProfileSessionContext {
+	assertNoBearerPrincipal(c.req.header("Authorization"));
+	c.header("Cache-Control", "no-store");
+	return {
+		orgSlug: requireParam(c, "orgSlug"),
+		sessionId: getCookie(c, CUSTOMER_SESSION_COOKIE),
+		csrfToken: c.req.header("X-CSRF-Token"),
+		requestOrigin: resolveRequestOrigin(c),
+	};
+}
 
+function registerCustomerProfileRoutes(
+	router: ParticipantProfileRouter,
+	profileService: ParticipantProfileService,
+): void {
 	// Customer: Get own teacher profile
 	router.get("/customer/orgs/:orgSlug/profiles/teacher", async (c) => {
 		try {
@@ -60,18 +74,11 @@ export function buildParticipantProfileRoutes(
 	// Customer: Upsert own teacher profile
 	router.put("/customer/orgs/:orgSlug/profiles/teacher", async (c) => {
 		try {
-			assertNoBearerPrincipal(c.req.header("Authorization"));
-			c.header("Cache-Control", "no-store");
-			const orgSlug = requireParam(c, "orgSlug");
-			const sessionId = getCookie(c, CUSTOMER_SESSION_COOKIE);
-			const csrfToken = c.req.header("X-CSRF-Token");
-			const requestOrigin = resolveRequestOrigin(c);
+			const context = readCustomerWriteContext(c);
 			const payload = await readJsonBody(c);
-			const result = await profileService.upsertTeacherProfile(
-				{ orgSlug, sessionId, csrfToken, requestOrigin },
-				payload,
+			return c.json(
+				await profileService.upsertTeacherProfile(context, payload),
 			);
-			return c.json(result);
 		} catch (error) {
 			return toJsonError(c, error);
 		}
@@ -95,22 +102,22 @@ export function buildParticipantProfileRoutes(
 	// Customer: Upsert own accompanist profile
 	router.put("/customer/orgs/:orgSlug/profiles/accompanist", async (c) => {
 		try {
-			assertNoBearerPrincipal(c.req.header("Authorization"));
-			c.header("Cache-Control", "no-store");
-			const orgSlug = requireParam(c, "orgSlug");
-			const sessionId = getCookie(c, CUSTOMER_SESSION_COOKIE);
-			const csrfToken = c.req.header("X-CSRF-Token");
-			const requestOrigin = resolveRequestOrigin(c);
+			const context = readCustomerWriteContext(c);
 			const payload = await readJsonBody(c);
-			const result = await profileService.upsertAccompanistProfile(
-				{ orgSlug, sessionId, csrfToken, requestOrigin },
-				payload,
+			return c.json(
+				await profileService.upsertAccompanistProfile(context, payload),
 			);
-			return c.json(result);
 		} catch (error) {
 			return toJsonError(c, error);
 		}
 	});
+}
+
+function registerAdminTeacherRoutes(
+	router: ParticipantProfileRouter,
+	options: ParticipantProfileRoutesOptions,
+): void {
+	const { profileService, authVerifier, repository } = options;
 
 	// Admin: List teacher profiles
 	router.get(
@@ -159,6 +166,13 @@ export function buildParticipantProfileRoutes(
 			}
 		},
 	);
+}
+
+function registerAdminAccompanistRoutes(
+	router: ParticipantProfileRouter,
+	options: ParticipantProfileRoutesOptions,
+): void {
+	const { profileService, authVerifier, repository } = options;
 
 	// Admin: List accompanist profiles
 	router.get(
@@ -207,12 +221,24 @@ export function buildParticipantProfileRoutes(
 			}
 		},
 	);
+}
+
+export function buildParticipantProfileRoutes(
+	options: ParticipantProfileRoutesOptions,
+): ParticipantProfileRouter {
+	const router: ParticipantProfileRouter = new Hono();
+	registerCustomerProfileRoutes(router, options.profileService);
+	registerAdminTeacherRoutes(router, options);
+	registerAdminAccompanistRoutes(router, options);
 
 	// Public: Directory profiles
 	router.get("/org-info/:orgSlug/directory/profiles", async (c) => {
 		try {
+			c.header("Cache-Control", "no-store");
 			const orgSlug = requireParam(c, "orgSlug");
-			return c.json(await profileService.getPublicDirectoryProfiles(orgSlug));
+			return c.json(
+				await options.profileService.getPublicDirectoryProfiles(orgSlug),
+			);
 		} catch (error) {
 			return toJsonError(c, error);
 		}
