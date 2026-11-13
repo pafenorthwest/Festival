@@ -1,344 +1,44 @@
 import type {
-	AccompanistDivisionSelectionPolicy,
 	AccompanistMembershipGrant,
 	AccompanistProfileRecord,
-	AuthenticatedUser,
-	ClassAvailabilityStatus,
 	CreateEntitlementGrantSnapshotInput,
 	EntitlementClass,
 	EntitlementGrantSnapshot,
-	FestivalClassCapacityAuditRecord,
-	FestivalClassConfiguration,
-	FestivalRecord,
-	OrganizationAdminUserEntry,
-	OrganizationDivision,
-	OrganizationInviteRecord,
-	OrganizationMembershipRecord,
-	OrganizationRecord,
-	OrganizationUserRecord,
 	ProfileApprovalStatus,
 	PublicDirectoryProfileDto,
-	RegistrationAgeConfiguration,
-	RegistrationCatalogValue,
-	ShopifyCapabilityDiagnostics,
-	ShopifyFailureCategory,
-	ShopifyVerificationStatus,
-	ShopifyWebhookFailureCategory,
-	ShopifyWebhookReadinessStatus,
 	TeacherProfileRecord,
 } from "@festival/common";
+import type {
+	DivisionFestivalRepository,
+	RegistrationCatalogRepository,
+} from "../domains/catalog-repertoire/index.js";
+import type {
+	AppUserMembershipRepository,
+	TenantRepository,
+} from "../domains/tenant-org/index.js";
+import type {
+	CreateAccompanistMembershipGrantInput,
+	CreateMembershipProductRecordInput,
+	EntitlementRevocationRecord,
+	MembershipCustomerContact,
+	ProductRecord,
+	ShopifyIntegrationRecord,
+	UpdateShopifyVerificationInput,
+	UpdateShopifyWebhookReadinessInput,
+	UpsertAccompanistProfileInput,
+	UpsertShopifyIntegrationInput,
+	UpsertTeacherProfileInput,
+} from "./organization-repository-types.js";
 
-export interface MembershipWithOrganization {
-	membership: OrganizationMembershipRecord;
-	organization: OrganizationRecord;
-}
-export interface InviteWithOrganization {
-	invite: OrganizationInviteRecord;
-	organization: OrganizationRecord;
-}
-export interface CreateMembershipInput {
-	organizationId: string;
-	userId: string;
-	role: OrganizationMembershipRecord["role"];
-	origin: OrganizationMembershipRecord["origin"];
-}
-export interface CreateInviteRecordInput {
-	organizationId: string;
-	email: string;
-	role: OrganizationInviteRecord["role"];
-	invitedByUserId: string;
-}
-export interface CreateFestivalRecordInput {
-	id: string;
-	organizationId: string;
-	code: string;
-	shortName: string;
-	name: string;
-	startDate: string;
-	endDate: string;
-	registrationOpensAt?: string | null;
-	registrationClosesAt?: string | null;
-}
-export interface ShopifyIntegrationRecord {
-	organizationId: string;
-	storeDomain: string;
-	clientId: string;
-	encryptedClientSecret: string;
-	encryptedStorefrontPrivateToken?: string;
-	verificationStatus: ShopifyVerificationStatus;
-	verifiedShopGid?: string;
-	verifiedShopDomain?: string;
-	grantedScopes: string[];
-	capabilities: ShopifyCapabilityDiagnostics;
-	integrationVersion: number;
-	verifiedAtIso?: string;
-	lastTestedAtIso?: string;
-	lastError?: string;
-	lastFailureCategory?: ShopifyFailureCategory;
-	webhookReadinessStatus: ShopifyWebhookReadinessStatus;
-	webhookCheckedAtIso?: string;
-	webhookError?: string;
-	webhookFailureCategory?: ShopifyWebhookFailureCategory;
-	webhookRequestId?: string;
-	createdAtIso: string;
-	updatedAtIso: string;
-}
-export interface UpsertShopifyIntegrationInput {
-	organizationId: string;
-	storeDomain: string;
-	clientId: string;
-	encryptedClientSecret: string;
-	encryptedStorefrontPrivateToken?: string;
-}
-interface UpdateShopifyVerificationBase {
-	organizationId: string;
-	lastTestedAtIso: string;
-	lastError?: string;
-	lastFailureCategory?: ShopifyFailureCategory;
-}
-export type UpdateShopifyVerificationInput =
-	| (UpdateShopifyVerificationBase & {
-			verificationStatus: "ok";
-			verifiedAtIso: string;
-			verifiedShopGid: string;
-			verifiedShopDomain: string;
-			grantedScopes: string[];
-			capabilities: ShopifyCapabilityDiagnostics;
-	  })
-	| (UpdateShopifyVerificationBase & {
-			verificationStatus: "failed";
-			verifiedAtIso?: undefined;
-			verifiedShopGid?: undefined;
-			verifiedShopDomain?: undefined;
-			grantedScopes?: undefined;
-			capabilities?: undefined;
-	  });
-export type UpdateShopifyWebhookReadinessInput =
-	| {
-			organizationId: string;
-			status: "checking" | "ready";
-			checkedAtIso: string;
-			message?: undefined;
-			failureCategory?: undefined;
-			requestId?: undefined;
-	  }
-	| {
-			organizationId: string;
-			status: "failed";
-			checkedAtIso: string;
-			message: string;
-			failureCategory: ShopifyWebhookFailureCategory;
-			requestId?: string;
-	  };
-export class ShopifyShopOwnershipError extends Error {
-	constructor() {
-		super("Shopify shop is already assigned to another organization.");
-		this.name = "ShopifyShopOwnershipError";
-	}
-}
-export class AccompanistMembershipConflictError extends Error {
-	constructor() {
-		super("An active accompanist membership already exists.");
-		this.name = "AccompanistMembershipConflictError";
-	}
-}
-export interface ProductRecord {
-	id: string;
-	organizationId: string;
-	productCategory: "membership";
-	entitlementClass: EntitlementClass;
-	durationDays: number;
-	isActive: boolean;
-	shopifyProductGid: string;
-	shopifyVariantGid: string;
-	productNameSnapshot: string;
-	createdAtIso: string;
-	updatedAtIso: string;
-}
-export interface CreateMembershipProductRecordInput {
-	organizationId: string;
-	entitlementClass: EntitlementClass;
-	durationDays: number;
-	isActive: boolean;
-	shopifyProductGid: string;
-	shopifyVariantGid: string;
-	productNameSnapshot: string;
-}
-export interface AccompanistDivisionPolicyRecord {
-	organizationId: string;
-	policy: AccompanistDivisionSelectionPolicy;
-	updatedAtIso: string;
-}
-export interface AccompanistDivisionPolicyHistoryRecord
-	extends AccompanistDivisionPolicyRecord {
-	id: string;
-	createdAtIso: string;
-}
-export type RegistrationCatalogKind = "class_subtype" | "instrument";
-export interface CreateFestivalClassConfigurationInput
-	extends Omit<
-		FestivalClassConfiguration,
-		"id" | "createdAtIso" | "updatedAtIso" | "isActive"
-	> {
-	isActive?: boolean;
-}
-export interface UpdateFestivalClassConfigurationInput {
-	id: string;
-	organizationId: string;
-	festivalId: string;
-	displayName?: string;
-	minimumAge?: number;
-	maximumAge?: number;
-	price?: string;
-	maximumPerformancePieces?: 1 | 2 | 3;
-	performanceMinutes?: number;
-	capacity?: number;
-	isActive?: boolean;
-	shopifyProductGid?: string;
-	shopifyVariantGid?: string;
-}
-export interface CreateFestivalClassCapacityAuditInput {
-	id?: string;
-	organizationId: string;
-	festivalId: string;
-	festivalClassId: string;
-	actorUid?: string | null;
-	action?: "class_created" | "capacity_updated";
-	previousCapacity?: number | null;
-	newCapacity: number;
-	placedCountAtChange: number;
-	availabilityAfterChange?: ClassAvailabilityStatus;
-	createdAtIso?: string;
-}
-export interface CreateAccompanistMembershipGrantInput
-	extends Omit<
-		AccompanistMembershipGrant,
-		"id" | "createdAtIso" | "status" | "isCurrent"
-	> {
-	supersedeGrantId?: string;
-}
-export interface EntitlementRevocationRecord {
-	id: string;
-	entitlementId: string;
-	organizationId: string;
-	actorUserId: string;
-	reason: string;
-	revokedAtIso: string;
-}
-export interface MembershipCustomerContact {
-	customerId: string;
-	name?: string;
-	email?: string;
-	phone?: string;
-	city?: string;
-}
-export interface UpsertProfileInput {
-	organizationId: string;
-	customerId: string;
-	displayName: string;
-	publicDirectoryOptIn: boolean;
-	divisionIds: string[];
-}
-export type UpsertTeacherProfileInput = UpsertProfileInput;
-export type UpsertAccompanistProfileInput = UpsertProfileInput;
-export interface OrganizationRepository {
-	ensureReady(): Promise<void>;
-	upsertUser(user: AuthenticatedUser): Promise<OrganizationUserRecord>;
-	findMembershipByUserId(
-		userId: string,
-	): Promise<MembershipWithOrganization | null>;
-	listMembershipsByUserId(
-		userId: string,
-	): Promise<MembershipWithOrganization[]>;
-	findMembershipByUserAndSlug(
-		userId: string,
-		slug: string,
-	): Promise<MembershipWithOrganization | null>;
-	findOrganizationById(
-		organizationId: string,
-	): Promise<OrganizationRecord | null>;
-	findOrganizationBySlug(slug: string): Promise<OrganizationRecord | null>;
-	findOrganizationByName(name: string): Promise<OrganizationRecord | null>;
-	findOrganizationByShopDomain(
-		shopDomain: string,
-	): Promise<OrganizationRecord | null>;
-	createOrganization(input: {
-		name: string;
-		slug: string;
-		defaultCurrencyCode?: string;
-	}): Promise<OrganizationRecord>;
-	listDivisions(
-		organizationId: string,
-		activeOnly?: boolean,
-	): Promise<OrganizationDivision[]>;
-	createDivision(input: {
-		organizationId: string;
-		displayName: string;
-		normalizedName: string;
-	}): Promise<OrganizationDivision>;
-	updateDivision(input: {
-		organizationId: string;
-		divisionId: string;
-		displayName?: string;
-		normalizedName?: string;
-		isActive?: boolean;
-	}): Promise<OrganizationDivision | null>;
-	reorderDivisions(
-		organizationId: string,
-		divisionIds: string[],
-	): Promise<OrganizationDivision[]>;
-	getOrganizationTimezone(organizationId: string): Promise<string>;
-	updateOrganizationTimezone(
-		organizationId: string,
-		timezone: string,
-	): Promise<string>;
-	createMembership(
-		input: CreateMembershipInput,
-	): Promise<OrganizationMembershipRecord>;
-	createInvite(
-		input: CreateInviteRecordInput,
-	): Promise<OrganizationInviteRecord>;
-	findInviteByToken(token: string): Promise<InviteWithOrganization | null>;
-	markInviteAccepted(token: string): Promise<void>;
-	listAdminUsers(
-		organizationId: string,
-		currentUserId: string,
-	): Promise<OrganizationAdminUserEntry[]>;
-	deleteMembership(input: {
-		organizationId: string;
-		membershipId: string;
-		currentUserId: string;
-	}): Promise<void>;
-	cancelInvite(input: {
-		organizationId: string;
-		inviteId: string;
-	}): Promise<void>;
-	listFestivals(organizationId: string): Promise<FestivalRecord[]>;
-	createFestival(input: CreateFestivalRecordInput): Promise<FestivalRecord>;
-	findFestivalByName(
-		organizationId: string,
-		name: string,
-	): Promise<FestivalRecord | null>;
-	findFestivalByShortName(
-		organizationId: string,
-		shortName: string,
-	): Promise<FestivalRecord | null>;
-	setPrimaryFestival(
-		organizationId: string,
-		festivalId: string,
-	): Promise<FestivalRecord>;
-	updateFestivalRegistrationWindow(
-		organizationId: string,
-		festivalId: string,
-		input: {
-			registrationOpensAt: string | null;
-			registrationClosesAt: string | null;
-		},
-	): Promise<FestivalRecord>;
-	dismissWelcome(
-		userId: string,
-		organizationId: string,
-	): Promise<OrganizationMembershipRecord>;
+export { assertValidSubtypeDependency } from "../domains/catalog-repertoire/index.js";
+export * from "./organization-repository-types.js";
+
+/** Compatibility repository interface composing S09 bounded contexts plus S10/S11 methods. */
+export interface OrganizationRepository
+	extends TenantRepository,
+		AppUserMembershipRepository,
+		DivisionFestivalRepository,
+		RegistrationCatalogRepository {
 	getShopifyIntegration(
 		organizationId: string,
 	): Promise<ShopifyIntegrationRecord | null>;
@@ -369,16 +69,6 @@ export interface OrganizationRepository {
 		organizationId: string,
 		entitlementClass: EntitlementClass,
 	): Promise<ProductRecord | null>;
-	getAccompanistDivisionPolicy(
-		organizationId: string,
-	): Promise<AccompanistDivisionPolicyRecord>;
-	updateAccompanistDivisionPolicy(input: {
-		organizationId: string;
-		policy: AccompanistDivisionSelectionPolicy;
-	}): Promise<AccompanistDivisionPolicyRecord>;
-	listAccompanistDivisionPolicyHistory(
-		organizationId: string,
-	): Promise<AccompanistDivisionPolicyHistoryRecord[]>;
 	createAccompanistMembershipGrant(
 		input: CreateAccompanistMembershipGrantInput,
 	): Promise<AccompanistMembershipGrant>;
@@ -392,102 +82,6 @@ export interface OrganizationRepository {
 		normalizedEmail?: string;
 		currentOnly?: boolean;
 	}): Promise<AccompanistMembershipGrant[]>;
-	getRegistrationAgeConfiguration(
-		organizationId: string,
-	): Promise<RegistrationAgeConfiguration | null>;
-	updateRegistrationAgeConfiguration(input: {
-		organizationId: string;
-		registrationAgeDate: string;
-	}): Promise<RegistrationAgeConfiguration>;
-	listRegistrationCatalogValues(
-		organizationId: string,
-		kind: RegistrationCatalogKind,
-		activeOnly?: boolean,
-	): Promise<RegistrationCatalogValue[]>;
-	listFestivalClassSubtypes(
-		organizationId: string,
-		festivalId: string,
-		activeOnly?: boolean,
-	): Promise<RegistrationCatalogValue[]>;
-	associateFestivalClassSubtype(input: {
-		organizationId: string;
-		festivalId: string;
-		classSubtypeId: string;
-	}): Promise<void>;
-	createRegistrationCatalogValue(input: {
-		organizationId: string;
-		kind: RegistrationCatalogKind;
-		displayName: string;
-		normalizedName: string;
-		requiredSubtypeId?: string | null;
-	}): Promise<RegistrationCatalogValue>;
-	updateRegistrationCatalogValue(input: {
-		organizationId: string;
-		kind: RegistrationCatalogKind;
-		id: string;
-		displayName?: string;
-		normalizedName?: string;
-		isActive?: boolean;
-		requiredSubtypeId?: string | null;
-	}): Promise<RegistrationCatalogValue | null>;
-	reorderRegistrationCatalogValues(
-		organizationId: string,
-		kind: RegistrationCatalogKind,
-		ids: string[],
-	): Promise<RegistrationCatalogValue[]>;
-	createFestivalClassConfigurationWithCapacityAudit(
-		input: CreateFestivalClassConfigurationInput,
-		actorUid?: string,
-	): Promise<FestivalClassConfiguration>;
-	/**
-	 * @param countPlaced Supplies the confirmed placement count for the in-memory
-	 * adapter's capacity audit; defaults to zero when omitted. PostgreSQL ignores
-	 * this callback and counts persisted confirmed entitlements in the same
-	 * transaction as the capacity update and audit.
-	 */
-	updateFestivalClassConfigurationWithCapacityAudit(
-		input: UpdateFestivalClassConfigurationInput,
-		actorUid?: string,
-		countPlaced?: () => Promise<number>,
-	): Promise<FestivalClassConfiguration>;
-	createFestivalClassConfiguration(
-		input: CreateFestivalClassConfigurationInput,
-	): Promise<FestivalClassConfiguration>;
-	updateFestivalClassConfiguration(
-		input: UpdateFestivalClassConfigurationInput,
-	): Promise<FestivalClassConfiguration>;
-	findFestivalClassConfigurationsByIds(
-		organizationId: string,
-		festivalId: string,
-		classIds: string[],
-	): Promise<FestivalClassConfiguration[]>;
-	findFestivalClassConfigurationById(
-		organizationId: string,
-		festivalId: string,
-		classId: string,
-	): Promise<FestivalClassConfiguration | null>;
-	findFestivalClassConfigurationById(
-		organizationId: string,
-		classId: string,
-	): Promise<FestivalClassConfiguration | null>;
-	findActiveFestivalClassByShortName(
-		organizationId: string,
-		festivalShortName: string,
-		classId: string,
-		festivalId?: string,
-	): Promise<FestivalClassConfiguration | null>;
-	listFestivalClassConfigurations(
-		organizationId: string,
-		festivalId: string,
-		activeOnly?: boolean,
-	): Promise<FestivalClassConfiguration[]>;
-	recordFestivalClassCapacityAudit(
-		input: CreateFestivalClassCapacityAuditInput,
-	): Promise<FestivalClassCapacityAuditRecord>;
-	listFestivalClassCapacityAudits(
-		organizationId: string,
-		festivalClassId: string,
-	): Promise<FestivalClassCapacityAuditRecord[]>;
 	findProductRecordByShopifyProductGid(
 		shopifyProductGid: string,
 	): Promise<ProductRecord | null>;
@@ -560,25 +154,4 @@ export interface OrganizationRepository {
 	getPublicDirectoryProfiles(
 		organizationId: string,
 	): Promise<PublicDirectoryProfileDto[]>;
-}
-
-export function assertValidSubtypeDependency(
-	id: string | undefined,
-	requiredSubtypeId: string,
-	subtypes: Map<string, string | null>,
-): void {
-	if (id && id === requiredSubtypeId)
-		throw new Error("Class subtype cannot depend on itself.");
-	if (!subtypes.has(requiredSubtypeId))
-		throw new Error("Required class subtype was not found.");
-	let currentId: string | null | undefined = subtypes.get(requiredSubtypeId);
-	const visited = new Set<string>(
-		id ? [id, requiredSubtypeId] : [requiredSubtypeId],
-	);
-	while (currentId) {
-		if ((id && currentId === id) || visited.has(currentId))
-			throw new Error("Class subtype dependency cycle detected.");
-		visited.add(currentId);
-		currentId = subtypes.get(currentId);
-	}
 }

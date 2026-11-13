@@ -1,303 +1,76 @@
-import { randomUUID } from "node:crypto";
-import {
-	type AcceptInviteInput,
-	type AcceptInviteResponse,
-	type AuthenticatedUser,
-	type CreateFestivalInput,
-	type CreateFestivalResponse,
-	type CreateInviteInput,
-	type CreateInviteResponse,
-	type CreateOrganizationDivisionInput,
-	type CreateOrganizationInput,
-	type CreateOrganizationResponse,
-	DEFAULT_FESTIVAL_CLASS_CAPACITY,
-	type DismissWelcomeResponse,
-	deriveDisplayName,
-	divisionNameUniquenessKey,
-	type FestivalClassConfiguration,
-	type FestivalRecord,
-	type FestivalSummary,
-	type InviteSummary,
-	isOrganizationRole,
-	isValidIanaTimezone,
-	type OrganizationAdminUsersResponse,
-	type OrganizationDivision,
-	type OrganizationFestivalListResponse,
-	type OrganizationLandingResponse,
-	type OrganizationMembershipListResponse,
-	type OrganizationMembershipRecord,
-	type OrganizationRecord,
-	type OrganizationSession,
-	type PublicOrganizationLandingResponse,
-	type ReorderOrganizationDivisionsInput,
-	type SessionMembership,
-	type SessionResponse,
-	type UpdateFestivalRegistrationWindowInput,
-	type UpdateOrganizationDivisionInput,
-	type UpdateOrganizationTimezoneInput,
-	validateCreateRoomInput,
-	validateDivisionName,
-	validateFestivalDates,
-	validateFestivalName,
-	validateFestivalRegistrationWindow,
-	validateOrganizationName,
-	validateOrganizationShortName,
-	validateRegistrationAgeDate,
+import type {
+	AcceptInviteInput,
+	AuthenticatedUser,
+	CreateFestivalInput,
+	CreateInviteInput,
+	CreateOrganizationDivisionInput,
+	CreateOrganizationInput,
+	ReorderOrganizationDivisionsInput,
+	UpdateFestivalRegistrationWindowInput,
+	UpdateOrganizationDivisionInput,
+	UpdateOrganizationTimezoneInput,
 } from "@festival/common";
 import type { TenantContext } from "../auth/tenant-context.js";
 import type { MembershipCommerceRepository } from "../commerce/membership-commerce-repository.js";
+import {
+	DivisionFestivalService,
+	RegistrationCatalogService,
+} from "../domains/catalog-repertoire/index.js";
+import {
+	OrganizationAgeConfigService,
+	OrganizationStaffInviteService,
+	RoomService,
+	TenantOrganizationService,
+} from "../domains/tenant-org/index.js";
 import { AppError } from "../errors/app-error.js";
 import type { DomainCacheInvalidator } from "../lib/domain-cache-invalidator.js";
-import type {
-	CreateFestivalClassConfigurationInput,
-	MembershipWithOrganization,
-	OrganizationRepository,
-	UpdateFestivalClassConfigurationInput,
-} from "../repo/organization-repository.js";
+import type { OrganizationRepository } from "../repo/organization-repository.js";
 import type { RoomRepository } from "../rooms/room-repository.js";
 import type { AdminClassCatalogService } from "./admin-class-catalog.service.js";
-import {
-	validateCreateClassInput,
-	validateUpdateClassInput,
-} from "./admin-class-catalog-validation.js";
 
-function toSessionMembership(
-	record: MembershipWithOrganization,
-): SessionMembership {
-	return {
-		organizationId: record.organization.id,
-		organizationName: record.organization.name,
-		organizationSlug: record.organization.slug,
-		role: record.membership.role,
-		showWelcome:
-			record.membership.origin === "invite" &&
-			!record.membership.welcomeDismissedAtIso,
-	};
-}
-
-function toInviteSummary(input: {
-	token: string;
-	organization: OrganizationRecord;
-	email: string;
-	role: OrganizationMembershipRecord["role"];
-	acceptedAtIso?: string;
-}): InviteSummary {
-	return {
-		token: input.token,
-		organizationName: input.organization.name,
-		organizationSlug: input.organization.slug,
-		email: input.email,
-		role: input.role,
-		status: input.acceptedAtIso ? "accepted" : "pending",
-		acceptedAtIso: input.acceptedAtIso,
-	};
-}
-
-function toFestivalSummary(record: FestivalRecord): FestivalSummary {
-	return {
-		id: record.id,
-		code: record.code,
-		shortName: record.shortName,
-		isPrimary: record.isPrimary,
-		name: record.name,
-		startDate: record.startDate,
-		endDate: record.endDate,
-		registrationOpensAt: record.registrationOpensAt ?? null,
-		registrationClosesAt: record.registrationClosesAt ?? null,
-		createdAtIso: record.createdAtIso,
-	};
-}
-
-function deriveFestivalCode(id: string): string {
-	return id.replaceAll("-", "").slice(0, 6);
-}
-
-function parseRequiredSubtypeId(value: unknown): string | null | undefined {
-	if (value === undefined) return undefined;
-	if (value === null || typeof value === "string") return value;
-	throw new AppError("Required class subtype must be a string or null.", 400);
-}
-
-function handleCatalogRepositoryError(error: unknown): never {
-	if (error instanceof AppError) {
-		throw error;
-	}
-	if (error instanceof Error) {
-		if (error.message === "Registration catalog value already exists.") {
-			throw new AppError(error.message, 409);
-		}
-		if (
-			error.message === "Class subtype cannot depend on itself." ||
-			error.message === "Class subtype dependency cycle detected." ||
-			error.message === "Required class subtype was not found."
-		) {
-			throw new AppError(error.message, 400);
-		}
-	}
-	throw error;
-}
-
-export class OrganizationService {
-	private cacheInvalidator?: DomainCacheInvalidator;
+/** Base compatibility facade holding division, festival, and catalog delegators. */
+class OrganizationCatalogServiceFacade {
+	protected readonly divisionFestivalService: DivisionFestivalService;
+	protected readonly registrationCatalogService: RegistrationCatalogService;
 
 	constructor(
 		readonly repository: OrganizationRepository,
-		private readonly adminClassCatalogService?: AdminClassCatalogService,
-		private readonly options?: { enableDropTransfer?: boolean },
-		private readonly roomRepository?: RoomRepository,
-		private readonly commerce?: Pick<
+		adminClassCatalogService?: AdminClassCatalogService,
+		options?: { enableDropTransfer?: boolean },
+		commerce?: Pick<
 			MembershipCommerceRepository,
 			"countConfirmedClassEntitlements"
 		>,
-	) {}
-
-	bindCacheInvalidator(invalidator: DomainCacheInvalidator): void {
-		this.cacheInvalidator = invalidator;
-	}
-
-	private emitFestivalCatalogUpdated(
-		organizationId: string,
-		slug?: string,
-		festivalId?: string,
-	): void {
-		this.cacheInvalidator?.emit({
-			type: "FestivalCatalogUpdated",
-			organizationId,
-			slug,
-			festivalId,
-		});
-	}
-
-	async getSession(identity?: AuthenticatedUser): Promise<SessionResponse> {
-		if (!identity) {
-			return {
-				session: {
-					authenticated: false,
-				},
-			};
-		}
-
-		const user = await this.repository.upsertUser({
-			...identity,
-			email: identity.email.toLowerCase(),
-			displayName: deriveDisplayName(identity),
-		});
-		const memberships = await this.repository.listMembershipsByUserId(user.id);
-
-		const session: OrganizationSession = {
-			authenticated: true,
-			user: {
-				uid: user.firebaseUid,
-				email: user.email,
-				displayName: user.displayName,
-			},
-		};
-
-		if (memberships[0]) {
-			session.membership = toSessionMembership(memberships[0]);
-		}
-
-		return { session };
-	}
-
-	async listMemberships(
-		identity: AuthenticatedUser,
-	): Promise<OrganizationMembershipListResponse> {
-		const user = await this.repository.upsertUser({
-			...identity,
-			displayName: deriveDisplayName(identity),
-			email: identity.email.toLowerCase(),
-		});
-
-		return {
-			memberships: (await this.repository.listMembershipsByUserId(user.id)).map(
-				toSessionMembership,
-			),
-		};
-	}
-
-	async createOrganization(
-		identity: AuthenticatedUser,
-		input: CreateOrganizationInput,
-	): Promise<CreateOrganizationResponse> {
-		const nameValidation = validateOrganizationName(input.name);
-		const shortNameValidation = validateOrganizationShortName(input.shortName);
-		const errors = [...nameValidation.errors, ...shortNameValidation.errors];
-		if (errors.length > 0) {
-			throw new AppError(errors.join(" "), 400);
-		}
-
-		const user = await this.repository.upsertUser({
-			...identity,
-			displayName: deriveDisplayName(identity),
-			email: identity.email.toLowerCase(),
-		});
-
-		const existingOrganization = await this.repository.findOrganizationBySlug(
-			shortNameValidation.normalized,
+	) {
+		this.divisionFestivalService = new DivisionFestivalService(
+			repository,
+			repository,
+			options,
 		);
-		if (existingOrganization) {
-			throw new AppError("Organization short name is already registered.", 409);
-		}
-
-		const existingOrganizationName =
-			await this.repository.findOrganizationByName(nameValidation.normalized);
-		if (existingOrganizationName) {
-			throw new AppError("Organization name is already registered.", 409);
-		}
-
-		const organization = await this.repository.createOrganization({
-			name: nameValidation.normalized,
-			slug: shortNameValidation.normalized,
-		});
-		const membership = await this.repository.createMembership({
-			organizationId: organization.id,
-			userId: user.id,
-			role: "Admin",
-			origin: "creator",
-		});
-		this.cacheInvalidator?.emit({
-			type: "OrgUpdated",
-			organizationId: organization.id,
-			slug: organization.slug,
-		});
-
-		return {
-			organization,
-			membership: toSessionMembership({ membership, organization }),
-		};
+		this.registrationCatalogService = new RegistrationCatalogService(
+			repository,
+			repository,
+			repository,
+			adminClassCatalogService,
+			commerce,
+		);
 	}
 
-	async listDivisionsForTenant(tenant: TenantContext) {
-		return {
-			divisions: await this.repository.listDivisions(tenant.organization.id),
-		};
+	listDivisionsForTenant(tenant: TenantContext) {
+		return this.divisionFestivalService.listDivisionsForTenant(tenant);
 	}
-
-	async getAccompanistDivisionPolicy(organizationId: string) {
-		return this.repository.getAccompanistDivisionPolicy(organizationId);
+	listDivisions(organizationId: string, activeOnly?: boolean) {
+		return this.divisionFestivalService.listDivisions(
+			organizationId,
+			activeOnly,
+		);
 	}
-
-	async updateAccompanistDivisionPolicy(options: {
-		organizationId: string;
-		policy: import("@festival/common").AccompanistDivisionSelectionPolicy;
-	}) {
-		const updated =
-			await this.repository.updateAccompanistDivisionPolicy(options);
-		this.emitFestivalCatalogUpdated(options.organizationId);
-		return updated;
-	}
-
-	async listDivisions(organizationId: string, activeOnly?: boolean) {
-		return this.repository.listDivisions(organizationId, activeOnly);
-	}
-
 	async listPublicDivisions(organizationSlug: string) {
 		const organization =
 			await this.repository.findOrganizationBySlug(organizationSlug);
 		if (!organization) throw new AppError("Organization not found.", 404);
 		const [divisions, instruments] = await Promise.all([
-			this.repository.listDivisions(organization.id, true),
+			this.divisionFestivalService.listPublicDivisions(organization.id),
 			this.repository.listRegistrationCatalogValues(
 				organization.id,
 				"instrument",
@@ -305,11 +78,7 @@ export class OrganizationService {
 			),
 		]);
 		return {
-			divisions: divisions.map(({ id, displayName, displayOrder }) => ({
-				id,
-				displayName,
-				displayOrder,
-			})),
+			divisions,
 			instruments: instruments.map(({ id, displayName, displayOrder }) => ({
 				id,
 				displayName,
@@ -317,86 +86,26 @@ export class OrganizationService {
 			})),
 		};
 	}
-
-	async requireSelectableDivision(organizationId: string, divisionId: string) {
-		const division = (
-			await this.repository.listDivisions(organizationId, true)
-		).find((candidate) => candidate.id === divisionId);
-		if (!division) {
-			throw new AppError("Division is not available for a new purchase.", 400);
-		}
-		return division;
+	requireSelectableDivision(organizationId: string, divisionId: string) {
+		return this.divisionFestivalService.requireSelectableDivision(
+			organizationId,
+			divisionId,
+		);
 	}
-
-	async getRegistrationConfigurationForTenant(tenant: TenantContext) {
-		return {
-			ageConfiguration: await this.repository.getRegistrationAgeConfiguration(
-				tenant.organization.id,
-			),
-			classSubtypes: await this.repository.listRegistrationCatalogValues(
-				tenant.organization.id,
-				"class_subtype",
-			),
-			instruments: await this.repository.listRegistrationCatalogValues(
-				tenant.organization.id,
-				"instrument",
-			),
-		};
-	}
-
-	async updateRegistrationAgeDateForTenant(
-		tenant: TenantContext,
-		value: unknown,
-	) {
-		try {
-			const ageConfiguration =
-				await this.repository.updateRegistrationAgeConfiguration({
-					organizationId: tenant.organization.id,
-					registrationAgeDate: validateRegistrationAgeDate(value),
-				});
-			this.cacheInvalidator?.emit({
-				type: "RegistrationAgeConfigUpdated",
-				organizationId: tenant.organization.id,
-				slug: tenant.organization.slug,
-			});
-			return { ageConfiguration };
-		} catch (error) {
-			throw new AppError(
-				error instanceof Error
-					? error.message
-					: "Registration age date is invalid.",
-				400,
-			);
-		}
-	}
-
-	async createRegistrationCatalogValueForTenant(
+	createRegistrationCatalogValueForTenant(
 		tenant: TenantContext,
 		kind: "class_subtype" | "instrument",
 		value: unknown,
 		requiredSubtypeId?: unknown,
 	) {
-		const displayName = this.requireDivisionName(value);
-		const parsedRequiredSubtypeId = parseRequiredSubtypeId(requiredSubtypeId);
-		try {
-			const created = await this.repository.createRegistrationCatalogValue({
-				organizationId: tenant.organization.id,
-				kind,
-				displayName,
-				normalizedName: divisionNameUniquenessKey(displayName),
-				requiredSubtypeId: parsedRequiredSubtypeId,
-			});
-			this.emitFestivalCatalogUpdated(
-				tenant.organization.id,
-				tenant.organization.slug,
-			);
-			return { value: created };
-		} catch (error) {
-			handleCatalogRepositoryError(error);
-		}
+		return this.registrationCatalogService.createRegistrationCatalogValueForTenant(
+			tenant,
+			kind,
+			value,
+			requiredSubtypeId,
+		);
 	}
-
-	async updateRegistrationCatalogValueForTenant(
+	updateRegistrationCatalogValueForTenant(
 		tenant: TenantContext,
 		kind: "class_subtype" | "instrument",
 		id: string,
@@ -406,1107 +115,282 @@ export class OrganizationService {
 			requiredSubtypeId?: unknown;
 		},
 	) {
-		if (
-			!input ||
-			(input.displayName === undefined &&
-				input.isActive === undefined &&
-				input.requiredSubtypeId === undefined)
-		)
-			throw new AppError("Registration catalog update is required.", 400);
-		if (input.isActive !== undefined && typeof input.isActive !== "boolean")
-			throw new AppError(
-				"Registration catalog active state must be a boolean.",
-				400,
-			);
-		const requiredSubtypeId = parseRequiredSubtypeId(input.requiredSubtypeId);
-		const displayName =
-			input.displayName === undefined
-				? undefined
-				: this.requireDivisionName(input.displayName);
-		try {
-			const value = await this.repository.updateRegistrationCatalogValue({
-				organizationId: tenant.organization.id,
-				kind,
-				id,
-				displayName,
-				normalizedName:
-					displayName === undefined
-						? undefined
-						: divisionNameUniquenessKey(displayName),
-				isActive: input.isActive as boolean | undefined,
-				requiredSubtypeId,
-			});
-			if (!value)
-				throw new AppError("Registration catalog value not found.", 404);
-			this.emitFestivalCatalogUpdated(
-				tenant.organization.id,
-				tenant.organization.slug,
-			);
-			return { value };
-		} catch (error) {
-			handleCatalogRepositoryError(error);
-		}
+		return this.registrationCatalogService.updateRegistrationCatalogValueForTenant(
+			tenant,
+			kind,
+			id,
+			input,
+		);
 	}
-
-	async reorderRegistrationCatalogValuesForTenant(
+	reorderRegistrationCatalogValuesForTenant(
 		tenant: TenantContext,
 		kind: "class_subtype" | "instrument",
 		ids: unknown,
 	) {
-		if (
-			!Array.isArray(ids) ||
-			ids.some((id) => typeof id !== "string" || !id.trim())
-		)
-			throw new AppError("Registration catalog order is invalid.", 400);
-		try {
-			const values = await this.repository.reorderRegistrationCatalogValues(
-				tenant.organization.id,
-				kind,
-				ids,
-			);
-			this.emitFestivalCatalogUpdated(
-				tenant.organization.id,
-				tenant.organization.slug,
-			);
-			return { values };
-		} catch (error) {
-			throw new AppError(
-				error instanceof Error
-					? error.message
-					: "Registration catalog order is invalid.",
-				400,
-			);
-		}
+		return this.registrationCatalogService.reorderRegistrationCatalogValuesForTenant(
+			tenant,
+			kind,
+			ids,
+		);
 	}
-
-	async createDivisionForTenant(
+	createDivisionForTenant(
 		tenant: TenantContext,
 		input: CreateOrganizationDivisionInput,
 	) {
-		const displayName = this.requireDivisionName(input?.displayName);
-		await this.assertUniqueDivisionName(tenant.organization.id, displayName);
-		try {
-			const division = await this.repository.createDivision({
-				organizationId: tenant.organization.id,
-				displayName,
-				normalizedName: divisionNameUniquenessKey(displayName),
-			});
-			this.emitFestivalCatalogUpdated(
-				tenant.organization.id,
-				tenant.organization.slug,
-			);
-			return { division };
-		} catch (error) {
-			if (
-				error instanceof Error &&
-				error.message === "Division display name already exists."
-			) {
-				throw new AppError(error.message, 409);
-			}
-			throw error;
-		}
+		return this.divisionFestivalService.createDivisionForTenant(tenant, input);
 	}
-
-	async updateDivisionForTenant(
+	updateDivisionForTenant(
 		tenant: TenantContext,
 		divisionId: string,
 		input: UpdateOrganizationDivisionInput,
 	) {
-		if (!input || typeof input !== "object")
-			throw new AppError("Division update is required.", 400);
-		if (input.displayName === undefined && input.isActive === undefined) {
-			throw new AppError(
-				"Division update must include displayName or isActive.",
-				400,
-			);
-		}
-		if (input.isActive !== undefined && typeof input.isActive !== "boolean") {
-			throw new AppError("Division active state must be a boolean.", 400);
-		}
-		const displayName =
-			input.displayName === undefined
-				? undefined
-				: this.requireDivisionName(input.displayName);
-		if (displayName !== undefined) {
-			await this.assertUniqueDivisionName(
-				tenant.organization.id,
-				displayName,
-				divisionId,
-			);
-		}
-		let division: OrganizationDivision | null;
-		try {
-			division = await this.repository.updateDivision({
-				organizationId: tenant.organization.id,
-				divisionId,
-				displayName,
-				normalizedName:
-					displayName === undefined
-						? undefined
-						: divisionNameUniquenessKey(displayName),
-				isActive: input.isActive,
-			});
-		} catch (error) {
-			if (
-				error instanceof Error &&
-				error.message === "Division display name already exists."
-			) {
-				throw new AppError(error.message, 409);
-			}
-			throw error;
-		}
-		if (!division) throw new AppError("Division not found.", 404);
-		this.emitFestivalCatalogUpdated(
-			tenant.organization.id,
-			tenant.organization.slug,
+		return this.divisionFestivalService.updateDivisionForTenant(
+			tenant,
+			divisionId,
+			input,
 		);
-		return { division };
 	}
-
-	async reorderDivisionsForTenant(
+	reorderDivisionsForTenant(
 		tenant: TenantContext,
 		input: ReorderOrganizationDivisionsInput,
 	) {
-		if (
-			!input ||
-			!Array.isArray(input.divisionIds) ||
-			input.divisionIds.some((id) => typeof id !== "string")
-		) {
-			throw new AppError("divisionIds must be an array of division IDs.", 400);
-		}
-		try {
-			const divisions = await this.repository.reorderDivisions(
-				tenant.organization.id,
-				input.divisionIds,
-			);
-			this.emitFestivalCatalogUpdated(
-				tenant.organization.id,
-				tenant.organization.slug,
-			);
-			return { divisions };
-		} catch (error) {
-			if (
-				error instanceof Error &&
-				error.message ===
-					"Division order must contain every organization division exactly once."
-			) {
-				throw new AppError(error.message, 400);
-			}
-			throw error;
-		}
-	}
-
-	async getTimezoneForTenant(tenant: TenantContext) {
-		return {
-			timezone: await this.repository.getOrganizationTimezone(
-				tenant.organization.id,
-			),
-		};
-	}
-
-	async updateTimezoneForTenant(
-		tenant: TenantContext,
-		input: UpdateOrganizationTimezoneInput,
-	) {
-		if (!input || !isValidIanaTimezone(input.timezone)) {
-			throw new AppError(
-				"Organization timezone must be a valid IANA timezone.",
-				400,
-			);
-		}
-		const timezone = await this.repository.updateOrganizationTimezone(
-			tenant.organization.id,
-			input.timezone,
+		return this.divisionFestivalService.reorderDivisionsForTenant(
+			tenant,
+			input,
 		);
-		this.cacheInvalidator?.emit({
-			type: "OrgUpdated",
-			organizationId: tenant.organization.id,
-			slug: tenant.organization.slug,
-		});
-		return { timezone };
 	}
-
-	private requireDivisionName(value: unknown): string {
-		try {
-			return validateDivisionName(value);
-		} catch (error) {
-			throw new AppError(
-				error instanceof Error
-					? error.message
-					: "Invalid division display name.",
-				400,
-			);
-		}
+	listFestivalsForTenant(tenant: TenantContext) {
+		return this.divisionFestivalService.listFestivalsForTenant(tenant);
 	}
-
-	private async assertUniqueDivisionName(
-		organizationId: string,
-		displayName: string,
-		excludingId?: string,
-	): Promise<void> {
-		const key = divisionNameUniquenessKey(displayName);
-		const duplicate = (
-			await this.repository.listDivisions(organizationId)
-		).some(
-			(division) =>
-				division.id !== excludingId &&
-				divisionNameUniquenessKey(division.displayName) === key,
-		);
-		if (duplicate)
-			throw new AppError("Division display name already exists.", 409);
+	getPublicLanding(slug: string) {
+		return this.divisionFestivalService.getPublicLanding(slug);
 	}
-
-	async createInvite(
-		identity: AuthenticatedUser,
-		input: CreateInviteInput,
-	): Promise<CreateInviteResponse> {
-		if (!isOrganizationRole(input.role)) {
-			throw new AppError(`Unsupported role: ${input.role}`, 400);
-		}
-
-		const user = await this.repository.upsertUser({
-			...identity,
-			displayName: deriveDisplayName(identity),
-			email: identity.email.toLowerCase(),
-		});
-		const membership = await this.repository.findMembershipByUserAndSlug(
-			user.id,
-			input.organizationSlug,
-		);
-
-		if (!membership) {
-			throw new AppError("Organization membership not found.", 404);
-		}
-
-		if (membership.membership.role !== "Admin") {
-			throw new AppError("Only Admin members can invite users.", 403);
-		}
-
-		const invite = await this.repository.createInvite({
-			organizationId: membership.organization.id,
-			email: input.email.toLowerCase(),
-			role: input.role,
-			invitedByUserId: user.id,
-		});
-
-		return {
-			invite: toInviteSummary({
-				token: invite.token,
-				organization: membership.organization,
-				email: invite.email,
-				role: invite.role,
-				acceptedAtIso: invite.acceptedAtIso,
-			}),
-		};
+	createFestivalForTenant(tenant: TenantContext, input: CreateFestivalInput) {
+		return this.divisionFestivalService.createFestivalForTenant(tenant, input);
 	}
-
-	async createInviteForTenant(
-		tenant: TenantContext,
-		input: CreateInviteInput,
-	): Promise<CreateInviteResponse> {
-		if (!isOrganizationRole(input.role)) {
-			throw new AppError(`Unsupported role: ${input.role}`, 400);
-		}
-
-		if (input.organizationSlug !== tenant.organization.slug) {
-			throw new AppError("Organization access denied.", 403);
-		}
-
-		const normalizedEmail = input.email.trim().toLowerCase();
-		await this.assertUniqueAdminUserEmail(
-			tenant.organization.id,
-			normalizedEmail,
-		);
-
-		const invite = await this.repository.createInvite({
-			organizationId: tenant.organization.id,
-			email: normalizedEmail,
-			role: input.role,
-			invitedByUserId: tenant.user.id,
-		});
-
-		return {
-			invite: toInviteSummary({
-				token: invite.token,
-				organization: tenant.organization,
-				email: invite.email,
-				role: invite.role,
-				acceptedAtIso: invite.acceptedAtIso,
-			}),
-		};
-	}
-
-	async listAdminUsersForTenant(
-		tenant: TenantContext,
-	): Promise<OrganizationAdminUsersResponse> {
-		return {
-			users: await this.repository.listAdminUsers(
-				tenant.organization.id,
-				tenant.user.id,
-			),
-		};
-	}
-
-	async deleteMembershipForTenant(
-		tenant: TenantContext,
-		membershipId: string,
-	): Promise<{ status: "deleted" }> {
-		const users = await this.repository.listAdminUsers(
-			tenant.organization.id,
-			tenant.user.id,
-		);
-		const user = users.find(
-			(entry) => entry.status === "accepted" && entry.id === membershipId,
-		);
-		if (!user) {
-			throw new AppError("Membership not found.", 404);
-		}
-
-		if (user.isSelf) {
-			throw new AppError("Admins cannot delete their own membership.", 400);
-		}
-
-		await this.repository.deleteMembership({
-			organizationId: tenant.organization.id,
-			membershipId,
-			currentUserId: tenant.user.id,
-		});
-		return { status: "deleted" };
-	}
-
-	async cancelInviteForTenant(
-		tenant: TenantContext,
-		inviteId: string,
-	): Promise<{ status: "deleted" }> {
-		const users = await this.repository.listAdminUsers(
-			tenant.organization.id,
-			tenant.user.id,
-		);
-		const user = users.find(
-			(entry) => entry.status === "pending" && entry.id === inviteId,
-		);
-		if (!user) {
-			throw new AppError("Invite not found.", 404);
-		}
-
-		await this.repository.cancelInvite({
-			organizationId: tenant.organization.id,
-			inviteId,
-		});
-		return { status: "deleted" };
-	}
-
-	async listFestivalsForTenant(
-		tenant: TenantContext,
-	): Promise<OrganizationFestivalListResponse> {
-		return {
-			festivals: (
-				await this.repository.listFestivals(tenant.organization.id)
-			).map(toFestivalSummary),
-		};
-	}
-
-	async getPublicLanding(
-		organizationSlug: string,
-	): Promise<PublicOrganizationLandingResponse> {
-		const organization =
-			await this.repository.findOrganizationBySlug(organizationSlug);
-		if (!organization) throw new AppError("Organization not found.", 404);
-
-		const today = new Date().toISOString().slice(0, 10);
-		const festivals = (await this.repository.listFestivals(organization.id))
-			.filter((festival) => festival.endDate >= today)
-			.sort((left, right) => left.startDate.localeCompare(right.startDate))
-			.map(toFestivalSummary);
-
-		return {
-			organization: { name: organization.name, slug: organization.slug },
-			festivals,
-			features: { dropTransfer: Boolean(this.options?.enableDropTransfer) },
-		};
-	}
-
-	private async requireOrganizationById(
-		organizationId: string,
-	): Promise<OrganizationRecord | null> {
-		return this.repository.findOrganizationById(organizationId);
-	}
-
-	async createFestivalForTenant(
-		tenant: TenantContext,
-		input: CreateFestivalInput,
-	): Promise<CreateFestivalResponse> {
-		const nameValidation = validateFestivalName(input.name);
-		const dateValidation = validateFestivalDates(input);
-		const shortNameValidation = validateOrganizationShortName(input.shortName);
-		const errors = [
-			...nameValidation.errors,
-			...dateValidation.errors,
-			...shortNameValidation.errors,
-		];
-		if (errors.length > 0) {
-			throw new AppError(errors.join(" "), 400);
-		}
-
-		const organization =
-			(await this.requireOrganizationById(tenant.organization.id)) ??
-			tenant.organization;
-		const windowValidation = validateFestivalRegistrationWindow(
-			{
-				registrationOpensAt: input.registrationOpensAt,
-				registrationClosesAt: input.registrationClosesAt,
-			},
-			organization.timezone,
-		);
-		if (!windowValidation.isValid) {
-			throw new AppError(
-				windowValidation.errors[0] ?? "Registration window is invalid.",
-				400,
-				"invalid_registration_window",
-			);
-		}
-
-		const existingFestival = await this.repository.findFestivalByName(
-			tenant.organization.id,
-			nameValidation.normalized,
-		);
-		if (existingFestival) {
-			throw new AppError("Festival name is already registered.", 409);
-		}
-		if (
-			await this.repository.findFestivalByShortName(
-				tenant.organization.id,
-				shortNameValidation.normalized,
-			)
-		) {
-			throw new AppError("Festival short name is already registered.", 409);
-		}
-
-		const id = randomUUID();
-		const festival = await this.repository.createFestival({
-			id,
-			organizationId: tenant.organization.id,
-			code: deriveFestivalCode(id),
-			shortName: shortNameValidation.normalized,
-			name: nameValidation.normalized,
-			startDate: dateValidation.startDate,
-			endDate: dateValidation.endDate,
-			registrationOpensAt: windowValidation.opensAtIso,
-			registrationClosesAt: windowValidation.closesAtIso,
-		});
-		this.emitFestivalCatalogUpdated(
-			tenant.organization.id,
-			tenant.organization.slug,
-			festival.id,
-		);
-
-		return {
-			festival: toFestivalSummary(festival),
-		};
-	}
-
-	async updateFestivalRegistrationWindowForTenant(
+	updateFestivalRegistrationWindowForTenant(
 		tenant: TenantContext,
 		festivalShortName: string,
 		input: UpdateFestivalRegistrationWindowInput,
-	): Promise<CreateFestivalResponse> {
-		if (!input || typeof input !== "object" || Array.isArray(input)) {
-			throw new AppError(
-				"Registration window update payload is required.",
-				400,
-				"invalid_registration_window",
-			);
-		}
-		const festival = await this.repository.findFestivalByShortName(
-			tenant.organization.id,
+	) {
+		return this.divisionFestivalService.updateFestivalRegistrationWindowForTenant(
+			tenant,
+			festivalShortName,
+			input,
+		);
+	}
+	getPrimaryFestivalPath(slug: string) {
+		return this.divisionFestivalService.getPrimaryFestivalPath(slug);
+	}
+	getPublicFestival(organizationSlug: string, festivalShortName: string) {
+		return this.divisionFestivalService.getPublicFestival(
+			organizationSlug,
 			festivalShortName,
 		);
-		if (!festival) throw new AppError("Festival not found.", 404);
-
-		const organization =
-			(await this.requireOrganizationById(tenant.organization.id)) ??
-			tenant.organization;
-		const validation = validateFestivalRegistrationWindow(
-			{
-				registrationOpensAt: input.registrationOpensAt,
-				registrationClosesAt: input.registrationClosesAt,
-			},
-			organization.timezone,
-		);
-		if (!validation.isValid) {
-			throw new AppError(
-				validation.errors[0] ?? "Registration window is invalid.",
-				400,
-				"invalid_registration_window",
-			);
-		}
-
-		const updated = await this.repository.updateFestivalRegistrationWindow(
-			tenant.organization.id,
-			festival.id,
-			{
-				registrationOpensAt: validation.opensAtIso,
-				registrationClosesAt: validation.closesAtIso,
-			},
-		);
-		this.emitFestivalCatalogUpdated(
-			tenant.organization.id,
-			tenant.organization.slug,
-			updated.id,
-		);
-		return { festival: toFestivalSummary(updated) };
 	}
-
-	async getPrimaryFestivalPath(
-		slug: string,
-	): Promise<{ status: 301 | 404; path: string }> {
-		const organization = await this.repository.findOrganizationBySlug(slug);
-		if (!organization) throw new AppError("Organization not found.", 404);
-		const primary = (await this.repository.listFestivals(organization.id)).find(
-			(festival) => festival.isPrimary,
-		);
-		return primary
-			? {
-					status: 301,
-					path: `/org/${organization.slug}/festival/${primary.shortName}`,
-				}
-			: { status: 404, path: "" };
-	}
-
-	async getPublicFestival(
-		organizationSlug: string,
-		festivalShortName: string,
-	): Promise<CreateFestivalResponse> {
-		const organization =
-			await this.repository.findOrganizationBySlug(organizationSlug);
-		if (!organization) throw new AppError("Organization not found.", 404);
-
-		const festival = await this.repository.findFestivalByShortName(
-			organization.id,
+	getAdminFestivalForTenant(tenant: TenantContext, festivalShortName: string) {
+		return this.divisionFestivalService.getAdminFestivalForTenant(
+			tenant,
 			festivalShortName,
 		);
-		if (!festival) throw new AppError("Festival not found.", 404);
-
-		return { festival: toFestivalSummary(festival) };
 	}
-
-	async getAdminFestivalForTenant(
-		tenant: TenantContext,
-		festivalShortName: string,
-	): Promise<CreateFestivalResponse> {
-		const festival = await this.repository.findFestivalByShortName(
-			tenant.organization.id,
-			festivalShortName,
-		);
-		if (!festival) throw new AppError("Festival not found.", 404);
-
-		return { festival: toFestivalSummary(festival) };
-	}
-
-	async setPrimaryFestivalForTenant(
-		tenant: TenantContext,
-		shortName: string,
-	): Promise<CreateFestivalResponse> {
-		const festival = await this.repository.findFestivalByShortName(
-			tenant.organization.id,
+	setPrimaryFestivalForTenant(tenant: TenantContext, shortName: string) {
+		return this.divisionFestivalService.setPrimaryFestivalForTenant(
+			tenant,
 			shortName,
 		);
-		if (!festival) throw new AppError("Festival not found.", 404);
-		const updated = await this.repository.setPrimaryFestival(
-			tenant.organization.id,
-			festival.id,
-		);
-		this.emitFestivalCatalogUpdated(
-			tenant.organization.id,
-			tenant.organization.slug,
-			updated.id,
-		);
-		return {
-			festival: toFestivalSummary(updated),
-		};
 	}
-
-	async listFestivalClasses(
-		orgSlug: string,
-		festivalShortName: string,
-	): Promise<FestivalClassConfiguration[]> {
-		if (this.adminClassCatalogService) {
-			return this.adminClassCatalogService.listClasses(
-				orgSlug,
-				festivalShortName,
-			);
-		}
-
-		const organization = await this.repository.findOrganizationBySlug(orgSlug);
-		if (!organization) throw new AppError("Organization not found.", 404);
-
-		const festival = await this.repository.findFestivalByShortName(
-			organization.id,
+	listFestivalClasses(orgSlug: string, festivalShortName: string) {
+		return this.registrationCatalogService.listFestivalClasses(
+			orgSlug,
 			festivalShortName,
 		);
-		if (!festival) throw new AppError("Festival not found.", 404);
-
-		return this.repository.listFestivalClassConfigurations(
-			organization.id,
-			festival.id,
-		);
 	}
-
-	async listFestivalClassSubtypesForTenant(
+	listFestivalClassSubtypesForTenant(
 		tenant: TenantContext,
 		festivalShortName: string,
 	) {
-		const festival = await this.repository.findFestivalByShortName(
-			tenant.organization.id,
+		return this.registrationCatalogService.listFestivalClassSubtypesForTenant(
+			tenant,
 			festivalShortName,
 		);
-		if (!festival) throw new AppError("Festival not found.", 404);
-		return {
-			classSubtypes: await this.repository.listFestivalClassSubtypes(
-				tenant.organization.id,
-				festival.id,
-			),
-		};
 	}
-
-	async createFestivalClassSubtypeForTenant(
+	createFestivalClassSubtypeForTenant(
 		tenant: TenantContext,
 		festivalShortName: string,
 		value: unknown,
 		requiredSubtypeId?: unknown,
 	) {
-		const festival = await this.repository.findFestivalByShortName(
-			tenant.organization.id,
+		return this.registrationCatalogService.createFestivalClassSubtypeForTenant(
+			tenant,
 			festivalShortName,
+			value,
+			requiredSubtypeId,
 		);
-		if (!festival) throw new AppError("Festival not found.", 404);
-		const displayName = this.requireDivisionName(value);
-		const normalizedName = divisionNameUniquenessKey(displayName);
-		const parsedRequiredSubtypeId = parseRequiredSubtypeId(requiredSubtypeId);
-		const existing = (
-			await this.repository.listRegistrationCatalogValues(
-				tenant.organization.id,
-				"class_subtype",
-			)
-		).find(
-			(candidate) =>
-				divisionNameUniquenessKey(candidate.displayName) === normalizedName,
+	}
+	createFestivalClass(
+		orgSlug: string,
+		festivalShortName: string,
+		input: Parameters<RegistrationCatalogService["createFestivalClass"]>[2],
+		actorUid?: string,
+	) {
+		return this.registrationCatalogService.createFestivalClass(
+			orgSlug,
+			festivalShortName,
+			input,
+			actorUid,
 		);
-		try {
-			const created =
-				existing ??
-				(await this.repository.createRegistrationCatalogValue({
-					organizationId: tenant.organization.id,
-					kind: "class_subtype",
-					displayName,
-					normalizedName,
-					requiredSubtypeId: parsedRequiredSubtypeId,
-				}));
-			await this.repository.associateFestivalClassSubtype({
-				organizationId: tenant.organization.id,
-				festivalId: festival.id,
-				classSubtypeId: created.id,
-			});
-			this.emitFestivalCatalogUpdated(
-				tenant.organization.id,
-				tenant.organization.slug,
-				festival.id,
-			);
-			return { value: created };
-		} catch (error) {
-			handleCatalogRepositoryError(error);
-		}
+	}
+	updateFestivalClass(
+		orgSlug: string,
+		festivalShortName: string,
+		classId: string,
+		input: unknown,
+		actorUid?: string,
+	) {
+		return this.registrationCatalogService.updateFestivalClass(
+			orgSlug,
+			festivalShortName,
+			classId,
+			input,
+			actorUid,
+		);
+	}
+}
+
+/** Compatibility facade delegating OrganizationService calls to S09 domain services. */
+export class OrganizationService extends OrganizationCatalogServiceFacade {
+	private readonly tenantOrgService: TenantOrganizationService;
+	private readonly staffInviteService: OrganizationStaffInviteService;
+	private readonly ageConfigService: OrganizationAgeConfigService;
+	private readonly roomService: RoomService;
+
+	constructor(
+		repository: OrganizationRepository,
+		adminClassCatalogService?: AdminClassCatalogService,
+		options?: { enableDropTransfer?: boolean },
+		roomRepository?: RoomRepository,
+		commerce?: Pick<
+			MembershipCommerceRepository,
+			"countConfirmedClassEntitlements"
+		>,
+	) {
+		super(repository, adminClassCatalogService, options, commerce);
+		this.tenantOrgService = new TenantOrganizationService(
+			repository,
+			repository,
+			options,
+		);
+		this.staffInviteService = new OrganizationStaffInviteService(repository);
+		this.ageConfigService = new OrganizationAgeConfigService(repository);
+		this.roomService = new RoomService(roomRepository, repository);
 	}
 
-	async listRoomsForTenant(tenant: TenantContext, festivalShortName: string) {
-		if (!this.roomRepository) {
-			throw new AppError("Rooms are unavailable.", 503);
-		}
-		const festival = await this.repository.findFestivalByShortName(
-			tenant.organization.id,
-			festivalShortName,
-		);
-		if (!festival) throw new AppError("Festival not found.", 404);
-		return {
-			rooms: await this.roomRepository.listRooms(
+	bindCacheInvalidator(invalidator: DomainCacheInvalidator): void {
+		this.tenantOrgService.bindCacheInvalidator(invalidator);
+		this.ageConfigService.bindCacheInvalidator(invalidator);
+		this.divisionFestivalService.bindCacheInvalidator(invalidator);
+		this.registrationCatalogService.bindCacheInvalidator(invalidator);
+	}
+
+	getSession(identity?: AuthenticatedUser) {
+		return this.tenantOrgService.getSession(identity);
+	}
+	listMemberships(identity: AuthenticatedUser) {
+		return this.tenantOrgService.listMemberships(identity);
+	}
+	createOrganization(
+		identity: AuthenticatedUser,
+		input: CreateOrganizationInput,
+	) {
+		return this.tenantOrgService.createOrganization(identity, input);
+	}
+	getAccompanistDivisionPolicy(organizationId: string) {
+		return this.tenantOrgService.getAccompanistDivisionPolicy(organizationId);
+	}
+	updateAccompanistDivisionPolicy(
+		options: Parameters<
+			TenantOrganizationService["updateAccompanistDivisionPolicy"]
+		>[0],
+	) {
+		return this.tenantOrgService.updateAccompanistDivisionPolicy(options);
+	}
+	async getRegistrationConfigurationForTenant(tenant: TenantContext) {
+		const [ageConfig, catalogConfig] = await Promise.all([
+			this.ageConfigService.getRegistrationConfigurationForTenant(tenant),
+			this.registrationCatalogService.listRegistrationCatalogConfiguration(
 				tenant.organization.id,
-				festival.id,
 			),
-		};
+		]);
+		return { ...ageConfig, ...catalogConfig };
 	}
-
-	async createRoomForTenant(
+	updateRegistrationAgeDateForTenant(tenant: TenantContext, value: unknown) {
+		return this.ageConfigService.updateRegistrationAgeDateForTenant(
+			tenant,
+			value,
+		);
+	}
+	getTimezoneForTenant(tenant: TenantContext) {
+		return this.tenantOrgService.getTimezoneForTenant(tenant);
+	}
+	updateTimezoneForTenant(
+		tenant: TenantContext,
+		input: UpdateOrganizationTimezoneInput,
+	) {
+		return this.tenantOrgService.updateTimezoneForTenant(tenant, input);
+	}
+	createInvite(identity: AuthenticatedUser, input: CreateInviteInput) {
+		return this.staffInviteService.createInvite(identity, input);
+	}
+	createInviteForTenant(tenant: TenantContext, input: CreateInviteInput) {
+		return this.staffInviteService.createInviteForTenant(tenant, input);
+	}
+	listAdminUsersForTenant(tenant: TenantContext) {
+		return this.staffInviteService.listAdminUsersForTenant(tenant);
+	}
+	deleteMembershipForTenant(tenant: TenantContext, membershipId: string) {
+		return this.staffInviteService.deleteMembershipForTenant(
+			tenant,
+			membershipId,
+		);
+	}
+	cancelInviteForTenant(tenant: TenantContext, inviteId: string) {
+		return this.staffInviteService.cancelInviteForTenant(tenant, inviteId);
+	}
+	listRoomsForTenant(tenant: TenantContext, festivalShortName: string) {
+		return this.roomService.listRoomsForTenant(tenant, festivalShortName);
+	}
+	createRoomForTenant(
 		tenant: TenantContext,
 		festivalShortName: string,
 		payload: unknown,
 	) {
-		if (!this.roomRepository) {
-			throw new AppError("Rooms are unavailable.", 503);
-		}
-		const festival = await this.repository.findFestivalByShortName(
-			tenant.organization.id,
+		return this.roomService.createRoomForTenant(
+			tenant,
 			festivalShortName,
+			payload,
 		);
-		if (!festival) throw new AppError("Festival not found.", 404);
-		const validated = validateCreateRoomInput(payload);
-		if (!validated.valid || !validated.data) {
-			throw new AppError(validated.errors.join(" "), 400);
-		}
-		return this.roomRepository.createRoom({
-			organizationId: tenant.organization.id,
-			festivalId: festival.id,
-			...validated.data,
-		});
 	}
-
-	async createFestivalClass(
-		orgSlug: string,
-		festivalShortName: string,
-		input: Omit<
-			CreateFestivalClassConfigurationInput,
-			"organizationId" | "festivalId"
-		>,
-		actorUid?: string,
-	): Promise<FestivalClassConfiguration> {
-		if (this.adminClassCatalogService) {
-			const created = await this.adminClassCatalogService.createClass(
-				orgSlug,
-				festivalShortName,
-				input,
-				actorUid,
-			);
-			this.emitFestivalCatalogUpdated(
-				created.organizationId,
-				orgSlug,
-				created.festivalId,
-			);
-			return created;
-		}
-
-		const organization = await this.repository.findOrganizationBySlug(orgSlug);
-		if (!organization) throw new AppError("Organization not found.", 404);
-
-		const festival = await this.repository.findFestivalByShortName(
-			organization.id,
-			festivalShortName,
-		);
-		if (!festival) throw new AppError("Festival not found.", 404);
-
-		const validated = validateCreateClassInput(input);
-
-		if (validated.divisionId) {
-			const divisions = await this.repository.listDivisions(organization.id);
-			const exists = divisions.some((d) => d.id === validated.divisionId);
-			if (!exists) throw new AppError("Division not found.", 404);
-		}
-
-		if (validated.classSubtypeId) {
-			const subtypes = await this.repository.listFestivalClassSubtypes(
-				organization.id,
-				festival.id,
-			);
-			const exists = subtypes.some((s) => s.id === validated.classSubtypeId);
-			if (!exists) throw new AppError("Class subtype not found.", 404);
-		}
-
-		const created =
-			await this.repository.createFestivalClassConfigurationWithCapacityAudit(
-				{
-					...input,
-					...validated,
-					organizationId: organization.id,
-					festivalId: festival.id,
-					maximumPerformancePieces: validated.maximumPerformancePieces ?? 1,
-					capacity: validated.capacity ?? DEFAULT_FESTIVAL_CLASS_CAPACITY,
-					shopifyProductGid:
-						validated.shopifyProductGid ?? input.shopifyProductGid,
-					shopifyVariantGid:
-						validated.shopifyVariantGid ?? input.shopifyVariantGid,
-				},
-				actorUid,
-			);
-		this.emitFestivalCatalogUpdated(
-			created.organizationId,
-			orgSlug,
-			created.festivalId,
-		);
-		return created;
+	getInvite(token: string) {
+		return this.staffInviteService.getInvite(token);
 	}
-
-	async updateFestivalClass(
-		orgSlug: string,
-		festivalShortName: string,
-		classId: string,
-		input: Omit<
-			UpdateFestivalClassConfigurationInput,
-			"id" | "organizationId" | "festivalId"
-		>,
-		actorUid?: string,
-	): Promise<FestivalClassConfiguration> {
-		if (this.adminClassCatalogService) {
-			const updated = await this.adminClassCatalogService.updateClass(
-				orgSlug,
-				festivalShortName,
-				classId,
-				input,
-				actorUid,
-			);
-			this.emitFestivalCatalogUpdated(
-				updated.organizationId,
-				orgSlug,
-				updated.festivalId,
-			);
-			return updated;
-		}
-
-		const organization = await this.repository.findOrganizationBySlug(orgSlug);
-		if (!organization) throw new AppError("Organization not found.", 404);
-
-		const festival = await this.repository.findFestivalByShortName(
-			organization.id,
-			festivalShortName,
-		);
-		if (!festival) throw new AppError("Festival not found.", 404);
-
-		const validated = validateUpdateClassInput(input);
-		const existing = await this.repository.findFestivalClassConfigurationById(
-			organization.id,
-			festival.id,
-			classId,
-		);
-		if (!existing) {
-			throw new AppError("Festival class configuration not found.", 404);
-		}
-		const effectiveMin = validated.minimumAge ?? existing.minimumAge;
-		const effectiveMax = validated.maximumAge ?? existing.maximumAge;
-		if (effectiveMax < effectiveMin) {
-			throw new AppError(
-				"Maximum age must be greater than or equal to minimum age.",
-				400,
-			);
-		}
-
-		try {
-			const commerce = this.commerce;
-			const updated =
-				await this.repository.updateFestivalClassConfigurationWithCapacityAudit(
-					{
-						...validated,
-						id: classId,
-						organizationId: organization.id,
-						festivalId: festival.id,
-					},
-					actorUid,
-					commerce
-						? () =>
-								commerce.countConfirmedClassEntitlements(
-									organization.id,
-									classId,
-								)
-						: undefined,
-				);
-			this.emitFestivalCatalogUpdated(
-				updated.organizationId,
-				orgSlug,
-				updated.festivalId,
-			);
-			return updated;
-		} catch (error) {
-			if (
-				error instanceof Error &&
-				error.message === "Festival class configuration not found."
-			) {
-				throw new AppError(error.message, 404);
-			}
-			throw error;
-		}
-	}
-
-	async getInvite(token: string): Promise<{ invite: InviteSummary }> {
-		const invite = await this.repository.findInviteByToken(token);
-		if (!invite) {
-			throw new AppError("Invite not found.", 404);
-		}
-
-		return {
-			invite: toInviteSummary({
-				token: invite.invite.token,
-				organization: invite.organization,
-				email: invite.invite.email,
-				role: invite.invite.role,
-				acceptedAtIso: invite.invite.acceptedAtIso,
-			}),
-		};
-	}
-
-	async acceptInvite(
+	acceptInvite(
 		identity: AuthenticatedUser,
 		token: string,
 		input: AcceptInviteInput,
-	): Promise<AcceptInviteResponse> {
-		const invite = await this.repository.findInviteByToken(token);
-		if (!invite) {
-			throw new AppError("Invite not found.", 404);
-		}
-
-		if (invite.invite.email.toLowerCase() !== identity.email.toLowerCase()) {
-			throw new AppError(
-				"Invite email does not match the authenticated user.",
-				403,
-			);
-		}
-
-		const user = await this.repository.upsertUser({
-			uid: identity.uid,
-			email: identity.email.toLowerCase(),
-			displayName: deriveDisplayName({
-				email: identity.email,
-				displayName: identity.displayName,
-				name: input.name,
-			}),
-		});
-
-		const existingMembership =
-			await this.repository.findMembershipByUserAndSlug(
-				user.id,
-				invite.organization.slug,
-			);
-
-		if (invite.invite.acceptedAtIso) {
-			throw new AppError("Invite has already been accepted.", 409);
-		}
-
-		let membership = existingMembership?.membership;
-		if (!membership) {
-			membership = await this.repository.createMembership({
-				organizationId: invite.organization.id,
-				userId: user.id,
-				role: invite.invite.role,
-				origin: "invite",
-			});
-		}
-
-		await this.repository.markInviteAccepted(token);
-
-		return {
-			organization: invite.organization,
-			membership: toSessionMembership({
-				membership,
-				organization: invite.organization,
-			}),
-		};
+	) {
+		return this.staffInviteService.acceptInvite(identity, token, input);
 	}
-
-	async getOrganizationLanding(
-		identity: AuthenticatedUser,
-		slug: string,
-	): Promise<OrganizationLandingResponse> {
-		const user = await this.repository.upsertUser({
-			...identity,
-			displayName: deriveDisplayName(identity),
-			email: identity.email.toLowerCase(),
-		});
-		const membership = await this.repository.findMembershipByUserAndSlug(
-			user.id,
-			slug,
-		);
-
-		if (!membership) {
-			throw new AppError("Organization membership not found.", 404);
-		}
-
-		return {
-			organization: membership.organization,
-			membership: toSessionMembership(membership),
-			features: { dropTransfer: Boolean(this.options?.enableDropTransfer) },
-		};
+	getOrganizationLanding(identity: AuthenticatedUser, slug: string) {
+		return this.tenantOrgService.getOrganizationLanding(identity, slug);
 	}
-
-	getOrganizationLandingForTenant(
-		tenant: TenantContext,
-	): OrganizationLandingResponse {
-		return {
-			organization: tenant.organization,
-			membership: toSessionMembership({
-				membership: tenant.membership,
-				organization: tenant.organization,
-			}),
-			features: { dropTransfer: Boolean(this.options?.enableDropTransfer) },
-		};
+	getOrganizationLandingForTenant(tenant: TenantContext) {
+		return this.tenantOrgService.getOrganizationLandingForTenant(tenant);
 	}
-
-	async dismissWelcome(
-		identity: AuthenticatedUser,
-		slug: string,
-	): Promise<DismissWelcomeResponse> {
-		const user = await this.repository.upsertUser({
-			...identity,
-			displayName: deriveDisplayName(identity),
-			email: identity.email.toLowerCase(),
-		});
-		const membership = await this.repository.findMembershipByUserAndSlug(
-			user.id,
-			slug,
-		);
-
-		if (!membership) {
-			throw new AppError("Organization membership not found.", 404);
-		}
-
-		if (membership.membership.origin !== "invite") {
-			return {
-				membership: toSessionMembership(membership),
-			};
-		}
-
-		const updatedMembership = await this.repository.dismissWelcome(
-			user.id,
-			membership.organization.id,
-		);
-
-		return {
-			membership: toSessionMembership({
-				membership: updatedMembership,
-				organization: membership.organization,
-			}),
-		};
+	dismissWelcome(identity: AuthenticatedUser, slug: string) {
+		return this.tenantOrgService.dismissWelcome(identity, slug);
 	}
-
-	async dismissWelcomeForTenant(
-		tenant: TenantContext,
-	): Promise<DismissWelcomeResponse> {
-		if (tenant.membership.origin !== "invite") {
-			return {
-				membership: toSessionMembership({
-					membership: tenant.membership,
-					organization: tenant.organization,
-				}),
-			};
-		}
-
-		const updatedMembership = await this.repository.dismissWelcome(
-			tenant.user.id,
-			tenant.organization.id,
-		);
-
-		return {
-			membership: toSessionMembership({
-				membership: updatedMembership,
-				organization: tenant.organization,
-			}),
-		};
-	}
-
-	private async assertUniqueAdminUserEmail(
-		organizationId: string,
-		email: string,
-	): Promise<void> {
-		const users = await this.repository.listAdminUsers(organizationId, "");
-		const exists = users.some(
-			(user) => user.email.toLowerCase() === email.toLowerCase(),
-		);
-		if (exists) {
-			throw new AppError("That email has already been added.", 409);
-		}
+	dismissWelcomeForTenant(tenant: TenantContext) {
+		return this.tenantOrgService.dismissWelcomeForTenant(tenant);
 	}
 }

@@ -3,15 +3,23 @@ import { AppError } from "@festival/common";
 import { sql } from "bun";
 import { PostgresOrganizationRepository } from "../src/repo/postgres-organization-repository.js";
 
-async function source() {
+async function source(
+	relativePath = "../src/repo/postgres-organization-repository.ts",
+) {
 	return (
-		await Bun.file(
-			new URL(
-				"../src/repo/postgres-organization-repository.ts",
-				import.meta.url,
-			),
-		).text()
+		await Bun.file(new URL(relativePath, import.meta.url)).text()
 	).replace(/\r\n/g, "\n");
+}
+
+function normalizeSql(query: unknown): string {
+	return String(query).replace(/\s+/g, " ").trim();
+}
+
+function normalizedCalls(spy: ReturnType<typeof spyOn>) {
+	return (spy.mock.calls as Array<[unknown, unknown]>).map(([q, p]) => [
+		normalizeSql(q),
+		p,
+	]);
 }
 
 const mockRow = {
@@ -56,7 +64,9 @@ const expectedClassConfig = {
 
 describe("PostgresOrganizationRepository", () => {
 	it("binds every festival column and makes the first festival primary", async () => {
-		const value = await source();
+		const value = await source(
+			"../src/domains/catalog-repertoire/division-festival-repository.ts",
+		);
 		const createFestival = value.slice(
 			value.indexOf("async createFestival("),
 			value.indexOf("async findFestivalByName("),
@@ -65,11 +75,13 @@ describe("PostgresOrganizationRepository", () => {
 		expect(createFestival).toContain("is_primary,");
 		expect(createFestival).toContain("NOT EXISTS (");
 		expect(createFestival).toContain("WHERE organization_id = $2");
-		expect(createFestival).toContain("$5,\n\t\t\t\t\t$6,\n\t\t\t\t\t$7");
+		expect(createFestival).toContain("$5, $6::date, $7::date");
 	});
 
 	it("does not add festival values to the invite insert", async () => {
-		const value = await source();
+		const value = await source(
+			"../src/domains/tenant-org/app-user-membership-repository.ts",
+		);
 		const createInvite = value.slice(
 			value.indexOf("async createInvite("),
 			value.indexOf("async findInviteByToken("),
@@ -80,22 +92,29 @@ describe("PostgresOrganizationRepository", () => {
 	});
 
 	it("retries accompanist cohort contention and returns a typed conflict", async () => {
-		const value = await source();
-		const createGrant = value.slice(
-			value.indexOf("async createAccompanistMembershipGrant("),
-			value.indexOf("async listAccompanistMembershipGrants("),
+		const delegate = await source(
+			"../src/repo/postgres-membership-grant-delegate.ts",
+		);
+		const helpers = await source(
+			"../src/repo/postgres-membership-grant-helpers.ts",
+		);
+		const createGrant = delegate.slice(
+			delegate.indexOf("async createAccompanistMembershipGrant("),
+			delegate.indexOf("async findCurrentAccompanistMembershipGrant("),
 		);
 
 		expect(createGrant).toContain("attempt < 2");
 		expect(createGrant).toContain("AccompanistMembershipCohortContentionError");
 		expect(createGrant).toContain("attempt === 0");
 		expect(createGrant).toContain("new AccompanistMembershipConflictError()");
-		expect(createGrant).toContain("RETURNING customer_id");
-		expect(value).toContain("unique|duplicate|exclusion");
+		expect(helpers).toContain("RETURNING customer_id");
+		expect(helpers).toContain("unique|duplicate|exclusion");
 	});
 
 	it("persists the write_inventory verification capability", async () => {
-		const value = await source();
+		const value = await source(
+			"../src/repo/postgres-shopify-integration-delegate.ts",
+		);
 
 		expect(value).toContain("can_write_inventory");
 		expect(value).toContain(
@@ -127,12 +146,13 @@ describe("PostgresOrganizationRepository", () => {
 			);
 
 			expect(result).toBeNull();
-			expect(unsafeSpy).toHaveBeenCalledWith(
+			const calls = normalizedCalls(unsafeSpy);
+			expect(calls).toContainEqual([
 				expect.stringContaining(
-					"SELECT * FROM test_schema.festival_class_configurations WHERE organization_id = $1 AND festival_id = $2 AND id = $3 LIMIT 1",
+					"FROM test_schema.festival_class_configurations WHERE organization_id = $1 AND festival_id = $2 AND id = $3 LIMIT 1",
 				),
 				["org-1", "fest-1", "non-existent"],
-			);
+			]);
 		});
 
 		it("returns correct record when found", async () => {
@@ -145,12 +165,13 @@ describe("PostgresOrganizationRepository", () => {
 			);
 
 			expect(result).toEqual(expectedClassConfig);
-			expect(unsafeSpy).toHaveBeenCalledWith(
+			const calls = normalizedCalls(unsafeSpy);
+			expect(calls).toContainEqual([
 				expect.stringContaining(
-					"SELECT * FROM test_schema.festival_class_configurations WHERE organization_id = $1 AND festival_id = $2 AND id = $3 LIMIT 1",
+					"FROM test_schema.festival_class_configurations WHERE organization_id = $1 AND festival_id = $2 AND id = $3 LIMIT 1",
 				),
 				["org-1", "fest-1", "class-1"],
-			);
+			]);
 		});
 
 		it("propagates unexpected database errors", async () => {
@@ -177,15 +198,17 @@ describe("PostgresOrganizationRepository", () => {
 				);
 				expect(result).toEqual(expectedClassConfig);
 				expect(unsafeSpy).toHaveBeenCalledTimes(1);
-				const [query, params] = unsafeSpy.mock.calls[0] as [string, unknown[]];
-				expect(query).toContain("INNER JOIN test_schema.festivals f");
+				const [rawQuery, params] = unsafeSpy.mock.calls[0] as [
+					string,
+					unknown[],
+				];
+				const query = normalizeSql(rawQuery);
+				expect(query).toContain("JOIN test_schema.festivals f");
 				expect(query).toContain("c.organization_id = $1");
-				expect(query).toContain(
-					"LOWER(BTRIM(f.short_name)) = LOWER(BTRIM($2))",
-				);
-				expect(query).toContain("c.id = $3 AND c.is_active");
-				expect(query).toContain("f.id = $4");
-				expect(params).toEqual(["org-1", " PNW2026 ", "class-1", "fest-1"]);
+				expect(query).toContain("LOWER(f.short_name) = LOWER($2)");
+				expect(query).toContain("c.id = $3 AND c.is_active = TRUE");
+				expect(query).toContain("c.festival_id = $4");
+				expect(params).toEqual(["org-1", "PNW2026", "class-1", "fest-1"]);
 			} finally {
 				unsafeSpy.mockRestore();
 				readySpy.mockRestore();
@@ -354,10 +377,12 @@ describe("PostgresOrganizationRepository", () => {
 		});
 
 		it("confirms source SQL does not update division_id or class_subtype_id in SET clause", async () => {
-			const value = await source();
+			const value = await source(
+				"../src/domains/catalog-repertoire/registration-catalog-helpers.ts",
+			);
 			const updateFn = value.slice(
-				value.indexOf("async updateFestivalClassConfiguration("),
-				value.indexOf("async findFestivalClassConfigurationById("),
+				value.indexOf("export async function updateFestivalClassRow("),
+				value.indexOf("export async function insertCapacityAuditRow("),
 			);
 			const setClause = updateFn.slice(
 				updateFn.indexOf("SET"),
@@ -580,12 +605,13 @@ describe("PostgresOrganizationRepository", () => {
 				status: "active",
 				createdAtIso: "2026-01-01T00:00:00.000Z",
 			});
-			expect(unsafeSpy).toHaveBeenCalledWith(
+			const calls = normalizedCalls(unsafeSpy);
+			expect(calls).toContainEqual([
 				expect.stringContaining(
 					"WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class='teacher_membership' AND ed.division_id=$3 AND e.revoked_at IS NULL AND (e.superseded_on IS NULL OR e.superseded_on > (NOW() AT TIME ZONE o.timezone)::date) AND e.starts_on <= (NOW() AT TIME ZONE o.timezone)::date AND e.ends_on > (NOW() AT TIME ZONE o.timezone)::date ORDER BY e.created_at ASC, e.id ASC LIMIT 1",
 				),
 				["org-1", "teacher-1", "div-1"],
-			);
+			]);
 		});
 
 		it("findActiveTeacherEntitlementGrant returns null when no active grant matches", async () => {
@@ -646,16 +672,17 @@ describe("PostgresOrganizationRepository", () => {
 				isCurrent: true,
 				createdAtIso: "2026-01-01T00:00:00.000Z",
 			});
-			expect(unsafeSpy).toHaveBeenCalledWith(
+			const calls = normalizedCalls(unsafeSpy);
+			expect(calls).toContainEqual([
 				expect.stringContaining(
 					"WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class='accompanist_membership' AND e.revoked_at IS NULL AND e.starts_on <= (NOW() AT TIME ZONE o.timezone)::date AND e.ends_on > (NOW() AT TIME ZONE o.timezone)::date",
 				),
 				["org-1", "acc-1"],
-			);
-			expect(unsafeSpy).toHaveBeenCalledWith(
+			]);
+			expect(calls).toContainEqual([
 				expect.stringContaining("ORDER BY e.created_at ASC, e.id ASC LIMIT 1"),
 				["org-1", "acc-1"],
-			);
+			]);
 		});
 
 		it("findCurrentAccompanistMembershipGrant returns null when no current grant matches", async () => {
@@ -821,12 +848,13 @@ describe("PostgresOrganizationRepository", () => {
 					createdAtIso: "2026-01-02T00:00:00.000Z",
 				},
 			]);
-			expect(unsafeSpy).toHaveBeenCalledWith(
+			const calls = normalizedCalls(unsafeSpy);
+			expect(calls).toContainEqual([
 				expect.stringContaining(
 					"FROM test_schema.festival_class_capacity_audit_logs WHERE organization_id = $1 AND festival_class_id = $2 ORDER BY created_at DESC, id DESC",
 				),
 				["org-1", "class-1"],
-			);
+			]);
 		});
 	});
 
@@ -961,13 +989,14 @@ describe("PostgresOrganizationRepository", () => {
 			expect(created.organizationId).toBe("org-1");
 			expect(created.startsOn).toBe("2026-12-15");
 			expect(created.endsOn).toBe("2028-01-01");
-			expect(unsafeSpy).toHaveBeenCalledWith(
+			const calls = normalizedCalls(unsafeSpy);
+			expect(calls).toContainEqual([
 				expect.stringContaining(
 					"UPDATE test_schema.membership_entitlements SET superseded_on = $4::date, superseded_at = NOW(), superseded_by_grant_id = $5 WHERE organization_id = $1 AND customer_id = $2 AND entitlement_class = $3 AND revoked_at IS NULL AND superseded_on IS NULL AND starts_on <= $4::date AND ends_on > $4::date AND ends_on <= ($4::date + INTERVAL '30 days')::date",
 				),
 				["org-1", "teacher-1", "teacher_membership", "2026-12-15", created.id],
-			);
-			expect(unsafeSpy).toHaveBeenCalledWith(
+			]);
+			expect(calls).toContainEqual([
 				expect.stringContaining(
 					"INSERT INTO test_schema.membership_entitlements",
 				),
@@ -980,7 +1009,7 @@ describe("PostgresOrganizationRepository", () => {
 					"2026-12-15",
 					"2028-01-01",
 				],
-			);
+			]);
 		});
 
 		it("createEntitlementGrantSnapshot translates exclusion constraint violation (23P01) into overlap error", async () => {

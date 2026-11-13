@@ -1,2341 +1,337 @@
-import { randomUUID } from "node:crypto";
-import type {
-	AccompanistDivisionSelectionPolicy,
-	AccompanistMembershipGrant,
-	AccompanistProfileRecord,
-	AuthenticatedUser,
-	CreateEntitlementGrantSnapshotInput,
-	EntitlementClass,
-	EntitlementGrantSnapshot,
-	FestivalClassCapacityAuditRecord,
-	FestivalClassConfiguration,
-	FestivalRecord,
-	OrganizationAdminUserEntry,
-	OrganizationDivision,
-	OrganizationInviteRecord,
-	OrganizationMembershipRecord,
-	OrganizationRecord,
-	OrganizationUserRecord,
-	ProfileApprovalStatus,
-	PublicDirectoryDivisionDto,
-	PublicDirectoryProfileDto,
-	RegistrationAgeConfiguration,
-	RegistrationCatalogValue,
-	TeacherProfileRecord,
-} from "@festival/common";
+import { TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS } from "@festival/common";
 import {
-	AppError,
-	addCalendarDays,
-	assertValidEntitlementDurationDays,
-	assertValidEntitlementGrantSnapshotInput,
-	calendarDateInTimezone,
-	calendarDaysUntil,
-	deriveEntitlementLifecycle,
-	EMPTY_SHOPIFY_CAPABILITIES,
-	evaluateClassCapacityStatus,
-	getDeterministicTeacherColor,
-	isEntitlementClass,
-	normalizeVerifiedShopifyIdentityEmail,
-	TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
-	TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS,
-	validateDisplayName,
-	validateDivisionIds,
-	validateProfileApprovalStatus,
-	validatePublicDirectoryOptIn,
-	validatePublicDirectoryProfileDto,
-} from "@festival/common";
-import { withInMemoryCapacityLock } from "../repo/in-memory-capacity-lock.js";
+	inMemCreateMembershipProductRecord,
+	inMemUpdateMembershipProductRecord,
+	inMemUpdateShopifyVerification,
+	inMemUpdateShopifyWebhookReadiness,
+	inMemUpsertShopifyIntegration,
+} from "./in-memory-org-commerce.js";
+import {
+	inMemCreateAccompanistMembershipGrant,
+	inMemCreateEntitlementGrantSnapshot,
+	inMemFindMembershipCustomerContacts,
+	inMemListActiveTeachersForDivision,
+	inMemRevokeEntitlement,
+} from "./in-memory-org-commerce-grants.js";
+import {
+	inMemGetPublicDirectoryProfiles,
+	inMemListAccompanistProfiles,
+	inMemListTeacherProfiles,
+	inMemUpdateAccompanistProfileApproval,
+	inMemUpdateTeacherProfileApproval,
+	inMemUpsertAccompanistProfile,
+	inMemUpsertTeacherProfile,
+	withAccompanistContact,
+} from "./in-memory-org-profiles.js";
+import {
+	withAccompanistLifecycle,
+	withTeacherLifecycle,
+} from "./in-memory-org-state.js";
+import { InMemoryTenantCatalogAdapter } from "./in-memory-org-tenant-catalog-adapter.js";
 import type {
-	AccompanistDivisionPolicyHistoryRecord,
-	AccompanistDivisionPolicyRecord,
-	CreateAccompanistMembershipGrantInput,
-	CreateFestivalClassCapacityAuditInput,
-	CreateFestivalClassConfigurationInput,
-	CreateFestivalRecordInput,
-	CreateInviteRecordInput,
-	CreateMembershipInput,
-	CreateMembershipProductRecordInput,
-	EntitlementRevocationRecord,
-	InviteWithOrganization,
 	MembershipCustomerContact,
-	MembershipWithOrganization,
 	OrganizationRepository,
-	ProductRecord,
-	RegistrationCatalogKind,
-	ShopifyIntegrationRecord,
-	UpdateFestivalClassConfigurationInput,
-	UpdateShopifyVerificationInput,
-	UpdateShopifyWebhookReadinessInput,
-	UpsertAccompanistProfileInput,
-	UpsertShopifyIntegrationInput,
-	UpsertTeacherProfileInput,
 } from "./organization-repository.js";
-import {
-	assertValidSubtypeDependency,
-	ShopifyShopOwnershipError,
-} from "./organization-repository.js";
-import {
-	profileEditRequiresReapproval,
-	resolveTeacherProfileApprovalStatus,
-} from "./profile-moderation.js";
-import {
-	compareCodePoint,
-	compareDivisionsByName,
-	compareProfilesByName,
-} from "./profile-ordering.js";
 
-type StoredTeacherEntitlement = Omit<EntitlementGrantSnapshot, "status">;
-type StoredAccompanistEntitlement = Omit<
-	AccompanistMembershipGrant,
-	"status" | "isCurrent"
->;
-
-export class InMemoryOrganizationRepository implements OrganizationRepository {
-	private readonly users = new Map<string, OrganizationUserRecord>();
-	private readonly usersByUid = new Map<string, string>();
-	private readonly organizations = new Map<string, OrganizationRecord>();
-	private readonly organizationsBySlug = new Map<string, string>();
-	private readonly organizationsByName = new Map<string, string>();
-	private readonly memberships = new Map<
-		string,
-		OrganizationMembershipRecord
-	>();
-	private readonly membershipsByUserId = new Map<string, Set<string>>();
-	private readonly membershipsByUserAndOrganization = new Map<string, string>();
-	private readonly invites = new Map<string, OrganizationInviteRecord>();
-	private readonly invitesByToken = new Map<string, string>();
-	private readonly festivals = new Map<string, FestivalRecord>();
-	private readonly shopifyIntegrations = new Map<
-		string,
-		ShopifyIntegrationRecord
-	>();
-	private readonly products = new Map<string, ProductRecord>();
-	private readonly entitlementGrants = new Map<
-		string,
-		StoredTeacherEntitlement
-	>();
-	private readonly entitlementRevocations = new Map<
-		string,
-		EntitlementRevocationRecord
-	>();
-	private readonly entitlementSupersededOn = new Map<string, string>();
-	private readonly entitlementSupersededAt = new Map<string, string>();
-	private readonly entitlementSupersededByGrantId = new Map<string, string>();
-	private readonly entitlementCohortVersions = new Map<string, number>();
-	private readonly membershipIdentityEmails = new Map<string, string>();
-	private readonly membershipIdentityEmailsByCustomer = new Map<
-		string,
-		string
-	>();
-	private readonly divisions = new Map<
-		string,
-		OrganizationDivision & { normalizedName: string }
-	>();
-	private readonly accompanistPolicies = new Map<
-		string,
-		AccompanistDivisionPolicyRecord
-	>();
-	private readonly accompanistPolicyHistory: AccompanistDivisionPolicyHistoryRecord[] =
-		[];
-	private readonly accompanistMembershipGrants = new Map<
-		string,
-		StoredAccompanistEntitlement
-	>();
-	private readonly registrationAgeConfigurations = new Map<
-		string,
-		RegistrationAgeConfiguration
-	>();
-	private readonly registrationCatalogValues = new Map<
-		string,
-		RegistrationCatalogValue & {
-			kind: RegistrationCatalogKind;
-			normalizedName: string;
-		}
-	>();
-	private readonly festivalClassSubtypeIds = new Set<string>();
-
-	private readonly festivalClassConfigurations = new Map<
-		string,
-		FestivalClassConfiguration
-	>();
-	private readonly festivalClassCapacityAudits: FestivalClassCapacityAuditRecord[] =
-		[];
-	private readonly customerContacts = new Map<
-		string,
-		MembershipCustomerContact
-	>();
-	private readonly teacherProfiles = new Map<string, TeacherProfileRecord>();
-	private readonly accompanistProfiles = new Map<
-		string,
-		AccompanistProfileRecord
-	>();
-
-	constructor(readonly now: () => Date = () => new Date()) {}
-
-	async ensureReady(): Promise<void> {}
-
-	async upsertUser(user: AuthenticatedUser): Promise<OrganizationUserRecord> {
-		const existingId = this.usersByUid.get(user.uid);
-		if (existingId) {
-			const existing = this.users.get(existingId);
-			if (!existing) {
-				throw new Error(`In-memory user not found for id ${existingId}`);
-			}
-
-			const updated: OrganizationUserRecord = {
-				...existing,
-				email: user.email.toLowerCase(),
-				displayName: user.displayName,
-				disassociated: false,
-			};
-			this.users.set(existingId, updated);
-			return updated;
-		}
-
-		const created: OrganizationUserRecord = {
-			id: randomUUID(),
-			firebaseUid: user.uid,
-			email: user.email.toLowerCase(),
-			displayName: user.displayName,
-			disassociated: false,
-			createdAtIso: new Date().toISOString(),
-		};
-
-		this.users.set(created.id, created);
-		this.usersByUid.set(created.firebaseUid, created.id);
-		return created;
-	}
-
-	async findMembershipByUserId(
-		userId: string,
-	): Promise<MembershipWithOrganization | null> {
-		const membershipIds = this.membershipsByUserId.get(userId);
-		const membershipId = membershipIds?.values().next().value;
-		if (!membershipId) {
-			return null;
-		}
-
-		return this.membershipWithOrganization(membershipId);
-	}
-
-	async listMembershipsByUserId(
-		userId: string,
-	): Promise<MembershipWithOrganization[]> {
-		const membershipIds = this.membershipsByUserId.get(userId);
-		if (!membershipIds) {
-			return [];
-		}
-
-		const memberships = await Promise.all(
-			[...membershipIds].map((membershipId) =>
-				this.membershipWithOrganization(membershipId),
-			),
+/** Profile directory portion of the in-memory OrganizationRepository compatibility adapter. */
+class InMemoryOrgProfilesAdapter extends InMemoryTenantCatalogAdapter {
+	async getTeacherProfile(organizationId: string, customerId: string) {
+		const m = [...this.state.teacherProfiles.values()].find(
+			(p) =>
+				p.organization_id === organizationId && p.customer_id === customerId,
 		);
-		return memberships.filter(
-			(membership): membership is MembershipWithOrganization =>
-				membership !== null,
+		return m ? { ...m, division_ids: [...m.division_ids] } : null;
+	}
+	async getTeacherProfileById(organizationId: string, profileId: string) {
+		const m = this.state.teacherProfiles.get(profileId);
+		if (!m || m.organization_id !== organizationId) return null;
+		return { ...m, division_ids: [...m.division_ids] };
+	}
+	async upsertTeacherProfile(
+		params: Parameters<OrganizationRepository["upsertTeacherProfile"]>[0],
+	) {
+		return inMemUpsertTeacherProfile(this.state, params);
+	}
+	async updateTeacherProfileApproval(
+		organizationId: string,
+		profileId: string,
+		approvalStatus: Parameters<
+			OrganizationRepository["updateTeacherProfileApproval"]
+		>[2],
+	) {
+		return inMemUpdateTeacherProfileApproval(
+			this.state,
+			organizationId,
+			profileId,
+			approvalStatus,
 		);
 	}
-
-	private async membershipWithOrganization(
-		membershipId: string,
-	): Promise<MembershipWithOrganization | null> {
-		const membership = this.memberships.get(membershipId);
-		if (!membership) {
-			return null;
-		}
-
-		const organization = this.organizations.get(membership.organizationId);
-		if (!organization) {
-			return null;
-		}
-
-		return { membership, organization };
+	async listTeacherProfiles(organizationId: string) {
+		return inMemListTeacherProfiles(this.state, organizationId);
 	}
-
-	async findMembershipByUserAndSlug(
-		userId: string,
-		slug: string,
-	): Promise<MembershipWithOrganization | null> {
-		const organizationId = this.organizationsBySlug.get(slug);
-		if (!organizationId) {
-			return null;
-		}
-
-		const membershipId = this.membershipsByUserAndOrganization.get(
-			`${userId}:${organizationId}`,
+	async getAccompanistProfile(organizationId: string, customerId: string) {
+		const m = [...this.state.accompanistProfiles.values()].find(
+			(p) =>
+				p.organization_id === organizationId && p.customer_id === customerId,
 		);
-		if (!membershipId) {
-			return null;
-		}
-
-		return this.membershipWithOrganization(membershipId);
+		return m ? withAccompanistContact(this.state, m) : null;
 	}
-
-	async findOrganizationById(
+	async getAccompanistProfileById(organizationId: string, profileId: string) {
+		const m = this.state.accompanistProfiles.get(profileId);
+		if (!m || m.organization_id !== organizationId) return null;
+		return withAccompanistContact(this.state, m);
+	}
+	async upsertAccompanistProfile(
+		params: Parameters<OrganizationRepository["upsertAccompanistProfile"]>[0],
+	) {
+		return inMemUpsertAccompanistProfile(this.state, params);
+	}
+	async updateAccompanistProfileApproval(
 		organizationId: string,
-	): Promise<OrganizationRecord | null> {
-		return this.organizations.get(organizationId) ?? null;
-	}
-
-	async findOrganizationBySlug(
-		slug: string,
-	): Promise<OrganizationRecord | null> {
-		const organizationId = this.organizationsBySlug.get(slug);
-		if (!organizationId) {
-			return null;
-		}
-
-		return this.organizations.get(organizationId) ?? null;
-	}
-
-	async findOrganizationByName(
-		name: string,
-	): Promise<OrganizationRecord | null> {
-		const organizationId = this.organizationsByName.get(name.toLowerCase());
-		if (!organizationId) {
-			return null;
-		}
-
-		return this.organizations.get(organizationId) ?? null;
-	}
-
-	async createOrganization(input: {
-		name: string;
-		slug: string;
-		defaultCurrencyCode?: string;
-	}): Promise<OrganizationRecord> {
-		const organization: OrganizationRecord = {
-			id: randomUUID(),
-			name: input.name,
-			slug: input.slug,
-			timezone: "UTC",
-			defaultCurrencyCode: input.defaultCurrencyCode ?? "USD",
-			createdAtIso: new Date().toISOString(),
-		};
-
-		this.organizations.set(organization.id, organization);
-		this.organizationsBySlug.set(organization.slug, organization.id);
-		this.organizationsByName.set(
-			organization.name.toLowerCase(),
-			organization.id,
-		);
-		return organization;
-	}
-
-	async listDivisions(
-		organizationId: string,
-		activeOnly = false,
-	): Promise<OrganizationDivision[]> {
-		return this.orderedDivisions(organizationId, activeOnly);
-	}
-
-	private orderedDivisions(
-		organizationId: string,
-		activeOnly = false,
-	): OrganizationDivision[] {
-		return [...this.divisions.values()]
-			.filter(
-				(division) =>
-					division.organizationId === organizationId &&
-					(!activeOnly || division.isActive),
-			)
-			.sort(
-				(a, b) => a.displayOrder - b.displayOrder || a.id.localeCompare(b.id),
-			)
-			.map(({ normalizedName: _normalizedName, ...division }) => division);
-	}
-
-	async createDivision(input: {
-		organizationId: string;
-		displayName: string;
-		normalizedName: string;
-	}): Promise<OrganizationDivision> {
-		if (
-			[...this.divisions.values()].some(
-				(division) =>
-					division.organizationId === input.organizationId &&
-					division.normalizedName === input.normalizedName,
-			)
-		) {
-			throw new Error("Division display name already exists.");
-		}
-		const now = new Date().toISOString();
-		const division = {
-			id: randomUUID(),
-			organizationId: input.organizationId,
-			displayName: input.displayName,
-			normalizedName: input.normalizedName,
-			isActive: true,
-			displayOrder: this.orderedDivisions(input.organizationId).length,
-			createdAtIso: now,
-			updatedAtIso: now,
-		};
-		this.divisions.set(division.id, division);
-		const { normalizedName: _normalizedName, ...result } = division;
-		return result;
-	}
-
-	async updateDivision(input: {
-		organizationId: string;
-		divisionId: string;
-		displayName?: string;
-		normalizedName?: string;
-		isActive?: boolean;
-	}): Promise<OrganizationDivision | null> {
-		const current = this.divisions.get(input.divisionId);
-		if (!current || current.organizationId !== input.organizationId)
-			return null;
-		if (
-			input.normalizedName &&
-			[...this.divisions.values()].some(
-				(division) =>
-					division.id !== current.id &&
-					division.organizationId === input.organizationId &&
-					division.normalizedName === input.normalizedName,
-			)
-		) {
-			throw new Error("Division display name already exists.");
-		}
-		const updated = {
-			...current,
-			displayName: input.displayName ?? current.displayName,
-			normalizedName: input.normalizedName ?? current.normalizedName,
-			isActive: input.isActive ?? current.isActive,
-			updatedAtIso: new Date().toISOString(),
-		};
-		this.divisions.set(updated.id, updated);
-		const { normalizedName: _normalizedName, ...result } = updated;
-		return result;
-	}
-
-	async reorderDivisions(
-		organizationId: string,
-		divisionIds: string[],
-	): Promise<OrganizationDivision[]> {
-		const current = this.orderedDivisions(organizationId);
-		if (
-			current.length !== divisionIds.length ||
-			new Set(divisionIds).size !== divisionIds.length ||
-			divisionIds.some((id) => !current.some((division) => division.id === id))
-		) {
-			throw new Error(
-				"Division order must contain every organization division exactly once.",
-			);
-		}
-		const now = new Date().toISOString();
-		divisionIds.forEach((id, displayOrder) => {
-			const division = this.divisions.get(id);
-			if (!division) throw new Error("Division not found.");
-			this.divisions.set(id, { ...division, displayOrder, updatedAtIso: now });
-		});
-		return this.orderedDivisions(organizationId);
-	}
-
-	async getOrganizationTimezone(organizationId: string): Promise<string> {
-		const organization = this.organizations.get(organizationId);
-		if (!organization) throw new Error("Organization not found.");
-		return organization.timezone;
-	}
-
-	async updateOrganizationTimezone(
-		organizationId: string,
-		timezone: string,
-	): Promise<string> {
-		const organization = this.organizations.get(organizationId);
-		if (!organization) throw new Error("Organization not found.");
-		this.organizations.set(organizationId, { ...organization, timezone });
-		return timezone;
-	}
-
-	async createMembership(
-		input: CreateMembershipInput,
-	): Promise<OrganizationMembershipRecord> {
-		const key = `${input.userId}:${input.organizationId}`;
-		if (this.membershipsByUserAndOrganization.has(key)) {
-			throw new Error("Membership already exists for this organization.");
-		}
-
-		const membership: OrganizationMembershipRecord = {
-			id: randomUUID(),
-			organizationId: input.organizationId,
-			userId: input.userId,
-			role: input.role,
-			origin: input.origin,
-			joinedAtIso: new Date().toISOString(),
-		};
-
-		this.memberships.set(membership.id, membership);
-		const userMemberships =
-			this.membershipsByUserId.get(membership.userId) ?? new Set<string>();
-		userMemberships.add(membership.id);
-		this.membershipsByUserId.set(membership.userId, userMemberships);
-		this.membershipsByUserAndOrganization.set(key, membership.id);
-		return membership;
-	}
-
-	async createInvite(
-		input: CreateInviteRecordInput,
-	): Promise<OrganizationInviteRecord> {
-		const invite: OrganizationInviteRecord = {
-			id: randomUUID(),
-			token: randomUUID(),
-			organizationId: input.organizationId,
-			email: input.email.toLowerCase(),
-			role: input.role,
-			invitedByUserId: input.invitedByUserId,
-			createdAtIso: new Date().toISOString(),
-		};
-
-		this.invites.set(invite.id, invite);
-		this.invitesByToken.set(invite.token, invite.id);
-		return invite;
-	}
-
-	async findInviteByToken(
-		token: string,
-	): Promise<InviteWithOrganization | null> {
-		const inviteId = this.invitesByToken.get(token);
-		if (!inviteId) {
-			return null;
-		}
-
-		const invite = this.invites.get(inviteId);
-		if (!invite) {
-			return null;
-		}
-
-		const organization = this.organizations.get(invite.organizationId);
-		if (!organization) {
-			return null;
-		}
-
-		return { invite, organization };
-	}
-
-	async markInviteAccepted(token: string): Promise<void> {
-		const inviteId = this.invitesByToken.get(token);
-		if (!inviteId) {
-			return;
-		}
-
-		const invite = this.invites.get(inviteId);
-		if (!invite) {
-			return;
-		}
-
-		this.invites.set(inviteId, {
-			...invite,
-			acceptedAtIso: new Date().toISOString(),
-		});
-	}
-
-	async listAdminUsers(
-		organizationId: string,
-		currentUserId: string,
-	): Promise<OrganizationAdminUserEntry[]> {
-		const acceptedUsers = [...this.memberships.values()]
-			.filter((membership) => membership.organizationId === organizationId)
-			.map((membership) => {
-				const user = this.users.get(membership.userId);
-				if (!user) {
-					throw new Error(`User not found for membership ${membership.id}`);
-				}
-
-				return {
-					id: membership.id,
-					email: user.email,
-					role: membership.role,
-					status: "accepted" as const,
-					isSelf: membership.userId === currentUserId,
-				};
-			});
-		const pendingUsers = [...this.invites.values()]
-			.filter(
-				(invite) =>
-					invite.organizationId === organizationId && !invite.acceptedAtIso,
-			)
-			.map((invite) => ({
-				id: invite.id,
-				email: invite.email,
-				role: invite.role,
-				status: "pending" as const,
-				isSelf: false,
-			}));
-
-		return [...acceptedUsers, ...pendingUsers];
-	}
-
-	async deleteMembership(input: {
-		organizationId: string;
-		membershipId: string;
-		currentUserId: string;
-	}): Promise<void> {
-		const membership = this.memberships.get(input.membershipId);
-		if (!membership || membership.organizationId !== input.organizationId) {
-			throw new Error("Membership not found.");
-		}
-
-		if (membership.userId === input.currentUserId) {
-			throw new Error("Admins cannot delete their own membership.");
-		}
-
-		this.memberships.delete(input.membershipId);
-		this.membershipsByUserId.get(membership.userId)?.delete(input.membershipId);
-		this.membershipsByUserAndOrganization.delete(
-			`${membership.userId}:${membership.organizationId}`,
-		);
-
-		const user = this.users.get(membership.userId);
-		if (user) {
-			this.users.set(user.id, {
-				...user,
-				disassociated: true,
-			});
-		}
-	}
-
-	async cancelInvite(input: {
-		organizationId: string;
-		inviteId: string;
-	}): Promise<void> {
-		const invite = this.invites.get(input.inviteId);
-		if (!invite || invite.organizationId !== input.organizationId) {
-			throw new Error("Invite not found.");
-		}
-
-		this.invites.delete(input.inviteId);
-		this.invitesByToken.delete(invite.token);
-	}
-
-	async listFestivals(organizationId: string): Promise<FestivalRecord[]> {
-		return [...this.festivals.values()].filter(
-			(festival) => festival.organizationId === organizationId,
+		profileId: string,
+		approvalStatus: Parameters<
+			OrganizationRepository["updateAccompanistProfileApproval"]
+		>[2],
+	) {
+		return inMemUpdateAccompanistProfileApproval(
+			this.state,
+			organizationId,
+			profileId,
+			approvalStatus,
 		);
 	}
-
-	async createFestival(
-		input: CreateFestivalRecordInput,
-	): Promise<FestivalRecord> {
-		if (
-			[...this.festivals.values()].some(
-				(festival) =>
-					festival.organizationId === input.organizationId &&
-					(festival.name.toLowerCase() === input.name.toLowerCase() ||
-						festival.code === input.code ||
-						festival.shortName === input.shortName),
-			)
-		) {
-			throw new Error("Festival already exists for this organization.");
-		}
-
-		const festival: FestivalRecord = {
-			id: input.id,
-			organizationId: input.organizationId,
-			code: input.code,
-			shortName: input.shortName,
-			isPrimary: ![...this.festivals.values()].some(
-				(item) =>
-					item.organizationId === input.organizationId && item.isPrimary,
-			),
-			name: input.name,
-			startDate: input.startDate,
-			endDate: input.endDate,
-			registrationOpensAt: input.registrationOpensAt ?? null,
-			registrationClosesAt: input.registrationClosesAt ?? null,
-			createdAtIso: new Date().toISOString(),
-		};
-
-		this.festivals.set(festival.id, festival);
-		return festival;
+	async listAccompanistProfiles(organizationId: string) {
+		return inMemListAccompanistProfiles(this.state, organizationId);
 	}
-
-	async findFestivalByName(
-		organizationId: string,
-		name: string,
-	): Promise<FestivalRecord | null> {
-		return (
-			[...this.festivals.values()].find(
-				(festival) =>
-					festival.organizationId === organizationId &&
-					festival.name.toLowerCase() === name.toLowerCase(),
-			) ?? null
-		);
+	async getPublicDirectoryProfiles(organizationId: string) {
+		return inMemGetPublicDirectoryProfiles(this.state, organizationId);
 	}
+}
 
-	async findFestivalByShortName(
-		organizationId: string,
-		shortName: string,
-	): Promise<FestivalRecord | null> {
-		return (
-			[...this.festivals.values()].find(
-				(festival) =>
-					festival.organizationId === organizationId &&
-					festival.shortName === shortName,
-			) ?? null
-		);
+/** In-memory OrganizationRepository compatibility adapter for non-S09 tests until S14. */
+export class InMemoryOrganizationRepository
+	extends InMemoryOrgProfilesAdapter
+	implements OrganizationRepository
+{
+	async getShopifyIntegration(organizationId: string) {
+		return this.state.shopifyIntegrations.get(organizationId) ?? null;
 	}
-
-	async setPrimaryFestival(
-		organizationId: string,
-		festivalId: string,
-	): Promise<FestivalRecord> {
-		const selected = this.festivals.get(festivalId);
-		if (!selected || selected.organizationId !== organizationId)
-			throw new Error("Festival not found.");
-		for (const festival of this.festivals.values()) {
-			if (festival.organizationId === organizationId)
-				this.festivals.set(festival.id, {
-					...festival,
-					isPrimary: festival.id === festivalId,
-				});
-		}
-		return { ...selected, isPrimary: true };
-	}
-
-	async updateFestivalRegistrationWindow(
-		organizationId: string,
-		festivalId: string,
-		input: {
-			registrationOpensAt: string | null;
-			registrationClosesAt: string | null;
-		},
-	): Promise<FestivalRecord> {
-		const existing = this.festivals.get(festivalId);
-		if (!existing || existing.organizationId !== organizationId) {
-			throw new Error("Festival not found.");
-		}
-		const updated: FestivalRecord = {
-			...existing,
-			registrationOpensAt: input.registrationOpensAt,
-			registrationClosesAt: input.registrationClosesAt,
-		};
-		this.festivals.set(festivalId, updated);
-		return { ...updated };
-	}
-
-	async dismissWelcome(
-		userId: string,
-		organizationId: string,
-	): Promise<OrganizationMembershipRecord> {
-		const membershipId = this.membershipsByUserAndOrganization.get(
-			`${userId}:${organizationId}`,
-		);
-		if (!membershipId) {
-			throw new Error(`Membership not found for user ${userId}`);
-		}
-
-		const membership = this.memberships.get(membershipId);
-		if (!membership || membership.organizationId !== organizationId) {
-			throw new Error(
-				`Membership not found for organization ${organizationId}`,
-			);
-		}
-
-		const updated: OrganizationMembershipRecord = {
-			...membership,
-			welcomeDismissedAtIso: new Date().toISOString(),
-		};
-
-		this.memberships.set(membership.id, updated);
-		return updated;
-	}
-
-	async getShopifyIntegration(
-		organizationId: string,
-	): Promise<ShopifyIntegrationRecord | null> {
-		return this.shopifyIntegrations.get(organizationId) ?? null;
-	}
-
-	async findOrganizationByShopDomain(
-		shopDomain: string,
-	): Promise<OrganizationRecord | null> {
-		const normalized = shopDomain.toLowerCase();
-		const integration = [...this.shopifyIntegrations.values()].find(
-			(value) =>
-				value.verificationStatus === "ok" &&
-				(value.storeDomain === normalized ||
-					value.verifiedShopDomain === normalized),
-		);
-		return integration
-			? (this.organizations.get(integration.organizationId) ?? null)
+	async getPublicShopifyCatalogDomain(organizationId: string) {
+		const i = this.state.shopifyIntegrations.get(organizationId);
+		return i?.verificationStatus === "ok"
+			? (i.verifiedShopDomain ?? null)
 			: null;
 	}
-
-	async getPublicShopifyCatalogDomain(
-		organizationId: string,
-	): Promise<string | null> {
-		const integration = this.shopifyIntegrations.get(organizationId);
-		return integration?.verificationStatus === "ok"
-			? (integration.verifiedShopDomain ?? null)
-			: null;
-	}
-
 	async upsertShopifyIntegration(
-		input: UpsertShopifyIntegrationInput,
-	): Promise<ShopifyIntegrationRecord> {
-		const existing = this.shopifyIntegrations.get(input.organizationId);
-		if (
-			[...this.shopifyIntegrations.values()].some(
-				(integration) =>
-					integration.organizationId !== input.organizationId &&
-					(integration.storeDomain === input.storeDomain ||
-						integration.verifiedShopDomain === input.storeDomain),
-			)
-		) {
-			throw new ShopifyShopOwnershipError();
-		}
-		const now = new Date().toISOString();
-		const record: ShopifyIntegrationRecord = {
-			organizationId: input.organizationId,
-			storeDomain: input.storeDomain,
-			clientId: input.clientId,
-			encryptedClientSecret: input.encryptedClientSecret,
-			encryptedStorefrontPrivateToken: input.encryptedStorefrontPrivateToken,
-			verificationStatus: "unknown",
-			grantedScopes: [],
-			capabilities: { ...EMPTY_SHOPIFY_CAPABILITIES },
-			integrationVersion: (existing?.integrationVersion ?? 0) + 1,
-			webhookReadinessStatus: "unknown",
-			createdAtIso: existing?.createdAtIso ?? now,
-			updatedAtIso: now,
-		};
-
-		this.shopifyIntegrations.set(input.organizationId, record);
-		return record;
+		input: Parameters<OrganizationRepository["upsertShopifyIntegration"]>[0],
+	) {
+		return inMemUpsertShopifyIntegration(this.state, input);
 	}
-
 	async updateShopifyWebhookReadiness(
-		input: UpdateShopifyWebhookReadinessInput,
-	): Promise<ShopifyIntegrationRecord> {
-		const existing = this.shopifyIntegrations.get(input.organizationId);
-		if (!existing) {
-			throw new Error("Shopify integration not found.");
-		}
-		const record: ShopifyIntegrationRecord = {
-			...existing,
-			webhookReadinessStatus: input.status,
-			webhookCheckedAtIso: input.checkedAtIso,
-			webhookError: input.status === "failed" ? input.message : undefined,
-			webhookFailureCategory:
-				input.status === "failed" ? input.failureCategory : undefined,
-			webhookRequestId: input.status === "failed" ? input.requestId : undefined,
-			updatedAtIso: new Date().toISOString(),
-		};
-		this.shopifyIntegrations.set(input.organizationId, record);
-		return record;
+		input: Parameters<
+			OrganizationRepository["updateShopifyWebhookReadiness"]
+		>[0],
+	) {
+		return inMemUpdateShopifyWebhookReadiness(this.state, input);
 	}
-
 	async updateShopifyVerification(
-		input: UpdateShopifyVerificationInput,
-	): Promise<ShopifyIntegrationRecord> {
-		const existing = this.shopifyIntegrations.get(input.organizationId);
-		if (!existing) {
-			throw new Error("Shopify integration not found.");
-		}
-		if (
-			input.verificationStatus === "ok" &&
-			[...this.shopifyIntegrations.values()].some(
-				(integration) =>
-					integration.organizationId !== input.organizationId &&
-					(integration.storeDomain === input.verifiedShopDomain ||
-						integration.verifiedShopDomain === input.verifiedShopDomain ||
-						integration.verifiedShopGid === input.verifiedShopGid),
-			)
-		) {
-			throw new ShopifyShopOwnershipError();
-		}
-
-		const record: ShopifyIntegrationRecord = {
-			...existing,
-			verificationStatus: input.verificationStatus,
-			verifiedShopGid:
-				input.verificationStatus === "ok" ? input.verifiedShopGid : undefined,
-			verifiedShopDomain:
-				input.verificationStatus === "ok"
-					? input.verifiedShopDomain
-					: undefined,
-			grantedScopes:
-				input.verificationStatus === "ok" ? [...input.grantedScopes] : [],
-			capabilities:
-				input.verificationStatus === "ok"
-					? { ...input.capabilities }
-					: { ...EMPTY_SHOPIFY_CAPABILITIES },
-			verifiedAtIso: input.verifiedAtIso,
-			lastTestedAtIso: input.lastTestedAtIso,
-			lastError: input.lastError,
-			lastFailureCategory: input.lastFailureCategory,
-			updatedAtIso: new Date().toISOString(),
-		};
-
-		this.shopifyIntegrations.set(input.organizationId, record);
-		return record;
+		input: Parameters<OrganizationRepository["updateShopifyVerification"]>[0],
+	) {
+		return inMemUpdateShopifyVerification(this.state, input);
 	}
-
 	async createMembershipProductRecord(
-		input: CreateMembershipProductRecordInput,
-	): Promise<ProductRecord> {
-		if (!this.organizations.has(input.organizationId)) {
-			throw new Error("Organization not found.");
-		}
-		if (!isEntitlementClass(input.entitlementClass)) {
-			throw new Error("Entitlement class is invalid.");
-		}
-		if (
-			[...this.products.values()].some(
-				(product) =>
-					product.organizationId === input.organizationId &&
-					product.productCategory === "membership" &&
-					product.entitlementClass === input.entitlementClass &&
-					product.isActive &&
-					input.isActive,
-			)
-		) {
-			throw new Error(
-				"Membership product already exists for this organization.",
-			);
-		}
-
-		if (
-			await this.findProductRecordByShopifyProductGid(input.shopifyProductGid)
-		) {
-			throw new Error("Shopify product is already associated.");
-		}
-
-		if (
-			await this.findProductRecordByShopifyVariantGid(input.shopifyVariantGid)
-		) {
-			throw new Error("Shopify variant is already associated.");
-		}
-
-		const now = new Date().toISOString();
-		assertValidEntitlementDurationDays(input.durationDays);
-		const record: ProductRecord = {
-			id: randomUUID(),
-			organizationId: input.organizationId,
-			productCategory: "membership",
-			entitlementClass: input.entitlementClass,
-			durationDays: input.durationDays,
-			isActive: input.isActive,
-			shopifyProductGid: input.shopifyProductGid,
-			shopifyVariantGid: input.shopifyVariantGid,
-			productNameSnapshot: input.productNameSnapshot,
-			createdAtIso: now,
-			updatedAtIso: now,
-		};
-
-		this.products.set(record.id, record);
-		return record;
+		input: Parameters<
+			OrganizationRepository["createMembershipProductRecord"]
+		>[0],
+	) {
+		return inMemCreateMembershipProductRecord(this.state, input);
 	}
-
-	async listMembershipProductRecords(
-		organizationId: string,
-	): Promise<ProductRecord[]> {
-		return [...this.products.values()]
+	async listMembershipProductRecords(organizationId: string) {
+		return [...this.state.products.values()]
 			.filter(
-				(product) =>
-					product.organizationId === organizationId &&
-					product.productCategory === "membership",
+				(p) =>
+					p.organizationId === organizationId &&
+					p.productCategory === "membership",
 			)
 			.sort((a, b) => a.createdAtIso.localeCompare(b.createdAtIso));
 	}
-
-	async updateMembershipProductRecord(input: {
-		organizationId: string;
-		productId: string;
-		productNameSnapshot?: string;
-		durationDays?: number;
-		isActive?: boolean;
-	}): Promise<ProductRecord | null> {
-		const current = this.products.get(input.productId);
-		if (!current || current.organizationId !== input.organizationId)
-			return null;
-		if (input.durationDays !== undefined) {
-			assertValidEntitlementDurationDays(input.durationDays);
-		}
-		if (
-			input.isActive === true &&
-			[...this.products.values()].some(
-				(product) =>
-					product.id !== current.id &&
-					product.organizationId === input.organizationId &&
-					product.entitlementClass === current.entitlementClass &&
-					product.isActive,
-			)
-		) {
-			throw new Error(
-				"Membership product already exists for this organization.",
-			);
-		}
-		const updated: ProductRecord = {
-			...current,
-			productNameSnapshot:
-				input.productNameSnapshot ?? current.productNameSnapshot,
-			durationDays: input.durationDays ?? current.durationDays,
-			isActive: input.isActive ?? current.isActive,
-			updatedAtIso: new Date().toISOString(),
-		};
-		this.products.set(updated.id, updated);
-		return { ...updated };
+	async updateMembershipProductRecord(
+		input: Parameters<
+			OrganizationRepository["updateMembershipProductRecord"]
+		>[0],
+	) {
+		return inMemUpdateMembershipProductRecord(this.state, input);
 	}
-
 	async findMembershipProductRecordByClass(
 		organizationId: string,
-		entitlementClass: EntitlementClass,
-	): Promise<ProductRecord | null> {
+		entitlementClass: Parameters<
+			OrganizationRepository["findMembershipProductRecordByClass"]
+		>[1],
+	) {
 		return (
-			[...this.products.values()].find(
-				(product) =>
-					product.organizationId === organizationId &&
-					product.productCategory === "membership" &&
-					product.entitlementClass === entitlementClass &&
-					product.isActive,
+			[...this.state.products.values()].find(
+				(p) =>
+					p.organizationId === organizationId &&
+					p.productCategory === "membership" &&
+					p.entitlementClass === entitlementClass &&
+					p.isActive,
 			) ?? null
 		);
 	}
-
-	async getAccompanistDivisionPolicy(
-		organizationId: string,
-	): Promise<AccompanistDivisionPolicyRecord> {
-		return (
-			this.accompanistPolicies.get(organizationId) ?? {
-				organizationId,
-				policy: "exactly_one",
-				updatedAtIso: new Date().toISOString(),
-			}
-		);
-	}
-
-	async updateAccompanistDivisionPolicy(input: {
-		organizationId: string;
-		policy: AccompanistDivisionSelectionPolicy;
-	}): Promise<AccompanistDivisionPolicyRecord> {
-		if (!this.organizations.has(input.organizationId)) {
-			throw new Error("Organization not found.");
-		}
-		const record: AccompanistDivisionPolicyRecord = {
-			organizationId: input.organizationId,
-			policy: input.policy,
-			updatedAtIso: new Date().toISOString(),
-		};
-		this.accompanistPolicies.set(input.organizationId, record);
-		this.accompanistPolicyHistory.push({
-			id: randomUUID(),
-			...record,
-			createdAtIso: record.updatedAtIso,
-		});
-		return record;
-	}
-
-	async listAccompanistDivisionPolicyHistory(
-		organizationId: string,
-	): Promise<AccompanistDivisionPolicyHistoryRecord[]> {
-		return this.accompanistPolicyHistory
-			.filter((record) => record.organizationId === organizationId)
-			.map((record) => ({ ...record }));
-	}
-
 	async createAccompanistMembershipGrant(
-		input: CreateAccompanistMembershipGrantInput,
-	): Promise<AccompanistMembershipGrant> {
-		if (input.supersedeGrantId) {
-			throw new Error("Superseding accompanist entitlements is not supported.");
-		}
-		if (
-			[...this.accompanistMembershipGrants.values()].some(
-				(grant) =>
-					grant.organizationId === input.organizationId &&
-					!this.entitlementRevocations.has(grant.id) &&
-					(grant.customerId === input.customerId ||
-						grant.normalizedEmail === input.normalizedEmail) &&
-					grant.startsOn < input.endsOn &&
-					grant.endsOn > input.startsOn,
-			)
-		) {
-			throw new Error("Accompanist membership intervals may not overlap.");
-		}
-		const { supersedeGrantId: _supersedeGrantId, ...snapshot } = input;
-		const grant: StoredAccompanistEntitlement = {
-			id: randomUUID(),
-			...snapshot,
-			divisions: input.divisions.map((division) => ({ ...division })),
-			contact: { ...input.contact },
-			createdAtIso: new Date().toISOString(),
-		};
-		this.bindMembershipIdentityEmail(
-			input.organizationId,
-			input.normalizedEmail,
-			input.customerId,
-		);
-		this.accompanistMembershipGrants.set(grant.id, grant);
-		this.advanceEntitlementCohort(
-			grant.organizationId,
-			grant.customerId,
-			"accompanist_membership",
-		);
-		return this.withAccompanistLifecycle(grant);
+		input: Parameters<
+			OrganizationRepository["createAccompanistMembershipGrant"]
+		>[0],
+	) {
+		return inMemCreateAccompanistMembershipGrant(this.state, input);
 	}
-
-	async findCurrentAccompanistMembershipGrant(input: {
-		organizationId: string;
-		customerId: string;
-	}): Promise<AccompanistMembershipGrant | null> {
-		const grants = [...this.accompanistMembershipGrants.values()]
+	async findCurrentAccompanistMembershipGrant(
+		input: Parameters<
+			OrganizationRepository["findCurrentAccompanistMembershipGrant"]
+		>[0],
+	) {
+		const match = [...this.state.accompanistMembershipGrants.values()]
 			.filter(
-				(grant) =>
-					grant.organizationId === input.organizationId &&
-					grant.customerId === input.customerId,
+				(g) =>
+					g.organizationId === input.organizationId &&
+					g.customerId === input.customerId,
 			)
 			.sort(
 				(a, b) =>
 					a.createdAtIso.localeCompare(b.createdAtIso) ||
 					a.id.localeCompare(b.id),
 			)
-			.map((grant) => this.withAccompanistLifecycle(grant))
-			.filter((grant) => grant.isCurrent);
-		const match = grants[0];
+			.map((g) => withAccompanistLifecycle(this.state, g))
+			.find((g) => g.isCurrent);
 		return match
 			? {
 					...match,
 					contact: { ...match.contact },
-					divisions: match.divisions.map((division) => ({ ...division })),
+					divisions: match.divisions.map((d) => ({ ...d })),
 				}
 			: null;
 	}
-
-	async listAccompanistMembershipGrants(input: {
-		organizationId: string;
-		customerId?: string;
-		normalizedEmail?: string;
-		currentOnly?: boolean;
-	}): Promise<AccompanistMembershipGrant[]> {
-		return [...this.accompanistMembershipGrants.values()]
-			.map((grant) => this.withAccompanistLifecycle(grant))
+	async listAccompanistMembershipGrants(
+		input: Parameters<
+			OrganizationRepository["listAccompanistMembershipGrants"]
+		>[0],
+	) {
+		return [...this.state.accompanistMembershipGrants.values()]
+			.map((g) => withAccompanistLifecycle(this.state, g))
 			.filter(
-				(grant) =>
-					grant.organizationId === input.organizationId &&
-					(!input.customerId || grant.customerId === input.customerId) &&
+				(g) =>
+					g.organizationId === input.organizationId &&
+					(!input.customerId || g.customerId === input.customerId) &&
 					(!input.normalizedEmail ||
-						grant.normalizedEmail === input.normalizedEmail) &&
-					(!input.currentOnly || grant.isCurrent),
+						g.normalizedEmail === input.normalizedEmail) &&
+					(!input.currentOnly || g.isCurrent),
 			)
 			.sort((a, b) => a.createdAtIso.localeCompare(b.createdAtIso))
-			.map((grant) => ({
-				...grant,
-				contact: { ...grant.contact },
-				divisions: grant.divisions.map((division) => ({ ...division })),
+			.map((g) => ({
+				...g,
+				contact: { ...g.contact },
+				divisions: g.divisions.map((d) => ({ ...d })),
 			}));
 	}
-
-	async getRegistrationAgeConfiguration(
-		organizationId: string,
-	): Promise<RegistrationAgeConfiguration | null> {
-		return this.registrationAgeConfigurations.get(organizationId) ?? null;
-	}
-
-	async updateRegistrationAgeConfiguration(input: {
-		organizationId: string;
-		registrationAgeDate: string;
-	}): Promise<RegistrationAgeConfiguration> {
-		if (!this.organizations.has(input.organizationId)) {
-			throw new Error("Organization not found.");
-		}
-		const record = {
-			organizationId: input.organizationId,
-			registrationAgeDate: input.registrationAgeDate,
-			updatedAtIso: new Date().toISOString(),
-		};
-		this.registrationAgeConfigurations.set(input.organizationId, record);
-		return record;
-	}
-
-	private getSubtypesMap(organizationId: string): Map<string, string | null> {
-		const map = new Map<string, string | null>();
-		for (const val of this.registrationCatalogValues.values()) {
-			if (
-				val.organizationId === organizationId &&
-				val.kind === "class_subtype"
-			) {
-				map.set(val.id, val.requiredSubtypeId ?? null);
-			}
-		}
-		return map;
-	}
-
-	async listRegistrationCatalogValues(
-		organizationId: string,
-		kind: RegistrationCatalogKind,
-		activeOnly = false,
-	): Promise<RegistrationCatalogValue[]> {
-		return [...this.registrationCatalogValues.values()]
-			.filter(
-				(value) =>
-					value.organizationId === organizationId &&
-					value.kind === kind &&
-					(!activeOnly || value.isActive),
-			)
-			.sort(
-				(a, b) => a.displayOrder - b.displayOrder || a.id.localeCompare(b.id),
-			)
-			.map(({ kind: _kind, normalizedName: _normalizedName, ...value }) => ({
-				...value,
-				requiredSubtypeId: value.requiredSubtypeId ?? null,
-			}));
-	}
-
-	async createRegistrationCatalogValue(input: {
-		organizationId: string;
-		kind: RegistrationCatalogKind;
-		displayName: string;
-		normalizedName: string;
-		requiredSubtypeId?: string | null;
-	}): Promise<RegistrationCatalogValue> {
-		if (
-			[...this.registrationCatalogValues.values()].some(
-				(value) =>
-					value.organizationId === input.organizationId &&
-					value.kind === input.kind &&
-					value.normalizedName === input.normalizedName,
-			)
-		)
-			throw new Error("Registration catalog value already exists.");
-		const id = randomUUID();
-		if (input.kind === "class_subtype" && input.requiredSubtypeId) {
-			assertValidSubtypeDependency(
-				id,
-				input.requiredSubtypeId,
-				this.getSubtypesMap(input.organizationId),
-			);
-		}
-		const now = new Date().toISOString();
-		const record = {
-			id,
-			organizationId: input.organizationId,
-			kind: input.kind,
-			displayName: input.displayName,
-			normalizedName: input.normalizedName,
-			isActive: true,
-			displayOrder: (
-				await this.listRegistrationCatalogValues(
-					input.organizationId,
-					input.kind,
-				)
-			).length,
-			requiredSubtypeId:
-				input.kind === "class_subtype" ? input.requiredSubtypeId || null : null,
-			createdAtIso: now,
-			updatedAtIso: now,
-		};
-		this.registrationCatalogValues.set(record.id, record);
-		const { kind: _kind, normalizedName: _normalizedName, ...result } = record;
-		return {
-			...result,
-			requiredSubtypeId: result.requiredSubtypeId ?? null,
-		};
-	}
-
-	async listFestivalClassSubtypes(
-		organizationId: string,
-		festivalId: string,
-		activeOnly = false,
-	): Promise<RegistrationCatalogValue[]> {
+	async findProductRecordByShopifyProductGid(shopifyProductGid: string) {
 		return (
-			await this.listRegistrationCatalogValues(
-				organizationId,
-				"class_subtype",
-				activeOnly,
-			)
-		).filter((value) =>
-			this.festivalClassSubtypeIds.has(`${festivalId}:${value.id}`),
-		);
-	}
-
-	async associateFestivalClassSubtype(input: {
-		organizationId: string;
-		festivalId: string;
-		classSubtypeId: string;
-	}): Promise<void> {
-		const festival = this.festivals.get(input.festivalId);
-		const subtype = this.registrationCatalogValues.get(input.classSubtypeId);
-		if (
-			!festival ||
-			festival.organizationId !== input.organizationId ||
-			!subtype ||
-			subtype.organizationId !== input.organizationId ||
-			subtype.kind !== "class_subtype"
-		) {
-			throw new Error("Festival class subtype was not found.");
-		}
-		this.festivalClassSubtypeIds.add(
-			`${input.festivalId}:${input.classSubtypeId}`,
-		);
-	}
-
-	async updateRegistrationCatalogValue(input: {
-		organizationId: string;
-		kind: RegistrationCatalogKind;
-		id: string;
-		displayName?: string;
-		normalizedName?: string;
-		isActive?: boolean;
-		requiredSubtypeId?: string | null;
-	}): Promise<RegistrationCatalogValue | null> {
-		const current = this.registrationCatalogValues.get(input.id);
-		if (
-			!current ||
-			current.organizationId !== input.organizationId ||
-			current.kind !== input.kind
-		)
-			return null;
-		if (
-			input.normalizedName &&
-			[...this.registrationCatalogValues.values()].some(
-				(value) =>
-					value.id !== current.id &&
-					value.organizationId === input.organizationId &&
-					value.kind === input.kind &&
-					value.normalizedName === input.normalizedName,
-			)
-		)
-			throw new Error("Registration catalog value already exists.");
-		if (input.kind === "class_subtype" && input.requiredSubtypeId) {
-			assertValidSubtypeDependency(
-				input.id,
-				input.requiredSubtypeId,
-				this.getSubtypesMap(input.organizationId),
-			);
-		}
-		const updated = {
-			...current,
-			displayName: input.displayName ?? current.displayName,
-			normalizedName: input.normalizedName ?? current.normalizedName,
-			isActive: input.isActive ?? current.isActive,
-			requiredSubtypeId:
-				input.requiredSubtypeId !== undefined
-					? input.requiredSubtypeId || null
-					: (current.requiredSubtypeId ?? null),
-			updatedAtIso: new Date().toISOString(),
-		};
-		this.registrationCatalogValues.set(updated.id, updated);
-		const { kind: _kind, normalizedName: _normalizedName, ...result } = updated;
-		return {
-			...result,
-			requiredSubtypeId: result.requiredSubtypeId ?? null,
-		};
-	}
-
-	async reorderRegistrationCatalogValues(
-		organizationId: string,
-		kind: RegistrationCatalogKind,
-		ids: string[],
-	): Promise<RegistrationCatalogValue[]> {
-		const current = await this.listRegistrationCatalogValues(
-			organizationId,
-			kind,
-		);
-		if (
-			current.length !== ids.length ||
-			new Set(ids).size !== ids.length ||
-			ids.some((id) => !current.some((value) => value.id === id))
-		)
-			throw new Error(
-				"Registration catalog order must contain every value exactly once.",
-			);
-		const now = new Date().toISOString();
-		ids.forEach((id, displayOrder) => {
-			const value = this.registrationCatalogValues.get(id);
-			if (!value) throw new Error("Registration catalog value not found.");
-			this.registrationCatalogValues.set(id, {
-				...value,
-				displayOrder,
-				updatedAtIso: now,
-			});
-		});
-		return this.listRegistrationCatalogValues(organizationId, kind);
-	}
-
-	private stageClassCapacityWrite(): InMemoryOrganizationRepository {
-		// Publish only the affected record and its audits after all writes succeed.
-		const staged = Object.create(this) as InMemoryOrganizationRepository;
-		Object.defineProperties(staged, {
-			festivalClassConfigurations: {
-				value: new Map(this.festivalClassConfigurations),
-			},
-			festivalClassCapacityAudits: { value: [] },
-		});
-		return staged;
-	}
-
-	async createFestivalClassConfigurationWithCapacityAudit(
-		input: CreateFestivalClassConfigurationInput,
-		actorUid?: string,
-	): Promise<FestivalClassConfiguration> {
-		return withInMemoryCapacityLock(async () => {
-			const staged = this.stageClassCapacityWrite();
-			const created = staged.createFestivalClassConfigurationUnlocked(input);
-			await staged.recordFestivalClassCapacityAudit({
-				organizationId: input.organizationId,
-				festivalId: input.festivalId,
-				festivalClassId: created.id,
-				actorUid,
-				previousCapacity: null,
-				newCapacity: created.capacity,
-				placedCountAtChange: 0,
-				action: "class_created",
-			});
-			this.festivalClassConfigurations.set(created.id, created);
-			this.festivalClassCapacityAudits.push(
-				...staged.festivalClassCapacityAudits,
-			);
-			return { ...created };
-		});
-	}
-
-	async updateFestivalClassConfigurationWithCapacityAudit(
-		input: UpdateFestivalClassConfigurationInput,
-		actorUid?: string,
-		countPlaced?: () => Promise<number>,
-	): Promise<FestivalClassConfiguration> {
-		return withInMemoryCapacityLock(async () => {
-			const previous = this.festivalClassConfigurations.get(input.id);
-			const staged = this.stageClassCapacityWrite();
-			const updated = staged.updateFestivalClassConfigurationUnlocked(input);
-			if (updated.capacity !== previous?.capacity) {
-				await staged.recordFestivalClassCapacityAudit({
-					organizationId: input.organizationId,
-					festivalId: input.festivalId,
-					festivalClassId: input.id,
-					actorUid,
-					previousCapacity: previous?.capacity,
-					newCapacity: updated.capacity,
-					placedCountAtChange: countPlaced ? await countPlaced() : 0,
-					action: "capacity_updated",
-				});
-			}
-			if (this.festivalClassConfigurations.get(input.id) !== previous) {
-				throw new Error(
-					"Festival class configuration changed concurrently. Please retry.",
-				);
-			}
-			this.festivalClassConfigurations.set(updated.id, updated);
-			this.festivalClassCapacityAudits.push(
-				...staged.festivalClassCapacityAudits,
-			);
-			return { ...updated };
-		});
-	}
-
-	async createFestivalClassConfiguration(
-		input: CreateFestivalClassConfigurationInput,
-	): Promise<FestivalClassConfiguration> {
-		return withInMemoryCapacityLock(() =>
-			this.createFestivalClassConfigurationUnlocked(input),
-		);
-	}
-
-	private createFestivalClassConfigurationUnlocked(
-		input: CreateFestivalClassConfigurationInput,
-	): FestivalClassConfiguration {
-		if (
-			!this.organizations.has(input.organizationId) ||
-			!this.festivals.has(input.festivalId)
-		)
-			throw new Error("Festival was not found.");
-		const now = new Date().toISOString();
-		const record: FestivalClassConfiguration = {
-			id: randomUUID(),
-			...input,
-			isActive: input.isActive ?? true,
-			createdAtIso: now,
-			updatedAtIso: now,
-		};
-		this.festivalClassConfigurations.set(record.id, record);
-		return { ...record };
-	}
-
-	async updateFestivalClassConfiguration(
-		input: UpdateFestivalClassConfigurationInput,
-	): Promise<FestivalClassConfiguration> {
-		return withInMemoryCapacityLock(() =>
-			this.updateFestivalClassConfigurationUnlocked(input),
-		);
-	}
-
-	private updateFestivalClassConfigurationUnlocked(
-		input: UpdateFestivalClassConfigurationInput,
-	): FestivalClassConfiguration {
-		const current = this.festivalClassConfigurations.get(input.id);
-		if (
-			!current ||
-			current.organizationId !== input.organizationId ||
-			current.festivalId !== input.festivalId
-		) {
-			throw new Error("Festival class configuration not found.");
-		}
-		const updated: FestivalClassConfiguration = {
-			...current,
-			displayName: input.displayName ?? current.displayName,
-			classSubtypeId: current.classSubtypeId,
-			divisionId: current.divisionId,
-			minimumAge: input.minimumAge ?? current.minimumAge,
-			maximumAge: input.maximumAge ?? current.maximumAge,
-			price: input.price ?? current.price,
-			maximumPerformancePieces:
-				input.maximumPerformancePieces ?? current.maximumPerformancePieces,
-			performanceMinutes:
-				input.performanceMinutes ?? current.performanceMinutes,
-			capacity: input.capacity ?? current.capacity,
-			isActive: input.isActive ?? current.isActive,
-			shopifyProductGid: input.shopifyProductGid ?? current.shopifyProductGid,
-			shopifyVariantGid: input.shopifyVariantGid ?? current.shopifyVariantGid,
-			updatedAtIso: new Date().toISOString(),
-		};
-		this.festivalClassConfigurations.set(updated.id, updated);
-		return { ...updated };
-	}
-
-	async findFestivalClassConfigurationsByIds(
-		organizationId: string,
-		festivalId: string,
-		classIds: string[],
-	): Promise<FestivalClassConfiguration[]> {
-		const records: FestivalClassConfiguration[] = [];
-		for (const classId of new Set(classIds)) {
-			const record = this.festivalClassConfigurations.get(classId);
-			if (
-				record?.organizationId === organizationId &&
-				record.festivalId === festivalId
-			) {
-				records.push({ ...record });
-			}
-		}
-		return records;
-	}
-
-	findFestivalClassConfigurationById(
-		organizationId: string,
-		festivalId: string,
-		classId: string,
-	): Promise<FestivalClassConfiguration | null>;
-	findFestivalClassConfigurationById(
-		organizationId: string,
-		classId: string,
-	): Promise<FestivalClassConfiguration | null>;
-	async findFestivalClassConfigurationById(
-		organizationId: string,
-		festivalIdOrClassId: string,
-		classId?: string,
-	): Promise<FestivalClassConfiguration | null> {
-		if (classId === undefined) {
-			const record = this.festivalClassConfigurations.get(festivalIdOrClassId);
-			if (!record || record.organizationId !== organizationId) {
-				return null;
-			}
-			return { ...record };
-		}
-		const festivalId = festivalIdOrClassId;
-		const record = this.festivalClassConfigurations.get(classId);
-		if (
-			!record ||
-			record.organizationId !== organizationId ||
-			record.festivalId !== festivalId ||
-			record.id !== classId
-		) {
-			return null;
-		}
-		return { ...record };
-	}
-
-	async findActiveFestivalClassByShortName(
-		organizationId: string,
-		festivalShortName: string,
-		classId: string,
-		festivalId?: string,
-	): Promise<FestivalClassConfiguration | null> {
-		const record = this.festivalClassConfigurations.get(classId);
-		const festival = record && this.festivals.get(record.festivalId);
-		if (
-			!record ||
-			!festival ||
-			record.organizationId !== organizationId ||
-			festival.organizationId !== organizationId ||
-			!record.isActive ||
-			festival.shortName.trim().toLowerCase() !==
-				festivalShortName.trim().toLowerCase() ||
-			(festivalId?.trim() && festival.id !== festivalId.trim())
-		) {
-			return null;
-		}
-		return { ...record };
-	}
-
-	async listFestivalClassConfigurations(
-		organizationId: string,
-		festivalId: string,
-		activeOnly = false,
-	): Promise<FestivalClassConfiguration[]> {
-		return [...this.festivalClassConfigurations.values()]
-			.filter(
-				(record) =>
-					record.organizationId === organizationId &&
-					record.festivalId === festivalId &&
-					(!activeOnly || record.isActive),
-			)
-			.map((record) => ({ ...record }));
-	}
-
-	async recordFestivalClassCapacityAudit(
-		input: CreateFestivalClassCapacityAuditInput,
-	): Promise<FestivalClassCapacityAuditRecord> {
-		const previousCapacity = input.previousCapacity ?? null;
-		const record: FestivalClassCapacityAuditRecord = {
-			id: input.id ?? randomUUID(),
-			organizationId: input.organizationId,
-			festivalId: input.festivalId,
-			festivalClassId: input.festivalClassId,
-			actorUid: input.actorUid ?? null,
-			action:
-				input.action ??
-				(previousCapacity === null ? "class_created" : "capacity_updated"),
-			previousCapacity,
-			newCapacity: input.newCapacity,
-			placedCountAtChange: input.placedCountAtChange,
-			availabilityAfterChange:
-				input.availabilityAfterChange ??
-				evaluateClassCapacityStatus(
-					input.newCapacity,
-					input.placedCountAtChange,
-				).availability,
-			createdAtIso: input.createdAtIso ?? this.now().toISOString(),
-		};
-		this.festivalClassCapacityAudits.push(record);
-		return { ...record };
-	}
-
-	async listFestivalClassCapacityAudits(
-		organizationId: string,
-		festivalClassId: string,
-	): Promise<FestivalClassCapacityAuditRecord[]> {
-		return this.festivalClassCapacityAudits
-			.filter(
-				(record) =>
-					record.organizationId === organizationId &&
-					record.festivalClassId === festivalClassId,
-			)
-			.slice()
-			.reverse()
-			.sort((a, b) => b.createdAtIso.localeCompare(a.createdAtIso))
-			.map((record) => ({ ...record }));
-	}
-
-	async findProductRecordByShopifyProductGid(
-		shopifyProductGid: string,
-	): Promise<ProductRecord | null> {
-		return (
-			[...this.products.values()].find(
-				(product) => product.shopifyProductGid === shopifyProductGid,
+			[...this.state.products.values()].find(
+				(p) => p.shopifyProductGid === shopifyProductGid,
 			) ?? null
 		);
 	}
-
-	async findProductRecordByShopifyVariantGid(
-		shopifyVariantGid: string,
-	): Promise<ProductRecord | null> {
+	async findProductRecordByShopifyVariantGid(shopifyVariantGid: string) {
 		return (
-			[...this.products.values()].find(
-				(product) => product.shopifyVariantGid === shopifyVariantGid,
+			[...this.state.products.values()].find(
+				(p) => p.shopifyVariantGid === shopifyVariantGid,
 			) ?? null
 		);
 	}
-
 	async createEntitlementGrantSnapshot(
-		input: CreateEntitlementGrantSnapshotInput,
-	): Promise<EntitlementGrantSnapshot> {
-		assertValidEntitlementGrantSnapshotInput(input);
-		const verifiedIdentityEmail = normalizeVerifiedShopifyIdentityEmail(
-			input.verifiedIdentityEmail,
-		);
-		const offering = this.products.get(input.offeringId);
-		if (
-			!offering ||
-			offering.organizationId !== input.organizationId ||
-			offering.entitlementClass !== input.entitlementClass
-		) {
-			throw new Error(
-				"Entitlement offering was not found for this Organization.",
-			);
-		}
-		const division = this.divisions.get(input.divisionId);
-		if (!division || division.organizationId !== input.organizationId) {
-			throw new Error(
-				"Entitlement division was not found for this Organization.",
-			);
-		}
-		if (
-			[...this.entitlementGrants.values()].some(
-				(grant) =>
-					grant.checkoutIntentId === input.checkoutIntentId ||
-					grant.shopifyOrderLineGid === input.shopifyOrderLineGid,
-			)
-		) {
-			throw new Error("Entitlement grant correlation is already recorded.");
-		}
-		const overlapping = [...this.entitlementGrants.values()].filter(
-			(grant) =>
-				grant.organizationId === input.organizationId &&
-				grant.customerId === input.customerId &&
-				grant.entitlementClass === input.entitlementClass &&
-				!this.entitlementRevocations.has(grant.id) &&
-				!this.entitlementSupersededOn.has(grant.id) &&
-				grant.startsOn < input.endsOn &&
-				grant.endsOn > input.startsOn,
-		);
-		const id = randomUUID();
-		const nowIso = this.now().toISOString();
-		let effectiveEndsOn = input.endsOn;
-		let supersededPrior = false;
-		for (const prior of overlapping) {
-			if (
-				prior.startsOn <= input.startsOn &&
-				prior.endsOn > input.startsOn &&
-				calendarDaysUntil(input.startsOn, prior.endsOn) <=
-					TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS
-			) {
-				this.entitlementSupersededOn.set(prior.id, input.startsOn);
-				this.entitlementSupersededAt.set(prior.id, nowIso);
-				this.entitlementSupersededByGrantId.set(prior.id, id);
-				effectiveEndsOn = addCalendarDays(prior.endsOn, input.durationDays);
-				supersededPrior = true;
-			} else {
-				throw new Error(
-					"Teacher Membership entitlement intervals may not overlap.",
-				);
-			}
-		}
-		if (
-			!supersededPrior &&
-			input.endsOn !== addCalendarDays(input.startsOn, input.durationDays)
-		) {
-			throw new Error(
-				"Entitlement endsOn must equal startsOn plus durationDays calendar days.",
-			);
-		}
-		const {
-			status: _status,
-			verifiedIdentityEmail: _verifiedIdentityEmail,
-			...snapshot
-		} = input;
-		const record: StoredTeacherEntitlement = Object.freeze({
-			...snapshot,
-			endsOn: effectiveEndsOn,
-			id,
-			createdAtIso: new Date().toISOString(),
-		});
-		this.bindMembershipIdentityEmail(
-			input.organizationId,
-			verifiedIdentityEmail,
-			input.customerId,
-		);
-		this.entitlementGrants.set(record.id, record);
-		this.advanceEntitlementCohort(
-			record.organizationId,
-			record.customerId,
-			record.entitlementClass,
-		);
-		return this.withTeacherLifecycle(record);
+		input: Parameters<
+			OrganizationRepository["createEntitlementGrantSnapshot"]
+		>[0],
+	) {
+		return inMemCreateEntitlementGrantSnapshot(this.state, input);
 	}
-
-	async findActiveTeacherEntitlementGrant(input: {
-		organizationId: string;
-		customerId: string;
-		divisionId: string;
-	}): Promise<EntitlementGrantSnapshot | null> {
+	async findActiveTeacherEntitlementGrant(
+		input: Parameters<
+			OrganizationRepository["findActiveTeacherEntitlementGrant"]
+		>[0],
+	) {
 		return (
-			[...this.entitlementGrants.values()]
+			[...this.state.entitlementGrants.values()]
 				.filter(
-					(grant) =>
-						grant.organizationId === input.organizationId &&
-						grant.customerId === input.customerId &&
-						grant.entitlementClass === TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS &&
-						grant.divisionId === input.divisionId,
+					(g) =>
+						g.organizationId === input.organizationId &&
+						g.customerId === input.customerId &&
+						g.entitlementClass === TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS &&
+						g.divisionId === input.divisionId,
 				)
 				.sort(
 					(a, b) =>
 						a.createdAtIso.localeCompare(b.createdAtIso) ||
 						a.id.localeCompare(b.id),
 				)
-				.map((grant) => this.withTeacherLifecycle(grant))
-				.find((grant) => grant.status === "active") ?? null
+				.map((g) => withTeacherLifecycle(this.state, g))
+				.find((g) => g.status === "active") ?? null
 		);
 	}
-
 	async listEntitlementGrantSnapshots(
 		organizationId: string,
 		customerId?: string,
-	): Promise<EntitlementGrantSnapshot[]> {
-		return [...this.entitlementGrants.values()]
+	) {
+		return [...this.state.entitlementGrants.values()]
 			.filter(
-				(grant) =>
-					grant.organizationId === organizationId &&
-					(!customerId || grant.customerId === customerId),
+				(g) =>
+					g.organizationId === organizationId &&
+					(!customerId || g.customerId === customerId),
 			)
 			.sort((a, b) => a.createdAtIso.localeCompare(b.createdAtIso))
-			.map((grant) => this.withTeacherLifecycle(grant));
+			.map((g) => withTeacherLifecycle(this.state, g));
 	}
-
-	async revokeEntitlement(input: {
-		organizationId: string;
-		entitlementId: string;
-		actorUserId: string;
-		reason: string;
-		revokedAtIso: string;
-	}) {
-		const teacher = this.entitlementGrants.get(input.entitlementId);
-		const accompanist = this.accompanistMembershipGrants.get(
-			input.entitlementId,
-		);
-		const target =
-			teacher?.organizationId === input.organizationId
-				? {
-						entitlementClass: teacher.entitlementClass,
-						customerId: teacher.customerId,
-						startsOn: teacher.startsOn,
-						endsOn: teacher.endsOn,
-					}
-				: accompanist?.organizationId === input.organizationId
-					? {
-							entitlementClass: "accompanist_membership" as const,
-							customerId: accompanist.customerId,
-							startsOn: accompanist.startsOn,
-							endsOn: accompanist.endsOn,
-						}
-					: null;
-		if (!target) {
-			throw new AppError("Entitlement was not found.", 404);
-		}
-		const existing = this.entitlementRevocations.get(input.entitlementId);
-		if (existing) return { revocation: existing, existing: true };
-		const organization = this.organizations.get(input.organizationId);
-		if (!organization) throw new AppError("Organization not found.", 404);
-		const lifecycle = deriveEntitlementLifecycle(
-			target,
-			calendarDateInTimezone(this.now().toISOString(), organization.timezone),
-		);
-		if (lifecycle === "expired") {
-			throw new AppError("Expired entitlements cannot be revoked.", 409);
-		}
-		this.advanceEntitlementCohort(
-			input.organizationId,
-			target.customerId,
-			target.entitlementClass,
-		);
-		const revocation: EntitlementRevocationRecord = {
-			id: randomUUID(),
-			entitlementId: input.entitlementId,
-			organizationId: input.organizationId,
-			actorUserId: input.actorUserId,
-			reason: input.reason,
-			revokedAtIso: input.revokedAtIso,
-		};
-		this.entitlementRevocations.set(input.entitlementId, revocation);
-		return { revocation, existing: false };
+	async revokeEntitlement(
+		input: Parameters<OrganizationRepository["revokeEntitlement"]>[0],
+	) {
+		return inMemRevokeEntitlement(this.state, input);
 	}
-
-	private withAccompanistLifecycle(
-		grant: StoredAccompanistEntitlement,
-	): AccompanistMembershipGrant {
-		const organization = this.organizations.get(grant.organizationId);
-		if (!organization) throw new Error("Organization not found.");
-		const status = this.entitlementRevocations.has(grant.id)
-			? "revoked"
-			: deriveEntitlementLifecycle(
-					grant,
-					calendarDateInTimezone(
-						this.now().toISOString(),
-						organization.timezone,
-					),
-				);
-		return { ...grant, status, isCurrent: status === "active" };
-	}
-
-	private withTeacherLifecycle(
-		grant: StoredTeacherEntitlement,
-	): EntitlementGrantSnapshot {
-		const organization = this.organizations.get(grant.organizationId);
-		if (!organization) throw new Error("Organization not found.");
-		const supersededOn =
-			this.entitlementSupersededOn.get(grant.id) ?? grant.supersededOn;
-		const supersededAt =
-			this.entitlementSupersededAt.get(grant.id) ?? grant.supersededAt;
-		const supersededByGrantId =
-			this.entitlementSupersededByGrantId.get(grant.id) ??
-			grant.supersededByGrantId;
-		const status = this.entitlementRevocations.has(grant.id)
-			? "revoked"
-			: deriveEntitlementLifecycle(
-					{ ...grant, ...(supersededOn ? { supersededOn } : {}) },
-					calendarDateInTimezone(
-						this.now().toISOString(),
-						organization.timezone,
-					),
-				);
-		return {
-			...grant,
-			...(supersededOn ? { supersededOn } : {}),
-			...(supersededAt !== undefined ? { supersededAt } : {}),
-			...(supersededByGrantId !== undefined ? { supersededByGrantId } : {}),
-			status,
-		};
-	}
-
-	private advanceEntitlementCohort(
-		organizationId: string,
-		customerId: string,
-		entitlementClass: EntitlementClass,
-	): void {
-		const key = `${organizationId}:${customerId}:${entitlementClass}`;
-		this.entitlementCohortVersions.set(
-			key,
-			(this.entitlementCohortVersions.get(key) ?? 0) + 1,
-		);
-	}
-
-	private bindMembershipIdentityEmail(
-		organizationId: string,
-		normalizedEmail: string,
-		customerId: string,
-	): void {
-		const emailKey = `${organizationId}:${normalizedEmail}`;
-		const customerKey = `${organizationId}:${customerId}`;
-		const existingCustomer = this.membershipIdentityEmails.get(emailKey);
-		const existingEmail =
-			this.membershipIdentityEmailsByCustomer.get(customerKey);
-		if (
-			(existingCustomer && existingCustomer !== customerId) ||
-			(existingEmail && existingEmail !== normalizedEmail)
-		) {
-			throw new Error("Shopify identity email belongs to another customer.");
-		}
-		this.membershipIdentityEmails.set(emailKey, customerId);
-		this.membershipIdentityEmailsByCustomer.set(customerKey, normalizedEmail);
-	}
-
-	private readonly customerNames = new Map<string, string>();
-
 	setCustomerName(customerId: string, name: string): void {
-		this.customerNames.set(customerId, name);
+		this.state.customerNames.set(customerId, name);
 	}
-
 	setCustomerContact(
 		organizationIdOrContact: string | MembershipCustomerContact,
 		contact?: MembershipCustomerContact,
 	): void {
 		if (typeof organizationIdOrContact === "string" && contact) {
-			this.customerContacts.set(
+			this.state.customerContacts.set(
 				`${organizationIdOrContact}:${contact.customerId}`,
 				contact,
 			);
 		} else if (typeof organizationIdOrContact === "object") {
-			const c = organizationIdOrContact;
-			this.customerContacts.set(c.customerId, c);
+			this.state.customerContacts.set(
+				organizationIdOrContact.customerId,
+				organizationIdOrContact,
+			);
 		}
 	}
-
 	async findMembershipCustomerContacts(
 		organizationId: string,
 		customerIds: string[],
-	): Promise<Map<string, MembershipCustomerContact>> {
-		const result = new Map<string, MembershipCustomerContact>();
-		for (const customerId of customerIds) {
-			const stored =
-				this.customerContacts.get(`${organizationId}:${customerId}`) ??
-				this.customerContacts.get(customerId);
-			const fallbackName = this.customerNames.get(customerId);
-			const fallbackEmail = this.membershipIdentityEmailsByCustomer.get(
-				`${organizationId}:${customerId}`,
-			);
-			const name = stored?.name ?? fallbackName;
-			const email = stored?.email ?? fallbackEmail;
-			const phone = stored?.phone;
-			const city = stored?.city;
-			if (
-				name !== undefined ||
-				email !== undefined ||
-				phone !== undefined ||
-				city !== undefined ||
-				stored !== undefined
-			) {
-				result.set(customerId, {
-					customerId,
-					...(name?.trim() ? { name: name.trim() } : {}),
-					...(email?.trim() ? { email: email.trim() } : {}),
-					...(phone?.trim() ? { phone: phone.trim() } : {}),
-					...(city?.trim() ? { city: city.trim() } : {}),
-				});
-			}
-		}
-		return result;
+	) {
+		return inMemFindMembershipCustomerContacts(
+			this.state,
+			organizationId,
+			customerIds,
+		);
 	}
-
 	async listActiveTeachersForDivision(
 		organizationId: string,
 		divisionId: string,
-	): Promise<Array<{ id: string; name: string }>> {
-		const activeGrants = [...this.entitlementGrants.values()]
-			.filter(
-				(grant) =>
-					grant.organizationId === organizationId &&
-					grant.divisionId === divisionId &&
-					grant.entitlementClass === TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
-			)
-			.map((grant) => this.withTeacherLifecycle(grant))
-			.filter((grant) => grant.status === "active");
-
-		const seen = new Set<string>();
-		const result: Array<{ id: string; name: string }> = [];
-		for (const grant of activeGrants) {
-			if (!seen.has(grant.customerId)) {
-				seen.add(grant.customerId);
-				result.push({
-					id: grant.customerId,
-					name: this.customerNames.get(grant.customerId) || "Teacher",
-				});
-			}
-		}
-		return result.sort((a, b) => a.name.localeCompare(b.name));
-	}
-
-	private assertValidDivisionIds(
-		organizationId: string,
-		divisionIds: string[],
-	): string[] {
-		const validated = validateDivisionIds(divisionIds);
-		const uniqueIds = [...new Set(validated)];
-		for (const divId of uniqueIds) {
-			const div = this.divisions.get(divId);
-			if (!div || div.organizationId !== organizationId) {
-				throw new AppError(
-					"One or more divisions do not belong to the organization.",
-					400,
-					"invalid_division",
-				);
-			}
-		}
-		return uniqueIds.sort(compareCodePoint);
-	}
-
-	async getTeacherProfile(
-		organizationId: string,
-		customerId: string,
-	): Promise<TeacherProfileRecord | null> {
-		const match = [...this.teacherProfiles.values()].find(
-			(p) =>
-				p.organization_id === organizationId && p.customer_id === customerId,
+	) {
+		return inMemListActiveTeachersForDivision(
+			this.state,
+			organizationId,
+			divisionId,
 		);
-		return match ? { ...match, division_ids: [...match.division_ids] } : null;
-	}
-
-	async getTeacherProfileById(
-		organizationId: string,
-		profileId: string,
-	): Promise<TeacherProfileRecord | null> {
-		const match = this.teacherProfiles.get(profileId);
-		if (!match || match.organization_id !== organizationId) {
-			return null;
-		}
-		return { ...match, division_ids: [...match.division_ids] };
-	}
-
-	async upsertTeacherProfile(
-		params: UpsertTeacherProfileInput,
-	): Promise<TeacherProfileRecord> {
-		const displayName = validateDisplayName(params.displayName);
-		const publicDirectoryOptIn = validatePublicDirectoryOptIn(
-			params.publicDirectoryOptIn,
-		);
-		const divisionIds = this.assertValidDivisionIds(
-			params.organizationId,
-			params.divisionIds,
-		);
-		const existing = [...this.teacherProfiles.values()].find(
-			(p) =>
-				p.organization_id === params.organizationId &&
-				p.customer_id === params.customerId,
-		);
-		const nowIso = this.now().toISOString();
-		const approvalStatus = resolveTeacherProfileApprovalStatus(
-			existing?.approval_status,
-			publicDirectoryOptIn,
-		);
-		if (existing) {
-			const updated: TeacherProfileRecord = {
-				...existing,
-				display_name: displayName,
-				public_directory_opt_in: publicDirectoryOptIn,
-				division_ids: divisionIds,
-				teacher_color: getDeterministicTeacherColor(params.customerId),
-				approval_status: approvalStatus,
-				updated_at: nowIso,
-			};
-			this.teacherProfiles.set(existing.id, updated);
-			return { ...updated, division_ids: [...updated.division_ids] };
-		}
-		const id = randomUUID();
-		const record: TeacherProfileRecord = {
-			id,
-			organization_id: params.organizationId,
-			customer_id: params.customerId,
-			display_name: displayName,
-			teacher_color: getDeterministicTeacherColor(params.customerId),
-			public_directory_opt_in: publicDirectoryOptIn,
-			approval_status: approvalStatus,
-			division_ids: divisionIds,
-			created_at: nowIso,
-			updated_at: nowIso,
-		};
-		this.teacherProfiles.set(id, record);
-		return { ...record, division_ids: [...record.division_ids] };
-	}
-
-	async updateTeacherProfileApproval(
-		organizationId: string,
-		profileId: string,
-		approvalStatus: ProfileApprovalStatus,
-	): Promise<TeacherProfileRecord | null> {
-		const validStatus = validateProfileApprovalStatus(approvalStatus);
-		const match = this.teacherProfiles.get(profileId);
-		if (!match || match.organization_id !== organizationId) {
-			return null;
-		}
-		const updated: TeacherProfileRecord = {
-			...match,
-			approval_status: validStatus,
-			updated_at: this.now().toISOString(),
-		};
-		this.teacherProfiles.set(profileId, updated);
-		return { ...updated, division_ids: [...updated.division_ids] };
-	}
-
-	async listTeacherProfiles(
-		organizationId: string,
-	): Promise<TeacherProfileRecord[]> {
-		return [...this.teacherProfiles.values()]
-			.filter((p) => p.organization_id === organizationId)
-			.sort(compareProfilesByName)
-			.map((p) => ({ ...p, division_ids: [...p.division_ids] }));
-	}
-
-	async getAccompanistProfile(
-		organizationId: string,
-		customerId: string,
-	): Promise<AccompanistProfileRecord | null> {
-		const match = [...this.accompanistProfiles.values()].find(
-			(p) =>
-				p.organization_id === organizationId && p.customer_id === customerId,
-		);
-		return match ? this.withAccompanistContact(match) : null;
-	}
-
-	async getAccompanistProfileById(
-		organizationId: string,
-		profileId: string,
-	): Promise<AccompanistProfileRecord | null> {
-		const match = this.accompanistProfiles.get(profileId);
-		if (!match || match.organization_id !== organizationId) {
-			return null;
-		}
-		return this.withAccompanistContact(match);
-	}
-
-	async upsertAccompanistProfile(
-		params: UpsertAccompanistProfileInput,
-	): Promise<AccompanistProfileRecord> {
-		const displayName = validateDisplayName(params.displayName);
-		const publicDirectoryOptIn = validatePublicDirectoryOptIn(
-			params.publicDirectoryOptIn,
-		);
-		const divisionIds = this.assertValidDivisionIds(
-			params.organizationId,
-			params.divisionIds,
-		);
-		const existing = [...this.accompanistProfiles.values()].find(
-			(p) =>
-				p.organization_id === params.organizationId &&
-				p.customer_id === params.customerId,
-		);
-		const nowIso = this.now().toISOString();
-
-		if (existing) {
-			const updated: AccompanistProfileRecord = {
-				...existing,
-				display_name: displayName,
-				public_directory_opt_in: publicDirectoryOptIn,
-				division_ids: divisionIds,
-				approval_status: profileEditRequiresReapproval(
-					{
-						displayName: existing.display_name,
-						divisionIds: existing.division_ids,
-					},
-					{ displayName, divisionIds },
-				)
-					? "pending"
-					: existing.approval_status,
-				updated_at: nowIso,
-			};
-			this.accompanistProfiles.set(existing.id, updated);
-			return this.withAccompanistContact(updated);
-		}
-		const id = randomUUID();
-		const record: AccompanistProfileRecord = {
-			id,
-			organization_id: params.organizationId,
-			customer_id: params.customerId,
-			display_name: displayName,
-			public_directory_opt_in: publicDirectoryOptIn,
-			approval_status: "pending",
-			division_ids: divisionIds,
-			created_at: nowIso,
-			updated_at: nowIso,
-		};
-		this.accompanistProfiles.set(id, record);
-		return this.withAccompanistContact(record);
-	}
-
-	async updateAccompanistProfileApproval(
-		organizationId: string,
-		profileId: string,
-		approvalStatus: ProfileApprovalStatus,
-	): Promise<AccompanistProfileRecord | null> {
-		const validStatus = validateProfileApprovalStatus(approvalStatus);
-		const match = this.accompanistProfiles.get(profileId);
-		if (!match || match.organization_id !== organizationId) {
-			return null;
-		}
-		const updated: AccompanistProfileRecord = {
-			...match,
-			approval_status: validStatus,
-			updated_at: this.now().toISOString(),
-		};
-		this.accompanistProfiles.set(profileId, updated);
-		return this.withAccompanistContact(updated);
-	}
-
-	async listAccompanistProfiles(
-		organizationId: string,
-	): Promise<AccompanistProfileRecord[]> {
-		return [...this.accompanistProfiles.values()]
-			.filter((p) => p.organization_id === organizationId)
-			.sort(compareProfilesByName)
-			.map((p) => this.withAccompanistContact(p));
-	}
-
-	private withAccompanistContact(
-		profile: AccompanistProfileRecord,
-	): AccompanistProfileRecord {
-		const customerKey = `${profile.organization_id}:${profile.customer_id}`;
-		const contact =
-			this.customerContacts.get(customerKey) ??
-			this.customerContacts.get(profile.customer_id);
-		// Mirrors Postgres: COALESCE(identity.normalized_email, c.email), c.phone.
-		const email =
-			this.membershipIdentityEmailsByCustomer.get(customerKey) ??
-			contact?.email;
-		const phone = contact?.phone;
-		return {
-			...profile,
-			division_ids: [...profile.division_ids],
-			...(phone ? { phone } : {}),
-			...(email ? { email } : {}),
-		};
-	}
-
-	private resolveDirectoryDivisions(
-		organizationId: string,
-		divisionIds: readonly string[],
-	): PublicDirectoryDivisionDto[] {
-		return divisionIds
-			.map((id) => this.divisions.get(id))
-			.filter((d): d is OrganizationDivision & { normalizedName: string } =>
-				Boolean(d && d.organizationId === organizationId),
-			)
-			.map((d) => ({ id: d.id, name: d.displayName }))
-			.sort(compareDivisionsByName);
-	}
-
-	private listPublicDirectoryTeachers(
-		organizationId: string,
-	): PublicDirectoryProfileDto[] {
-		const activeTeacherCustomerIds = new Set(
-			[...this.entitlementGrants.values()]
-				.filter(
-					(grant) =>
-						grant.organizationId === organizationId &&
-						grant.entitlementClass === TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
-				)
-				.map((grant) => this.withTeacherLifecycle(grant))
-				.filter((grant) => grant.status === "active")
-				.map((grant) => grant.customerId),
-		);
-		return [...this.teacherProfiles.values()]
-			.filter(
-				(p) =>
-					p.organization_id === organizationId &&
-					p.public_directory_opt_in &&
-					p.approval_status === "approved" &&
-					activeTeacherCustomerIds.has(p.customer_id),
-			)
-			.sort(compareProfilesByName)
-			.map((tp) =>
-				validatePublicDirectoryProfileDto({
-					displayName: tp.display_name,
-					role: "Teacher",
-					approvedDivisions: this.resolveDirectoryDivisions(
-						organizationId,
-						tp.division_ids,
-					),
-					teacherColor: getDeterministicTeacherColor(tp.customer_id),
-					isActiveMember: true,
-				}),
-			);
-	}
-
-	private listPublicDirectoryAccompanists(
-		organizationId: string,
-	): PublicDirectoryProfileDto[] {
-		const activeAccompanistCustomerIds = new Set(
-			[...this.accompanistMembershipGrants.values()]
-				.filter((grant) => grant.organizationId === organizationId)
-				.map((grant) => this.withAccompanistLifecycle(grant))
-				.filter((grant) => grant.status === "active")
-				.map((grant) => grant.customerId),
-		);
-		return [...this.accompanistProfiles.values()]
-			.filter(
-				(p) =>
-					p.organization_id === organizationId &&
-					p.public_directory_opt_in &&
-					p.approval_status === "approved",
-			)
-			.sort(compareProfilesByName)
-			.map((ap) =>
-				validatePublicDirectoryProfileDto({
-					displayName: ap.display_name,
-					role: "Accompanist",
-					approvedDivisions: this.resolveDirectoryDivisions(
-						organizationId,
-						ap.division_ids,
-					),
-					isActiveMember: activeAccompanistCustomerIds.has(ap.customer_id),
-				}),
-			);
-	}
-
-	async getPublicDirectoryProfiles(
-		organizationId: string,
-	): Promise<PublicDirectoryProfileDto[]> {
-		return [
-			...this.listPublicDirectoryTeachers(organizationId),
-			...this.listPublicDirectoryAccompanists(organizationId),
-		];
 	}
 }
