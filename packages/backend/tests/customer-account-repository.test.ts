@@ -393,4 +393,75 @@ describe("customer account repository contract", () => {
 		}
 		expect(await repo.findActiveChildAgeSnapshot("org", child.id)).toBeNull();
 	});
+	it("createChildWithAgeSnapshot atomically creates child and age snapshot", async () => {
+		const repo = new InMemoryCustomerAccountRepository();
+		const result = await repo.createChildWithAgeSnapshot({
+			child: {
+				organizationId: "org",
+				parentCustomerId: "parent_1",
+				displayName: "Charlie",
+			},
+			snapshot: {
+				age: 7,
+				validUntilIso: "2027-01-01T00:00:00.000Z",
+			},
+		});
+		expect(result.child).toMatchObject({
+			organizationId: "org",
+			parentCustomerId: "parent_1",
+			displayName: "Charlie",
+		});
+		expect(result.ageSnapshot).toMatchObject({
+			organizationId: "org",
+			childId: result.child.id,
+			age: 7,
+			validUntilIso: "2027-01-01T00:00:00.000Z",
+		});
+		expect(result.ageSnapshot.supersededAtIso).toBeUndefined();
+
+		await expect(
+			repo.createChildWithAgeSnapshot({
+				child: {
+					organizationId: "org",
+					parentCustomerId: "parent_1",
+					displayName: "charlie",
+				},
+				snapshot: {
+					age: 8,
+					validUntilIso: "2027-01-01T00:00:00.000Z",
+				},
+			}),
+		).rejects.toThrow("Child display name is already registered.");
+	});
+	it("findSessionCustomerAndIntegration resolves session, customer, and integration in one call", async () => {
+		const repo = new InMemoryCustomerAccountRepository();
+		const now = new Date().toISOString();
+		expect(
+			await repo.findSessionCustomerAndIntegration("missing-session", "org"),
+		).toBeNull();
+
+		await repo.upsertIntegration({
+			organizationId: "org",
+			storefrontDomain: "store.example.com",
+			clientId: "client_1",
+			encryptedClientSecret: "secret_1",
+		});
+		const created = await repo.createCustomerSession({
+			...session(now),
+			sessionId: "sess_1",
+			organizationId: "org",
+		});
+
+		expect(
+			await repo.findSessionCustomerAndIntegration("sess_1", "other-org"),
+		).toEqual({ organizationMismatch: true });
+
+		const found = await repo.findSessionCustomerAndIntegration("sess_1", "org");
+		expect(found).not.toBeNull();
+		if (found && !("organizationMismatch" in found)) {
+			expect(found.session.sessionId).toBe("sess_1");
+			expect(found.customer?.id).toBe(created.customer.id);
+			expect(found.integration?.organizationId).toBe("org");
+		}
+	});
 });

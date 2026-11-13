@@ -49,7 +49,7 @@ async function sendChildRequest(
 	index: number,
 	config: BenchmarkConfig,
 ): Promise<RequestResult> {
-	const id = String(index).padStart(3, "0");
+	const id = String(index).padStart(4, "0");
 	const sessionId = `perf-sess-${id}`;
 	const csrfToken = `perf-csrf-${id}`;
 	const url = `${config.baseUrl}/api/organizations/${config.slug}/customer/children`;

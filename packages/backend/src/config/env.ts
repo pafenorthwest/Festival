@@ -5,6 +5,7 @@ export interface AppEnv {
 	port: number;
 	databaseUrl?: string;
 	databaseSchema?: string;
+	databasePoolMax: number;
 	firebaseProjectId?: string;
 	firebaseClientEmail?: string;
 	firebasePrivateKey?: string;
@@ -31,6 +32,8 @@ export interface AppEnv {
 	enableDropTransfer?: boolean;
 	shopifyAdminAuditPath?: string;
 }
+
+export type BackendEnv = AppEnv;
 
 const LOCAL_API_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
 const LOCAL_API_PORTS = [5172, 5173, 8080];
@@ -82,6 +85,22 @@ function parseDatabaseSsl(value: string | undefined): string {
 	}
 
 	return "require";
+}
+
+export function parseDatabasePoolMax(
+	raw: string | undefined,
+): number | undefined {
+	const trimmed = raw?.trim();
+	if (!trimmed) {
+		return undefined;
+	}
+
+	const value = Number(trimmed);
+	if (!Number.isInteger(value) || value <= 0) {
+		throw new Error(`Invalid DB_POOL_MAX value: ${trimmed}`);
+	}
+
+	return value;
 }
 
 function parseShopifyAdminAuditPath(value: string | undefined): string {
@@ -163,6 +182,7 @@ export function loadEnv(options?: {
 		port,
 		databaseUrl,
 		databaseSchema,
+		databasePoolMax: parseDatabasePoolMax(process.env.DB_POOL_MAX) ?? 80,
 		firebaseProjectId,
 		firebaseClientEmail: process.env.FIREBASE_CLIENT_EMAIL?.trim(),
 		firebasePrivateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
