@@ -5,11 +5,11 @@
 Independent code review of `s06-schema-migrations-ledger-runner` against `goals/s06-schema-migrations-ledger-runner/goals.v0.md` (`[G1]`–`[G4]`), `tasks/s06-schema-migrations-ledger-runner/spec.md`, and `specs/bounded-contexts-2026.md` (§4.8 Platform Infrastructure).
 
 ## Scope & Files Reviewed
-- `database/postgres17-schema.sql` (`orgs.schema_migrations` table and primary key constraint)
+- `database/postgres17-schema.sql` (`orgs.schema_migrations` table and primary key constraint; reconciled to canonical Postgres 17 `pg_dump --schema-only` output)
 - `database/migrations/20261109000000_load_pafe_concertos.sql` -> `database/bootstrap/20261109000000_load_pafe_concertos.sql` (separated `\copy` seed from DDL migrations)
 - `database/migrations/README.md`
 - `scripts/migrate.ts` (253 lines)
-- `scripts/check-schema-parity.ts` (97 lines)
+- `scripts/check-schema-parity.ts` (98 lines; includes leading `\uFEFF` BOM stripping in `normalizePgDumpForParity`)
 - `package.json` (`migrate` and `check:schema-parity` scripts)
 - `packages/backend/src/repo/postgres-schema.ts` (`initializePostgresSchema` and `provisionPostgresTestSchema`)
 - `packages/backend/src/routes/private-runtime.routes.ts` (`/ready` via `repository.ensureReady()`)
@@ -33,7 +33,7 @@ Independent code review of `s06-schema-migrations-ledger-runner` against `goals/
    - Advisory lock lifecycle: `scripts/migrate.ts` reserves a dedicated connection (`db.reserve()`), acquires `pg_advisory_lock(hashtextextended($1, 0))`, and guarantees `pg_advisory_unlock` and `reserved.release()` in nested `finally` blocks, followed by `await db.close()`.
    - Transaction atomicity: each pending migration's SQL and its `INSERT INTO ... schema_migrations` ledger record execute together inside `reserved.begin(async (tx) => ...)`.
    - SQL injection safety: schema names are validated against `/^[A-Za-z_][A-Za-z0-9_]{0,62}$/`; ledger queries, advisory lock keys, and readiness probes use parameterized `$1`/`$2`/`$3` bindings.
-   - Size & cleanliness guardrails: all new files are `<= 500` lines (`scripts/migrate.ts`: 253L, `scripts/check-schema-parity.ts`: 97L, `packages/backend/tests/migrate-runner.test.ts`: 322L); all new functions are `<= 36` lines and `<= 3` parameters; no secrets or debug logs present.
+   - Size & cleanliness guardrails: all new files are `<= 500` lines (`scripts/migrate.ts`: 253L, `scripts/check-schema-parity.ts`: 98L, `packages/backend/tests/migrate-runner.test.ts`: 322L); all new functions are `<= 36` lines and `<= 3` parameters; no secrets or debug logs present.
 
 - Findings status: none
 

@@ -25,6 +25,7 @@ function isIgnoredParityLine(line: string): boolean {
 
 export function normalizePgDumpForParity(sqlText: string): string {
 	return sqlText
+		.replace(/^\uFEFF/, "")
 		.replaceAll("\r\n", "\n")
 		.split("\n")
 		.filter((line) => !isIgnoredParityLine(line))
