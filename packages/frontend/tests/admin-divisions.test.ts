@@ -4,8 +4,8 @@ import {
 	listIanaTimezones,
 	moveDivisionIds,
 } from "../src/app/adminDivisions.js";
-import type { FestivalAppState } from "../src/app/createFestivalAppState.js";
-import { createFestivalDataLoaders } from "../src/app/createFestivalDataLoaders.js";
+import type { FestivalAppController } from "../src/app/useFestivalAppController.js";
+import { createDivisionHelpers } from "../src/domains/admin-org/adminOrgDivisionHelpers.js";
 import {
 	createAdminDivision,
 	getAdminDivisions,
@@ -164,25 +164,32 @@ describe("Admin divisions frontend contract", () => {
 			);
 		}) as typeof fetch;
 
-		const state = {
+		const shell = {
 			firebaseUser: () => currentUser,
 			route: () => ({ kind: "org-admin-divisions", slug: "pafe" }),
-			setIsLoadingDivisionConfiguration: (value: boolean) => {
-				isLoading = value;
-			},
-			setDivisionConfigurationLoadError: () => undefined,
-			setDivisions: (value: Array<{ displayName: string }>) => {
+		} as unknown as FestivalAppController;
+		const helpers = createDivisionHelpers({
+			shell,
+			divisions: () => divisions as never,
+			setDivisions: ((value: Array<{ displayName: string }>) => {
 				divisions = value;
-			},
-			setDivisionRenameDrafts: () => undefined,
-			setOrganizationTimezone: () => undefined,
-			setTimezoneDraft: () => undefined,
-		} as unknown as FestivalAppState;
-		const loaders = createFestivalDataLoaders(state);
+			}) as never,
+			divisionNameDraft: () => "",
+			setDivisionNameDraft: (() => undefined) as never,
+			divisionRenameDrafts: () => ({}),
+			setDivisionRenameDrafts: (() => undefined) as never,
+			setCreateDivisionAttempted: (() => undefined) as never,
+			setIsLoadingDivisionConfiguration: ((value: boolean) => {
+				isLoading = value;
+			}) as never,
+			setDivisionConfigurationLoadError: (() => undefined) as never,
+			isDivisionMutationPending: () => false,
+			setIsDivisionMutationPending: (() => undefined) as never,
+		});
 
-		const olderLoad = loaders.loadDivisionConfiguration("pafe");
+		const olderLoad = helpers.loadDivisionConfiguration("pafe");
 		currentUser = newerUser;
-		await loaders.loadDivisionConfiguration("pafe");
+		await helpers.loadDivisionConfiguration("pafe");
 		resolveOlderToken?.("older-token");
 		await olderLoad;
 
@@ -199,10 +206,11 @@ describe("Admin divisions frontend contract", () => {
 
 	it("renders the locked workflow states and guards all mutations", async () => {
 		const page = await Bun.file("src/pages/AdminDivisionsPage.tsx").text();
-		const actions = await Bun.file("src/app/createFestivalActions.ts").text();
-		const lifecycle = await Bun.file("src/app/useFestivalLifecycle.ts").text();
-		const loaders = await Bun.file(
-			"src/app/createFestivalDataLoaders.ts",
+		const divisionHelpers = await Bun.file(
+			"src/domains/admin-org/adminOrgDivisionHelpers.ts",
+		).text();
+		const adminOrgContext = await Bun.file(
+			"src/domains/admin-org/AdminOrgContext.tsx",
 		).text();
 		const home = await Bun.file("src/pages/AdminHomePage.tsx").text();
 
@@ -211,7 +219,7 @@ describe("Admin divisions frontend contract", () => {
 		expect(page).toContain("Loading division configuration");
 		expect(page).toContain("Saving division configuration");
 		expect(page).toContain("No divisions configured yet.");
-		expect(loaders).toContain(
+		expect(divisionHelpers).toContain(
 			"Division configuration is temporarily unavailable",
 		);
 		expect(page).toContain("Inactive divisions remain on historical purchases");
@@ -219,10 +227,10 @@ describe("Admin divisions frontend contract", () => {
 		expect(page).toContain("Move down");
 		expect(page).toContain("Activate");
 		expect(page).toContain("Deactivate");
-		expect(actions).toContain("state.isDivisionMutationPending()");
-		expect(actions).toContain("!state.isAdminMember()");
-		expect(loaders).toContain("divisionConfigurationLoadVersion");
-		expect(loaders).toContain("isCurrentDivisionConfigurationLoad");
-		expect(lifecycle).toContain("if (!state.isAdminMember())");
+		expect(divisionHelpers).toContain("deps.isDivisionMutationPending()");
+		expect(divisionHelpers).toContain("!shell.isAdminMember()");
+		expect(divisionHelpers).toContain("divisionConfigurationLoadVersion");
+		expect(divisionHelpers).toContain("isCurrentDivisionConfigurationLoad");
+		expect(adminOrgContext).toContain("if (!shell.isAdminMember()) return;");
 	});
 });

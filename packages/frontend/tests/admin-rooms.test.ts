@@ -15,14 +15,18 @@ describe("admin rooms panel", () => {
 	});
 
 	it("wires the rooms route into the app shell and admin home page", async () => {
+		const routePaths = await read("../src/lib/routePaths.ts");
 		const routes = await read("../src/lib/routes.ts");
-		const app = await read("../src/App.tsx");
+		const appRoutes = await read("../src/app/AdminRoutes.tsx");
+		const lazyPages = await read("../src/app/lazyPages.ts");
 		const home = await read("../src/pages/AdminHomePage.tsx");
 
-		expect(routes).toContain('kind: "org-admin-rooms"');
-		expect(routes).toContain("buildOrgAdminRoomsPath");
-		expect(app).toContain('app.route().kind === "org-admin-rooms"');
-		expect(app).toContain("<AdminRoomsPage");
+		expect(routePaths).toContain('kind: "org-admin-rooms"');
+		expect(routePaths).toContain("buildOrgAdminRoomsPath");
+		expect(routes).toContain('"org-admin-rooms"');
+		expect(appRoutes).toContain('path="/admin/rooms"');
+		expect(appRoutes).toContain("<Pages.AdminRoomsPage");
+		expect(lazyPages).toContain('"org-admin-rooms": AdminRoomsPage');
 		expect(home).toContain("buildOrgAdminRoomsPath");
 		expect(home).toContain("<strong>Rooms</strong>");
 	});
@@ -30,9 +34,11 @@ describe("admin rooms panel", () => {
 	it("uses the admin header and Rooms breadcrumb on the rooms route", async () => {
 		const state = await read("../src/app/createFestivalAppState.ts");
 		const header = await read("../src/components/AppHeader.tsx");
-		const adminRouteKinds = state
-			.split("const ADMIN_ROUTE_KINDS = [")[1]
-			?.split("] as const;")[0];
+		const adminBreadcrumbs = state
+			.split(
+				'const ADMIN_BREADCRUMBS: Partial<Record<AppRoute["kind"], string>> = {',
+			)[1]
+			?.split("};")[0];
 		const adminSubRoute = state
 			.split("const isAdminSubRoute = createMemo(")[1]
 			?.split("const adminBreadcrumb =")[0];
@@ -40,11 +46,12 @@ describe("admin rooms panel", () => {
 			.split("const adminBreadcrumb = createMemo(")[1]
 			?.split("const adminUserLabel =")[0];
 
-		expect(adminRouteKinds).toContain('"org-admin-rooms"');
-		expect(adminSubRoute).toContain('route().kind === "org-admin-rooms"');
-		expect(adminBreadcrumb).toMatch(
-			/case "org-admin-rooms":\s*return "Admin > Rooms";/,
+		expect(adminBreadcrumbs).toContain('"org-admin-rooms": "Admin > Rooms"');
+		expect(state).toContain("kind in ADMIN_BREADCRUMBS");
+		expect(adminSubRoute).toContain(
+			'isAdminRoute() && route().kind !== "org-admin"',
 		);
+		expect(adminBreadcrumb).toContain("ADMIN_BREADCRUMBS[route().kind]");
 		expect(header).toContain("when={props.app.isAdminRoute()}");
 		expect(header).toContain("{props.app.adminBreadcrumb()}");
 		expect(header).toContain("when={props.app.isAdminSubRoute()}");

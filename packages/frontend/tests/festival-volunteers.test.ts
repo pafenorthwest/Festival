@@ -19,66 +19,68 @@ afterEach(() => {
 
 describe("volunteer sign-in flow", () => {
 	it("uses volunteer admin intent for volunteer management", async () => {
-		const state = await read("../src/app/createFestivalAppState.ts");
-		const lifecycle = await read("../src/app/useFestivalLifecycle.ts");
+		const volunteersContext = await read(
+			"../src/domains/volunteers/VolunteersContext.tsx",
+		);
 		const page = await read("../src/pages/VolunteerRolesPage.tsx");
-		const app = await read("../src/App.tsx");
+		const appRoutes = await read("../src/app/AdminRoutes.tsx");
 		const home = await read("../src/pages/AdminHomePage.tsx");
 
-		expect(state).toContain("hasVolunteerAdminIntent");
-		expect(state).toContain('"Division Chair"');
-		expect(state).toContain('"Concert Chair"');
-		expect(lifecycle).toContain('currentRoute.kind === "org-admin-volunteers"');
-		expect(lifecycle).toContain("state.hasVolunteerAdminIntent()");
-		expect(lifecycle).toContain("loadFestivals(currentRoute.slug)");
-		expect(page).toContain("props.app.hasVolunteerAdminIntent()");
+		expect(volunteersContext).toContain("hasVolunteerAdminIntent");
+		expect(volunteersContext).toContain('"Division Chair"');
+		expect(volunteersContext).toContain('"Concert Chair"');
+		expect(volunteersContext).toContain(
+			'currentRoute?.kind === "org-admin-volunteers"',
+		);
+		expect(volunteersContext).toContain("hasVolunteerAdminIntent()");
+		expect(volunteersContext).toContain("loadFestivals(currentRoute.slug)");
+		expect(page).toContain("volunteers.hasVolunteerAdminIntent()");
 		expect(page).toContain("AccessDeniedPanel");
 		expect(page).toContain(
-			"useAdminFestivalSelection(() => props.app.festivals())",
+			"useAdminFestivalSelection(() => volunteers.festivals())",
 		);
 		expect(page).toContain("<FestivalSelector");
 		expect(page).toContain("onChange={setSelectedFestivalShortName}");
 		expect(page).toContain(
 			"getVolunteerRoles(token, props.slug, festivalShortName)",
 		);
-		expect(app).toContain("<VolunteerRolesPage");
-		expect(app).toContain("app={app}");
+		expect(appRoutes).toContain("<Pages.VolunteerRolesPage");
+		expect(appRoutes).toContain("app={app}");
 		const volunteersLabelIndex = home.indexOf("<strong>Volunteers</strong>");
 		const volunteersCard = home.slice(
 			home.lastIndexOf("<button", volunteersLabelIndex),
 			volunteersLabelIndex,
 		);
-		expect(volunteersCard).toContain("props.app.hasVolunteerAdminIntent()");
+		expect(volunteersCard).toContain("volunteers.hasVolunteerAdminIntent()");
 		expect(volunteersCard).not.toContain("props.app.isAdminMember()");
 		const festivalsCard = home.slice(
 			home.lastIndexOf("<button", home.indexOf("<strong>Festivals</strong>")),
 			home.indexOf("<strong>Festivals</strong>"),
 		);
 		expect(festivalsCard).toContain("props.app.isAdminMember()");
-		expect(festivalsCard).not.toContain("props.app.hasVolunteerAdminIntent()");
+		expect(festivalsCard).not.toContain("hasVolunteerAdminIntent()");
 	});
 
 	it("loads the URL organization before evaluating a volunteer-admin direct link", async () => {
 		const lifecycle = await read("../src/app/useFestivalLifecycle.ts");
-		const organizationLoadStart = lifecycle.indexOf(
-			'currentRoute.kind === "org-root"',
+		const volunteersContext = await read(
+			"../src/domains/volunteers/VolunteersContext.tsx",
 		);
-		const organizationLoadCondition = lifecycle.slice(
-			organizationLoadStart,
-			lifecycle.indexOf("state.firebaseUser()", organizationLoadStart),
-		);
-		const volunteerAdminLoad = lifecycle.indexOf(
-			'currentRoute.kind === "org-admin-volunteers"',
-		);
-		const volunteerAdminIntent = lifecycle.indexOf(
-			"state.hasVolunteerAdminIntent()",
+		const orgLoadSet = lifecycle.slice(
+			lifecycle.indexOf("ORGANIZATION_LOAD_ROUTE_KINDS"),
+			lifecycle.indexOf(
+				"]);",
+				lifecycle.indexOf("ORGANIZATION_LOAD_ROUTE_KINDS"),
+			),
 		);
 
-		expect(organizationLoadCondition).toContain(
-			'currentRoute.kind === "org-admin-volunteers"',
-		);
-		expect(volunteerAdminLoad).toBeLessThan(volunteerAdminIntent);
+		expect(orgLoadSet).toContain('"org-root"');
+		expect(orgLoadSet).toContain('"org-admin-volunteers"');
 		expect(lifecycle).toContain("loadOrganization(currentRoute.slug)");
+		expect(volunteersContext).toContain(
+			'currentRoute?.kind === "org-admin-volunteers"',
+		);
+		expect(volunteersContext).toContain("hasVolunteerAdminIntent()");
 	});
 
 	it("requests roles for the selected festival", async () => {
@@ -139,7 +141,7 @@ describe("volunteer sign-in flow", () => {
 		const lifecycle = await read("../src/app/useFestivalLifecycle.ts");
 
 		expect(actions).toContain('kind: "volunteer" as const');
-		expect(actions).toContain("route.festivalSlug");
+		expect(actions).toContain("currentRoute.festivalSlug");
 		expect(actions).toContain(
 			"Volunteer sign-in must start from a festival page.",
 		);
@@ -152,14 +154,14 @@ describe("volunteer sign-in flow", () => {
 
 	it("shows a public volunteer page that verifies the festival and offers sign-in", async () => {
 		const page = await read("../src/pages/FestivalVolunteersPage.tsx");
-		const app = await read("../src/App.tsx");
+		const appRoutes = await read("../src/app/AppRoutes.tsx");
 
 		expect(page).toContain("getPublicFestival");
 		expect(page).toContain("Festival not found.");
 		expect(page).toContain('festival.state === "errored"');
 		expect(page).toContain('openSignInModal("volunteer")');
-		expect(app).toContain('app.route().kind === "festival-volunteers"');
-		expect(app).toContain("<FestivalVolunteersPage");
+		expect(appRoutes).toContain('path="/festival/:festivalSlug/volunteers"');
+		expect(appRoutes).toContain("<Pages.FestivalVolunteersPage");
 	});
 
 	it("interacts with volunteer API endpoints with proper paths and options", async () => {

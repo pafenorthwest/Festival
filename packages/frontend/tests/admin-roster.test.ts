@@ -83,11 +83,17 @@ describe("AdminRosterPage contract and rendering", () => {
 		expect(page).toContain("Staff Roster");
 	});
 
-	it("wires route in App.tsx", async () => {
-		const app = await read("../src/App.tsx");
+	it("wires route in AppRoutes.tsx", async () => {
+		const appRoutes = await read("../src/app/AdminRoutes.tsx");
+		const lazyPages = await read("../src/app/lazyPages.ts");
+		const routes = await read("../src/lib/routes.ts");
 
-		expect(app).toContain('app.route().kind === "org-admin-roster"');
-		expect(app).toContain("<AdminRosterPage app={app} />");
+		expect(routes).toContain('"org-admin-roster"');
+		expect(lazyPages).toContain('"org-admin-roster": AdminRosterPage');
+		expect(appRoutes).toContain(
+			'path={["/admin/roster", "/admin/accompanists"]}',
+		);
+		expect(appRoutes).toContain("<Pages.AdminRosterPage app={app} />");
 	});
 
 	it("correctly filters sample roster entries by membership type", () => {

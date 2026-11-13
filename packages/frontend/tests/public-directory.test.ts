@@ -45,8 +45,16 @@ function profile(
 	return { displayName, role, approvedDivisions: [], isActiveMember: true };
 }
 
-const appSource = await Bun.file(
-	new URL("../src/App.tsx", import.meta.url),
+const appRoutesSource = await Bun.file(
+	new URL("../src/app/AppRoutes.tsx", import.meta.url),
+).text();
+
+const lazyPagesSource = await Bun.file(
+	new URL("../src/app/lazyPages.ts", import.meta.url),
+).text();
+
+const routesSource = await Bun.file(
+	new URL("../src/lib/routes.ts", import.meta.url),
 ).text();
 
 const sideNavigationSource = await Bun.file(
@@ -93,15 +101,19 @@ describe("public directory routing, navigation, and API", () => {
 		expect(sideNavigationSource).toContain("groups");
 	});
 
-	it("wires public directory route and page component in App.tsx", () => {
-		expect(appSource).toMatch(
-			/PublicDirectoryPage[\s\S]*?from\s*["']\.\/(?:pages\/PublicDirectoryPage|app\/lazyPages)(?:\.js)?["']/,
+	it("wires public directory route and page component in AppRoutes.tsx", () => {
+		expect(lazyPagesSource).toMatch(
+			/export const PublicDirectoryPage = lazyPage\(\(\) =>[\s\S]*?import\(["']\.\.\/pages\/PublicDirectoryPage(?:\.js)?["']\)/,
 		);
-		expect(appSource).toContain('app.route().kind === "org-public-directory"');
-		expect(appSource).toContain("<PublicDirectoryPage");
-		expect(appSource).toContain(
-			"slug={(app.route() as { slug: string }).slug}",
+		expect(lazyPagesSource).toContain(
+			'"org-public-directory": PublicDirectoryPage',
 		);
+		expect(routesSource).toContain('"org-public-directory"');
+		expect(appRoutesSource).toContain(
+			'import * as Pages from "./lazyPages.js"',
+		);
+		expect(appRoutesSource).toContain('path="/directory"');
+		expect(appRoutesSource).toContain("<Pages.PublicDirectoryPage slug={slug}");
 	});
 
 	it("fetches public directory profiles from GET /api/org-info/:orgSlug/directory/profiles", async () => {

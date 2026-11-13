@@ -28,7 +28,15 @@ const modalComponent = await Bun.file(
 const waitlistModalComponent = await Bun.file(
 	new URL("../src/components/FestivalClassWaitlistModal.tsx", import.meta.url),
 ).text();
-const app = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
+const appRoutes = await Bun.file(
+	new URL("../src/app/AppRoutes.tsx", import.meta.url),
+).text();
+const lazyPages = await Bun.file(
+	new URL("../src/app/lazyPages.ts", import.meta.url),
+).text();
+const routes = await Bun.file(
+	new URL("../src/lib/routes.ts", import.meta.url),
+).text();
 const appState = await Bun.file(
 	new URL("../src/app/createFestivalAppState.ts", import.meta.url),
 ).text();
@@ -52,14 +60,20 @@ describe("Festival Admin Classes entry point", () => {
 		);
 		expect(classesPage).toContain("Festival not found.");
 		expect(classesPage).toContain("buildFestivalAdminPath");
-		expect(app).toContain('app.route().kind === "festival-admin-classes"');
+		expect(routes).toContain('"festival-admin-classes"');
+		expect(lazyPages).toContain(
+			'"festival-admin-classes": FestivalAdminClassesPage',
+		);
+		expect(appRoutes).toContain('path="/festival/:festivalSlug/admin/classes"');
+		expect(appRoutes).toContain("<Pages.FestivalAdminClassesPage");
 	});
 
 	it("uses the Admin masthead treatment for Festival Admin routes", () => {
-		expect(appState).toContain('"festival-admin",');
-		expect(appState).toContain('"festival-admin-classes",');
-		expect(appState).toContain('return "Admin > Festival";');
-		expect(appState).toContain('return "Admin > Festival > Classes";');
+		expect(appState).toContain('"festival-admin": "Admin > Festival",');
+		expect(appState).toContain(
+			'"festival-admin-classes": "Admin > Festival > Classes",',
+		);
+		expect(appState).toContain("kind in ADMIN_BREADCRUMBS");
 	});
 });
 

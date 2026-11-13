@@ -357,9 +357,13 @@ describe("billing routing & dashboard wiring contract", () => {
 		);
 	});
 
-	it("mounts BillingReconciliationPage in App.tsx", async () => {
-		const app = await read("../src/App.tsx");
-		expect(app).toContain("BillingReconciliationPage");
-		expect(app).toContain('app.route().kind === "org-billing"');
+	it("mounts BillingReconciliationPage in AppRoutes.tsx", async () => {
+		const appRoutes = await read("../src/app/AdminRoutes.tsx");
+		const lazyPages = await read("../src/app/lazyPages.ts");
+		const routes = await read("../src/lib/routes.ts");
+		expect(routes).toContain('"org-billing"');
+		expect(lazyPages).toContain('"org-billing": BillingReconciliationPage');
+		expect(appRoutes).toContain('path="/billing"');
+		expect(appRoutes).toContain("<Pages.BillingReconciliationPage");
 	});
 });

@@ -1,237 +1,53 @@
-export type AppRoute =
-	| { kind: "home" }
-	| { kind: "privacy-policy" }
-	| { kind: "create-org" }
-	| { kind: "invite"; token: string }
-	| { kind: "org-root"; slug: string }
-	| { kind: "festival-public"; slug: string; festivalSlug: string }
-	| { kind: "festival-admin"; slug: string; festivalSlug: string }
-	| { kind: "festival-admin-classes"; slug: string; festivalSlug: string }
-	| { kind: "festival-volunteers"; slug: string; festivalSlug: string }
-	| { kind: "festival-register"; slug: string; festivalSlug: string }
-	| {
-			kind: "festival-register-class";
-			slug: string;
-			festivalSlug: string;
-			classId: string;
-	  }
-	| { kind: "festival-cart"; slug: string; festivalSlug: string }
-	| { kind: "org-membership"; slug: string }
-	| { kind: "org-accompanist-membership"; slug: string }
-	| { kind: "org-customer-account-legacy"; slug: string }
-	| { kind: "org-customer-account-memberships"; slug: string }
-	| { kind: "org-customer-account-contact"; slug: string }
-	| { kind: "org-customer-account-children"; slug: string }
-	| { kind: "org-customer-account-orders"; slug: string }
-	| { kind: "org-customer-account-classes"; slug: string }
-	| { kind: "org-customer-account-availability"; slug: string }
-	| { kind: "org-admin"; slug: string }
-	| { kind: "org-admin-users"; slug: string }
-	| { kind: "org-admin-integrations"; slug: string }
-	| { kind: "org-admin-memberships"; slug: string }
-	| { kind: "org-admin-festivals"; slug: string }
-	| { kind: "org-admin-divisions"; slug: string }
-	| { kind: "org-admin-settings"; slug: string }
-	| { kind: "org-admin-accompanists"; slug: string }
-	| { kind: "org-admin-roster"; slug: string }
-	| { kind: "org-admin-volunteers"; slug: string }
-	| { kind: "org-admin-rooms"; slug: string }
-	| { kind: "org-music-review"; slug: string }
-	| { kind: "org-billing"; slug: string }
-	| { kind: "org-communications"; slug: string }
-	| { kind: "org-public-directory"; slug: string }
-	| AdminCheckoutRecoveryRoute
-	| CustomerCheckoutRecoveryRoute;
+import type { AppRoute } from "./routePaths.js";
 
-export type AdminCheckoutRecoveryRoute = {
-	kind: "org-admin-checkout-recovery";
-	slug: string;
-};
+export * from "./routePaths.js";
 
-export type CustomerCheckoutRecoveryRoute = {
-	kind: "org-checkout-recovery";
-	slug: string;
-	token: string;
-};
+type SegmentMatcher = string | readonly string[];
 
-export function buildOrgBillingPath(slug: string): string {
-	return `/organizations/${slug}/billing`;
+interface RoutePattern {
+	segments: readonly SegmentMatcher[];
+	allowTrailingSlash?: boolean;
+	build: (params: Record<string, string>) => AppRoute;
 }
 
-export function buildOrgPath(slug: string): string {
-	return `/org/${slug}/admin`;
+const ORG_PREFIX = ["org", "organizations"] as const;
+
+type FestivalRouteKind = Exclude<
+	Extract<AppRoute, { slug: string; festivalSlug: string }>["kind"],
+	"festival-register-class"
+>;
+
+type SlugOnlyRouteKind = Exclude<
+	Extract<AppRoute, { slug: string }>["kind"],
+	FestivalRouteKind | "org-checkout-recovery"
+>;
+
+function slugRoute(
+	segments: readonly SegmentMatcher[],
+	kind: SlugOnlyRouteKind,
+	allowTrailingSlash = false,
+): RoutePattern {
+	return {
+		segments,
+		allowTrailingSlash,
+		build: ({ slug = "" }) => ({ kind, slug }) as AppRoute,
+	};
 }
 
-export function buildOrgRootPath(slug: string): string {
-	return `/org/${slug}`;
-}
-
-export function buildOrgPublicDirectoryPath(slug: string): string {
-	return `/org/${slug}/directory`;
-}
-
-export function buildOrgMembershipPath(slug: string): string {
-	return `/org/${slug}/membership`;
-}
-
-export function buildOrgAccompanistMembershipPath(slug: string): string {
-	return `/org/${slug}/accompanist-membership`;
-}
-
-export function buildFestivalAdminClassesPath(
-	slug: string,
-	festivalSlug: string,
-): string {
-	return `${buildFestivalAdminPath(slug, festivalSlug)}/classes`;
-}
-
-export function buildFestivalVolunteersPath(
-	slug: string,
-	festivalSlug: string,
-): string {
-	return `/org/${slug}/festival/${festivalSlug}/volunteers`;
-}
-
-export function buildFestivalRegistrationPath(
-	slug: string,
-	festivalSlug: string,
-): string {
-	return `/org/${slug}/festival/${festivalSlug}/register`;
-}
-
-export function buildFestivalRegistrationClassPath(
-	slug: string,
-	festivalSlug: string,
-	classId: string,
-): string {
-	return `${buildFestivalRegistrationPath(slug, festivalSlug)}/class/${encodeURIComponent(classId)}`;
-}
-
-export function buildFestivalCartPath(
-	slug: string,
-	festivalSlug: string,
-): string {
-	return `${buildFestivalRegistrationPath(slug, festivalSlug)}/cart`;
-}
-
-export function buildFestivalAdminPath(
-	slug: string,
-	festivalSlug: string,
-): string {
-	return `/org/${slug}/festival/${festivalSlug}/admin`;
-}
-
-export function buildOrgCustomerAccountPath(slug: string): string {
-	return buildOrgCustomerAccountMembershipsPath(slug);
-}
-
-export function buildOrgCustomerAccountMembershipsPath(slug: string): string {
-	return `/org/${slug}/account/memberships`;
-}
-
-export function buildOrgCustomerAccountContactPath(slug: string): string {
-	return `/org/${slug}/account/contact`;
-}
-export function buildOrgCustomerAccountChildrenPath(slug: string): string {
-	return `/org/${slug}/account/children`;
-}
-
-export function buildOrgCustomerAccountOrdersPath(slug: string): string {
-	return `/org/${slug}/account/orders`;
-}
-
-export function buildOrgCustomerAccountClassesPath(slug: string): string {
-	return `/org/${slug}/account/classes`;
-}
-
-export function buildOrgCustomerAccountAvailabilityPath(slug: string): string {
-	return `/org/${slug}/account/availability`;
-}
-
-export function buildOrgAdminUsersPath(slug: string): string {
-	return `/org/${slug}/admin/users`;
-}
-
-export function buildOrgAdminIntegrationsPath(slug: string): string {
-	return `/org/${slug}/admin/integrations`;
-}
-
-export function buildOrgAdminMembershipsPath(slug: string): string {
-	return `/org/${slug}/admin/memberships`;
-}
-
-export function buildOrgAdminFestivalsPath(slug: string): string {
-	return `/org/${slug}/admin/festivals`;
-}
-
-export function buildOrgAdminDivisionsPath(slug: string): string {
-	return `/org/${slug}/admin/divisions`;
-}
-export function buildOrgAdminSettingsPath(slug: string): string {
-	return `/org/${slug}/admin/settings`;
-}
-export function buildOrgAdminRosterPath(slug: string): string {
-	return `/org/${slug}/admin/roster`;
-}
-export function buildOrgAdminAccompanistsPath(slug: string): string {
-	return buildOrgAdminRosterPath(slug);
-}
-
-export function buildOrgAdminVolunteersPath(slug: string): string {
-	return `/org/${slug}/admin/volunteers`;
-}
-
-export function buildOrgAdminRoomsPath(slug: string): string {
-	return `/org/${slug}/admin/rooms`;
-}
-
-export function buildOrgMusicReviewPath(slug: string): string {
-	return `/organizations/${slug}/music-review`;
-}
-
-export function buildOrgCommunicationsPath(slug: string): string {
-	return `/organizations/${slug}/communications`;
-}
-
-export function buildOrgAdminCheckoutRecoveryPath(slug: string): string {
-	return `/org/${slug}/admin/checkout-recovery`;
-}
-
-export function buildOrgCheckoutRecoveryPath(
-	slug: string,
-	token: string,
-): string {
-	return `/org/${slug}/checkout-recovery/${token}`;
-}
-
-export function buildInvitePath(token: string): string {
-	return `/invite/${token}`;
-}
-
-export function buildPrivacyPolicyPath(): string {
-	return "/privacy-policy";
-}
-
-export function isOrganizationPageRoute(route: AppRoute): boolean {
-	return (
-		route.kind === "festival-register" ||
-		route.kind === "festival-register-class" ||
-		route.kind === "festival-cart" ||
-		route.kind === "festival-volunteers" ||
-		route.kind === "org-root" ||
-		route.kind === "org-public-directory" ||
-		route.kind === "festival-public" ||
-		route.kind === "org-membership" ||
-		route.kind === "org-accompanist-membership" ||
-		route.kind === "org-customer-account-legacy" ||
-		route.kind === "org-customer-account-memberships" ||
-		route.kind === "org-customer-account-contact" ||
-		route.kind === "org-customer-account-children" ||
-		route.kind === "org-customer-account-orders" ||
-		route.kind === "org-customer-account-classes" ||
-		route.kind === "org-customer-account-availability" ||
-		route.kind === "org-checkout-recovery"
-	);
+function festivalRoute(
+	suffix: readonly SegmentMatcher[],
+	kind: FestivalRouteKind,
+	allowTrailingSlash = false,
+): RoutePattern {
+	return {
+		segments: ["org", ":slug", "festival", ":festivalSlug", ...suffix],
+		allowTrailingSlash,
+		build: ({ slug = "", festivalSlug = "" }) => ({
+			kind,
+			slug,
+			festivalSlug,
+		}),
+	};
 }
 
 function decodeRouteSegment(value: string): string {
@@ -242,319 +58,179 @@ function decodeRouteSegment(value: string): string {
 	}
 }
 
+const ROUTE_PATTERNS: readonly RoutePattern[] = [
+	{
+		segments: ["privacy-policy"],
+		build: () => ({ kind: "privacy-policy" }),
+	},
+	{
+		segments: ["create-organization"],
+		build: () => ({ kind: "create-org" }),
+	},
+	{
+		segments: ["invite", ":token"],
+		build: ({ token = "" }) => ({ kind: "invite", token }),
+	},
+	slugRoute(["org", ":slug"], "org-root", true),
+	slugRoute(["org", ":slug", "directory"], "org-public-directory", true),
+	festivalRoute(["admin"], "festival-admin"),
+	festivalRoute(["admin", "classes"], "festival-admin-classes"),
+	festivalRoute(["volunteers"], "festival-volunteers"),
+	{
+		segments: [
+			"org",
+			":slug",
+			"festival",
+			":festivalSlug",
+			"register",
+			"class",
+			":classId",
+		],
+		allowTrailingSlash: true,
+		build: ({ slug = "", festivalSlug = "", classId = "" }) => ({
+			kind: "festival-register-class",
+			slug,
+			festivalSlug,
+			classId: decodeRouteSegment(classId),
+		}),
+	},
+	festivalRoute(["register", "cart"], "festival-cart", true),
+	festivalRoute(["register"], "festival-register"),
+	festivalRoute([], "festival-public"),
+	slugRoute(["org", ":slug", "membership"], "org-membership"),
+	slugRoute(
+		["org", ":slug", "accompanist-membership"],
+		"org-accompanist-membership",
+	),
+	slugRoute(["org", ":slug", "account"], "org-customer-account-legacy", true),
+	slugRoute(
+		["org", ":slug", "account", "memberships"],
+		"org-customer-account-memberships",
+	),
+	slugRoute(
+		["org", ":slug", "account", "contact"],
+		"org-customer-account-contact",
+	),
+	slugRoute(
+		["org", ":slug", "account", "orders"],
+		"org-customer-account-orders",
+	),
+	slugRoute(
+		["org", ":slug", "account", "classes"],
+		"org-customer-account-classes",
+	),
+	slugRoute(
+		[ORG_PREFIX, ":slug", "account", "availability"],
+		"org-customer-account-availability",
+		true,
+	),
+	slugRoute(["org", ":slug", "admin"], "org-admin"),
+	slugRoute(
+		["org", ":slug", "account", "children"],
+		"org-customer-account-children",
+	),
+	slugRoute(["org", ":slug", "admin", "users"], "org-admin-users"),
+	slugRoute(
+		["org", ":slug", "admin", "integrations"],
+		"org-admin-integrations",
+	),
+	slugRoute(["org", ":slug", "admin", "memberships"], "org-admin-memberships"),
+	slugRoute(["org", ":slug", "admin", "festivals"], "org-admin-festivals"),
+	slugRoute(["org", ":slug", "admin", "divisions"], "org-admin-divisions"),
+	slugRoute(["org", ":slug", "admin", "settings"], "org-admin-settings"),
+	slugRoute(["org", ":slug", "admin", "roster"], "org-admin-roster"),
+	slugRoute(["org", ":slug", "admin", "accompanists"], "org-admin-roster"),
+	slugRoute(["org", ":slug", "admin", "volunteers"], "org-admin-volunteers"),
+	slugRoute(["org", ":slug", "admin", "rooms"], "org-admin-rooms"),
+	slugRoute([ORG_PREFIX, ":slug", "music-review"], "org-music-review", true),
+	slugRoute(
+		[ORG_PREFIX, ":slug", "admin", "music-review"],
+		"org-music-review",
+		true,
+	),
+	slugRoute([ORG_PREFIX, ":slug", "billing"], "org-billing", true),
+	slugRoute(
+		[ORG_PREFIX, ":slug", "communications"],
+		"org-communications",
+		true,
+	),
+	slugRoute(
+		[ORG_PREFIX, ":slug", "admin", "communications"],
+		"org-communications",
+		true,
+	),
+	slugRoute(
+		["org", ":slug", "admin", "checkout-recovery"],
+		"org-admin-checkout-recovery",
+		true,
+	),
+	{
+		segments: ["org", ":slug", "checkout-recovery", ":token"],
+		allowTrailingSlash: true,
+		build: ({ slug = "", token = "" }) => ({
+			kind: "org-checkout-recovery",
+			slug,
+			token,
+		}),
+	},
+];
+
+function matchSegment(
+	matcher: SegmentMatcher,
+	segment: string,
+	params: Record<string, string>,
+): boolean {
+	if (typeof matcher === "string") {
+		if (matcher.startsWith(":")) {
+			if (segment.length === 0) {
+				return false;
+			}
+			params[matcher.slice(1)] = segment;
+			return true;
+		}
+		return segment === matcher;
+	}
+	return matcher.includes(segment);
+}
+
+function matchRoutePattern(
+	pattern: RoutePattern,
+	segments: readonly string[],
+	hasTrailingSlash: boolean,
+): AppRoute | null {
+	if (hasTrailingSlash && !pattern.allowTrailingSlash) {
+		return null;
+	}
+	if (segments.length !== pattern.segments.length) {
+		return null;
+	}
+	const params: Record<string, string> = {};
+	for (let i = 0; i < pattern.segments.length; i += 1) {
+		const matcher = pattern.segments[i];
+		const segment = segments[i];
+		if (matcher === undefined || segment === undefined) {
+			return null;
+		}
+		if (!matchSegment(matcher, segment, params)) {
+			return null;
+		}
+	}
+	return pattern.build(params);
+}
+
 export function parseRoute(pathname: string): AppRoute {
-	if (pathname === "/") {
+	if (pathname === "/" || !pathname.startsWith("/")) {
 		return { kind: "home" };
 	}
+	const hasTrailingSlash = pathname.length > 1 && pathname.endsWith("/");
+	const trimmed = hasTrailingSlash ? pathname.slice(0, -1) : pathname;
+	const segments = trimmed.slice(1).split("/");
 
-	if (pathname === "/privacy-policy") {
-		return { kind: "privacy-policy" };
+	for (const pattern of ROUTE_PATTERNS) {
+		const matched = matchRoutePattern(pattern, segments, hasTrailingSlash);
+		if (matched !== null) {
+			return matched;
+		}
 	}
-
-	if (pathname === "/create-organization") {
-		return { kind: "create-org" };
-	}
-
-	const inviteMatch = pathname.match(/^\/invite\/([^/]+)$/);
-	if (inviteMatch) {
-		return { kind: "invite", token: inviteMatch[1] ?? "" };
-	}
-
-	const orgRootMatch = pathname.match(/^\/org\/([^/]+)\/?$/);
-	if (orgRootMatch) {
-		return { kind: "org-root", slug: orgRootMatch[1] ?? "" };
-	}
-
-	const orgPublicDirectoryMatch = pathname.match(
-		/^\/org\/([^/]+)\/directory\/?$/,
-	);
-	if (orgPublicDirectoryMatch) {
-		return {
-			kind: "org-public-directory",
-			slug: orgPublicDirectoryMatch[1] ?? "",
-		};
-	}
-	const festivalAdminMatch = pathname.match(
-		/^\/org\/([^/]+)\/festival\/([^/]+)\/admin$/,
-	);
-	if (festivalAdminMatch)
-		return {
-			kind: "festival-admin",
-			slug: festivalAdminMatch[1] ?? "",
-			festivalSlug: festivalAdminMatch[2] ?? "",
-		};
-	const festivalAdminClassesMatch = pathname.match(
-		/^\/org\/([^/]+)\/festival\/([^/]+)\/admin\/classes$/,
-	);
-	if (festivalAdminClassesMatch)
-		return {
-			kind: "festival-admin-classes",
-			slug: festivalAdminClassesMatch[1] ?? "",
-			festivalSlug: festivalAdminClassesMatch[2] ?? "",
-		};
-	const festivalVolunteersMatch = pathname.match(
-		/^\/org\/([^/]+)\/festival\/([^/]+)\/volunteers$/,
-	);
-	if (festivalVolunteersMatch)
-		return {
-			kind: "festival-volunteers",
-			slug: festivalVolunteersMatch[1] ?? "",
-			festivalSlug: festivalVolunteersMatch[2] ?? "",
-		};
-	const festivalClassMatch = pathname.match(
-		/^\/org\/([^/]+)\/festival\/([^/]+)\/register\/class\/([^/]+)\/?$/,
-	);
-	if (festivalClassMatch)
-		return {
-			kind: "festival-register-class",
-			slug: festivalClassMatch[1] ?? "",
-			festivalSlug: festivalClassMatch[2] ?? "",
-			classId: decodeRouteSegment(festivalClassMatch[3] ?? ""),
-		};
-	const festivalCartMatch = pathname.match(
-		/^\/org\/([^/]+)\/festival\/([^/]+)\/register\/cart\/?$/,
-	);
-	if (festivalCartMatch)
-		return {
-			kind: "festival-cart",
-			slug: festivalCartMatch[1] ?? "",
-			festivalSlug: festivalCartMatch[2] ?? "",
-		};
-	const festivalRegisterMatch = pathname.match(
-		/^\/org\/([^/]+)\/festival\/([^/]+)\/register$/,
-	);
-	if (festivalRegisterMatch)
-		return {
-			kind: "festival-register",
-			slug: festivalRegisterMatch[1] ?? "",
-			festivalSlug: festivalRegisterMatch[2] ?? "",
-		};
-	const festivalPublicMatch = pathname.match(
-		/^\/org\/([^/]+)\/festival\/([^/]+)$/,
-	);
-	if (festivalPublicMatch)
-		return {
-			kind: "festival-public",
-			slug: festivalPublicMatch[1] ?? "",
-			festivalSlug: festivalPublicMatch[2] ?? "",
-		};
-
-	const orgMembershipMatch = pathname.match(/^\/org\/([^/]+)\/membership$/);
-	if (orgMembershipMatch) {
-		return { kind: "org-membership", slug: orgMembershipMatch[1] ?? "" };
-	}
-	const accompanistMembershipMatch = pathname.match(
-		/^\/org\/([^/]+)\/accompanist-membership$/,
-	);
-	if (accompanistMembershipMatch) {
-		return {
-			kind: "org-accompanist-membership",
-			slug: accompanistMembershipMatch[1] ?? "",
-		};
-	}
-
-	const customerAccountMatch = pathname.match(/^\/org\/([^/]+)\/account\/?$/);
-	if (customerAccountMatch)
-		return {
-			kind: "org-customer-account-legacy",
-			slug: customerAccountMatch[1] ?? "",
-		};
-
-	const customerAccountMembershipsMatch = pathname.match(
-		/^\/org\/([^/]+)\/account\/memberships$/,
-	);
-	if (customerAccountMembershipsMatch)
-		return {
-			kind: "org-customer-account-memberships",
-			slug: customerAccountMembershipsMatch[1] ?? "",
-		};
-
-	const customerAccountContactMatch = pathname.match(
-		/^\/org\/([^/]+)\/account\/contact$/,
-	);
-	if (customerAccountContactMatch)
-		return {
-			kind: "org-customer-account-contact",
-			slug: customerAccountContactMatch[1] ?? "",
-		};
-
-	const customerAccountOrdersMatch = pathname.match(
-		/^\/org\/([^/]+)\/account\/orders$/,
-	);
-	if (customerAccountOrdersMatch)
-		return {
-			kind: "org-customer-account-orders",
-			slug: customerAccountOrdersMatch[1] ?? "",
-		};
-
-	const customerAccountClassesMatch = pathname.match(
-		/^\/org\/([^/]+)\/account\/classes$/,
-	);
-	if (customerAccountClassesMatch)
-		return {
-			kind: "org-customer-account-classes",
-			slug: customerAccountClassesMatch[1] ?? "",
-		};
-
-	const customerAccountAvailabilityMatch = pathname.match(
-		/^\/(?:organizations|org)\/([^/]+)\/account\/availability\/?$/,
-	);
-	if (customerAccountAvailabilityMatch)
-		return {
-			kind: "org-customer-account-availability",
-			slug: customerAccountAvailabilityMatch[1] ?? "",
-		};
-
-	const orgAdminMatch = pathname.match(/^\/org\/([^/]+)\/admin$/);
-	if (orgAdminMatch) {
-		return { kind: "org-admin", slug: orgAdminMatch[1] ?? "" };
-	}
-	const customerAccountChildrenMatch = pathname.match(
-		/^\/org\/([^/]+)\/account\/children$/,
-	);
-	if (customerAccountChildrenMatch)
-		return {
-			kind: "org-customer-account-children",
-			slug: customerAccountChildrenMatch[1] ?? "",
-		};
-
-	const orgAdminUsersMatch = pathname.match(/^\/org\/([^/]+)\/admin\/users$/);
-	if (orgAdminUsersMatch) {
-		return { kind: "org-admin-users", slug: orgAdminUsersMatch[1] ?? "" };
-	}
-
-	const orgAdminIntegrationsMatch = pathname.match(
-		/^\/org\/([^/]+)\/admin\/integrations$/,
-	);
-	if (orgAdminIntegrationsMatch) {
-		return {
-			kind: "org-admin-integrations",
-			slug: orgAdminIntegrationsMatch[1] ?? "",
-		};
-	}
-
-	const orgAdminMembershipsMatch = pathname.match(
-		/^\/org\/([^/]+)\/admin\/memberships$/,
-	);
-	if (orgAdminMembershipsMatch) {
-		return {
-			kind: "org-admin-memberships",
-			slug: orgAdminMembershipsMatch[1] ?? "",
-		};
-	}
-
-	const orgAdminFestivalsMatch = pathname.match(
-		/^\/org\/([^/]+)\/admin\/festivals$/,
-	);
-	if (orgAdminFestivalsMatch) {
-		return {
-			kind: "org-admin-festivals",
-			slug: orgAdminFestivalsMatch[1] ?? "",
-		};
-	}
-
-	const orgAdminDivisionsMatch = pathname.match(
-		/^\/org\/([^/]+)\/admin\/divisions$/,
-	);
-	if (orgAdminDivisionsMatch) {
-		return {
-			kind: "org-admin-divisions",
-			slug: orgAdminDivisionsMatch[1] ?? "",
-		};
-	}
-	const orgAdminSettingsMatch = pathname.match(
-		/^\/org\/([^/]+)\/admin\/settings$/,
-	);
-	if (orgAdminSettingsMatch) {
-		return {
-			kind: "org-admin-settings",
-			slug: orgAdminSettingsMatch[1] ?? "",
-		};
-	}
-	const orgAdminRosterMatch = pathname.match(/^\/org\/([^/]+)\/admin\/roster$/);
-	if (orgAdminRosterMatch)
-		return {
-			kind: "org-admin-roster",
-			slug: orgAdminRosterMatch[1] ?? "",
-		};
-
-	const orgAdminAccompanistsMatch = pathname.match(
-		/^\/org\/([^/]+)\/admin\/accompanists$/,
-	);
-	if (orgAdminAccompanistsMatch)
-		return {
-			kind: "org-admin-roster",
-			slug: orgAdminAccompanistsMatch[1] ?? "",
-		};
-
-	const orgAdminVolunteersMatch = pathname.match(
-		/^\/org\/([^/]+)\/admin\/volunteers$/,
-	);
-	if (orgAdminVolunteersMatch) {
-		return {
-			kind: "org-admin-volunteers",
-			slug: orgAdminVolunteersMatch[1] ?? "",
-		};
-	}
-
-	const orgAdminRoomsMatch = pathname.match(/^\/org\/([^/]+)\/admin\/rooms$/);
-	if (orgAdminRoomsMatch) {
-		return {
-			kind: "org-admin-rooms",
-			slug: orgAdminRoomsMatch[1] ?? "",
-		};
-	}
-
-	const orgMusicReviewMatch = pathname.match(
-		/^\/(?:organizations|org)\/([^/]+)\/(?:admin\/)?music-review\/?$/,
-	);
-	if (orgMusicReviewMatch) {
-		return {
-			kind: "org-music-review",
-			slug: orgMusicReviewMatch[1] ?? "",
-		};
-	}
-
-	const orgBillingMatch = pathname.match(
-		/^\/(?:organizations|org)\/([^/]+)\/billing\/?$/,
-	);
-	if (orgBillingMatch) {
-		return {
-			kind: "org-billing",
-			slug: orgBillingMatch[1] ?? "",
-		};
-	}
-
-	const orgCommunicationsMatch = pathname.match(
-		/^\/(?:organizations|org)\/([^/]+)\/(?:admin\/)?communications\/?$/,
-	);
-	if (orgCommunicationsMatch) {
-		return {
-			kind: "org-communications",
-			slug: orgCommunicationsMatch[1] ?? "",
-		};
-	}
-
-	const orgAdminCheckoutRecoveryMatch = pathname.match(
-		/^\/org\/([^/]+)\/admin\/checkout-recovery\/?$/,
-	);
-	if (orgAdminCheckoutRecoveryMatch) {
-		return {
-			kind: "org-admin-checkout-recovery",
-			slug: orgAdminCheckoutRecoveryMatch[1] ?? "",
-		};
-	}
-
-	const orgCheckoutRecoveryMatch = pathname.match(
-		/^\/org\/([^/]+)\/checkout-recovery\/([^/]+)\/?$/,
-	);
-	if (orgCheckoutRecoveryMatch) {
-		return {
-			kind: "org-checkout-recovery",
-			slug: orgCheckoutRecoveryMatch[1] ?? "",
-			token: orgCheckoutRecoveryMatch[2] ?? "",
-		};
-	}
-
 	return { kind: "home" };
 }

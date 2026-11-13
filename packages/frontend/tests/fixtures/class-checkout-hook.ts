@@ -9,6 +9,14 @@ mock.module("@solidjs/router", () => ({
 		beforeLeave = handler;
 	},
 }));
+mock.module("../../src/domains/customer/CustomerIdentityContext.js", () => ({
+	useCustomerIdentity: () => ({
+		customerSession: () => ({ authenticated: true, csrfToken: "csrf" }),
+		isCustomerSessionLoading: () => false,
+		refreshCustomerSession: async () => {},
+		setCustomerSession: () => {},
+	}),
+}));
 
 const events = new EventTarget();
 const assigned: string[] = [];

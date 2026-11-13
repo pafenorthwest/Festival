@@ -22,7 +22,9 @@ import {
 	validatePieceTitle,
 } from "../src/pages/festivalRegistrationHelpers.js";
 
-const app = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
+const appRoutes = await Bun.file(
+	new URL("../src/app/AppRoutes.tsx", import.meta.url),
+).text();
 const repertoireModal = await Bun.file(
 	new URL("../src/components/FestivalRepertoireModal.tsx", import.meta.url),
 ).text();
@@ -35,8 +37,8 @@ const cartCard = await Bun.file(
 
 describe("Festival Class Registration routing & landing entry", () => {
 	it("mounts FestivalClassRegistrationPage for festival-register route", () => {
-		expect(app).toContain('app.route().kind === "festival-register"');
-		expect(app).toContain("<FestivalClassRegistrationPage");
+		expect(appRoutes).toContain('path="/festival/:festivalSlug/register"');
+		expect(appRoutes).toContain("<Pages.FestivalClassRegistrationPage");
 	});
 	it("returns a signed-out parent directly to their festival cart after sign-in", () => {
 		const path = customerFestivalRegistrationSignInPath(

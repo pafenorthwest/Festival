@@ -5,6 +5,14 @@ import type { RegistrationEligibleClass } from "@festival/common";
 const solid = await import("solid-js/dist/solid.js");
 mock.module("solid-js", () => solid);
 mock.module("@solidjs/router", () => ({ useBeforeLeave: () => {} }));
+mock.module("../../src/domains/customer/CustomerIdentityContext.js", () => ({
+	useCustomerIdentity: () => ({
+		customerSession: () => ({ authenticated: true, csrfToken: "csrf" }),
+		isCustomerSessionLoading: () => false,
+		refreshCustomerSession: async () => {},
+		setCustomerSession: () => {},
+	}),
+}));
 globalThis.window = new EventTarget() as Window & typeof globalThis;
 
 const setRealTimeout = globalThis.setTimeout;
@@ -182,7 +190,7 @@ const pageSource = await Bun.file(
 ).text();
 assert.match(
 	pageSource,
-	/view\(\) !== "cart"\}>\s*<Show when=\{purchased\.error\}>/,
+	/view\(\) !== "cart"\}>\s*<Show when=\{state\.purchased\.error\}>/,
 );
 assert.match(pageSource, /Purchased registrations could not be loaded/);
 dispose();
