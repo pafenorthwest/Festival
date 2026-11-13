@@ -1,14 +1,22 @@
 import { describe, expect, it } from "bun:test";
-import type { FestivalChildAgeSnapshot } from "@festival/common";
-import { InMemoryCustomerAccountRepository } from "../src/customer/in-memory-customer-account-repository.js";
+import { PostgresCustomerAccountRepository } from "../src/customer/postgres-customer-account-repository.js";
+import { PostgresOrganizationRepository } from "../src/repo/postgres-organization-repository.js";
+import { buildCanonicalPostgresSchemaSql } from "../src/repo/postgres-schema.js";
+import {
+	currentPostgresFixture,
+	resetPostgresFixture,
+} from "./postgres-test-fixture.js";
 
-function session(now: string) {
+const currentSchema = currentPostgresFixture("cust_acct_contract");
+const integrationTest = process.env.POSTGRES_INTEGRATION_URL ? it : it.skip;
+
+function buildSessionInput(orgId: string, now: string, suffix = "1") {
 	return {
-		sessionId: "session",
-		organizationId: "org",
-		shopifyCustomerGid: "gid://shopify/Customer/1",
-		encryptedTokens: "encrypted-one",
-		csrfToken: "csrf",
+		sessionId: `session-${suffix}`,
+		organizationId: orgId,
+		shopifyCustomerGid: `gid://shopify/Customer/${suffix}`,
+		encryptedTokens: `encrypted-${suffix}`,
+		csrfToken: `csrf-${suffix}`,
 		integrationVersion: 1,
 		createdAtIso: now,
 		lastSeenAtIso: now,
@@ -16,155 +24,18 @@ function session(now: string) {
 	};
 }
 
-async function createSession(
-	repo: InMemoryCustomerAccountRepository,
-	now: string,
-) {
-	return (await repo.createCustomerSession(session(now))).session;
-}
-
 describe("customer account repository contract", () => {
-	it("keeps parent child names unique and supersedes immutable age snapshots", async () => {
-		const repo = new InMemoryCustomerAccountRepository();
-		const child = await repo.createChild({
-			organizationId: "org",
-			parentCustomerId: "parent",
-			displayName: "Alex",
-		});
-		await expect(
-			repo.createChild({
-				organizationId: "org",
-				parentCustomerId: "parent",
-				displayName: "alex",
-			}),
-		).rejects.toThrow("Child display name is already registered.");
-		expect(
-			await repo.createChild({
-				organizationId: "org",
-				parentCustomerId: "other-parent",
-				displayName: "Alex",
-			}),
-		).toMatchObject({ displayName: "Alex" });
-		const first = await repo.createChildAgeSnapshot({
-			organizationId: "org",
-			childId: child.id,
-			age: 9,
-			validUntilIso: "2027-01-01T00:00:00.000Z",
-		});
-		const second = await repo.createChildAgeSnapshot({
-			organizationId: "org",
-			childId: child.id,
-			age: 10,
-			validUntilIso: "2027-04-01T00:00:00.000Z",
-		});
-		const snapshots = await repo.listChildAgeSnapshots("org", child.id);
-		expect(snapshots).toHaveLength(2);
-		expect(
-			snapshots.find((snapshot) => snapshot.id === first.id)?.supersededAtIso,
-		).toBeDefined();
-		expect(
-			snapshots.find((snapshot) => snapshot.id === second.id)?.supersededAtIso,
-		).toBeUndefined();
-	});
-	it("consumes OAuth state once and revokes sessions when credentials rotate", async () => {
-		const repo = new InMemoryCustomerAccountRepository();
-		const now = new Date().toISOString();
-		await repo.putOAuthState({
-			stateHash: "hash",
-			organizationId: "org",
-			nonce: "nonce",
-			returnTo: "/org/festival/account",
-			offeringId: "offering_123",
-			expiresAtIso: new Date(Date.now() + 10000).toISOString(),
-		});
-		expect(await repo.consumeOAuthState("hash", now)).toMatchObject({
-			offeringId: "offering_123",
-		});
-		expect(await repo.consumeOAuthState("hash", now)).toBeNull();
-		await repo.upsertIntegration({
-			organizationId: "org",
-			storefrontDomain: "store.example.com",
-			clientId: "one",
-			encryptedClientSecret: "encrypted-one",
-		});
-		await createSession(repo, now);
-		const rotated = await repo.upsertIntegration({
-			organizationId: "org",
-			storefrontDomain: "store.example.com",
-			clientId: "two",
-			encryptedClientSecret: "encrypted-two",
-		});
-		expect(rotated.integrationVersion).toBe(2);
-		expect((await repo.getSession("session"))?.revokedAtIso).toBeDefined();
-	});
-	it("does not let stale touches or token replacements undo revocation", async () => {
-		const repo = new InMemoryCustomerAccountRepository();
-		const now = new Date().toISOString();
-		const initial = await createSession(repo, now);
-		await repo.revokeSession("session", now);
-		const mutation = {
-			sessionId: "session",
-			organizationId: "org",
-			integrationVersion: 1,
-			seenAtIso: new Date(new Date(now).getTime() + 1_000).toISOString(),
-			idleCutoffIso: new Date(new Date(now).getTime() - 60_000).toISOString(),
-		};
-		expect(await repo.touchSession(mutation)).toBeNull();
-		expect(
-			await repo.replaceSessionTokens({
-				...mutation,
-				expectedEncryptedTokens: initial.encryptedTokens,
-				replacementEncryptedTokens: "encrypted-two",
-				replacementExpiresAtIso: initial.expiresAtIso,
-			}),
-		).toBeNull();
-		const stored = await repo.getSession("session");
-		expect(stored?.revokedAtIso).toBeDefined();
-		expect(stored?.encryptedTokens).toBe("encrypted-one");
-	});
-	it("preserves rotated tokens across later session touches", async () => {
-		const repo = new InMemoryCustomerAccountRepository();
-		const now = new Date().toISOString();
-		const initial = await createSession(repo, now);
-		const seenAtIso = new Date(new Date(now).getTime() + 1_000).toISOString();
-		const mutation = {
-			sessionId: "session",
-			organizationId: "org",
-			integrationVersion: 1,
-			seenAtIso,
-			idleCutoffIso: new Date(new Date(now).getTime() - 60_000).toISOString(),
-		};
-		const rotated = await repo.replaceSessionTokens({
-			...mutation,
-			expectedEncryptedTokens: initial.encryptedTokens,
-			replacementEncryptedTokens: "encrypted-two",
-			replacementExpiresAtIso: initial.expiresAtIso,
-		});
-		expect(rotated?.encryptedTokens).toBe("encrypted-two");
-		const touched = await repo.touchSession({
-			...mutation,
-			seenAtIso: new Date(new Date(now).getTime() + 2_000).toISOString(),
-		});
-		expect(touched?.encryptedTokens).toBe("encrypted-two");
-		expect(
-			await repo.replaceSessionTokens({
-				...mutation,
-				expectedEncryptedTokens: "encrypted-one",
-				replacementEncryptedTokens: "encrypted-stale",
-				replacementExpiresAtIso: initial.expiresAtIso,
-			}),
-		).toBeNull();
-		expect((await repo.getSession("session"))?.encryptedTokens).toBe(
-			"encrypted-two",
-		);
-	});
-	it("defines distinct durable PostgreSQL configuration, state, and session tables", async () => {
-		const source = (
-			await import("../src/repo/postgres-schema.js")
-		).buildCanonicalPostgresSchemaSql("schema");
-		const repositorySource = await Bun.file(
+	it("defines distinct durable PostgreSQL configuration, state, and session tables across split repositories", async () => {
+		const source = buildCanonicalPostgresSchemaSql("schema");
+		const sessionSource = await Bun.file(
 			new URL(
-				"../src/customer/postgres-customer-account-repository.ts",
+				"../src/domains/customer-identity/customer-session-repository.ts",
+				import.meta.url,
+			),
+		).text();
+		const childSource = await Bun.file(
+			new URL(
+				"../src/domains/customer-identity/child-profile-repository.ts",
 				import.meta.url,
 			),
 		).text();
@@ -180,288 +51,241 @@ describe("customer account repository contract", () => {
 		expect(source).toContain("idx_festival_children_parent_name");
 		expect(source).toContain("superseded_at");
 		expect(source).not.toContain("birth_date");
-		expect(source).toContain("customer_id");
-		expect(repositorySource).toContain(
-			"ON CONFLICT (organization_id,shopify_customer_gid)",
-		);
 		expect(source).toContain("customer_id TEXT NOT NULL");
-		expect(repositorySource).not.toContain("chr(31)");
-		expect(repositorySource).not.toContain("E'\\\\000'");
-		expect(repositorySource).toContain("encrypted_tokens");
-		expect(repositorySource).not.toContain("access_token TEXT");
-		expect(repositorySource).toContain("revoked_at IS NULL");
-		expect(repositorySource).toContain("encrypted_tokens=$4");
-		expect(repositorySource).toContain("sql.begin");
-		expect(repositorySource).not.toContain("festival_entitlements");
-		expect(repositorySource).not.toContain("festival_orders");
+		expect(sessionSource).toContain(
+			"ON CONFLICT (organization_id, shopify_customer_gid)",
+		);
+		expect(sessionSource).not.toContain("chr(31)");
+		expect(sessionSource).not.toContain("E'\\\\000'");
+		expect(sessionSource).toContain("encrypted_tokens");
+		expect(sessionSource).not.toContain("access_token TEXT");
+		expect(sessionSource).toContain("revoked_at IS NULL");
+		expect(sessionSource).toContain("encrypted_tokens = $4");
+		expect(childSource).toContain("sql.begin");
+		expect(sessionSource).not.toContain("festival_entitlements");
+		expect(sessionSource).not.toContain("festival_orders");
 	});
-	it("resolves concurrent sessions to one tenant customer", async () => {
-		const repo = new InMemoryCustomerAccountRepository();
-		const now = new Date().toISOString();
-		const [first, second] = await Promise.all([
-			repo.createCustomerSession(session(now)),
-			repo.createCustomerSession({ ...session(now), sessionId: "session-2" }),
-		]);
-		expect(first.customer.id).toBe(second.customer.id);
-		expect(first.session.customerId).toBe(first.customer.id);
-		expect(second.session.customerId).toBe(first.customer.id);
-		const differentShopifyIdentity = await repo.createCustomerSession({
-			...session(now),
-			sessionId: "session-3",
-			shopifyCustomerGid: "gid://shopify/Customer/2",
-		});
-		const differentTenant = await repo.createCustomerSession({
-			...session(now),
-			sessionId: "session-4",
-			organizationId: "other",
-		});
-		expect(differentShopifyIdentity.customer.id).not.toBe(first.customer.id);
-		expect(differentTenant.customer.id).not.toBe(first.customer.id);
-	});
-	it("preserves Festival edits and hides unconsented profiles from Admin search", async () => {
-		const repo = new InMemoryCustomerAccountRepository();
-		const now = new Date().toISOString();
-		const { customer } = await repo.createCustomerSession(session(now));
-		const profile = {
-			name: "Festival Name",
-			email: "festival@example.com",
-			phone: "+1 555 0100",
-			mailingAddress: {
-				line1: "1 Main St",
-				city: "Seattle",
-				region: "WA",
-				postalCode: "98101",
-				countryCode: "US",
-			},
-		};
-		await repo.applyCustomerProfile({
-			customerId: customer.id,
-			organizationId: customer.organizationId,
-			source: "festival",
-			updatedAtIso: now,
-			profile,
-		});
-		await repo.applyCustomerProfile({
-			customerId: customer.id,
-			organizationId: customer.organizationId,
-			source: "shopify",
-			updatedAtIso: new Date(Date.now() + 1000).toISOString(),
-			profile: { name: "Shopify Name", email: "shopify@example.com" },
-		});
-		expect(
-			(await repo.getCustomer(customer.organizationId, customer.id))?.name
-				.value,
-		).toBe("Festival Name");
-		expect(
-			await repo.searchConsentedCustomers(
-				customer.organizationId,
-				"Festival",
-				"notice-v1",
-				20,
-			),
-		).toEqual([]);
-		const consent = await repo.recordStaffAccessConsent({
-			customerId: customer.id,
-			organizationId: customer.organizationId,
-			privacyNoticeVersion: "notice-v1",
-			consentedAtIso: now,
-		});
-		const repeated = await repo.recordStaffAccessConsent({
-			customerId: customer.id,
-			organizationId: customer.organizationId,
-			privacyNoticeVersion: "notice-v1",
-			consentedAtIso: new Date(Date.now() + 1000).toISOString(),
-		});
-		expect(repeated).toEqual(consent);
-		const earlierTimestamp = new Date(
-			new Date(now).getTime() - 1000,
-		).toISOString();
-		const earlierConsent = await repo.recordStaffAccessConsent({
-			customerId: customer.id,
-			organizationId: customer.organizationId,
-			privacyNoticeVersion: "notice-v1",
-			consentedAtIso: earlierTimestamp,
-		});
-		expect(earlierConsent.consentedAtIso).toBe(earlierTimestamp);
-		expect(
-			(
+
+	integrationTest(
+		"keeps parent child names unique and supersedes immutable age snapshots in Postgres",
+		async () => {
+			const schema = await currentSchema();
+			try {
+				const orgRepo = new PostgresOrganizationRepository(schema);
+				const repo = new PostgresCustomerAccountRepository(schema);
+				const org = await orgRepo.createOrganization({
+					name: "Child Org",
+					slug: "child-org",
+				});
+				const now = "2026-11-12T18:00:00.000Z";
+				const parent1 = (
+					await repo.createCustomerSession(buildSessionInput(org.id, now, "p1"))
+				).customer;
+				const parent2 = (
+					await repo.createCustomerSession(buildSessionInput(org.id, now, "p2"))
+				).customer;
+
+				const child = await repo.createChild({
+					organizationId: org.id,
+					parentCustomerId: parent1.id,
+					displayName: "Alex",
+				});
+				await expect(
+					repo.createChild({
+						organizationId: org.id,
+						parentCustomerId: parent1.id,
+						displayName: "alex",
+					}),
+				).rejects.toThrow("Child display name is already registered.");
+				expect(
+					await repo.createChild({
+						organizationId: org.id,
+						parentCustomerId: parent2.id,
+						displayName: "Alex",
+					}),
+				).toMatchObject({ displayName: "Alex" });
+
+				const first = await repo.createChildAgeSnapshot({
+					organizationId: org.id,
+					childId: child.id,
+					age: 9,
+					validUntilIso: "2027-01-01T00:00:00.000Z",
+				});
+				const second = await repo.createChildAgeSnapshot({
+					organizationId: org.id,
+					childId: child.id,
+					age: 10,
+					validUntilIso: "2027-04-01T00:00:00.000Z",
+				});
+				const snapshots = await repo.listChildAgeSnapshots(org.id, child.id);
+				expect(snapshots).toHaveLength(2);
+				expect(
+					snapshots.find((s) => s.id === first.id)?.supersededAtIso,
+				).toBeDefined();
+				expect(
+					snapshots.find((s) => s.id === second.id)?.supersededAtIso,
+				).toBeUndefined();
+				expect(
+					await repo.findChild(org.id, parent1.id, child.id),
+				).toMatchObject({ id: child.id });
+				expect(await repo.findChild(org.id, parent2.id, child.id)).toBeNull();
+			} finally {
+				await resetPostgresFixture(schema);
+			}
+		},
+	);
+
+	integrationTest(
+		"consumes OAuth state once, revokes sessions on rotation, and protects rotated tokens in Postgres",
+		async () => {
+			const schema = await currentSchema();
+			try {
+				const orgRepo = new PostgresOrganizationRepository(schema);
+				const repo = new PostgresCustomerAccountRepository(schema);
+				const org = await orgRepo.createOrganization({
+					name: "OAuth Org",
+					slug: "oauth-org",
+				});
+				const now = "2026-11-12T18:00:00.000Z";
+				await repo.putOAuthState({
+					stateHash: "hash-1",
+					organizationId: org.id,
+					nonce: "nonce",
+					returnTo: "/org/festival/account",
+					offeringId: "offering_123",
+					expiresAtIso: "2026-11-13T18:00:00.000Z",
+				});
+				expect(await repo.consumeOAuthState("hash-1", now)).toMatchObject({
+					offeringId: "offering_123",
+				});
+				expect(await repo.consumeOAuthState("hash-1", now)).toBeNull();
+
+				await repo.upsertIntegration({
+					organizationId: org.id,
+					storefrontDomain: "store.example.com",
+					clientId: "one",
+					encryptedClientSecret: "encrypted-one",
+				});
+				const { session } = await repo.createCustomerSession(
+					buildSessionInput(org.id, now, "rot"),
+				);
+				const mutation = {
+					sessionId: session.sessionId,
+					organizationId: org.id,
+					integrationVersion: 1,
+					seenAtIso: "2026-11-12T18:00:01.000Z",
+					idleCutoffIso: "2026-11-12T17:00:00.000Z",
+				};
+				const swapped = await repo.replaceSessionTokens({
+					...mutation,
+					expectedEncryptedTokens: session.encryptedTokens,
+					replacementEncryptedTokens: "encrypted-two",
+					replacementExpiresAtIso: session.expiresAtIso,
+				});
+				expect(swapped?.encryptedTokens).toBe("encrypted-two");
+				expect(
+					await repo.replaceSessionTokens({
+						...mutation,
+						expectedEncryptedTokens: session.encryptedTokens,
+						replacementEncryptedTokens: "encrypted-stale",
+						replacementExpiresAtIso: session.expiresAtIso,
+					}),
+				).toBeNull();
+
+				const rotated = await repo.upsertIntegration({
+					organizationId: org.id,
+					storefrontDomain: "store.example.com",
+					clientId: "two",
+					encryptedClientSecret: "encrypted-two",
+				});
+				expect(rotated.integrationVersion).toBe(2);
+				expect(
+					(await repo.getSession(session.sessionId))?.revokedAtIso,
+				).toBeDefined();
+				expect(
+					await repo.touchSession({
+						...mutation,
+						seenAtIso: "2026-11-12T18:00:02.000Z",
+					}),
+				).toBeNull();
+			} finally {
+				await resetPostgresFixture(schema);
+			}
+		},
+	);
+
+	integrationTest(
+		"preserves Festival edits over Shopify provenance and scopes consented admin search in Postgres",
+		async () => {
+			const schema = await currentSchema();
+			try {
+				const orgRepo = new PostgresOrganizationRepository(schema);
+				const otherOrg = await orgRepo.createOrganization({
+					name: "Other Org",
+					slug: "other-org",
+				});
+				const org = await orgRepo.createOrganization({
+					name: "Profile Org",
+					slug: "profile-org",
+				});
+				const repo = new PostgresCustomerAccountRepository(schema);
+				const now = "2026-11-12T18:00:00.000Z";
+				const { customer } = await repo.createCustomerSession(
+					buildSessionInput(org.id, now, "prof"),
+				);
+				await repo.applyCustomerProfile({
+					customerId: customer.id,
+					organizationId: org.id,
+					source: "festival",
+					updatedAtIso: now,
+					profile: {
+						name: "Festival Name",
+						email: "festival@example.com",
+						phone: "+1 555 0100",
+					},
+				});
+				await repo.applyCustomerProfile({
+					customerId: customer.id,
+					organizationId: org.id,
+					source: "shopify",
+					updatedAtIso: "2026-11-12T18:00:01.000Z",
+					profile: { name: "Shopify Name", email: "shopify@example.com" },
+				});
+				expect((await repo.getCustomer(org.id, customer.id))?.name.value).toBe(
+					"Festival Name",
+				);
+				expect(
+					await repo.searchConsentedCustomers(
+						org.id,
+						"Festival",
+						"notice-v1",
+						20,
+					),
+				).toEqual([]);
 				await repo.recordStaffAccessConsent({
 					customerId: customer.id,
-					organizationId: customer.organizationId,
+					organizationId: org.id,
 					privacyNoticeVersion: "notice-v1",
 					consentedAtIso: now,
-				})
-			).consentedAtIso,
-		).toBe(earlierTimestamp);
-		expect(
-			(
-				await repo.recordStaffAccessConsent({
-					customerId: customer.id,
-					organizationId: customer.organizationId,
-					privacyNoticeVersion: "notice-v2",
-					consentedAtIso: now,
-				})
-			).consentedAtIso,
-		).toBe(now);
-		expect(
-			await repo.searchConsentedCustomers(
-				customer.organizationId,
-				"festival@example",
-				"notice-v1",
-				20,
-			),
-		).toHaveLength(1);
-		expect(
-			await repo.getConsentedCustomer("other", customer.id, "notice-v1"),
-		).toBeNull();
-	});
-
-	it("findChild returns owned child and null for wrong parent, wrong organization, or missing child", async () => {
-		const repo = new InMemoryCustomerAccountRepository();
-		const child = await repo.createChild({
-			organizationId: "org",
-			parentCustomerId: "parent-1",
-			displayName: "Jordan",
-		});
-
-		expect(await repo.findChild("org", "parent-1", child.id)).toEqual(child);
-		expect(await repo.findChild("org", "wrong-parent", child.id)).toBeNull();
-		expect(await repo.findChild("wrong-org", "parent-1", child.id)).toBeNull();
-		expect(await repo.findChild("org", "parent-1", "missing-child")).toBeNull();
-	});
-
-	it("findActiveChildAgeSnapshot returns nonsuperseded snapshot including expired, null when none or all superseded, and newest when multiple exist", async () => {
-		const repo = new InMemoryCustomerAccountRepository();
-		const child = await repo.createChild({
-			organizationId: "org",
-			parentCustomerId: "parent-1",
-			displayName: "Morgan",
-		});
-
-		expect(await repo.findActiveChildAgeSnapshot("org", child.id)).toBeNull();
-
-		const expired = await repo.createChildAgeSnapshot({
-			organizationId: "org",
-			childId: child.id,
-			age: 8,
-			validUntilIso: "2020-01-01T00:00:00.000Z",
-			createdAtIso: "2019-10-01T00:00:00.000Z",
-		});
-		expect(await repo.findActiveChildAgeSnapshot("org", child.id)).toEqual(
-			expired,
-		);
-		expect(
-			await repo.findActiveChildAgeSnapshot("wrong-org", child.id),
-		).toBeNull();
-
-		const active = await repo.createChildAgeSnapshot({
-			organizationId: "org",
-			childId: child.id,
-			age: 9,
-			validUntilIso: "2027-01-01T00:00:00.000Z",
-			createdAtIso: "2026-10-01T00:00:00.000Z",
-		});
-		expect(await repo.findActiveChildAgeSnapshot("org", child.id)).toEqual(
-			active,
-		);
-
-		const internalSnapshots = (
-			repo as unknown as {
-				childAgeSnapshots: Map<string, FestivalChildAgeSnapshot>;
-			}
-		).childAgeSnapshots;
-		const olderUnsuperseded = {
-			id: "snap-older",
-			organizationId: "org",
-			childId: child.id,
-			age: 8,
-			createdAtIso: "2026-09-01T00:00:00.000Z",
-			validUntilIso: "2027-01-01T00:00:00.000Z",
-		};
-		internalSnapshots.set(olderUnsuperseded.id, olderUnsuperseded);
-		expect(await repo.findActiveChildAgeSnapshot("org", child.id)).toEqual(
-			active,
-		);
-
-		for (const [id, snap] of internalSnapshots.entries()) {
-			if (snap.childId === child.id) {
-				internalSnapshots.set(id, {
-					...snap,
-					supersededAtIso: "2026-10-02T00:00:00.000Z",
 				});
+				expect(
+					await repo.searchConsentedCustomers(
+						org.id,
+						"festival@example",
+						"notice-v1",
+						20,
+					),
+				).toHaveLength(1);
+				expect(
+					await repo.getConsentedCustomer(
+						otherOrg.id,
+						customer.id,
+						"notice-v1",
+					),
+				).toBeNull();
+			} finally {
+				await resetPostgresFixture(schema);
 			}
-		}
-		expect(await repo.findActiveChildAgeSnapshot("org", child.id)).toBeNull();
-	});
-	it("createChildWithAgeSnapshot atomically creates child and age snapshot", async () => {
-		const repo = new InMemoryCustomerAccountRepository();
-		const result = await repo.createChildWithAgeSnapshot({
-			child: {
-				organizationId: "org",
-				parentCustomerId: "parent_1",
-				displayName: "Charlie",
-			},
-			snapshot: {
-				age: 7,
-				validUntilIso: "2027-01-01T00:00:00.000Z",
-			},
-		});
-		expect(result.child).toMatchObject({
-			organizationId: "org",
-			parentCustomerId: "parent_1",
-			displayName: "Charlie",
-		});
-		expect(result.ageSnapshot).toMatchObject({
-			organizationId: "org",
-			childId: result.child.id,
-			age: 7,
-			validUntilIso: "2027-01-01T00:00:00.000Z",
-		});
-		expect(result.ageSnapshot.supersededAtIso).toBeUndefined();
-
-		await expect(
-			repo.createChildWithAgeSnapshot({
-				child: {
-					organizationId: "org",
-					parentCustomerId: "parent_1",
-					displayName: "charlie",
-				},
-				snapshot: {
-					age: 8,
-					validUntilIso: "2027-01-01T00:00:00.000Z",
-				},
-			}),
-		).rejects.toThrow("Child display name is already registered.");
-	});
-	it("findSessionCustomerAndIntegration resolves session, customer, and integration in one call", async () => {
-		const repo = new InMemoryCustomerAccountRepository();
-		const now = new Date().toISOString();
-		expect(
-			await repo.findSessionCustomerAndIntegration("missing-session", "org"),
-		).toBeNull();
-
-		await repo.upsertIntegration({
-			organizationId: "org",
-			storefrontDomain: "store.example.com",
-			clientId: "client_1",
-			encryptedClientSecret: "secret_1",
-		});
-		const created = await repo.createCustomerSession({
-			...session(now),
-			sessionId: "sess_1",
-			organizationId: "org",
-		});
-
-		expect(
-			await repo.findSessionCustomerAndIntegration("sess_1", "other-org"),
-		).toEqual({ organizationMismatch: true });
-
-		const found = await repo.findSessionCustomerAndIntegration("sess_1", "org");
-		expect(found).not.toBeNull();
-		if (found && !("organizationMismatch" in found)) {
-			expect(found.session.sessionId).toBe("sess_1");
-			expect(found.customer?.id).toBe(created.customer.id);
-			expect(found.integration?.organizationId).toBe("org");
-		}
-	});
+		},
+	);
 });

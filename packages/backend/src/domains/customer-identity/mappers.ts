@@ -9,7 +9,7 @@ import type {
 	CustomerSessionRecord,
 	CustomerStaffAccessConsentRecord,
 	FestivalCustomerRecord,
-} from "./customer-account-repository.js";
+} from "./types.js";
 
 export type PgTimestamp = Date | string;
 
@@ -153,7 +153,9 @@ export interface ChildWithAgeSnapshotCteRow {
 }
 
 export function toIsoString(value: PgTimestamp): string {
-	return value instanceof Date ? value.toISOString() : value;
+	if (value instanceof Date) return value.toISOString();
+	const parsed = Date.parse(value);
+	return Number.isNaN(parsed) ? value : new Date(parsed).toISOString();
 }
 
 export function toOptionalIsoString(
@@ -168,13 +170,7 @@ export function toNullableIsoString(
 	return value === null || value === undefined ? null : toIsoString(value);
 }
 
-export function schemaName(value: string): string {
-	if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value))
-		throw new Error("Invalid DB_SCHEMA.");
-	return value;
-}
-
-export function integration(
+export function integrationRowToRecord(
 	row: IntegrationRow,
 ): CustomerAccountIntegrationRecord {
 	return {
@@ -192,7 +188,7 @@ export function integration(
 	};
 }
 
-export function session(row: SessionRow): CustomerSessionRecord {
+export function sessionRowToRecord(row: SessionRow): CustomerSessionRecord {
 	return {
 		sessionId: row.session_id,
 		customerId: row.customer_id,
@@ -208,7 +204,7 @@ export function session(row: SessionRow): CustomerSessionRecord {
 	};
 }
 
-function mailingAddress(
+function parseMailingAddress(
 	value: CustomerRow["mailing_address"],
 ): CustomerMailingAddress | null {
 	if (!value) return null;
@@ -217,7 +213,7 @@ function mailingAddress(
 		: value;
 }
 
-function field<T>(
+function mapProfileField<T>(
 	value: T | null,
 	source: "shopify" | "festival" | null,
 	updatedAt: PgTimestamp | null,
@@ -225,25 +221,25 @@ function field<T>(
 	return { value, source, updatedAtIso: toNullableIsoString(updatedAt) };
 }
 
-export function customer(row: CustomerRow): FestivalCustomerRecord {
+export function customerRowToRecord(row: CustomerRow): FestivalCustomerRecord {
 	return {
 		id: row.id,
 		organizationId: row.organization_id,
 		shopifyCustomerGid: row.shopify_customer_gid,
-		name: field(row.name, row.name_source, row.name_updated_at),
-		email: field(row.email, row.email_source, row.email_updated_at),
-		mailingAddress: field(
-			mailingAddress(row.mailing_address),
+		name: mapProfileField(row.name, row.name_source, row.name_updated_at),
+		email: mapProfileField(row.email, row.email_source, row.email_updated_at),
+		mailingAddress: mapProfileField(
+			parseMailingAddress(row.mailing_address),
 			row.mailing_address_source,
 			row.mailing_address_updated_at,
 		),
-		phone: field(row.phone, row.phone_source, row.phone_updated_at),
+		phone: mapProfileField(row.phone, row.phone_source, row.phone_updated_at),
 		createdAtIso: toIsoString(row.created_at),
 		updatedAtIso: toIsoString(row.updated_at),
 	};
 }
 
-export function childRecord(row: ChildRow): FestivalChildRecord {
+export function childRowToRecord(row: ChildRow): FestivalChildRecord {
 	return {
 		id: row.id,
 		organizationId: row.organization_id,
@@ -253,7 +249,7 @@ export function childRecord(row: ChildRow): FestivalChildRecord {
 	};
 }
 
-export function childAgeSnapshot(
+export function childAgeSnapshotRowToRecord(
 	row: ChildAgeSnapshotRow,
 ): FestivalChildAgeSnapshot {
 	const supersededAtIso = toOptionalIsoString(row.superseded_at);
@@ -268,7 +264,7 @@ export function childAgeSnapshot(
 	};
 }
 
-export function consentRecord(
+export function consentRowToRecord(
 	row: ConsentRow,
 ): CustomerStaffAccessConsentRecord {
 	return {
@@ -279,7 +275,7 @@ export function consentRecord(
 	};
 }
 
-export function stateRecord(row: StateRow): CustomerOAuthStateRecord {
+export function stateRowToRecord(row: StateRow): CustomerOAuthStateRecord {
 	return {
 		stateHash: row.state_hash,
 		organizationId: row.organization_id,
@@ -288,4 +284,70 @@ export function stateRecord(row: StateRow): CustomerOAuthStateRecord {
 		offeringId: row.offering_id ?? undefined,
 		expiresAtIso: toIsoString(row.expires_at),
 	};
+}
+
+export function extractJoinedCustomer(
+	row: JoinedSessionCustomerIntegrationRow,
+): FestivalCustomerRecord | null {
+	if (
+		!row.c_id ||
+		!row.c_organization_id ||
+		!row.c_shopify_customer_gid ||
+		!row.c_created_at ||
+		!row.c_updated_at
+	) {
+		return null;
+	}
+	return customerRowToRecord({
+		id: row.c_id,
+		organization_id: row.c_organization_id,
+		shopify_customer_gid: row.c_shopify_customer_gid,
+		name: row.c_name,
+		name_source: row.c_name_source,
+		name_updated_at: row.c_name_updated_at,
+		email: row.c_email,
+		email_source: row.c_email_source,
+		email_updated_at: row.c_email_updated_at,
+		mailing_address: row.c_mailing_address,
+		mailing_address_source: row.c_mailing_address_source,
+		mailing_address_updated_at: row.c_mailing_address_updated_at,
+		phone: row.c_phone,
+		phone_source: row.c_phone_source,
+		phone_updated_at: row.c_phone_updated_at,
+		created_at: row.c_created_at,
+		updated_at: row.c_updated_at,
+	});
+}
+
+export function extractJoinedIntegration(
+	row: JoinedSessionCustomerIntegrationRow,
+): CustomerAccountIntegrationRecord | null {
+	if (
+		!row.i_organization_id ||
+		!row.i_storefront_domain ||
+		!row.i_client_id ||
+		!row.i_encrypted_client_secret ||
+		!row.i_readiness ||
+		row.i_can_read_orders === null ||
+		row.i_can_read_orders === undefined ||
+		row.i_integration_version === null ||
+		row.i_integration_version === undefined ||
+		!row.i_created_at ||
+		!row.i_updated_at
+	) {
+		return null;
+	}
+	return integrationRowToRecord({
+		organization_id: row.i_organization_id,
+		storefront_domain: row.i_storefront_domain,
+		client_id: row.i_client_id,
+		encrypted_client_secret: row.i_encrypted_client_secret,
+		readiness: row.i_readiness,
+		can_read_orders: row.i_can_read_orders,
+		integration_version: row.i_integration_version,
+		verified_at: row.i_verified_at,
+		last_error: row.i_last_error,
+		created_at: row.i_created_at,
+		updated_at: row.i_updated_at,
+	});
 }
