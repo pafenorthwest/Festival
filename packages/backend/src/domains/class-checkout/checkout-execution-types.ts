@@ -62,6 +62,7 @@ export interface ClassCheckoutExecutionEvent {
 	generation: number;
 	eventType: string;
 	evidence: ClassCheckoutEvidence;
+	hasCartEvidence?: boolean;
 	createdAtIso: string;
 }
 

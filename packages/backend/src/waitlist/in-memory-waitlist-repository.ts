@@ -52,43 +52,66 @@ export class InMemoryWaitlistRepository implements WaitlistRepository {
 		if (active) {
 			return { entry: active, alreadyJoined: true, action: "none" };
 		}
+		const withdrawn = this.findLatestWithdrawnEntry(
+			params.organizationId,
+			params.festivalClassId,
+			params.childId,
+		);
+		return withdrawn
+			? this.reactivateEntry(withdrawn, params, nowIso)
+			: this.insertNewEntry(params, nowIso);
+	}
 
-		const withdrawn = this.entries
+	private findLatestWithdrawnEntry(
+		organizationId: string,
+		festivalClassId: string,
+		childId: string,
+	): FestivalClassWaitlistEntry | undefined {
+		return this.entries
 			.filter(
 				(e) =>
-					e.organizationId === params.organizationId &&
-					e.festivalClassId === params.festivalClassId &&
-					e.childId === params.childId &&
+					e.organizationId === organizationId &&
+					e.festivalClassId === festivalClassId &&
+					e.childId === childId &&
 					e.status === "withdrawn",
 			)
 			.sort(
 				(a, b) =>
 					new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
 			)[0];
+	}
 
-		if (withdrawn) {
-			withdrawn.status = "active";
-			withdrawn.withdrawnAt = null;
-			withdrawn.joinedAt = nowIso;
-			withdrawn.updatedAt = nowIso;
-			this.events.push({
-				id: randomUUID(),
-				organizationId: params.organizationId,
-				festivalId: params.festivalId,
-				festivalClassId: params.festivalClassId,
-				waitlistEntryId: withdrawn.id,
-				eventType: "rejoined",
-				actorType: "parent",
-				actorId: params.parentCustomerId,
-				createdAt: nowIso,
-			});
-			return {
-				entry: { ...withdrawn },
-				alreadyJoined: false,
-				action: "rejoined",
-			};
-		}
+	private reactivateEntry(
+		withdrawn: FestivalClassWaitlistEntry,
+		params: CreateOrReactivateWaitlistEntryParams,
+		nowIso: string,
+	): CreateOrReactivateWaitlistEntryResult {
+		withdrawn.status = "active";
+		withdrawn.withdrawnAt = null;
+		withdrawn.joinedAt = nowIso;
+		withdrawn.updatedAt = nowIso;
+		this.events.push({
+			id: randomUUID(),
+			organizationId: params.organizationId,
+			festivalId: params.festivalId,
+			festivalClassId: params.festivalClassId,
+			waitlistEntryId: withdrawn.id,
+			eventType: "rejoined",
+			actorType: "parent",
+			actorId: params.parentCustomerId,
+			createdAt: nowIso,
+		});
+		return {
+			entry: { ...withdrawn },
+			alreadyJoined: false,
+			action: "rejoined",
+		};
+	}
 
+	private insertNewEntry(
+		params: CreateOrReactivateWaitlistEntryParams,
+		nowIso: string,
+	): CreateOrReactivateWaitlistEntryResult {
 		const newEntry: FestivalClassWaitlistEntry = {
 			id: randomUUID(),
 			organizationId: params.organizationId,

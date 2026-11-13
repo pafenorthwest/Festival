@@ -248,6 +248,37 @@ export async function resolveRecoveryCustomerId(
 	return providedCustomerId;
 }
 
+function assertRecoveryIntentCreated(outcome: {
+	kind: string;
+	intent?: CheckoutIntentRecord;
+}): CheckoutIntentRecord {
+	if (outcome.kind === "created" && outcome.intent) {
+		return outcome.intent;
+	}
+	if (outcome.kind === "in_progress") {
+		throw new AppError(
+			"Checkout is already in progress.",
+			409,
+			"checkout_in_progress",
+		);
+	}
+	if (outcome.kind === "active") {
+		throw new AppError(
+			"Teacher Membership already exists.",
+			409,
+			"membership_active",
+		);
+	}
+	if (outcome.kind === "expired") {
+		throw new AppError("Checkout has expired.", 409, "checkout_expired");
+	}
+	throw new AppError(
+		"This checkout attempt cannot continue.",
+		409,
+		"checkout_terminal_failure",
+	);
+}
+
 export async function createNewCheckoutIntent(params: {
 	checkoutRepository: CheckoutRepository;
 	organizationId: string;
@@ -283,32 +314,7 @@ export async function createNewCheckoutIntent(params: {
 			params.offering?.price.currencyCode ?? params.sourceIntent.currencyCode,
 		expiresAtIso,
 	});
-
-	if (outcome.kind !== "created") {
-		if (outcome.kind === "in_progress") {
-			throw new AppError(
-				"Checkout is already in progress.",
-				409,
-				"checkout_in_progress",
-			);
-		}
-		if (outcome.kind === "active") {
-			throw new AppError(
-				"Teacher Membership already exists.",
-				409,
-				"membership_active",
-			);
-		}
-		if (outcome.kind === "expired") {
-			throw new AppError("Checkout has expired.", 409, "checkout_expired");
-		}
-		throw new AppError(
-			"This checkout attempt cannot continue.",
-			409,
-			"checkout_terminal_failure",
-		);
-	}
-	return outcome.intent;
+	return assertRecoveryIntentCreated(outcome);
 }
 
 export async function createStorefrontCheckout(params: {
