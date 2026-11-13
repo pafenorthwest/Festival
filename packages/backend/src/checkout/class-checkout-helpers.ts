@@ -58,7 +58,7 @@ export function validateAndNormalizeRepertoirePieces(
 	options?: LegacyRepertoireValidationOptions,
 ): RepertoirePiece[] {
 	if (!Array.isArray(pieces)) {
-		throw new AppError("At least one repertoire piece is required.", 400);
+		throw new AppError("Repertoire pieces must be a non-empty array.", 400);
 	}
 	const requireConcertoCatalogWork =
 		options?.requireConcertoCatalogWork ??

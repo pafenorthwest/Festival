@@ -111,6 +111,53 @@ export function validateRepertoirePiece(piece: unknown): void {
 	}
 }
 
+function normalizeValidatedPiece(
+	piece: RepertoirePiece,
+	options?: RepertoireValidationOptions,
+): RepertoirePiece {
+	validateRepertoirePiece(piece);
+	const catalogWorkId =
+		typeof piece.catalogWorkId === "string" && piece.catalogWorkId.trim()
+			? piece.catalogWorkId.trim()
+			: undefined;
+	if (options?.requireConcertoCatalogWork) {
+		const work = catalogWorkId
+			? options.preResolvedWorksById?.get(catalogWorkId)
+			: undefined;
+		if (
+			!catalogWorkId ||
+			!work?.isActive ||
+			!(work.classifications ?? []).includes("concerto")
+		) {
+			throw new AppError(
+				"Concerto class registrations require an active concerto catalog work.",
+				400,
+				"concerto_catalog_work_required",
+			);
+		}
+	} else if (catalogWorkId && options?.preResolvedWorksById) {
+		const work = options.preResolvedWorksById.get(catalogWorkId);
+		if (!work?.isActive) {
+			throw new AppError(
+				"Selected catalog work was not found or is inactive.",
+				400,
+				"catalog_work_invalid",
+			);
+		}
+	}
+	const movement =
+		typeof piece.movement === "string" && piece.movement.trim()
+			? piece.movement.trim()
+			: undefined;
+	return {
+		...(catalogWorkId ? { catalogWorkId } : {}),
+		title: piece.title.trim(),
+		composer: piece.composer.trim(),
+		...(movement ? { movement } : {}),
+		durationSeconds: piece.durationSeconds,
+	};
+}
+
 export function validateAndNormalizeRepertoirePieces(
 	pieces: RepertoirePiece[],
 	festivalClass: Pick<
@@ -120,65 +167,22 @@ export function validateAndNormalizeRepertoirePieces(
 	options?: RepertoireValidationOptions,
 ): RepertoirePiece[] {
 	if (!Array.isArray(pieces) || pieces.length === 0) {
-		throw new AppError("At least one repertoire piece is required.", 400);
+		throw new AppError("Repertoire pieces must be a non-empty array.", 400);
 	}
 	if (pieces.length > festivalClass.maximumPerformancePieces) {
 		throw new AppError(
-			`This class allows at most ${festivalClass.maximumPerformancePieces} repertoire piece(s).`,
+			`Number of pieces (${pieces.length}) exceeds the maximum allowed (${festivalClass.maximumPerformancePieces}).`,
 			400,
 		);
 	}
-	const normalized: RepertoirePiece[] = [];
-	let totalDurationSeconds = 0;
-	for (const piece of pieces) {
-		validateRepertoirePiece(piece);
-		const catalogWorkId =
-			typeof piece.catalogWorkId === "string" && piece.catalogWorkId.trim()
-				? piece.catalogWorkId.trim()
-				: undefined;
-		if (options?.requireConcertoCatalogWork) {
-			const work = catalogWorkId
-				? options.preResolvedWorksById?.get(catalogWorkId)
-				: undefined;
-			if (
-				!catalogWorkId ||
-				!work ||
-				!work.isActive ||
-				!(work.classifications ?? []).includes("concerto")
-			) {
-				throw new AppError(
-					"Concerto class registrations require an active concerto catalog work.",
-					400,
-					"concerto_catalog_work_required",
-				);
-			}
-		} else if (catalogWorkId && options?.preResolvedWorksById) {
-			const work = options.preResolvedWorksById.get(catalogWorkId);
-			if (!work || !work.isActive) {
-				throw new AppError(
-					"Selected catalog work was not found or is inactive.",
-					400,
-					"catalog_work_invalid",
-				);
-			}
-		}
-		const movement =
-			typeof piece.movement === "string" && piece.movement.trim()
-				? piece.movement.trim()
-				: undefined;
-		totalDurationSeconds += piece.durationSeconds;
-		normalized.push({
-			...(catalogWorkId ? { catalogWorkId } : {}),
-			title: piece.title.trim(),
-			composer: piece.composer.trim(),
-			...(movement ? { movement } : {}),
-			durationSeconds: piece.durationSeconds,
-		});
-	}
-	const maxSeconds = festivalClass.performanceMinutes * 60;
-	if (totalDurationSeconds > maxSeconds) {
+	const normalized = pieces.map((piece) =>
+		normalizeValidatedPiece(piece, options),
+	);
+	const totalDurationMinutes =
+		normalized.reduce((sum, piece) => sum + piece.durationSeconds, 0) / 60;
+	if (totalDurationMinutes > festivalClass.performanceMinutes) {
 		throw new AppError(
-			`Total repertoire duration (${totalDurationSeconds}s) exceeds class limit (${maxSeconds}s).`,
+			`Total performance duration (${totalDurationMinutes} minutes) exceeds the maximum allowed of ${festivalClass.performanceMinutes} minutes.`,
 			400,
 		);
 	}

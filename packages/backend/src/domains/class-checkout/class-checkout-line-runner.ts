@@ -142,7 +142,7 @@ async function validateSingleClassLine(
 	if (!festivalClass.isActive) {
 		throw input.festivalShortName
 			? new AppError("Festival class configuration not found.", 404)
-			: new AppError("Selected class is not active.", 400);
+			: new AppError("Festival class configuration is inactive.", 400);
 	}
 	if (
 		input.divisionId !== undefined &&
