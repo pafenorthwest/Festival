@@ -2,8 +2,8 @@
 -- PostgreSQL database dump
 --
 
--- Dumped from database version 17.11 (Homebrew)
--- Dumped by pg_dump version 17.11 (Homebrew)
+-- Dumped from database version 17.11
+-- Dumped by pg_dump version 17.11
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -22,7 +22,6 @@ SET row_security = off;
 --
 
 CREATE SCHEMA orgs;
-
 
 --
 -- Name: btree_gist; Type: EXTENSION; Schema: -; Owner: -
@@ -65,11 +64,11 @@ CREATE FUNCTION orgs.enforce_shopify_shop_ownership() RETURNS trigger
 CREATE FUNCTION orgs.lock_class_capacity_cutoff() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
-        BEGIN
-            PERFORM pg_advisory_xact_lock(hashtextextended('orgs:class-capacity-cutoff', 0));
-            RETURN NULL;
-        END;
-        $$;
+BEGIN
+    PERFORM pg_advisory_xact_lock(hashtextextended('orgs:class-capacity-cutoff', 0));
+    RETURN NULL;
+END;
+$$;
 
 
 --
@@ -79,18 +78,18 @@ CREATE FUNCTION orgs.lock_class_capacity_cutoff() RETURNS trigger
 CREATE FUNCTION orgs.prevent_referenced_catalog_kind_change() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
-		BEGIN
-			IF NEW.kind IS DISTINCT FROM OLD.kind AND (
-				EXISTS (SELECT 1 FROM orgs.registration_catalog_values v WHERE v.organization_id = OLD.organization_id AND v.required_subtype_id = OLD.id)
-				OR EXISTS (SELECT 1 FROM orgs.festival_class_configurations c WHERE c.organization_id = OLD.organization_id AND c.class_subtype_id = OLD.id)
-				OR EXISTS (SELECT 1 FROM orgs.festival_class_subtypes s WHERE s.organization_id = OLD.organization_id AND s.class_subtype_id = OLD.id)
-			) THEN
-				RAISE EXCEPTION 'Cannot change the kind of a referenced registration catalog value'
-					USING ERRCODE = '23503';
-			END IF;
-			RETURN NEW;
-		END;
-		$$;
+BEGIN
+    IF NEW.kind IS DISTINCT FROM OLD.kind AND (
+        EXISTS (SELECT 1 FROM orgs.registration_catalog_values v WHERE v.organization_id = OLD.organization_id AND v.required_subtype_id = OLD.id)
+        OR EXISTS (SELECT 1 FROM orgs.festival_class_configurations c WHERE c.organization_id = OLD.organization_id AND c.class_subtype_id = OLD.id)
+        OR EXISTS (SELECT 1 FROM orgs.festival_class_subtypes s WHERE s.organization_id = OLD.organization_id AND s.class_subtype_id = OLD.id)
+    ) THEN
+        RAISE EXCEPTION 'Cannot change the kind of a referenced registration catalog value'
+            USING ERRCODE = '23503';
+    END IF;
+    RETURN NEW;
+END;
+$$;
 
 
 --
@@ -100,27 +99,27 @@ CREATE FUNCTION orgs.prevent_referenced_catalog_kind_change() RETURNS trigger
 CREATE FUNCTION orgs.validate_catalog_subtype_reference() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
-		DECLARE
-			target_id TEXT;
-			target_kind TEXT;
-		BEGIN
-			IF TG_TABLE_NAME = 'registration_catalog_values' THEN
-				target_id := NEW.required_subtype_id;
-			ELSE
-				target_id := NEW.class_subtype_id;
-			END IF;
-			IF target_id IS NULL THEN RETURN NEW; END IF;
-			SELECT kind INTO target_kind
-			FROM orgs.registration_catalog_values
-			WHERE id = target_id AND organization_id = NEW.organization_id
-			FOR SHARE;
-			IF target_kind IS DISTINCT FROM 'class_subtype' THEN
-				RAISE EXCEPTION 'Registration subtype reference must point to a class_subtype value'
-					USING ERRCODE = '23503';
-			END IF;
-			RETURN NEW;
-		END;
-		$$;
+DECLARE
+    target_id TEXT;
+    target_kind TEXT;
+BEGIN
+    IF TG_TABLE_NAME = 'registration_catalog_values' THEN
+        target_id := NEW.required_subtype_id;
+    ELSE
+        target_id := NEW.class_subtype_id;
+    END IF;
+    IF target_id IS NULL THEN RETURN NEW; END IF;
+    SELECT kind INTO target_kind
+    FROM orgs.registration_catalog_values
+    WHERE id = target_id AND organization_id = NEW.organization_id
+    FOR SHARE;
+    IF target_kind IS DISTINCT FROM 'class_subtype' THEN
+        RAISE EXCEPTION 'Registration subtype reference must point to a class_subtype value'
+            USING ERRCODE = '23503';
+    END IF;
+    RETURN NEW;
+END;
+$$;
 
 
 SET default_tablespace = '';
@@ -318,6 +317,51 @@ CREATE TABLE orgs.checkout_recovery_requests (
     expires_at timestamp with time zone NOT NULL,
     consumed_at timestamp with time zone,
     CONSTRAINT checkout_recovery_requests_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'consumed'::text, 'expired'::text, 'cancelled'::text, 'invalidated'::text])))
+);
+
+
+--
+-- Name: class_checkout_execution_events; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.class_checkout_execution_events (
+    id text NOT NULL,
+    organization_id text NOT NULL,
+    intent_id text NOT NULL,
+    generation bigint NOT NULL,
+    event_type text NOT NULL,
+    evidence jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL
+);
+
+
+--
+-- Name: class_checkout_executions; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.class_checkout_executions (
+    intent_id text NOT NULL,
+    organization_id text NOT NULL,
+    customer_id text NOT NULL,
+    fingerprint text NOT NULL,
+    request_snapshot jsonb NOT NULL,
+    storefront_binding jsonb,
+    state text DEFAULT 'ready'::text NOT NULL,
+    checkpoint text DEFAULT 'prepared'::text NOT NULL,
+    generation bigint DEFAULT 0 NOT NULL,
+    lease_owner text,
+    lease_expires_at timestamp with time zone,
+    shopify_cart_id text,
+    result_code text,
+    recovery_reference text NOT NULL,
+    recovery_recorded_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    updated_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT class_checkout_executions_check CHECK (((lease_owner IS NULL) = (lease_expires_at IS NULL))),
+    CONSTRAINT class_checkout_executions_check1 CHECK (((state = 'running'::text) = (lease_owner IS NOT NULL))),
+    CONSTRAINT class_checkout_executions_checkpoint_check CHECK ((checkpoint = ANY (ARRAY['prepared'::text, 'create_dispatched'::text, 'remote_cart_known'::text, 'attached'::text]))),
+    CONSTRAINT class_checkout_executions_generation_check CHECK ((generation >= 0)),
+    CONSTRAINT class_checkout_executions_state_check CHECK ((state = ANY (ARRAY['ready'::text, 'running'::text, 'retryable'::text, 'recovery_required'::text, 'completed'::text, 'rejected'::text])))
 );
 
 
@@ -1224,6 +1268,18 @@ CREATE TABLE orgs.rooms (
 
 
 --
+-- Name: schema_migrations; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.schema_migrations (
+    version text NOT NULL,
+    filename text NOT NULL,
+    checksum text NOT NULL,
+    applied_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
 -- Name: shopify_customer_account_integrations; Type: TABLE; Schema: orgs; Owner: -
 --
 
@@ -1636,6 +1692,38 @@ ALTER TABLE ONLY orgs.checkout_intents
 
 ALTER TABLE ONLY orgs.checkout_recovery_requests
     ADD CONSTRAINT checkout_recovery_requests_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: class_checkout_execution_events class_checkout_execution_events_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.class_checkout_execution_events
+    ADD CONSTRAINT class_checkout_execution_events_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: class_checkout_executions class_checkout_executions_intent_id_organization_id_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.class_checkout_executions
+    ADD CONSTRAINT class_checkout_executions_intent_id_organization_id_key UNIQUE (intent_id, organization_id);
+
+
+--
+-- Name: class_checkout_executions class_checkout_executions_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.class_checkout_executions
+    ADD CONSTRAINT class_checkout_executions_pkey PRIMARY KEY (intent_id);
+
+
+--
+-- Name: class_checkout_executions class_checkout_executions_recovery_reference_key; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.class_checkout_executions
+    ADD CONSTRAINT class_checkout_executions_recovery_reference_key UNIQUE (recovery_reference);
 
 
 --
@@ -2343,6 +2431,14 @@ ALTER TABLE ONLY orgs.rooms
 
 
 --
+-- Name: schema_migrations schema_migrations_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.schema_migrations
+    ADD CONSTRAINT schema_migrations_pkey PRIMARY KEY (version);
+
+
+--
 -- Name: shopify_customer_account_integrations shopify_customer_account_integrations_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
 --
 
@@ -2550,6 +2646,13 @@ CREATE UNIQUE INDEX checkout_intent_lines_checkout_intent_id_line_index_key ON o
 
 
 --
+-- Name: checkout_intents_id_organization_key; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE UNIQUE INDEX checkout_intents_id_organization_key ON orgs.checkout_intents USING btree (id, organization_id);
+
+
+--
 -- Name: checkout_intents_scope_key; Type: INDEX; Schema: orgs; Owner: -
 --
 
@@ -2557,10 +2660,59 @@ CREATE UNIQUE INDEX checkout_intents_scope_key ON orgs.checkout_intents USING bt
 
 
 --
+-- Name: class_checkout_execution_events_intent_idx; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX class_checkout_execution_events_intent_idx ON orgs.class_checkout_execution_events USING btree (organization_id, intent_id, created_at);
+
+
+--
+-- Name: class_checkout_executions_recovery_idx; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX class_checkout_executions_recovery_idx ON orgs.class_checkout_executions USING btree (organization_id, customer_id, state);
+
+
+--
 -- Name: class_entitlements_checkout_intent_line_id_key; Type: INDEX; Schema: orgs; Owner: -
 --
 
 CREATE UNIQUE INDEX class_entitlements_checkout_intent_line_id_key ON orgs.class_entitlements USING btree (checkout_intent_line_id) WHERE (checkout_intent_line_id IS NOT NULL);
+
+
+--
+-- Name: festival_children_id_organization_key; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE UNIQUE INDEX festival_children_id_organization_key ON orgs.festival_children USING btree (id, organization_id);
+
+
+--
+-- Name: festival_children_id_organization_parent_key; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE UNIQUE INDEX festival_children_id_organization_parent_key ON orgs.festival_children USING btree (id, organization_id, parent_customer_id);
+
+
+--
+-- Name: festival_class_configurations_id_organization_festival_key; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE UNIQUE INDEX festival_class_configurations_id_organization_festival_key ON orgs.festival_class_configurations USING btree (id, organization_id, festival_id);
+
+
+--
+-- Name: festival_class_configurations_id_organization_key; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE UNIQUE INDEX festival_class_configurations_id_organization_key ON orgs.festival_class_configurations USING btree (id, organization_id);
+
+
+--
+-- Name: festival_class_waitlist_entries_reference_key; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE UNIQUE INDEX festival_class_waitlist_entries_reference_key ON orgs.festival_class_waitlist_entries USING btree (id, organization_id, festival_class_id, parent_customer_id, child_id);
 
 
 --
@@ -3012,6 +3164,13 @@ CREATE INDEX membership_validation_decision_audits_org_idx ON orgs.membership_va
 
 
 --
+-- Name: registration_catalog_values_id_organization_key; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE UNIQUE INDEX registration_catalog_values_id_organization_key ON orgs.registration_catalog_values USING btree (id, organization_id);
+
+
+--
 -- Name: registration_catalog_values_required_subtype_idx; Type: INDEX; Schema: orgs; Owner: -
 --
 
@@ -3309,6 +3468,22 @@ ALTER TABLE ONLY orgs.checkout_intents
 
 
 --
+-- Name: checkout_intents checkout_intents_child_tenant_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.checkout_intents
+    ADD CONSTRAINT checkout_intents_child_tenant_fkey FOREIGN KEY (child_id, organization_id) REFERENCES orgs.festival_children(id, organization_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: checkout_intents checkout_intents_class_tenant_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.checkout_intents
+    ADD CONSTRAINT checkout_intents_class_tenant_fkey FOREIGN KEY (festival_class_id, organization_id) REFERENCES orgs.festival_class_configurations(id, organization_id) ON DELETE RESTRICT;
+
+
+--
 -- Name: checkout_intents checkout_intents_festival_class_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
 --
 
@@ -3341,6 +3516,14 @@ ALTER TABLE ONLY orgs.checkout_intents
 
 
 --
+-- Name: checkout_recovery_requests checkout_recovery_requests_intent_tenant_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.checkout_recovery_requests
+    ADD CONSTRAINT checkout_recovery_requests_intent_tenant_fkey FOREIGN KEY (source_checkout_intent_id, organization_id) REFERENCES orgs.checkout_intents(id, organization_id) ON DELETE CASCADE;
+
+
+--
 -- Name: checkout_recovery_requests checkout_recovery_requests_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
 --
 
@@ -3362,6 +3545,22 @@ ALTER TABLE ONLY orgs.checkout_recovery_requests
 
 ALTER TABLE ONLY orgs.checkout_recovery_requests
     ADD CONSTRAINT checkout_recovery_requests_source_checkout_intent_id_organ_fkey FOREIGN KEY (source_checkout_intent_id, organization_id) REFERENCES orgs.checkout_intents(id, organization_id) ON DELETE CASCADE;
+
+
+--
+-- Name: class_checkout_execution_events class_checkout_execution_events_intent_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.class_checkout_execution_events
+    ADD CONSTRAINT class_checkout_execution_events_intent_id_organization_id_fkey FOREIGN KEY (intent_id, organization_id) REFERENCES orgs.class_checkout_executions(intent_id, organization_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: class_checkout_executions class_checkout_executions_intent_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.class_checkout_executions
+    ADD CONSTRAINT class_checkout_executions_intent_id_organization_id_fkey FOREIGN KEY (intent_id, organization_id) REFERENCES orgs.checkout_intents(id, organization_id) ON DELETE RESTRICT;
 
 
 --
@@ -3389,6 +3588,14 @@ ALTER TABLE ONLY orgs.class_entitlements
 
 
 --
+-- Name: class_entitlements class_entitlements_checkout_intent_tenant_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.class_entitlements
+    ADD CONSTRAINT class_entitlements_checkout_intent_tenant_fkey FOREIGN KEY (checkout_intent_id, organization_id) REFERENCES orgs.checkout_intents(id, organization_id) ON DELETE RESTRICT;
+
+
+--
 -- Name: class_entitlements class_entitlements_child_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
 --
 
@@ -3402,6 +3609,22 @@ ALTER TABLE ONLY orgs.class_entitlements
 
 ALTER TABLE ONLY orgs.class_entitlements
     ADD CONSTRAINT class_entitlements_child_id_organization_id_parent_custome_fkey FOREIGN KEY (child_id, organization_id, parent_customer_id) REFERENCES orgs.festival_children(id, organization_id, parent_customer_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: class_entitlements class_entitlements_child_parent_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.class_entitlements
+    ADD CONSTRAINT class_entitlements_child_parent_fkey FOREIGN KEY (child_id, organization_id, parent_customer_id) REFERENCES orgs.festival_children(id, organization_id, parent_customer_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: class_entitlements class_entitlements_class_scope_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.class_entitlements
+    ADD CONSTRAINT class_entitlements_class_scope_fkey FOREIGN KEY (festival_class_id, organization_id, festival_id) REFERENCES orgs.festival_class_configurations(id, organization_id, festival_id) ON DELETE RESTRICT;
 
 
 --
@@ -3493,6 +3716,22 @@ ALTER TABLE ONLY orgs.festival_child_age_snapshots
 
 
 --
+-- Name: festival_child_age_snapshots festival_child_age_snapshots_child_tenant_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_child_age_snapshots
+    ADD CONSTRAINT festival_child_age_snapshots_child_tenant_fkey FOREIGN KEY (child_id, organization_id) REFERENCES orgs.festival_children(id, organization_id) ON DELETE CASCADE;
+
+
+--
+-- Name: festival_children festival_children_organization_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_children
+    ADD CONSTRAINT festival_children_organization_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
 -- Name: festival_children festival_children_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
 --
 
@@ -3509,11 +3748,27 @@ ALTER TABLE ONLY orgs.festival_children
 
 
 --
+-- Name: festival_children festival_children_parent_customer_tenant_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_children
+    ADD CONSTRAINT festival_children_parent_customer_tenant_fkey FOREIGN KEY (parent_customer_id, organization_id) REFERENCES orgs.festival_customers(id, organization_id) ON DELETE CASCADE;
+
+
+--
 -- Name: festival_class_capacity_audit_logs festival_class_capacity_audit_festival_class_id_organizati_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
 --
 
 ALTER TABLE ONLY orgs.festival_class_capacity_audit_logs
     ADD CONSTRAINT festival_class_capacity_audit_festival_class_id_organizati_fkey FOREIGN KEY (festival_class_id, organization_id, festival_id) REFERENCES orgs.festival_class_configurations(id, organization_id, festival_id) ON DELETE CASCADE;
+
+
+--
+-- Name: festival_class_capacity_audit_logs festival_class_capacity_audit_logs_class_scope_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_class_capacity_audit_logs
+    ADD CONSTRAINT festival_class_capacity_audit_logs_class_scope_fkey FOREIGN KEY (festival_class_id, organization_id, festival_id) REFERENCES orgs.festival_class_configurations(id, organization_id, festival_id) ON DELETE CASCADE;
 
 
 --
@@ -3573,6 +3828,14 @@ ALTER TABLE ONLY orgs.festival_class_configurations
 
 
 --
+-- Name: festival_class_configurations festival_class_configurations_division_tenant_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_class_configurations
+    ADD CONSTRAINT festival_class_configurations_division_tenant_fkey FOREIGN KEY (division_id, organization_id) REFERENCES orgs.organization_divisions(id, organization_id) ON DELETE RESTRICT;
+
+
+--
 -- Name: festival_class_configurations festival_class_configurations_festival_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
 --
 
@@ -3589,11 +3852,27 @@ ALTER TABLE ONLY orgs.festival_class_configurations
 
 
 --
+-- Name: festival_class_configurations festival_class_configurations_festival_tenant_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_class_configurations
+    ADD CONSTRAINT festival_class_configurations_festival_tenant_fkey FOREIGN KEY (festival_id, organization_id) REFERENCES orgs.festivals(id, organization_id) ON DELETE RESTRICT;
+
+
+--
 -- Name: festival_class_configurations festival_class_configurations_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
 --
 
 ALTER TABLE ONLY orgs.festival_class_configurations
     ADD CONSTRAINT festival_class_configurations_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: festival_class_configurations festival_class_configurations_subtype_tenant_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_class_configurations
+    ADD CONSTRAINT festival_class_configurations_subtype_tenant_fkey FOREIGN KEY (class_subtype_id, organization_id) REFERENCES orgs.registration_catalog_values(id, organization_id) ON DELETE RESTRICT;
 
 
 --
@@ -3637,6 +3916,14 @@ ALTER TABLE ONLY orgs.festival_class_subtypes
 
 
 --
+-- Name: festival_class_subtypes festival_class_subtypes_subtype_tenant_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_class_subtypes
+    ADD CONSTRAINT festival_class_subtypes_subtype_tenant_fkey FOREIGN KEY (class_subtype_id, organization_id) REFERENCES orgs.registration_catalog_values(id, organization_id) ON DELETE RESTRICT;
+
+
+--
 -- Name: festival_class_waitlist_entries festival_class_waitlist_entri_child_id_organization_id_par_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
 --
 
@@ -3666,6 +3953,22 @@ ALTER TABLE ONLY orgs.festival_class_waitlist_entries
 
 ALTER TABLE ONLY orgs.festival_class_waitlist_entries
     ADD CONSTRAINT festival_class_waitlist_entries_child_id_fkey FOREIGN KEY (child_id) REFERENCES orgs.festival_children(id) ON DELETE CASCADE;
+
+
+--
+-- Name: festival_class_waitlist_entries festival_class_waitlist_entries_child_parent_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_class_waitlist_entries
+    ADD CONSTRAINT festival_class_waitlist_entries_child_parent_fkey FOREIGN KEY (child_id, organization_id, parent_customer_id) REFERENCES orgs.festival_children(id, organization_id, parent_customer_id) ON DELETE CASCADE;
+
+
+--
+-- Name: festival_class_waitlist_entries festival_class_waitlist_entries_class_scope_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_class_waitlist_entries
+    ADD CONSTRAINT festival_class_waitlist_entries_class_scope_fkey FOREIGN KEY (festival_class_id, organization_id, festival_id) REFERENCES orgs.festival_class_configurations(id, organization_id, festival_id) ON DELETE CASCADE;
 
 
 --
@@ -3701,6 +4004,14 @@ ALTER TABLE ONLY orgs.festival_class_waitlist_entries
 
 
 --
+-- Name: festival_class_waitlist_entries festival_class_waitlist_entries_parent_tenant_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_class_waitlist_entries
+    ADD CONSTRAINT festival_class_waitlist_entries_parent_tenant_fkey FOREIGN KEY (parent_customer_id, organization_id) REFERENCES orgs.festival_customers(id, organization_id) ON DELETE CASCADE;
+
+
+--
 -- Name: festival_class_waitlist_events festival_class_waitlist_event_waitlist_entry_id_organizati_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
 --
 
@@ -3714,6 +4025,14 @@ ALTER TABLE ONLY orgs.festival_class_waitlist_events
 
 ALTER TABLE ONLY orgs.festival_class_waitlist_events
     ADD CONSTRAINT festival_class_waitlist_events_child_id_fkey FOREIGN KEY (child_id) REFERENCES orgs.festival_children(id) ON DELETE CASCADE;
+
+
+--
+-- Name: festival_class_waitlist_events festival_class_waitlist_events_entry_scope_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.festival_class_waitlist_events
+    ADD CONSTRAINT festival_class_waitlist_events_entry_scope_fkey FOREIGN KEY (waitlist_entry_id, organization_id, festival_class_id, parent_customer_id, child_id) REFERENCES orgs.festival_class_waitlist_entries(id, organization_id, festival_class_id, parent_customer_id, child_id) ON DELETE CASCADE;
 
 
 --
@@ -4082,6 +4401,14 @@ ALTER TABLE ONLY orgs.registration_catalog_values
 
 ALTER TABLE ONLY orgs.registration_catalog_values
     ADD CONSTRAINT registration_catalog_values_required_subtype_id_organizati_fkey FOREIGN KEY (required_subtype_id, organization_id) REFERENCES orgs.registration_catalog_values(id, organization_id) ON DELETE SET NULL (required_subtype_id);
+
+
+--
+-- Name: registration_catalog_values registration_catalog_values_required_subtype_tenant_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.registration_catalog_values
+    ADD CONSTRAINT registration_catalog_values_required_subtype_tenant_fkey FOREIGN KEY (required_subtype_id, organization_id) REFERENCES orgs.registration_catalog_values(id, organization_id) ON DELETE SET NULL (required_subtype_id);
 
 
 --
@@ -4597,30 +4924,5 @@ ALTER TABLE ONLY orgs.volunteers
 
 
 --
-CREATE TABLE IF NOT EXISTS orgs.class_checkout_executions (
-    intent_id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, customer_id TEXT NOT NULL,
-    fingerprint TEXT NOT NULL, request_snapshot JSONB NOT NULL,
-    storefront_binding JSONB NULL,
-    state TEXT NOT NULL DEFAULT 'ready' CHECK (state IN ('ready','running','retryable','recovery_required','completed','rejected')),
-    checkpoint TEXT NOT NULL DEFAULT 'prepared' CHECK (checkpoint IN ('prepared','create_dispatched','remote_cart_known','attached')),
-    generation BIGINT NOT NULL DEFAULT 0 CHECK (generation >= 0),
-    lease_owner TEXT NULL, lease_expires_at TIMESTAMPTZ NULL,
-    shopify_cart_id TEXT NULL, result_code TEXT NULL,
-    recovery_reference TEXT NOT NULL UNIQUE, recovery_recorded_at TIMESTAMPTZ NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(), updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
-    CHECK ((lease_owner IS NULL) = (lease_expires_at IS NULL)),
-    CHECK ((state = 'running') = (lease_owner IS NOT NULL)),
-    FOREIGN KEY (intent_id, organization_id) REFERENCES orgs.checkout_intents(id, organization_id) ON DELETE RESTRICT,
-    UNIQUE (intent_id, organization_id)
-);
-CREATE TABLE IF NOT EXISTS orgs.class_checkout_execution_events (
-    id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, intent_id TEXT NOT NULL,
-    generation BIGINT NOT NULL, event_type TEXT NOT NULL, evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
-    FOREIGN KEY (intent_id, organization_id) REFERENCES orgs.class_checkout_executions(intent_id, organization_id) ON DELETE RESTRICT
-);
-CREATE INDEX IF NOT EXISTS class_checkout_executions_recovery_idx ON orgs.class_checkout_executions (organization_id,customer_id,state);
-CREATE INDEX IF NOT EXISTS class_checkout_execution_events_intent_idx ON orgs.class_checkout_execution_events (organization_id,intent_id,created_at);
-
 -- PostgreSQL database dump complete
 --

@@ -52,7 +52,18 @@ bun run check:sql
 ```
 
 ## Delivery
-Pending execution.
+- `database/postgres17-schema.sql`: added `orgs.schema_migrations` ledger table (`version TEXT PRIMARY KEY, filename TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`).
+- `database/bootstrap/20261109000000_load_pafe_concertos.sql`: moved from `database/migrations/20261109000000_load_pafe_concertos.sql` to separate `psql \copy` seed data from DDL migrations; updated `database/migrations/README.md`.
+- `scripts/migrate.ts`: implemented tracked migration runner (deterministic `YYYYMMDDHHMMSS_*.sql` ordering, CRLF-to-LF SHA-256 checksums, `psql` meta-command rejection, `pg_advisory_lock(hashtextextended($1, 0))` serialization, atomic per-migration transactions).
+- `scripts/check-schema-parity.ts`: implemented normalized `pg_dump --schema-only --schema=orgs` drift check.
+- `package.json`: added `migrate` and `check:schema-parity` scripts.
+- `packages/backend/src/repo/postgres-schema.ts`: stripped runtime DDL from `initializePostgresSchema` (read-only schema/ledger checks); added `provisionPostgresTestSchema` for isolated test schemas.
+- `packages/backend/tests/migrate-runner.test.ts`, `packages/backend/tests/postgres-test-fixture.ts`, `packages/backend/tests/postgres-application-fixture.ts`, `packages/backend/tests/postgres-initializer-existing-schema.integration.test.ts`: added migration runner tests and aligned Postgres test fixtures.
+- `.github/workflows/pr-checks.yml`: added blocking `Schema parity check` step against Postgres 17.
+- `.github/workflows/deploy.yml` and `cloud-setup/05-rebuild-and-validate.sh`: wired `postgres --wait` and `bun run scripts/migrate.ts` under `set -euo pipefail` before starting/recreating backend containers.
+- `tasks/s06-schema-migrations-ledger-runner/code-review.md` and `specs/pre-thanksgiving-program.md` (`S06` marked `DONE`).
 
 ## Quality gate results
-Pending execution.
+- `bun run verify:toolchain`: host environment runs Bun `1.4.4` vs `verify:toolchain` pinned `1.4.2` (CI uses pinned toolchain).
+- `bun run test` (host): unit/contract tests passed; 64 PostgreSQL integration tests skipped because `POSTGRES_INTEGRATION_URL` is unset on host (CI `.github/workflows/pr-checks.yml` runs full Postgres 17 integration suites and `Schema parity check`).
+- Code review (`tasks/s06-schema-migrations-ledger-runner/code-review.md`): verdict `patch is correct` (confidence: high; 0 findings).

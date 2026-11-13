@@ -14,6 +14,7 @@ import {
 } from "../src/customer/customer-account-service.js";
 import { AppError } from "../src/errors/app-error.js";
 import { PostgresOrganizationRepository } from "../src/repo/postgres-organization-repository.js";
+import { provisionPostgresTestSchema } from "../src/repo/postgres-schema.js";
 import { buildParticipantProfileRoutes } from "../src/routes/participant-profile/participant-profile.routes.js";
 import { ParticipantProfileService } from "../src/services/participant-profile-service.js";
 
@@ -102,6 +103,7 @@ async function seedFixtureTenant(repository: PostgresOrganizationRepository) {
 }
 
 async function buildDirectoryFixture(schema: string) {
+	await provisionPostgresTestSchema(schema);
 	const repository = new PostgresOrganizationRepository(schema);
 	const t = await seedFixtureTenant(repository);
 	const sessions: SessionMap = new Map();
