@@ -45,7 +45,15 @@ bun run check:sql
 ```
 
 ## Delivery
-Pending execution.
+Completed Wave 3 S11 extraction of `class-checkout` (`packages/backend/src/domains/class-checkout/**`) and `commerce-projection` (`packages/backend/src/domains/commerce-projection/**`) bounded contexts, shared backend infra bridge (`packages/backend/src/infra/s11-infra.ts`), thin legacy facades and `InMemory*` test-double adapters across `checkout/**`, `shopify/**` (excluding S10 `public-membership-product-service.ts`), `commerce/**` (excluding S10 `membership-status-service.ts` and `accompanist-membership-service.ts`), `registration/**`, `waitlist/**`, and `billing/**`, domain event buses (`CheckoutIntentResolved`, `ClassCapacityChanged`, `ShopifySecretRotated`, `OrderProjected`), S07 O(1) SQL read models (`CustomerRegistrationQueryService`), S08 recovery reaper & `WebhookWorkerQueue.drain()`, and Postgres 17 + domain test coverage. All 155 created/modified `packages/backend/src/**/*.ts` files comply with `<=500`L/file, `<=250`L/class, and `<=60`L/function size bounds, with zero `InMemory*` classes under `domains/` and zero out-of-scope edits.
 
 ## Quality gate results
-Pending execution.
+- `bun run verify:toolchain`: passed (`Bun 1.4.2`, `TypeScript 5.9.3`)
+- `bun run format:check`: passed (`Checked 689 files`, 0 errors, 0 warnings)
+- `bun run lint`: passed (`Checked 689 files`, 0 errors, 0 warnings)
+- `bun run build`: passed (`common`, `backend` including scripts bundle, `frontend`, `shopify-confirmation`)
+- `bunx --bun tsc -p packages/backend/tsconfig.json --noEmit`: passed (0 errors)
+- `bun run --cwd packages/frontend check:types`: passed (0 errors)
+- `bun run check:sql`: passed (`Validated 410 backend TypeScript files.`)
+- Tests (`POSTGRES_INTEGRATION_URL` set, `DATABASE_URL` unset): `test:common`, `test:frontend` (`471 pass, 0 fail`), `test:confirmation` (`20 pass, 0 fail`), `packages/backend/tests/migrate-runner.test.ts` standalone (`9 pass, 0 fail`), and all other 145 backend test files (`1644 pass, 0 fail, 8877 expect() calls`; combined Windows `bun test` hits pre-existing Bun 1.4.2 Windows `sql` teardown crash inside `migrate-runner.test.ts` when run in one process, verified end-to-end via CI Linux `Pull Request Checks / verify`).
+- `validate-packet.ps1 -TaskName s11-split-class-checkout-and-commerce-projection -RequireCodeReview`: `PACKET VALID` (`codeReview=valid(none)`).
