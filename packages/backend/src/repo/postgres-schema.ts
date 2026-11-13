@@ -21,6 +21,12 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		CREATE EXTENSION IF NOT EXISTS pgcrypto;
 		CREATE EXTENSION IF NOT EXISTS btree_gist;
 
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.schema_migrations (
+			version TEXT PRIMARY KEY,
+			filename TEXT NOT NULL,
+			checksum TEXT NOT NULL,
+			applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.organizations (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL UNIQUE,
@@ -1071,155 +1077,52 @@ CREATE INDEX IF NOT EXISTS class_checkout_execution_events_intent_idx ON ${safeS
 
 const initializations = new Map<string, Promise<void>>();
 
-/** Initializes an empty schema without modifying rows in an existing one. */
+/** Provisions an isolated test schema from the canonical DDL. For test fixtures only. */
+export async function provisionPostgresTestSchema(
+	schema: string,
+): Promise<void> {
+	const safeSchema = postgresSchemaName(schema);
+	await sql.begin(async (transaction) => {
+		await transaction.unsafe(
+			"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+			[safeSchema],
+		);
+		await transaction.unsafe(buildCanonicalPostgresSchemaSql(safeSchema));
+	});
+}
+
+/** Verifies that the target schema has already been initialized by migrations. */
 export async function initializePostgresSchema(schema: string): Promise<void> {
 	const safeSchema = postgresSchemaName(schema);
 	const existing = initializations.get(safeSchema);
 	if (existing) return existing;
 
-	const initialization = sql.begin(async (transaction) => {
-		await transaction.unsafe(
-			"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+	const initialization = (async () => {
+		const notInitializedError = () =>
+			new Error(
+				`Database schema "${safeSchema}" is not initialized. Run "bun run migrate" before starting the backend.`,
+			);
+		const schemata = await sql.unsafe(
+			"SELECT 1 FROM information_schema.schemata WHERE schema_name = $1",
 			[safeSchema],
 		);
-		await transaction.unsafe(`CREATE SCHEMA IF NOT EXISTS ${safeSchema};`);
-		await transaction.unsafe(
-			`ALTER TABLE IF EXISTS ${safeSchema}.class_checkout_executions ADD COLUMN IF NOT EXISTS storefront_binding JSONB;`,
+		if (schemata.length === 0) {
+			throw notInitializedError();
+		}
+		const regclasses = await sql.unsafe(
+			"SELECT to_regclass($1) AS migrations_reg, to_regclass($2) AS organizations_reg",
+			[`${safeSchema}.schema_migrations`, `${safeSchema}.organizations`],
 		);
-		await transaction.unsafe(
-			`ALTER TABLE IF EXISTS ${safeSchema}.registration_metadata ADD COLUMN IF NOT EXISTS checkout_intent_line_id TEXT;`,
-		);
-		await transaction.unsafe(
-			`ALTER TABLE IF EXISTS ${safeSchema}.registration_metadata ADD COLUMN IF NOT EXISTS registration_snapshot JSONB;`,
-		);
-		await transaction.unsafe(
-			`ALTER TABLE IF EXISTS ${safeSchema}.class_entitlements ADD COLUMN IF NOT EXISTS checkout_intent_line_id TEXT;`,
-		);
-		await transaction.unsafe(
-			`ALTER TABLE IF EXISTS ${safeSchema}.class_entitlements ADD COLUMN IF NOT EXISTS admitted_cart_reference TEXT;`,
-		);
-		await transaction.unsafe(
-			`ALTER TABLE IF EXISTS ${safeSchema}.class_entitlements ADD COLUMN IF NOT EXISTS capacity_at_allocation INTEGER;`,
-		);
-		await transaction.unsafe(
-			`ALTER TABLE IF EXISTS ${safeSchema}.class_entitlements ADD COLUMN IF NOT EXISTS placed_count_before_allocation INTEGER;`,
-		);
-		await transaction.unsafe(
-			`ALTER TABLE IF EXISTS ${safeSchema}.checkout_intents ADD COLUMN IF NOT EXISTS line_identity_protocol TEXT;`,
-		);
-		await transaction.unsafe(
-			`ALTER TABLE IF EXISTS ${safeSchema}.refund_events ADD COLUMN IF NOT EXISTS shopify_order_line_id TEXT;`,
-		);
-		await transaction.unsafe(
-			`ALTER TABLE IF EXISTS ${safeSchema}.shopify_webhook_deliveries ADD COLUMN IF NOT EXISTS failure_stage TEXT;`,
-		);
-		await transaction.unsafe(
-			`ALTER TABLE IF EXISTS ${safeSchema}.shopify_webhook_deliveries ADD COLUMN IF NOT EXISTS failure_code TEXT;`,
-		);
-		await transaction.unsafe(
-			`ALTER TABLE IF EXISTS ${safeSchema}.shopify_webhook_deliveries ADD COLUMN IF NOT EXISTS shopify_request_id TEXT;`,
-		);
-		await transaction.unsafe(
-			`ALTER TABLE IF EXISTS ${safeSchema}.shopify_webhook_deliveries ADD COLUMN IF NOT EXISTS failed_at TIMESTAMPTZ;`,
-		);
-		await transaction.unsafe(
-			`ALTER TABLE IF EXISTS ${safeSchema}.registration_catalog_values ADD COLUMN IF NOT EXISTS required_subtype_id TEXT;`,
-		);
-		// Older schemas may lack the composite keys these parent tables need.
-		// Add the keys before creating new tables that reference them.
-		await transaction.unsafe(
-			`DO $reference_keys$
-			DECLARE
-				reference_key RECORD;
-				parent_table REGCLASS;
-			BEGIN
-				FOR reference_key IN
-					SELECT * FROM (VALUES
-						('registration_catalog_values', 'registration_catalog_values_id_organization_key', ARRAY['id', 'organization_id']),
-						('festival_children', 'festival_children_id_organization_key', ARRAY['id', 'organization_id']),
-						('festival_children', 'festival_children_id_organization_parent_key', ARRAY['id', 'organization_id', 'parent_customer_id']),
-						('festival_class_configurations', 'festival_class_configurations_id_organization_key', ARRAY['id', 'organization_id']),
-						('festival_class_configurations', 'festival_class_configurations_id_organization_festival_key', ARRAY['id', 'organization_id', 'festival_id']),
-						('festival_class_waitlist_entries', 'festival_class_waitlist_entries_reference_key', ARRAY['id', 'organization_id', 'festival_class_id', 'parent_customer_id', 'child_id']),
-						('checkout_intents', 'checkout_intents_id_organization_key', ARRAY['id', 'organization_id'])
-					) AS keys(table_name, index_name, column_names)
-				LOOP
-					parent_table := to_regclass('${safeSchema}.' || reference_key.table_name);
-					IF parent_table IS NOT NULL AND NOT EXISTS (
-						SELECT 1 FROM pg_index idx
-						WHERE idx.indrelid = parent_table
-						  AND idx.indisunique AND idx.indisvalid AND idx.indimmediate
-						  AND idx.indpred IS NULL AND idx.indexprs IS NULL
-						  AND idx.indnkeyatts = cardinality(reference_key.column_names)
-						  AND reference_key.column_names <@ ARRAY(
-							SELECT att.attname::text
-							FROM unnest(idx.indkey) WITH ORDINALITY AS key_column(attnum, position)
-							JOIN pg_attribute att ON att.attrelid = idx.indrelid AND att.attnum = key_column.attnum
-							WHERE key_column.position <= idx.indnkeyatts
-						  )
-					) THEN
-						EXECUTE format('CREATE UNIQUE INDEX IF NOT EXISTS %I ON %s (%s)',
-							reference_key.index_name, parent_table, array_to_string(reference_key.column_names, ', '));
-					END IF;
-				END LOOP;
-			END $reference_keys$;`,
-		);
-		await transaction.unsafe(
-			`DROP INDEX IF EXISTS ${safeSchema}.registration_metadata_checkout_intent_id_unique;`,
-		);
-		await transaction.unsafe(buildCanonicalPostgresSchemaSql(safeSchema));
-		await transaction.unsafe(
-			`ALTER TABLE IF EXISTS ${safeSchema}.organizations ADD COLUMN IF NOT EXISTS default_currency_code TEXT NOT NULL DEFAULT 'USD';`,
-		);
-		await transaction.unsafe(
-			`ALTER TABLE IF EXISTS ${safeSchema}.repertoire_works ADD COLUMN IF NOT EXISTS imslp_url TEXT;`,
-		);
-		await transaction.unsafe(
-			`DO $$
-			BEGIN
-				IF to_regclass('${safeSchema}.customer_festival_availability') IS NOT NULL AND NOT EXISTS (
-					SELECT 1
-					FROM pg_constraint con
-					JOIN pg_class rel ON rel.oid = con.conrelid
-					JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
-					WHERE nsp.nspname = '${safeSchema}'
-					  AND rel.relname = 'customer_festival_availability'
-					  AND con.conname = 'chk_customer_festival_availability_hours'
-				) THEN
-					ALTER TABLE ${safeSchema}.customer_festival_availability
-					ADD CONSTRAINT chk_customer_festival_availability_hours
-					CHECK (jsonb_typeof(available_hours) = 'array' AND available_hours <@ '[8,9,10,11,12,13,14,15,16,17]'::jsonb);
-				END IF;
-			END $$;`,
-		);
-		await transaction.unsafe(
-			`ALTER TABLE IF EXISTS ${safeSchema}.festivals ADD COLUMN IF NOT EXISTS registration_opens_at TIMESTAMPTZ;`,
-		);
-		await transaction.unsafe(
-			`ALTER TABLE IF EXISTS ${safeSchema}.festivals ADD COLUMN IF NOT EXISTS registration_closes_at TIMESTAMPTZ;`,
-		);
-		await transaction.unsafe(
-			`ALTER TABLE IF EXISTS ${safeSchema}.membership_entitlements ADD COLUMN IF NOT EXISTS superseded_on date;`,
-		);
-		await transaction.unsafe(
-			`ALTER TABLE IF EXISTS ${safeSchema}.membership_entitlements ADD COLUMN IF NOT EXISTS superseded_at timestamptz;`,
-		);
-		await transaction.unsafe(
-			`ALTER TABLE IF EXISTS ${safeSchema}.membership_entitlements ADD COLUMN IF NOT EXISTS superseded_by_grant_id text REFERENCES ${safeSchema}.membership_entitlements(id) ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED;`,
-		);
-		await transaction.unsafe(
-			`ALTER TABLE IF EXISTS ${safeSchema}.membership_entitlements
-			 DROP CONSTRAINT IF EXISTS membership_entitlements_superseded_on_check,
-			 ADD CONSTRAINT membership_entitlements_superseded_on_check
-			 CHECK (((superseded_on IS NULL) OR ((superseded_on >= starts_on) AND (superseded_on <= ends_on))));`,
-		);
-		await transaction.unsafe(
-			`ALTER TABLE IF EXISTS ${safeSchema}.membership_entitlements
-			 DROP CONSTRAINT IF EXISTS membership_entitlements_organization_id_customer_id_entitl_excl,
-			 ADD CONSTRAINT membership_entitlements_organization_id_customer_id_entitl_excl
-			 EXCLUDE USING gist (organization_id WITH =, customer_id WITH =, entitlement_class WITH =, daterange(starts_on, COALESCE(superseded_on, ends_on), '[)'::text) WITH &&) WHERE ((revoked_at IS NULL));`,
-		);
-	});
+		if (!regclasses[0]?.migrations_reg || !regclasses[0]?.organizations_reg) {
+			throw notInitializedError();
+		}
+		try {
+			await sql.unsafe(`SELECT 1 FROM ${safeSchema}.schema_migrations LIMIT 1`);
+		} catch {
+			throw notInitializedError();
+		}
+	})();
+
 	initializations.set(safeSchema, initialization);
 	try {
 		await initialization;

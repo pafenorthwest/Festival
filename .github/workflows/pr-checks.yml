@@ -58,6 +58,30 @@ jobs:
       - name: SQL parameter check
         run: bun run check:sql
 
+      - name: Schema parity check
+        id: schema_parity
+        run: |
+          set -euo pipefail
+          docker run --rm --network host -e PGPASSWORD=postgres postgres:17-alpine \
+            psql -h 127.0.0.1 -p 5432 -U postgres -d postgres -v ON_ERROR_STOP=1 \
+            -c "DROP DATABASE IF EXISTS festival_parity;" \
+            -c "CREATE DATABASE festival_parity;"
+          docker run --rm --network host -e PGPASSWORD=postgres -v "${PWD}:/workspace:ro" -w /workspace postgres:17-alpine \
+            psql -h 127.0.0.1 -p 5432 -U postgres -d festival_parity -v ON_ERROR_STOP=1 -f database/postgres17-schema.sql
+          DATABASE_URL="postgres://postgres:postgres@127.0.0.1:5432/festival_parity" bun run migrate
+          docker run --rm --network host -e PGPASSWORD=postgres postgres:17-alpine \
+            pg_dump -h 127.0.0.1 -p 5432 -U postgres -d festival_parity \
+            --schema-only --schema=orgs --no-owner --no-privileges > /tmp/migrated-schema.sql
+          bun run check:schema-parity /tmp/migrated-schema.sql
+
+      - name: Clean up schema parity database
+        if: always() && (steps.schema_parity.outcome == 'success' || steps.schema_parity.outcome == 'failure')
+        run: |
+          docker run --rm --network host -e PGPASSWORD=postgres postgres:17-alpine \
+            psql -h 127.0.0.1 -p 5432 -U postgres -d postgres -v ON_ERROR_STOP=1 \
+            -c "DROP DATABASE IF EXISTS festival_parity;"
+          rm -f /tmp/migrated-schema.sql
+
       - name: Test
         env:
           DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/festival_test

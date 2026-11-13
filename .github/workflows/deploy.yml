@@ -213,6 +213,11 @@ jobs:
             git diff --quiet
             git diff --cached --quiet
             bash cloud-setup/03-prepare-images.sh
+            docker compose --env-file cloud-setup/.env -f cloud-setup/compose.yml up -d postgres --wait
+            docker run --rm --network festival-cloud_default --env-file cloud-setup/.env \
+              -e DB_HOST=postgres -e DB_PORT=5432 -e DATABASE=festival_octv3_db \
+              -e DB_USER=festivaladmin -e DB_SSL=false -e DB_SCHEMA=orgs \
+              -v "${PWD}:/app:ro" -w /app oven/bun:1.4.2 bun run scripts/migrate.ts
             docker compose --env-file cloud-setup/.env -f cloud-setup/compose.yml up -d --no-build --pull never
 
   smoke-test:

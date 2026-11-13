@@ -1,7 +1,10 @@
 import { afterAll } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { sql } from "bun";
-import { initializePostgresSchema } from "../src/repo/postgres-schema.js";
+import {
+	initializePostgresSchema,
+	provisionPostgresTestSchema,
+} from "../src/repo/postgres-schema.js";
 
 if (process.env.POSTGRES_INTEGRATION_URL && !process.env.DATABASE_URL) {
 	process.env.DATABASE_URL = process.env.POSTGRES_INTEGRATION_URL;
@@ -30,7 +33,9 @@ export function currentPostgresFixture(label: string): () => Promise<string> {
 		}
 		if (!ready) {
 			owned.add(schema);
-			ready = initializePostgresSchema(schema);
+			ready = provisionPostgresTestSchema(schema).then(() =>
+				initializePostgresSchema(schema),
+			);
 			await ready;
 			console.info("[postgres-fixture] initialized current schema");
 		}

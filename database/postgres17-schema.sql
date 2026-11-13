@@ -1224,6 +1224,18 @@ CREATE TABLE orgs.rooms (
 
 
 --
+-- Name: schema_migrations; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.schema_migrations (
+    version text NOT NULL,
+    filename text NOT NULL,
+    checksum text NOT NULL,
+    applied_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
 -- Name: shopify_customer_account_integrations; Type: TABLE; Schema: orgs; Owner: -
 --
 
@@ -2340,6 +2352,14 @@ ALTER TABLE ONLY orgs.rooms
 
 ALTER TABLE ONLY orgs.rooms
     ADD CONSTRAINT rooms_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: schema_migrations schema_migrations_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.schema_migrations
+    ADD CONSTRAINT schema_migrations_pkey PRIMARY KEY (version);
 
 
 --
