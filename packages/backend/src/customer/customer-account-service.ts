@@ -26,6 +26,7 @@ import type {
 	OrganizationRecord,
 	RegistrationAccompanistSummary,
 	RegistrationAgeConfiguration,
+	RegistrationCatalogValue,
 	RegistrationEligibleClass,
 	RegistrationTeacherSummary,
 	RepertoirePiece,
@@ -52,6 +53,14 @@ import {
 import { lifecycleForEntitlementRead } from "../commerce/entitlement-lifecycle.js";
 import type { MembershipCommerceRepository } from "../commerce/membership-commerce-repository.js";
 import { AppError } from "../errors/app-error.js";
+import {
+	BoundedAsyncCache,
+	type CacheMetrics,
+} from "../lib/bounded-async-cache.js";
+import type {
+	DomainCacheInvalidationEvent,
+	DomainCacheInvalidator,
+} from "../lib/domain-cache-invalidator.js";
 import type { RepertoireRepository } from "../repertoire/repertoire-repository.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
 import {
@@ -59,7 +68,6 @@ import {
 	SHOPIFY_CUSTOMER_TOKENS_PURPOSE,
 	type ShopifySecretKeyring,
 } from "../shopify/encryption.js";
-import { BoundedAsyncCache, type CacheMetrics } from "./bounded-async-cache.js";
 import type {
 	CustomerAccountIntegrationRecord,
 	CustomerAccountRepository,
@@ -247,6 +255,79 @@ function toCustomerMetadataSummary(
 	};
 }
 
+interface RegistrationItemContext {
+	childrenById: Map<string, { id: string; name: string }>;
+	classConfigsByFestival: Map<string, Map<string, FestivalClassConfiguration>>;
+	metadataByEntitlementId: Map<string, ClassRegistrationMetadata>;
+	paidAtByOrderGid: Map<string, string | null>;
+	editCutoffs: Map<string, Date>;
+	nowMs: number;
+}
+
+function buildCustomerRegistrationItem(
+	entitlement: ClassEntitlement,
+	ctx: RegistrationItemContext,
+): CustomerClassRegistrationItem {
+	const festivalClass = ctx.classConfigsByFestival
+		.get(entitlement.festivalId)
+		?.get(entitlement.festivalClassId);
+	const child = ctx.childrenById.get(entitlement.childId);
+	const metadata = ctx.metadataByEntitlementId.get(entitlement.id) ?? null;
+	const editCutoff = ctx.editCutoffs.get(entitlement.festivalId);
+	return {
+		entitlement: toCustomerEntitlementSummary(entitlement),
+		festivalClass: festivalClass
+			? toCustomerFestivalClassSummary(festivalClass)
+			: undefined,
+		child,
+		metadata: metadata ? toCustomerMetadataSummary(metadata) : null,
+		paidAtIso: ctx.paidAtByOrderGid.get(entitlement.shopifyOrderGid) ?? null,
+		metadataEditCutoffIso: editCutoff?.toISOString() ?? null,
+		canEditMetadata: Boolean(
+			metadata &&
+				festivalClass &&
+				editCutoff &&
+				ctx.nowMs < editCutoff.getTime(),
+		),
+	};
+}
+
+function toRegistrationEligibleClass(
+	item: FestivalClassConfiguration,
+	ctx: {
+		subtypeById: Map<string, RegistrationCatalogValue>;
+		isRegistrationOpen: boolean;
+		placedCounts?: Map<string, number>;
+	},
+): RegistrationEligibleClass {
+	const placedCount = ctx.placedCounts
+		? (ctx.placedCounts.get(item.id) ?? 0)
+		: undefined;
+	const subtype = ctx.subtypeById.get(item.classSubtypeId) ?? null;
+	return {
+		id: item.id,
+		displayName: item.displayName,
+		divisionId: item.divisionId,
+		classSubtypeId: item.classSubtypeId,
+		...(subtype ? { classSubtypeName: subtype.displayName } : {}),
+		requiresConcerto: doesClassRequireConcerto(item, subtype),
+		minimumAge: item.minimumAge,
+		maximumAge: item.maximumAge,
+		price: item.price,
+		maximumPerformancePieces: item.maximumPerformancePieces,
+		performanceMinutes: item.performanceMinutes,
+		capacity: item.capacity,
+		isRegistrationOpen: ctx.isRegistrationOpen,
+		...(placedCount !== undefined
+			? {
+					placedCount,
+					availability: evaluateClassCapacityStatus(item.capacity, placedCount)
+						.availability,
+				}
+			: {}),
+	};
+}
+
 export interface CustomerAccountServiceOptions {
 	publicOrigin: string;
 	idleDays?: number;
@@ -286,6 +367,7 @@ export class CustomerAccountService {
 		string,
 		RegistrationAgeConfiguration | null
 	>;
+	private unsubscribeCacheInvalidator?: () => void;
 	private readonly repertoire?: RepertoireRepository;
 	private get customers(): CustomerAccountRepository {
 		return this.repository;
@@ -350,6 +432,39 @@ export class CustomerAccountService {
 			maxTotalBytes: 1024 * 1024,
 			now: this.nowMs,
 		});
+	}
+	bindCacheInvalidator(invalidator: DomainCacheInvalidator): void {
+		this.unsubscribeCacheInvalidator?.();
+		this.unsubscribeCacheInvalidator = invalidator.subscribe((event) =>
+			this.handleCacheInvalidation(event),
+		);
+	}
+	private handleCacheInvalidation(event: DomainCacheInvalidationEvent): void {
+		if (event.type === "OrgUpdated") {
+			this.organizationBySlugCache.deleteWhere(
+				(slug, org) => slug === event.slug || org?.id === event.organizationId,
+			);
+			return;
+		}
+		if (event.type === "RegistrationAgeConfigUpdated") {
+			this.registrationAgeConfigCache.deleteWhere(
+				(orgId) => orgId === event.organizationId,
+			);
+			return;
+		}
+		if (event.type === "ShopifySecretRotated") {
+			this.discoveryCache.deleteWhere(
+				(key) =>
+					!event.organizationId || key.startsWith(`${event.organizationId}\0`),
+			);
+			return;
+		}
+		if (event.type === "CachesCleared") {
+			this.organizationBySlugCache.deleteWhere(() => true);
+			this.registrationAgeConfigCache.deleteWhere(() => true);
+			this.discoveryCache.deleteWhere(() => true);
+			this.jwksCache.deleteWhere(() => true);
+		}
 	}
 	private nowMs = () => this.now().getTime();
 	private urls(slug: string) {
@@ -1279,6 +1394,117 @@ export class CustomerAccountService {
 		return this.customerReadAccess(slug, sessionToken);
 	}
 
+	private async requireRegistrationListFestival(
+		organizationId: string,
+		festivalShortName: string,
+	): Promise<FestivalRecord> {
+		const found = await this.organizations.findFestivalByShortName(
+			organizationId,
+			festivalShortName,
+		);
+		if (!found) throw new AppError("Festival not found.", 404);
+		return found;
+	}
+
+	private async loadClassConfigsByFestivalIds(
+		organizationId: string,
+		festivalIds: readonly string[],
+	): Promise<Map<string, Map<string, FestivalClassConfiguration>>> {
+		const entries = await Promise.all(
+			festivalIds.map(async (festivalId) => {
+				const list = await this.organizations.listFestivalClassConfigurations(
+					organizationId,
+					festivalId,
+				);
+				return [
+					festivalId,
+					new Map(list.map((config) => [config.id, config])),
+				] as const;
+			}),
+		);
+		return new Map(entries);
+	}
+
+	private async loadMetadataByEntitlementIds(
+		checkout: CheckoutRepository,
+		organizationId: string,
+		entitlementIds: readonly string[],
+	): Promise<Map<string, ClassRegistrationMetadata>> {
+		if (entitlementIds.length === 0) return new Map();
+		if (checkout.listRegistrationMetadataByEntitlementIds) {
+			return checkout.listRegistrationMetadataByEntitlementIds(
+				organizationId,
+				entitlementIds,
+			);
+		}
+		const entries = await Promise.all(
+			entitlementIds.map(async (id) => {
+				const meta = await checkout.getRegistrationMetadataByEntitlementId(
+					organizationId,
+					id,
+				);
+				return meta ? ([id, meta] as const) : null;
+			}),
+		);
+		return new Map(entries.filter((entry) => entry !== null));
+	}
+
+	private async buildRegistrationItemContext(
+		scope: {
+			organization: OrganizationRecord;
+			festivals: readonly FestivalRecord[];
+			children: ReadonlyArray<{
+				id: string;
+				displayName: string;
+				name?: string;
+			}>;
+		},
+		entitlements: readonly ClassEntitlement[],
+		repos: {
+			commerce: MembershipCommerceRepository;
+			checkout: CheckoutRepository;
+		},
+	): Promise<RegistrationItemContext> {
+		const orgId = scope.organization.id;
+		const [projections, classConfigsByFestival, metadataByEntitlementId] =
+			await Promise.all([
+				repos.commerce.listOrderProjectionsByGids(orgId, [
+					...new Set(entitlements.map((e) => e.shopifyOrderGid)),
+				]),
+				this.loadClassConfigsByFestivalIds(orgId, [
+					...new Set(entitlements.map((e) => e.festivalId)),
+				]),
+				this.loadMetadataByEntitlementIds(
+					repos.checkout,
+					orgId,
+					entitlements.map((e) => e.id),
+				),
+			]);
+		return {
+			childrenById: new Map(
+				scope.children.map((c) => [
+					c.id,
+					{ id: c.id, name: c.name ?? c.displayName },
+				]),
+			),
+			classConfigsByFestival,
+			metadataByEntitlementId,
+			paidAtByOrderGid: new Map(
+				projections.map((p) => [p.shopifyOrderGid, p.fullyPaidAtIso ?? null]),
+			),
+			editCutoffs: new Map(
+				scope.festivals.map((f) => [
+					f.id,
+					deriveFestivalMetadataCutoff(
+						f.startDate,
+						scope.organization.timezone || "UTC",
+					),
+				]),
+			),
+			nowMs: this.now().getTime(),
+		};
+	}
+
 	async listClassRegistrations(
 		slug: string,
 		sessionToken: string,
@@ -1289,125 +1515,42 @@ export class CustomerAccountService {
 			session.organizationId,
 			session.customerId,
 		);
-
-		let festival: FestivalRecord | undefined;
-		if (festivalShortName) {
-			const found = await this.organizations.findFestivalByShortName(
-				session.organizationId,
-				festivalShortName,
-			);
-			if (!found) {
-				throw new AppError("Festival not found.", 404);
-			}
-			festival = found;
-		}
-
-		const checkout = this.checkout;
-		if (!this.commerce || !checkout) {
+		const festival = festivalShortName
+			? await this.requireRegistrationListFestival(
+					session.organizationId,
+					festivalShortName,
+				)
+			: undefined;
+		if (!this.commerce || !this.checkout) {
 			throw new AppError(
 				"Commerce or checkout repository is not configured.",
 				500,
 			);
 		}
-
 		const entitlements = await this.commerce.listClassEntitlements({
 			organizationId: session.organizationId,
 			parentCustomerId: session.customerId,
 			festivalId: festival?.id,
 		});
 		const [organization, festivals] = await Promise.all([
-			this.organizations.findOrganizationBySlug(slug),
+			this.organizationBySlugCache.getOrLoad(slug, async () =>
+				this.loadOrganizationBySlug(slug),
+			),
 			festival
 				? Promise.resolve([festival])
 				: this.organizations.listFestivals(session.organizationId),
 		]);
 		if (!organization) throw new AppError("Organization not found.", 404);
-		const editCutoffs = new Map(
-			festivals.map((entry) => [
-				entry.id,
-				deriveFestivalMetadataCutoff(
-					entry.startDate,
-					organization.timezone || "UTC",
-				),
-			]),
+		const ctx = await this.buildRegistrationItemContext(
+			{ organization, festivals, children },
+			entitlements,
+			{ commerce: this.commerce, checkout: this.checkout },
 		);
-		const nowMs = this.now().getTime();
-
-		const projections = await this.commerce.listOrderProjectionsByGids(
-			session.organizationId,
-			[
-				...new Set(
-					entitlements.map((entitlement) => entitlement.shopifyOrderGid),
-				),
-			],
-		);
-		const paidAtByOrderGid = new Map(
-			projections.map((projection) => [
-				projection.shopifyOrderGid,
-				projection.fullyPaidAtIso ?? null,
-			]),
-		);
-
-		const classConfigCache = new Map<
-			string,
-			Map<string, FestivalClassConfiguration>
-		>();
-		const getClassConfig = async (
-			festivalId: string,
-			festivalClassId: string,
-		): Promise<FestivalClassConfiguration | undefined> => {
-			let configs = classConfigCache.get(festivalId);
-			if (!configs) {
-				const list = await this.organizations.listFestivalClassConfigurations(
-					session.organizationId,
-					festivalId,
-				);
-				configs = new Map(list.map((c) => [c.id, c]));
-				classConfigCache.set(festivalId, configs);
-			}
-			return configs.get(festivalClassId);
+		return {
+			registrations: entitlements.map((entitlement) =>
+				buildCustomerRegistrationItem(entitlement, ctx),
+			),
 		};
-
-		const registrations: CustomerClassRegistrationItem[] = await Promise.all(
-			entitlements.map(async (entitlement) => {
-				const festivalClass = await getClassConfig(
-					entitlement.festivalId,
-					entitlement.festivalClassId,
-				);
-				const matchedChild = children.find((c) => c.id === entitlement.childId);
-				const child = matchedChild
-					? {
-							id: matchedChild.id,
-							name:
-								(matchedChild as { name?: string; displayName?: string })
-									.name ?? matchedChild.displayName,
-						}
-					: undefined;
-				const metadata = await checkout.getRegistrationMetadataByEntitlementId(
-					session.organizationId,
-					entitlement.id,
-				);
-				const editCutoff = editCutoffs.get(entitlement.festivalId);
-				return {
-					entitlement: toCustomerEntitlementSummary(entitlement),
-					festivalClass: festivalClass
-						? toCustomerFestivalClassSummary(festivalClass)
-						: undefined,
-					child,
-					metadata: metadata ? toCustomerMetadataSummary(metadata) : null,
-					paidAtIso: paidAtByOrderGid.get(entitlement.shopifyOrderGid) ?? null,
-					metadataEditCutoffIso: editCutoff?.toISOString() ?? null,
-					canEditMetadata: Boolean(
-						metadata &&
-							festivalClass &&
-							editCutoff &&
-							nowMs < editCutoff.getTime(),
-					),
-				};
-			}),
-		);
-
-		return { registrations };
 	}
 
 	private assertRegistrationEditsOpen(
@@ -2131,6 +2274,52 @@ export class CustomerAccountService {
 		return { works };
 	}
 
+	private async requireEligibleDivisionTeacher(
+		organizationId: string,
+		divisionId: string,
+		teacherId: string,
+	): Promise<void> {
+		if (!teacherId || typeof teacherId !== "string") {
+			throw new AppError("Teacher ID is required.", 400);
+		}
+		const activeTeachers =
+			await this.organizations.listActiveTeachersForDivision(
+				organizationId,
+				divisionId,
+			);
+		if (!activeTeachers.some((teacher) => teacher.id === teacherId)) {
+			throw new AppError(
+				"Selected teacher is not eligible in this division.",
+				400,
+			);
+		}
+	}
+
+	private async loadConfirmedCountsByClassIds(
+		organizationId: string,
+		classIds: readonly string[],
+	): Promise<Map<string, number> | undefined> {
+		const commerce = this.commerce;
+		if (!commerce) return undefined;
+		if (classIds.length === 0) return new Map();
+		if (commerce.countConfirmedClassEntitlementsByClassIds) {
+			return commerce.countConfirmedClassEntitlementsByClassIds(
+				organizationId,
+				classIds,
+			);
+		}
+		const entries = await Promise.all(
+			classIds.map(
+				async (id) =>
+					[
+						id,
+						await commerce.countConfirmedClassEntitlements(organizationId, id),
+					] as const,
+			),
+		);
+		return new Map(entries);
+	}
+
 	async listRegistrationEligibleClasses(
 		slug: string,
 		festivalShortName: string,
@@ -2150,22 +2339,11 @@ export class CustomerAccountService {
 			childId,
 		);
 		await this.requireActiveDivision(access.organizationId, divisionId);
-
-		if (!teacherId || typeof teacherId !== "string") {
-			throw new AppError("Teacher ID is required.", 400);
-		}
-		const activeTeachers =
-			await this.organizations.listActiveTeachersForDivision(
-				access.organizationId,
-				divisionId,
-			);
-		if (!activeTeachers.some((teacher) => teacher.id === teacherId)) {
-			throw new AppError(
-				"Selected teacher is not eligible in this division.",
-				400,
-			);
-		}
-
+		await this.requireEligibleDivisionTeacher(
+			access.organizationId,
+			divisionId,
+			teacherId,
+		);
 		const [classes, timezone, subtypes] = await Promise.all([
 			this.organizations.listFestivalClassConfigurations(
 				access.organizationId,
@@ -2179,55 +2357,27 @@ export class CustomerAccountService {
 				false,
 			),
 		]);
-		const subtypeById = new Map(subtypes.map((s) => [s.id, s]));
-		const isRegistrationOpen = isFestivalRegistrationOpen(
-			festival,
-			this.now(),
-			timezone,
-		);
 		const eligible = classes.filter(
 			(c) =>
 				c.divisionId === divisionId &&
 				c.minimumAge <= childAge &&
 				childAge <= c.maximumAge,
 		);
-
-		return {
-			classes: await Promise.all(
-				eligible.map(async (item) => {
-					const placedCount = this.commerce
-						? await this.commerce.countConfirmedClassEntitlements(
-								access.organizationId,
-								item.id,
-							)
-						: undefined;
-					const subtype = subtypeById.get(item.classSubtypeId) ?? null;
-					return {
-						id: item.id,
-						displayName: item.displayName,
-						divisionId: item.divisionId,
-						classSubtypeId: item.classSubtypeId,
-						...(subtype ? { classSubtypeName: subtype.displayName } : {}),
-						requiresConcerto: doesClassRequireConcerto(item, subtype),
-						minimumAge: item.minimumAge,
-						maximumAge: item.maximumAge,
-						price: item.price,
-						maximumPerformancePieces: item.maximumPerformancePieces,
-						performanceMinutes: item.performanceMinutes,
-						capacity: item.capacity,
-						isRegistrationOpen,
-						...(placedCount !== undefined
-							? {
-									placedCount,
-									availability: evaluateClassCapacityStatus(
-										item.capacity,
-										placedCount,
-									).availability,
-								}
-							: {}),
-					};
-				}),
+		const placedCounts = await this.loadConfirmedCountsByClassIds(
+			access.organizationId,
+			eligible.map((item) => item.id),
+		);
+		const ctx = {
+			subtypeById: new Map(subtypes.map((s) => [s.id, s])),
+			isRegistrationOpen: isFestivalRegistrationOpen(
+				festival,
+				this.now(),
+				timezone,
 			),
+			placedCounts,
+		};
+		return {
+			classes: eligible.map((item) => toRegistrationEligibleClass(item, ctx)),
 		};
 	}
 

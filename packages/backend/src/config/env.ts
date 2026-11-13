@@ -5,7 +5,7 @@ export interface AppEnv {
 	port: number;
 	databaseUrl?: string;
 	databaseSchema?: string;
-	databasePoolMax: number;
+	databasePoolMax?: number;
 	firebaseProjectId?: string;
 	firebaseClientEmail?: string;
 	firebasePrivateKey?: string;

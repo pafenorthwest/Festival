@@ -11,7 +11,10 @@ import {
 import { sql } from "bun";
 import { withInMemoryCapacityLock } from "../repo/in-memory-capacity-lock.js";
 import { initializePostgresSchema } from "../repo/postgres-schema.js";
-import { countConfirmedClassEntitlements } from "./postgres-class-entitlement-count.js";
+import {
+	countConfirmedClassEntitlements,
+	countConfirmedClassEntitlementsByClassIds,
+} from "./postgres-class-entitlement-count.js";
 
 function schemaName(value: string) {
 	if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(value)) {
@@ -59,6 +62,10 @@ export interface ClassEntitlementRepository {
 		organizationId: string,
 		festivalClassId: string,
 	): Promise<number>;
+	countConfirmedClassEntitlementsByClassIds?(
+		organizationId: string,
+		festivalClassIds: readonly string[],
+	): Promise<Map<string, number>>;
 	updateClassEntitlementStatus(
 		organizationId: string,
 		id: string,
@@ -246,6 +253,28 @@ export class InMemoryClassEntitlementRepository
 			}
 		}
 		return count;
+	}
+
+	async countConfirmedClassEntitlementsByClassIds(
+		organizationId: string,
+		festivalClassIds: readonly string[],
+	): Promise<Map<string, number>> {
+		if (festivalClassIds.length === 0) return new Map();
+		const targetIds = new Set(festivalClassIds);
+		const counts = new Map<string, number>();
+		for (const record of this.entitlements.values()) {
+			if (
+				record.organizationId === organizationId &&
+				record.status === "confirmed" &&
+				targetIds.has(record.festivalClassId)
+			) {
+				counts.set(
+					record.festivalClassId,
+					(counts.get(record.festivalClassId) ?? 0) + 1,
+				);
+			}
+		}
+		return counts;
 	}
 
 	async updateClassEntitlementStatus(
@@ -531,6 +560,20 @@ export class PostgresClassEntitlementRepository
 			organizationId,
 			festivalClassId,
 		);
+	}
+
+	async countConfirmedClassEntitlementsByClassIds(
+		organizationId: string,
+		festivalClassIds: readonly string[],
+	): Promise<Map<string, number>> {
+		if (festivalClassIds.length === 0) return new Map();
+		await this.ensureReady();
+		return countConfirmedClassEntitlementsByClassIds({
+			database: sql,
+			schema: this.schema,
+			organizationId,
+			festivalClassIds,
+		});
 	}
 
 	async updateClassEntitlementStatus(

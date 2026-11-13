@@ -323,6 +323,10 @@ export interface MembershipCommerceRepository {
 		organizationId: string,
 		festivalClassId: string,
 	): Promise<number>;
+	countConfirmedClassEntitlementsByClassIds?(
+		organizationId: string,
+		festivalClassIds: readonly string[],
+	): Promise<Map<string, number>>;
 	updateClassEntitlementStatus(
 		organizationId: string,
 		id: string,
@@ -1274,6 +1278,28 @@ export class InMemoryMembershipCommerceRepository
 			}
 		}
 		return count;
+	}
+
+	async countConfirmedClassEntitlementsByClassIds(
+		organizationId: string,
+		festivalClassIds: readonly string[],
+	): Promise<Map<string, number>> {
+		if (festivalClassIds.length === 0) return new Map();
+		const targetIds = new Set(festivalClassIds);
+		const counts = new Map<string, number>();
+		for (const record of this.classEntitlements.values()) {
+			if (
+				record.organizationId === organizationId &&
+				record.status === "confirmed" &&
+				targetIds.has(record.festivalClassId)
+			) {
+				counts.set(
+					record.festivalClassId,
+					(counts.get(record.festivalClassId) ?? 0) + 1,
+				);
+			}
+		}
+		return counts;
 	}
 
 	async updateClassEntitlementStatus(

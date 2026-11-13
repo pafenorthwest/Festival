@@ -373,6 +373,20 @@ export class InMemoryCustomerAccountRepository
 			? child
 			: null;
 	}
+	async findChildrenByIds(
+		organizationId: string,
+		parentCustomerId: string,
+		childIds: readonly string[],
+	): Promise<FestivalChildRecord[]> {
+		if (childIds.length === 0) return [];
+		const targetIds = new Set(childIds);
+		return [...this.children.values()].filter(
+			(child) =>
+				child.organizationId === organizationId &&
+				child.parentCustomerId === parentCustomerId &&
+				targetIds.has(child.id),
+		);
+	}
 	async listChildren(organizationId: string, parentCustomerId: string) {
 		return [...this.children.values()].filter(
 			(child) =>

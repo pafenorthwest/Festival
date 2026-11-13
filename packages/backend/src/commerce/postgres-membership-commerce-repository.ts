@@ -30,7 +30,10 @@ import type {
 	ShopifyWebhookDelivery,
 } from "./membership-commerce-repository.js";
 import { PaidLineConflictError } from "./membership-commerce-repository.js";
-import { countConfirmedClassEntitlements } from "./postgres-class-entitlement-count.js";
+import {
+	countConfirmedClassEntitlements,
+	countConfirmedClassEntitlementsByClassIds,
+} from "./postgres-class-entitlement-count.js";
 
 function schemaName(value: string) {
 	if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(value))
@@ -1349,6 +1352,20 @@ export class PostgresMembershipCommerceRepository
 			organizationId,
 			festivalClassId,
 		);
+	}
+
+	async countConfirmedClassEntitlementsByClassIds(
+		organizationId: string,
+		festivalClassIds: readonly string[],
+	): Promise<Map<string, number>> {
+		if (festivalClassIds.length === 0) return new Map();
+		await this.ensureReady();
+		return countConfirmedClassEntitlementsByClassIds({
+			database: sql,
+			schema: this.schema,
+			organizationId,
+			festivalClassIds,
+		});
 	}
 
 	async updateClassEntitlementStatus(

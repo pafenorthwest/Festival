@@ -44,7 +44,7 @@ All empirical release benchmarks are executed against the live Festival integrat
   - **Database Driver**: Bun SQL native PostgreSQL client
   - **Reverse Proxy**: Nginx with SSL/TLS termination and HTTP keep-alive pooling
 - **Database Engine**: PostgreSQL 17 container (`Octv3`), schema `orgs`
-  - Database pool size: `DB_POOL_MAX=80` (configured via `databasePoolMax` in `packages/backend/src/config/env.ts` and `sql.options.max`)
+  - Database pool size: `DB_POOL_MAX=80` (configured via `databasePoolMax` in `packages/backend/src/config/env.ts` and `sql.options.max`; PostgreSQL `max_connections = 200`)
   - Transaction guard: `idle_in_transaction_session_timeout = '10s'`
   - Statement guard: `statement_timeout = '15s'`
 
@@ -232,10 +232,10 @@ docker compose --env-file cloud-setup/.env -f cloud-setup/compose.yml exec -T po
 - **Operations Under Test**: PostgreSQL connection pool behavior under simultaneous read contention, standard writes, and row-locked queue writes.
 
 ### Scenario 4: Waitlist Queue Churn & Concurrency
-- **Participants**: 500 parents (session indices 3001..3500) exercising dynamic waitlist queue operations.
+- **Participants**: 750 parents (session indices 3001..3750) exercising dynamic waitlist queue operations.
 - **Execution Phases**:
-  - **Phase 1: Initial Waitlist Load**: 500 parents simultaneously join the waitlist for `perf-class-01`.
-  - **Phase 2: Saturated Churn Burst**: Exactly 250 parents execute simultaneous withdrawals (`POST .../waitlist/withdraw`) while 250 new parents simultaneously submit join requests (`POST .../waitlist`).
+  - **Phase 1: Initial Waitlist Load**: 500 parents (indices 3001..3500) simultaneously join the waitlist for `perf-class-01`.
+  - **Phase 2: Saturated Churn Burst**: Exactly 250 parents (indices 3001..3250) execute simultaneous withdrawals (`POST .../waitlist/withdraw`) while 250 new parents (indices 3501..3750) simultaneously submit join requests (`POST .../waitlist`).
 - **Operations Under Test**:
   - Concurrent transition of waitlist entry statuses (`active` to `withdrawn`).
   - Position compaction and non-blocking read/write concurrency on waitlist indices.
@@ -444,7 +444,7 @@ flowchart TD
 For production deployments anticipating large registration spikes, verify the following configuration locks:
 
 1. **Bun SQL Pool Allocation**:
-   - Keep `DB_POOL_MAX` set to at least 80 on single-droplet setups to provide sufficient connection concurrency without exceeding PostgreSQL `max_connections` (typically set to 150–200).
+   - Keep `DB_POOL_MAX` set to at least 80 on single-droplet setups to provide sufficient connection concurrency without exceeding PostgreSQL `max_connections=200`.
 2. **PostgreSQL Connection Safeguards**:
    - `idle_in_transaction_session_timeout = '10s'`: Prevents dangling or orphaned transactions from holding row locks on catalog or waitlist tables.
    - `statement_timeout = '15s'`: Protects the database engine from runaway table scans or blocking queries.

@@ -1,175 +1,24 @@
-import { appendFileSync } from "node:fs";
+import {
+	computeMetricStats,
+	executeHttp,
+	parseConfig,
+	publishSummary,
+	renderScenarioSummary,
+	type ScenarioConfig,
+	type StepResult,
+	statsFromResults,
+} from "./perf-scenario-helpers.js";
 
-export interface ScenarioConfig {
-	baseUrl: string;
-	slug: string;
-	festival: string;
-	classId: string;
-	origin: string;
-	scenario: "1" | "2" | "3" | "4" | "all";
-}
-
-export interface MetricStats {
-	totalRequests: number;
-	totalDurationMs: number;
-	throughput: number;
-	min: number;
-	mean: number;
-	p50: number;
-	p90: number;
-	p95: number;
-	p99: number;
-	max: number;
-	statusCounts: Map<number, number>;
-}
-
-export interface StepResult {
-	label: string;
-	status: number;
-	latencyMs: number;
-	childId?: string;
-	errorSnippet?: string;
-}
-
-export function parseConfig(): ScenarioConfig {
-	const args = Bun.argv.slice(2);
-	let raw = process.env.SCENARIO?.trim().toLowerCase();
-	for (let i = 0; i < args.length; i++) {
-		const arg = args[i] ?? "";
-		if (arg === "--scenario" && i + 1 < args.length)
-			raw = args[++i]?.trim().toLowerCase();
-		else if (arg.startsWith("--scenario="))
-			raw = arg.split("=")[1]?.trim().toLowerCase();
-	}
-	const valid = ["1", "2", "3", "4", "all"] as const;
-	const scenario = (
-		valid.includes(raw as (typeof valid)[number]) ? raw : "all"
-	) as ScenarioConfig["scenario"];
-	const baseUrl = (
-		process.env.BASE_URL?.trim() || "https://int.artsfestival.online"
-	).replace(/\/+$/, "");
-	return {
-		baseUrl,
-		slug: process.env.SLUG?.trim() || "perf-test",
-		festival: process.env.FESTIVAL?.trim() || "perf-2026",
-		classId: process.env.CLASS_ID?.trim() || "perf-class-01",
-		origin: new URL(baseUrl).origin,
-		scenario,
-	};
-}
-
-export function calculatePercentile(
-	sorted: number[],
-	fraction: number,
-): number {
-	if (sorted.length === 0) return 0;
-	const index = Math.min(
-		sorted.length - 1,
-		Math.ceil(sorted.length * fraction) - 1,
-	);
-	return sorted[Math.max(0, index)] ?? 0;
-}
-
-export function computeMetricStats(
-	latencies: number[],
-	statuses: number[],
-	totalDurationMs: number,
-): MetricStats {
-	const sorted = [...latencies].sort((a, b) => a - b);
-	const sum = sorted.reduce((acc, v) => acc + v, 0);
-	const mean = sorted.length > 0 ? sum / sorted.length : 0;
-	const throughput =
-		totalDurationMs > 0 ? (sorted.length / totalDurationMs) * 1000 : 0;
-	const statusCounts = new Map<number, number>();
-	for (const s of statuses) statusCounts.set(s, (statusCounts.get(s) ?? 0) + 1);
-
-	return {
-		totalRequests: sorted.length,
-		totalDurationMs,
-		throughput,
-		min: sorted[0] ?? 0,
-		mean,
-		p50: calculatePercentile(sorted, 0.5),
-		p90: calculatePercentile(sorted, 0.9),
-		p95: calculatePercentile(sorted, 0.95),
-		p99: calculatePercentile(sorted, 0.99),
-		max: sorted[sorted.length - 1] ?? 0,
-		statusCounts,
-	};
-}
-
-function statsFromResults(
-	results: StepResult[],
-	durationMs: number,
-): MetricStats {
-	return computeMetricStats(
-		results.map((r) => r.latencyMs),
-		results.map((r) => r.status),
-		durationMs,
-	);
-}
-
-export function renderStatusBreakdown(
-	statusCounts: Map<number, number>,
-	total: number,
-): string {
-	const codes = Array.from(statusCounts.keys()).sort((a, b) => a - b);
-	const rows = codes.map((code) => {
-		const count = statusCounts.get(code) ?? 0;
-		const pct = total > 0 ? ((count / total) * 100).toFixed(1) : "0.0";
-		return `| ${code === 0 ? "Network Error" : code} | ${count} | ${pct}% |`;
-	});
-	return [
-		"| Status Code | Count | Share |",
-		"| :--- | :--- | :--- |",
-		...rows,
-	].join("\n");
-}
-
-function renderScenarioSummary(
-	title: string,
-	sections: Array<{ name: string; stats: MetricStats }>,
-	allResults: StepResult[],
-): string {
-	const rows = sections.map(
-		({ name, stats: s }) =>
-			`| ${name} | ${s.totalRequests} | ${s.throughput.toFixed(1)} req/s | ${s.min.toFixed(1)} | ${s.p50.toFixed(1)} | ${s.p90.toFixed(1)} | ${s.p95.toFixed(1)} | ${s.p99.toFixed(1)} | ${s.max.toFixed(1)} |`,
-	);
-	const overviewTable = [
-		"| Step / Metric Group | Requests | Throughput | Min (ms) | P50 (ms) | P90 (ms) | P95 (ms) | P99 (ms) | Max (ms) |",
-		"| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
-		...rows,
-	].join("\n");
-
-	const statusCounts = new Map<number, number>();
-	for (const r of allResults)
-		statusCounts.set(r.status, (statusCounts.get(r.status) ?? 0) + 1);
-	const statusTable = renderStatusBreakdown(statusCounts, allResults.length);
-
-	const failed = allResults.filter((r) => r.status < 200 || r.status >= 400);
-	const errorRows = failed
-		.slice(0, 15)
-		.map(
-			(f) =>
-				`| ${f.label} | ${f.status || "Network Error"} | ${(f.errorSnippet || "None").replace(/\|/g, "\\|")} |`,
-		);
-	const errorSec =
-		failed.length === 0
-			? ""
-			: [
-					"",
-					`### Errors (${failed.length} total)`,
-					"",
-					"| Operation | Status | Response Snippet |",
-					"| :--- | :--- | :--- |",
-					...errorRows,
-					...(failed.length > 15
-						? [`*... and ${failed.length - 15} additional errors omitted.*`]
-						: []),
-				].join("\n");
-
-	return `## ${title}\n\n### Performance Breakdown\n\n${overviewTable}\n\n### HTTP Status Distribution\n\n${statusTable}${errorSec}\n`;
-}
+export {
+	calculatePercentile,
+	computeMetricStats,
+	type MetricStats,
+	type ParseConfigOptions,
+	parseConfig,
+	renderStatusBreakdown,
+	type ScenarioConfig,
+	type StepResult,
+} from "./perf-scenario-helpers.js";
 
 function authHeaders(
 	config: ScenarioConfig,
@@ -182,48 +31,6 @@ function authHeaders(
 		"X-CSRF-Token": `perf-csrf-${id}`,
 		"Content-Type": "application/json",
 	};
-}
-
-async function executeHttp(
-	url: string,
-	opts: { method?: string; headers?: Record<string, string>; body?: string },
-	label: string,
-): Promise<StepResult> {
-	const t0 = performance.now();
-	try {
-		const res = await fetch(url, {
-			method: opts.method ?? "GET",
-			headers: opts.headers,
-			body: opts.body,
-		});
-		let childId: string | undefined;
-		let errorSnippet: string | undefined;
-		if (res.ok) {
-			if (opts.method === "POST" && label.includes("children")) {
-				const json = (await res.json().catch(() => null)) as {
-					child?: { id: string };
-				} | null;
-				childId = json?.child?.id;
-			}
-		} else {
-			const bodyText = await res.text().catch(() => "");
-			errorSnippet = bodyText.trim().slice(0, 160).replace(/\r?\n/g, " ");
-		}
-		return {
-			label,
-			status: res.status,
-			latencyMs: performance.now() - t0,
-			childId,
-			errorSnippet,
-		};
-	} catch (err) {
-		return {
-			label,
-			status: 0,
-			latencyMs: performance.now() - t0,
-			errorSnippet: err instanceof Error ? err.message : String(err),
-		};
-	}
 }
 
 const childPath = (cfg: ScenarioConfig) =>
@@ -246,6 +53,21 @@ async function createChild(
 		{ method: "POST", headers: authHeaders(cfg, idx), body },
 		"POST /customer/children",
 	);
+}
+
+async function preseedChildren(
+	cfg: ScenarioConfig,
+	indices: readonly number[],
+): Promise<Map<number, string>> {
+	const childMap = new Map<number, string>();
+	const preseeded = await Promise.all(
+		indices.map((idx) => createChild(cfg, idx)),
+	);
+	for (let i = 0; i < indices.length; i++) {
+		const idx = indices[i] ?? 0;
+		childMap.set(idx, fallbackChild(preseeded[i], idx));
+	}
+	return childMap;
 }
 
 async function joinWaitlist(
@@ -351,7 +173,6 @@ async function runScenario1(cfg: ScenarioConfig): Promise<string> {
 		parents.map((idx) => createChild(cfg, idx)),
 	);
 	const childDurMs = performance.now() - cStart;
-
 	const rStart = performance.now();
 	const joinResults = await Promise.all(
 		parents.map((idx, i) =>
@@ -359,7 +180,6 @@ async function runScenario1(cfg: ScenarioConfig): Promise<string> {
 		),
 	);
 	const raceDurMs = performance.now() - rStart;
-
 	return renderScenarioSummary(
 		"Scenario 1: High-Contention Waitlist Join Race",
 		[
@@ -386,7 +206,6 @@ async function runScenario2(cfg: ScenarioConfig): Promise<string> {
 	const stepProfile: StepResult[] = [];
 	const stepSession: StepResult[] = [];
 	const funnelDurations: number[] = [];
-
 	const t0 = performance.now();
 	await Promise.all(
 		parents.map(async (idx) => {
@@ -405,7 +224,6 @@ async function runScenario2(cfg: ScenarioConfig): Promise<string> {
 		{ name: "Step 3: POST /customer/profile", res: stepProfile },
 		{ name: "Step 4: GET /customer/session", res: stepSession },
 	];
-
 	return renderScenarioSummary(
 		"Scenario 2: Full Multi-Step Funnel",
 		[
@@ -431,23 +249,14 @@ async function runScenario3(cfg: ScenarioConfig): Promise<string> {
 		"\n--- Scenario 3: Flash-Mob Mixed Traffic (Indices 1001..3000) ---",
 	);
 	const waitlistIdx = Array.from({ length: 100 }, (_, i) => 2901 + i);
-	const childMap = new Map<number, string>();
-	const preseeded = await Promise.all(
-		waitlistIdx.map((idx) => createChild(cfg, idx)),
-	);
-	for (let i = 0; i < waitlistIdx.length; i++) {
-		const idx = waitlistIdx[i] ?? 2901;
-		childMap.set(idx, fallbackChild(preseeded[i], idx));
-	}
-
+	const childMap = await preseedChildren(cfg, waitlistIdx);
 	const readTasks = Array.from({ length: 1600 }, (_, i) => {
-		const idx = 1001 + i;
 		const mod = i % 3;
 		return mod === 0
 			? getLanding(cfg)
 			: mod === 1
 				? getDivisions(cfg)
-				: getSession(cfg, idx);
+				: getSession(cfg, 1001 + i);
 	});
 	const writeTasks = Array.from({ length: 300 }, (_, i) =>
 		createChild(cfg, 2601 + i),
@@ -455,7 +264,6 @@ async function runScenario3(cfg: ScenarioConfig): Promise<string> {
 	const waitlistTasks = waitlistIdx.map((idx) =>
 		joinWaitlist(cfg, idx, childMap.get(idx) ?? ""),
 	);
-
 	const t0 = performance.now();
 	const [readRes, writeRes, waitRes] = await Promise.all([
 		Promise.all(readTasks),
@@ -464,7 +272,6 @@ async function runScenario3(cfg: ScenarioConfig): Promise<string> {
 	]);
 	const durMs = performance.now() - t0;
 	const allRes = [...readRes, ...writeRes, ...waitRes];
-
 	return renderScenarioSummary(
 		"Scenario 3: Flash-Mob Mixed Traffic (80/15/5 - 2,000 req)",
 		[
@@ -489,43 +296,34 @@ async function runScenario3(cfg: ScenarioConfig): Promise<string> {
 	);
 }
 
-async function runScenario4(cfg: ScenarioConfig): Promise<string> {
+export async function runScenario4(cfg: ScenarioConfig): Promise<string> {
 	console.log(
-		"\n--- Scenario 4: Waitlist Queue Churn & Concurrency (Indices 3001..3500) ---",
+		"\n--- Scenario 4: Waitlist Queue Churn & Concurrency (Indices 3001..3750) ---",
 	);
-	const parents = Array.from({ length: 500 }, (_, i) => 3001 + i);
-	const childMap = new Map<number, string>();
-	const preseeded = await Promise.all(
-		parents.map((idx) => createChild(cfg, idx)),
-	);
-	for (let i = 0; i < parents.length; i++) {
-		const idx = parents[i] ?? 3001;
-		childMap.set(idx, fallbackChild(preseeded[i], idx));
-	}
-
+	const allParents = Array.from({ length: 750 }, (_, i) => 3001 + i);
+	const childMap = await preseedChildren(cfg, allParents);
 	const p1Start = performance.now();
 	const initialJoins = await Promise.all(
-		parents.map((idx) => joinWaitlist(cfg, idx, childMap.get(idx) ?? "")),
+		allParents
+			.slice(0, 500)
+			.map((idx) => joinWaitlist(cfg, idx, childMap.get(idx) ?? "")),
 	);
 	const p1DurMs = performance.now() - p1Start;
-
-	const withdrawParents = parents.slice(0, 250);
-	const joinParents = parents.slice(250, 500);
-
 	const p2Start = performance.now();
-	const withdrawTasks = withdrawParents.map((idx) =>
-		withdrawWaitlist(cfg, idx, childMap.get(idx) ?? ""),
-	);
-	const joinTasks = joinParents.map((idx) =>
-		joinWaitlist(cfg, idx, childMap.get(idx) ?? ""),
-	);
 	const [withdrawRes, secondJoinRes] = await Promise.all([
-		Promise.all(withdrawTasks),
-		Promise.all(joinTasks),
+		Promise.all(
+			allParents
+				.slice(0, 250)
+				.map((idx) => withdrawWaitlist(cfg, idx, childMap.get(idx) ?? "")),
+		),
+		Promise.all(
+			allParents
+				.slice(500, 750)
+				.map((idx) => joinWaitlist(cfg, idx, childMap.get(idx) ?? "")),
+		),
 	]);
 	const p2DurMs = performance.now() - p2Start;
 	const churnRes = [...withdrawRes, ...secondJoinRes];
-
 	return renderScenarioSummary(
 		"Scenario 4: Waitlist Queue Churn & Concurrency",
 		[
@@ -550,18 +348,6 @@ async function runScenario4(cfg: ScenarioConfig): Promise<string> {
 	);
 }
 
-function publishSummary(markdown: string): void {
-	console.log(markdown);
-	const summaryPath = process.env.GITHUB_STEP_SUMMARY;
-	if (summaryPath) {
-		try {
-			appendFileSync(summaryPath, `\n${markdown}\n`);
-		} catch (err) {
-			console.error("Failed to append to GITHUB_STEP_SUMMARY:", err);
-		}
-	}
-}
-
 async function main(): Promise<void> {
 	const config = parseConfig();
 	console.log("==================================================");
@@ -570,7 +356,6 @@ async function main(): Promise<void> {
 		`Target: ${config.baseUrl} | Slug: ${config.slug} | Scenario: ${config.scenario}`,
 	);
 	console.log("==================================================");
-
 	const summaries: string[] = [
 		"# Advanced Performance Scenarios Benchmark Report",
 		"",
@@ -582,7 +367,6 @@ async function main(): Promise<void> {
 		`- **Timestamp**: \`${new Date().toISOString()}\``,
 		"",
 	];
-
 	const runners = [
 		{ id: "1", fn: runScenario1 },
 		{ id: "2", fn: runScenario2 },
@@ -593,7 +377,6 @@ async function main(): Promise<void> {
 		if (config.scenario === id || config.scenario === "all")
 			summaries.push(await fn(config));
 	}
-
 	publishSummary(summaries.join("\n"));
 }
 

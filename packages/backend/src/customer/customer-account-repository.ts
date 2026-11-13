@@ -189,6 +189,11 @@ export interface CustomerAccountRepository {
 		parentCustomerId: string,
 		childId: string,
 	): Promise<FestivalChildRecord | null>;
+	findChildrenByIds(
+		organizationId: string,
+		parentCustomerId: string,
+		childIds: readonly string[],
+	): Promise<FestivalChildRecord[]>;
 	listChildren(
 		organizationId: string,
 		parentCustomerId: string,

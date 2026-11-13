@@ -234,6 +234,10 @@ export interface CheckoutRepository {
 		organizationId: string,
 		classEntitlementId: string,
 	): Promise<ClassRegistrationMetadata | null>;
+	listRegistrationMetadataByEntitlementIds?(
+		organizationId: string,
+		classEntitlementIds: readonly string[],
+	): Promise<Map<string, ClassRegistrationMetadata>>;
 	updateRegistrationMetadata(
 		registrationMetadataId: string,
 		organizationId: string,
@@ -853,6 +857,34 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 					),
 				})
 			: null;
+	}
+
+	async listRegistrationMetadataByEntitlementIds(
+		organizationId: string,
+		classEntitlementIds: readonly string[],
+	): Promise<Map<string, ClassRegistrationMetadata>> {
+		if (classEntitlementIds.length === 0) return new Map();
+		const targetIds = new Set(classEntitlementIds);
+		const result = new Map<string, ClassRegistrationMetadata>();
+		for (const meta of this.registrationMetadata.values()) {
+			if (
+				meta.organizationId === organizationId &&
+				meta.classEntitlementId !== null &&
+				targetIds.has(meta.classEntitlementId) &&
+				!result.has(meta.classEntitlementId)
+			) {
+				result.set(
+					meta.classEntitlementId,
+					structuredClone({
+						...meta,
+						registrationSnapshot: normalizeClassRegistrationSnapshot(
+							meta.registrationSnapshot,
+						),
+					}),
+				);
+			}
+		}
+		return result;
 	}
 
 	async updateRegistrationMetadata(

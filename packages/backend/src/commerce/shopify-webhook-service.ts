@@ -1,11 +1,15 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { Context } from "hono";
+import { BoundedAsyncCache } from "../lib/bounded-async-cache.js";
+import type {
+	DomainCacheInvalidationEvent,
+	DomainCacheInvalidator,
+} from "../lib/domain-cache-invalidator.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
 import {
 	SHOPIFY_CLIENT_SECRET_PURPOSE,
 	type ShopifySecretKeyring,
 } from "../shopify/encryption.js";
-import { BoundedAsyncCache } from "./bounded-async-cache.js";
 import type { MembershipCommerceRepository } from "./membership-commerce-repository.js";
 import type { ShopifyOrderProjectionService } from "./shopify-order-projection-service.js";
 import {
@@ -132,6 +136,8 @@ export class ShopifyWebhookService {
 	private readonly secretCache: BoundedAsyncCache<string, string>;
 	private readonly orgCacheTtlMs: number;
 	private readonly secretCacheTtlMs: number;
+	private cacheInvalidator?: DomainCacheInvalidator;
+	private unsubscribeCacheInvalidator?: () => void;
 
 	constructor(
 		private readonly organizations: OrganizationRepository,
@@ -196,9 +202,45 @@ export class ShopifyWebhookService {
 		return this.queue.drain();
 	}
 
-	clearCaches(): void {
+	bindCacheInvalidator(invalidator: DomainCacheInvalidator): void {
+		this.unsubscribeCacheInvalidator?.();
+		this.cacheInvalidator = invalidator;
+		this.unsubscribeCacheInvalidator = invalidator.subscribe((event) =>
+			this.handleCacheInvalidation(event),
+		);
+	}
+
+	private flushLocalCaches(): void {
 		this.orgCache.deleteWhere(() => true);
 		this.secretCache.deleteWhere(() => true);
+	}
+
+	private handleCacheInvalidation(event: DomainCacheInvalidationEvent): void {
+		if (event.type === "ShopifySecretRotated") {
+			this.orgCache.deleteWhere(
+				(_domain, org) =>
+					!event.organizationId || org?.id === event.organizationId,
+			);
+			this.secretCache.deleteWhere(
+				(key) =>
+					!event.organizationId || key.startsWith(`${event.organizationId}:`),
+			);
+			return;
+		}
+		if (event.type === "OrgUpdated") {
+			this.orgCache.deleteWhere(
+				(_domain, org) => org?.id === event.organizationId,
+			);
+			return;
+		}
+		if (event.type === "CachesCleared") {
+			this.flushLocalCaches();
+		}
+	}
+
+	clearCaches(): void {
+		this.flushLocalCaches();
+		this.cacheInvalidator?.clearAll();
 	}
 
 	reclaimPending(

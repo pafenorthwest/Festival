@@ -321,19 +321,7 @@ export class ClassCheckoutService {
 		const uniqueChildIds = [
 			...new Set(input.items.map((item) => item.childId)),
 		];
-		for (const childId of uniqueChildIds) {
-			const child = preloaded?.children?.has(childId)
-				? (preloaded.children.get(childId) ?? null)
-				: await this.customers.findChild(
-						input.organizationId,
-						input.customerId,
-						childId,
-					);
-			if (!child) {
-				throw new AppError("Child not found.", 404);
-			}
-		}
-
+		await this.verifyOwnedChildren(input, uniqueChildIds, preloaded?.children);
 		const targetFestival =
 			preloaded?.targetFestival ??
 			resolveTargetFestival(
@@ -343,24 +331,14 @@ export class ClassCheckoutService {
 					festivalShortName: input.festivalShortName,
 				},
 			);
-
-		const classes = new Map<string, FestivalClassConfiguration>(
-			preloaded?.classes,
-		);
 		const uniqueClassIds = [
 			...new Set(input.items.map((item) => item.festivalClassId)),
 		];
-		const missingClassIds = uniqueClassIds.filter((id) => !classes.has(id));
-		if (missingClassIds.length > 0) {
-			const configs =
-				await this.organizations.findFestivalClassConfigurationsByIds(
-					input.organizationId,
-					targetFestival.id,
-					missingClassIds,
-				);
-			for (const cfg of configs) classes.set(cfg.id, cfg);
-		}
-
+		const classes = await this.loadEligibilityClassConfigs(
+			{ organizationId: input.organizationId, festivalId: targetFestival.id },
+			uniqueClassIds,
+			preloaded?.classes,
+		);
 		const [activeEntitlements, subtypes, timezone] = await Promise.all([
 			this.loadTargetedEntitlements({
 				organizationId: input.organizationId,
@@ -377,11 +355,6 @@ export class ClassCheckoutService {
 			preloaded?.timezone ??
 				this.organizations.getOrganizationTimezone(input.organizationId),
 		]);
-		const isRegistrationOpen = isFestivalRegistrationOpen(
-			targetFestival,
-			this.now(),
-			timezone,
-		);
 		return evaluatePurchaseEligibility({
 			organizationId: input.organizationId,
 			festivalId: targetFestival.id,
@@ -389,9 +362,60 @@ export class ClassCheckoutService {
 			classes,
 			subtypes,
 			activeEntitlements,
-			isRegistrationOpen,
+			isRegistrationOpen: isFestivalRegistrationOpen(
+				targetFestival,
+				this.now(),
+				timezone,
+			),
 			mode: input.mode ?? "cart",
 		});
+	}
+
+	private async verifyOwnedChildren(
+		input: { organizationId: string; customerId: string },
+		uniqueChildIds: readonly string[],
+		preloaded?: Map<string, FestivalChildRecord | null>,
+	): Promise<void> {
+		const knownChildren = new Map<string, FestivalChildRecord | null>(
+			preloaded,
+		);
+		const missingChildIds = uniqueChildIds.filter(
+			(childId) => !knownChildren.has(childId),
+		);
+		if (missingChildIds.length > 0) {
+			const fetched = await this.customers.findChildrenByIds(
+				input.organizationId,
+				input.customerId,
+				missingChildIds,
+			);
+			for (const child of fetched) {
+				knownChildren.set(child.id, child);
+			}
+		}
+		for (const childId of uniqueChildIds) {
+			if (!knownChildren.get(childId)) {
+				throw new AppError("Child not found.", 404);
+			}
+		}
+	}
+
+	private async loadEligibilityClassConfigs(
+		scope: { organizationId: string; festivalId: string },
+		uniqueClassIds: readonly string[],
+		preloaded?: Map<string, FestivalClassConfiguration>,
+	): Promise<Map<string, FestivalClassConfiguration>> {
+		const classes = new Map<string, FestivalClassConfiguration>(preloaded);
+		const missingClassIds = uniqueClassIds.filter((id) => !classes.has(id));
+		if (missingClassIds.length > 0) {
+			const configs =
+				await this.organizations.findFestivalClassConfigurationsByIds(
+					scope.organizationId,
+					scope.festivalId,
+					[...missingClassIds],
+				);
+			for (const cfg of configs) classes.set(cfg.id, cfg);
+		}
+		return classes;
 	}
 
 	private async loadTargetedEntitlements(input: {

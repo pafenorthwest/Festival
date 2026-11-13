@@ -7,6 +7,7 @@ import {
 import { InMemoryCheckoutRepository } from "../src/checkout/checkout-repository.js";
 import { InMemoryMembershipCommerceRepository } from "../src/commerce/membership-commerce-repository.js";
 import type {
+	CustomerAccountRepository,
 	CustomerSessionTokenReplacementInput,
 	CustomerSessionTouchInput,
 } from "../src/customer/customer-account-repository.js";
