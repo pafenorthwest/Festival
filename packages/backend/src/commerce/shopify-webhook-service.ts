@@ -1,6 +1,8 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { sql } from "bun";
 import type { Context } from "hono";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
+import { postgresSchemaName } from "../repo/postgres-schema.js";
 import {
 	SHOPIFY_CLIENT_SECRET_PURPOSE,
 	type ShopifySecretKeyring,
@@ -16,6 +18,8 @@ import {
 export const MAX_SHOPIFY_WEBHOOK_BODY_BYTES = 64 * 1024;
 export const DEFAULT_ORG_CACHE_TTL_MS = 60_000;
 export const DEFAULT_SECRET_CACHE_TTL_MS = 60_000;
+export const DEFAULT_WEBHOOK_PROCESSING_LEASE_MS = 15 * 60_000;
+export const DEFAULT_WEBHOOK_REAP_BATCH_SIZE = 100;
 const DEFAULT_CACHE_MAX_ENTRIES = 1_000;
 const DEFAULT_ORG_CACHE_MAX_BYTES = 10 * 1024 * 1024;
 const DEFAULT_SECRET_CACHE_MAX_BYTES = 4 * 1024 * 1024;
@@ -125,9 +129,87 @@ async function readRawBody(request: Request): Promise<Buffer | undefined> {
 	}
 }
 
+export interface ReapStaleWebhookDeliveriesOptions {
+	batchSize?: number;
+	leaseMs?: number;
+	now?: () => Date;
+}
+
+function clampPositiveInt(value: number | undefined, fallback: number): number {
+	if (value === undefined || !Number.isFinite(value)) return fallback;
+	return Math.max(1, Math.trunc(value));
+}
+
+export async function reapStaleWebhookDeliveries(
+	schema: string,
+	options?: ReapStaleWebhookDeliveriesOptions,
+): Promise<string[]> {
+	const safeSchema = postgresSchemaName(schema);
+	const batchSize = clampPositiveInt(
+		options?.batchSize,
+		DEFAULT_WEBHOOK_REAP_BATCH_SIZE,
+	);
+	const leaseMs = clampPositiveInt(
+		options?.leaseMs,
+		DEFAULT_WEBHOOK_PROCESSING_LEASE_MS,
+	);
+	const nowDate = (options?.now ?? (() => new Date()))();
+	const failedAtIso = nowDate.toISOString();
+	const staleBeforeIso = new Date(nowDate.getTime() - leaseMs).toISOString();
+	const rows = (await sql.unsafe(
+		`WITH stale AS (
+			SELECT id
+			FROM ${safeSchema}.shopify_webhook_deliveries
+			WHERE status = 'processing'
+				AND (processing_started_at IS NULL OR processing_started_at <= $1::timestamptz)
+			ORDER BY processing_started_at ASC NULLS FIRST, id ASC
+			LIMIT $3
+			FOR UPDATE SKIP LOCKED
+		)
+		UPDATE ${safeSchema}.shopify_webhook_deliveries AS d
+		SET status = 'failed',
+			failure_category = 'upstream',
+			failure_stage = 'projection',
+			failure_code = 'unexpected',
+			shopify_request_id = NULL,
+			failed_at = $2::timestamptz,
+			processing_started_at = NULL
+		FROM stale
+		WHERE d.id = stale.id
+		RETURNING d.id`,
+		[staleBeforeIso, failedAtIso, batchSize],
+	)) as Array<{ id: string }>;
+	return rows.map((row) => String(row.id));
+}
+
+function enqueueReclaimedIntoQueue(
+	queue: WebhookWorkerQueue,
+	deliveryIds: readonly string[],
+	customSchedule?: (deliveryId: string) => void,
+): number {
+	let scheduled = 0;
+	for (const id of deliveryIds) {
+		if (!id || queue.isQueuedOrActive(id)) {
+			continue;
+		}
+		if (customSchedule) {
+			customSchedule(id);
+			scheduled++;
+			continue;
+		}
+		const beforePending = queue.stats().pendingRecoveryCount;
+		const accepted = queue.enqueue(id, { retainForRecovery: true });
+		if (accepted || queue.stats().pendingRecoveryCount > beforePending) {
+			scheduled++;
+		}
+	}
+	return scheduled;
+}
+
 export class ShopifyWebhookService {
 	private readonly queue: WebhookWorkerQueue;
 	private readonly scheduleFn: (deliveryId: string) => void;
+	private readonly customSchedule?: (deliveryId: string) => void;
 	private readonly orgCache: BoundedAsyncCache<string, OrgRecord>;
 	private readonly secretCache: BoundedAsyncCache<string, string>;
 	private readonly orgCacheTtlMs: number;
@@ -160,28 +242,23 @@ export class ShopifyWebhookService {
 			now: () => this.now().getTime(),
 		});
 
-		if (schedule instanceof WebhookWorkerQueue) {
-			this.queue = schedule;
-			this.scheduleFn = (deliveryId) => {
+		this.customSchedule = typeof schedule === "function" ? schedule : undefined;
+		this.queue =
+			schedule instanceof WebhookWorkerQueue
+				? schedule
+				: new WebhookWorkerQueue({
+						handler: async (deliveryId) => {
+							await this.projection?.processDelivery(deliveryId);
+						},
+						concurrency: options?.queueConcurrency,
+						maxBacklog: options?.queueMaxBacklog,
+						maxPendingRecovery: options?.queueMaxPendingRecovery,
+					});
+		this.scheduleFn =
+			this.customSchedule ??
+			((deliveryId) => {
 				this.queue.enqueue(deliveryId);
-			};
-		} else {
-			this.queue = new WebhookWorkerQueue({
-				handler: async (deliveryId) => {
-					await this.projection?.processDelivery(deliveryId);
-				},
-				concurrency: options?.queueConcurrency,
-				maxBacklog: options?.queueMaxBacklog,
-				maxPendingRecovery: options?.queueMaxPendingRecovery,
 			});
-			if (typeof schedule === "function") {
-				this.scheduleFn = schedule;
-			} else {
-				this.scheduleFn = (deliveryId) => {
-					this.queue.enqueue(deliveryId);
-				};
-			}
-		}
 	}
 
 	getQueue(): WebhookWorkerQueue {
@@ -190,6 +267,10 @@ export class ShopifyWebhookService {
 
 	getStats(): WebhookWorkerQueueStats {
 		return this.queue.getStats();
+	}
+
+	getAvailableReclaimSlots(limit = DEFAULT_WEBHOOK_REAP_BATCH_SIZE): number {
+		return this.queue.getAvailableReclaimSlots(limit);
 	}
 
 	drain(): Promise<void> {
@@ -223,6 +304,30 @@ export class ShopifyWebhookService {
 			);
 			return pending.map((delivery) => delivery.id);
 		});
+	}
+
+	enqueueReclaimedDeliveries(deliveryIds: readonly string[]): number {
+		return enqueueReclaimedIntoQueue(
+			this.queue,
+			deliveryIds,
+			this.customSchedule,
+		);
+	}
+
+	async reapStaleProcessingDeliveries(
+		schema: string,
+		options?: { batchSize?: number; leaseMs?: number },
+	): Promise<number> {
+		const batchSize = this.getAvailableReclaimSlots(options?.batchSize);
+		if (batchSize <= 0) {
+			return 0;
+		}
+		const ids = await reapStaleWebhookDeliveries(schema, {
+			...options,
+			batchSize,
+			now: this.now,
+		});
+		return this.enqueueReclaimedDeliveries(ids);
 	}
 
 	private async resolveVerifiedClientSecret(
