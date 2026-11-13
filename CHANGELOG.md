@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.4.0] - 2026-11-13
+
+### Added
+
+- Deterministic pre-deploy migration runner (`scripts/migrate.ts`) backed by `orgs.schema_migrations` ledger and `pg_dump --schema-only` parity gate against `database/postgres17-schema.sql` (`S06`).
+- Shared event-driven `DomainCacheInvalidator` replacing isolated `BoundedAsyncCache` silos and `compose.yml` `max_connections=200` (`S07`, `#358`).
+- Graceful `SIGTERM`/`SIGINT` webhook worker drain (`shopifyWebhookService.drain()`), `PeriodicLeaseReaper` using `FOR UPDATE SKIP LOCKED` to reclaim stale webhook, checkout execution, and OAuth/session leases, and partial index `20261115010000_idx_class_checkout_executions_running.sql` (`S08`).
+- Shared `@festival/common` runtime validation schemas, typed Hono RPC (`hc<AppType>`) domain API clients, and declarative route-security metadata (`S12`).
+- Modular per-domain DI composition under `packages/backend/src/composition/` (`S14`).
+
+### Changed
+
+- Bounded-context domain decomposition across `tenant-org`, `catalog-repertoire`, `customer-identity`, `teacher-directory`, `class-checkout`, and `commerce-projection`, splitting monolithic repositories, `CustomerAccountService`, `ShopifyAdminApiClient`, `OrganizationService`, `ClassCheckoutService`, and `ShopifyOrderProjectionService` into `<=500`-line modules and retiring `InMemory*` SQL emulators (`S09`–`S11`).
+- Split `api.ts` into typed Hono RPC domain clients and replaced the static `route-security.ts` array with declarative route-security metadata (`S12`).
+- Decomposed `createFestivalAppState` and `createFestivalActions` into route-scoped SolidJS contexts, unified `@solidjs/router` routing, and modularized registration, volunteer, and repertoire UI components (`S13`).
+- Reduced `packages/backend/src/app.ts` to `<=500` lines via `packages/backend/src/composition/` modules, removed obsolete Wave 3 checkout shims, and bumped root and all four workspace package versions (`@festival/common`, `@festival/backend`, `@festival/frontend`, and `@festival/shopify-confirmation`) in lockstep to `0.4.0` (`S14`).
+
+### Fixed
+
+- Removed boot-time DDL from `initializePostgresSchema` and `/api/internal/ready` (`S06`).
+- Removed 5-minute `null` caching and replaced hot-path N+1 queries (`listRegistrationEligibleClasses`, `listClassRegistrations`, `evaluateEligibility`, `PublicMembershipProductService.list`) with SQL joins and batching (`S07`, `#358`).
+
 ## [0.3.0] - 2026-11-13
 
 ### Added
