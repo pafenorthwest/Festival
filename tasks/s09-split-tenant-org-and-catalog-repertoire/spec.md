@@ -9,6 +9,7 @@
 ## Scope
 
 ### In scope
+- `packages/backend/src/infra/s09-infra.ts` — shared backend infra adapter exposing schema helpers, cache/invalidation primitives, commerce count lookup, and validation/types to `domains/`.
 - `packages/backend/src/domains/tenant-org/**` — `TenantRepository`, `AppUserMembershipRepository`, `RoomRepository`, `TenantOrganizationService`, `OrganizationStaffInviteService`, `OrganizationAgeConfigService`, and public `index.ts` barrel (`OrgUpdated`, `RegistrationAgeConfigUpdated` invalidation events).
 - `packages/backend/src/domains/catalog-repertoire/**` — `DivisionFestivalRepository`, `RegistrationCatalogRepository`, split repertoire repositories (`repertoire-catalog-repository.ts`, `repertoire-submission-repository.ts`), `DivisionFestivalService`, `RegistrationCatalogService`, and `RepertoireService` (`FestivalCatalogUpdated`, `RepertoireUpdated` events).
 - `packages/backend/src/repo/postgres-organization-repository.ts` (`3,636`L), `packages/backend/src/repo/organization-repository.ts`, and `packages/backend/src/repo/in-memory-organization-repository.ts` (`2,333`L) — extract `tenant-org` and `catalog-repertoire` methods into `domains/tenant-org/**` and `domains/catalog-repertoire/**`, retire `InMemory*` SQL-emulator clones, and retain a thin delegating compatibility adapter (`<=500`L) for unmigrated callers until `S14`.
@@ -46,7 +47,21 @@ bun run check:sql
 ```
 
 ## Delivery
-Pending execution.
+- Shared backend infra adapter: `packages/backend/src/infra/s09-infra.ts` exposing schema helpers, `BoundedAsyncCache`, `DomainCacheInvalidator`, `TenantContext`, commerce count lookup, and shared validation/time helpers to `domains/`.
+- `packages/backend/src/domains/tenant-org/**`: `PostgresTenantRepository`, `PostgresAppUserMembershipRepository`, `PostgresRoomRepository`, `TenantOrganizationService`, `OrganizationStaffInviteService`, `OrganizationAgeConfigService`, `RoomService`, `tenant-mappers.ts`, `app-user-repository.ts`, and `index.ts` barrel emitting `OrgUpdated` and `RegistrationAgeConfigUpdated` onto `DomainCacheInvalidator`.
+- `packages/backend/src/domains/catalog-repertoire/**`: `PostgresDivisionFestivalRepository`, `PostgresRegistrationCatalogRepository`, `PostgresRepertoireCatalogRepository`, `PostgresRepertoireSubmissionRepository`, `DivisionFestivalService`, `RegistrationCatalogService`, `RepertoireService`, modular query/mapper/helper files, and `index.ts` barrel emitting `FestivalCatalogUpdated` and `RepertoireUpdated` while preserving `#360` concerto compatibility and advisory-locked atomic capacity audits.
+- Thin `<=500`L/file, `<=250`L/class, `<=60`L/fn compatibility facades and modular helpers at `packages/backend/src/repo/` (`organization-repository.ts`, `organization-repository-types.ts`, `postgres-organization-repository.ts`, `postgres-tenant-catalog-facade.ts`, `postgres-membership-grant-delegate.ts`, `postgres-membership-grant-helpers.ts`, `postgres-membership-revocation-helpers.ts`, `postgres-profile-directory-delegate.ts`, `postgres-profile-directory-helpers.ts`, `postgres-shopify-integration-delegate.ts`, `in-memory-organization-repository.ts`, `in-memory-org-*.ts`, `app-user-repository.ts`, `postgres-app-user-repository.ts`), `packages/backend/src/rooms/**`, `packages/backend/src/repertoire/**`, and `packages/backend/src/services/organization-service.ts`.
+- Added unit and PostgreSQL 17 integration suites (`packages/backend/tests/domains/tenant-org/tenant-org.test.ts`, `packages/backend/tests/domains/catalog-repertoire/catalog-repertoire.test.ts`, `packages/backend/tests/domains/catalog-repertoire/repertoire.test.ts`), migrated org/catalog/repertoire tests, and completed independent `tasks/s09-split-tenant-org-and-catalog-repertoire/code-review.md` (`Verdict: patch is correct`, `Findings status: none`).
 
 ## Quality gate results
-Pending execution.
+- `pwsh -NoProfile -File .agents/skills/festival-session/scripts/validate-packet.ps1 -TaskName s09-split-tenant-org-and-catalog-repertoire -RequireCodeReview`: `PACKET VALID` (`codeReview=valid(none)`).
+- `bun run verify:toolchain`: passed (`Bun 1.4.2`, `TypeScript 5.9.3`).
+- `bun run format:check` & `bun run lint`: passed (`Checked 619 files`, 0 errors/warnings).
+- `bun run build`: passed (`common`, `backend`, `frontend`, `shopify-confirmation`).
+- `bunx --bun tsc -p packages/backend/tsconfig.json --noEmit` & `bun run --cwd packages/frontend check:types`: passed (0 errors).
+- `bun run check:sql`: passed (`Validated 340 backend TypeScript files.`).
+- Tests (`POSTGRES_INTEGRATION_URL` & `DATABASE_URL` pointing to local PostgreSQL 17 `festival_test`; `migrate-runner.test.ts` run standalone after batch 1 to avoid Bun 1.4.2 Windows connection-pool crash):
+  - `test:common`: `353 pass, 0 fail` across `22` files.
+  - `test:frontend`: `471 pass, 0 fail` across `53` files.
+  - `test:confirmation`: `20 pass, 0 fail` across `1` file.
+  - `packages/backend/tests` (`143` files total in 3 batches: `66` files `953 pass` + `migrate-runner.test.ts` `9 pass` + `76` files `687 pass`): `1,649 pass, 0 fail` (including `architecture-boundaries.test.ts` 6/6 and all S09 domain/repo/route tests).
