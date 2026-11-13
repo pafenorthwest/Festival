@@ -13,12 +13,10 @@ import type {
 	CreateCheckoutIntentInput,
 } from "../domains/class-checkout/index.js";
 import { withInMemoryCapacityLock } from "../repo/in-memory-capacity-lock.js";
-import { InMemoryClassCheckoutExecutionRepository } from "./class-checkout-execution.js";
+import type { InMemoryClassCheckoutExecutionRepository } from "./class-checkout-execution.js";
 import { withInMemoryCheckoutAdmissionLock } from "./in-memory-checkout-admission-lock.js";
 import {
 	attachInMemoryCart,
-	buildInMemoryRestartLookup,
-	computeInMemoryIntentOutcome,
 	createInMemoryCheckoutIntent,
 	getInMemoryMetadataByEntitlementId,
 	type InMemoryCheckoutStore,
@@ -30,8 +28,42 @@ import {
 	snapshotInMemoryMetadataLinks,
 	updateInMemoryMetadata,
 } from "./in-memory-checkout-helpers.js";
+import {
+	createInMemoryClassExecutionsRepo,
+	findInMemoryIntentByCorrelation,
+	findInMemoryIntentById,
+	findInMemoryIntentByKey,
+	getInMemoryCart,
+	getInMemoryClassCheckoutReplayState,
+	getInMemoryOutcome,
+	hasInMemoryProcessingIntent,
+	markInMemoryCheckoutStarted,
+	markInMemoryFailed,
+} from "./in-memory-checkout-query-helpers.js";
 
 export * from "../domains/class-checkout/checkout-types.js";
+
+type AttachInMemoryCartInput = Omit<
+	CheckoutCartRecord,
+	"reference" | "createdAtIso" | "status"
+> & {
+	intentId: string;
+	capacityCheck?: () => Promise<AppError | null>;
+	executionClaim?: ClassCheckoutClaim;
+};
+
+type InsertInMemoryMetadataParams = {
+	id: string;
+	organizationId: string;
+	festivalId: string;
+	checkoutIntentId: string;
+	checkoutIntentLineId?: string | null;
+	teacherMembershipId: string;
+	accompanistMembershipId: string | null;
+	repertoireJson: RepertoirePiece[];
+	repertoireSnapshotPieces?: RepertoirePiece[];
+	registrationSnapshot?: ClassRegistrationSnapshot | null;
+};
 
 export class InMemoryCheckoutRepository implements CheckoutRepository {
 	readonly classExecutions: InMemoryClassCheckoutExecutionRepository;
@@ -45,36 +77,9 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		false;
 
 	constructor(private readonly now: () => Date = () => new Date()) {
-		this.classExecutions = new InMemoryClassCheckoutExecutionRepository(
+		this.classExecutions = createInMemoryClassExecutionsRepo(
+			() => this.store(),
 			now,
-			(org, intentId) => {
-				const intent = this.intents.get(intentId);
-				return Boolean(
-					intent &&
-						intent.organizationId === org &&
-						["approved", "rejected", "needs_review", "superseded"].includes(
-							intent.status,
-						),
-				);
-			},
-			(org, intentId) => {
-				const intent = this.intents.get(intentId);
-				if (intent?.organizationId === org) intent.status = "superseded";
-			},
-			(org, customer, intentId, nowIso) =>
-				[...this.intents.values()].some(
-					(intent) =>
-						intent.organizationId === org &&
-						intent.customerId === customer &&
-						intent.id !== intentId &&
-						["creating", "ready", "checkout_started"].includes(intent.status) &&
-						intent.expiresAtIso > nowIso,
-				),
-			(org, intentId) =>
-				this.intents.get(intentId)?.organizationId === org
-					? (this.intents.get(intentId)?.expiresAtIso ?? null)
-					: null,
-			buildInMemoryRestartLookup(this.store()),
 		);
 	}
 
@@ -102,14 +107,7 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		sessionId: string;
 		idempotencyKey: string;
 	}) {
-		const value = [...this.intents.values()].find(
-			(item) =>
-				item.organizationId === input.organizationId &&
-				item.customerId === input.customerId &&
-				item.sessionId === input.sessionId &&
-				item.idempotencyKey === input.idempotencyKey,
-		);
-		return value ? structuredClone(value) : null;
+		return findInMemoryIntentByKey(this.store(), input);
 	}
 
 	async getOutcome(input: {
@@ -118,14 +116,7 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		sessionId: string;
 		idempotencyKey: string;
 	}) {
-		const intent = [...this.intents.values()].find(
-			(item) =>
-				item.organizationId === input.organizationId &&
-				item.customerId === input.customerId &&
-				item.sessionId === input.sessionId &&
-				item.idempotencyKey === input.idempotencyKey,
-		);
-		return intent ? computeInMemoryIntentOutcome(this.store(), intent) : null;
+		return getInMemoryOutcome(this.store(), input);
 	}
 
 	async createIntent(record: CreateCheckoutIntentInput) {
@@ -136,51 +127,22 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		);
 	}
 
-	async attachCart(
-		input: Omit<CheckoutCartRecord, "reference" | "createdAtIso" | "status"> & {
-			intentId: string;
-			capacityCheck?: () => Promise<AppError | null>;
-			executionClaim?: ClassCheckoutClaim;
-		},
-	) {
+	async attachCart(input: AttachInMemoryCartInput) {
 		return withInMemoryCapacityLock(async () =>
 			attachInMemoryCart(this.store(), input),
 		);
 	}
 
-	async markIntentReady(
-		input: Omit<CheckoutCartRecord, "reference" | "createdAtIso" | "status"> & {
-			intentId: string;
-			capacityCheck?: () => Promise<AppError | null>;
-			executionClaim?: ClassCheckoutClaim;
-		},
-	) {
+	async markIntentReady(input: AttachInMemoryCartInput) {
 		return this.attachCart(input);
 	}
 
 	async markCheckoutStarted(intentId: string) {
-		const intent = this.intents.get(intentId);
-		if (
-			!intent ||
-			(intent.status !== "ready" && intent.status !== "checkout_started")
-		) {
-			throw new Error("Checkout intent is not ready.");
-		}
-		intent.status = "checkout_started";
-		const cart = intent.cartReference
-			? this.carts.get(intent.cartReference)
-			: undefined;
-		if (cart) cart.status = "checkout_started";
+		markInMemoryCheckoutStarted(this.store(), intentId);
 	}
 
 	async markFailed(intentId: string) {
-		const intent = this.intents.get(intentId);
-		if (!intent) return;
-		intent.status = "failed";
-		if (intent.cartReference) {
-			const cart = this.carts.get(intent.cartReference);
-			if (cart) cart.status = "superseded";
-		}
+		markInMemoryFailed(this.store(), intentId);
 	}
 
 	async markIntentFailed(input: {
@@ -198,27 +160,21 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		customerId: string,
 		nowIso: string,
 	) {
-		const cart = this.carts.get(reference);
-		if (
-			!cart ||
-			cart.organizationId !== organizationId ||
-			cart.customerId !== customerId ||
-			cart.expiresAtIso <= nowIso ||
-			cart.status === "expired" ||
-			cart.status === "superseded"
-		) {
-			return null;
-		}
-		return { ...cart };
+		return getInMemoryCart(
+			this.store(),
+			reference,
+			organizationId,
+			customerId,
+			nowIso,
+		);
 	}
 
 	async findIntentByCorrelation(organizationId: string, correlationId: string) {
-		const intent = [...this.intents.values()].find(
-			(value) =>
-				value.organizationId === organizationId &&
-				value.correlationId === correlationId,
+		return findInMemoryIntentByCorrelation(
+			this.store(),
+			organizationId,
+			correlationId,
 		);
-		return intent ? { ...intent } : null;
 	}
 
 	async findIntentByCorrelationId(
@@ -229,24 +185,15 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 	}
 
 	async findIntentById(organizationId: string, intentId: string) {
-		const intent = this.intents.get(intentId);
-		if (!intent || intent.organizationId !== organizationId) return null;
-		return { ...intent };
+		return findInMemoryIntentById(this.store(), organizationId, intentId);
 	}
 
 	async getClassCheckoutReplayState(organizationId: string, intentId: string) {
-		const execution = this.classExecutions.getSnapshot(
+		return getInMemoryClassCheckoutReplayState(
+			this.store(),
 			organizationId,
 			intentId,
 		);
-		const intent = this.intents.get(intentId);
-		if (!execution || intent?.organizationId !== organizationId) return null;
-		return {
-			intentStatus: intent.status,
-			state: execution.state,
-			generation: execution.generation,
-			resultCode: execution.resultCode,
-		};
 	}
 
 	async hasProcessingIntent(
@@ -255,20 +202,12 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		nowIso: string,
 		intentType: CheckoutIntentType = "class_entry",
 	) {
-		if (
-			intentType === "class_entry" &&
-			(await this.classExecutions.findBlocking(organizationId, customerId))
-		) {
-			return true;
-		}
-		return [...this.intents.values()].some(
-			(intent) =>
-				intent.organizationId === organizationId &&
-				intent.customerId === customerId &&
-				intent.expiresAtIso > nowIso &&
-				(intent.status === "creating" ||
-					intent.status === "ready" ||
-					intent.status === "checkout_started"),
+		return hasInMemoryProcessingIntent(
+			this.store(),
+			organizationId,
+			customerId,
+			nowIso,
+			intentType,
 		);
 	}
 
@@ -291,18 +230,9 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		);
 	}
 
-	async insertRegistrationMetadata(params: {
-		id: string;
-		organizationId: string;
-		festivalId: string;
-		checkoutIntentId: string;
-		checkoutIntentLineId?: string | null;
-		teacherMembershipId: string;
-		accompanistMembershipId: string | null;
-		repertoireJson: RepertoirePiece[];
-		repertoireSnapshotPieces?: RepertoirePiece[];
-		registrationSnapshot?: ClassRegistrationSnapshot | null;
-	}): Promise<ClassRegistrationMetadata> {
+	async insertRegistrationMetadata(
+		params: InsertInMemoryMetadataParams,
+	): Promise<ClassRegistrationMetadata> {
 		return insertInMemoryMetadata(this.store(), params);
 	}
 

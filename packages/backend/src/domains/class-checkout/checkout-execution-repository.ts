@@ -10,10 +10,15 @@ import {
 	validateExecutionSchemaName,
 } from "./checkout-execution-helpers.js";
 import {
-	advisoryLockExecutionTx,
+	listRecoveryExecutionsQuery,
+	observeExecutionPaymentTx,
+	reapOneExpiredExecutionTx,
+	recordApplicationExpiryTx,
+	selectExpiredExecutionCandidatesQuery,
+} from "./checkout-execution-lifecycle-queries.js";
+import {
 	appendExecutionEventTx,
 	claimExecutionTx,
-	dbClockNowIso,
 	findBlockingExecutionQuery,
 	findUnissuedInvalidCartRestartQuery,
 	isUnissuedCartReplacementBlockedQuery,
@@ -162,112 +167,36 @@ export class PostgresClassCheckoutExecutionRepository
 		organizationId: string,
 		customerId?: string,
 	): Promise<ClassCheckoutExecution[]> {
-		const rows = (
-			customerId
-				? await sql.unsafe(
-						`SELECT e.*, e.lease_expires_at::text, e.recovery_recorded_at::text,
-							e.created_at::text, e.updated_at::text
-						FROM ${this.schema}.class_checkout_executions e
-						WHERE e.organization_id = $1
-							AND e.customer_id = $2
-							AND e.state = 'recovery_required'
-						ORDER BY COALESCE(e.recovery_recorded_at, e.updated_at) DESC`,
-						[organizationId, customerId],
-					)
-				: await sql.unsafe(
-						`SELECT e.*, e.lease_expires_at::text, e.recovery_recorded_at::text,
-							e.created_at::text, e.updated_at::text
-						FROM ${this.schema}.class_checkout_executions e
-						WHERE e.organization_id = $1 AND e.state = 'recovery_required'
-						ORDER BY COALESCE(e.recovery_recorded_at, e.updated_at) DESC`,
-						[organizationId],
-					)
-		) as Record<string, unknown>[];
-		return rows.map(rowToExecution);
+		return listRecoveryExecutionsQuery(
+			sql,
+			this.schema,
+			organizationId,
+			customerId,
+		);
 	}
 
 	async reapExpired(
 		organizationId: string,
 		intentId?: string,
 	): Promise<number> {
-		const candidates = (
-			intentId
-				? await sql.unsafe(
-						`SELECT intent_id FROM ${this.schema}.class_checkout_executions
-						WHERE organization_id = $1
-							AND intent_id = $2
-							AND state = 'running'
-							AND lease_expires_at <= clock_timestamp()`,
-						[organizationId, intentId],
-					)
-				: await sql.unsafe(
-						`SELECT intent_id FROM ${this.schema}.class_checkout_executions
-						WHERE organization_id = $1
-							AND state = 'running'
-							AND lease_expires_at <= clock_timestamp()`,
-						[organizationId],
-					)
-		) as Array<{ intent_id: string }>;
+		const candidates = await selectExpiredExecutionCandidatesQuery(
+			sql,
+			this.schema,
+			organizationId,
+			intentId,
+		);
 		let reaped = 0;
 		for (const candidate of candidates) {
-			reaped += await this.reapOneExpired(organizationId, candidate.intent_id);
+			reaped += await sql.begin((tx) =>
+				reapOneExpiredExecutionTx(
+					tx,
+					this.schema,
+					organizationId,
+					candidate.intent_id,
+				),
+			);
 		}
 		return reaped;
-	}
-
-	private async reapOneExpired(
-		organizationId: string,
-		intentId: string,
-	): Promise<number> {
-		return sql.begin(async (tx) => {
-			await advisoryLockExecutionTx(tx, organizationId, intentId);
-			const row = await selectExecutionRow(
-				tx,
-				this.schema,
-				organizationId,
-				intentId,
-				true,
-			);
-			if (!row) return 0;
-			const current = rowToExecution(row);
-			const nowIso = await dbClockNowIso(tx);
-			if (
-				current.state !== "running" ||
-				!current.leaseExpiresAtIso ||
-				current.leaseExpiresAtIso > nowIso
-			) {
-				return 0;
-			}
-			const nextState =
-				current.checkpoint === "create_dispatched"
-					? "recovery_required"
-					: "retryable";
-			const resultCode =
-				nextState === "recovery_required" ? "checkout_creation_unknown" : null;
-			await tx.unsafe(
-				`UPDATE ${this.schema}.class_checkout_executions
-				SET state = $3,
-					lease_owner = NULL,
-					lease_expires_at = NULL,
-					result_code = $4,
-					recovery_recorded_at = CASE
-						WHEN $3 = 'recovery_required'
-						THEN COALESCE(recovery_recorded_at, clock_timestamp())
-						ELSE recovery_recorded_at
-					END,
-					updated_at = clock_timestamp()
-				WHERE organization_id = $1 AND intent_id = $2`,
-				[organizationId, intentId, nextState, resultCode],
-			);
-			await appendExecutionEventTx(tx, this.schema, {
-				organizationId,
-				intentId,
-				generation: current.generation,
-				eventType: "lease_expired",
-				evidence: { stage: current.checkpoint },
-			});
-			return 1;
-		});
 	}
 
 	async resolve(
@@ -302,51 +231,7 @@ export class PostgresClassCheckoutExecutionRepository
 		shopifyOrderGid: string;
 		approved: boolean;
 	}): Promise<void> {
-		await sql.begin(async (tx) => {
-			await advisoryLockExecutionTx(tx, input.organizationId, input.intentId);
-			const row = await selectExecutionRow(
-				tx,
-				this.schema,
-				input.organizationId,
-				input.intentId,
-				true,
-			);
-			if (!row) return;
-			const exec = rowToExecution(row);
-			const nextGen = exec.generation + 1;
-			const nextState = input.approved
-				? "completed"
-				: exec.state !== "rejected"
-					? "recovery_required"
-					: exec.state;
-			const nextResult =
-				!input.approved && exec.state !== "rejected"
-					? "paid_order_requires_review"
-					: exec.resultCode;
-			await tx.unsafe(
-				`UPDATE ${this.schema}.class_checkout_executions
-				SET state = $3,
-					generation = $4,
-					lease_owner = NULL,
-					lease_expires_at = NULL,
-					result_code = $5,
-					recovery_recorded_at = CASE
-						WHEN $3 = 'recovery_required'
-						THEN COALESCE(recovery_recorded_at, clock_timestamp())
-						ELSE recovery_recorded_at
-					END,
-					updated_at = clock_timestamp()
-				WHERE organization_id = $1 AND intent_id = $2`,
-				[input.organizationId, input.intentId, nextState, nextGen, nextResult],
-			);
-			await appendExecutionEventTx(tx, this.schema, {
-				organizationId: input.organizationId,
-				intentId: input.intentId,
-				generation: nextGen,
-				eventType: "paid_order_observed",
-				evidence: { shopifyOrderGid: input.shopifyOrderGid },
-			});
-		});
+		await sql.begin((tx) => observeExecutionPaymentTx(tx, this.schema, input));
 	}
 
 	async recordApplicationExpiry(input: {
@@ -354,57 +239,7 @@ export class PostgresClassCheckoutExecutionRepository
 		intentId: string;
 		expectedGeneration: number;
 	}): Promise<ClassCheckoutExecution | null> {
-		return sql.begin(async (tx) => {
-			await advisoryLockExecutionTx(tx, input.organizationId, input.intentId);
-			const expired = (await tx.unsafe(
-				`SELECT 1 FROM ${this.schema}.checkout_intents
-				WHERE organization_id = $1 AND id = $2
-					AND expires_at <= clock_timestamp()
-					AND status NOT IN ('approved', 'rejected', 'needs_review', 'superseded')`,
-				[input.organizationId, input.intentId],
-			)) as unknown[];
-			if (expired.length === 0) return null;
-			const row = await selectExecutionRow(
-				tx,
-				this.schema,
-				input.organizationId,
-				input.intentId,
-				true,
-			);
-			if (!row) return null;
-			const exec = rowToExecution(row);
-			if (exec.generation !== input.expectedGeneration) return null;
-			if (exec.state === "recovery_required") return exec;
-			if (
-				!["ready", "retryable", "completed"].includes(exec.state) ||
-				!["attached", "remote_cart_known"].includes(exec.checkpoint)
-			) {
-				return null;
-			}
-			const nextGen = exec.generation + 1;
-			const rows = (await tx.unsafe(
-				`UPDATE ${this.schema}.class_checkout_executions
-				SET state = 'recovery_required',
-					generation = $3,
-					lease_owner = NULL,
-					lease_expires_at = NULL,
-					result_code = 'checkout_expired',
-					recovery_recorded_at = COALESCE(recovery_recorded_at, clock_timestamp()),
-					updated_at = clock_timestamp()
-				WHERE organization_id = $1 AND intent_id = $2
-				RETURNING *, lease_expires_at::text, recovery_recorded_at::text,
-					created_at::text, updated_at::text`,
-				[input.organizationId, input.intentId, nextGen],
-			)) as Record<string, unknown>[];
-			await appendExecutionEventTx(tx, this.schema, {
-				organizationId: input.organizationId,
-				intentId: input.intentId,
-				generation: nextGen,
-				eventType: "application_checkout_expired",
-				evidence: { stage: exec.checkpoint, code: "checkout_expired" },
-			});
-			return rows[0] ? rowToExecution(rows[0]) : null;
-		});
+		return sql.begin((tx) => recordApplicationExpiryTx(tx, this.schema, input));
 	}
 }
 

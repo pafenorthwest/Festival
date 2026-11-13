@@ -4,7 +4,6 @@ import {
 	assertSafeExecutionSnapshot,
 	computeRecoveryReference,
 	executionClaimMatches,
-	isBlockingExecution,
 	rowToExecution,
 } from "./checkout-execution-helpers.js";
 import type {
@@ -150,6 +149,28 @@ export async function prepareExecutionTx(
 	return value;
 }
 
+function isClaimableExecution(
+	current: ClassCheckoutExecution,
+	nowIso: string,
+	allowCompleted?: boolean,
+): boolean {
+	if (current.state === "rejected" || current.state === "recovery_required") {
+		return false;
+	}
+	if (
+		current.state === "completed" &&
+		!(allowCompleted && current.checkpoint === "attached")
+	) {
+		return false;
+	}
+	if (current.leaseExpiresAtIso && current.leaseExpiresAtIso > nowIso) {
+		return false;
+	}
+	return !(
+		current.state === "running" && current.checkpoint === "create_dispatched"
+	);
+}
+
 export async function claimExecutionTx(
 	tx: SqlRunner,
 	schema: string,
@@ -183,16 +204,7 @@ export async function claimExecutionTx(
 	if (!row) return null;
 	const current = rowToExecution(row);
 	const nowIso = await dbClockNowIso(tx);
-	if (
-		current.state === "rejected" ||
-		current.state === "recovery_required" ||
-		(current.state === "completed" &&
-			!(input.allowCompleted && current.checkpoint === "attached")) ||
-		(current.leaseExpiresAtIso && current.leaseExpiresAtIso > nowIso) ||
-		(current.state === "running" && current.checkpoint === "create_dispatched")
-	) {
-		return null;
-	}
+	if (!isClaimableExecution(current, nowIso, input.allowCompleted)) return null;
 	const blockingRow = await findBlockingRowTx(
 		tx,
 		schema,
@@ -225,62 +237,33 @@ export async function findBlockingRowTx(
 	customerId: string,
 	excludeIntentId?: string,
 ): Promise<Record<string, unknown> | null> {
-	const rows = (
-		excludeIntentId
-			? await runner.unsafe(
-					`SELECT e.*, e.lease_expires_at::text, e.recovery_recorded_at::text,
-						e.created_at::text, e.updated_at::text
-					FROM ${schema}.class_checkout_executions e
-					JOIN ${schema}.checkout_intents i
-						ON i.id = e.intent_id AND i.organization_id = e.organization_id
-					WHERE e.organization_id = $1
-						AND e.customer_id = $2
-						AND e.intent_id <> $3
-						AND i.status NOT IN ('approved', 'rejected', 'needs_review', 'superseded')
-						AND (
-							e.state = 'recovery_required'
-							OR (e.state = 'running' AND e.lease_expires_at > clock_timestamp())
-							OR (
-								e.checkpoint IN ('create_dispatched', 'remote_cart_known')
-								AND e.state NOT IN ('completed', 'rejected')
-							)
-							OR (
-								e.checkpoint = 'attached'
-								AND e.state IN ('ready', 'retryable', 'completed')
-								AND i.expires_at <= clock_timestamp()
-							)
-						)
-					ORDER BY e.created_at DESC
-					LIMIT 1`,
-					[organizationId, customerId, excludeIntentId],
+	const rows = (await runner.unsafe(
+		`SELECT e.*, e.lease_expires_at::text, e.recovery_recorded_at::text,
+			e.created_at::text, e.updated_at::text
+		FROM ${schema}.class_checkout_executions e
+		JOIN ${schema}.checkout_intents i
+			ON i.id = e.intent_id AND i.organization_id = e.organization_id
+		WHERE e.organization_id = $1
+			AND e.customer_id = $2
+			AND ($3::text IS NULL OR e.intent_id <> $3)
+			AND i.status NOT IN ('approved', 'rejected', 'needs_review', 'superseded')
+			AND (
+				e.state = 'recovery_required'
+				OR (e.state = 'running' AND e.lease_expires_at > clock_timestamp())
+				OR (
+					e.checkpoint IN ('create_dispatched', 'remote_cart_known')
+					AND e.state NOT IN ('completed', 'rejected')
 				)
-			: await runner.unsafe(
-					`SELECT e.*, e.lease_expires_at::text, e.recovery_recorded_at::text,
-						e.created_at::text, e.updated_at::text
-					FROM ${schema}.class_checkout_executions e
-					JOIN ${schema}.checkout_intents i
-						ON i.id = e.intent_id AND i.organization_id = e.organization_id
-					WHERE e.organization_id = $1
-						AND e.customer_id = $2
-						AND i.status NOT IN ('approved', 'rejected', 'needs_review', 'superseded')
-						AND (
-							e.state = 'recovery_required'
-							OR (e.state = 'running' AND e.lease_expires_at > clock_timestamp())
-							OR (
-								e.checkpoint IN ('create_dispatched', 'remote_cart_known')
-								AND e.state NOT IN ('completed', 'rejected')
-							)
-							OR (
-								e.checkpoint = 'attached'
-								AND e.state IN ('ready', 'retryable', 'completed')
-								AND i.expires_at <= clock_timestamp()
-							)
-						)
-					ORDER BY e.created_at DESC
-					LIMIT 1`,
-					[organizationId, customerId],
+				OR (
+					e.checkpoint = 'attached'
+					AND e.state IN ('ready', 'retryable', 'completed')
+					AND i.expires_at <= clock_timestamp()
 				)
-	) as Record<string, unknown>[];
+			)
+		ORDER BY e.created_at DESC
+		LIMIT 1`,
+		[organizationId, customerId, excludeIntentId ?? null],
+	)) as Record<string, unknown>[];
 	return rows[0] ?? null;
 }
 
@@ -299,51 +282,16 @@ export async function findBlockingExecutionQuery(
 	return row ? rowToExecution(row) : null;
 }
 
-export async function transitionExecutionTx(
+async function persistExecutionTransitionTx(
 	tx: SqlRunner,
 	schema: string,
+	current: ClassCheckoutExecution,
 	input: TransitionClassCheckoutExecution,
-): Promise<boolean> {
-	await advisoryLockExecutionTx(
-		tx,
-		input.claim.organizationId,
-		input.claim.intentId,
-	);
-	const row = await selectExecutionRow(
-		tx,
-		schema,
-		input.claim.organizationId,
-		input.claim.intentId,
-		true,
-	);
-	if (!row) return false;
-	const current = rowToExecution(row);
-	const nowIso = await dbClockNowIso(tx);
-	if (!executionClaimMatches(current, input.claim, nowIso)) {
-		return false;
-	}
-	if (input.state === "rejected" && current.checkpoint !== "prepared") {
-		throw new Error(
-			"An externally dispatched checkout requires audited recovery.",
-		);
-	}
+): Promise<ClassCheckoutExecutionState> {
 	const nextCheckpoint: ClassCheckoutCheckpoint =
 		input.checkpoint ?? current.checkpoint;
 	const nextState: ClassCheckoutExecutionState = input.state ?? current.state;
 	const releaseLease = input.releaseLease || nextState !== "running";
-	const nextLeaseOwner = releaseLease ? null : current.leaseOwner;
-	const nextLeaseExpiresAt = releaseLease ? null : current.leaseExpiresAtIso;
-	const nextCartId =
-		input.shopifyCartId !== undefined
-			? input.shopifyCartId
-			: current.shopifyCartId;
-	const nextBinding =
-		input.storefrontBinding !== undefined
-			? input.storefrontBinding
-			: current.storefrontBinding;
-	const nextResultCode =
-		input.resultCode !== undefined ? input.resultCode : current.resultCode;
-
 	await tx.unsafe(
 		`UPDATE ${schema}.class_checkout_executions
 		SET checkpoint = $3,
@@ -365,12 +313,52 @@ export async function transitionExecutionTx(
 			input.claim.intentId,
 			nextCheckpoint,
 			nextState,
-			nextLeaseOwner,
-			nextLeaseExpiresAt,
-			nextCartId,
-			nextBinding ?? null,
-			nextResultCode,
+			releaseLease ? null : current.leaseOwner,
+			releaseLease ? null : current.leaseExpiresAtIso,
+			input.shopifyCartId !== undefined
+				? input.shopifyCartId
+				: current.shopifyCartId,
+			(input.storefrontBinding !== undefined
+				? input.storefrontBinding
+				: current.storefrontBinding) ?? null,
+			input.resultCode !== undefined ? input.resultCode : current.resultCode,
 		],
+	);
+	return nextState;
+}
+
+export async function transitionExecutionTx(
+	tx: SqlRunner,
+	schema: string,
+	input: TransitionClassCheckoutExecution,
+): Promise<boolean> {
+	await advisoryLockExecutionTx(
+		tx,
+		input.claim.organizationId,
+		input.claim.intentId,
+	);
+	const row = await selectExecutionRow(
+		tx,
+		schema,
+		input.claim.organizationId,
+		input.claim.intentId,
+		true,
+	);
+	if (!row) return false;
+	const current = rowToExecution(row);
+	if (!executionClaimMatches(current, input.claim, await dbClockNowIso(tx))) {
+		return false;
+	}
+	if (input.state === "rejected" && current.checkpoint !== "prepared") {
+		throw new Error(
+			"An externally dispatched checkout requires audited recovery.",
+		);
+	}
+	const nextState = await persistExecutionTransitionTx(
+		tx,
+		schema,
+		current,
+		input,
 	);
 	if (nextState === "rejected") {
 		await tx.unsafe(

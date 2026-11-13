@@ -85,6 +85,44 @@ export interface ClassCheckoutFailureLineDetail {
 	placedCount?: number;
 }
 
+type CapacityClassConfig = {
+	id: string;
+	organizationId: string;
+	festivalId: string;
+	isActive: boolean;
+	capacity: number;
+};
+
+function collectClassCapacityFailures(
+	organizationId: string,
+	festivalId: string,
+	freshClass: CapacityClassConfig | null,
+	placedCount: number,
+	matchingLines: ReadonlyArray<{ childId: string; festivalClassId: string }>,
+): ClassCheckoutFailureLineDetail[] {
+	if (
+		freshClass?.isActive &&
+		freshClass.organizationId === organizationId &&
+		freshClass.festivalId === festivalId &&
+		freshClass.capacity > 0 &&
+		placedCount + matchingLines.length <= freshClass.capacity
+	) {
+		return [];
+	}
+	const capacity = freshClass?.capacity ?? 0;
+	const reason = !freshClass?.isActive
+		? "Class is no longer available and is in waitlist state."
+		: `Class has reached capacity (${placedCount}/${capacity}) and is in waitlist state.`;
+	return matchingLines.map((line) => ({
+		childId: line.childId,
+		festivalClassId: line.festivalClassId,
+		code: "class_at_capacity",
+		reason,
+		capacity,
+		placedCount,
+	}));
+}
+
 export async function verifyPostCartCreateCapacityCutoff(params: {
 	organizationId: string;
 	festivalId: string;
@@ -94,15 +132,7 @@ export async function verifyPostCartCreateCapacityCutoff(params: {
 			organizationId: string,
 			festivalId: string,
 			classIds: string[],
-		): Promise<
-			Array<{
-				id: string;
-				organizationId: string;
-				festivalId: string;
-				isActive: boolean;
-				capacity: number;
-			}>
-		>;
+		): Promise<CapacityClassConfig[]>;
 	};
 	countConfirmedEntitlements?: (
 		organizationId: string,
@@ -122,35 +152,21 @@ export async function verifyPostCartCreateCapacityCutoff(params: {
 	const failures: ClassCheckoutFailureLineDetail[] = [];
 
 	for (const classId of distinctClassIds) {
-		const freshClass = classMap.get(classId) ?? null;
 		const placedCount = params.countConfirmedEntitlements
 			? await params.countConfirmedEntitlements(params.organizationId, classId)
 			: 0;
 		const matchingLines = params.lines.filter(
 			(l) => l.festivalClassId === classId,
 		);
-		if (
-			!freshClass?.isActive ||
-			freshClass.organizationId !== params.organizationId ||
-			freshClass.festivalId !== params.festivalId ||
-			freshClass.capacity <= 0 ||
-			placedCount + matchingLines.length > freshClass.capacity
-		) {
-			const capacity = freshClass?.capacity ?? 0;
-			const reason = !freshClass?.isActive
-				? "Class is no longer available and is in waitlist state."
-				: `Class has reached capacity (${placedCount}/${capacity}) and is in waitlist state.`;
-			for (const line of matchingLines) {
-				failures.push({
-					childId: line.childId,
-					festivalClassId: line.festivalClassId,
-					code: "class_at_capacity",
-					reason,
-					capacity,
-					placedCount,
-				});
-			}
-		}
+		failures.push(
+			...collectClassCapacityFailures(
+				params.organizationId,
+				params.festivalId,
+				classMap.get(classId) ?? null,
+				placedCount,
+				matchingLines,
+			),
+		);
 	}
 	if (failures.length === 0) return null;
 	const waitlistedClassIds = [

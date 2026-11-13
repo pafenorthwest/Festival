@@ -2,8 +2,6 @@ import { randomUUID } from "node:crypto";
 import type {
 	RefundEvent,
 	RefundEventStatus,
-	RegistrationActorRole,
-	RegistrationChangeAction,
 	RegistrationChangeLog,
 } from "@festival/common";
 import {

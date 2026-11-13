@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
+	assertExecutionFingerprint,
+	assertSafeExecutionSnapshot,
+	type ClassCheckoutClaim,
 	type ClassCheckoutEvidence,
 	type ClassCheckoutExecution,
 	type ClassCheckoutExecutionEvent,
@@ -8,6 +11,7 @@ import {
 	type FindUnissuedInvalidCartRestartInput,
 	type InMemoryClassCheckoutRestartLookup,
 	isBlockingExecution,
+	type PrepareClassCheckoutExecution,
 	type ResolveClassCheckoutExecution,
 	type RestartUnissuedInvalidCartInput,
 	resolvedExecution,
@@ -378,4 +382,84 @@ export function shouldExecutionBlock(
 		["ready", "retryable", "completed"].includes(value.state) &&
 		Boolean(expires && expires <= store.now().toISOString())
 	);
+}
+
+export function markInMemoryAttached(
+	store: InMemoryExecutionStore,
+	claim: ClassCheckoutClaim,
+): boolean {
+	const value = store.records.get(
+		execKey(claim.organizationId, claim.intentId),
+	);
+	if (
+		!value ||
+		!executionClaimMatches(value, claim, store.now().toISOString())
+	) {
+		return false;
+	}
+	value.checkpoint = "attached";
+	value.updatedAtIso = store.now().toISOString();
+	store.appendEvent(value, "cart_attached");
+	return true;
+}
+
+export function prepareInMemoryExecution(
+	store: InMemoryExecutionStore,
+	input: PrepareClassCheckoutExecution,
+): ClassCheckoutExecution {
+	assertSafeExecutionSnapshot(input.requestSnapshot);
+	const existing = store.records.get(
+		execKey(input.organizationId, input.intentId),
+	);
+	if (existing) {
+		assertExecutionFingerprint(existing, input.fingerprint);
+		return structuredClone(existing);
+	}
+	const now = store.now().toISOString();
+	const value: ClassCheckoutExecution = {
+		...structuredClone(input),
+		storefrontBinding: null,
+		state: "ready",
+		checkpoint: "prepared",
+		generation: 0,
+		leaseOwner: null,
+		leaseExpiresAtIso: null,
+		shopifyCartId: null,
+		resultCode: null,
+		recoveryReference: randomUUID(),
+		recoveryRecordedAtIso: null,
+		createdAtIso: now,
+		updatedAtIso: now,
+	};
+	store.records.set(execKey(input.organizationId, input.intentId), value);
+	store.appendEvent(value, "prepared");
+	return structuredClone(value);
+}
+
+export function observeInMemoryPayment(
+	store: InMemoryExecutionStore,
+	input: {
+		organizationId: string;
+		intentId: string;
+		shopifyOrderGid: string;
+		approved: boolean;
+	},
+): void {
+	const value = store.records.get(
+		execKey(input.organizationId, input.intentId),
+	);
+	if (!value) return;
+	value.generation++;
+	value.leaseOwner = null;
+	value.leaseExpiresAtIso = null;
+	if (input.approved) value.state = "completed";
+	else if (value.state !== "rejected") {
+		value.state = "recovery_required";
+		value.recoveryRecordedAtIso ??= store.now().toISOString();
+		value.resultCode = "paid_order_requires_review";
+	}
+	value.updatedAtIso = store.now().toISOString();
+	store.appendEvent(value, "paid_order_observed", {
+		shopifyOrderGid: input.shopifyOrderGid,
+	});
 }

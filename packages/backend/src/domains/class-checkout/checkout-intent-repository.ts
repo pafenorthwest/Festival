@@ -9,21 +9,22 @@ import { initializePostgresSchema } from "../../infra/s11-infra.js";
 import { PostgresClassCheckoutExecutionRepository } from "./checkout-execution-repository.js";
 import type { ClassCheckoutClaim } from "./checkout-execution-types.js";
 import {
-	type CheckoutIntentRow,
-	ensureIntentLines,
-	mapCheckoutCartRow,
-	mapCheckoutIntentRow,
 	resolveExistingOutcome,
 	validateCheckoutSchemaName,
 } from "./checkout-intent-helpers.js";
 import {
 	attachCartTx,
 	createIntentTx,
-	INTENT_COLUMNS,
+	findIntentByCorrelationQuery,
+	findIntentByIdQuery,
+	getCartQuery,
+	hasActiveProcessingIntentQuery,
 	loadCartByReference,
-	loadIntentLines,
+	markCheckoutStartedTx,
+	markIntentFailedQuery,
 	queryIntentByKey,
 	queryReplayState,
+	resolveIntentQuery,
 } from "./checkout-intent-queries.js";
 import type {
 	CheckoutCartRecord,
@@ -123,35 +124,11 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 	}
 
 	async markCheckoutStarted(intentId: string): Promise<void> {
-		await sql.begin(async (tx) => {
-			const updated = (await tx.unsafe(
-				`UPDATE ${this.schema}.checkout_intents
-				SET status = 'checkout_started'
-				WHERE id = $1 AND status = 'ready'
-				RETURNING cart_reference`,
-				[intentId],
-			)) as Array<{ cart_reference: string | null }>;
-			if (updated.length === 0) {
-				throw new Error("Checkout intent is not ready.");
-			}
-			if (updated[0].cart_reference) {
-				await tx.unsafe(
-					`UPDATE ${this.schema}.checkout_carts
-					SET status = 'checkout_started'
-					WHERE reference = $1`,
-					[updated[0].cart_reference],
-				);
-			}
-		});
+		await sql.begin((tx) => markCheckoutStartedTx(tx, this.schema, intentId));
 	}
 
 	async markFailed(intentId: string): Promise<void> {
-		await sql.unsafe(
-			`UPDATE ${this.schema}.checkout_intents
-			SET status = 'failed'
-			WHERE id = $1 AND status IN ('creating', 'ready')`,
-			[intentId],
-		);
+		await markIntentFailedQuery(sql, this.schema, intentId);
 	}
 
 	async markIntentFailed(input: {
@@ -167,32 +144,26 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 		customerId: string,
 		nowIso: string,
 	): Promise<CheckoutCartRecord | null> {
-		const rows = (await sql.unsafe(
-			`SELECT reference, shopify_cart_id, organization_id, customer_id,
-				session_id, integration_version, status, expires_at::text, created_at::text
-			FROM ${this.schema}.checkout_carts
-			WHERE reference = $1
-				AND organization_id = $2
-				AND customer_id = $3
-				AND expires_at > $4::timestamptz`,
-			[reference, organizationId, customerId, nowIso],
-		)) as Array<Parameters<typeof mapCheckoutCartRow>[0]>;
-		return rows[0] ? mapCheckoutCartRow(rows[0]) : null;
+		return getCartQuery(
+			sql,
+			this.schema,
+			reference,
+			organizationId,
+			customerId,
+			nowIso,
+		);
 	}
 
 	async findIntentByCorrelation(
 		organizationId: string,
 		correlationId: string,
 	): Promise<CheckoutIntentRecord | null> {
-		const rows = (await sql.unsafe(
-			`SELECT ${INTENT_COLUMNS}
-			FROM ${this.schema}.checkout_intents
-			WHERE organization_id = $1 AND correlation_id = $2`,
-			[organizationId, correlationId],
-		)) as CheckoutIntentRow[];
-		if (!rows[0]) return null;
-		const lines = await loadIntentLines(sql, this.schema, rows[0].id);
-		return ensureIntentLines(mapCheckoutIntentRow(rows[0], lines));
+		return findIntentByCorrelationQuery(
+			sql,
+			this.schema,
+			organizationId,
+			correlationId,
+		);
 	}
 
 	async findIntentByCorrelationId(
@@ -206,15 +177,7 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 		organizationId: string,
 		intentId: string,
 	): Promise<CheckoutIntentRecord | null> {
-		const rows = (await sql.unsafe(
-			`SELECT ${INTENT_COLUMNS}
-			FROM ${this.schema}.checkout_intents
-			WHERE organization_id = $1 AND id = $2`,
-			[organizationId, intentId],
-		)) as CheckoutIntentRow[];
-		if (!rows[0]) return null;
-		const lines = await loadIntentLines(sql, this.schema, rows[0].id);
-		return ensureIntentLines(mapCheckoutIntentRow(rows[0], lines));
+		return findIntentByIdQuery(sql, this.schema, organizationId, intentId);
 	}
 
 	async getClassCheckoutReplayState(
@@ -236,28 +199,20 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 		) {
 			return true;
 		}
-		const rows = (await sql.unsafe(
-			`SELECT id FROM ${this.schema}.checkout_intents
-			WHERE organization_id = $1
-				AND customer_id = $2
-				AND expires_at > $3::timestamptz
-				AND status IN ('creating', 'ready', 'checkout_started')
-			LIMIT 1`,
-			[organizationId, customerId, nowIso],
-		)) as Record<string, unknown>[];
-		return rows.length > 0;
+		return hasActiveProcessingIntentQuery(
+			sql,
+			this.schema,
+			organizationId,
+			customerId,
+			nowIso,
+		);
 	}
 
 	async resolveIntent(
 		intentId: string,
 		resolution: "approved" | "rejected" | "needs_review",
 	): Promise<void> {
-		await sql.unsafe(
-			`UPDATE ${this.schema}.checkout_intents
-			SET status = $2
-			WHERE id = $1`,
-			[intentId, resolution],
-		);
+		await resolveIntentQuery(sql, this.schema, intentId, resolution);
 	}
 
 	async insertRegistrationMetadata(params: {

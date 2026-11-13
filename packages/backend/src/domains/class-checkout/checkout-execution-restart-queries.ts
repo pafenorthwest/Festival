@@ -19,29 +19,12 @@ import type {
 } from "./checkout-execution-types.js";
 import type { SqlRunner } from "./registration-metadata-queries.js";
 
-export async function resolveExecutionTx(
+async function persistResolvedExecutionTx(
 	tx: SqlRunner,
 	schema: string,
 	input: ResolveClassCheckoutExecution,
-): Promise<ClassCheckoutExecution | null> {
-	await advisoryLockExecutionTx(tx, input.organizationId, input.intentId);
-	const paid = (await tx.unsafe(
-		`SELECT 1 FROM ${schema}.checkout_intents
-		WHERE id = $1 AND organization_id = $2
-			AND status IN ('approved', 'rejected', 'needs_review')`,
-		[input.intentId, input.organizationId],
-	)) as unknown[];
-	if (paid.length > 0) return null;
-	const row = await selectExecutionRow(
-		tx,
-		schema,
-		input.organizationId,
-		input.intentId,
-		true,
-	);
-	if (!row) return null;
-	const updated = resolvedExecution(rowToExecution(row), input);
-	if (!updated) return null;
+	updated: ClassCheckoutExecution,
+): Promise<ClassCheckoutExecution> {
 	const rows = (await tx.unsafe(
 		`UPDATE ${schema}.class_checkout_executions
 		SET state = $3,
@@ -89,6 +72,32 @@ export async function resolveExecutionTx(
 		},
 	});
 	return rows[0] ? rowToExecution(rows[0]) : updated;
+}
+
+export async function resolveExecutionTx(
+	tx: SqlRunner,
+	schema: string,
+	input: ResolveClassCheckoutExecution,
+): Promise<ClassCheckoutExecution | null> {
+	await advisoryLockExecutionTx(tx, input.organizationId, input.intentId);
+	const paid = (await tx.unsafe(
+		`SELECT 1 FROM ${schema}.checkout_intents
+		WHERE id = $1 AND organization_id = $2
+			AND status IN ('approved', 'rejected', 'needs_review')`,
+		[input.intentId, input.organizationId],
+	)) as unknown[];
+	if (paid.length > 0) return null;
+	const row = await selectExecutionRow(
+		tx,
+		schema,
+		input.organizationId,
+		input.intentId,
+		true,
+	);
+	if (!row) return null;
+	const updated = resolvedExecution(rowToExecution(row), input);
+	if (!updated) return null;
+	return persistResolvedExecutionTx(tx, schema, input, updated);
 }
 
 async function evaluateRestartCandidateTx(
@@ -184,36 +193,12 @@ async function isReplacementIntentClosedQuery(
 	return rows.length > 0;
 }
 
-export async function restartUnissuedInvalidCartTx(
+async function applyUnissuedRestartUpdatesTx(
 	tx: SqlRunner,
 	schema: string,
 	input: RestartUnissuedInvalidCartInput,
-): Promise<{ replacementKey: string } | null> {
-	await tx.unsafe("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
-		`${input.organizationId}:${input.customerId}`,
-	]);
-	await advisoryLockExecutionTx(tx, input.organizationId, input.intentId);
-	const execRow = await selectExecutionRow(
-		tx,
-		schema,
-		input.organizationId,
-		input.intentId,
-		true,
-	);
-	if (!execRow) return null;
-	const exec = rowToExecution(execRow);
-	if (exec.customerId !== input.customerId) return null;
-	const candidate = await evaluateRestartCandidateTx(tx, schema, exec, true);
-	if (!candidate) return null;
-	if (candidate.decision !== "restartable") {
-		const closed = await isReplacementIntentClosedQuery(
-			tx,
-			schema,
-			exec,
-			candidate.decision.replacementKey,
-		);
-		return closed ? null : candidate.decision;
-	}
+	exec: ClassCheckoutExecution,
+): Promise<{ replacementKey: string }> {
 	const replacementKey = `restart_${createHash("sha256")
 		.update(`${input.organizationId}:${input.intentId}:${exec.generation}`)
 		.digest("hex")
@@ -251,12 +236,45 @@ export async function restartUnissuedInvalidCartTx(
 	return { replacementKey };
 }
 
-export async function findUnissuedInvalidCartRestartQuery(
+export async function restartUnissuedInvalidCartTx(
+	tx: SqlRunner,
+	schema: string,
+	input: RestartUnissuedInvalidCartInput,
+): Promise<{ replacementKey: string } | null> {
+	await tx.unsafe("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+		`${input.organizationId}:${input.customerId}`,
+	]);
+	await advisoryLockExecutionTx(tx, input.organizationId, input.intentId);
+	const execRow = await selectExecutionRow(
+		tx,
+		schema,
+		input.organizationId,
+		input.intentId,
+		true,
+	);
+	if (!execRow) return null;
+	const exec = rowToExecution(execRow);
+	if (exec.customerId !== input.customerId) return null;
+	const candidate = await evaluateRestartCandidateTx(tx, schema, exec, true);
+	if (!candidate) return null;
+	if (candidate.decision !== "restartable") {
+		const closed = await isReplacementIntentClosedQuery(
+			tx,
+			schema,
+			exec,
+			candidate.decision.replacementKey,
+		);
+		return closed ? null : candidate.decision;
+	}
+	return applyUnissuedRestartUpdatesTx(tx, schema, input, exec);
+}
+
+async function queryRestartCandidateExecutions(
 	runner: SqlRunner,
 	schema: string,
 	input: FindUnissuedInvalidCartRestartInput,
-): Promise<ClassCheckoutExecution | null> {
-	const rows = (await runner.unsafe(
+): Promise<Record<string, unknown>[]> {
+	return (await runner.unsafe(
 		`SELECT e.*, e.lease_expires_at::text, e.recovery_recorded_at::text,
 			e.created_at::text, e.updated_at::text
 		FROM ${schema}.class_checkout_executions e
@@ -284,6 +302,61 @@ export async function findUnissuedInvalidCartRestartQuery(
 		ORDER BY (i.status = 'creating') DESC, i.created_at DESC, i.id`,
 		[input.organizationId, input.customerId, input.festivalShortName],
 	)) as Record<string, unknown>[];
+}
+
+async function hasNewerFestivalCheckoutQuery(
+	runner: SqlRunner,
+	schema: string,
+	input: FindUnissuedInvalidCartRestartInput,
+	intentId: string,
+	createdAt: string,
+	replacementKey: string,
+): Promise<boolean> {
+	const newer = (await runner.unsafe(
+		`SELECT 1 FROM ${schema}.checkout_intents intent
+		LEFT JOIN ${schema}.class_checkout_executions execution
+			ON execution.intent_id = intent.id
+			AND execution.organization_id = intent.organization_id
+		LEFT JOIN ${schema}.festival_class_configurations cfg
+			ON cfg.id = intent.festival_class_id
+			AND cfg.organization_id = intent.organization_id
+		LEFT JOIN ${schema}.festivals festival
+			ON festival.id = cfg.festival_id
+			AND festival.organization_id = cfg.organization_id
+		WHERE intent.organization_id = $1
+			AND intent.customer_id = $2
+			AND intent.id <> $3
+			AND intent.intent_type = 'class_entry'
+			AND intent.idempotency_key <> $6
+			AND intent.created_at > $4::timestamptz
+			AND (
+				lower((
+					CASE jsonb_typeof(execution.request_snapshot)
+						WHEN 'string' THEN (execution.request_snapshot #>> '{}')::jsonb
+						ELSE execution.request_snapshot
+					END
+				) ->> 'festivalShortName') = lower($5)
+				OR lower(festival.short_name) = lower($5)
+			)
+		LIMIT 1`,
+		[
+			input.organizationId,
+			input.customerId,
+			intentId,
+			createdAt,
+			input.festivalShortName,
+			replacementKey,
+		],
+	)) as unknown[];
+	return newer.length > 0;
+}
+
+export async function findUnissuedInvalidCartRestartQuery(
+	runner: SqlRunner,
+	schema: string,
+	input: FindUnissuedInvalidCartRestartInput,
+): Promise<ClassCheckoutExecution | null> {
+	const rows = await queryRestartCandidateExecutions(runner, schema, input);
 	for (const row of rows) {
 		const value = rowToExecution(row);
 		const candidate = await evaluateRestartCandidateTx(
@@ -304,43 +377,18 @@ export async function findUnissuedInvalidCartRestartQuery(
 		) {
 			continue;
 		}
-		const newer = (await runner.unsafe(
-			`SELECT 1 FROM ${schema}.checkout_intents intent
-			LEFT JOIN ${schema}.class_checkout_executions execution
-				ON execution.intent_id = intent.id
-				AND execution.organization_id = intent.organization_id
-			LEFT JOIN ${schema}.festival_class_configurations cfg
-				ON cfg.id = intent.festival_class_id
-				AND cfg.organization_id = intent.organization_id
-			LEFT JOIN ${schema}.festivals festival
-				ON festival.id = cfg.festival_id
-				AND festival.organization_id = cfg.organization_id
-			WHERE intent.organization_id = $1
-				AND intent.customer_id = $2
-				AND intent.id <> $3
-				AND intent.intent_type = 'class_entry'
-				AND intent.idempotency_key <> $6
-				AND intent.created_at > $4::timestamptz
-				AND (
-					lower((
-						CASE jsonb_typeof(execution.request_snapshot)
-							WHEN 'string' THEN (execution.request_snapshot #>> '{}')::jsonb
-							ELSE execution.request_snapshot
-						END
-					) ->> 'festivalShortName') = lower($5)
-					OR lower(festival.short_name) = lower($5)
-				)
-			LIMIT 1`,
-			[
-				input.organizationId,
-				input.customerId,
+		if (
+			!(await hasNewerFestivalCheckoutQuery(
+				runner,
+				schema,
+				input,
 				value.intentId,
 				candidate.createdAt,
-				input.festivalShortName,
 				candidate.decision.replacementKey,
-			],
-		)) as unknown[];
-		if (newer.length === 0) return value;
+			))
+		) {
+			return value;
+		}
 	}
 	return null;
 }

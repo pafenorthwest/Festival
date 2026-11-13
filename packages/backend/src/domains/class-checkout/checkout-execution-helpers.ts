@@ -123,16 +123,10 @@ export function unissuedInvalidCartRestartDecision(
 		: null;
 }
 
-export function resolvedExecution(
+function validateResolveExecutionInput(
 	value: ClassCheckoutExecution,
 	input: ResolveClassCheckoutExecution,
-): ClassCheckoutExecution | null {
-	if (
-		value.state !== "recovery_required" ||
-		value.generation !== input.expectedGeneration
-	) {
-		return null;
-	}
+): void {
 	if (
 		input.action === "resume_known_cart" &&
 		!(input.shopifyCartId || value.shopifyCartId)
@@ -165,7 +159,19 @@ export function resolvedExecution(
 			"checkout_recovery_evidence_required",
 		);
 	}
-	const nowIso = new Date().toISOString();
+}
+
+export function resolvedExecution(
+	value: ClassCheckoutExecution,
+	input: ResolveClassCheckoutExecution,
+): ClassCheckoutExecution | null {
+	if (
+		value.state !== "recovery_required" ||
+		value.generation !== input.expectedGeneration
+	) {
+		return null;
+	}
+	validateResolveExecutionInput(value, input);
 	const cartId =
 		input.action === "resume_known_cart"
 			? (input.shopifyCartId ?? value.shopifyCartId)
@@ -194,7 +200,7 @@ export function resolvedExecution(
 					? "abandoned_unknown"
 					: "checkout_abandoned"
 				: null,
-		updatedAtIso: nowIso,
+		updatedAtIso: new Date().toISOString(),
 	};
 }
 

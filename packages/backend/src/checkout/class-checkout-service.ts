@@ -74,12 +74,13 @@ function adaptStorefront(
 ): ClassCheckoutStorefrontPort {
 	return {
 		get inspectCart() {
-			return storefront.inspectCart
+			const inspectCart = storefront.inspectCart;
+			return inspectCart
 				? (
 						input: Parameters<
 							NonNullable<ClassCheckoutStorefrontPort["inspectCart"]>
 						>[0],
-					) => storefront.inspectCart!(input)
+					) => inspectCart(input)
 				: undefined;
 		},
 		createCart: (input) =>

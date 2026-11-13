@@ -236,14 +236,12 @@ export async function createIntentTx(
 	return insertIntentAndExecutionTx(tx, schema, input, intentType);
 }
 
-async function insertIntentAndExecutionTx(
+async function insertIntentRowTx(
 	tx: SqlRunner,
 	schema: string,
 	input: CreateCheckoutIntentInput,
 	intentType: string,
-): Promise<CheckoutIntentOutcome> {
-	const intentId = randomUUID();
-	const correlationId = randomUUID();
+): Promise<CheckoutIntentRecord> {
 	const lineProtocol =
 		input.lineIdentityProtocol !== undefined
 			? input.lineIdentityProtocol
@@ -263,8 +261,8 @@ async function insertIntentAndExecutionTx(
 			$13, $14, $15, $16, $17, $18, $19, $20, $21, 'creating', $22::timestamptz
 		) RETURNING ${INTENT_COLUMNS}`,
 		[
-			intentId,
-			correlationId,
+			randomUUID(),
+			randomUUID(),
 			input.organizationId,
 			input.customerId,
 			input.sessionId,
@@ -287,7 +285,16 @@ async function insertIntentAndExecutionTx(
 			input.expiresAtIso,
 		],
 	)) as CheckoutIntentRow[];
-	const intent = mapCheckoutIntentRow(inserted[0]);
+	return mapCheckoutIntentRow(inserted[0]);
+}
+
+async function insertIntentAndExecutionTx(
+	tx: SqlRunner,
+	schema: string,
+	input: CreateCheckoutIntentInput,
+	intentType: string,
+): Promise<CheckoutIntentOutcome> {
+	const intent = await insertIntentRowTx(tx, schema, input, intentType);
 	const lines = buildIntentLineRecords(intent, input.lines);
 	await insertIntentLinesTx(tx, schema, lines);
 	if (input.classExecution) {
@@ -299,6 +306,132 @@ async function insertIntentAndExecutionTx(
 		});
 	}
 	return { kind: "created", intent: { ...intent, lines } };
+}
+
+export async function markCheckoutStartedTx(
+	tx: SqlRunner,
+	schema: string,
+	intentId: string,
+): Promise<void> {
+	const updated = (await tx.unsafe(
+		`UPDATE ${schema}.checkout_intents
+		SET status = 'checkout_started'
+		WHERE id = $1 AND status = 'ready'
+		RETURNING cart_reference`,
+		[intentId],
+	)) as Array<{ cart_reference: string | null }>;
+	if (updated.length === 0) {
+		throw new Error("Checkout intent is not ready.");
+	}
+	if (updated[0].cart_reference) {
+		await tx.unsafe(
+			`UPDATE ${schema}.checkout_carts
+			SET status = 'checkout_started'
+			WHERE reference = $1`,
+			[updated[0].cart_reference],
+		);
+	}
+}
+
+export async function markIntentFailedQuery(
+	runner: SqlRunner,
+	schema: string,
+	intentId: string,
+): Promise<void> {
+	await runner.unsafe(
+		`UPDATE ${schema}.checkout_intents
+		SET status = 'failed'
+		WHERE id = $1 AND status IN ('creating', 'ready')`,
+		[intentId],
+	);
+}
+
+export async function getCartQuery(
+	runner: SqlRunner,
+	schema: string,
+	reference: string,
+	organizationId: string,
+	customerId: string,
+	nowIso: string,
+): Promise<CheckoutCartRecord | null> {
+	const rows = (await runner.unsafe(
+		`SELECT reference, shopify_cart_id, organization_id, customer_id,
+			session_id, integration_version, status, expires_at::text, created_at::text
+		FROM ${schema}.checkout_carts
+		WHERE reference = $1
+			AND organization_id = $2
+			AND customer_id = $3
+			AND expires_at > $4::timestamptz`,
+		[reference, organizationId, customerId, nowIso],
+	)) as CheckoutCartRow[];
+	return rows[0] ? mapCheckoutCartRow(rows[0]) : null;
+}
+
+export async function findIntentByCorrelationQuery(
+	runner: SqlRunner,
+	schema: string,
+	organizationId: string,
+	correlationId: string,
+): Promise<CheckoutIntentRecord | null> {
+	const rows = (await runner.unsafe(
+		`SELECT ${INTENT_COLUMNS}
+		FROM ${schema}.checkout_intents
+		WHERE organization_id = $1 AND correlation_id = $2`,
+		[organizationId, correlationId],
+	)) as CheckoutIntentRow[];
+	if (!rows[0]) return null;
+	const lines = await loadIntentLines(runner, schema, rows[0].id);
+	return ensureIntentLines(mapCheckoutIntentRow(rows[0], lines));
+}
+
+export async function findIntentByIdQuery(
+	runner: SqlRunner,
+	schema: string,
+	organizationId: string,
+	intentId: string,
+): Promise<CheckoutIntentRecord | null> {
+	const rows = (await runner.unsafe(
+		`SELECT ${INTENT_COLUMNS}
+		FROM ${schema}.checkout_intents
+		WHERE organization_id = $1 AND id = $2`,
+		[organizationId, intentId],
+	)) as CheckoutIntentRow[];
+	if (!rows[0]) return null;
+	const lines = await loadIntentLines(runner, schema, rows[0].id);
+	return ensureIntentLines(mapCheckoutIntentRow(rows[0], lines));
+}
+
+export async function hasActiveProcessingIntentQuery(
+	runner: SqlRunner,
+	schema: string,
+	organizationId: string,
+	customerId: string,
+	nowIso: string,
+): Promise<boolean> {
+	const rows = (await runner.unsafe(
+		`SELECT id FROM ${schema}.checkout_intents
+		WHERE organization_id = $1
+			AND customer_id = $2
+			AND expires_at > $3::timestamptz
+			AND status IN ('creating', 'ready', 'checkout_started')
+		LIMIT 1`,
+		[organizationId, customerId, nowIso],
+	)) as Record<string, unknown>[];
+	return rows.length > 0;
+}
+
+export async function resolveIntentQuery(
+	runner: SqlRunner,
+	schema: string,
+	intentId: string,
+	resolution: "approved" | "rejected" | "needs_review",
+): Promise<void> {
+	await runner.unsafe(
+		`UPDATE ${schema}.checkout_intents
+		SET status = $2
+		WHERE id = $1`,
+		[intentId, resolution],
+	);
 }
 
 export async function queryReplayState(

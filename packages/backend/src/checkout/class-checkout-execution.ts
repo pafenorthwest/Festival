@@ -1,13 +1,10 @@
 import { randomUUID } from "node:crypto";
 import {
-	assertExecutionFingerprint,
-	assertSafeExecutionSnapshot,
 	type ClassCheckoutClaim,
 	type ClassCheckoutEvidence,
 	type ClassCheckoutExecution,
 	type ClassCheckoutExecutionEvent,
 	type ClassCheckoutExecutionRepository,
-	executionClaimMatches,
 	type FindUnissuedInvalidCartRestartInput,
 	type InMemoryClassCheckoutRestartLookup,
 	lateEvidenceId,
@@ -26,6 +23,9 @@ import {
 	findUnissuedRestartInMemory,
 	type InMemoryExecutionStore,
 	isUnissuedReplacementBlockedInMemory,
+	markInMemoryAttached,
+	observeInMemoryPayment,
+	prepareInMemoryExecution,
 	reapInMemoryExpiredExecutions,
 	recordApplicationExpiryInMemory,
 	resolveInMemoryExecution,
@@ -119,19 +119,7 @@ export class InMemoryClassCheckoutExecutionRepository
 	}
 
 	markAttached(claim: ClassCheckoutClaim): boolean {
-		const value = this.records.get(
-			execKey(claim.organizationId, claim.intentId),
-		);
-		if (
-			!value ||
-			!executionClaimMatches(value, claim, this.now().toISOString())
-		) {
-			return false;
-		}
-		value.checkpoint = "attached";
-		value.updatedAtIso = this.now().toISOString();
-		this.event(value, "cart_attached");
-		return true;
+		return markInMemoryAttached(this.store(), claim);
 	}
 
 	async getByRecoveryReference(org: string, reference: string) {
@@ -144,33 +132,7 @@ export class InMemoryClassCheckoutExecutionRepository
 	}
 
 	async prepare(input: PrepareClassCheckoutExecution) {
-		assertSafeExecutionSnapshot(input.requestSnapshot);
-		const existing = this.records.get(
-			execKey(input.organizationId, input.intentId),
-		);
-		if (existing) {
-			assertExecutionFingerprint(existing, input.fingerprint);
-			return structuredClone(existing);
-		}
-		const now = this.now().toISOString();
-		const value: ClassCheckoutExecution = {
-			...structuredClone(input),
-			storefrontBinding: null,
-			state: "ready",
-			checkpoint: "prepared",
-			generation: 0,
-			leaseOwner: null,
-			leaseExpiresAtIso: null,
-			shopifyCartId: null,
-			resultCode: null,
-			recoveryReference: randomUUID(),
-			recoveryRecordedAtIso: null,
-			createdAtIso: now,
-			updatedAtIso: now,
-		};
-		this.records.set(execKey(input.organizationId, input.intentId), value);
-		this.event(value, "prepared");
-		return structuredClone(value);
+		return prepareInMemoryExecution(this.store(), input);
 	}
 
 	async claim(input: {
@@ -298,23 +260,7 @@ export class InMemoryClassCheckoutExecutionRepository
 		shopifyOrderGid: string;
 		approved: boolean;
 	}) {
-		const value = this.records.get(
-			execKey(input.organizationId, input.intentId),
-		);
-		if (!value) return;
-		value.generation++;
-		value.leaseOwner = null;
-		value.leaseExpiresAtIso = null;
-		if (input.approved) value.state = "completed";
-		else if (value.state !== "rejected") {
-			value.state = "recovery_required";
-			value.recoveryRecordedAtIso ??= this.now().toISOString();
-			value.resultCode = "paid_order_requires_review";
-		}
-		value.updatedAtIso = this.now().toISOString();
-		this.event(value, "paid_order_observed", {
-			shopifyOrderGid: input.shopifyOrderGid,
-		});
+		observeInMemoryPayment(this.store(), input);
 	}
 
 	async recordApplicationExpiry(input: {
