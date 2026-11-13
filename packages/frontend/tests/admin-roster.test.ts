@@ -4,13 +4,18 @@ import type { StaffMembershipRosterEntry } from "../src/lib/api.js";
 const read = (path: string) => Bun.file(new URL(path, import.meta.url)).text();
 
 describe("AdminRosterPage contract and rendering", () => {
-	it("defines StaffMembershipRosterEntry and listStaffRoster in api.ts", async () => {
-		const api = await read("../src/lib/api.ts");
+	it("defines StaffMembershipRosterEntry and listStaffRoster in api/org-admin.ts and common directory", async () => {
+		const api = await read("../src/lib/api/org-admin.ts");
+		const directorySchema = await read("../../common/src/directory.ts");
 
-		expect(api).toContain("export interface StaffMembershipRosterEntry");
-		expect(api).toContain('membershipType: "Teacher" | "Accompanist"');
+		expect(directorySchema).toContain(
+			"export interface StaffMembershipRosterEntry",
+		);
+		expect(directorySchema).toContain(
+			'membershipType: v.picklist(["Teacher", "Accompanist"])',
+		);
 		expect(api).toContain("export function listStaffRoster");
-		expect(api).toContain("/staff/accompanists");
+		expect(api).toContain(".staff.accompanists.$path");
 		expect(api).toContain("encodeURIComponent(slug)");
 	});
 

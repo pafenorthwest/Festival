@@ -31,7 +31,10 @@ const sideNavigation = await Bun.file(
 	new URL("../src/components/OrganizationSideNavigation.tsx", import.meta.url),
 ).text();
 const api = await Bun.file(
-	new URL("../src/lib/api.ts", import.meta.url),
+	new URL("../src/lib/api/customer.ts", import.meta.url),
+).text();
+const clientApi = await Bun.file(
+	new URL("../src/lib/api/client.ts", import.meta.url),
 ).text();
 
 describe("customer account frontend boundary", () => {
@@ -107,12 +110,17 @@ describe("customer account frontend boundary", () => {
 		expect(ordersPage).not.toMatch(
 			/firstName|lastName|emailAddress|phoneNumber|accessToken|refreshToken|idToken/,
 		);
-		expect(api).toContain('credentials: "include"');
-		expect(api).toContain("form.action = `/api/organizations/");
-		expect(api).toContain("/customer/logout`;");
-		expect(api).toContain("/customer/profile");
-		expect(api).toContain("/customer/membership-status");
-		expect(api).toContain('"X-CSRF-Token": csrfToken');
+		expect(clientApi).toContain('credentials: "include"');
+		expect(api).toContain("form.action =");
+		expect(api).toContain("apiPrefix(false)");
+		expect(api).toContain(
+			'customerRpc.organizations[":slug"].customer.logout.$path',
+		);
+		expect(api).toContain(
+			'customerRpc.organizations[":slug"].customer.profile.$path',
+		);
+		expect(api).toContain('"membership-status"');
+		expect(api).toContain('"X-CSRF-Token": options.csrfToken');
 	});
 
 	it("renders Festival membership states separately and bounds polling", () => {

@@ -4,14 +4,18 @@ const read = (path: string) => Bun.file(new URL(path, import.meta.url)).text();
 
 describe("admin rooms panel", () => {
 	it("exposes API helpers for listing and creating rooms, scoped to a festival", async () => {
-		const api = await read("../src/lib/api.ts");
+		const api = await read("../src/lib/api/catalog.ts");
+		const tenantSchema = await read("../../common/src/tenant.ts");
 
 		expect(api).toContain("export function listRooms");
 		expect(api).toContain("export function createRoom");
-		expect(api).toContain("pianoType: PianoType");
-		expect(api).toContain('"upright" | "grand"');
-		expect(api).toContain("encodeURIComponent(slug)");
-		expect(api).toContain("encodeURIComponent(festivalSlug)");
+		expect(api).toContain("input: CreateRoomInput");
+		expect(tenantSchema).toContain("pianoType: PianoTypeSchema");
+		expect(tenantSchema).toContain('"upright", "grand"');
+		expect(api).toContain("slug: encodeURIComponent(slug)");
+		expect(api).toContain(
+			"festivalShortName: encodeURIComponent(festivalSlug)",
+		);
 	});
 
 	it("wires the rooms route into the app shell and admin home page", async () => {

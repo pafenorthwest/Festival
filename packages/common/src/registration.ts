@@ -1,10 +1,54 @@
+import * as v from "valibot";
+import type {
+	CreateFestivalClassInput,
+	FestivalClassConfigurationDto,
+	UpdateFestivalClassInput,
+} from "./catalog.js";
 import type {
 	ClassEntitlement,
 	ClassEntitlementStatus,
 	RegistrationEligibleClass,
 } from "./entitlements.js";
+import {
+	type ClassEligibilityResult,
+	ELIGIBILITY_REASON_CODES,
+	type ProposedPurchaseLineItem,
+} from "./purchase-eligibility.js";
+import {
+	assertValidDropRegistrationInput,
+	assertValidTransferRegistrationInput,
+	validateDropRegistrationInput,
+	validateRepertoirePiece,
+	validateTransferRegistrationInput,
+} from "./registration-validation.js";
+import { nonEmptyText } from "./schema-utils.js";
 
-export type { RegistrationEligibleClass };
+export type {
+	CreateFestivalClassInput,
+	FestivalClassConfigurationDto,
+	RegistrationEligibleClass,
+	UpdateFestivalClassInput,
+};
+export {
+	assertValidDropRegistrationInput,
+	assertValidTransferRegistrationInput,
+	validateDropRegistrationInput,
+	validateRepertoirePiece,
+	validateTransferRegistrationInput,
+};
+
+export const RepertoirePieceSchema = v.object({
+	title: nonEmptyText("Title", 300),
+	composer: nonEmptyText("Composer", 300),
+	movement: v.optional(v.nullable(v.string())),
+	durationSeconds: v.pipe(
+		v.number("Duration must be a number."),
+		v.integer("Duration must be a whole number of seconds."),
+		v.minValue(1, "Duration must be a positive integer."),
+	),
+	durationMinutes: v.optional(v.number()),
+	catalogWorkId: v.optional(v.nullable(v.string())),
+});
 
 export interface RepertoirePiece {
 	title: string;
@@ -118,54 +162,6 @@ export interface ClassRegistrationMetadata {
 	/** Null/absent on historical checkouts whose original selection was not captured. */
 	registrationSnapshot?: ClassRegistrationSnapshot | null;
 	createdAt: Date;
-}
-
-export interface FestivalClassConfigurationDto {
-	id: string;
-	organizationId: string;
-	festivalId: string;
-	displayName: string;
-	classSubtypeId: string;
-	divisionId: string;
-	minimumAge: number;
-	maximumAge: number;
-	price: string;
-	maximumPerformancePieces: 1 | 2 | 3;
-	performanceMinutes: number;
-	capacity: number;
-	isActive: boolean;
-	shopifyProductGid: string;
-	shopifyVariantGid: string;
-	createdAt: Date;
-	updatedAt: Date;
-}
-
-export interface CreateFestivalClassInput {
-	displayName: string;
-	classSubtypeId: string;
-	divisionId: string;
-	minimumAge: number;
-	maximumAge: number;
-	price: string;
-	maximumPerformancePieces?: 1 | 2 | 3;
-	performanceMinutes: number;
-	capacity?: number;
-	isActive?: boolean;
-	shopifyProductGid?: string;
-	shopifyVariantGid?: string;
-}
-
-export interface UpdateFestivalClassInput {
-	displayName?: string;
-	minimumAge?: number;
-	maximumAge?: number;
-	price?: string;
-	maximumPerformancePieces?: 1 | 2 | 3;
-	performanceMinutes?: number;
-	capacity?: number;
-	isActive?: boolean;
-	shopifyProductGid?: string;
-	shopifyVariantGid?: string;
 }
 
 export const REGISTRATION_CHANGE_ACTIONS = [
@@ -319,279 +315,176 @@ export type DropRegistrationValidationResult =
 export type TransferRegistrationValidationResult =
 	RegistrationValidationResult<TransferRegistrationInput>;
 
-function asTrimmed(value: unknown): string {
-	return typeof value === "string" ? value.trim() : "";
+export const ProposedPurchaseLineItemSchema = v.object({
+	id: v.optional(v.string()),
+	childId: nonEmptyText("Child ID", 200),
+	festivalClassId: nonEmptyText("Festival class ID", 200),
+	teacherId: v.optional(v.string()),
+	accompanistId: v.optional(v.nullable(v.string())),
+	pieces: v.optional(v.array(RepertoirePieceSchema)),
+	isCandidate: v.optional(v.boolean()),
+});
+
+export const EvaluateRegistrationEligibilityInputSchema = v.object({
+	items: v.pipe(
+		v.array(ProposedPurchaseLineItemSchema),
+		v.minLength(1, "At least one item is required."),
+	),
+	csrfToken: v.optional(v.string()),
+});
+
+export interface EvaluateRegistrationEligibilityInput {
+	items: ProposedPurchaseLineItem[];
+	csrfToken?: string;
 }
 
-function asObject(payload: unknown): Record<string, unknown> | null {
-	if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-		return null;
-	}
-	return payload as Record<string, unknown>;
+const SubtypeDependencyDescriptorSchema = v.object({
+	requiredSubtypeId: v.string(),
+	requiredSubtypeName: v.optional(v.string()),
+	divisionId: v.optional(v.string()),
+	minimumAge: v.optional(v.number()),
+	maximumAge: v.optional(v.number()),
+	classSubtypeId: v.optional(v.string()),
+	festivalClassId: v.optional(v.string()),
+	satisfiedBy: v.optional(v.picklist(["entitlement", "proposed_item"])),
+	sourceFestivalClassId: v.optional(v.string()),
+	sourceLineItemId: v.optional(v.string()),
+});
+
+export const ClassEligibilityResultSchema = v.object({
+	childId: v.string(),
+	festivalClassId: v.string(),
+	eligible: v.boolean(),
+	isEligible: v.boolean(),
+	reasonCode: v.picklist(ELIGIBILITY_REASON_CODES),
+	message: v.optional(v.string()),
+	availability: v.optional(v.picklist(["open", "waitlist"])),
+	capacity: v.optional(v.number()),
+	placedCount: v.optional(v.number()),
+	dependencyDescriptor: v.optional(SubtypeDependencyDescriptorSchema),
+	missingPrerequisite: v.optional(SubtypeDependencyDescriptorSchema),
+	satisfiedPrerequisites: v.optional(
+		v.array(SubtypeDependencyDescriptorSchema),
+	),
+	lineItemId: v.optional(v.string()),
+});
+
+export const EvaluateRegistrationEligibilityResponseSchema = v.object({
+	results: v.array(ClassEligibilityResultSchema),
+});
+
+export interface EvaluateRegistrationEligibilityResponse {
+	results: ClassEligibilityResult[];
 }
 
-function parseOptionalActorRole(
-	value: unknown,
-	errors: string[],
-): RegistrationActorRole | undefined {
-	if (value === undefined || value === null) return undefined;
-	if (isRegistrationActorRole(value)) return value;
-	errors.push(`Invalid actor role: "${String(value)}".`);
-	return undefined;
-}
+const StartClassCheckoutLineItemSchema = v.object({
+	id: v.optional(v.string()),
+	childId: nonEmptyText("Child ID", 200),
+	festivalClassId: nonEmptyText("Festival class ID", 200),
+	classId: v.optional(v.string()),
+	divisionId: v.optional(v.string()),
+	teacherId: v.optional(v.string()),
+	instrumentId: v.optional(v.string()),
+	accompanistId: v.optional(v.nullable(v.string())),
+	accompanistOption: v.optional(v.string()),
+	pieces: v.optional(v.array(RepertoirePieceSchema)),
+	isCandidate: v.optional(v.boolean()),
+});
 
-function parseOptionalBoundedText(
-	value: unknown,
-	fieldName: string,
-	maxLength: number,
-	errors: string[],
-): string | null | undefined {
-	if (typeof value === "string") {
-		const trimmed = value.trim();
-		if (trimmed.length > maxLength) {
-			errors.push(`${fieldName} must be ${maxLength} characters or less.`);
-		}
-		return trimmed.length > 0 ? trimmed : null;
-	}
-	if (value === null) return null;
-	return undefined;
-}
+export const StartClassCheckoutInputSchema = v.object({
+	festivalClassId: v.optional(v.string()),
+	childId: v.optional(v.string()),
+	teacherId: v.optional(v.string()),
+	instrumentId: v.optional(v.string()),
+	pieces: v.optional(v.array(RepertoirePieceSchema)),
+	divisionId: v.optional(v.string()),
+	accompanistId: v.optional(v.string()),
+	festivalId: v.optional(v.string()),
+	festivalShortName: v.optional(v.string()),
+	currency: v.optional(v.string()),
+	currencyCode: v.optional(v.string()),
+	lineItems: v.optional(v.array(StartClassCheckoutLineItemSchema)),
+	items: v.optional(v.array(StartClassCheckoutLineItemSchema)),
+});
 
-function parseInteger(
-	value: unknown,
-	fieldName: string,
-	errors: string[],
-	nonNegative = false,
-): number | null | undefined {
-	if (value === undefined || value === null) return undefined;
-	if (
-		typeof value !== "number" ||
-		!Number.isInteger(value) ||
-		(nonNegative && value < 0)
-	) {
-		errors.push(
-			`${fieldName} must be ${nonNegative ? "a non-negative integer" : "an integer"}.`,
-		);
-		return undefined;
-	}
-	return value;
-}
+export type StartClassCheckoutInput = v.InferOutput<
+	typeof StartClassCheckoutInputSchema
+>;
 
-export function validateRepertoirePiece(
-	item: unknown,
-	index = 0,
-	errors: string[] = [],
-): RepertoirePiece | null {
-	const piece = asObject(item);
-	if (!piece) {
-		errors.push(`Piece at index ${index} must be an object.`);
-		return null;
-	}
-	const title = asTrimmed(piece.title);
-	const composer = asTrimmed(piece.composer);
-	const movement = asTrimmed(piece.movement) || null;
-	const durationSeconds = piece.durationSeconds;
-	let catalogWorkId: string | undefined;
+export const StartClassCheckoutResponseSchema = v.object({
+	checkoutUrl: v.string(),
+	correlationId: v.string(),
+});
+export type StartClassCheckoutResponse = v.InferOutput<
+	typeof StartClassCheckoutResponseSchema
+>;
 
-	if (!title) errors.push(`Piece at index ${index} requires a title.`);
-	if (!composer) errors.push(`Piece at index ${index} requires a composer.`);
-	if (
-		typeof durationSeconds !== "number" ||
-		!Number.isInteger(durationSeconds) ||
-		durationSeconds <= 0
-	) {
-		errors.push(
-			`Piece at index ${index} durationSeconds must be a positive integer.`,
-		);
-	}
-	if (piece.catalogWorkId !== undefined && piece.catalogWorkId !== null) {
-		if (
-			typeof piece.catalogWorkId !== "string" ||
-			piece.catalogWorkId.trim().length === 0
-		) {
-			errors.push("Each repertoire piece must have a valid catalog work ID.");
-		} else {
-			catalogWorkId = piece.catalogWorkId.trim();
-		}
-	}
+export const UpdateRegistrationMetadataInputSchema = v.objectWithRest(
+	{
+		pieces: v.optional(v.array(RepertoirePieceSchema)),
+		accompanistId: v.optional(v.nullable(v.string())),
+	},
+	v.unknown(),
+);
+export type UpdateRegistrationMetadataInput = v.InferOutput<
+	typeof UpdateRegistrationMetadataInputSchema
+>;
 
-	if (errors.length > 0) return null;
-	return {
-		title,
-		composer,
-		...(movement ? { movement } : {}),
-		durationSeconds: durationSeconds as number,
-		...(catalogWorkId ? { catalogWorkId } : {}),
-	};
-}
+export const ClassCheckoutRecoveryReferenceInputSchema = v.strictObject({
+	recoveryReference: v.pipe(
+		v.string("Checkout reference is required."),
+		v.uuid("Checkout reference must be a valid UUID."),
+	),
+});
 
-function parseOptionalPieces(
-	value: unknown,
-	errors: string[],
-): RepertoirePiece[] | undefined {
-	if (value === undefined || value === null) return undefined;
-	if (!Array.isArray(value)) {
-		errors.push("Repertoire pieces must be an array.");
-		return undefined;
-	}
-	const pieces: RepertoirePiece[] = [];
-	for (let i = 0; i < value.length; i++) {
-		const piece = validateRepertoirePiece(value[i], i, errors);
-		if (piece) pieces.push(piece);
-	}
-	return pieces;
-}
+export const JoinWaitlistBodySchema = v.object({
+	childId: nonEmptyText("Child ID", 200),
+	parentName: nonEmptyText("Parent name", 255),
+	parentEmail: nonEmptyText("Parent email", 320),
+	parentPhone: nonEmptyText("Parent phone", 60),
+	staffAccessConsent: v.boolean("Staff access consent is required."),
+	festivalClassId: v.optional(v.string()),
+});
 
-export function validateDropRegistrationInput(
-	payload: unknown,
-): RegistrationValidationResult<DropRegistrationInput> {
-	const body = asObject(payload);
-	if (!body) {
-		return {
-			valid: false,
-			errors: ["Drop registration input must be an object."],
-		};
-	}
-	const errors: string[] = [];
+export const WithdrawWaitlistBodySchema = v.pipe(
+	v.object({
+		waitlistEntryId: v.optional(nonEmptyText("Waitlist entry ID", 200)),
+		id: v.optional(nonEmptyText("Waitlist entry ID", 200)),
+		childId: v.optional(nonEmptyText("Child ID", 200)),
+		festivalClassId: v.optional(v.string()),
+	}),
+	v.check(
+		(input) => Boolean(input.waitlistEntryId || input.id || input.childId),
+		"Either waitlistEntryId or childId is required.",
+	),
+);
 
-	const classEntitlementId =
-		asTrimmed(body.classEntitlementId) || asTrimmed(body.id);
-	if (classEntitlementId.length === 0) {
-		errors.push("Class entitlement ID is required.");
-	}
-
-	const organizationId = asTrimmed(body.organizationId) || undefined;
-	const festivalId = asTrimmed(body.festivalId) || undefined;
-	const actorUid = asTrimmed(body.actorUid) || undefined;
-	const actorRole = parseOptionalActorRole(body.actorRole, errors);
-	const reason = parseOptionalBoundedText(body.reason, "Reason", 500, errors);
-
-	const requestRefund =
-		body.requestRefund === true || body.issueRefund === true || undefined;
-	const refundAmountCents = parseInteger(
-		body.refundAmountCents,
-		"Refund amount in cents",
-		errors,
-		true,
-	);
-	const refundReason = parseOptionalBoundedText(
-		body.refundReason,
-		"Refund reason",
-		500,
-		errors,
-	);
-
-	if (errors.length > 0) {
-		return { valid: false, errors };
-	}
-
-	const data: DropRegistrationInput = {
-		classEntitlementId,
-		...(organizationId ? { organizationId } : {}),
-		...(festivalId ? { festivalId } : {}),
-		...(actorUid ? { actorUid } : {}),
-		...(actorRole ? { actorRole } : {}),
-		...(reason !== undefined ? { reason } : {}),
-		...(requestRefund !== undefined
-			? { requestRefund, issueRefund: requestRefund }
-			: {}),
-		...(refundAmountCents !== undefined ? { refundAmountCents } : {}),
-		...(refundReason !== undefined ? { refundReason } : {}),
-	};
-
-	return { valid: true, errors: [], data, request: data };
-}
-
-export function validateTransferRegistrationInput(
-	payload: unknown,
-): RegistrationValidationResult<TransferRegistrationInput> {
-	const body = asObject(payload);
-	if (!body) {
-		return {
-			valid: false,
-			errors: ["Transfer registration input must be an object."],
-		};
-	}
-	const errors: string[] = [];
-
-	const classEntitlementId =
-		asTrimmed(body.classEntitlementId) || asTrimmed(body.id);
-	if (classEntitlementId.length === 0) {
-		errors.push("Class entitlement ID is required.");
-	}
-
-	const targetFestivalClassId =
-		asTrimmed(body.targetFestivalClassId) ||
-		asTrimmed(body.destinationFestivalClassId) ||
-		asTrimmed(body.targetClassId) ||
-		asTrimmed(body.toFestivalClassId);
-	if (targetFestivalClassId.length === 0) {
-		errors.push("Target festival class ID is required.");
-	}
-
-	const sourceFestivalClassId =
-		asTrimmed(body.sourceFestivalClassId) ||
-		asTrimmed(body.fromFestivalClassId) ||
-		undefined;
-
-	if (
-		sourceFestivalClassId &&
-		targetFestivalClassId &&
-		sourceFestivalClassId === targetFestivalClassId
-	) {
-		errors.push(
-			"Target festival class must be different from source festival class.",
-		);
-	}
-
-	const organizationId = asTrimmed(body.organizationId) || undefined;
-	const festivalId = asTrimmed(body.festivalId) || undefined;
-	const actorUid = asTrimmed(body.actorUid) || undefined;
-	const actorRole = parseOptionalActorRole(body.actorRole, errors);
-	const reason = parseOptionalBoundedText(body.reason, "Reason", 500, errors);
-	const pieces = parseOptionalPieces(body.pieces, errors);
-	const priceDifferenceCents = parseInteger(
-		body.priceDifferenceCents,
-		"Price difference in cents",
-		errors,
-	);
-
-	if (errors.length > 0) {
-		return { valid: false, errors };
-	}
-
-	const data: TransferRegistrationInput = {
-		classEntitlementId,
-		targetFestivalClassId,
-		...(sourceFestivalClassId ? { sourceFestivalClassId } : {}),
-		...(organizationId ? { organizationId } : {}),
-		...(festivalId ? { festivalId } : {}),
-		...(actorUid ? { actorUid } : {}),
-		...(actorRole ? { actorRole } : {}),
-		...(reason !== undefined ? { reason } : {}),
-		...(pieces !== undefined ? { pieces } : {}),
-		...(priceDifferenceCents !== undefined ? { priceDifferenceCents } : {}),
-	};
-
-	return { valid: true, errors: [], data, request: data };
-}
-
-export function assertValidDropRegistrationInput(
-	payload: unknown,
-): DropRegistrationInput {
-	const result = validateDropRegistrationInput(payload);
-	if (!result.valid || !result.data) {
-		throw new Error(result.errors.join("; "));
-	}
-	return result.data;
-}
-
-export function assertValidTransferRegistrationInput(
-	payload: unknown,
-): TransferRegistrationInput {
-	const result = validateTransferRegistrationInput(payload);
-	if (!result.valid || !result.data) {
-		throw new Error(result.errors.join("; "));
-	}
-	return result.data;
-}
+export const DropRegistrationBodySchema = v.object({
+	reason: v.optional(v.nullable(v.string())),
+	requestRefund: v.optional(v.boolean()),
+	issueRefund: v.optional(v.boolean()),
+	refund: v.optional(v.boolean()),
+	refundAmountCents: v.optional(v.number()),
+	amountCents: v.optional(v.number()),
+	refundReason: v.optional(v.nullable(v.string())),
+});
+export const TransferRegistrationBodySchema = v.pipe(
+	v.object({
+		targetFestivalClassId: v.optional(v.string()),
+		targetClassId: v.optional(v.string()),
+		destinationFestivalClassId: v.optional(v.string()),
+		reason: v.optional(v.nullable(v.string())),
+	}),
+	v.check(
+		(i) =>
+			Boolean(
+				i.targetFestivalClassId?.trim() ||
+					i.targetClassId?.trim() ||
+					i.destinationFestivalClassId?.trim(),
+			),
+		"Target festival class ID is required.",
+	),
+);
+export const PromoteWaitlistBodySchema = v.object({
+	reason: v.optional(v.nullable(v.string())),
+});

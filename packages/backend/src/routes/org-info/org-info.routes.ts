@@ -1,3 +1,4 @@
+import type { Context } from "hono";
 import { Hono } from "hono";
 import {
 	type ApiVariables,
@@ -11,6 +12,40 @@ import type { AuthVerifier } from "../../auth/types.js";
 import { AppError } from "../../errors/app-error.js";
 import type { OrganizationRepository } from "../../repo/organization-repository.js";
 import type { OrganizationService } from "../../services/organization-service.js";
+import {
+	type CoLocatedRouteSecurity,
+	defineRouteSecurity,
+} from "../shared/route-security-metadata.js";
+
+const orgInfoRoute = (
+	method: CoLocatedRouteSecurity["method"],
+	path: string,
+	authenticationClass: CoLocatedRouteSecurity["authenticationClass"],
+) =>
+	defineRouteSecurity({
+		method,
+		path,
+		authenticationClass,
+		csrfRequired: false,
+		browserAllowed: true,
+	});
+
+export const ORG_INFO_TENANT_ROUTE_SECURITY = [
+	orgInfoRoute("GET", "/", "tenant"),
+	orgInfoRoute("POST", "/welcome/dismiss", "tenant"),
+] as const satisfies readonly CoLocatedRouteSecurity[];
+
+export const ORG_INFO_PUBLIC_ROUTE_SECURITY = [
+	orgInfoRoute("GET", "/primary", "public"),
+	orgInfoRoute("GET", "/festivals/:festivalShortName", "public"),
+	orgInfoRoute("GET", "/divisions", "public"),
+	orgInfoRoute("GET", "/landing", "public"),
+] as const satisfies readonly CoLocatedRouteSecurity[];
+
+export const ORG_INFO_ROUTE_SECURITY = [
+	...ORG_INFO_TENANT_ROUTE_SECURITY,
+	...ORG_INFO_PUBLIC_ROUTE_SECURITY,
+] as const satisfies readonly CoLocatedRouteSecurity[];
 
 export interface OrgInfoRoutesOptions {
 	organizationService: OrganizationService;
@@ -18,103 +53,86 @@ export interface OrgInfoRoutesOptions {
 	repository: OrganizationRepository;
 }
 
-export function buildOrgInfoRoutes(
-	options: OrgInfoRoutesOptions,
-): Hono<{ Variables: Partial<ApiVariables> }> {
+type ApiContext = Context<{ Variables: Partial<ApiVariables> }>;
+
+function requireOrgSlug(c: ApiContext): string {
+	const slug = c.req.param("slug");
+	if (!slug) throw new AppError("Organization is required.", 400);
+	return slug;
+}
+
+async function withOrgInfoJson<T>(c: ApiContext, fn: () => Promise<T> | T) {
+	try {
+		return c.json(await fn());
+	} catch (error) {
+		return toJsonError(c, error);
+	}
+}
+
+export function buildOrgInfoTenantRoutes(options: OrgInfoRoutesOptions) {
 	const { organizationService, authVerifier, repository } = options;
-	const router = new Hono<{ Variables: Partial<ApiVariables> }>();
+	const auth = requireAuth(authVerifier);
+	const tenant = requireTenant(repository);
 
-	// Tenant: org landing
-	router.get(
-		"/",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		async (c) => {
-			try {
-				return c.json(
-					organizationService.getOrganizationLandingForTenant(
-						getRequiredTenant(c),
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
+	return new Hono<{ Variables: Partial<ApiVariables> }>()
+		.get("/", auth, tenant, (c) =>
+			withOrgInfoJson(c, () =>
+				organizationService.getOrganizationLandingForTenant(
+					getRequiredTenant(c),
+				),
+			),
+		)
+		.post(
+			"/welcome/dismiss",
+			auth,
+			tenant,
+			requireTenantRole([
+				"Admin",
+				"Division Chair",
+				"Music Reviewer",
+				"Concert Chair",
+				"Read Only",
+			]),
+			(c) =>
+				withOrgInfoJson(c, () =>
+					organizationService.dismissWelcomeForTenant(getRequiredTenant(c)),
+				),
+		);
+}
 
-	// Tenant: dismiss welcome banner
-	router.post(
-		"/welcome/dismiss",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole([
-			"Admin",
-			"Division Chair",
-			"Music Reviewer",
-			"Concert Chair",
-			"Read Only",
-		]),
-		async (c) => {
-			try {
-				return c.json(
-					await organizationService.dismissWelcomeForTenant(
-						getRequiredTenant(c),
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
+export function buildOrgInfoPublicRoutes(
+	options: Pick<OrgInfoRoutesOptions, "organizationService">,
+) {
+	const { organizationService } = options;
 
-	// Public: primary festival redirect target
-	router.get("/primary", async (c) => {
-		try {
-			const slug = c.req.param("slug");
-			if (!slug) throw new AppError("Organization is required.", 400);
-			return c.json(await organizationService.getPrimaryFestivalPath(slug));
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
-
-	// Public: festival detail
-	router.get("/festivals/:festivalShortName", async (c) => {
-		try {
-			const slug = c.req.param("slug");
-			if (!slug) throw new AppError("Organization is required.", 400);
-			return c.json(
-				await organizationService.getPublicFestival(
-					slug,
+	return new Hono<{ Variables: Partial<ApiVariables> }>()
+		.get("/primary", (c) =>
+			withOrgInfoJson(c, () =>
+				organizationService.getPrimaryFestivalPath(requireOrgSlug(c)),
+			),
+		)
+		.get("/festivals/:festivalShortName", (c) =>
+			withOrgInfoJson(c, () =>
+				organizationService.getPublicFestival(
+					requireOrgSlug(c),
 					c.req.param("festivalShortName"),
 				),
-			);
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
+			),
+		)
+		.get("/divisions", (c) =>
+			withOrgInfoJson(c, () =>
+				organizationService.listPublicDivisions(requireOrgSlug(c)),
+			),
+		)
+		.get("/landing", (c) =>
+			withOrgInfoJson(c, () =>
+				organizationService.getPublicLanding(requireOrgSlug(c)),
+			),
+		);
+}
 
-	// Public: division list
-	router.get("/divisions", async (c) => {
-		try {
-			const slug = c.req.param("slug");
-			if (!slug) throw new AppError("Organization is required.", 400);
-			return c.json(await organizationService.listPublicDivisions(slug));
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
-
-	// Public: org landing page data
-	router.get("/landing", async (c) => {
-		try {
-			const slug = c.req.param("slug");
-			if (!slug) throw new AppError("Organization is required.", 400);
-			return c.json(await organizationService.getPublicLanding(slug));
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
-
-	return router;
+export function buildOrgInfoRoutes(options: OrgInfoRoutesOptions) {
+	return new Hono<{ Variables: Partial<ApiVariables> }>()
+		.route("/", buildOrgInfoTenantRoutes(options))
+		.route("/", buildOrgInfoPublicRoutes(options));
 }

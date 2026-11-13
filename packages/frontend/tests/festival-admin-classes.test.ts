@@ -40,8 +40,14 @@ const routes = await Bun.file(
 const appState = await Bun.file(
 	new URL("../src/app/createFestivalAppState.ts", import.meta.url),
 ).text();
-const api = await Bun.file(
-	new URL("../src/lib/api.ts", import.meta.url),
+const orgAdminApi = await Bun.file(
+	new URL("../src/lib/api/org-admin.ts", import.meta.url),
+).text();
+const catalogApi = await Bun.file(
+	new URL("../src/lib/api/catalog.ts", import.meta.url),
+).text();
+const registrationApi = await Bun.file(
+	new URL("../src/lib/api/registration.ts", import.meta.url),
 ).text();
 const styles = await Bun.file(
 	new URL("../src/styles.css", import.meta.url),
@@ -179,14 +185,18 @@ describe("Festival Admin Classes filter bar and status toggling", () => {
 	});
 
 	it("exposes listDivisions and updated getAdminRegistrationConfiguration from api.ts", () => {
-		expect(api).toContain("export const listDivisions = getAdminDivisions;");
-		expect(api).toContain("classSubtypes: RegistrationCatalogValue[];");
+		expect(orgAdminApi).toContain(
+			"export const listDivisions = getAdminDivisions;",
+		);
+		expect(catalogApi).toContain("classSubtypes: RegistrationCatalogValue[];");
 	});
 });
 
 describe("Festival Admin Classes waitlist roster integration", () => {
 	it("exposes getClassWaitlistRoster api function that requests admin waitlist endpoint", async () => {
-		expect(api).toContain("export function getClassWaitlistRoster(");
+		expect(registrationApi).toContain(
+			"export function getClassWaitlistRoster(",
+		);
 		const originalFetch = globalThis.fetch;
 		try {
 			let calledUrl = "";

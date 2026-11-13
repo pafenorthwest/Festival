@@ -1,18 +1,17 @@
 import {
-	type ClassCheckoutLineItemInput,
-	type ClassCheckoutRecoveryStatusDto,
-	type ClassCheckoutRestartDto,
+	DropRegistrationBodySchema,
+	EvaluateRegistrationEligibilityInputSchema,
 	type ProposedPurchaseLineItem,
-	type RepertoirePiece,
-	stripCandidateMarker,
+	RegistrationEligibleClassesQuerySchema,
+	RegistrationSearchQuerySchema,
+	RegistrationTeachersQuerySchema,
+	TransferRegistrationBodySchema,
+	UpdateRegistrationMetadataInputSchema,
 } from "@festival/common";
 import { type Context, Hono } from "hono";
 import { getCookie } from "hono/cookie";
-import { type ApiVariables, toJsonError } from "../../auth/tenant-context.js";
-import {
-	ClassCheckoutRecoveryRequiredError,
-	type ClassCheckoutService,
-} from "../../checkout/class-checkout-service.js";
+import { toJsonError } from "../../auth/tenant-context.js";
+import type { ClassCheckoutService } from "../../checkout/class-checkout-service.js";
 import {
 	CUSTOMER_SESSION_COOKIE,
 	type CustomerAccountService,
@@ -21,83 +20,72 @@ import { AppError } from "../../errors/app-error.js";
 import type { DropTransferService } from "../../registration/drop-transfer-service.js";
 import { assertNoBearerPrincipal } from "../customer-auth/customer-auth.routes.js";
 import { resolveRequestOrigin } from "../shared/csrf-guard.js";
-import { assertAllowedFields } from "../shared/payload-guard.js";
+import {
+	type CoLocatedRouteSecurity,
+	defineRouteSecurity,
+} from "../shared/route-security-metadata.js";
+import {
+	jsonValidator,
+	preValidationGuard,
+	queryValidator,
+} from "../shared/schema-validator.js";
+import {
+	assertValidRepertoirePieces,
+	type BrowserClassCheckoutDto,
+	buildCustomerClassCheckoutRoutes,
+	CUSTOMER_CLASS_CHECKOUT_ROUTE_SECURITY,
+	type CustomerEnv,
+	handleClassCheckout,
+	handleClassCheckoutStatus,
+	readValidJsonOrBody,
+	requireCustomerAccountService,
+	requireSlug,
+	withCustomerAccount,
+} from "./customer-class-checkout.routes.js";
 
-type CustomerEnv = { Variables: Partial<ApiVariables> };
-const UUID_REGEX =
-	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const REG_BASE = "/festivals/:festivalShortName/registration";
+const REG_ITEM = "/class-registrations/:registrationId";
 
-export interface BrowserClassCheckoutDto {
-	checkoutUrl: string;
-	correlationId: string;
-}
+const customerRegRoute = (
+	method: "GET" | "POST" | "PATCH",
+	path: string,
+	csrfRequired: boolean,
+): CoLocatedRouteSecurity =>
+	defineRouteSecurity({
+		method,
+		path,
+		authenticationClass: "customer",
+		csrfRequired,
+		browserAllowed: true,
+	});
 
-function recoveryDto(
-	result: ClassCheckoutRecoveryStatusDto,
-): ClassCheckoutRecoveryStatusDto {
-	return {
-		status: result.status,
-		recoveryReference: result.recoveryReference,
-		...(result.festivalShortName
-			? { festivalShortName: result.festivalShortName }
-			: {}),
-		reasonCode: result.reasonCode,
-		retryAllowed: result.retryAllowed,
-		...(result.restartAllowed === true ? { restartAllowed: true } : {}),
-		...(result.checkoutUrl ? { checkoutUrl: result.checkoutUrl } : {}),
-		...(result.correlationId ? { correlationId: result.correlationId } : {}),
-		...(result.recordedAtIso ? { recordedAtIso: result.recordedAtIso } : {}),
-	};
-}
+const CUSTOMER_REGISTRATION_CORE_SECURITY = [
+	customerRegRoute("GET", `${REG_BASE}/concerto-catalog`, false),
+	customerRegRoute("GET", `${REG_BASE}/teachers`, false),
+	customerRegRoute("GET", `${REG_BASE}/eligible-classes`, false),
+	customerRegRoute("GET", `${REG_BASE}/accompanists`, false),
+	customerRegRoute("POST", `${REG_BASE}/eligibility`, true),
+	customerRegRoute("GET", "/class-registrations", false),
+	customerRegRoute("GET", `${REG_BASE}/class-registrations`, false),
+	customerRegRoute("PATCH", `${REG_ITEM}/metadata`, true),
+	customerRegRoute("PATCH", `${REG_BASE}${REG_ITEM}/metadata`, true),
+	customerRegRoute("POST", `${REG_ITEM}/drop`, true),
+	customerRegRoute("POST", `${REG_ITEM}/transfer`, true),
+] as const satisfies readonly CoLocatedRouteSecurity[];
 
-function restartDto(result: ClassCheckoutRestartDto): ClassCheckoutRestartDto {
-	return {
-		replacementKey: result.replacementKey,
-		registrations: result.registrations.map((line) => ({
-			lineId: line.lineId,
-			childId: line.childId,
-			childName: line.childName,
-			divisionId: line.divisionId,
-			divisionName: line.divisionName,
-			teacherId: line.teacherId,
-			teacherName: line.teacherName,
-			classId: line.classId,
-			className: line.className,
-			classSubtypeId: line.classSubtypeId,
-			classSubtypeName: line.classSubtypeName,
-			minimumAge: line.minimumAge,
-			maximumAge: line.maximumAge,
-			priceCents: line.priceCents,
-			accompanistId: line.accompanistId,
-			accompanistName: line.accompanistName,
-			instrumentId: line.instrumentId,
-			instrumentName: line.instrumentName,
-			pieces: line.pieces.map((piece) => ({
-				title: piece.title,
-				composer: piece.composer,
-				movement: piece.movement,
-				durationSeconds: piece.durationSeconds,
-				durationMinutes: piece.durationMinutes,
-				catalogWorkId: piece.catalogWorkId,
-			})),
-		})),
-	};
-}
+export const CUSTOMER_REGISTRATION_ROUTE_SECURITY = [
+	...CUSTOMER_REGISTRATION_CORE_SECURITY.slice(0, 4),
+	...CUSTOMER_CLASS_CHECKOUT_ROUTE_SECURITY,
+	...CUSTOMER_REGISTRATION_CORE_SECURITY.slice(4),
+] as const satisfies readonly CoLocatedRouteSecurity[];
 
-function checkoutError(c: Context<CustomerEnv>, error: unknown): Response {
-	if (error instanceof ClassCheckoutRecoveryRequiredError) {
-		c.header("Cache-Control", "no-store");
-		return c.json(
-			{
-				error: error.message,
-				code: error.code,
-				recovery: recoveryDto(error.recovery),
-			},
-			409,
-		);
-	}
-	return toJsonError(c, error);
-}
+export {
+	type BrowserClassCheckoutDto,
+	buildCustomerClassCheckoutRoutes,
+	CUSTOMER_CLASS_CHECKOUT_ROUTE_SECURITY,
+	handleClassCheckout,
+	handleClassCheckoutStatus,
+};
 
 export interface CustomerRegistrationRoutesOptions {
 	customerAccountService?: CustomerAccountService;
@@ -105,308 +93,191 @@ export interface CustomerRegistrationRoutesOptions {
 	dropTransferService?: DropTransferService;
 }
 
-function requireCustomerAccountService(
-	service: CustomerAccountService | undefined,
-): CustomerAccountService {
-	if (!service) throw new AppError("Customer Account is unavailable.", 503);
-	return service;
-}
-
 function requireDropTransferService(
 	service: DropTransferService | undefined,
 ): DropTransferService {
-	if (!service)
+	if (!service) {
 		throw new AppError("Feature 'drop_and_transfer' is not enabled.", 404);
+	}
 	return service;
 }
 
-function requireIdempotencyKey(c: Context): string {
-	const key = c.req.header("Idempotency-Key");
-	if (!key || !UUID_REGEX.test(key))
-		throw new AppError("Checkout request is invalid.", 400);
-	return key;
-}
-
-function requireSlug(c: Context): string {
-	const slug = c.req.param("slug");
-	if (!slug) throw new AppError("Organization slug is required.", 400);
-	return slug;
-}
-
-async function withCustomerAccount(
+function withRegAccount<T>(
 	c: Context<CustomerEnv>,
-	service: CustomerAccountService | undefined,
-	fn: (s: CustomerAccountService) => Promise<unknown>,
-): Promise<Response> {
-	try {
-		assertNoBearerPrincipal(c.req.header("Authorization"));
-		return c.json(await fn(requireCustomerAccountService(service)));
-	} catch (error) {
-		return toJsonError(c, error);
-	}
-}
-
-function parseCheckoutPayload(raw: unknown): Record<string, unknown> {
-	if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-		throw new AppError("Checkout request is invalid.", 400);
-	}
-	return raw as Record<string, unknown>;
-}
-
-async function readJsonBody(
-	c: Context,
-	errorMessage = "Checkout request is invalid.",
-): Promise<unknown> {
-	try {
-		return await c.req.json();
-	} catch {
-		throw new AppError(errorMessage, 400);
-	}
-}
-
-function resolveFestivalShortName(
-	c: Context,
-	payload: Record<string, unknown>,
-): string | undefined {
-	const routeShortName = c.req.param("festivalShortName");
-	return (
-		routeShortName ||
-		(typeof payload.festivalShortName === "string"
-			? payload.festivalShortName
-			: undefined)
+	cas: CustomerAccountService | undefined,
+	fn: (
+		s: CustomerAccountService,
+		req: { slug: string; fest?: string; cookie?: string },
+	) => Promise<T>,
+) {
+	return withCustomerAccount(c, cas, (s) =>
+		fn(s, {
+			slug: requireSlug(c),
+			fest: c.req.param("festivalShortName"),
+			cookie: getCookie(c, CUSTOMER_SESSION_COOKIE),
+		}),
 	);
 }
 
-function buildCheckoutInput(
-	access: Pick<
-		Awaited<ReturnType<CustomerAccountService["checkoutAccess"]>>,
-		| "organizationId"
-		| "customerId"
-		| "sessionId"
-		| "integrationVersion"
-		| "shopifyCustomerAccessToken"
-	>,
-	payload: Record<string, unknown>,
-	idempotencyKey: string,
-	festivalShortName?: string,
+function preCheckMetadataPieces(raw: unknown): void {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
+	assertValidRepertoirePieces((raw as { pieces?: unknown }).pieces);
+}
+
+function handleUpdateRegistrationMetadata(
+	c: Context<CustomerEnv>,
+	cas: CustomerAccountService | undefined,
+	body: unknown,
 ) {
-	const opt = (key: string) =>
-		payload[key] !== undefined ? { [key]: payload[key] } : {};
-	const base = {
-		organizationId: access.organizationId,
-		customerId: access.customerId,
-		sessionId: access.sessionId,
-		integrationVersion: access.integrationVersion,
-		buyerAccessToken: access.shopifyCustomerAccessToken,
-		idempotencyKey,
-		...opt("festivalId"),
-		...(festivalShortName !== undefined ? { festivalShortName } : {}),
-	};
-	if (Array.isArray(payload.lineItems)) {
-		return {
-			...base,
-			lineItems: (payload.lineItems as ClassCheckoutLineItemInput[]).map(
-				(item) => stripCandidateMarker(item) as ClassCheckoutLineItemInput,
-			),
-		};
-	}
-	return {
-		...base,
-		festivalClassId: payload.festivalClassId as string,
-		childId: payload.childId as string,
-		teacherId: payload.teacherId as string,
-		pieces: payload.pieces as RepertoirePiece[],
-		...opt("divisionId"),
-		...opt("accompanistId"),
-		...opt("instrumentId"),
-	};
-}
-
-export async function handleClassCheckout(
-	c: Context<CustomerEnv>,
-	accountService?: CustomerAccountService,
-	checkoutService?: ClassCheckoutService,
-): Promise<Response> {
-	try {
-		assertNoBearerPrincipal(c.req.header("Authorization"));
-		if (!accountService || !checkoutService) {
-			throw new AppError("Class checkout is unavailable.", 503);
-		}
-		const idempotencyKey = requireIdempotencyKey(c);
-		const origin = resolveRequestOrigin(c);
-		const sessionCookie = getCookie(c, CUSTOMER_SESSION_COOKIE);
-		const localAccess = await accountService.formAccess(
-			requireSlug(c),
-			sessionCookie,
-			c.req.header("X-CSRF-Token"),
-			origin,
-		);
-		const payload = parseCheckoutPayload(await readJsonBody(c));
-		assertAllowedFields(
-			payload,
-			[
-				"childId",
-				"festivalClassId",
-				"teacherId",
-				"divisionId",
-				"accompanistId",
-				"accompanistOption",
-				"pieces",
-				"instrument",
-				"instrumentId",
-				"festivalId",
-				"festivalShortName",
-				"organizationSlug",
-				"lineItems",
-			],
-			"Class checkout request",
-		);
-		const festShortName = resolveFestivalShortName(c, payload);
-		if (checkoutService.preflightRecovery) {
-			await checkoutService.preflightRecovery(
-				buildCheckoutInput(
-					{
-						...localAccess,
-						sessionId: sessionCookie ?? "",
-						integrationVersion: 0,
-						shopifyCustomerAccessToken: "",
-					},
-					payload,
-					idempotencyKey,
-					festShortName,
-				),
-			);
-		}
-		const access = await accountService.checkoutAccess(
-			requireSlug(c),
-			sessionCookie,
-			c.req.header("X-CSRF-Token"),
-			origin,
-		);
-		const input = buildCheckoutInput(
-			access,
-			payload,
-			idempotencyKey,
-			festShortName,
-		);
-		const result = await checkoutService.start(input);
-		c.header("Cache-Control", "no-store");
-		const responseDto: BrowserClassCheckoutDto = {
-			checkoutUrl: result.checkoutUrl,
-			correlationId: result.correlationId,
-		};
-		return c.json(responseDto);
-	} catch (error) {
-		return checkoutError(c, error);
-	}
-}
-
-export async function handleClassCheckoutStatus(
-	c: Context<CustomerEnv>,
-	accountService?: CustomerAccountService,
-	checkoutService?: ClassCheckoutService,
-): Promise<Response> {
-	try {
-		assertNoBearerPrincipal(c.req.header("Authorization"));
-		if (!accountService || !checkoutService)
-			throw new AppError("Class checkout is unavailable.", 503);
-		const sessionCookie = getCookie(c, CUSTOMER_SESSION_COOKIE);
-		const access = await accountService.formAccess(
-			requireSlug(c),
-			sessionCookie,
+	return withRegAccount(c, cas, (s, { slug, fest, cookie }) =>
+		s.updateRegistrationMetadata(
+			slug,
+			fest,
+			c.req.param("registrationId") ?? "",
+			cookie,
 			c.req.header("X-CSRF-Token"),
 			resolveRequestOrigin(c),
-		);
-		const payload = parseCheckoutPayload(await readJsonBody(c));
-		assertAllowedFields(
-			payload,
-			["recoveryReference"],
-			"Checkout status request",
-		);
-		if (
-			typeof payload.recoveryReference !== "string" ||
-			!UUID_REGEX.test(payload.recoveryReference)
-		)
-			throw new AppError("Checkout status request is invalid.", 400);
-		const result = await checkoutService.recoveryStatus({
-			organizationId: access.organizationId,
-			customerId: access.customerId,
-			sessionId: sessionCookie ?? "",
-			festivalShortName: c.req.param("festivalShortName"),
-			recoveryReference: payload.recoveryReference,
-			idempotencyKey: requireIdempotencyKey(c),
-		});
-		c.header("Cache-Control", "no-store");
-		return c.json(recoveryDto(result));
-	} catch (error) {
-		return checkoutError(c, error);
-	}
+			body,
+		),
+	);
 }
 
-async function handleClassCheckoutRestart(
+interface DropTransferContext {
+	dropService: DropTransferService;
+	registrationId: string;
+	session: { organizationId: string; customerId: string };
+	entitlement: NonNullable<
+		Awaited<ReturnType<DropTransferService["getEntitlement"]>>
+	>;
+}
+const dropTransferCache = new WeakMap<Request, DropTransferContext>();
+
+async function resolveDropTransferContext(
 	c: Context<CustomerEnv>,
-	accountService?: CustomerAccountService,
-	checkoutService?: ClassCheckoutService,
-): Promise<Response> {
-	c.header("Cache-Control", "no-store");
-	try {
-		assertNoBearerPrincipal(c.req.header("Authorization"));
-		if (!accountService || !checkoutService)
-			throw new AppError("Class checkout is unavailable.", 503);
-		const access = await accountService.formAccess(
-			requireSlug(c),
-			getCookie(c, CUSTOMER_SESSION_COOKIE),
-			c.req.header("X-CSRF-Token"),
-			resolveRequestOrigin(c),
-		);
-		const payload = parseCheckoutPayload(await readJsonBody(c));
-		assertAllowedFields(
-			payload,
-			["recoveryReference"],
-			"Checkout restart request",
-		);
-		if (
-			typeof payload.recoveryReference !== "string" ||
-			!UUID_REGEX.test(payload.recoveryReference)
-		)
-			throw new AppError("Checkout restart request is invalid.", 400);
-		const result = await checkoutService.restartUnissuedCart({
-			organizationId: access.organizationId,
-			customerId: access.customerId,
-			festivalShortName: c.req.param("festivalShortName") ?? "",
-			recoveryReference: payload.recoveryReference,
-		});
-		return c.json(restartDto(result));
-	} catch (error) {
-		return checkoutError(c, error);
+	cas?: CustomerAccountService,
+	dts?: DropTransferService,
+): Promise<DropTransferContext> {
+	const cached = dropTransferCache.get(c.req.raw);
+	if (cached) return cached;
+	assertNoBearerPrincipal(c.req.header("Authorization"));
+	const accountService = requireCustomerAccountService(cas);
+	const dropService = requireDropTransferService(dts);
+	const registrationId = c.req.param("registrationId") ?? "";
+	const session = await accountService.validateSession(
+		requireSlug(c),
+		getCookie(c, CUSTOMER_SESSION_COOKIE) ?? "",
+	);
+	const entitlement = await dropService.getEntitlement(
+		registrationId,
+		session.organizationId,
+	);
+	if (!entitlement || entitlement.parentCustomerId !== session.customerId) {
+		throw new AppError("Registration not found.", 404);
 	}
+	const context = { dropService, registrationId, session, entitlement };
+	dropTransferCache.set(c.req.raw, context);
+	return context;
 }
 
-async function handleFindClassCheckoutRestart(
+async function runDropTransfer(
 	c: Context<CustomerEnv>,
-	accountService?: CustomerAccountService,
-	checkoutService?: ClassCheckoutService,
-): Promise<Response> {
-	c.header("Cache-Control", "no-store");
+	options: CustomerRegistrationRoutesOptions,
+	fn: (
+		ctx: DropTransferContext,
+		body: Record<string, unknown>,
+	) => Promise<unknown>,
+) {
 	try {
-		assertNoBearerPrincipal(c.req.header("Authorization"));
-		if (!accountService || !checkoutService)
-			throw new AppError("Class checkout is unavailable.", 503);
-		const access = await accountService.customerReadAccess(
-			requireSlug(c),
-			getCookie(c, CUSTOMER_SESSION_COOKIE),
+		const ctx = await resolveDropTransferContext(
+			c,
+			options.customerAccountService,
+			options.dropTransferService,
 		);
-		const { recoveryReference } = await checkoutService.findUnissuedCartRestart(
-			{
-				organizationId: access.organizationId,
-				customerId: access.customerId,
-				festivalShortName: c.req.param("festivalShortName") ?? "",
-			},
+		const body = await readValidJsonOrBody<Record<string, unknown>>(
+			c,
+			"Invalid JSON payload.",
 		);
-		return c.json({ recoveryReference });
+		return c.json(await fn(ctx, body));
 	} catch (error) {
 		return toJsonError(c, error);
 	}
+}
+
+function handleDropRegistration(
+	c: Context<CustomerEnv>,
+	options: CustomerRegistrationRoutesOptions,
+) {
+	return runDropTransfer(c, options, (ctx, body) => {
+		const requestRefund =
+			body.requestRefund === true || body.issueRefund === true;
+		return ctx.dropService.dropRegistration({
+			classEntitlementId: ctx.registrationId,
+			organizationId: ctx.session.organizationId,
+			festivalId: ctx.entitlement.festivalId,
+			actorUid: ctx.session.customerId,
+			actorRole: "customer",
+			reason: typeof body.reason === "string" ? body.reason : null,
+			requestRefund,
+			issueRefund: requestRefund,
+		});
+	});
+}
+
+function resolveTransferTargetClassId(body: Record<string, unknown>): string {
+	const raw =
+		body.targetFestivalClassId ??
+		body.targetClassId ??
+		body.destinationFestivalClassId;
+	const trimmed = typeof raw === "string" ? raw.trim() : "";
+	if (!trimmed)
+		throw new AppError("Target festival class ID is required.", 400);
+	return trimmed;
+}
+
+function handleTransferRegistration(
+	c: Context<CustomerEnv>,
+	options: CustomerRegistrationRoutesOptions,
+) {
+	return runDropTransfer(c, options, (ctx, body) =>
+		ctx.dropService.transferRegistration({
+			classEntitlementId: ctx.registrationId,
+			targetFestivalClassId: resolveTransferTargetClassId(body),
+			organizationId: ctx.session.organizationId,
+			festivalId: ctx.entitlement.festivalId,
+			sourceFestivalClassId: ctx.entitlement.festivalClassId,
+			actorUid: ctx.session.customerId,
+			actorRole: "customer",
+			reason: typeof body.reason === "string" ? body.reason : null,
+		}),
+	);
+}
+
+interface EligibilityContext {
+	checkoutService: ClassCheckoutService;
+	session: { organizationId: string; customerId: string };
+}
+const eligibilityContextCache = new WeakMap<Request, EligibilityContext>();
+
+async function resolveEligibilityContext(
+	c: Context<CustomerEnv>,
+	accountService?: CustomerAccountService,
+	checkoutService?: ClassCheckoutService,
+): Promise<EligibilityContext> {
+	const cached = eligibilityContextCache.get(c.req.raw);
+	if (cached) return cached;
+	assertNoBearerPrincipal(c.req.header("Authorization"));
+	if (!accountService || !checkoutService) {
+		throw new AppError("Class checkout is unavailable.", 503);
+	}
+	const session = await accountService.customerSession(
+		requireSlug(c),
+		getCookie(c, CUSTOMER_SESSION_COOKIE),
+		c.req.header("X-CSRF-Token"),
+		resolveRequestOrigin(c),
+	);
+	const ctx = { checkoutService, session };
+	eligibilityContextCache.set(c.req.raw, ctx);
+	return ctx;
 }
 
 function parseEligibilityPayload(raw: unknown): {
@@ -416,22 +287,20 @@ function parseEligibilityPayload(raw: unknown): {
 		throw new AppError("Eligibility request is invalid.", 400);
 	}
 	const { items } = raw as { items?: unknown };
-	if (!Array.isArray(items) || items.length === 0) {
-		throw new AppError("Eligibility request is invalid.", 400);
-	}
-	for (const item of items) {
-		if (
-			!item ||
-			typeof item !== "object" ||
-			Array.isArray(item) ||
-			typeof item.childId !== "string" ||
-			!item.childId.trim() ||
-			typeof item.festivalClassId !== "string" ||
-			!item.festivalClassId.trim()
-		) {
-			throw new AppError("Eligibility request is invalid.", 400);
-		}
-	}
+	const isNonEmptyStr = (v: unknown) =>
+		typeof v === "string" && v.trim() !== "";
+	const invalid =
+		!Array.isArray(items) ||
+		items.length === 0 ||
+		items.some(
+			(i) =>
+				!i ||
+				typeof i !== "object" ||
+				Array.isArray(i) ||
+				!isNonEmptyStr((i as { childId?: unknown }).childId) ||
+				!isNonEmptyStr((i as { festivalClassId?: unknown }).festivalClassId),
+		);
+	if (invalid) throw new AppError("Eligibility request is invalid.", 400);
 	return { items: items as ProposedPurchaseLineItem[] };
 }
 
@@ -439,27 +308,18 @@ export async function handleEvaluateEligibility(
 	c: Context<CustomerEnv>,
 	accountService?: CustomerAccountService,
 	checkoutService?: ClassCheckoutService,
-): Promise<Response> {
+) {
 	try {
-		assertNoBearerPrincipal(c.req.header("Authorization"));
-		if (!accountService || !checkoutService) {
-			throw new AppError("Class checkout is unavailable.", 503);
-		}
-		const origin = resolveRequestOrigin(c);
-		const session = await accountService.customerSession(
-			requireSlug(c),
-			getCookie(c, CUSTOMER_SESSION_COOKIE),
-			c.req.header("X-CSRF-Token"),
-			origin,
+		const { checkoutService: service, session } =
+			await resolveEligibilityContext(c, accountService, checkoutService);
+		const { items } = parseEligibilityPayload(
+			await readValidJsonOrBody(c, "Eligibility request is invalid."),
 		);
-		const body = parseEligibilityPayload(
-			await readJsonBody(c, "Eligibility request is invalid."),
-		);
-		const result = await checkoutService.evaluateEligibility({
+		const result = await service.evaluateEligibility({
 			organizationId: session.organizationId,
 			customerId: session.customerId,
 			festivalShortName: c.req.param("festivalShortName"),
-			items: body.items,
+			items,
 			mode: "advisory",
 		});
 		return c.json({ results: result.results });
@@ -468,220 +328,155 @@ export async function handleEvaluateEligibility(
 	}
 }
 
+function makeReadGuard(cas: CustomerAccountService | undefined) {
+	return preValidationGuard((c) => {
+		assertNoBearerPrincipal(c.req.header("Authorization"));
+		requireCustomerAccountService(cas);
+		requireSlug(c);
+	});
+}
+
+function buildRegistrationSearchRoutes(
+	cas: CustomerAccountService | undefined,
+) {
+	const guardAccount = makeReadGuard(cas);
+	return new Hono<CustomerEnv>()
+		.get(
+			`${REG_BASE}/teachers`,
+			guardAccount,
+			queryValidator(RegistrationTeachersQuerySchema),
+			(c) => {
+				const q = c.req.valid("query");
+				return withRegAccount(c, cas, (s, { slug, fest, cookie }) =>
+					s.listRegistrationTeachers(
+						slug,
+						fest ?? "",
+						cookie,
+						q.childId ?? "",
+						q.divisionId ?? "",
+					),
+				);
+			},
+		)
+		.get(
+			`${REG_BASE}/eligible-classes`,
+			guardAccount,
+			queryValidator(RegistrationEligibleClassesQuerySchema),
+			(c) => {
+				const q = c.req.valid("query");
+				return withRegAccount(c, cas, (s, { slug, fest, cookie }) =>
+					s.listRegistrationEligibleClasses(
+						slug,
+						fest ?? "",
+						cookie,
+						q.childId ?? "",
+						q.divisionId ?? "",
+						q.teacherId ?? "",
+					),
+				);
+			},
+		);
+}
+
+function buildRegistrationListRoutes(cas: CustomerAccountService | undefined) {
+	const listRegs = (c: Context<CustomerEnv>) =>
+		withRegAccount(c, cas, (s, { slug, fest, cookie }) =>
+			s.listClassRegistrations(slug, cookie ?? "", fest),
+		);
+	return new Hono<CustomerEnv>()
+		.get(
+			`${REG_BASE}/concerto-catalog`,
+			makeReadGuard(cas),
+			queryValidator(RegistrationSearchQuerySchema),
+			(c) =>
+				withRegAccount(c, cas, (s, { slug, fest, cookie }) =>
+					s.searchRegistrationConcertoCatalog(
+						slug,
+						fest ?? "",
+						cookie,
+						c.req.valid("query").q ?? "",
+					),
+				),
+		)
+		.get(`${REG_BASE}/accompanists`, (c) =>
+			withRegAccount(c, cas, (s, { slug, fest, cookie }) =>
+				s.listRegistrationAccompanists(slug, fest ?? "", cookie),
+			),
+		)
+		.get("/class-registrations", listRegs)
+		.get(`${REG_BASE}/class-registrations`, listRegs);
+}
+
+function buildMetadataRoutes(cas: CustomerAccountService | undefined) {
+	const guardMetadata = preValidationGuard(async (c) => {
+		assertNoBearerPrincipal(c.req.header("Authorization"));
+		await requireCustomerAccountService(cas).checkoutAccess(
+			requireSlug(c),
+			getCookie(c, CUSTOMER_SESSION_COOKIE),
+			c.req.header("X-CSRF-Token"),
+			resolveRequestOrigin(c),
+		);
+	});
+	const metadataValidator = jsonValidator(
+		UpdateRegistrationMetadataInputSchema,
+		{
+			invalidJsonMessage: "Invalid request body.",
+			preCheck: preCheckMetadataPieces,
+		},
+	);
+	return new Hono<CustomerEnv>()
+		.patch(`${REG_ITEM}/metadata`, guardMetadata, metadataValidator, (c) =>
+			handleUpdateRegistrationMetadata(c, cas, c.req.valid("json")),
+		)
+		.patch(
+			`${REG_BASE}${REG_ITEM}/metadata`,
+			guardMetadata,
+			metadataValidator,
+			(c) => handleUpdateRegistrationMetadata(c, cas, c.req.valid("json")),
+		);
+}
+
+function buildDropTransferRoutes(options: CustomerRegistrationRoutesOptions) {
+	const { customerAccountService: cas, dropTransferService: dts } = options;
+	const guardDropTransfer = preValidationGuard<CustomerEnv>(async (c) => {
+		await resolveDropTransferContext(c, cas, dts);
+	});
+	return new Hono<CustomerEnv>()
+		.post(
+			`${REG_ITEM}/drop`,
+			guardDropTransfer,
+			jsonValidator(DropRegistrationBodySchema, { allowEmptyJsonObject: true }),
+			(c) => handleDropRegistration(c, options),
+		)
+		.post(
+			`${REG_ITEM}/transfer`,
+			guardDropTransfer,
+			jsonValidator(TransferRegistrationBodySchema, {
+				invalidJsonMessage: "Transfer request is invalid.",
+			}),
+			(c) => handleTransferRegistration(c, options),
+		);
+}
+
 export function buildCustomerRegistrationRoutes(
 	options: CustomerRegistrationRoutesOptions,
-): Hono<CustomerEnv> {
-	const router = new Hono<CustomerEnv>();
-	const {
-		customerAccountService: cas,
-		classCheckoutService: ccs,
-		dropTransferService: dts,
-	} = options;
-	const reg = "/festivals/:festivalShortName/registration";
-
-	router.get(`${reg}/concerto-catalog`, (c) =>
-		withCustomerAccount(c, cas, (s) =>
-			s.searchRegistrationConcertoCatalog(
-				requireSlug(c),
-				c.req.param("festivalShortName") ?? "",
-				getCookie(c, CUSTOMER_SESSION_COOKIE),
-				c.req.query("q") ?? "",
-			),
-		),
-	);
-
-	router.get(`${reg}/teachers`, (c) =>
-		withCustomerAccount(c, cas, (s) =>
-			s.listRegistrationTeachers(
-				requireSlug(c),
-				c.req.param("festivalShortName") ?? "",
-				getCookie(c, CUSTOMER_SESSION_COOKIE),
-				c.req.query("childId") ?? "",
-				c.req.query("divisionId") ?? "",
-			),
-		),
-	);
-	router.get(`${reg}/eligible-classes`, (c) =>
-		withCustomerAccount(c, cas, (s) =>
-			s.listRegistrationEligibleClasses(
-				requireSlug(c),
-				c.req.param("festivalShortName") ?? "",
-				getCookie(c, CUSTOMER_SESSION_COOKIE),
-				c.req.query("childId") ?? "",
-				c.req.query("divisionId") ?? "",
-				c.req.query("teacherId") ?? "",
-			),
-		),
-	);
-	router.get(`${reg}/accompanists`, (c) =>
-		withCustomerAccount(c, cas, (s) =>
-			s.listRegistrationAccompanists(
-				requireSlug(c),
-				c.req.param("festivalShortName") ?? "",
-				getCookie(c, CUSTOMER_SESSION_COOKIE),
-			),
-		),
-	);
-	router.post("/class-checkout", (c) => handleClassCheckout(c, cas, ccs));
-	router.post(`${reg}/checkout`, (c) => handleClassCheckout(c, cas, ccs));
-	router.post(`${reg}/checkout/status`, (c) =>
-		handleClassCheckoutStatus(c, cas, ccs),
-	);
-	router.get(`${reg}/checkout/restart`, (c) =>
-		handleFindClassCheckoutRestart(c, cas, ccs),
-	);
-	router.post(`${reg}/checkout/restart`, (c) =>
-		handleClassCheckoutRestart(c, cas, ccs),
-	);
-	router.post(`${reg}/eligibility`, (c) =>
-		handleEvaluateEligibility(c, cas, ccs),
-	);
-	const listRegs = (c: Context<CustomerEnv>) =>
-		withCustomerAccount(c, cas, (s) =>
-			s.listClassRegistrations(
-				requireSlug(c),
-				getCookie(c, CUSTOMER_SESSION_COOKIE) ?? "",
-				c.req.param("festivalShortName"),
-			),
-		);
-	router.get("/class-registrations", listRegs);
-	router.get(`${reg}/class-registrations`, listRegs);
-
-	const updateMetadata = (c: Context<CustomerEnv>) =>
-		withCustomerAccount(c, cas, async (s) => {
-			let body: unknown;
-			try {
-				body = await c.req.json();
-			} catch {
-				throw new AppError("Invalid request body.", 400);
-			}
-			return s.updateRegistrationMetadata(
-				requireSlug(c),
-				c.req.param("festivalShortName"),
-				c.req.param("registrationId") ?? "",
-				getCookie(c, CUSTOMER_SESSION_COOKIE),
-				c.req.header("X-CSRF-Token"),
-				resolveRequestOrigin(c),
-				body,
-			);
-		});
-	router.patch("/class-registrations/:registrationId/metadata", updateMetadata);
-	router.patch(
-		`${reg}/class-registrations/:registrationId/metadata`,
-		updateMetadata,
-	);
-
-	router.post("/class-registrations/:registrationId/drop", async (c) => {
-		try {
-			assertNoBearerPrincipal(c.req.header("Authorization"));
-			const accountService = requireCustomerAccountService(cas);
-			const dropService = requireDropTransferService(dts);
-			const slug = requireSlug(c);
-			const registrationId = c.req.param("registrationId") ?? "";
-			const sessionToken = getCookie(c, CUSTOMER_SESSION_COOKIE) ?? "";
-			const session = await accountService.validateSession(slug, sessionToken);
-
-			const entitlement = await dropService.getEntitlement(
-				registrationId,
-				session.organizationId,
-			);
-			if (!entitlement || entitlement.parentCustomerId !== session.customerId) {
-				throw new AppError("Registration not found.", 404);
-			}
-
-			let body: Record<string, unknown> = {};
-			try {
-				const b = await c.req.json();
-				if (b && typeof b === "object" && !Array.isArray(b)) {
-					body = b as Record<string, unknown>;
-				}
-			} catch {
-				// body is optional for drop
-			}
-
-			const reason = typeof body.reason === "string" ? body.reason : null;
-			const requestRefund =
-				body.requestRefund === true || body.issueRefund === true;
-
-			const result = await dropService.dropRegistration({
-				classEntitlementId: registrationId,
-				organizationId: session.organizationId,
-				festivalId: entitlement.festivalId,
-				actorUid: session.customerId,
-				actorRole: "customer",
-				reason,
-				requestRefund,
-				issueRefund: requestRefund,
-			});
-
-			return c.json(result);
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
-
-	router.post("/class-registrations/:registrationId/transfer", async (c) => {
-		try {
-			assertNoBearerPrincipal(c.req.header("Authorization"));
-			const accountService = requireCustomerAccountService(cas);
-			const dropService = requireDropTransferService(dts);
-			const slug = requireSlug(c);
-			const registrationId = c.req.param("registrationId") ?? "";
-			const sessionToken = getCookie(c, CUSTOMER_SESSION_COOKIE) ?? "";
-			const session = await accountService.validateSession(slug, sessionToken);
-
-			const entitlement = await dropService.getEntitlement(
-				registrationId,
-				session.organizationId,
-			);
-			if (!entitlement || entitlement.parentCustomerId !== session.customerId) {
-				throw new AppError("Registration not found.", 404);
-			}
-
-			let body: Record<string, unknown> = {};
-			try {
-				const b = await c.req.json();
-				if (b && typeof b === "object" && !Array.isArray(b)) {
-					body = b as Record<string, unknown>;
-				} else {
-					throw new AppError("Transfer request is invalid.", 400);
-				}
-			} catch (err) {
-				if (err instanceof AppError) throw err;
-				throw new AppError("Transfer request is invalid.", 400);
-			}
-
-			const targetFestivalClassId =
-				typeof body.targetFestivalClassId === "string"
-					? body.targetFestivalClassId.trim()
-					: typeof body.targetClassId === "string"
-						? body.targetClassId.trim()
-						: typeof body.destinationFestivalClassId === "string"
-							? body.destinationFestivalClassId.trim()
-							: "";
-
-			if (!targetFestivalClassId) {
-				throw new AppError("Target festival class ID is required.", 400);
-			}
-
-			const reason = typeof body.reason === "string" ? body.reason : null;
-
-			const result = await dropService.transferRegistration({
-				classEntitlementId: registrationId,
-				targetFestivalClassId,
-				organizationId: session.organizationId,
-				festivalId: entitlement.festivalId,
-				sourceFestivalClassId: entitlement.festivalClassId,
-				actorUid: session.customerId,
-				actorRole: "customer",
-				reason,
-			});
-
-			return c.json(result);
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
-
-	return router;
+) {
+	const { customerAccountService: cas, classCheckoutService: ccs } = options;
+	return new Hono<CustomerEnv>()
+		.route("/", buildRegistrationSearchRoutes(cas))
+		.route("/", buildRegistrationListRoutes(cas))
+		.route("/", buildCustomerClassCheckoutRoutes(options))
+		.post(
+			`${REG_BASE}/eligibility`,
+			preValidationGuard<CustomerEnv>(async (c) => {
+				await resolveEligibilityContext(c, cas, ccs);
+			}),
+			jsonValidator(EvaluateRegistrationEligibilityInputSchema, {
+				invalidJsonMessage: "Eligibility request is invalid.",
+				preCheck: parseEligibilityPayload,
+			}),
+			(c) => handleEvaluateEligibility(c, cas, ccs),
+		)
+		.route("/", buildMetadataRoutes(cas))
+		.route("/", buildDropTransferRoutes(options));
 }

@@ -78,6 +78,15 @@ async function readFrontendSource(): Promise<string> {
 		"src/components/AppHeader.tsx",
 		"src/components/SignInModal.tsx",
 		"src/lib/api.ts",
+		"src/lib/api/auth.ts",
+		"src/lib/api/catalog.ts",
+		"src/lib/api/client.ts",
+		"src/lib/api/commerce.ts",
+		"src/lib/api/customer.ts",
+		"src/lib/api/directory.ts",
+		"src/lib/api/org-admin.ts",
+		"src/lib/api/registration.ts",
+		"src/lib/api/volunteers.ts",
 		"src/lib/routePaths.ts",
 		"src/lib/routes.ts",
 		"src/lib/sanitize-html.ts",
@@ -428,7 +437,7 @@ describe("organization onboarding integration", () => {
 		expect(source).toContain(
 			"Membership information is temporarily unavailable. Please try again",
 		);
-		expect(source).toContain(`/api/organizations/\${slug}/membership-products`);
+		expect(source).toContain('catalogOrg()["membership-products"].$path');
 		expect(source).not.toContain("myshopify.com/admin");
 		expect(source).not.toContain("admin/api/2026-07");
 		expect(source).toContain("DOMPurify.sanitize");
@@ -439,7 +448,7 @@ describe("organization onboarding integration", () => {
 
 	it("starts customer authentication then calls the server-only checkout endpoint", async () => {
 		const page = await Bun.file("src/pages/MembershipPage.tsx").text();
-		const api = await Bun.file("src/lib/api.ts").text();
+		const commerceApi = await Bun.file("src/lib/api/commerce.ts").text();
 		expect(page).toContain('"Purchase"');
 		expect(page).toContain("getCustomerSession(route.slug)");
 		expect(page).toContain("customerMembershipPurchaseSignInPath(");
@@ -457,9 +466,9 @@ describe("organization onboarding integration", () => {
 		expect(page).toContain("checkout_terminal_failure");
 		expect(page).toContain("Start a new checkout.");
 		expect(page).not.toMatch(/cartCreate|shopifyVariantGid/);
-		expect(api).toContain("customer/membership-purchase/");
-		expect(api).toContain("/customer/checkout");
-		expect(api).toContain("Idempotency-Key");
+		expect(commerceApi).toContain('"membership-purchase"');
+		expect(commerceApi).toContain("orgCust.checkout.$path");
+		expect(commerceApi).toContain('"Idempotency-Key"');
 		expect(customerMembershipPurchaseSignInPath("pafe", "offering_123")).toBe(
 			"/api/organizations/pafe/customer-auth/start?offering=offering_123",
 		);
@@ -609,7 +618,7 @@ describe("organization onboarding integration", () => {
 		expect(source).toContain("getAdminMembershipProducts(token, targetSlug)");
 		expect(source).toContain("getIdToken(deps.getFirebaseUser())");
 		expect(source).toContain("createMembershipProduct(token");
-		expect(source).toContain("admin/membership-products");
+		expect(source).toContain('["membership-products"]');
 		expect(source).not.toContain("SHOPIFY_ADMIN_ACCESS_TOKEN");
 		expect(source).not.toContain("admin/api/2026-07");
 	});
@@ -645,17 +654,16 @@ describe("organization onboarding integration", () => {
 	});
 
 	it("keeps membership offering retirement explicit and Admin-scoped", async () => {
-		const apiSource = await Bun.file("src/lib/api.ts").text();
+		const commerceSource = await Bun.file("src/lib/api/commerce.ts").text();
 		const pageSource = await Bun.file(
 			"src/pages/AdminMembershipProductsPage.tsx",
 		).text();
 
-		expect(apiSource).toContain("retireAdminMembershipProduct");
-		expect(apiSource).toContain(
-			// biome-ignore lint/suspicious/noTemplateCurlyInString: assert the literal source fragment, including its interpolation syntax.
-			"membership-products/${encodeURIComponent(offeringId)}/retire",
+		expect(commerceSource).toContain("retireAdminMembershipProduct");
+		expect(commerceSource).toContain(
+			'orgAdmin["membership-products"][":offeringId"].retire.$path',
 		);
-		expect(apiSource).toContain("JSON.stringify({ confirmed: true })");
+		expect(commerceSource).toContain("{ confirmed: true }");
 		expect(pageSource).toContain("window.confirm(");
 		expect(pageSource).toContain("prevents future purchases");
 		expect(pageSource).toContain("Retired");
