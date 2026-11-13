@@ -2,30 +2,56 @@ import type {
 	AccompanistMembershipGrant,
 	CanonicalWork,
 	ClassEntitlement,
+	ClassEntitlementStatus,
+	CreateClassEntitlementInput,
+	CustomerProfile,
 	FestivalClassConfiguration,
 	FestivalRecord,
+	OrganizationDivision,
 	OrganizationRecord,
 	PublicMembershipProductSummary,
 	RegistrationCatalogValue,
 } from "@festival/common";
 
+export interface CheckoutShopifyIntegrationRecord {
+	storeDomain?: string;
+	shopDomain?: string;
+	verifiedShopDomain?: string;
+	verificationStatus?: string;
+	integrationVersion: number;
+	readiness?: string;
+}
+
 export interface CheckoutOrganizationReadPort {
 	findOrganizationById(id: string): Promise<OrganizationRecord | null>;
 	findOrganizationBySlug(slug: string): Promise<OrganizationRecord | null>;
 	getOrganizationTimezone(organizationId: string): Promise<string>;
-	getShopifyIntegration(organizationId: string): Promise<{
-		storeDomain: string;
-		integrationVersion: number;
-		readiness?: string;
-	} | null>;
+	getShopifyIntegration(
+		organizationId: string,
+	): Promise<CheckoutShopifyIntegrationRecord | null>;
 	getClassCapacity?(
 		organizationId: string,
 		festivalClassId: string,
-	): Promise<{ capacity: number | null } | null>;
+	): Promise<{ capacity: number | null } | number | null>;
 	getCapacity?(
 		organizationId: string,
 		festivalClassId: string,
-	): Promise<{ capacity: number | null } | null>;
+	): Promise<{ capacity: number | null } | number | null>;
+	findMembershipCustomerContacts?(
+		organizationId: string,
+		customerIds: string[],
+	): Promise<
+		Map<
+			string,
+			{
+				customerId: string;
+				name?: string;
+				email?: string;
+				phone?: string;
+				city?: string;
+			}
+		>
+	>;
 }
 
 export interface CheckoutCatalogReadPort {
@@ -37,28 +63,50 @@ export interface CheckoutCatalogReadPort {
 	listDivisions(
 		organizationId: string,
 		activeOnly?: boolean,
-	): Promise<Array<{ id: string; displayName: string; isActive: boolean }>>;
+	): Promise<
+		Array<{
+			id: string;
+			displayName: string;
+			isActive: boolean;
+			organizationId?: string;
+			code?: string;
+			sortOrder?: number;
+		}>
+	>;
 	listFestivalClassConfigurations(
 		organizationId: string,
 		festivalId: string,
 		activeOnly?: boolean,
 	): Promise<FestivalClassConfiguration[]>;
-	findFestivalClassConfigurationById?(
-		organizationId: string,
-		festivalClassId: string,
-	): Promise<FestivalClassConfiguration | null>;
+	findFestivalClassConfigurationById?: {
+		(
+			organizationId: string,
+			festivalId: string,
+			festivalClassId: string,
+		): Promise<FestivalClassConfiguration | null>;
+		(
+			organizationId: string,
+			festivalClassId: string,
+		): Promise<FestivalClassConfiguration | null>;
+	};
 	findFestivalClassConfigurationsByIds?(
 		organizationId: string,
-		festivalClassIds: readonly string[],
+		festivalId: string,
+		festivalClassIds: string[],
 	): Promise<FestivalClassConfiguration[]>;
 	findActiveFestivalClassByShortName?(
 		organizationId: string,
 		festivalShortName: string,
 		festivalClassId: string,
-	): Promise<{
-		festival: FestivalRecord;
-		festivalClass: FestivalClassConfiguration;
-	} | null>;
+		festivalId?: string,
+	): Promise<
+		| FestivalClassConfiguration
+		| {
+				festival: FestivalRecord;
+				festivalClass: FestivalClassConfiguration;
+		  }
+		| null
+	>;
 	listRegistrationCatalogValues(
 		organizationId: string,
 		kind: "class_subtype" | "instrument" | "classification",
@@ -71,6 +119,9 @@ export interface CheckoutCatalogReadPort {
 		id: string;
 		shopifyProductGid: string;
 		shopifyVariantGid: string;
+		durationDays?: number;
+		productNameSnapshot?: string;
+		isActive?: boolean;
 	} | null>;
 }
 
@@ -99,30 +150,41 @@ export interface CheckoutChildAgeSnapshotRecord {
 	validUntilIso: string;
 }
 
+export interface CheckoutCustomerSessionRecord {
+	id?: string;
+	sessionId?: string;
+	organizationId: string;
+	customerId: string;
+	shopifyCustomerGid?: string;
+	integrationVersion: number;
+	idleExpiresAtIso?: string;
+	absoluteExpiresAtIso?: string;
+	expiresAtIso?: string;
+	lastSeenAtIso?: string;
+	revokedAtIso?: string | null;
+	accessTokenExpiresAtIso?: string | null;
+}
+
+export interface CheckoutCustomerRecord {
+	id: string;
+	organizationId: string;
+	name: { value: string | null };
+	email: { value: string | null };
+	shopifyCustomerGid: string | null;
+}
+
 export interface CheckoutCustomerIdentityPort {
-	getSession(
-		organizationId: string,
-		sessionId: string,
-	): Promise<{
-		id: string;
-		organizationId: string;
-		customerId: string;
-		integrationVersion: number;
-		idleExpiresAtIso: string;
-		absoluteExpiresAtIso: string;
-		revokedAtIso: string | null;
-		accessTokenExpiresAtIso?: string | null;
-	} | null>;
+	getSession: {
+		(
+			organizationId: string,
+			sessionId: string,
+		): Promise<CheckoutCustomerSessionRecord | null>;
+		(sessionId: string): Promise<CheckoutCustomerSessionRecord | null>;
+	};
 	getCustomer(
 		organizationId: string,
 		customerId: string,
-	): Promise<{
-		id: string;
-		organizationId: string;
-		name: { value: string };
-		email: { value: string };
-		shopifyCustomerGid: string | null;
-	} | null>;
+	): Promise<CheckoutCustomerRecord | null>;
 	listChildren(
 		organizationId: string,
 		customerId: string,
@@ -144,48 +206,37 @@ export interface CheckoutCustomerIdentityPort {
 	): Promise<CheckoutChildAgeSnapshotRecord | null>;
 }
 
+export interface CheckoutTeacherGrantSnapshot {
+	id: string;
+	customerId: string;
+	divisionIds?: string[];
+	contact?: { name: string };
+	startsOn: string;
+	endsOn: string;
+	revokedAtIso?: string | null;
+	supersededOn?: string | null;
+	status?: string;
+}
+
 export interface CheckoutTeacherDirectoryPort {
 	listActiveTeachersForDivision(
 		organizationId: string,
 		divisionId: string,
 	): Promise<Array<{ id: string; name: string; divisionIds?: string[] }>>;
-	findActiveTeacherEntitlementGrant?(
-		organizationId: string,
-		teacherCustomerId: string,
-		divisionId: string,
-		today: string,
-	): Promise<{
-		id: string;
-		customerId: string;
-		divisionIds?: string[];
-		contact: { name: string };
-		startsOn: string;
-		endsOn: string;
-		revokedAtIso?: string | null;
-		supersededOn?: string | null;
-		status?: string;
-	} | null>;
-	findCurrentAccompanistMembershipGrant?(
-		organizationId: string,
-		accompanistCustomerId: string,
-	): Promise<AccompanistMembershipGrant | null>;
-	listEntitlementGrantSnapshots?(input: {
+	findActiveTeacherEntitlementGrant?(input: {
 		organizationId: string;
-		customerId?: string;
-		entitlementClass?: "teacher_membership";
-	}): Promise<
-		Array<{
-			id: string;
-			customerId: string;
-			divisionIds: string[];
-			contact: { name: string };
-			startsOn: string;
-			endsOn: string;
-			revokedAtIso?: string | null;
-			supersededOn?: string | null;
-			status?: string;
-		}>
-	>;
+		customerId: string;
+		divisionId: string;
+		onDate?: string;
+	}): Promise<CheckoutTeacherGrantSnapshot | null>;
+	findCurrentAccompanistMembershipGrant?(input: {
+		organizationId: string;
+		customerId: string;
+	}): Promise<AccompanistMembershipGrant | null>;
+	listEntitlementGrantSnapshots?(
+		organizationId: string,
+		customerId?: string,
+	): Promise<CheckoutTeacherGrantSnapshot[]>;
 }
 
 export interface CheckoutCommerceReadPort {
@@ -198,11 +249,13 @@ export interface CheckoutCommerceReadPort {
 		festivalClassIds: readonly string[],
 	): Promise<Map<string, number>>;
 	listClassEntitlements(filter: {
-		organizationId: string;
+		organizationId?: string;
 		parentCustomerId?: string;
 		festivalId?: string;
 		festivalClassId?: string;
+		festivalClassIds?: string[];
 		childId?: string;
+		childIds?: string[];
 		status?: ClassEntitlement["status"];
 	}): Promise<ClassEntitlement[]>;
 	listOrderProjectionsByGids?(
@@ -217,30 +270,31 @@ export interface CheckoutCommerceReadPort {
 	hasScheduledEntitlement?(
 		organizationId: string,
 		customerId: string,
-		nowIso?: string,
-		entitlementClass?: "teacher_membership",
+		entitlementClass: "teacher_membership" | "accompanist_membership",
+		today: string,
 	): Promise<boolean>;
 	getClassEntitlement?(
 		organizationId: string,
 		entitlementId: string,
 	): Promise<ClassEntitlement | null>;
-	createClassEntitlement?(input: {
-		id: string;
-		organizationId: string;
-		festivalId: string;
-		festivalClassId: string;
-		childId: string;
-		parentCustomerId: string;
-		shopifyOrderGid: string;
-		shopifyOrderLineGid: string;
-		checkoutIntentId?: string | null;
-		checkoutIntentLineId?: string | null;
-		status: ClassEntitlement["status"];
-	}): Promise<ClassEntitlement>;
+	createClassEntitlement?(
+		input: CreateClassEntitlementInput,
+	): Promise<ClassEntitlement>;
 	updateClassEntitlementStatus?(
 		organizationId: string,
 		entitlementId: string,
-		status: ClassEntitlement["status"],
+		status: ClassEntitlementStatus,
+		expectedStatus?: ClassEntitlementStatus | ClassEntitlementStatus[],
+	): Promise<ClassEntitlement | null>;
+	updateClassEntitlement?(
+		organizationId: string,
+		entitlementId: string,
+		updates: {
+			festivalClassId?: string;
+			status?: ClassEntitlementStatus;
+			expectedStatus?: ClassEntitlementStatus | ClassEntitlementStatus[];
+		},
+		expectedStatus?: ClassEntitlementStatus | ClassEntitlementStatus[],
 	): Promise<ClassEntitlement | null>;
 }
 
@@ -251,14 +305,21 @@ export interface MembershipListingsPort {
 }
 
 export interface ClassCheckoutStorefrontPort {
-	inspectCart(input: {
+	inspectCart?(input: {
 		organizationId: string;
 		shopifyCartId: string;
+		expectedStorefrontBinding?: {
+			shopDomain: string;
+			integrationVersion: number;
+		};
 	}): Promise<{
-		shopifyCartId: string;
+		shopifyCartId?: string;
+		correlationId?: string | null;
+		customerGid?: string | null;
 		checkoutUrl?: string;
 		buyerIdentityPresent?: boolean;
 		lines: Array<{
+			intentLineId?: string | null;
 			variantGid: string;
 			quantity: number;
 			attributes?: Array<{ key: string; value: string }>;
@@ -267,14 +328,42 @@ export interface ClassCheckoutStorefrontPort {
 	} | null>;
 	createCart(input: {
 		organizationId: string;
+		expectedStorefrontBinding?: {
+			shopDomain: string;
+			integrationVersion: number;
+		};
 		shopifyVariantGid?: string;
+		currencyCode?: string;
 		lines?: Array<{
-			shopifyVariantGid: string;
+			merchandiseId?: string;
+			shopifyVariantGid?: string;
+			variantGid?: string;
 			quantity: number;
 			attributes?: Array<{ key: string; value: string }>;
 		}>;
 		attributes?: Array<{ key: string; value: string }>;
-		buyerAccessToken: string;
+		buyerAccessToken?: string;
+		shopifyCustomerGid?: string;
+		correlationId: string;
+		signal?: AbortSignal;
+	}): Promise<{ shopifyCartId: string; checkoutUrl?: string }>;
+	checkout(input: {
+		organizationId: string;
+		shopifyCartId: string;
+		expectedStorefrontBinding?: {
+			shopDomain: string;
+			integrationVersion: number;
+		};
+		signal?: AbortSignal;
+	}): Promise<{ checkoutUrl: string }>;
+}
+
+export interface MembershipCheckoutStorefrontPort {
+	createCart(input: {
+		organizationId: string;
+		shopifyVariantGid: string;
+		buyerAccessToken?: string;
+		shopifyCustomerGid?: string;
 		correlationId: string;
 	}): Promise<{ shopifyCartId: string; checkoutUrl?: string }>;
 	checkout(input: {
@@ -282,3 +371,49 @@ export interface ClassCheckoutStorefrontPort {
 		shopifyCartId: string;
 	}): Promise<{ checkoutUrl: string }>;
 }
+
+export interface WaitlistEntitlementPort {
+	listClassEntitlements?(filter: {
+		organizationId: string;
+		festivalId?: string;
+		festivalClassId?: string;
+		parentCustomerId?: string;
+		childId?: string;
+		status?: ClassEntitlementStatus;
+	}): Promise<ClassEntitlement[]>;
+	countConfirmedClassEntitlements?(
+		organizationId: string,
+		festivalClassId: string,
+	): Promise<number>;
+}
+
+export interface ClassCheckoutDropRefundPort {
+	refundOrderLine(input: {
+		organizationId: string;
+		orderGid: string;
+		orderLineGid: string;
+		amountCents: number;
+		currencyCode: string;
+		reason?: string;
+		idempotencyKey?: string;
+	}): Promise<{
+		shopifyRefundGid: string;
+		refundedAmountCents: number;
+		currencyCode: string;
+	}>;
+	refund?(input: {
+		organizationId: string;
+		shopifyOrderGid: string;
+		shopifyOrderLineGid: string;
+		amountCents: number;
+		currencyCode: string;
+		reason?: string;
+		idempotencyKey?: string;
+	}): Promise<{ shopifyRefundGid: string }>;
+}
+
+export type CheckoutDivisionRecord = Pick<
+	OrganizationDivision,
+	"id" | "displayName" | "isActive"
+>;
+export type WaitlistCustomerProfile = Pick<CustomerProfile, "name" | "email">;

@@ -1,300 +1,37 @@
-import { randomUUID } from "node:crypto";
 import type {
+	AppError,
 	ClassRegistrationMetadata,
 	ClassRegistrationSnapshot,
 	RepertoirePiece,
 } from "@festival/common";
-import { normalizeClassRegistrationSnapshot } from "@festival/common";
-import { AppError } from "../errors/app-error.js";
-import { withInMemoryCapacityLock } from "../repo/in-memory-capacity-lock.js";
-import {
-	buildIntentLineRecords,
-	repertoireItemsFromLegacyPieces,
-} from "./checkout-line-helpers.js";
-import {
-	assertSafeExecutionSnapshot,
-	type ClassCheckoutClaim,
-	type ClassCheckoutExecution,
-	type ClassCheckoutExecutionRepository,
-	executionClaimMatches,
-	InMemoryClassCheckoutExecutionRepository,
-} from "./class-checkout-execution.js";
-import { withInMemoryCheckoutAdmissionLock } from "./in-memory-checkout-admission-lock.js";
-
-export { buildIntentLineRecords, repertoireItemsFromLegacyPieces };
-
-export type CheckoutCartStatus =
-	| "ready"
-	| "checkout_started"
-	| "expired"
-	| "superseded";
-export type CheckoutIntentStatus =
-	| "creating"
-	| "ready"
-	| "checkout_started"
-	| "failed"
-	| "expired"
-	| "superseded"
-	| "approved"
-	| "rejected"
-	| "needs_review";
-
-/** Server-only records. Their Shopify IDs and access context must never be DTO fields. */
-export interface CheckoutCartRecord {
-	reference: string;
-	shopifyCartId: string;
-	organizationId: string;
-	customerId: string;
-	sessionId: string;
-	integrationVersion: number;
-	status: CheckoutCartStatus;
-	expiresAtIso: string;
-	createdAtIso: string;
-}
-
-export type CheckoutIntentType = "membership" | "class_entry";
-
-/** Durable protocol marker for class checkout cart-line identity attributes. */
-export const CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL = "class_line_identity_v1";
-
-export interface CheckoutIntentLineItemRecord {
-	id: string;
-	checkoutIntentId: string;
-	lineIndex: number;
-	lineType: string;
-	festivalClassId: string | null;
-	childId: string | null;
-	offeringId: string | null;
-	shopifyProductGid: string;
-	shopifyVariantGid: string;
-	amount: string;
-	currencyCode: string;
-	divisionId: string | null;
-	divisionNameSnapshot: string | null;
-	createdAtIso: string;
-}
-
-export interface CheckoutIntentRecord {
-	id: string;
-	correlationId: string;
-	organizationId: string;
-	customerId: string;
-	sessionId: string;
-	idempotencyKey: string;
-	intentType: CheckoutIntentType;
-	offeringId: string | null;
-	entitlementClass: "teacher_membership" | null;
-	durationDays: number | null;
-	festivalClassId: string | null;
-	childId: string | null;
-	shopifyProductGid: string;
-	shopifyVariantGid: string;
-	policyVersion: "v1" | null;
-	divisionId: string | null;
-	divisionNameSnapshot: string | null;
-	staffAccessConsent: boolean;
-	amount: string;
-	currencyCode: string;
-	cartReference: string | null;
-	status: CheckoutIntentStatus;
-	expiresAtIso: string;
-	createdAtIso: string;
-	/** Null is reserved for pre-protocol historical checkout intents. */
-	lineIdentityProtocol?: string | null;
-	lines?: CheckoutIntentLineItemRecord[];
-}
-
-export function assertCheckoutIntentType(
-	intent: CheckoutIntentRecord,
-	expectedType: CheckoutIntentType,
-): void {
-	if (intent.intentType !== expectedType)
-		throw new AppError(
-			"This checkout key is already associated with another purchase type.",
-			409,
-			"checkout_payload_conflict",
-		);
-}
-
-export type CheckoutIntentOutcome =
-	| { kind: "created"; intent: CheckoutIntentRecord }
-	| { kind: "in_progress" }
-	| { kind: "ready"; intent: CheckoutIntentRecord; cart: CheckoutCartRecord }
-	| { kind: "active" }
-	| { kind: "expired" }
-	| { kind: "failed" };
-
-export type ClassCheckoutReplayState = Pick<
-	ClassCheckoutExecution,
-	"state" | "generation" | "resultCode"
-> & { intentStatus: CheckoutIntentStatus };
-
-export interface CheckoutRepository {
-	classExecutions?: ClassCheckoutExecutionRepository;
-	setClassCheckoutPaymentEvidenceLookup?(
-		lookup: (intent: CheckoutIntentRecord) => boolean,
-	): void;
-	findIntentByKey?(input: {
-		organizationId: string;
-		customerId: string;
-		sessionId: string;
-		idempotencyKey: string;
-	}): Promise<CheckoutIntentRecord | null>;
-	getOutcome(input: {
-		organizationId: string;
-		customerId: string;
-		sessionId: string;
-		idempotencyKey: string;
-	}): Promise<Exclude<CheckoutIntentOutcome, { kind: "created" }> | null>;
-	createIntent(
-		record: CreateCheckoutIntentInput,
-	): Promise<CheckoutIntentOutcome>;
-	attachCart(
-		input: Omit<CheckoutCartRecord, "reference" | "createdAtIso" | "status"> & {
-			intentId: string;
-			capacityCheck?: () => Promise<AppError | null>;
-			executionClaim?: ClassCheckoutClaim;
-		},
-	): Promise<CheckoutCartRecord>;
-	markIntentReady?(
-		input: Omit<CheckoutCartRecord, "reference" | "createdAtIso" | "status"> & {
-			intentId: string;
-			capacityCheck?: () => Promise<AppError | null>;
-			executionClaim?: ClassCheckoutClaim;
-		},
-	): Promise<CheckoutCartRecord>;
-	markCheckoutStarted(intentId: string): Promise<void>;
-	markFailed(intentId: string): Promise<void>;
-	markIntentFailed?(input: {
-		organizationId?: string;
-		intentId: string;
-		failureCode?: string;
-		failureMessage?: string;
-	}): Promise<void>;
-	getCart(
-		reference: string,
-		organizationId: string,
-		customerId: string,
-		nowIso: string,
-	): Promise<CheckoutCartRecord | null>;
-	findIntentByCorrelation(
-		organizationId: string,
-		correlationId: string,
-	): Promise<CheckoutIntentRecord | null>;
-	findIntentByCorrelationId?(
-		organizationId: string,
-		correlationId: string,
-	): Promise<CheckoutIntentRecord | null>;
-	findIntentById?(
-		organizationId: string,
-		intentId: string,
-	): Promise<CheckoutIntentRecord | null>;
-	getClassCheckoutReplayState(
-		organizationId: string,
-		intentId: string,
-	): Promise<ClassCheckoutReplayState | null>;
-	hasProcessingIntent(
-		organizationId: string,
-		customerId: string,
-		nowIso: string,
-		intentType?: CheckoutIntentType,
-	): Promise<boolean>;
-	resolveIntent(
-		intentId: string,
-		resolution: "approved" | "rejected" | "needs_review",
-	): Promise<void>;
-	insertRegistrationMetadata(params: {
-		id: string;
-		organizationId: string;
-		festivalId: string;
-		checkoutIntentId: string;
-		checkoutIntentLineId?: string | null;
-		teacherMembershipId: string;
-		accompanistMembershipId: string | null;
-		repertoireJson: RepertoirePiece[];
-		repertoireSnapshotPieces?: RepertoirePiece[];
-		registrationSnapshot?: ClassRegistrationSnapshot | null;
-	}): Promise<ClassRegistrationMetadata>;
-	listCheckoutRegistrationSnapshots?(
-		organizationId: string,
-		intentId: string,
-	): Promise<
-		Array<{
-			checkoutIntentLineId: string;
-			registrationSnapshot: ClassRegistrationSnapshot;
-		}>
-	>;
-	linkRegistrationMetadataToEntitlement(params: {
-		checkoutIntentId?: string;
-		checkoutIntentLineId?: string;
-		classEntitlementId: string;
-		tx?: { unsafe(sql: string, params?: unknown[]): Promise<unknown> };
-	}): Promise<void>;
-	getRegistrationMetadataByEntitlementId(
-		organizationId: string,
-		classEntitlementId: string,
-	): Promise<ClassRegistrationMetadata | null>;
-	listRegistrationMetadataByEntitlementIds?(
-		organizationId: string,
-		classEntitlementIds: readonly string[],
-	): Promise<Map<string, ClassRegistrationMetadata>>;
-	updateRegistrationMetadata(
-		registrationMetadataId: string,
-		organizationId: string,
-		input: {
-			accompanistMembershipId?: string | null;
-			pieces: RepertoirePiece[];
-		},
-	): Promise<ClassRegistrationMetadata>;
-}
-
-export interface CreateCheckoutIntentLineInput {
-	id?: string;
-	lineIndex?: number;
-	lineType?: string;
-	festivalClassId?: string | null;
-	childId?: string | null;
-	offeringId?: string | null;
-	shopifyProductGid: string;
-	shopifyVariantGid: string;
-	amount: string;
-	currencyCode: string;
-	divisionId?: string | null;
-	divisionNameSnapshot?: string | null;
-}
-
-export type CreateCheckoutIntentInput = Omit<
+import type {
+	CheckoutCartRecord,
 	CheckoutIntentRecord,
-	| "id"
-	| "correlationId"
-	| "cartReference"
-	| "createdAtIso"
-	| "status"
-	| "intentType"
-	| "offeringId"
-	| "entitlementClass"
-	| "durationDays"
-	| "festivalClassId"
-	| "childId"
-	| "policyVersion"
-	| "divisionId"
-	| "divisionNameSnapshot"
-	| "staffAccessConsent"
-	| "lines"
-> & {
-	intentType?: CheckoutIntentType;
-	offeringId?: string | null;
-	entitlementClass?: "teacher_membership" | null;
-	durationDays?: number | null;
-	festivalClassId?: string | null;
-	childId?: string | null;
-	policyVersion?: "v1" | null;
-	divisionId?: string | null;
-	divisionNameSnapshot?: string | null;
-	staffAccessConsent?: boolean;
-	lines?: CreateCheckoutIntentLineInput[];
-	classExecution?: { fingerprint: string; requestSnapshot: unknown };
-};
+	CheckoutIntentType,
+	CheckoutRepository,
+	ClassCheckoutClaim,
+	CreateCheckoutIntentInput,
+} from "../domains/class-checkout/index.js";
+import { withInMemoryCapacityLock } from "../repo/in-memory-capacity-lock.js";
+import { InMemoryClassCheckoutExecutionRepository } from "./class-checkout-execution.js";
+import { withInMemoryCheckoutAdmissionLock } from "./in-memory-checkout-admission-lock.js";
+import {
+	attachInMemoryCart,
+	buildInMemoryRestartLookup,
+	computeInMemoryIntentOutcome,
+	createInMemoryCheckoutIntent,
+	getInMemoryMetadataByEntitlementId,
+	type InMemoryCheckoutStore,
+	insertInMemoryMetadata,
+	linkInMemoryMetadataToEntitlement,
+	listInMemoryCheckoutSnapshots,
+	listInMemoryMetadataByEntitlementIds,
+	restoreInMemoryMetadataLinks,
+	snapshotInMemoryMetadataLinks,
+	updateInMemoryMetadata,
+} from "./in-memory-checkout-helpers.js";
+
+export * from "../domains/class-checkout/checkout-types.js";
 
 export class InMemoryCheckoutRepository implements CheckoutRepository {
 	readonly classExecutions: InMemoryClassCheckoutExecutionRepository;
@@ -333,83 +70,32 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 						["creating", "ready", "checkout_started"].includes(intent.status) &&
 						intent.expiresAtIso > nowIso,
 				),
-			(org, intentId) => {
-				const intent = this.intents.get(intentId);
-				return intent?.organizationId === org ? intent.expiresAtIso : null;
-			},
-			{
-				intent: ({ organizationId, customerId, intentId }) => {
-					const intent = this.intents.get(intentId);
-					return intent?.organizationId === organizationId &&
-						intent.customerId === customerId &&
-						intent.intentType === "class_entry"
-						? {
-								status: intent.status,
-								cartReference: intent.cartReference,
-								paymentObserved: this.hasClassCheckoutPaymentEvidence(intent),
-							}
-						: null;
-				},
-				replacementClosed: (input, replacementKey) =>
-					[...this.intents.values()].some(
-						(intent) =>
-							intent.organizationId === input.organizationId &&
-							intent.customerId === input.customerId &&
-							intent.intentType === "class_entry" &&
-							intent.idempotencyKey === replacementKey &&
-							(!["creating", "ready", "checkout_started"].includes(
-								intent.status,
-							) ||
-								this.hasClassCheckoutPaymentEvidence(intent)),
-					),
-				hasNewerCheckout: async (input, replacementKey) => {
-					const original = this.intents.get(input.intentId);
-					if (!original) return false;
-					const originalMetadata = this.registrationMetadata.get(original.id);
-					let newer = false;
-					for (const intent of this.intents.values()) {
-						if (intent.id === original.id) {
-							newer = true;
-							continue;
-						}
-						if (
-							intent.organizationId !== input.organizationId ||
-							intent.customerId !== input.customerId ||
-							intent.intentType !== "class_entry"
-						)
-							continue;
-						if (intent.idempotencyKey === replacementKey) continue;
-						if (!newer) continue;
-						const metadata = this.registrationMetadata.get(intent.id);
-						const execution = await this.classExecutions.get(
-							input.organizationId,
-							intent.id,
-						);
-						const snapshot = execution?.requestSnapshot as
-							| {
-									festivalShortName?: string;
-							  }
-							| undefined;
-						if (
-							(original.festivalClassId &&
-								original.festivalClassId === intent.festivalClassId) ||
-							(originalMetadata &&
-								metadata?.festivalId === originalMetadata.festivalId) ||
-							snapshot?.festivalShortName?.toLowerCase() ===
-								input.festivalShortName.toLowerCase()
-						)
-							return true;
-					}
-					return false;
-				},
-			},
+			(org, intentId) =>
+				this.intents.get(intentId)?.organizationId === org
+					? (this.intents.get(intentId)?.expiresAtIso ?? null)
+					: null,
+			buildInMemoryRestartLookup(this.store()),
 		);
 	}
+
+	private store(): InMemoryCheckoutStore {
+		return {
+			carts: this.carts,
+			intents: this.intents,
+			registrationMetadata: this.registrationMetadata,
+			classExecutions: this.classExecutions,
+			now: this.now,
+			hasPaymentEvidence: (intent) =>
+				this.hasClassCheckoutPaymentEvidence(intent),
+		};
+	}
+
 	setClassCheckoutPaymentEvidenceLookup(
 		lookup: (intent: CheckoutIntentRecord) => boolean,
 	) {
 		this.hasClassCheckoutPaymentEvidence = lookup;
 	}
+
 	async findIntentByKey(input: {
 		organizationId: string;
 		customerId: string;
@@ -417,11 +103,11 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		idempotencyKey: string;
 	}) {
 		const value = [...this.intents.values()].find(
-			(value) =>
-				value.organizationId === input.organizationId &&
-				value.customerId === input.customerId &&
-				value.sessionId === input.sessionId &&
-				value.idempotencyKey === input.idempotencyKey,
+			(item) =>
+				item.organizationId === input.organizationId &&
+				item.customerId === input.customerId &&
+				item.sessionId === input.sessionId &&
+				item.idempotencyKey === input.idempotencyKey,
 		);
 		return value ? structuredClone(value) : null;
 	}
@@ -433,89 +119,20 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		idempotencyKey: string;
 	}) {
 		const intent = [...this.intents.values()].find(
-			(value) =>
-				value.organizationId === input.organizationId &&
-				value.customerId === input.customerId &&
-				value.sessionId === input.sessionId &&
-				value.idempotencyKey === input.idempotencyKey,
+			(item) =>
+				item.organizationId === input.organizationId &&
+				item.customerId === input.customerId &&
+				item.sessionId === input.sessionId &&
+				item.idempotencyKey === input.idempotencyKey,
 		);
-		return intent ? this.outcomeFor(intent) : null;
+		return intent ? computeInMemoryIntentOutcome(this.store(), intent) : null;
 	}
 
 	async createIntent(record: CreateCheckoutIntentInput) {
-		if (record.classExecution)
-			assertSafeExecutionSnapshot(record.classExecution.requestSnapshot);
 		return withInMemoryCheckoutAdmissionLock(
 			record.organizationId,
 			record.customerId,
-			async () => {
-				const existing = [...this.intents.values()].find(
-					(intent) =>
-						intent.organizationId === record.organizationId &&
-						intent.customerId === record.customerId &&
-						intent.sessionId === record.sessionId &&
-						intent.idempotencyKey === record.idempotencyKey,
-				);
-				if (existing) return this.outcomeFor(existing);
-				if (
-					record.intentType === "class_entry" &&
-					(await this.classExecutions.findBlocking(
-						record.organizationId,
-						record.customerId,
-					))
-				)
-					return { kind: "in_progress" as const };
-				const nowIso = this.now().toISOString();
-				for (const intent of this.intents.values()) {
-					if (
-						intent.organizationId === record.organizationId &&
-						intent.customerId === record.customerId &&
-						(intent.status === "creating" ||
-							intent.status === "ready" ||
-							intent.status === "checkout_started") &&
-						intent.expiresAtIso > nowIso
-					) {
-						return { kind: "in_progress" as const };
-					}
-				}
-				const {
-					lines: _lines,
-					classExecution: _execution,
-					...recordWithoutLines
-				} = record;
-				const value: CheckoutIntentRecord = {
-					...recordWithoutLines,
-					intentType: record.intentType ?? "membership",
-					offeringId: record.offeringId ?? null,
-					entitlementClass: record.entitlementClass ?? null,
-					durationDays: record.durationDays ?? null,
-					festivalClassId: record.festivalClassId ?? null,
-					childId: record.childId ?? null,
-					policyVersion: record.policyVersion ?? null,
-					divisionId: record.divisionId ?? null,
-					divisionNameSnapshot: record.divisionNameSnapshot ?? null,
-					staffAccessConsent: record.staffAccessConsent ?? false,
-					lineIdentityProtocol:
-						record.intentType === "class_entry"
-							? CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL
-							: null,
-					id: randomUUID(),
-					correlationId: randomUUID(),
-					cartReference: null,
-					status: "creating",
-					createdAtIso: nowIso,
-				};
-				value.lines = buildIntentLineRecords(value, record.lines);
-				this.intents.set(value.id, value);
-				if (record.classExecution)
-					await this.classExecutions.prepare({
-						organizationId: record.organizationId,
-						customerId: record.customerId,
-						intentId: value.id,
-						...record.classExecution,
-					});
-				return { kind: "created" as const, intent: { ...value } };
-			},
+			async () => createInMemoryCheckoutIntent(this.store(), record),
 		);
 	}
 
@@ -526,50 +143,9 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 			executionClaim?: ClassCheckoutClaim;
 		},
 	) {
-		return withInMemoryCapacityLock(async () => {
-			const { capacityCheck, executionClaim, ...cartInput } = input;
-			if (executionClaim) {
-				const execution = await this.classExecutions.get(
-					input.organizationId,
-					input.intentId,
-				);
-				if (
-					!execution ||
-					!executionClaimMatches(
-						execution,
-						executionClaim,
-						this.now().toISOString(),
-					)
-				)
-					throw new Error("Checkout execution claim is stale.");
-			}
-			const attached = this.intents.get(input.intentId);
-			if (executionClaim && attached?.cartReference) {
-				const cart = this.carts.get(attached.cartReference);
-				if (cart?.shopifyCartId === input.shopifyCartId) return { ...cart };
-			}
-			const failure = await capacityCheck?.();
-			if (failure) throw failure;
-			const intent = this.intents.get(input.intentId);
-			if (
-				!intent ||
-				intent.organizationId !== input.organizationId ||
-				intent.status !== "creating"
-			)
-				throw new Error("Checkout intent cannot accept a cart.");
-			if (executionClaim && !this.classExecutions.markAttached(executionClaim))
-				throw new Error("Checkout execution claim is stale.");
-			const value: CheckoutCartRecord = {
-				...cartInput,
-				reference: randomUUID(),
-				status: "ready",
-				createdAtIso: this.now().toISOString(),
-			};
-			this.carts.set(value.reference, value);
-			intent.cartReference = value.reference;
-			intent.status = "ready";
-			return { ...value };
-		});
+		return withInMemoryCapacityLock(async () =>
+			attachInMemoryCart(this.store(), input),
+		);
 	}
 
 	async markIntentReady(
@@ -587,8 +163,9 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		if (
 			!intent ||
 			(intent.status !== "ready" && intent.status !== "checkout_started")
-		)
+		) {
 			throw new Error("Checkout intent is not ready.");
+		}
 		intent.status = "checkout_started";
 		const cart = intent.cartReference
 			? this.carts.get(intent.cartReference)
@@ -629,8 +206,9 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 			cart.expiresAtIso <= nowIso ||
 			cart.status === "expired" ||
 			cart.status === "superseded"
-		)
+		) {
 			return null;
+		}
 		return { ...cart };
 	}
 
@@ -680,8 +258,9 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		if (
 			intentType === "class_entry" &&
 			(await this.classExecutions.findBlocking(organizationId, customerId))
-		)
+		) {
 			return true;
+		}
 		return [...this.intents.values()].some(
 			(intent) =>
 				intent.organizationId === organizationId &&
@@ -705,21 +284,10 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		organizationId: string,
 		intentId: string,
 	) {
-		return [...new Set(this.registrationMetadata.values())].flatMap(
-			(metadata) =>
-				metadata.organizationId === organizationId &&
-				metadata.checkoutIntentId === intentId &&
-				metadata.checkoutIntentLineId &&
-				metadata.registrationSnapshot
-					? [
-							{
-								checkoutIntentLineId: metadata.checkoutIntentLineId,
-								registrationSnapshot: structuredClone(
-									metadata.registrationSnapshot,
-								),
-							},
-						]
-					: [],
+		return listInMemoryCheckoutSnapshots(
+			this.store(),
+			organizationId,
+			intentId,
 		);
 	}
 
@@ -735,55 +303,7 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		repertoireSnapshotPieces?: RepertoirePiece[];
 		registrationSnapshot?: ClassRegistrationSnapshot | null;
 	}): Promise<ClassRegistrationMetadata> {
-		for (const existing of this.registrationMetadata.values()) {
-			if (existing.id === params.id)
-				throw new Error("Registration metadata ID already exists.");
-			if (
-				params.checkoutIntentLineId != null &&
-				existing.checkoutIntentLineId === params.checkoutIntentLineId &&
-				existing.organizationId === params.organizationId &&
-				existing.checkoutIntentId === params.checkoutIntentId &&
-				(await this.classExecutions.get(
-					params.organizationId,
-					params.checkoutIntentId,
-				))
-			)
-				return structuredClone(existing);
-			if (
-				params.checkoutIntentLineId != null &&
-				existing.checkoutIntentLineId === params.checkoutIntentLineId
-			)
-				throw new Error(
-					"Registration metadata checkout intent line already exists.",
-				);
-		}
-		const repertoireItems = repertoireItemsFromLegacyPieces(
-			params.id,
-			params.organizationId,
-			params.repertoireSnapshotPieces ?? params.repertoireJson,
-		);
-		const record: ClassRegistrationMetadata = {
-			id: params.id,
-			organizationId: params.organizationId,
-			festivalId: params.festivalId,
-			checkoutIntentId: params.checkoutIntentId,
-			checkoutIntentLineId: params.checkoutIntentLineId ?? null,
-			classEntitlementId: null,
-			teacherMembershipId: params.teacherMembershipId,
-			accompanistMembershipId: params.accompanistMembershipId,
-			repertoireJson: params.repertoireJson,
-			repertoireItems,
-			registrationSnapshot: structuredClone(
-				normalizeClassRegistrationSnapshot(params.registrationSnapshot),
-			),
-			createdAt: this.now(),
-		};
-		this.registrationMetadata.set(params.id, record);
-		this.registrationMetadata.set(params.checkoutIntentId, record);
-		if (params.checkoutIntentLineId) {
-			this.registrationMetadata.set(params.checkoutIntentLineId, record);
-		}
-		return structuredClone(record);
+		return insertInMemoryMetadata(this.store(), params);
 	}
 
 	async linkRegistrationMetadataToEntitlement(params: {
@@ -792,99 +312,42 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 		classEntitlementId: string;
 		tx?: { unsafe(sql: string, params?: unknown[]): Promise<unknown> };
 	}): Promise<void> {
-		const record = [...this.registrationMetadata.values()].find((meta) => {
-			if (params.checkoutIntentLineId) {
-				return meta.checkoutIntentLineId === params.checkoutIntentLineId;
-			}
-			return meta.checkoutIntentId === params.checkoutIntentId;
-		});
-		if (record) {
-			record.classEntitlementId = params.classEntitlementId;
-		}
+		linkInMemoryMetadataToEntitlement(this.store(), params);
 	}
 
 	snapshotRegistrationMetadataEntitlementLinks(input: {
 		checkoutIntentIds: string[];
 		checkoutIntentLineIds: string[];
 	}): Map<string, string | null> {
-		const checkoutIntentIds = new Set(input.checkoutIntentIds);
-		const checkoutIntentLineIds = new Set(input.checkoutIntentLineIds);
-		const records = new Map<string, ClassRegistrationMetadata>();
-		for (const record of this.registrationMetadata.values()) {
-			if (
-				checkoutIntentIds.has(record.checkoutIntentId) ||
-				(typeof record.checkoutIntentLineId === "string" &&
-					checkoutIntentLineIds.has(record.checkoutIntentLineId))
-			) {
-				records.set(record.id, record);
-			}
-		}
-		return new Map(
-			[...records.values()].map((record) => [
-				record.id,
-				record.classEntitlementId,
-			]),
-		);
+		return snapshotInMemoryMetadataLinks(this.store(), input);
 	}
 
 	restoreRegistrationMetadataEntitlementLinks(
 		snapshot: Map<string, string | null>,
 	): void {
-		const records = new Map<string, ClassRegistrationMetadata>();
-		for (const record of this.registrationMetadata.values()) {
-			if (snapshot.has(record.id)) records.set(record.id, record);
-		}
-		for (const [id, classEntitlementId] of snapshot) {
-			const record = records.get(id);
-			if (record) record.classEntitlementId = classEntitlementId;
-		}
+		restoreInMemoryMetadataLinks(this.store(), snapshot);
 	}
 
 	async getRegistrationMetadataByEntitlementId(
 		organizationId: string,
 		classEntitlementId: string,
 	): Promise<ClassRegistrationMetadata | null> {
-		const match = [...this.registrationMetadata.values()].find(
-			(meta) =>
-				meta.organizationId === organizationId &&
-				meta.classEntitlementId === classEntitlementId,
+		return getInMemoryMetadataByEntitlementId(
+			this.store(),
+			organizationId,
+			classEntitlementId,
 		);
-		return match
-			? structuredClone({
-					...match,
-					registrationSnapshot: normalizeClassRegistrationSnapshot(
-						match.registrationSnapshot,
-					),
-				})
-			: null;
 	}
 
 	async listRegistrationMetadataByEntitlementIds(
 		organizationId: string,
 		classEntitlementIds: readonly string[],
 	): Promise<Map<string, ClassRegistrationMetadata>> {
-		if (classEntitlementIds.length === 0) return new Map();
-		const targetIds = new Set(classEntitlementIds);
-		const result = new Map<string, ClassRegistrationMetadata>();
-		for (const meta of this.registrationMetadata.values()) {
-			if (
-				meta.organizationId === organizationId &&
-				meta.classEntitlementId !== null &&
-				targetIds.has(meta.classEntitlementId) &&
-				!result.has(meta.classEntitlementId)
-			) {
-				result.set(
-					meta.classEntitlementId,
-					structuredClone({
-						...meta,
-						registrationSnapshot: normalizeClassRegistrationSnapshot(
-							meta.registrationSnapshot,
-						),
-					}),
-				);
-			}
-		}
-		return result;
+		return listInMemoryMetadataByEntitlementIds(
+			this.store(),
+			organizationId,
+			classEntitlementIds,
+		);
 	}
 
 	async updateRegistrationMetadata(
@@ -895,47 +358,11 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 			pieces: RepertoirePiece[];
 		},
 	): Promise<ClassRegistrationMetadata> {
-		const record = [...this.registrationMetadata.values()].find(
-			(meta) =>
-				meta.id === registrationMetadataId &&
-				meta.organizationId === organizationId,
+		return updateInMemoryMetadata(
+			this.store(),
+			registrationMetadataId,
+			organizationId,
+			input,
 		);
-		if (!record) throw new Error("Registration metadata not found.");
-		if (input.accompanistMembershipId !== undefined) {
-			record.accompanistMembershipId = input.accompanistMembershipId;
-		}
-		record.repertoireJson = input.pieces;
-		record.repertoireItems = repertoireItemsFromLegacyPieces(
-			record.id,
-			record.organizationId,
-			input.pieces,
-		);
-		return structuredClone({
-			...record,
-			registrationSnapshot: normalizeClassRegistrationSnapshot(
-				record.registrationSnapshot,
-			),
-		});
-	}
-
-	private outcomeFor(
-		intent: CheckoutIntentRecord,
-	): Exclude<CheckoutIntentOutcome, { kind: "created" }> {
-		const nowIso = this.now().toISOString();
-		if (intent.expiresAtIso <= nowIso) return { kind: "expired" };
-		if (intent.status === "creating") return { kind: "in_progress" };
-		if (intent.status === "failed") return { kind: "failed" };
-		const cart = intent.cartReference
-			? this.carts.get(intent.cartReference)
-			: undefined;
-		if (
-			cart &&
-			(intent.status === "ready" || intent.status === "checkout_started") &&
-			cart.expiresAtIso > nowIso &&
-			cart.status !== "expired" &&
-			cart.status !== "superseded"
-		)
-			return { kind: "ready", intent: { ...intent }, cart: { ...cart } };
-		return { kind: "failed" };
 	}
 }
