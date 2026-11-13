@@ -1,9 +1,18 @@
-import { describe, expect, it, spyOn } from "bun:test";
+import { describe, expect, it, spyOn, test } from "bun:test";
+import { randomUUID } from "node:crypto";
 import { sql } from "bun";
 import {
 	InMemoryClassEntitlementRepository,
 	PostgresClassEntitlementRepository,
 } from "../src/commerce/class-entitlement-repository.js";
+import { PaidLineConflictError } from "../src/domains/commerce-projection/index.js";
+import {
+	currentPostgresFixture,
+	resetPostgresFixture,
+} from "./postgres-test-fixture.js";
+
+const currentSchema = currentPostgresFixture("class_entitlement_repo");
+const integrationTest = process.env.POSTGRES_INTEGRATION_URL ? test : test.skip;
 
 describe("Issue #266: Class Entitlement Intent Line Invariant", () => {
 	const baseInput = {
@@ -223,5 +232,186 @@ describe("Issue #266: Class Entitlement Intent Line Invariant", () => {
 				unsafeSpy.mockRestore();
 			}
 		});
+	});
+
+	describe("PostgresClassEntitlementRepository (Postgres 17)", () => {
+		async function seedEntitlementPrerequisites(schema: string) {
+			const orgId = randomUUID();
+			const divisionId = randomUUID();
+			const subtypeId = randomUUID();
+			const festivalId = randomUUID();
+			const class1Id = randomUUID();
+			const class2Id = randomUUID();
+			const customerId = randomUUID();
+			const child1Id = randomUUID();
+			const child2Id = randomUUID();
+			const intentId = randomUUID();
+			const intentLine1Id = randomUUID();
+			const intentLine2Id = randomUUID();
+
+			await sql`INSERT INTO ${sql(`${schema}.organizations`)} (id, name, slug) VALUES (${orgId}, 'Class Ent Org', ${`org-${orgId}`})`;
+			await sql`INSERT INTO ${sql(`${schema}.organization_divisions`)} (id, organization_id, display_name, normalized_name, display_order) VALUES (${divisionId}, ${orgId}, 'Piano', 'piano', 0)`;
+			await sql`INSERT INTO ${sql(`${schema}.registration_catalog_values`)} (id, organization_id, kind, display_name, normalized_name, display_order) VALUES (${subtypeId}, ${orgId}, 'class_subtype', 'Classical', 'classical', 0)`;
+			await sql`INSERT INTO ${sql(`${schema}.festivals`)} (id, organization_id, code, short_name, is_primary, name, start_date, end_date) VALUES (${festivalId}, ${orgId}, 'FEST', 'fest', TRUE, 'Festival', '2027-01-01', '2027-01-02')`;
+			await sql`INSERT INTO ${sql(`${schema}.festival_customers`)} (id, organization_id, shopify_customer_gid, created_at, updated_at) VALUES (${customerId}, ${orgId}, 'gid://shopify/Customer/1', NOW(), NOW())`;
+			await sql`INSERT INTO ${sql(`${schema}.festival_children`)} (id, organization_id, parent_customer_id, display_name, created_at) VALUES (${child1Id}, ${orgId}, ${customerId}, 'Child One', NOW()), (${child2Id}, ${orgId}, ${customerId}, 'Child Two', NOW())`;
+			await sql`INSERT INTO ${sql(`${schema}.festival_class_configurations`)} (id, organization_id, festival_id, display_name, class_subtype_id, division_id, minimum_age, maximum_age, price, maximum_performance_pieces, performance_minutes, capacity, shopify_product_gid, shopify_variant_gid) VALUES (${class1Id}, ${orgId}, ${festivalId}, 'Class 1', ${subtypeId}, ${divisionId}, 5, 18, '50.00', 2, 10, 20, 'gid://shopify/Product/c1', 'gid://shopify/ProductVariant/c1'), (${class2Id}, ${orgId}, ${festivalId}, 'Class 2', ${subtypeId}, ${divisionId}, 5, 18, '50.00', 2, 10, 20, 'gid://shopify/Product/c2', 'gid://shopify/ProductVariant/c2')`;
+			await sql.unsafe(
+				`INSERT INTO ${schema}.checkout_intents (id, correlation_id, organization_id, customer_id, session_id, idempotency_key, intent_type, festival_class_id, child_id, shopify_product_gid, shopify_variant_gid, amount, currency_code, status, expires_at) VALUES ($1, $2, $3, $4, 'sess-1', 'idem-1', 'class_entry', $5, $6, 'gid://shopify/Product/c1', 'gid://shopify/ProductVariant/c1', '100.00', 'USD', 'checkout_started', NOW() + INTERVAL '1 hour')`,
+				[intentId, randomUUID(), orgId, customerId, class1Id, child1Id],
+			);
+			await sql.unsafe(
+				`INSERT INTO ${schema}.checkout_intent_lines (id, checkout_intent_id, line_index, line_type, festival_class_id, child_id, shopify_product_gid, shopify_variant_gid, amount, currency_code) VALUES ($1, $2, 0, 'class_entry', $3, $4, 'gid://shopify/Product/c1', 'gid://shopify/ProductVariant/c1', '50.00', 'USD'), ($5, $2, 1, 'class_entry', $6, $7, 'gid://shopify/Product/c2', 'gid://shopify/ProductVariant/c2', '50.00', 'USD')`,
+				[
+					intentLine1Id,
+					intentId,
+					class1Id,
+					child1Id,
+					intentLine2Id,
+					class2Id,
+					child2Id,
+				],
+			);
+			return {
+				orgId,
+				festivalId,
+				class1Id,
+				class2Id,
+				customerId,
+				child1Id,
+				child2Id,
+				intentId,
+				intentLine1Id,
+				intentLine2Id,
+			};
+		}
+
+		integrationTest(
+			"persists intent lines, enforces idempotent replay and fail-closed conflicts, and counts confirmed entitlements",
+			async () => {
+				const schema = await currentSchema();
+				try {
+					const s = await seedEntitlementPrerequisites(schema);
+					const repo = new PostgresClassEntitlementRepository(schema);
+					const first = await repo.createClassEntitlement({
+						organizationId: s.orgId,
+						festivalId: s.festivalId,
+						festivalClassId: s.class1Id,
+						parentCustomerId: s.customerId,
+						childId: s.child1Id,
+						checkoutIntentId: s.intentId,
+						checkoutIntentLineId: s.intentLine1Id,
+						shopifyOrderGid: "gid://shopify/Order/1001",
+						shopifyOrderLineGid: "gid://shopify/LineItem/1001-1",
+						paidAmountCents: 5000,
+						paidCurrencyCode: "USD",
+						status: "confirmed",
+						admittedCartReference: "cart-ref-1",
+						capacityAtAllocation: 20,
+						placedCountBeforeAllocation: 0,
+					});
+
+					expect(first.checkoutIntentLineId).toBe(s.intentLine1Id);
+					expect(first.admittedCartReference).toBe("cart-ref-1");
+					expect(first.capacityAtAllocation).toBe(20);
+					expect(first.placedCountBeforeAllocation).toBe(0);
+
+					// Idempotent replay ignores caller-supplied client id and returns existing row.
+					const replay = await repo.createClassEntitlement({
+						id: randomUUID(),
+						organizationId: s.orgId,
+						festivalId: s.festivalId,
+						festivalClassId: s.class1Id,
+						parentCustomerId: s.customerId,
+						childId: s.child1Id,
+						checkoutIntentId: s.intentId,
+						checkoutIntentLineId: s.intentLine1Id,
+						shopifyOrderGid: "gid://shopify/Order/1001",
+						shopifyOrderLineGid: "gid://shopify/LineItem/1001-1",
+						paidAmountCents: 5000,
+						paidCurrencyCode: "USD",
+						status: "confirmed",
+					});
+					expect(replay.id).toBe(first.id);
+
+					// Duplicate intent line with a different Shopify order line fails closed.
+					await expect(
+						repo.createClassEntitlement({
+							organizationId: s.orgId,
+							festivalId: s.festivalId,
+							festivalClassId: s.class1Id,
+							parentCustomerId: s.customerId,
+							childId: s.child1Id,
+							checkoutIntentId: s.intentId,
+							checkoutIntentLineId: s.intentLine1Id,
+							shopifyOrderGid: "gid://shopify/Order/1002",
+							shopifyOrderLineGid: "gid://shopify/LineItem/1002-1",
+							paidAmountCents: 5000,
+							paidCurrencyCode: "USD",
+							status: "confirmed",
+						}),
+					).rejects.toThrow(
+						"Class entitlement conflict: checkout intent line already fulfilled by a different order line.",
+					);
+
+					// Waitlisted line on class 2 is not counted as confirmed.
+					await repo.createClassEntitlement({
+						organizationId: s.orgId,
+						festivalId: s.festivalId,
+						festivalClassId: s.class2Id,
+						parentCustomerId: s.customerId,
+						childId: s.child2Id,
+						checkoutIntentId: s.intentId,
+						checkoutIntentLineId: s.intentLine2Id,
+						shopifyOrderGid: "gid://shopify/Order/1001",
+						shopifyOrderLineGid: "gid://shopify/LineItem/1001-2",
+						paidAmountCents: 5000,
+						paidCurrencyCode: "USD",
+						status: "waitlisted",
+					});
+
+					// Null-intent-line conflict on same shopifyOrderLineGid throws PaidLineConflictError.
+					await expect(
+						repo.createClassEntitlement({
+							organizationId: s.orgId,
+							festivalId: s.festivalId,
+							festivalClassId: s.class2Id,
+							parentCustomerId: s.customerId,
+							childId: s.child1Id,
+							checkoutIntentId: s.intentId,
+							checkoutIntentLineId: null,
+							shopifyOrderGid: "gid://shopify/Order/1001",
+							shopifyOrderLineGid: "gid://shopify/LineItem/1001-2",
+							paidAmountCents: 5000,
+							paidCurrencyCode: "USD",
+							status: "confirmed",
+						}),
+					).rejects.toBeInstanceOf(PaidLineConflictError);
+
+					expect(
+						(
+							await repo.findClassEntitlementByIntentLineId(
+								s.orgId,
+								s.intentLine1Id,
+							)
+						)?.id,
+					).toBe(first.id);
+					expect(
+						await repo.countConfirmedClassEntitlements(s.orgId, s.class1Id),
+					).toBe(1);
+					expect(
+						await repo.countConfirmedClassEntitlements(s.orgId, s.class2Id),
+					).toBe(0);
+					expect(
+						await repo.listClassEntitlements({
+							organizationId: s.orgId,
+							festivalClassId: s.class2Id,
+						}),
+					).toHaveLength(1);
+				} finally {
+					await resetPostgresFixture(schema);
+				}
+			},
+		);
 	});
 });

@@ -1,4 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import {
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	spyOn,
+	test,
+} from "bun:test";
+import { randomUUID } from "node:crypto";
 import { sql } from "bun";
 import {
 	DuplicateAdjustmentError,
@@ -8,14 +17,13 @@ import {
 	resolveLedgerEntryType,
 } from "../src/billing/billing-repository.js";
 import { PostgresBillingRepository } from "../src/billing/postgres-billing-repository.js";
+import {
+	currentPostgresFixture,
+	resetPostgresFixture,
+} from "./postgres-test-fixture.js";
 
-async function postgresBillingSource() {
-	return (
-		await Bun.file(
-			new URL("../src/billing/postgres-billing-repository.ts", import.meta.url),
-		).text()
-	).replace(/\r\n/g, "\n");
-}
+const currentSchema = currentPostgresFixture("billing_repo");
+const integrationTest = process.env.POSTGRES_INTEGRATION_URL ? test : test.skip;
 
 describe("BillingRepository - InMemoryBillingRepository", () => {
 	let repo: InMemoryBillingRepository;
@@ -335,29 +343,182 @@ describe("BillingRepository - PostgresBillingRepository", () => {
 		).toThrow("Database schema is invalid.");
 	});
 
-	it("uses atomic sql.begin transaction with row locking and duplicate checks", async () => {
-		const source = await postgresBillingSource();
+	describe("PostgresBillingRepository (Postgres 17)", () => {
+		integrationTest(
+			"atomically records credit adjustments and ledger entries with lock, balance check, and duplicate guard",
+			async () => {
+				const schema = await currentSchema();
+				try {
+					const orgId = randomUUID();
+					const customerId = randomUUID();
+					await sql`INSERT INTO ${sql(`${schema}.organizations`)} (id, name, slug) VALUES (${orgId}, 'Billing Org', ${`org-${orgId}`})`;
 
-		expect(source).toContain("return (await sql.begin(async (tx) => {");
-		expect(source).toContain("credit_balances (organization_id, customer_id");
-		expect(source).toContain("FOR UPDATE");
-		expect(source).toContain("billing_adjustments");
-		expect(source).toContain("billing_ledger");
-		expect(source).toContain("newBalanceCents < 0");
-		expect(source).toContain("InsufficientCreditBalanceError");
-		expect(source).toContain("DuplicateAdjustmentError");
-	});
+					const repo = new PostgresBillingRepository(schema);
+					const issued = await repo.createAdjustmentWithLedger(
+						{
+							organizationId: orgId,
+							customerId,
+							adminUserId: "admin-1",
+							adjustmentType: "credit_issue",
+							amountCents: 6000,
+							currencyCode: "USD",
+							reason: "Schedule credit",
+							referenceType: "order",
+							referenceId: "ord-100",
+						},
+						{
+							entryType: "credit",
+							direction: "inflow",
+							notes: "Initial credit",
+						},
+					);
+					expect(issued.creditBalance.balanceCents).toBe(6000);
+					expect(issued.ledgerEntry.balanceAfterCents).toBe(6000);
 
-	it("queries shopify_order_projections, class_entitlements, and checkout_carts for mismatches", async () => {
-		const source = await postgresBillingSource();
+					// Duplicate (organization_id, reference_type, reference_id, adjustment_type) rejects
+					await expect(
+						repo.createAdjustmentWithLedger(
+							{
+								organizationId: orgId,
+								customerId,
+								adminUserId: "admin-1",
+								adjustmentType: "credit_issue",
+								amountCents: 1000,
+								currencyCode: "USD",
+								reason: "Duplicate",
+								referenceType: "order",
+								referenceId: "ord-100",
+							},
+							{ entryType: "credit", direction: "inflow" },
+						),
+					).rejects.toBeInstanceOf(DuplicateAdjustmentError);
 
-		expect(source).toContain("shopify_order_projections");
-		expect(source).toContain("class_entitlements");
-		expect(source).toContain("checkout_intents");
-		expect(source).toContain("checkout_carts");
-		expect(source).toContain("paid_unregistered");
-		expect(source).toContain("registered_unpaid");
-		expect(source).toContain("partial_payment");
+					// Applying more credit than balance fails atomically without altering balance or ledger
+					await expect(
+						repo.createAdjustmentWithLedger(
+							{
+								organizationId: orgId,
+								customerId,
+								adminUserId: "admin-1",
+								adjustmentType: "credit_apply",
+								amountCents: 9000,
+								currencyCode: "USD",
+								reason: "Overdraft",
+							},
+							{ entryType: "debit", direction: "outflow" },
+						),
+					).rejects.toBeInstanceOf(InsufficientCreditBalanceError);
+
+					const applied = await repo.createAdjustmentWithLedger(
+						{
+							organizationId: orgId,
+							customerId,
+							adminUserId: "admin-1",
+							adjustmentType: "credit_apply",
+							amountCents: 2500,
+							currencyCode: "USD",
+							reason: "Apply to registration",
+						},
+						{ entryType: "debit", direction: "outflow" },
+					);
+					expect(applied.creditBalance.balanceCents).toBe(3500);
+					expect(
+						(await repo.getCreditBalance(orgId, customerId))?.balanceCents,
+					).toBe(3500);
+					expect(
+						await repo.findAdjustmentByReference(orgId, "order", "ord-100"),
+					).toMatchObject({ id: issued.adjustment.id });
+					expect(await repo.listAdjustments(orgId, customerId)).toHaveLength(2);
+					expect(await repo.listLedgerEntries(orgId, customerId)).toHaveLength(
+						2,
+					);
+				} finally {
+					await resetPostgresFixture(schema);
+				}
+			},
+		);
+
+		integrationTest(
+			"detects paid_unregistered, registered_unpaid, and partial_payment mismatches in Postgres 17",
+			async () => {
+				const schema = await currentSchema();
+				try {
+					const orgId = randomUUID();
+					const divisionId = randomUUID();
+					const subtypeId = randomUUID();
+					const festivalId = randomUUID();
+					const classId = randomUUID();
+					const customerId = randomUUID();
+					const childId = randomUUID();
+					const partialIntentId = randomUUID();
+					const unpaidIntentId = randomUUID();
+					const paidUnregIntentId = randomUUID();
+
+					await sql`INSERT INTO ${sql(`${schema}.organizations`)} (id, name, slug) VALUES (${orgId}, 'Mismatch Org', ${`org-${orgId}`})`;
+					await sql`INSERT INTO ${sql(`${schema}.organization_divisions`)} (id, organization_id, display_name, normalized_name, display_order) VALUES (${divisionId}, ${orgId}, 'Piano', 'piano', 0)`;
+					await sql`INSERT INTO ${sql(`${schema}.registration_catalog_values`)} (id, organization_id, kind, display_name, normalized_name, display_order) VALUES (${subtypeId}, ${orgId}, 'class_subtype', 'Classical', 'classical', 0)`;
+					await sql`INSERT INTO ${sql(`${schema}.festivals`)} (id, organization_id, code, short_name, is_primary, name, start_date, end_date) VALUES (${festivalId}, ${orgId}, 'FEST', 'fest', TRUE, 'Festival', '2027-01-01', '2027-01-02')`;
+					await sql`INSERT INTO ${sql(`${schema}.festival_customers`)} (id, organization_id, shopify_customer_gid, created_at, updated_at) VALUES (${customerId}, ${orgId}, 'gid://shopify/Customer/9', NOW(), NOW())`;
+					await sql`INSERT INTO ${sql(`${schema}.festival_children`)} (id, organization_id, parent_customer_id, display_name, created_at) VALUES (${childId}, ${orgId}, ${customerId}, 'Child M', NOW())`;
+					await sql`INSERT INTO ${sql(`${schema}.festival_class_configurations`)} (id, organization_id, festival_id, display_name, class_subtype_id, division_id, minimum_age, maximum_age, price, maximum_performance_pieces, performance_minutes, capacity, shopify_product_gid, shopify_variant_gid) VALUES (${classId}, ${orgId}, ${festivalId}, 'Class M', ${subtypeId}, ${divisionId}, 5, 18, '50.00', 2, 10, 20, 'gid://shopify/Product/m', 'gid://shopify/ProductVariant/m')`;
+
+					await sql.unsafe(
+						`INSERT INTO ${schema}.checkout_carts (reference, shopify_cart_id, organization_id, customer_id, session_id, integration_version, status, expires_at) VALUES ('cart-m', 'gid://shopify/Cart/m', $1, $2, 's', 1, 'checkout_started', NOW() + INTERVAL '1 hour')`,
+						[orgId, customerId],
+					);
+					await sql.unsafe(
+						`INSERT INTO ${schema}.checkout_intents (id, correlation_id, organization_id, customer_id, session_id, idempotency_key, intent_type, festival_class_id, child_id, shopify_product_gid, shopify_variant_gid, amount, currency_code, cart_reference, status, expires_at) VALUES
+						 ($1, 'corr-paid-unreg', $4, $5, 's', 'k1', 'class_entry', $6, $7, 'gid://shopify/Product/m', 'gid://shopify/ProductVariant/m', '50.00', 'USD', 'cart-m', 'checkout_started', NOW() + INTERVAL '1 hour'),
+						 ($2, 'corr-unpaid', $4, $5, 's', 'k2', 'class_entry', $6, $7, 'gid://shopify/Product/m', 'gid://shopify/ProductVariant/m', '50.00', 'USD', NULL, 'checkout_started', NOW() + INTERVAL '1 hour'),
+						 ($3, 'corr-partial', $4, $5, 's', 'k3', 'class_entry', $6, $7, 'gid://shopify/Product/m', 'gid://shopify/ProductVariant/m', '50.00', 'USD', NULL, 'checkout_started', NOW() + INTERVAL '1 hour')`,
+						[
+							paidUnregIntentId,
+							unpaidIntentId,
+							partialIntentId,
+							orgId,
+							customerId,
+							classId,
+							childId,
+						],
+					);
+					// 1) paid_unregistered: paid projection with no entitlement
+					// 2) partial_payment: paid projection + confirmed entitlement paid 3000 < 5000
+					await sql.unsafe(
+						`INSERT INTO ${schema}.shopify_order_projections (organization_id, shopify_order_gid, shopify_customer_gid, correlation_id, fully_paid_at, currency_code, created_at, updated_at) VALUES
+						 ($1, 'gid://shopify/Order/paid-unreg', 'gid://shopify/Customer/9', 'corr-paid-unreg', NOW(), 'USD', NOW(), NOW()),
+						 ($1, 'gid://shopify/Order/partial', 'gid://shopify/Customer/9', 'corr-partial', NOW(), 'USD', NOW(), NOW())`,
+						[orgId],
+					);
+					// 3) registered_unpaid: confirmed entitlement with paid_amount_cents = 0 and no paid order
+					await sql.unsafe(
+						`INSERT INTO ${schema}.class_entitlements (id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status) VALUES
+						 ($1, $3, $4, $5, $6, $7, $8, 'gid://shopify/Order/unpaid', 'gid://shopify/LineItem/unpaid-1', 0, 'USD', 'confirmed'),
+						 ($2, $3, $4, $5, $6, $7, $9, 'gid://shopify/Order/partial', 'gid://shopify/LineItem/partial-1', 3000, 'USD', 'confirmed')`,
+						[
+							randomUUID(),
+							randomUUID(),
+							orgId,
+							festivalId,
+							classId,
+							customerId,
+							childId,
+							unpaidIntentId,
+							partialIntentId,
+						],
+					);
+
+					const repo = new PostgresBillingRepository(schema);
+					const mismatches = await repo.listMismatches(orgId);
+					expect(mismatches.map((m) => m.mismatchType).sort()).toEqual([
+						"paid_unregistered",
+						"partial_payment",
+						"registered_unpaid",
+					]);
+				} finally {
+					await resetPostgresFixture(schema);
+				}
+			},
+		);
 	});
 
 	describe("PostgresBillingRepository method execution with mocked sql", () => {
