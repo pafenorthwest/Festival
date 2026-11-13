@@ -7,6 +7,7 @@ import { ShopifyWebhookService } from "../src/commerce/shopify-webhook-service.j
 import { CustomerAccountService } from "../src/customer/customer-account-service.js";
 import { InMemoryCustomerAccountRepository } from "../src/customer/in-memory-customer-account-repository.js";
 import { AppError } from "../src/errors/app-error.js";
+import { BoundedAsyncCache } from "../src/lib/bounded-async-cache.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
 import { OrganizationService } from "../src/services/organization-service.js";
 import {
@@ -386,5 +387,97 @@ describe("domain cache invalidation and public membership caching ([G1], [G4])",
 			{ confirmed: true },
 		);
 		expect((await list()).membershipProducts).toEqual([]);
+	});
+
+	it("prevents in-flight PublicMembershipProductService.list from coalescing or repopulating stale data after invalidation ([G1], [G4])", async () => {
+		const { s, post } = await buildHarness();
+		const created = await post(
+			"/api/organizations/pafe/admin/membership-products",
+			{ name: "Teacher Membership", description: "Annual.", price: "75.00" },
+		);
+		const { membershipProduct: prod } = (await created.json()) as {
+			membershipProduct: { id: string };
+		};
+		s.cat.calls = 0;
+
+		const load1Started = Promise.withResolvers<void>();
+		const load1Gate =
+			Promise.withResolvers<PublicShopifyCatalogProduct | null>();
+		let pauseFirst = true;
+		const baseRead = s.cat.readProduct.bind(s.cat);
+		s.cat.readProduct = async (domain: string, gid: string) => {
+			if (pauseFirst) {
+				pauseFirst = false;
+				s.cat.calls += 1;
+				load1Started.resolve();
+				return load1Gate.promise;
+			}
+			return baseRead(domain, gid);
+		};
+
+		const load1 = s.pub.list("pafe");
+		await load1Started.promise;
+
+		s.cat.products.set(GID_P, catalogEntry("Updated Membership", "90.00"));
+		await post(`/api/organizations/pafe/admin/membership-products/${prod.id}`, {
+			name: "Updated Membership",
+			description: "Annual.",
+			price: "90.00",
+		});
+
+		const load2 = s.pub.list("pafe");
+		for (let i = 0; i < 12; i += 1) await Promise.resolve();
+		try {
+			expect(s.cat.calls).toBe(2);
+			const r2 = await load2;
+			expect(r2.membershipProducts[0]?.name).toBe("Updated Membership");
+		} finally {
+			load1Gate.resolve(catalogEntry("Teacher Membership", "75.00"));
+			await load1;
+		}
+		const r3 = await s.pub.list("pafe");
+		expect([r3.membershipProducts[0]?.name, s.cat.calls]).toEqual([
+			"Updated Membership",
+			2,
+		]);
+	});
+
+	it("discards invalidated or force-superseded in-flight BoundedAsyncCache loads", async () => {
+		const cache = new BoundedAsyncCache<string, { orgId: string; v: string }>({
+			maxEntries: 16,
+			maxEntryBytes: 1024,
+			maxTotalBytes: 4096,
+		});
+		const gate1 = Promise.withResolvers<{ orgId: string; v: string }>();
+		const p1 = cache.getOrLoad("pafe", async () => ({
+			value: await gate1.promise,
+			ttlMs: 60_000,
+			bytes: 16,
+		}));
+		cache.deleteWhere((_k, val) => val.orgId === "other");
+		cache.deleteWhere((_k, val) => val.orgId === "org-1");
+		gate1.resolve({ orgId: "org-1", v: "stale-1" });
+		await p1;
+		expect(cache.get("pafe")).toBeUndefined();
+
+		const gate2 = Promise.withResolvers<{ orgId: string; v: string }>();
+		const p2 = cache.getOrLoad("pafe", async () => ({
+			value: await gate2.promise,
+			ttlMs: 60_000,
+			bytes: 16,
+		}));
+		const p3 = cache.getOrLoad(
+			"pafe",
+			async () => ({
+				value: { orgId: "org-1", v: "fresh-2" },
+				ttlMs: 60_000,
+				bytes: 16,
+			}),
+			true,
+		);
+		expect((await p3).v).toBe("fresh-2");
+		gate2.resolve({ orgId: "org-1", v: "stale-2" });
+		await p2;
+		expect(cache.get("pafe")?.v).toBe("fresh-2");
 	});
 });

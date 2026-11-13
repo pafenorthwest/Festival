@@ -24,9 +24,17 @@ interface Entry<V> {
 	bytes: number;
 }
 
+interface PendingEntry<K, V> {
+	key: K;
+	promise: Promise<V>;
+	invalidatedPredicates: Array<(key: K, value: V) => boolean>;
+	superseded: boolean;
+}
+
 export class BoundedAsyncCache<K, V> {
 	private entries = new Map<K, Entry<V>>();
-	private pending = new Map<K, Promise<V>>();
+	private pending = new Map<K, PendingEntry<K, V>>();
+	private inFlight = new Set<PendingEntry<K, V>>();
 	private counters = {
 		hits: 0,
 		misses: 0,
@@ -130,6 +138,55 @@ export class BoundedAsyncCache<K, V> {
 		for (const [key, entry] of this.entries) {
 			if (predicate(key, entry.value)) this.remove(key);
 		}
+		for (const pendingEntry of this.inFlight) {
+			pendingEntry.invalidatedPredicates.push(predicate);
+		}
+		this.pending.clear();
+	}
+
+	private shouldStoreLoaded(entry: PendingEntry<K, V>, value: V): boolean {
+		return (
+			!this.isSkippedNullish(value) &&
+			!entry.superseded &&
+			!this.entries.has(entry.key) &&
+			!entry.invalidatedPredicates.some((pred) => pred(entry.key, value))
+		);
+	}
+
+	private startLoad(
+		key: K,
+		loader: () => Promise<{ value: V; ttlMs: number; bytes: number }>,
+	): Promise<V> {
+		this.pending.delete(key);
+		for (const active of this.inFlight) {
+			if (active.key === key) active.superseded = true;
+		}
+		const entry: PendingEntry<K, V> = {
+			key,
+			promise: Promise.resolve(undefined as never),
+			invalidatedPredicates: [],
+			superseded: false,
+		};
+		this.inFlight.add(entry);
+		entry.promise = loader()
+			.then((loaded) => {
+				if (this.shouldStoreLoaded(entry, loaded.value)) {
+					this.set(key, loaded.value, loaded.ttlMs, loaded.bytes);
+				}
+				return loaded.value;
+			})
+			.catch((error) => {
+				this.counters.errors++;
+				throw error;
+			})
+			.finally(() => {
+				this.inFlight.delete(entry);
+				if (this.pending.get(key) === entry) this.pending.delete(key);
+			});
+		if (!entry.superseded && !entry.invalidatedPredicates.length) {
+			this.pending.set(key, entry);
+		}
+		return entry.promise;
 	}
 
 	async getOrLoad(
@@ -140,29 +197,16 @@ export class BoundedAsyncCache<K, V> {
 		if (!force) {
 			const cached = this.get(key);
 			if (cached !== undefined) return cached;
+			const existing = this.pending.get(key);
+			if (existing) {
+				this.counters.coalesced++;
+				return existing.promise;
+			}
 		} else {
 			this.remove(key);
 			this.counters.misses++;
 		}
-		const existing = this.pending.get(key);
-		if (existing) {
-			this.counters.coalesced++;
-			return existing;
-		}
-		const pending = loader()
-			.then((loaded) => {
-				if (!this.isSkippedNullish(loaded.value)) {
-					this.set(key, loaded.value, loaded.ttlMs, loaded.bytes);
-				}
-				return loaded.value;
-			})
-			.catch((error) => {
-				this.counters.errors++;
-				throw error;
-			})
-			.finally(() => this.pending.delete(key));
-		this.pending.set(key, pending);
-		return pending;
+		return this.startLoad(key, loader);
 	}
 
 	metrics(): CacheMetrics {
