@@ -4,12 +4,14 @@ import { For, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { AccessDeniedPanel } from "../components/AccessDeniedPanel.js";
 import { Button } from "../components/Button.js";
+import { useAdminOrg } from "../domains/admin-org/AdminOrgContext.js";
 
 interface AdminUsersPageProps {
 	app: FestivalAppController;
 }
 
 export function AdminUsersPage(props: AdminUsersPageProps) {
+	const adminOrg = useAdminOrg();
 	return (
 		<Show
 			when={props.app.isAdminMember()}
@@ -25,7 +27,7 @@ export function AdminUsersPage(props: AdminUsersPageProps) {
 					</div>
 				</header>
 				<div class="admin-list">
-					<For each={props.app.adminUsers()}>
+					<For each={adminOrg.adminUsers()}>
 						{(entry) => (
 							<div class={`admin-user-row admin-user-row-${entry.status}`}>
 								<span class="status-dot" aria-hidden="true" />
@@ -35,7 +37,7 @@ export function AdminUsersPage(props: AdminUsersPageProps) {
 									type="button"
 									class="icon-button trash-button"
 									aria-label={`Remove ${entry.email}`}
-									onClick={() => void props.app.handleDeleteAdminUser(entry)}
+									onClick={() => void adminOrg.handleDeleteAdminUser(entry)}
 									disabled={props.app.isBusy() || entry.isSelf}
 								/>
 							</div>
@@ -46,9 +48,9 @@ export function AdminUsersPage(props: AdminUsersPageProps) {
 					<span>Email</span>
 					<input
 						type="email"
-						value={props.app.inviteDraft().email}
+						value={adminOrg.inviteDraft().email}
 						onInput={(event) =>
-							props.app.setInviteDraft((current) => ({
+							adminOrg.setInviteDraft((current) => ({
 								...current,
 								email: event.currentTarget.value,
 							}))
@@ -58,9 +60,9 @@ export function AdminUsersPage(props: AdminUsersPageProps) {
 				<label class="field">
 					<span>Role</span>
 					<select
-						value={props.app.inviteDraft().role}
+						value={adminOrg.inviteDraft().role}
 						onInput={(event) =>
-							props.app.setInviteDraft((current) => ({
+							adminOrg.setInviteDraft((current) => ({
 								...current,
 								role: event.currentTarget.value as OrganizationRole,
 							}))
@@ -73,7 +75,7 @@ export function AdminUsersPage(props: AdminUsersPageProps) {
 				</label>
 				<Button
 					type="button"
-					onClick={props.app.handleCreateAdminInvite}
+					onClick={adminOrg.handleCreateAdminInvite}
 					disabled={props.app.isBusy()}
 				>
 					Send invite

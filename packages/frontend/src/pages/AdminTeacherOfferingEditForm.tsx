@@ -5,6 +5,7 @@ import {
 import { createSignal, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { Button } from "../components/Button.js";
+import { useOptionalTeacherDirectory } from "../domains/directory/TeacherDirectoryContext.js";
 import { updateAdminMembershipProduct } from "../lib/api.js";
 
 export interface AdminTeacherOfferingEditFormProps {
@@ -37,6 +38,7 @@ export function isTeacherOfferingPriceInvalid(
 export function createTeacherOfferingEditState(
 	props: AdminTeacherOfferingEditFormProps,
 ) {
+	const teacherDirectory = useOptionalTeacherDirectory();
 	const [name, setName] = createSignal(props.offering.name);
 	const [description, setDescription] = createSignal(
 		props.offering.description ?? "",
@@ -72,7 +74,14 @@ export function createTeacherOfferingEditState(
 					price: price().trim(),
 				},
 			);
-			await props.app.loadMembershipProducts(route.slug);
+			const loadMembershipProducts =
+				teacherDirectory?.loadMembershipProducts ??
+				(
+					props.app as {
+						loadMembershipProducts?: (slug: string) => Promise<void>;
+					}
+				).loadMembershipProducts;
+			await loadMembershipProducts?.(route.slug);
 			props.onSaved();
 		} catch (error) {
 			setSaveError(

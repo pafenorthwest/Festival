@@ -61,15 +61,17 @@ describe("customer account availability routes and navigation", () => {
 		const sideNav = await read(
 			"../src/components/OrganizationSideNavigation.tsx",
 		);
-		const app = await read("../src/App.tsx");
+		const appRoutes = await read("../src/app/AppRoutes.tsx");
+		const lazyPages = await read("../src/app/lazyPages.ts");
 
 		expect(sideNav).toContain("buildOrgCustomerAccountAvailabilityPath");
 		expect(sideNav).toContain('label: "Availability"');
 		expect(sideNav).toContain("aria-label={link.label}");
-		expect(app).toContain(
-			'app.route().kind === "org-customer-account-availability"',
+		expect(lazyPages).toContain(
+			'"org-customer-account-availability": CustomerAccountAvailabilityPage',
 		);
-		expect(app).toContain("<CustomerAccountAvailabilityPage");
+		expect(appRoutes).toContain('path="/account/availability"');
+		expect(appRoutes).toContain("<Pages.CustomerAccountAvailabilityPage");
 	});
 });
 

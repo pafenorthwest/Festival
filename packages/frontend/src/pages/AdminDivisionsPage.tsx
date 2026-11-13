@@ -3,12 +3,14 @@ import { divisionNameValidationError } from "../app/adminDivisions.js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { AccessDeniedPanel } from "../components/AccessDeniedPanel.js";
 import { Button } from "../components/Button.js";
+import { useAdminOrg } from "../domains/admin-org/AdminOrgContext.js";
 
 interface AdminDivisionsPageProps {
 	app: FestivalAppController;
 }
 
 export function AdminDivisionsPage(props: AdminDivisionsPageProps) {
+	const adminOrg = useAdminOrg();
 	return (
 		<Show
 			when={props.app.isAdminMember()}
@@ -23,18 +25,18 @@ export function AdminDivisionsPage(props: AdminDivisionsPageProps) {
 				</div>
 			</section>
 
-			<Show when={props.app.isLoadingDivisionConfiguration()}>
+			<Show when={adminOrg.isLoadingDivisionConfiguration()}>
 				<section class="panel flow-panel" aria-live="polite">
 					Loading division configuration…
 				</section>
 			</Show>
 
-			<Show when={props.app.divisionConfigurationLoadError()}>
+			<Show when={adminOrg.divisionConfigurationLoadError()}>
 				<section class="panel flow-panel division-load-error" role="alert">
-					<p>{props.app.divisionConfigurationLoadError()}</p>
+					<p>{adminOrg.divisionConfigurationLoadError()}</p>
 					<Button
 						type="button"
-						onClick={props.app.handleReloadDivisionConfiguration}
+						onClick={adminOrg.handleReloadDivisionConfiguration}
 					>
 						Try again
 					</Button>
@@ -43,11 +45,11 @@ export function AdminDivisionsPage(props: AdminDivisionsPageProps) {
 
 			<Show
 				when={
-					!props.app.isLoadingDivisionConfiguration() &&
-					!props.app.divisionConfigurationLoadError()
+					!adminOrg.isLoadingDivisionConfiguration() &&
+					!adminOrg.divisionConfigurationLoadError()
 				}
 			>
-				<Show when={props.app.isDivisionMutationPending()}>
+				<Show when={adminOrg.isDivisionMutationPending()}>
 					<section class="panel flow-panel" aria-live="polite" aria-busy="true">
 						Saving division configuration…
 					</section>
@@ -65,14 +67,14 @@ export function AdminDivisionsPage(props: AdminDivisionsPageProps) {
 					<label class="field">
 						<span>Division name</span>
 						<input
-							value={props.app.divisionNameDraft()}
+							value={adminOrg.divisionNameDraft()}
 							onInput={(event) =>
-								props.app.setDivisionNameDraft(event.currentTarget.value)
+								adminOrg.setDivisionNameDraft(event.currentTarget.value)
 							}
 							aria-invalid={
-								props.app.createDivisionAttempted() &&
+								adminOrg.createDivisionAttempted() &&
 								Boolean(
-									divisionNameValidationError(props.app.divisionNameDraft()),
+									divisionNameValidationError(adminOrg.divisionNameDraft()),
 								)
 							}
 							maxlength={100}
@@ -80,18 +82,18 @@ export function AdminDivisionsPage(props: AdminDivisionsPageProps) {
 					</label>
 					<Show
 						when={
-							props.app.createDivisionAttempted() &&
-							divisionNameValidationError(props.app.divisionNameDraft())
+							adminOrg.createDivisionAttempted() &&
+							divisionNameValidationError(adminOrg.divisionNameDraft())
 						}
 					>
 						<p class="field-error" role="alert">
-							{divisionNameValidationError(props.app.divisionNameDraft())}
+							{divisionNameValidationError(adminOrg.divisionNameDraft())}
 						</p>
 					</Show>
 					<Button
 						type="button"
-						disabled={props.app.isDivisionMutationPending()}
-						onClick={props.app.handleCreateDivision}
+						disabled={adminOrg.isDivisionMutationPending()}
+						onClick={adminOrg.handleCreateDivision}
 					>
 						Create division
 					</Button>
@@ -99,11 +101,11 @@ export function AdminDivisionsPage(props: AdminDivisionsPageProps) {
 
 				<section class="panel flow-panel division-list-panel">
 					<h3>Configured divisions</h3>
-					<Show when={props.app.divisions().length === 0}>
+					<Show when={adminOrg.divisions().length === 0}>
 						<p class="muted">No divisions configured yet.</p>
 					</Show>
 					<ol class="division-list">
-						<For each={props.app.divisions()}>
+						<For each={adminOrg.divisions()}>
 							{(division, index) => (
 								<li class="division-row">
 									<div class="division-row-heading">
@@ -118,11 +120,11 @@ export function AdminDivisionsPage(props: AdminDivisionsPageProps) {
 										<span>Rename division</span>
 										<input
 											value={
-												props.app.divisionRenameDrafts()[division.id] ??
+												adminOrg.divisionRenameDrafts()[division.id] ??
 												division.displayName
 											}
 											onInput={(event) =>
-												props.app.setDivisionRenameDrafts((current) => ({
+												adminOrg.setDivisionRenameDrafts((current) => ({
 													...current,
 													[division.id]: event.currentTarget.value,
 												}))
@@ -133,10 +135,8 @@ export function AdminDivisionsPage(props: AdminDivisionsPageProps) {
 									<div class="division-actions">
 										<Button
 											type="button"
-											disabled={props.app.isDivisionMutationPending()}
-											onClick={() =>
-												props.app.handleRenameDivision(division.id)
-											}
+											disabled={adminOrg.isDivisionMutationPending()}
+											onClick={() => adminOrg.handleRenameDivision(division.id)}
 										>
 											Save name
 										</Button>
@@ -144,10 +144,10 @@ export function AdminDivisionsPage(props: AdminDivisionsPageProps) {
 											type="button"
 											variant="secondary"
 											disabled={
-												props.app.isDivisionMutationPending() || index() === 0
+												adminOrg.isDivisionMutationPending() || index() === 0
 											}
 											onClick={() =>
-												props.app.handleMoveDivision(division.id, -1)
+												adminOrg.handleMoveDivision(division.id, -1)
 											}
 											aria-label={`Move ${division.displayName} up`}
 										>
@@ -157,11 +157,11 @@ export function AdminDivisionsPage(props: AdminDivisionsPageProps) {
 											type="button"
 											variant="secondary"
 											disabled={
-												props.app.isDivisionMutationPending() ||
-												index() === props.app.divisions().length - 1
+												adminOrg.isDivisionMutationPending() ||
+												index() === adminOrg.divisions().length - 1
 											}
 											onClick={() =>
-												props.app.handleMoveDivision(division.id, 1)
+												adminOrg.handleMoveDivision(division.id, 1)
 											}
 											aria-label={`Move ${division.displayName} down`}
 										>
@@ -170,9 +170,9 @@ export function AdminDivisionsPage(props: AdminDivisionsPageProps) {
 										<Button
 											type="button"
 											variant="secondary"
-											disabled={props.app.isDivisionMutationPending()}
+											disabled={adminOrg.isDivisionMutationPending()}
 											onClick={() =>
-												props.app.handleSetDivisionActive(
+												adminOrg.handleSetDivisionActive(
 													division.id,
 													!division.isActive,
 												)

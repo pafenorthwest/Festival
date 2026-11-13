@@ -1,5 +1,6 @@
 import { createEffect, createResource, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
+import { useOptionalCustomerIdentity } from "../domains/customer/CustomerIdentityContext.js";
 import {
 	customerLandingSignInPath,
 	getPublicOrganizationLanding,
@@ -19,6 +20,10 @@ interface AppHeaderProps {
 }
 
 export function AppHeader(props: AppHeaderProps) {
+	const customerIdentity = useOptionalCustomerIdentity() ?? {
+		customerSession: () => ({ authenticated: false as const }),
+		isCustomerSessionLoading: () => false,
+	};
 	const slug = () => {
 		const route = props.app.route();
 		return isOrganizationPageRoute(route)
@@ -79,7 +84,7 @@ export function AppHeader(props: AppHeaderProps) {
 
 	function logout() {
 		const organizationSlug = slug();
-		const session = props.app.customerSession();
+		const session = customerIdentity.customerSession();
 		if (organizationSlug && session.authenticated && session.csrfToken) {
 			if (
 				!window.dispatchEvent(
@@ -222,9 +227,9 @@ export function AppHeader(props: AppHeaderProps) {
 						</span>
 						<span class="parent-header-label">Account</span>
 					</button>
-					<Show when={!props.app.isCustomerSessionLoading()}>
+					<Show when={!customerIdentity.isCustomerSessionLoading()}>
 						<Show
-							when={props.app.customerSession().authenticated}
+							when={customerIdentity.customerSession().authenticated}
 							fallback={
 								<Button
 									type="button"

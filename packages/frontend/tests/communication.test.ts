@@ -352,10 +352,18 @@ describe("communication routes and navigation", () => {
 		);
 	});
 
-	it("mounts CommunicationTemplatesPage in App.tsx", async () => {
-		const app = await read("../src/App.tsx");
-		expect(app).toContain("<CommunicationTemplatesPage");
-		expect(app).toContain('app.route().kind === "org-communications"');
+	it("mounts CommunicationTemplatesPage in AppRoutes.tsx", async () => {
+		const appRoutes = await read("../src/app/AdminRoutes.tsx");
+		const lazyPages = await read("../src/app/lazyPages.ts");
+		const routes = await read("../src/lib/routes.ts");
+		expect(routes).toContain('"org-communications"');
+		expect(lazyPages).toContain(
+			'"org-communications": CommunicationTemplatesPage',
+		);
+		expect(appRoutes).toContain(
+			'path={["/communications", "/admin/communications"]}',
+		);
+		expect(appRoutes).toContain("<Pages.CommunicationTemplatesPage");
 	});
 
 	it("verifies CommunicationTemplatesPage supports templates and delivery logs tabs", async () => {

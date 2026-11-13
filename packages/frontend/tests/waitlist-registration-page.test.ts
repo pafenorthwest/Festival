@@ -13,9 +13,9 @@ const { useRegistrationWaitlist } = await import(
 );
 
 describe("FestivalClassRegistrationPage waitlist contract", () => {
-	it("strictly enforces file length <= 550 lines", () => {
+	it("strictly enforces file length <= 250 lines", () => {
 		const lineCount = regPageSource.split("\n").length;
-		expect(lineCount).toBeLessThanOrEqual(550);
+		expect(lineCount).toBeLessThanOrEqual(250);
 	});
 });
 

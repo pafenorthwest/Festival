@@ -1,18 +1,7 @@
 import type {
-	CustomerSessionResponse,
-	FestivalSummary,
-	InviteSummary,
-	MembershipProductSummary,
-	OrganizationAdminUserEntry,
-	OrganizationDivision,
 	OrganizationLandingResponse,
 	SessionMembership,
 	SessionResponse,
-	ShopifyIntegrationSettings,
-} from "@festival/common";
-import {
-	validateFestivalName,
-	validateMembershipProductInput,
 } from "@festival/common";
 import { useLocation, useNavigate } from "@solidjs/router";
 import type { User } from "firebase/auth";
@@ -20,578 +9,211 @@ import { createMemo, createSignal } from "solid-js";
 import { createParentRegistrationState } from "../lib/parent-registration-state.js";
 import { type AppRoute, buildOrgPath, parseRoute } from "../lib/routes.js";
 import { shortUserLabel, toAuthenticatedUser } from "./appFormatting.js";
-import type {
-	FestivalDraft,
-	InviteDraft,
-	InviteFeedback,
-	MembershipProductDraft,
-	ShopifyDraft,
-	SignInModalKind,
-	SignInStep,
-} from "./appTypes.js";
+import type { SignInModalKind, SignInStep } from "./appTypes.js";
 
-const ORGANIZATION_NAME_PATTERN = /^[A-Za-z0-9\-() ]+$/;
-const ORGANIZATION_SHORT_NAME_PATTERN = /^[A-Za-z0-9-]+$/;
-const ADMIN_ROUTE_KINDS = [
-	"org-admin",
-	"org-admin-users",
-	"org-admin-integrations",
-	"org-admin-memberships",
-	"org-admin-festivals",
-	"org-admin-divisions",
-	"org-admin-settings",
-	"org-admin-accompanists",
-	"org-admin-roster",
-	"org-admin-rooms",
-	"festival-admin",
-	"festival-admin-classes",
-	"org-admin-volunteers",
-	"org-music-review",
-	"org-billing",
-	"org-communications",
-	"org-admin-checkout-recovery",
-] as const;
+const ADMIN_BREADCRUMBS: Partial<Record<AppRoute["kind"], string>> = {
+	"org-admin-users": "Admin > Users",
+	"org-admin-integrations": "Admin > Integrations",
+	"org-admin-memberships": "Admin > Memberships",
+	"org-admin-festivals": "Admin > Festivals",
+	"org-admin-divisions": "Admin > Divisions",
+	"org-admin-settings": "Admin > Settings",
+	"org-admin-accompanists": "Admin > Staff Roster",
+	"org-admin-roster": "Admin > Staff Roster",
+	"org-admin-rooms": "Admin > Rooms",
+	"festival-admin": "Admin > Festival",
+	"festival-admin-classes": "Admin > Festival > Classes",
+	"org-admin-volunteers": "Admin > Volunteers",
+	"org-music-review": "Admin > Music Review",
+	"org-billing": "Admin > Billing Reconciliation",
+	"org-communications": "Admin > Communications",
+	"org-admin-checkout-recovery": "Admin > Checkout Recovery",
+};
 
-export const INVITE_FEEDBACK_DURATION_MS = 2200;
-export const INVITE_CARD_SCROLL_DELAY_MS = 600;
+function computeIsDropTransferEnabled(
+	organization: OrganizationLandingResponse["organization"] | null,
+): boolean {
+	const fromOrg = organization?.features?.dropTransfer;
+	if (typeof fromOrg === "boolean") return fromOrg;
+	return (
+		typeof import.meta !== "undefined" &&
+		(import.meta as unknown as { env?: Record<string, string> }).env
+			?.FRONT_ENABLE_DROP_TRANSFER === "true"
+	);
+}
 
-export function createFestivalAppState() {
-	const parentRegistration = createParentRegistrationState();
-	const [parentNavigationCollapsed, setParentNavigationCollapsed] =
-		createSignal(false);
-	const [parentNavigationOpen, setParentNavigationOpen] = createSignal(false);
-	const location = useLocation();
-	const routerNavigate = useNavigate();
+function createShellSignals() {
 	const [firebaseUser, setFirebaseUser] = createSignal<User | null>(null);
 	const [session, setSession] = createSignal<SessionResponse["session"]>({
 		authenticated: false,
 	});
-	const [customerSession, setCustomerSession] = createSignal<
-		CustomerSessionResponse["session"]
-	>({ authenticated: false });
-	const [isCustomerSessionLoading, setIsCustomerSessionLoading] =
-		createSignal(false);
 	const [memberships, setMemberships] = createSignal<SessionMembership[]>([]);
 	const [organization, setOrganization] = createSignal<
 		OrganizationLandingResponse["organization"] | null
 	>(null);
-	const [invite, setInvite] = createSignal<InviteSummary | null>(null);
 	const [createdOrganizationSlug, setCreatedOrganizationSlug] = createSignal<
 		string | null
 	>(null);
-	const [createdInvites, setCreatedInvites] = createSignal<InviteSummary[]>([]);
-	const [adminUsers, setAdminUsers] = createSignal<
-		OrganizationAdminUserEntry[]
-	>([]);
-	const [festivals, setFestivals] = createSignal<FestivalSummary[]>([]);
-	const [divisions, setDivisions] = createSignal<OrganizationDivision[]>([]);
-	const [divisionNameDraft, setDivisionNameDraft] = createSignal("");
-	const [divisionRenameDrafts, setDivisionRenameDrafts] = createSignal<
-		Record<string, string>
-	>({});
-	const [createDivisionAttempted, setCreateDivisionAttempted] =
-		createSignal(false);
-	const [isLoadingDivisionConfiguration, setIsLoadingDivisionConfiguration] =
-		createSignal(false);
-	const [divisionConfigurationLoadError, setDivisionConfigurationLoadError] =
-		createSignal("");
-	const [isDivisionMutationPending, setIsDivisionMutationPending] =
-		createSignal(false);
-	const [membershipProducts, setMembershipProducts] = createSignal<
-		MembershipProductSummary[]
-	>([]);
-	const [isLoadingMembershipProducts, setIsLoadingMembershipProducts] =
-		createSignal(false);
-	const [membershipProductsLoadError, setMembershipProductsLoadError] =
-		createSignal("");
-	const [shopifySettings, setShopifySettings] =
-		createSignal<ShopifyIntegrationSettings | null>(null);
-	const [shopifyDraft, setShopifyDraft] = createSignal<ShopifyDraft>({
-		storeUrl: "",
-		clientId: "",
-		clientSecret: "",
-		storefrontPrivateToken: "",
-	});
-	const [isShopifyTesting, setIsShopifyTesting] = createSignal(false);
+	const [statusMessage, setStatusMessage] = createSignal("");
+	const [errorMessage, setErrorMessage] = createSignal("");
+	const [isBusy, setIsBusy] = createSignal(false);
 	const [signInModalKind, setSignInModalKind] =
 		createSignal<SignInModalKind | null>(null);
 	const [signInStep, setSignInStep] = createSignal<SignInStep>("method");
 	const [signInEmail, setSignInEmail] = createSignal("");
+	const [signInInviteName, setSignInInviteName] = createSignal("");
 	const [needsEmailLinkConfirmation, setNeedsEmailLinkConfirmation] =
 		createSignal(false);
-	const [inviteName, setInviteName] = createSignal("");
-	const [organizationName, setOrganizationName] = createSignal("");
-	const [organizationShortName, setOrganizationShortName] = createSignal("");
-	const [organizationNameTouched, setOrganizationNameTouched] =
+	const [parentNavigationCollapsed, setParentNavigationCollapsed] =
 		createSignal(false);
-	const [organizationShortNameTouched, setOrganizationShortNameTouched] =
-		createSignal(false);
-	const [createOrganizationAttempted, setCreateOrganizationAttempted] =
-		createSignal(false);
-	const [inviteDraft, setInviteDraft] = createSignal<InviteDraft>({
-		email: "",
-		role: "Admin",
-	});
-	const [inviteFeedback, setInviteFeedback] =
-		createSignal<InviteFeedback | null>(null);
-	const [festivalDraft, setFestivalDraft] = createSignal<FestivalDraft>({
-		shortName: "",
-		name: "",
-		startDate: "",
-		endDate: "",
-		registrationOpensAt: "",
-		registrationClosesAt: "",
-	});
-	const [membershipProductDraft, setMembershipProductDraft] =
-		createSignal<MembershipProductDraft>({
-			name: "",
-			description: "",
-			price: "",
-		});
-	const [festivalNameTouched, setFestivalNameTouched] = createSignal(false);
-	const [createFestivalAttempted, setCreateFestivalAttempted] =
-		createSignal(false);
-	const [
-		createMembershipProductAttempted,
-		setCreateMembershipProductAttempted,
-	] = createSignal(false);
-	const [isCreatingMembershipProduct, setIsCreatingMembershipProduct] =
-		createSignal(false);
-	const [statusMessage, setStatusMessage] = createSignal("");
-	const [errorMessage, setErrorMessage] = createSignal("");
-	const [isBusy, setIsBusy] = createSignal(false);
-	let invitePanelRef: HTMLElement | undefined;
-	let invitePanelScrollTimeout: ReturnType<typeof setTimeout> | undefined;
-	let inviteFeedbackTimeout: ReturnType<typeof setTimeout> | undefined;
+	const [parentNavigationOpen, setParentNavigationOpen] = createSignal(false);
 
-	const route = createMemo<AppRoute>(() => parseRoute(location.pathname));
-	const sessionMembership = createMemo(() => session().membership ?? null);
-	const shouldShowOrgChooser = createMemo(
-		() => route().kind === "home" && memberships().length > 1,
+	return {
+		createdOrganizationSlug,
+		errorMessage,
+		firebaseUser,
+		isBusy,
+		memberships,
+		needsEmailLinkConfirmation,
+		organization,
+		parentNavigationCollapsed,
+		parentNavigationOpen,
+		session,
+		setCreatedOrganizationSlug,
+		setErrorMessage,
+		setFirebaseUser,
+		setIsBusy,
+		setMemberships,
+		setNeedsEmailLinkConfirmation,
+		setOrganization,
+		setParentNavigationCollapsed,
+		setParentNavigationOpen,
+		setSession,
+		setSignInEmail,
+		setSignInInviteName,
+		setSignInModalKind,
+		setSignInStep,
+		setStatusMessage,
+		signInEmail,
+		signInInviteName,
+		signInModalKind,
+		signInStep,
+		statusMessage,
+	};
+}
+
+function createShellDerived(
+	signals: ReturnType<typeof createShellSignals>,
+	pathname: () => string,
+) {
+	const route = createMemo<AppRoute>(() => parseRoute(pathname()));
+	const sessionMembership = createMemo(
+		() => signals.session().membership ?? null,
 	);
-	const currentInviteToken = createMemo(() => {
-		const currentRoute = route();
-		return currentRoute.kind === "invite" ? currentRoute.token : null;
-	});
+	const shouldShowOrgChooser = createMemo(
+		() => route().kind === "home" && signals.memberships().length > 1,
+	);
 	const authenticatedUser = createMemo(() => {
-		const user = firebaseUser();
+		const user = signals.firebaseUser();
 		return user ? toAuthenticatedUser(user) : null;
 	});
-	const organizationCreated = createMemo(() =>
-		Boolean(createdOrganizationSlug()),
-	);
-	const organizationValidationErrors = createMemo(() => {
-		const errors: string[] = [];
-		const name = organizationName().trim();
-		const shortName = organizationShortName().trim();
-
-		if (!name) {
-			errors.push("Organization name is required.");
-		} else if (!ORGANIZATION_NAME_PATTERN.test(name)) {
-			errors.push("Organization name may contain only [A-Za-z0-9-() ].");
-		}
-
-		if (!shortName) {
-			errors.push("Short name is required.");
-		} else if (!ORGANIZATION_SHORT_NAME_PATTERN.test(shortName)) {
-			errors.push("Short name may contain only [A-Za-z0-9-].");
-		}
-
-		return errors;
-	});
-	const shouldShowOrganizationValidation = createMemo(
-		() =>
-			createOrganizationAttempted() ||
-			organizationNameTouched() ||
-			organizationShortNameTouched(),
-	);
-	const hasOrganizationNameError = createMemo(() => {
-		if (!shouldShowOrganizationValidation()) {
-			return false;
-		}
-
-		const name = organizationName().trim();
-		return !name || !ORGANIZATION_NAME_PATTERN.test(name);
-	});
-	const hasOrganizationShortNameError = createMemo(() => {
-		if (!shouldShowOrganizationValidation()) {
-			return false;
-		}
-
-		const shortName = organizationShortName().trim();
-		return !shortName || !ORGANIZATION_SHORT_NAME_PATTERN.test(shortName);
-	});
-	const organizationValidationMessage = createMemo(() =>
-		organizationValidationErrors().join(" "),
-	);
 	const isAdminMember = createMemo(() => sessionMembership()?.role === "Admin");
-	// Volunteer administration follows the product's admin intent, which is
-	// broader than the organization-wide Admin role used by other admin areas.
-	const hasVolunteerAdminIntent = createMemo(() =>
-		["Admin", "Division Chair", "Concert Chair"].includes(
-			sessionMembership()?.role ?? "",
-		),
+	const isDropTransferEnabled = createMemo(() =>
+		computeIsDropTransferEnabled(signals.organization()),
 	);
-	const festivalNameValidation = createMemo(() =>
-		validateFestivalName(festivalDraft().name),
-	);
-	const shouldShowFestivalNameValidation = createMemo(
-		() => createFestivalAttempted() || festivalNameTouched(),
-	);
-	const hasFestivalNameError = createMemo(
-		() => shouldShowFestivalNameValidation() && !festivalNameValidation().valid,
-	);
-	const festivalNameValidationMessage = createMemo(() =>
-		festivalNameValidation().errors.join(" "),
-	);
-	const membershipProductValidation = createMemo(() =>
-		validateMembershipProductInput(membershipProductDraft()),
-	);
-	const shouldShowMembershipProductValidation = createMemo(() =>
-		createMembershipProductAttempted(),
-	);
-	const membershipProductValidationMessage = createMemo(() =>
-		membershipProductValidation().errors.join(" "),
-	);
-	const shopifyPrerequisiteMet = createMemo(() => {
-		const settings = shopifySettings();
-		return (
-			settings?.verificationStatus === "ok" &&
-			settings.capabilities.read_products === "granted" &&
-			settings.capabilities.write_products === "granted" &&
-			settings.capabilities.write_inventory === "granted"
-		);
+	const isAdminRoute = createMemo(() => {
+		const kind = route().kind;
+		return kind === "org-admin" || kind in ADMIN_BREADCRUMBS;
 	});
-	const isDropTransferEnabled = createMemo(() => {
-		const fromOrg = organization()?.features?.dropTransfer;
-		if (typeof fromOrg === "boolean") return fromOrg;
-		return (
-			typeof import.meta !== "undefined" &&
-			(import.meta as unknown as { env?: Record<string, string> }).env
-				?.FRONT_ENABLE_DROP_TRANSFER === "true"
-		);
-	});
-	const isAdminRoute = createMemo(() =>
-		ADMIN_ROUTE_KINDS.some((kind) => kind === route().kind),
-	);
 	const isAdminSubRoute = createMemo(
-		() =>
-			route().kind === "org-admin-users" ||
-			route().kind === "org-admin-integrations" ||
-			route().kind === "org-admin-memberships" ||
-			route().kind === "org-admin-festivals" ||
-			route().kind === "org-admin-divisions" ||
-			route().kind === "org-admin-settings" ||
-			route().kind === "org-admin-accompanists" ||
-			route().kind === "org-admin-roster" ||
-			route().kind === "org-admin-rooms" ||
-			route().kind === "festival-admin" ||
-			route().kind === "festival-admin-classes" ||
-			route().kind === "org-admin-volunteers" ||
-			route().kind === "org-music-review" ||
-			route().kind === "org-billing" ||
-			route().kind === "org-communications" ||
-			route().kind === "org-admin-checkout-recovery",
+		() => isAdminRoute() && route().kind !== "org-admin",
 	);
-	const adminBreadcrumb = createMemo(() => {
-		switch (route().kind) {
-			case "org-admin-users":
-				return "Admin > Users";
-			case "org-admin-integrations":
-				return "Admin > Integrations";
-			case "org-admin-memberships":
-				return "Admin > Memberships";
-			case "org-admin-festivals":
-				return "Admin > Festivals";
-			case "org-admin-divisions":
-				return "Admin > Divisions";
-			case "org-admin-settings":
-				return "Admin > Settings";
-			case "org-admin-accompanists":
-			case "org-admin-roster":
-				return "Admin > Staff Roster";
-			case "org-admin-rooms":
-				return "Admin > Rooms";
-			case "festival-admin":
-				return "Admin > Festival";
-			case "festival-admin-classes":
-				return "Admin > Festival > Classes";
-			case "org-admin-volunteers":
-				return "Admin > Volunteers";
-			case "org-music-review":
-				return "Admin > Music Review";
-			case "org-billing":
-				return "Admin > Billing Reconciliation";
-			case "org-communications":
-				return "Admin > Communications";
-			case "org-admin-checkout-recovery":
-				return "Admin > Checkout Recovery";
-			default:
-				return "Admin";
-		}
-	});
-	const adminUserLabel = createMemo(() => shortUserLabel(session().user));
-
-	function setInvitePanelRef(element: HTMLElement) {
-		invitePanelRef = element;
-	}
-
-	function scrollInvitePanel() {
-		invitePanelScrollTimeout = setTimeout(() => {
-			invitePanelRef?.scrollIntoView({
-				behavior: "smooth",
-				block: "start",
-			});
-			invitePanelScrollTimeout = undefined;
-		}, INVITE_CARD_SCROLL_DELAY_MS);
-	}
-
-	function clearTimers() {
-		if (invitePanelScrollTimeout) {
-			clearTimeout(invitePanelScrollTimeout);
-			invitePanelScrollTimeout = undefined;
-		}
-
-		if (inviteFeedbackTimeout) {
-			clearTimeout(inviteFeedbackTimeout);
-			inviteFeedbackTimeout = undefined;
-		}
-	}
-
-	function navigate(path: string) {
-		if (location.pathname === path) {
-			return;
-		}
-
-		routerNavigate(path);
-	}
-
-	function clearMessages() {
-		setErrorMessage("");
-		setStatusMessage("");
-	}
-
-	function backToAdmin() {
-		clearMessages();
-		const membership = sessionMembership();
-		if (!membership) {
-			return;
-		}
-
-		navigate(buildOrgPath(membership.organizationSlug));
-	}
-
-	function resetOnboardingFlowState() {
-		setOrganization(null);
-		setCreatedOrganizationSlug(null);
-		setCreatedInvites([]);
-		setAdminUsers([]);
-		setFestivals([]);
-		setDivisions([]);
-		setDivisionNameDraft("");
-		setDivisionRenameDrafts({});
-		setCreateDivisionAttempted(false);
-		setIsLoadingDivisionConfiguration(false);
-		setDivisionConfigurationLoadError("");
-		setIsDivisionMutationPending(false);
-		setMembershipProducts([]);
-		setIsLoadingMembershipProducts(false);
-		setMembershipProductsLoadError("");
-		setShopifySettings(null);
-		setShopifyDraft({
-			storeUrl: "",
-			clientId: "",
-			clientSecret: "",
-			storefrontPrivateToken: "",
-		});
-		setIsShopifyTesting(false);
-		setOrganizationName("");
-		setOrganizationShortName("");
-		setOrganizationNameTouched(false);
-		setOrganizationShortNameTouched(false);
-		setCreateOrganizationAttempted(false);
-		setInviteDraft({
-			email: "",
-			role: "Admin",
-		});
-		setFestivalDraft({
-			shortName: "",
-			name: "",
-			startDate: "",
-			endDate: "",
-			registrationOpensAt: "",
-			registrationClosesAt: "",
-		});
-		setMembershipProductDraft({
-			name: "",
-			description: "",
-			price: "",
-		});
-		setFestivalNameTouched(false);
-		setCreateFestivalAttempted(false);
-		setCreateMembershipProductAttempted(false);
-		setIsCreatingMembershipProduct(false);
-		setInviteFeedback(null);
-		clearTimers();
-	}
-
-	function showInviteFeedback(feedback: Omit<InviteFeedback, "id">) {
-		if (inviteFeedbackTimeout) {
-			clearTimeout(inviteFeedbackTimeout);
-		}
-
-		setInviteFeedback({
-			...feedback,
-			id: Date.now(),
-		});
-		inviteFeedbackTimeout = setTimeout(() => {
-			setInviteFeedback(null);
-			inviteFeedbackTimeout = undefined;
-		}, INVITE_FEEDBACK_DURATION_MS);
-	}
-
-	function openSignInModal(kind: SignInModalKind) {
-		setSignInStep("method");
-		setSignInModalKind(kind);
-	}
-
-	function closeSignInModal() {
-		setSignInModalKind(null);
-		setSignInStep("method");
-		navigate("/");
-	}
+	const adminBreadcrumb = createMemo(
+		() => ADMIN_BREADCRUMBS[route().kind] ?? "Admin",
+	);
+	const adminUserLabel = createMemo(() =>
+		shortUserLabel(signals.session().user),
+	);
 
 	return {
 		adminBreadcrumb,
 		adminUserLabel,
-		adminUsers,
 		authenticatedUser,
+		isAdminMember,
+		isAdminRoute,
+		isAdminSubRoute,
+		isDropTransferEnabled,
+		route,
+		sessionMembership,
+		shouldShowOrgChooser,
+		get slug() {
+			const current = route();
+			if ("slug" in current && typeof current.slug === "string") {
+				return current.slug;
+			}
+			return sessionMembership()?.organizationSlug ?? "";
+		},
+	};
+}
+
+export function createFestivalAppState() {
+	const parentRegistration = createParentRegistrationState();
+	const location = useLocation();
+	const routerNavigate = useNavigate();
+	const signals = createShellSignals();
+	const derived = createShellDerived(signals, () => location.pathname);
+
+	function navigate(path: string) {
+		if (location.pathname !== path) {
+			routerNavigate(path);
+		}
+	}
+
+	function clearMessages() {
+		signals.setErrorMessage("");
+		signals.setStatusMessage("");
+	}
+
+	function clearTimers() {}
+
+	function backToAdmin() {
+		clearMessages();
+		const membership = derived.sessionMembership();
+		if (membership) {
+			navigate(buildOrgPath(membership.organizationSlug));
+		}
+	}
+
+	function resetOnboardingFlowState() {
+		signals.setOrganization(null);
+		signals.setCreatedOrganizationSlug(null);
+		clearTimers();
+	}
+
+	function openSignInModal(kind: SignInModalKind, inviteName?: string) {
+		signals.setSignInStep("method");
+		signals.setSignInInviteName(inviteName ?? "");
+		signals.setSignInModalKind(kind);
+	}
+
+	function closeSignInModal() {
+		signals.setSignInModalKind(null);
+		signals.setSignInStep("method");
+		signals.setSignInInviteName("");
+		navigate("/");
+	}
+
+	return {
+		...signals,
+		...derived,
 		backToAdmin,
 		clearMessages,
 		clearTimers,
 		closeSignInModal,
-		customerSession,
-		get slug() {
-			const r = route();
-			if ("slug" in r && typeof r.slug === "string") return r.slug;
-			return sessionMembership()?.organizationSlug ?? "";
-		},
-		createdInvites,
-		createdOrganizationSlug,
-		createDivisionAttempted,
-		divisionConfigurationLoadError,
-		divisionNameDraft,
-		divisionRenameDrafts,
-		divisions,
-		errorMessage,
-		festivalDraft,
-		festivalNameValidation,
-		festivalNameValidationMessage,
-		festivals,
-		firebaseUser,
-		hasFestivalNameError,
-		hasOrganizationNameError,
-		hasOrganizationShortNameError,
-		hasVolunteerAdminIntent,
-		invite,
-		inviteDraft,
-		inviteFeedback,
-		inviteName,
-		isAdminMember,
-		isAdminRoute,
-		isAdminSubRoute,
-		isCreatingMembershipProduct,
-		isDivisionMutationPending,
-		isDropTransferEnabled,
-		isLoadingDivisionConfiguration,
-		isLoadingMembershipProducts,
-		isShopifyTesting,
-		isBusy,
-		isCustomerSessionLoading,
-		membershipProductDraft,
-		membershipProductValidation,
-		membershipProductValidationMessage,
-		membershipProducts,
-		membershipProductsLoadError,
-		memberships,
 		navigate,
-		parentRegistration,
-		parentNavigationCollapsed,
-		setParentNavigationCollapsed,
-		parentNavigationOpen,
-		setParentNavigationOpen,
 		openSignInModal,
-		organization,
-		organizationCreated,
-		organizationName,
-		organizationShortName,
-		organizationValidationErrors,
-		organizationValidationMessage,
+		parentRegistration,
 		resetOnboardingFlowState,
-		route,
-		scrollInvitePanel,
-		session,
-		sessionMembership,
-		setAdminUsers,
-		setCreateFestivalAttempted,
-		setCreateDivisionAttempted,
-		setCreateMembershipProductAttempted,
-		setCreateOrganizationAttempted,
-		setCreatedInvites,
-		setCreatedOrganizationSlug,
-		setErrorMessage,
-		setDivisionConfigurationLoadError,
-		setDivisionNameDraft,
-		setDivisionRenameDrafts,
-		setDivisions,
-		setFestivalDraft,
-		setFestivalNameTouched,
-		setFestivals,
-		setFirebaseUser,
-		setInvite,
-		setInviteDraft,
-		setInviteFeedback,
-		setInviteName,
-		setInvitePanelRef,
-		setIsBusy,
-		setIsDivisionMutationPending,
-		setIsLoadingDivisionConfiguration,
-		setIsCreatingMembershipProduct,
-		setIsLoadingMembershipProducts,
-		setIsShopifyTesting,
-		setMembershipProductDraft,
-		setMembershipProducts,
-		setMembershipProductsLoadError,
-		setMemberships,
-		setOrganization,
-		setOrganizationName,
-		setOrganizationNameTouched,
-		setOrganizationShortName,
-		setOrganizationShortNameTouched,
-		setSession,
-		setCustomerSession,
-		setIsCustomerSessionLoading,
-		setShopifyDraft,
-		setShopifySettings,
-		setSignInEmail,
-		setSignInModalKind,
-		setSignInStep,
-		setStatusMessage,
-		shouldShowFestivalNameValidation,
-		shouldShowMembershipProductValidation,
-		shouldShowOrganizationValidation,
-		shouldShowOrgChooser,
-		showInviteFeedback,
-		shopifyPrerequisiteMet,
-		signInEmail,
-		signInModalKind,
-		signInStep,
-		needsEmailLinkConfirmation,
-		setNeedsEmailLinkConfirmation,
-		shopifyDraft,
-		shopifySettings,
-		statusMessage,
-		currentInviteToken,
 	};
 }
 

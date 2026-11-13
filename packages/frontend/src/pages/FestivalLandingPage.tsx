@@ -7,6 +7,7 @@ import {
 	Show,
 } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
+import { useOptionalCustomerIdentity } from "../domains/customer/CustomerIdentityContext.js";
 import { getCustomerChildren, getPublicFestival } from "../lib/api.js";
 import {
 	buildFestivalRegistrationPath,
@@ -21,6 +22,7 @@ interface FestivalLandingPageProps {
 }
 
 export function FestivalLandingPage(props: FestivalLandingPageProps) {
+	const customerIdentity = useOptionalCustomerIdentity();
 	const membershipPath = `/org/${props.slug}/membership`;
 	const [entryError, setEntryError] = createSignal("");
 	const [entering, setEntering] = createSignal(false);
@@ -71,7 +73,7 @@ export function FestivalLandingPage(props: FestivalLandingPageProps) {
 		if (entering()) return;
 		const registrationPath = buildFestivalRegistrationPath(slug, festivalSlug);
 		app.parentRegistration.setActiveFestival(slug, festivalSlug);
-		if (!app.customerSession().authenticated) {
+		if (!customerIdentity?.customerSession().authenticated) {
 			app.navigate(registrationPath);
 			return;
 		}

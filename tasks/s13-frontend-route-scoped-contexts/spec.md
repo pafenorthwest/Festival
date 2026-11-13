@@ -45,7 +45,15 @@ bun run check:sql
 ```
 
 ## Delivery
-Pending execution.
+- **Lean App Shell (`packages/frontend/src/app/`)**: Reduced root state to Firebase staff auth, active organization summary, and global toast/banner notifications (`createFestivalAppState.ts`, `useFestivalAppController.ts`, `App.tsx`).
+- **Declarative `@solidjs/router` Routing**: Replaced manual regex `parseRoute` dispatch with declarative `@solidjs/router` `<Route>` definitions in `AppRoutes.tsx` backed by pure path builders in `routePaths.ts`/`routes.ts`, preserving all URL contracts with `lazy()` domain boundaries.
+- **7 Route-Scoped Domain Contexts (`packages/frontend/src/domains/*`)**: Extracted domain signals and actions into `admin-org`, `catalog`, `customer`, `directory`, `registration`, `admin-commerce`, and `volunteers`, mounted only on matching routes.
+- **Component & Hook Splits**: Split `VolunteerRolesPage.tsx`, `MusicReviewModal.tsx`, and `FestivalClassRegistrationPage.tsx` (`useFestivalRegistrationPage.ts`) into focused subcomponents and hooks (`<=500`L/file, `<=60`L/fn).
 
 ## Quality gate results
-Pending execution.
+- `pwsh -NoProfile -File .agents/skills/festival-session/scripts/validate-packet.ps1 -TaskName s13-frontend-route-scoped-contexts -RequireCodeReview`: PASS (exit 0)
+- `bun run verify:toolchain`, `bun run format:check`, `bun run lint`, `bun run build`, `bun run --cwd packages/frontend check:types`, `bun run --cwd packages/backend tsc --noEmit`, `bun run check:sql`: PASS (all exit `0`)
+- `bun run test:common`: `353 pass`, `0 fail`, `0 skip`
+- `bun run test:frontend`: `471 pass`, `0 fail`, `0 skip` (`53` files)
+- `bun run test:confirmation`: `20 pass`, `0 fail`, `0 skip`
+- `bun run test:backend`: Windows Bun 1.4.2 segfault (`exit 3`) in `tests/migrate-runner.test.ts` (backend untouched; Linux CI runner verifies full backend suite)

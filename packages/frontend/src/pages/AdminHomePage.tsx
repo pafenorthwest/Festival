@@ -1,6 +1,7 @@
 import { Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { Button } from "../components/Button.js";
+import { useVolunteers } from "../domains/volunteers/VolunteersContext.js";
 import {
 	buildOrgAdminCheckoutRecoveryPath,
 	buildOrgAdminDivisionsPath,
@@ -18,6 +19,7 @@ interface AdminHomePageProps {
 }
 
 export function AdminHomePage(props: AdminHomePageProps) {
+	const volunteers = useVolunteers();
 	return (
 		<section class="panel org-shell">
 			<header class="org-header">
@@ -191,7 +193,7 @@ export function AdminHomePage(props: AdminHomePageProps) {
 				<button
 					type="button"
 					class="admin-workflow-card"
-					disabled={!props.app.hasVolunteerAdminIntent()}
+					disabled={!volunteers.hasVolunteerAdminIntent()}
 					data-preload-path={
 						props.app.sessionMembership()
 							? buildOrgAdminVolunteersPath(
@@ -201,7 +203,7 @@ export function AdminHomePage(props: AdminHomePageProps) {
 					}
 					onClick={() => {
 						const membership = props.app.sessionMembership();
-						if (!membership || !props.app.hasVolunteerAdminIntent()) {
+						if (!membership || !volunteers.hasVolunteerAdminIntent()) {
 							return;
 						}
 

@@ -8,8 +8,11 @@ const page = await Bun.file(
 const appHeader = await Bun.file(
 	new URL("../src/components/AppHeader.tsx", import.meta.url),
 ).text();
-const lifecycle = await Bun.file(
-	new URL("../src/app/useFestivalLifecycle.ts", import.meta.url),
+const customerIdentityContext = await Bun.file(
+	new URL(
+		"../src/domains/customer/CustomerIdentityContext.tsx",
+		import.meta.url,
+	),
 ).text();
 const app = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
 const sideNavigation = await Bun.file(
@@ -67,8 +70,9 @@ describe("public organization landing page", () => {
 		);
 		expect(appHeader).toContain("isOrganizationPageRoute");
 		expect(appHeader).not.toContain("getCustomerSession");
-		expect(appHeader).toContain("props.app.customerSession()");
-		expect(lifecycle).toContain("getCustomerSession");
+		expect(appHeader).toContain("useOptionalCustomerIdentity()");
+		expect(appHeader).toContain("customerIdentity.customerSession()");
+		expect(customerIdentityContext).toContain("getCustomerSession");
 		expect(appHeader).toContain("logoutCustomer");
 		expect(appHeader).toContain("const route = props.app.route();");
 		expect(appHeader).toContain("? (route as { slug: string }).slug");

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import type { FestivalAppState } from "../src/app/createFestivalAppState.js";
-import { createFestivalDataLoaders } from "../src/app/createFestivalDataLoaders.js";
+import type { User } from "firebase/auth";
+import { createMembershipProductsLoader } from "../src/domains/directory/TeacherDirectoryContext.js";
 import {
 	acceptInvite,
 	createInvite,
@@ -55,13 +55,19 @@ afterEach(() => {
 });
 
 async function readFrontendSource(): Promise<string> {
+	const domainPaths = Array.from(
+		new Bun.Glob("src/domains/**/*.{ts,tsx}").scanSync("."),
+	);
 	const paths = [
 		"src/App.tsx",
+		"src/app/AppRoutes.tsx",
+		"src/app/FestivalShellContext.tsx",
 		"src/app/appFormatting.ts",
 		"src/app/appTypes.ts",
 		"src/app/createFestivalActions.ts",
 		"src/app/createFestivalAppState.ts",
 		"src/app/createFestivalDataLoaders.ts",
+		"src/app/lazyPages.ts",
 		"src/app/useFestivalAppController.ts",
 		"src/app/useFestivalLifecycle.ts",
 		"src/components/AccessDeniedPanel.tsx",
@@ -72,6 +78,8 @@ async function readFrontendSource(): Promise<string> {
 		"src/components/AppHeader.tsx",
 		"src/components/SignInModal.tsx",
 		"src/lib/api.ts",
+		"src/lib/routePaths.ts",
+		"src/lib/routes.ts",
 		"src/lib/sanitize-html.ts",
 		"src/pages/AdminFestivalsPage.tsx",
 		"src/pages/AdminHomePage.tsx",
@@ -84,6 +92,7 @@ async function readFrontendSource(): Promise<string> {
 		"src/pages/MembershipPage.tsx",
 		"src/pages/OrganizationChooser.tsx",
 		"src/pages/OrganizationRootPage.tsx",
+		...domainPaths,
 	];
 	const sources = await Promise.all(paths.map((path) => Bun.file(path).text()));
 	return sources.join("\n");
@@ -414,7 +423,7 @@ describe("organization onboarding integration", () => {
 	it("wires the public membership page through the backend API only", async () => {
 		const source = await readFrontendSource();
 
-		expect(source).toContain('route().kind === "org-membership"');
+		expect(source).toContain('route.kind === "org-membership"');
 		expect(source).toContain("getMembershipProducts(slug)");
 		expect(source).toContain(
 			"Membership information is temporarily unavailable. Please try again",
@@ -474,16 +483,21 @@ describe("organization onboarding integration", () => {
 	});
 
 	it("surfaces Shopify settings load failures on both admin pages", async () => {
-		const lifecycleSource = await Bun.file(
-			"src/app/useFestivalLifecycle.ts",
+		const commerceSource = await Bun.file(
+			"src/domains/admin-commerce/AdminCommerceContext.tsx",
 		).text();
 
-		const settingsLoadFailureHandlers = lifecycleSource.match(
-			/loadShopifySettings\(currentRoute\.slug\)\.catch/g,
+		expect(commerceSource).toContain(
+			'currentRoute?.kind === "org-admin-integrations"',
 		);
-		expect(settingsLoadFailureHandlers).toHaveLength(2);
-		expect(lifecycleSource).toContain(
-			"state.setErrorMessage((error as Error).message)",
+		expect(commerceSource).toContain(
+			'currentRoute?.kind === "org-admin-memberships"',
+		);
+		expect(commerceSource).toContain(
+			"loadShopifySettings(currentRoute.slug).catch",
+		);
+		expect(commerceSource).toContain(
+			"shell?.setErrorMessage((error as Error).message)",
 		);
 	});
 
@@ -498,11 +512,14 @@ describe("organization onboarding integration", () => {
 	});
 
 	it("resets every required festival draft field when onboarding state is cleared", async () => {
-		const appState = await Bun.file("src/app/createFestivalAppState.ts").text();
+		const catalogSource = await Bun.file(
+			"src/domains/catalog/CatalogRepertoireContext.tsx",
+		).text();
 
-		expect(appState).toContain(
-			'setFestivalDraft({\n\t\t\tshortName: "",\n\t\t\tname: "",',
+		expect(catalogSource).toContain(
+			'const INITIAL_FESTIVAL_DRAFT: FestivalDraft = {\n\tshortName: "",\n\tname: "",',
 		);
+		expect(catalogSource).toContain("...INITIAL_FESTIVAL_DRAFT");
 	});
 
 	it("keeps issue 63 onboarding validation and invite UX wired in the frontend", async () => {
@@ -515,12 +532,12 @@ describe("organization onboarding integration", () => {
 		expect(source).toContain("Short name is required.");
 		expect(source).toContain("hasOrganizationNameError()");
 		expect(source).toContain("hasOrganizationShortNameError()");
-		expect(source).toContain("readOnly={props.app.organizationCreated()}");
+		expect(source).toContain("readOnly={adminOrg.organizationCreated()}");
 		expect(source).toContain("INVITE_CARD_SCROLL_DELAY_MS = 600");
 		expect(source).toContain("scrollIntoView");
 		expect(source).toContain("Send another invite");
 		expect(source).toContain("That email has already been invited.");
-		expect(source).toContain("entry.email.toLowerCase() === normalizedEmail");
+		expect(source).toContain("e.email.toLowerCase() === normalizedEmail");
 		expect(source).toContain("class={`invite-feedback invite-feedback-");
 		expect(styles).toContain("invite-feedback-success");
 		expect(styles).toContain("invite-feedback-error");
@@ -537,12 +554,10 @@ describe("organization onboarding integration", () => {
 
 		expect(source).toContain("function resetOnboardingFlowState()");
 		expect(source).toContain("setCreatedOrganizationSlug(null)");
-		expect(source).toContain("setCreatedInvites([])");
-		expect(source).toContain('setOrganizationName("")');
-		expect(source).toContain('setOrganizationShortName("")');
+		expect(source).toContain("createSignal<InviteSummary[]>([])");
 		expect(source).toContain('email: "",');
-		expect(source).toContain("const previousUser = state.firebaseUser()");
-		expect(source).toContain("previousUser?.uid !== user?.uid");
+		expect(source).toContain("state.firebaseUser()?.uid !== user?.uid");
+		expect(source).toContain("state.resetOnboardingFlowState();");
 	});
 
 	it("keeps admin headers compact with breadcrumbs and header-level back navigation", async () => {
@@ -591,8 +606,8 @@ describe("organization onboarding integration", () => {
 		expect(source).toContain("admin/memberships");
 		expect(source).toContain("Only Admin members can manage memberships.");
 		expect(source).toContain("props.app.isAdminMember()");
-		expect(source).toContain("getAdminMembershipProducts(token, slug)");
-		expect(source).toContain("getIdToken(state.firebaseUser())");
+		expect(source).toContain("getAdminMembershipProducts(token, targetSlug)");
+		expect(source).toContain("getIdToken(deps.getFirebaseUser())");
 		expect(source).toContain("createMembershipProduct(token");
 		expect(source).toContain("admin/membership-products");
 		expect(source).not.toContain("SHOPIFY_ADMIN_ACCESS_TOKEN");
@@ -608,14 +623,14 @@ describe("organization onboarding integration", () => {
 		expect(source).toContain("Verified Shopify integration is required");
 		expect(source).toContain("shopifyPrerequisiteMet");
 		expect(pageSource).toContain(
-			'props.app.shopifySettings()?.verificationStatus === "ok"',
+			'adminCommerce.shopifySettings()?.verificationStatus === "ok"',
 		);
 		expect(pageSource).toContain(
-			'props.app.shopifyPrerequisiteMet() ? "Ready" : "Not Ready"',
+			'adminCommerce.shopifyPrerequisiteMet() ? "Ready" : "Not Ready"',
 		);
 		expect(pageSource).toContain("shopify-status-not-ready");
 		expect(pageSource).toContain("<Show when={!shopifyIntegrationVerified()}>");
-		expect(pageSource).toContain("!props.app.shopifyPrerequisiteMet() ||");
+		expect(pageSource).toContain("!adminCommerce.shopifyPrerequisiteMet() ||");
 		expect(source).toContain("Membership product created.");
 		expect(source).toContain("Plan: Standard");
 		expect(source).toContain("isCreatingMembershipProduct()");
@@ -623,7 +638,7 @@ describe("organization onboarding integration", () => {
 		expect(source).toContain("setCreateMembershipProductAttempted(true)");
 		expect(source).toContain("membershipProductValidationMessage()");
 		expect(source).toContain("setMembershipProductDraft((current) =>");
-		expect(source).toContain("await loaders.loadMembershipProducts");
+		expect(source).toContain("await loadMembershipProducts");
 		expect(source).toContain('name: "",');
 		expect(source).toContain('description: "",');
 		expect(source).toContain('price: "",');
@@ -652,12 +667,17 @@ describe("organization onboarding integration", () => {
 		let products: unknown[] = [{ id: "stale-product" }];
 		let loading = false;
 		let loadError = "";
-		const state = {
-			firebaseUser() {
-				return {
+		globalThis.fetch = (() =>
+			Promise.resolve(
+				mockJsonResponse({ error: "Shopify unavailable" }, 503),
+			)) as typeof fetch;
+
+		const loadMembershipProducts = createMembershipProductsLoader({
+			getFirebaseUser: () =>
+				({
 					getIdToken: () => Promise.resolve("firebase-token"),
-				};
-			},
+				}) as unknown as User,
+			getSlug: () => "pafe",
 			setIsLoadingMembershipProducts(value: boolean) {
 				loading = value;
 			},
@@ -667,14 +687,8 @@ describe("organization onboarding integration", () => {
 			setMembershipProductsLoadError(value: string) {
 				loadError = value;
 			},
-		} as unknown as FestivalAppState;
-		globalThis.fetch = (() =>
-			Promise.resolve(
-				mockJsonResponse({ error: "Shopify unavailable" }, 503),
-			)) as typeof fetch;
-
-		const loaders = createFestivalDataLoaders(state);
-		await loaders.loadMembershipProducts("pafe");
+		});
+		await loadMembershipProducts("pafe");
 
 		expect(products).toEqual([]);
 		expect(loading).toBe(false);
