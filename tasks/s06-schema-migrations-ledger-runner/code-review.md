@@ -13,10 +13,12 @@ Independent code review of `s06-schema-migrations-ledger-runner` against `goals/
 - `package.json` (`migrate` and `check:schema-parity` scripts)
 - `packages/backend/src/repo/postgres-schema.ts` (`initializePostgresSchema` and `provisionPostgresTestSchema`)
 - `packages/backend/src/routes/private-runtime.routes.ts` (`/ready` via `repository.ensureReady()`)
-- `packages/backend/tests/migrate-runner.test.ts` (322 lines)
+- `packages/backend/tests/migrate-runner.test.ts` (322 lines; integration SQL schema-qualified with `orgs.` so `rewriteSchemaReferences` targets isolated test schemas)
 - `packages/backend/tests/postgres-test-fixture.ts`
 - `packages/backend/tests/postgres-application-fixture.ts`
 - `packages/backend/tests/postgres-initializer-existing-schema.integration.test.ts`
+- `packages/backend/tests/postgres-profile-postal-code.integration.test.ts` (provisions isolated test schema via `provisionPostgresTestSchema`)
+- `packages/backend/tests/public-teacher-directory.integration.test.ts` (provisions isolated test schema via `provisionPostgresTestSchema`)
 - `.github/workflows/pr-checks.yml`
 - `.github/workflows/deploy.yml`
 - `cloud-setup/05-rebuild-and-validate.sh`
@@ -34,6 +36,7 @@ Independent code review of `s06-schema-migrations-ledger-runner` against `goals/
    - Transaction atomicity: each pending migration's SQL and its `INSERT INTO ... schema_migrations` ledger record execute together inside `reserved.begin(async (tx) => ...)`.
    - SQL injection safety: schema names are validated against `/^[A-Za-z_][A-Za-z0-9_]{0,62}$/`; ledger queries, advisory lock keys, and readiness probes use parameterized `$1`/`$2`/`$3` bindings.
    - Size & cleanliness guardrails: all new files are `<= 500` lines (`scripts/migrate.ts`: 253L, `scripts/check-schema-parity.ts`: 98L, `packages/backend/tests/migrate-runner.test.ts`: 322L); all new functions are `<= 36` lines and `<= 3` parameters; no secrets or debug logs present.
+   - Verification: local Postgres 17 full test suite passed (`1610 pass, 0 skip, 0 fail`).
 
 - Findings status: none
 

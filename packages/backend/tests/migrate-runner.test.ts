@@ -188,8 +188,8 @@ describe("migrate runner postgres integration tests", () => {
 			const dir = createTempDir("mig-fresh-");
 			try {
 				await sql.unsafe(`CREATE SCHEMA ${schema}`);
-				const sql1 = "CREATE TABLE items (id TEXT PRIMARY KEY);\n";
-				const sql2 = "ALTER TABLE items ADD COLUMN note TEXT;\n";
+				const sql1 = "CREATE TABLE orgs.items (id TEXT PRIMARY KEY);\n";
+				const sql2 = "ALTER TABLE orgs.items ADD COLUMN note TEXT;\n";
 				writeFileSync(join(dir, "20260101000000_items.sql"), sql1, "utf8");
 				writeFileSync(join(dir, "20260102000000_note.sql"), sql2, "utf8");
 
@@ -223,7 +223,7 @@ describe("migrate runner postgres integration tests", () => {
 				await sql.unsafe(`CREATE SCHEMA ${schema}`);
 				writeFileSync(
 					join(dir, "20260101000000_items.sql"),
-					"CREATE TABLE items (id TEXT PRIMARY KEY);\n",
+					"CREATE TABLE orgs.items (id TEXT PRIMARY KEY);\n",
 					"utf8",
 				);
 
@@ -253,19 +253,19 @@ describe("migrate runner postgres integration tests", () => {
 				await sql.unsafe(`CREATE SCHEMA ${schema}`);
 				writeFileSync(
 					join(dir, "20260101000000_items.sql"),
-					"CREATE TABLE items (id TEXT PRIMARY KEY);\n",
+					"CREATE TABLE orgs.items (id TEXT PRIMARY KEY);\n",
 					"utf8",
 				);
 				await runMigrations({ schema, migrationsDir: dir });
 
 				writeFileSync(
 					join(dir, "20260101000000_items.sql"),
-					"CREATE TABLE items (id TEXT PRIMARY KEY, tampered INT);\n",
+					"CREATE TABLE orgs.items (id TEXT PRIMARY KEY, tampered INT);\n",
 					"utf8",
 				);
 				writeFileSync(
 					join(dir, "20260102000000_later.sql"),
-					"CREATE TABLE later_table (id INT);\n",
+					"CREATE TABLE orgs.later_table (id INT);\n",
 					"utf8",
 				);
 
@@ -292,12 +292,12 @@ describe("migrate runner postgres integration tests", () => {
 				await sql.unsafe(`CREATE SCHEMA ${schema}`);
 				writeFileSync(
 					join(dir, "20260101000000_items.sql"),
-					"CREATE TABLE items (id TEXT PRIMARY KEY);\n",
+					"CREATE TABLE orgs.items (id TEXT PRIMARY KEY);\n",
 					"utf8",
 				);
 				writeFileSync(
 					join(dir, "20260102000000_note.sql"),
-					"ALTER TABLE items ADD COLUMN note TEXT;\n",
+					"ALTER TABLE orgs.items ADD COLUMN note TEXT;\n",
 					"utf8",
 				);
 
