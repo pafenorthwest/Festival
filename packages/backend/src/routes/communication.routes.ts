@@ -1,13 +1,18 @@
 import {
+	CommunicationLogQuerySchema,
+	CommunicationTemplatesQuerySchema,
+	CreateMessageTemplatePayloadSchema,
 	isMessageChannel,
 	isMessageLogStatus,
 	type MessageChannel,
 	type MessageLogStatus,
+	TriggerMessageEventPayloadSchema,
+	UpdateMessageTemplatePayloadSchema,
 	validateCreateMessageTemplateInput,
 	validateTriggerMessageEventInput,
 	validateUpdateMessageTemplateInput,
 } from "@festival/common";
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import {
 	type ApiVariables,
 	getRequiredTenant,
@@ -20,6 +25,37 @@ import { InMemoryCommunicationRepository } from "../communication/communication-
 import { CommunicationService } from "../communication/communication-service.js";
 import { AppError } from "../errors/app-error.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
+import {
+	type CoLocatedRouteSecurity,
+	defineRouteSecurity,
+} from "./shared/route-security-metadata.js";
+import {
+	jsonValidator,
+	preValidationGuard,
+	queryValidator,
+} from "./shared/schema-validator.js";
+
+type CommunicationEnv = { Variables: Partial<ApiVariables> };
+
+const tenantCommunicationRoute = (
+	method: "GET" | "POST" | "PATCH",
+	path: string,
+): CoLocatedRouteSecurity =>
+	defineRouteSecurity({
+		method,
+		path,
+		authenticationClass: "tenant",
+		csrfRequired: false,
+		browserAllowed: true,
+	});
+
+export const COMMUNICATION_ROUTE_SECURITY = [
+	tenantCommunicationRoute("GET", "/templates"),
+	tenantCommunicationRoute("POST", "/templates"),
+	tenantCommunicationRoute("PATCH", "/templates/:templateId"),
+	tenantCommunicationRoute("GET", "/logs"),
+	tenantCommunicationRoute("POST", "/events"),
+] as const satisfies readonly CoLocatedRouteSecurity[];
 
 export interface CommunicationRoutesOptions {
 	authVerifier: AuthVerifier;
@@ -81,170 +117,215 @@ function parseNonNegativeInt(
 	return parsed;
 }
 
-async function parseJsonBody(c: {
-	req: { json: () => Promise<unknown> };
-}): Promise<unknown> {
+interface TemplateQueryFilter {
+	channel?: string;
+	isActive?: string;
+}
+
+interface LogQueryFilter {
+	channel?: string;
+	status?: string;
+	eventId?: string;
+	limit?: string;
+	offset?: string;
+}
+
+async function handleListTemplates(
+	c: Context<CommunicationEnv>,
+	commService: CommunicationService,
+	query: TemplateQueryFilter,
+) {
 	try {
-		return await c.req.json();
-	} catch {
-		throw new AppError("Invalid JSON body.", 400);
+		const tenant = getRequiredTenant(c);
+		const channel = parseChannelFilter(query.channel);
+		const isActive = parseBooleanFilter(query.isActive, "isActive");
+
+		const templates = await commService.listTemplates(tenant.organization.id, {
+			...(channel ? { channel } : {}),
+			...(isActive !== undefined ? { isActive } : {}),
+		});
+		return c.json(templates);
+	} catch (error) {
+		return toJsonError(c, error);
 	}
 }
 
-export function buildCommunicationRoutes(
-	options: CommunicationRoutesOptions,
-): Hono<{ Variables: Partial<ApiVariables> }> {
-	const router = new Hono<{ Variables: Partial<ApiVariables> }>();
+async function handleCreateTemplate(
+	c: Context<CommunicationEnv>,
+	commService: CommunicationService,
+	body: unknown,
+) {
+	try {
+		const tenant = getRequiredTenant(c);
+		const validation = validateCreateMessageTemplateInput(body);
+		if (!validation.valid || !validation.data) {
+			throw new AppError(validation.errors.join(" "), 400);
+		}
+
+		const template = await commService.createTemplate({
+			...validation.data,
+			organizationId: tenant.organization.id,
+		});
+		return c.json(template, 201);
+	} catch (error) {
+		return toJsonError(c, error);
+	}
+}
+
+async function handleUpdateTemplate(
+	c: Context<CommunicationEnv>,
+	commService: CommunicationService,
+	body: unknown,
+) {
+	try {
+		const tenant = getRequiredTenant(c);
+		const templateId = c.req.param("templateId");
+		if (!templateId?.trim()) {
+			throw new AppError("Template ID is required.", 400);
+		}
+
+		const validation = validateUpdateMessageTemplateInput(body);
+		if (!validation.valid || !validation.data) {
+			throw new AppError(validation.errors.join(" "), 400);
+		}
+
+		try {
+			const updated = await commService.updateTemplate(
+				tenant.organization.id,
+				templateId.trim(),
+				validation.data,
+			);
+			return c.json(updated);
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			if (message.includes("Template not found")) {
+				throw new AppError("Template not found.", 404);
+			}
+			throw err;
+		}
+	} catch (error) {
+		return toJsonError(c, error);
+	}
+}
+
+async function handleListLogs(
+	c: Context<CommunicationEnv>,
+	commService: CommunicationService,
+	query: LogQueryFilter,
+) {
+	try {
+		const tenant = getRequiredTenant(c);
+		const channel = parseChannelFilter(query.channel);
+		const status = parseStatusFilter(query.status);
+		const eventId = query.eventId?.trim() || undefined;
+		const limit = parsePositiveInt(query.limit, "limit");
+		const offset = parseNonNegativeInt(query.offset, "offset");
+
+		const logs = await commService.listLogs(tenant.organization.id, {
+			...(channel ? { channel } : {}),
+			...(status ? { status } : {}),
+			...(eventId ? { eventId } : {}),
+			...(limit !== undefined ? { limit } : {}),
+			...(offset !== undefined ? { offset } : {}),
+		});
+		return c.json(logs);
+	} catch (error) {
+		return toJsonError(c, error);
+	}
+}
+
+async function handleTriggerEvent(
+	c: Context<CommunicationEnv>,
+	commService: CommunicationService,
+) {
+	try {
+		const tenant = getRequiredTenant(c);
+		const body = await c.req.json();
+		const validation = validateTriggerMessageEventInput(body);
+		if (!validation.valid || !validation.data) {
+			throw new AppError(validation.errors.join(" "), 400);
+		}
+
+		const result = await commService.triggerEvent({
+			...validation.data,
+			organizationId: tenant.organization.id,
+		});
+		return c.json(result);
+	} catch (error) {
+		return toJsonError(c, error);
+	}
+}
+
+const createTemplateValidator = jsonValidator(
+	CreateMessageTemplatePayloadSchema,
+	{
+		invalidJsonMessage: "Invalid JSON body.",
+		preCheck: (raw) => {
+			const validation = validateCreateMessageTemplateInput(raw);
+			if (!validation.valid || !validation.data) {
+				throw new AppError(validation.errors.join(" "), 400);
+			}
+		},
+	},
+);
+
+const requireTemplateIdGuard = preValidationGuard((c) => {
+	if (!c.req.param("templateId")?.trim()) {
+		throw new AppError("Template ID is required.", 400);
+	}
+});
+
+const updateTemplateValidator = jsonValidator(
+	UpdateMessageTemplatePayloadSchema,
+	{
+		invalidJsonMessage: "Invalid JSON body.",
+		preCheck: (raw) => {
+			const validation = validateUpdateMessageTemplateInput(raw);
+			if (!validation.valid || !validation.data) {
+				throw new AppError(validation.errors.join(" "), 400);
+			}
+		},
+	},
+);
+
+const triggerEventValidator = jsonValidator(TriggerMessageEventPayloadSchema, {
+	invalidJsonMessage: "Invalid JSON body.",
+	preCheck: (raw) => {
+		const validation = validateTriggerMessageEventInput(raw);
+		if (!validation.valid || !validation.data) {
+			throw new AppError(validation.errors.join(" "), 400);
+		}
+	},
+});
+
+export function buildCommunicationRoutes(options: CommunicationRoutesOptions) {
 	const { authVerifier, repository } = options;
+	const auth = [requireAuth(authVerifier), requireTenant(repository)] as const;
 	const commService =
 		options.communicationService ??
 		new CommunicationService(new InMemoryCommunicationRepository());
 
-	// 1. GET /templates: List all message templates for organization
-	router.get(
-		"/templates",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		async (c) => {
-			try {
-				const tenant = getRequiredTenant(c);
-				const channel = parseChannelFilter(c.req.query("channel"));
-				const isActive = parseBooleanFilter(
-					c.req.query("isActive"),
-					"isActive",
-				);
-
-				const templates = await commService.listTemplates(
-					tenant.organization.id,
-					{
-						...(channel ? { channel } : {}),
-						...(isActive !== undefined ? { isActive } : {}),
-					},
-				);
-				return c.json(templates);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	// 2. POST /templates: Create new message template
-	router.post(
-		"/templates",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		async (c) => {
-			try {
-				const tenant = getRequiredTenant(c);
-				const body = await parseJsonBody(c);
-				const validation = validateCreateMessageTemplateInput(body);
-				if (!validation.valid || !validation.data) {
-					throw new AppError(validation.errors.join(" "), 400);
-				}
-
-				const template = await commService.createTemplate({
-					...validation.data,
-					organizationId: tenant.organization.id,
-				});
-				c.status(201);
-				return c.json(template);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	// 3. PATCH /templates/:templateId: Update template (body, subject, isActive)
-	router.patch(
-		"/templates/:templateId",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		async (c) => {
-			try {
-				const tenant = getRequiredTenant(c);
-				const templateId = c.req.param("templateId");
-				if (!templateId?.trim()) {
-					throw new AppError("Template ID is required.", 400);
-				}
-
-				const body = await parseJsonBody(c);
-				const validation = validateUpdateMessageTemplateInput(body);
-				if (!validation.valid || !validation.data) {
-					throw new AppError(validation.errors.join(" "), 400);
-				}
-
-				try {
-					const updated = await commService.updateTemplate(
-						tenant.organization.id,
-						templateId.trim(),
-						validation.data,
-					);
-					return c.json(updated);
-				} catch (err) {
-					const message = err instanceof Error ? err.message : String(err);
-					if (message.includes("Template not found")) {
-						throw new AppError("Template not found.", 404);
-					}
-					throw err;
-				}
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	// 4. GET /logs: List delivery logs (with channel, status, eventId query params)
-	router.get(
-		"/logs",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		async (c) => {
-			try {
-				const tenant = getRequiredTenant(c);
-				const channel = parseChannelFilter(c.req.query("channel"));
-				const status = parseStatusFilter(c.req.query("status"));
-				const eventId = c.req.query("eventId")?.trim() || undefined;
-				const limit = parsePositiveInt(c.req.query("limit"), "limit");
-				const offset = parseNonNegativeInt(c.req.query("offset"), "offset");
-
-				const logs = await commService.listLogs(tenant.organization.id, {
-					...(channel ? { channel } : {}),
-					...(status ? { status } : {}),
-					...(eventId ? { eventId } : {}),
-					...(limit !== undefined ? { limit } : {}),
-					...(offset !== undefined ? { offset } : {}),
-				});
-				return c.json(logs);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	// 5. POST /events: Trigger message event with { eventType, recipientDestination, payload, idempotencyKey, channel }
-	router.post(
-		"/events",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		async (c) => {
-			try {
-				const tenant = getRequiredTenant(c);
-				const body = await parseJsonBody(c);
-				const validation = validateTriggerMessageEventInput(body);
-				if (!validation.valid || !validation.data) {
-					throw new AppError(validation.errors.join(" "), 400);
-				}
-
-				const result = await commService.triggerEvent({
-					...validation.data,
-					organizationId: tenant.organization.id,
-				});
-				return c.json(result);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	return router;
+	return new Hono<CommunicationEnv>()
+		.get(
+			"/templates",
+			...auth,
+			queryValidator(CommunicationTemplatesQuerySchema),
+			(c) => handleListTemplates(c, commService, c.req.valid("query")),
+		)
+		.post("/templates", ...auth, createTemplateValidator, (c) =>
+			handleCreateTemplate(c, commService, c.req.valid("json")),
+		)
+		.patch(
+			"/templates/:templateId",
+			...auth,
+			requireTemplateIdGuard,
+			updateTemplateValidator,
+			(c) => handleUpdateTemplate(c, commService, c.req.valid("json")),
+		)
+		.get("/logs", ...auth, queryValidator(CommunicationLogQuerySchema), (c) =>
+			handleListLogs(c, commService, c.req.valid("query")),
+		)
+		.post("/events", ...auth, triggerEventValidator, (c) =>
+			handleTriggerEvent(c, commService),
+		);
 }

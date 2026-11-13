@@ -1,3 +1,7 @@
+import {
+	CreateCustomerChildInputSchema,
+	RefreshCustomerChildAgeSnapshotInputSchema,
+} from "@festival/common";
 import { type Context, Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import { type ApiVariables, toJsonError } from "../../auth/tenant-context.js";
@@ -7,10 +11,44 @@ import {
 } from "../../customer/customer-account-service.js";
 import { AppError } from "../../errors/app-error.js";
 import { assertNoBearerPrincipal } from "../customer-auth/customer-auth.routes.js";
+import {
+	type CoLocatedRouteSecurity,
+	defineRouteSecurity,
+} from "../shared/route-security-metadata.js";
+import {
+	jsonValidator,
+	preValidationGuard,
+} from "../shared/schema-validator.js";
+
+export const CUSTOMER_CHILDREN_ROUTE_SECURITY = [
+	defineRouteSecurity({
+		method: "GET",
+		path: "/children",
+		authenticationClass: "customer",
+		csrfRequired: false,
+		browserAllowed: true,
+	}),
+	defineRouteSecurity({
+		method: "POST",
+		path: "/children",
+		authenticationClass: "customer",
+		csrfRequired: true,
+		browserAllowed: true,
+	}),
+	defineRouteSecurity({
+		method: "POST",
+		path: "/children/:childId/age-snapshot",
+		authenticationClass: "customer",
+		csrfRequired: true,
+		browserAllowed: true,
+	}),
+] as const satisfies readonly CoLocatedRouteSecurity[];
 
 export interface CustomerChildrenRoutesOptions {
 	customerAccountService?: CustomerAccountService;
 }
+
+type ChildrenContext = Context<{ Variables: Partial<ApiVariables> }>;
 
 function requireCustomerAccountService(
 	service: CustomerAccountService | undefined,
@@ -38,9 +76,9 @@ function requireChildId(c: Context): string {
 }
 
 async function listChildrenHandler(
-	c: Context<{ Variables: Partial<ApiVariables> }>,
+	c: ChildrenContext,
 	service?: CustomerAccountService,
-): Promise<Response> {
+) {
 	try {
 		assertNoBearerPrincipal(c.req.header("Authorization"));
 		const accountService = requireCustomerAccountService(service);
@@ -56,9 +94,10 @@ async function listChildrenHandler(
 }
 
 async function createChildHandler(
-	c: Context<{ Variables: Partial<ApiVariables> }>,
-	service?: CustomerAccountService,
-): Promise<Response> {
+	c: ChildrenContext,
+	service: CustomerAccountService | undefined,
+	body: unknown,
+) {
 	try {
 		assertNoBearerPrincipal(c.req.header("Authorization"));
 		const accountService = requireCustomerAccountService(service);
@@ -69,7 +108,7 @@ async function createChildHandler(
 				getCookie(c, CUSTOMER_SESSION_COOKIE),
 				c.req.header("X-CSRF-Token"),
 				c.req.header("Origin"),
-				await c.req.json(),
+				body,
 			),
 		);
 	} catch (error) {
@@ -78,9 +117,10 @@ async function createChildHandler(
 }
 
 async function refreshChildAgeSnapshotHandler(
-	c: Context<{ Variables: Partial<ApiVariables> }>,
-	service?: CustomerAccountService,
-): Promise<Response> {
+	c: ChildrenContext,
+	service: CustomerAccountService | undefined,
+	body: unknown,
+) {
 	try {
 		assertNoBearerPrincipal(c.req.header("Authorization"));
 		const accountService = requireCustomerAccountService(service);
@@ -91,7 +131,7 @@ async function refreshChildAgeSnapshotHandler(
 				c.req.header("X-CSRF-Token"),
 				c.req.header("Origin"),
 				requireChildId(c),
-				await c.req.json(),
+				body,
 			),
 		);
 	} catch (error) {
@@ -101,19 +141,40 @@ async function refreshChildAgeSnapshotHandler(
 
 export function buildCustomerChildrenRoutes(
 	options: CustomerChildrenRoutesOptions,
-): Hono<{ Variables: Partial<ApiVariables> }> {
-	const router = new Hono<{ Variables: Partial<ApiVariables> }>();
+) {
 	const { customerAccountService } = options;
-
-	router.get("/children", (c) =>
-		listChildrenHandler(c, customerAccountService),
-	);
-	router.post("/children", (c) =>
-		createChildHandler(c, customerAccountService),
-	);
-	router.post("/children/:childId/age-snapshot", (c) =>
-		refreshChildAgeSnapshotHandler(c, customerAccountService),
-	);
-
-	return router;
+	const guardChildren = preValidationGuard((c) => {
+		assertNoBearerPrincipal(c.req.header("Authorization"));
+		requireCustomerAccountService(customerAccountService);
+		requireOrganizationSlug(c);
+	});
+	const guardChildAgeSnapshot = preValidationGuard((c) => {
+		assertNoBearerPrincipal(c.req.header("Authorization"));
+		requireCustomerAccountService(customerAccountService);
+		requireOrganizationSlug(c);
+		requireChildId(c);
+	});
+	return new Hono<{ Variables: Partial<ApiVariables> }>()
+		.get("/children", (c) => listChildrenHandler(c, customerAccountService))
+		.post(
+			"/children",
+			guardChildren,
+			jsonValidator(CreateCustomerChildInputSchema),
+			(c) => createChildHandler(c, customerAccountService, c.req.valid("json")),
+		)
+		.post(
+			"/children/:childId/age-snapshot",
+			guardChildAgeSnapshot,
+			jsonValidator(RefreshCustomerChildAgeSnapshotInputSchema),
+			(c) =>
+				refreshChildAgeSnapshotHandler(
+					c,
+					customerAccountService,
+					c.req.valid("json"),
+				),
+		);
 }
+
+export type CustomerChildrenRoutesType = ReturnType<
+	typeof buildCustomerChildrenRoutes
+>;

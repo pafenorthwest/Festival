@@ -1,0 +1,58 @@
+import type { CustomClaimsWriter } from "../auth/custom-claims.js";
+import type { ApiVariables } from "../auth/tenant-context.js";
+import type { AuthVerifier } from "../auth/types.js";
+import type { BillingReconciliationService } from "../billing/billing-reconciliation-service.js";
+import type { CheckoutRecoveryService } from "../checkout/checkout-recovery-service.js";
+import type { CheckoutRepository } from "../checkout/checkout-repository.js";
+import type { ClassCheckoutService } from "../checkout/class-checkout-service.js";
+import type { MembershipCheckoutService } from "../checkout/membership-checkout-service.js";
+import type { MembershipCommerceRepository } from "../commerce/membership-commerce-repository.js";
+import type { MembershipStatusService } from "../commerce/membership-status-service.js";
+import type { ShopifyOrderProjectionService } from "../commerce/shopify-order-projection-service.js";
+import type { CommunicationService } from "../communication/communication-service.js";
+import type { CustomerAccountService } from "../customer/customer-account-service.js";
+import type { CustomerAvailabilityService } from "../customer/customer-availability-service.js";
+import type { DropTransferService } from "../registration/drop-transfer-service.js";
+import type { RegistrationChangeRepository } from "../registration/registration-change-repository.js";
+import type { RepertoireRepository } from "../repertoire/index.js";
+import type { AccompanistMembershipService } from "../services/accompanist-membership-service.js";
+import type { OrganizationService } from "../services/organization-service.js";
+import type { ParticipantProfileService } from "../services/participant-profile-service.js";
+import type { PublicMembershipProductService } from "../shopify/public-membership-product-service.js";
+import type { ShopifyIntegrationDiagnosticService } from "../shopify/shopify-integration-diagnostic-service.js";
+import type { ShopifyIntegrationService } from "../shopify/shopify-integration-service.js";
+import type { ShopifyMembershipProductService } from "../shopify/shopify-membership-product-service.js";
+import type { VolunteerRepository } from "../volunteers/volunteer-repository.js";
+import type { WaitlistService } from "../waitlist/waitlist-service.js";
+
+export type ApiEnv = { Variables: Partial<ApiVariables> };
+
+export interface ApiRouterOptions {
+	organizationService: OrganizationService;
+	authVerifier: AuthVerifier;
+	shopifyIntegrationService?: ShopifyIntegrationService;
+	shopifyMembershipProductService?: ShopifyMembershipProductService;
+	customerAccountService?: CustomerAccountService;
+	customerAvailabilityService?: CustomerAvailabilityService;
+	publicMembershipProductService?: PublicMembershipProductService;
+	shopifyIntegrationDiagnosticService?: ShopifyIntegrationDiagnosticService;
+	membershipCheckoutService?: MembershipCheckoutService;
+	membershipStatusService?: MembershipStatusService;
+	accompanistMembershipService?: AccompanistMembershipService;
+	commerceRepository?: MembershipCommerceRepository;
+	checkoutRepository?: CheckoutRepository;
+	shopifyOrderProjectionService?: ShopifyOrderProjectionService;
+	volunteerRepository?: VolunteerRepository;
+	classCheckoutService?: ClassCheckoutService;
+	customClaimsWriter?: CustomClaimsWriter;
+	repertoireRepository?: RepertoireRepository;
+	dropTransferService?: DropTransferService;
+	enableDropTransfer?: boolean;
+	registrationChangeRepository?: RegistrationChangeRepository;
+	billingReconciliationService?: BillingReconciliationService;
+	communicationService?: CommunicationService;
+	checkoutRecoveryService?: CheckoutRecoveryService;
+	participantProfileService?: ParticipantProfileService;
+	waitlistService?: WaitlistService;
+	publicOrigin?: string;
+}

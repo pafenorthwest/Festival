@@ -1,26 +1,15 @@
-export const PIANO_TYPES = ["upright", "grand"] as const;
-export type PianoType = (typeof PIANO_TYPES)[number];
+import {
+	type CreateRoomInput,
+	PIANO_TYPES,
+	type PianoType,
+	type Room,
+	type RoomPianoConfiguration,
+} from "./tenant.js";
+
+export type { CreateRoomInput, PianoType, Room, RoomPianoConfiguration };
+export { PIANO_TYPES };
 
 export const MAX_PIANOS_PER_ROOM = 3;
-
-export interface RoomPianoConfiguration {
-	pianoType: PianoType;
-	count: number;
-}
-
-export interface Room {
-	id: string;
-	organizationId: string;
-	festivalId: string;
-	name: string;
-	pianoConfigurations: RoomPianoConfiguration[];
-	createdAtIso: string;
-}
-
-export interface CreateRoomInput {
-	name: string;
-	pianoConfigurations: RoomPianoConfiguration[];
-}
 
 export interface CreateRoomValidation {
 	valid: boolean;

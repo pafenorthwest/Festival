@@ -2,6 +2,27 @@ import { type Context, Hono } from "hono";
 import { type ApiVariables, toJsonError } from "../../auth/tenant-context.js";
 import { AppError } from "../../errors/app-error.js";
 import type { PublicMembershipProductService } from "../../shopify/public-membership-product-service.js";
+import {
+	type CoLocatedRouteSecurity,
+	defineRouteSecurity,
+} from "../shared/route-security-metadata.js";
+
+export const CATALOG_ROUTE_SECURITY = [
+	defineRouteSecurity({
+		method: "GET",
+		path: "/membership-products",
+		authenticationClass: "public",
+		csrfRequired: false,
+		browserAllowed: true,
+	}),
+	defineRouteSecurity({
+		method: "HEAD",
+		path: "/membership-products",
+		authenticationClass: "public",
+		csrfRequired: false,
+		browserAllowed: true,
+	}),
+] as const satisfies readonly CoLocatedRouteSecurity[];
 
 function assertBodylessPublicRead(
 	authorization: string | undefined,
@@ -26,18 +47,19 @@ export interface CatalogRoutesOptions {
 	publicMembershipProductService?: PublicMembershipProductService;
 }
 
-async function publicMembershipProductsHandler(
+async function handlePublicMembershipProducts(
 	c: Context<{ Variables: Partial<ApiVariables> }>,
 	options: CatalogRoutesOptions,
-): Promise<Response> {
+) {
 	try {
 		assertBodylessPublicRead(
 			c.req.header("Authorization"),
 			c.req.header("Content-Length"),
 			c.req.raw.body !== null,
 		);
-		if (!options.publicMembershipProductService)
+		if (!options.publicMembershipProductService) {
 			throw new AppError("Membership information is unavailable.", 503);
+		}
 		const slug = c.req.param("slug");
 		if (!slug) throw new AppError("Organization is required.", 400);
 		c.header("Cache-Control", "no-store");
@@ -47,22 +69,23 @@ async function publicMembershipProductsHandler(
 	}
 }
 
-export function buildCatalogRoutes(
+async function handlePublicMembershipProductsHead(
+	c: Context<{ Variables: Partial<ApiVariables> }>,
 	options: CatalogRoutesOptions,
-): Hono<{ Variables: Partial<ApiVariables> }> {
-	const router = new Hono<{ Variables: Partial<ApiVariables> }>();
-
-	router.get("/membership-products", (c) =>
-		publicMembershipProductsHandler(c, options),
-	);
-
-	router.on("HEAD", "/membership-products", async (c) => {
-		const response = await publicMembershipProductsHandler(c, options);
-		return new Response(null, {
-			status: response.status,
-			headers: response.headers,
-		});
+) {
+	const response = await handlePublicMembershipProducts(c, options);
+	return new Response(null, {
+		status: response.status,
+		headers: response.headers,
 	});
+}
 
-	return router;
+export function buildCatalogRoutes(options: CatalogRoutesOptions) {
+	return new Hono<{ Variables: Partial<ApiVariables> }>()
+		.get("/membership-products", (c) =>
+			handlePublicMembershipProducts(c, options),
+		)
+		.on("HEAD", "/membership-products", (c) =>
+			handlePublicMembershipProductsHead(c, options),
+		);
 }

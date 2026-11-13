@@ -1,3 +1,8 @@
+import {
+	UpdateProfileApprovalBodySchema,
+	UpsertCustomerTeacherProfileInputSchema,
+	UpsertParticipantProfileInputSchema,
+} from "@festival/common";
 import { type Context, Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import {
@@ -18,6 +23,66 @@ import type {
 } from "../../services/participant-profile-service.js";
 import { assertNoBearerPrincipal } from "../customer-auth/customer-auth.routes.js";
 import { resolveRequestOrigin } from "../shared/csrf-guard.js";
+import {
+	type CoLocatedRouteSecurity,
+	defineRouteSecurity,
+} from "../shared/route-security-metadata.js";
+import {
+	jsonValidator,
+	preValidationGuard,
+} from "../shared/schema-validator.js";
+
+const profileRoute = (
+	method: CoLocatedRouteSecurity["method"],
+	path: string,
+	options: {
+		authenticationClass: CoLocatedRouteSecurity["authenticationClass"];
+		csrfRequired?: boolean;
+	},
+) =>
+	defineRouteSecurity({
+		method,
+		path,
+		authenticationClass: options.authenticationClass,
+		csrfRequired: options.csrfRequired ?? false,
+		browserAllowed: true,
+	});
+
+export const PARTICIPANT_PROFILE_ROUTE_SECURITY = [
+	profileRoute("GET", "/customer/orgs/:orgSlug/profiles/teacher", {
+		authenticationClass: "customer",
+	}),
+	profileRoute("PUT", "/customer/orgs/:orgSlug/profiles/teacher", {
+		authenticationClass: "customer",
+		csrfRequired: true,
+	}),
+	profileRoute("GET", "/customer/orgs/:orgSlug/profiles/accompanist", {
+		authenticationClass: "customer",
+	}),
+	profileRoute("PUT", "/customer/orgs/:orgSlug/profiles/accompanist", {
+		authenticationClass: "customer",
+		csrfRequired: true,
+	}),
+	profileRoute("GET", "/admin/orgs/:orgSlug/profiles/teachers", {
+		authenticationClass: "admin",
+	}),
+	profileRoute(
+		"PATCH",
+		"/admin/orgs/:orgSlug/profiles/teachers/:profileId/approval",
+		{ authenticationClass: "admin" },
+	),
+	profileRoute("GET", "/admin/orgs/:orgSlug/profiles/accompanists", {
+		authenticationClass: "admin",
+	}),
+	profileRoute(
+		"PATCH",
+		"/admin/orgs/:orgSlug/profiles/accompanists/:profileId/approval",
+		{ authenticationClass: "admin" },
+	),
+	profileRoute("GET", "/org-info/:orgSlug/directory/profiles", {
+		authenticationClass: "public",
+	}),
+] as const satisfies readonly CoLocatedRouteSecurity[];
 
 export interface ParticipantProfileRoutesOptions {
 	profileService: ParticipantProfileService;
@@ -25,7 +90,7 @@ export interface ParticipantProfileRoutesOptions {
 	repository: OrganizationRepository;
 }
 
-type ParticipantProfileRouter = Hono<{ Variables: Partial<ApiVariables> }>;
+type ApiContext = Context<{ Variables: Partial<ApiVariables> }>;
 
 function requireParam(c: Context, name: string): string {
 	const val = c.req.param(name);
@@ -35,12 +100,13 @@ function requireParam(c: Context, name: string): string {
 	return val;
 }
 
-async function readJsonBody(c: Context): Promise<unknown> {
-	try {
-		return await c.req.json();
-	} catch {
-		throw new AppError("Invalid JSON body.", 400);
-	}
+function readCustomerReadContext(c: Context) {
+	assertNoBearerPrincipal(c.req.header("Authorization"));
+	c.header("Cache-Control", "no-store");
+	return {
+		orgSlug: requireParam(c, "orgSlug"),
+		sessionId: getCookie(c, CUSTOMER_SESSION_COOKIE),
+	};
 }
 
 function readCustomerWriteContext(c: Context): CustomerProfileSessionContext {
@@ -54,195 +120,161 @@ function readCustomerWriteContext(c: Context): CustomerProfileSessionContext {
 	};
 }
 
-function registerCustomerProfileRoutes(
-	router: ParticipantProfileRouter,
-	profileService: ParticipantProfileService,
-): void {
-	// Customer: Get own teacher profile
-	router.get("/customer/orgs/:orgSlug/profiles/teacher", async (c) => {
-		try {
-			assertNoBearerPrincipal(c.req.header("Authorization"));
-			c.header("Cache-Control", "no-store");
-			const orgSlug = requireParam(c, "orgSlug");
-			const sessionId = getCookie(c, CUSTOMER_SESSION_COOKIE);
-			return c.json(await profileService.getTeacherProfile(orgSlug, sessionId));
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
-
-	// Customer: Upsert own teacher profile
-	router.put("/customer/orgs/:orgSlug/profiles/teacher", async (c) => {
-		try {
-			const context = readCustomerWriteContext(c);
-			const payload = await readJsonBody(c);
-			return c.json(
-				await profileService.upsertTeacherProfile(context, payload),
-			);
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
-
-	// Customer: Get own accompanist profile
-	router.get("/customer/orgs/:orgSlug/profiles/accompanist", async (c) => {
-		try {
-			assertNoBearerPrincipal(c.req.header("Authorization"));
-			c.header("Cache-Control", "no-store");
-			const orgSlug = requireParam(c, "orgSlug");
-			const sessionId = getCookie(c, CUSTOMER_SESSION_COOKIE);
-			return c.json(
-				await profileService.getAccompanistProfile(orgSlug, sessionId),
-			);
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
-
-	// Customer: Upsert own accompanist profile
-	router.put("/customer/orgs/:orgSlug/profiles/accompanist", async (c) => {
-		try {
-			const context = readCustomerWriteContext(c);
-			const payload = await readJsonBody(c);
-			return c.json(
-				await profileService.upsertAccompanistProfile(context, payload),
-			);
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
+async function withNoStoreJson<T>(c: ApiContext, fn: () => Promise<T>) {
+	try {
+		c.header("Cache-Control", "no-store");
+		return c.json(await fn());
+	} catch (error) {
+		return toJsonError(c, error);
+	}
 }
 
-function registerAdminTeacherRoutes(
-	router: ParticipantProfileRouter,
-	options: ParticipantProfileRoutesOptions,
-): void {
-	const { profileService, authVerifier, repository } = options;
+const customerWriteContextCache = new WeakMap<
+	Request,
+	CustomerProfileSessionContext
+>();
 
-	// Admin: List teacher profiles
-	router.get(
-		"/admin/orgs/:orgSlug/profiles/teachers",
-		requireAuth(authVerifier),
-		requireTenant(repository, "orgSlug"),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				c.header("Cache-Control", "no-store");
-				const tenant = getRequiredTenant(c);
-				return c.json(
-					await profileService.listTeacherProfiles(
-						tenant.organization.id,
-						tenant.identity.uid,
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
+const guardCustomerWrite = preValidationGuard((c) => {
+	customerWriteContextCache.set(c.req.raw, readCustomerWriteContext(c));
+});
 
-	// Admin: Update teacher approval status
-	router.patch(
-		"/admin/orgs/:orgSlug/profiles/teachers/:profileId/approval",
-		requireAuth(authVerifier),
-		requireTenant(repository, "orgSlug"),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				c.header("Cache-Control", "no-store");
-				const tenant = getRequiredTenant(c);
-				const profileId = requireParam(c, "profileId");
-				const payload = await readJsonBody(c);
-				return c.json(
-					await profileService.updateTeacherProfileApproval(
-						tenant.organization.id,
-						profileId,
-						payload,
-						tenant.identity.uid,
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
+function buildCustomerProfileRoutes(profileService: ParticipantProfileService) {
+	return new Hono<{ Variables: Partial<ApiVariables> }>()
+		.get("/customer/orgs/:orgSlug/profiles/teacher", (c) =>
+			withNoStoreJson(c, () => {
+				const { orgSlug, sessionId } = readCustomerReadContext(c);
+				return profileService.getTeacherProfile(orgSlug, sessionId);
+			}),
+		)
+		.put(
+			"/customer/orgs/:orgSlug/profiles/teacher",
+			guardCustomerWrite,
+			jsonValidator(UpsertCustomerTeacherProfileInputSchema),
+			(c) =>
+				withNoStoreJson(c, () => {
+					const context =
+						customerWriteContextCache.get(c.req.raw) ??
+						readCustomerWriteContext(c);
+					return profileService.upsertTeacherProfile(
+						context,
+						c.req.valid("json"),
+					);
+				}),
+		)
+		.get("/customer/orgs/:orgSlug/profiles/accompanist", (c) =>
+			withNoStoreJson(c, () => {
+				const { orgSlug, sessionId } = readCustomerReadContext(c);
+				return profileService.getAccompanistProfile(orgSlug, sessionId);
+			}),
+		)
+		.put(
+			"/customer/orgs/:orgSlug/profiles/accompanist",
+			guardCustomerWrite,
+			jsonValidator(UpsertParticipantProfileInputSchema),
+			(c) =>
+				withNoStoreJson(c, () => {
+					const context =
+						customerWriteContextCache.get(c.req.raw) ??
+						readCustomerWriteContext(c);
+					return profileService.upsertAccompanistProfile(
+						context,
+						c.req.valid("json"),
+					);
+				}),
+		);
 }
 
-function registerAdminAccompanistRoutes(
-	router: ParticipantProfileRouter,
+function buildAdminTeacherProfileRoutes(
 	options: ParticipantProfileRoutesOptions,
-): void {
+) {
 	const { profileService, authVerifier, repository } = options;
+	const auth = requireAuth(authVerifier);
+	const tenant = requireTenant(repository, "orgSlug");
+	const admin = requireTenantRole(["Admin"]);
 
-	// Admin: List accompanist profiles
-	router.get(
-		"/admin/orgs/:orgSlug/profiles/accompanists",
-		requireAuth(authVerifier),
-		requireTenant(repository, "orgSlug"),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				c.header("Cache-Control", "no-store");
-				const tenant = getRequiredTenant(c);
-				return c.json(
-					await profileService.listAccompanistProfiles(
-						tenant.organization.id,
-						tenant.identity.uid,
-					),
+	return new Hono<{ Variables: Partial<ApiVariables> }>()
+		.get("/admin/orgs/:orgSlug/profiles/teachers", auth, tenant, admin, (c) =>
+			withNoStoreJson(c, () => {
+				const t = getRequiredTenant(c);
+				return profileService.listTeacherProfiles(
+					t.organization.id,
+					t.identity.uid,
 				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
+			}),
+		)
+		.patch(
+			"/admin/orgs/:orgSlug/profiles/teachers/:profileId/approval",
+			auth,
+			tenant,
+			admin,
+			jsonValidator(UpdateProfileApprovalBodySchema),
+			(c) =>
+				withNoStoreJson(c, () => {
+					const t = getRequiredTenant(c);
+					return profileService.updateTeacherProfileApproval(
+						t.organization.id,
+						requireParam(c, "profileId"),
+						c.req.valid("json"),
+						t.identity.uid,
+					);
+				}),
+		);
+}
 
-	// Admin: Update accompanist approval status
-	router.patch(
-		"/admin/orgs/:orgSlug/profiles/accompanists/:profileId/approval",
-		requireAuth(authVerifier),
-		requireTenant(repository, "orgSlug"),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				c.header("Cache-Control", "no-store");
-				const tenant = getRequiredTenant(c);
-				const profileId = requireParam(c, "profileId");
-				const payload = await readJsonBody(c);
-				return c.json(
-					await profileService.updateAccompanistProfileApproval(
-						tenant.organization.id,
-						profileId,
-						payload,
-						tenant.identity.uid,
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
+function buildAdminAccompanistProfileRoutes(
+	options: ParticipantProfileRoutesOptions,
+) {
+	const { profileService, authVerifier, repository } = options;
+	const auth = requireAuth(authVerifier);
+	const tenant = requireTenant(repository, "orgSlug");
+	const admin = requireTenantRole(["Admin"]);
+
+	return new Hono<{ Variables: Partial<ApiVariables> }>()
+		.get(
+			"/admin/orgs/:orgSlug/profiles/accompanists",
+			auth,
+			tenant,
+			admin,
+			(c) =>
+				withNoStoreJson(c, () => {
+					const t = getRequiredTenant(c);
+					return profileService.listAccompanistProfiles(
+						t.organization.id,
+						t.identity.uid,
+					);
+				}),
+		)
+		.patch(
+			"/admin/orgs/:orgSlug/profiles/accompanists/:profileId/approval",
+			auth,
+			tenant,
+			admin,
+			jsonValidator(UpdateProfileApprovalBodySchema),
+			(c) =>
+				withNoStoreJson(c, () => {
+					const t = getRequiredTenant(c);
+					return profileService.updateAccompanistProfileApproval(
+						t.organization.id,
+						requireParam(c, "profileId"),
+						c.req.valid("json"),
+						t.identity.uid,
+					);
+				}),
+		);
 }
 
 export function buildParticipantProfileRoutes(
 	options: ParticipantProfileRoutesOptions,
-): ParticipantProfileRouter {
-	const router: ParticipantProfileRouter = new Hono();
-	registerCustomerProfileRoutes(router, options.profileService);
-	registerAdminTeacherRoutes(router, options);
-	registerAdminAccompanistRoutes(router, options);
-
-	// Public: Directory profiles
-	router.get("/org-info/:orgSlug/directory/profiles", async (c) => {
-		try {
-			c.header("Cache-Control", "no-store");
-			const orgSlug = requireParam(c, "orgSlug");
-			return c.json(
-				await options.profileService.getPublicDirectoryProfiles(orgSlug),
-			);
-		} catch (error) {
-			return toJsonError(c, error);
-		}
-	});
-
-	return router;
+) {
+	return new Hono<{ Variables: Partial<ApiVariables> }>()
+		.route("/", buildCustomerProfileRoutes(options.profileService))
+		.route("/", buildAdminTeacherProfileRoutes(options))
+		.route("/", buildAdminAccompanistProfileRoutes(options))
+		.get("/org-info/:orgSlug/directory/profiles", (c) =>
+			withNoStoreJson(c, () =>
+				options.profileService.getPublicDirectoryProfiles(
+					requireParam(c, "orgSlug"),
+				),
+			),
+		);
 }

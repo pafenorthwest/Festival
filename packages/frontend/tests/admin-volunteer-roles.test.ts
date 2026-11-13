@@ -4,14 +4,17 @@ const read = (path: string) => Bun.file(new URL(path, import.meta.url)).text();
 
 describe("admin volunteer role and shift management", () => {
 	it("exposes API helpers for creating roles and shifts, scoped to a festival", async () => {
-		const api = await read("../src/lib/api.ts");
+		const api = await read("../src/lib/api/volunteers.ts");
+		const commonVolunteers = await read("../../common/src/volunteers.ts");
 
 		expect(api).toContain("export function createVolunteerRole");
 		expect(api).toContain("export function getVolunteerShiftsForRole");
 		expect(api).toContain("export function createVolunteerShift");
-		expect(api).toContain("displayName: string;");
-		expect(api).toContain("encodeURIComponent(slug)");
-		expect(api).toContain("encodeURIComponent(festivalShortName)");
+		expect(commonVolunteers).toContain("displayName: v.string(),");
+		expect(api).toContain("const enc = encodeURIComponent;");
+		expect(api).toContain(
+			"slug: enc(slug), festivalShortName: enc(festivalShortName)",
+		);
 	});
 
 	it("shows the create-role and shift-management forms to volunteer administrators", async () => {
@@ -96,14 +99,14 @@ describe("admin volunteer role and shift management", () => {
 	});
 
 	it("exposes API helpers for updating and deleting roles and shifts", async () => {
-		const api = await read("../src/lib/api.ts");
+		const api = await read("../src/lib/api/volunteers.ts");
 
 		expect(api).toContain("export function updateVolunteerRole");
 		expect(api).toContain("export function deleteVolunteerRole");
 		expect(api).toContain("export function updateVolunteerShift");
 		expect(api).toContain("export function deleteVolunteerShift");
-		expect(api).toContain('method: "PATCH"');
-		expect(api).toContain('method: "DELETE"');
+		expect(api).toContain(".$patch(");
+		expect(api).toContain(".$delete(");
 	});
 
 	it("lets an admin edit or delete a role, per the volunteer admin build screen", async () => {

@@ -1,8 +1,9 @@
 import {
 	type BillingAdjustmentType,
 	type CreateBillingAdjustmentInput,
-	isBillingLedgerDirection,
-	isBillingLedgerEntryType,
+	type CreateBillingAdjustmentPayload,
+	CreateBillingAdjustmentPayloadSchema,
+	CustomerIdQuerySchema,
 	validateCreateBillingAdjustmentInput,
 } from "@festival/common";
 import { type Context, Hono } from "hono";
@@ -25,6 +26,49 @@ import {
 import { AppError } from "../errors/app-error.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
 import type { OrganizationService } from "../services/organization-service.js";
+import {
+	type CoLocatedRouteSecurity,
+	defineRouteSecurity,
+} from "./shared/route-security-metadata.js";
+import { jsonValidator, queryValidator } from "./shared/schema-validator.js";
+
+export const ADMIN_BILLING_ROUTE_SECURITY = [
+	defineRouteSecurity({
+		method: "GET",
+		path: "/mismatches",
+		authenticationClass: "admin",
+		csrfRequired: false,
+		browserAllowed: true,
+	}),
+	defineRouteSecurity({
+		method: "GET",
+		path: "/customers/:customerId/credit-balance",
+		authenticationClass: "admin",
+		csrfRequired: false,
+		browserAllowed: true,
+	}),
+	defineRouteSecurity({
+		method: "GET",
+		path: "/customers/:customerId/ledger",
+		authenticationClass: "admin",
+		csrfRequired: false,
+		browserAllowed: true,
+	}),
+	defineRouteSecurity({
+		method: "GET",
+		path: "/adjustments",
+		authenticationClass: "admin",
+		csrfRequired: false,
+		browserAllowed: true,
+	}),
+	defineRouteSecurity({
+		method: "POST",
+		path: "/adjustments",
+		authenticationClass: "admin",
+		csrfRequired: false,
+		browserAllowed: true,
+	}),
+] as const satisfies readonly CoLocatedRouteSecurity[];
 
 export interface AdminBillingRoutesOptions {
 	authVerifier: AuthVerifier;
@@ -43,25 +87,16 @@ function requireNonEmptyCustomerId(c: BillingContext): string {
 	return customerId;
 }
 
-async function parseAdjustmentPayload(
-	c: BillingContext,
+function optionalTrimmed(value: unknown): string | null {
+	return typeof value === "string" && value.trim().length > 0
+		? value.trim()
+		: null;
+}
+
+function assertMatchingOrganization(
+	body: CreateBillingAdjustmentPayload,
 	tenantOrganizationId: string,
-	defaultAdminUserId: string,
-): Promise<{
-	input: CreateBillingAdjustmentInput;
-	options: CreateAdjustmentOptions;
-}> {
-	let body: Record<string, unknown>;
-	try {
-		body = (await c.req.json()) as Record<string, unknown>;
-	} catch {
-		throw new AppError("Invalid JSON payload.", 400);
-	}
-
-	if (!body || typeof body !== "object" || Array.isArray(body)) {
-		throw new AppError("Billing adjustment input must be an object.", 400);
-	}
-
+): void {
 	if (
 		typeof body.organizationId === "string" &&
 		body.organizationId.trim() &&
@@ -69,88 +104,139 @@ async function parseAdjustmentPayload(
 	) {
 		throw new AppError("Organization mismatch.", 400);
 	}
+}
 
-	const customerId =
-		typeof body.customerId === "string" ? body.customerId.trim() : "";
-	const adminUserId =
-		typeof body.adminUserId === "string" && body.adminUserId.trim()
-			? body.adminUserId.trim()
-			: defaultAdminUserId;
-	const adjustmentType =
-		typeof body.adjustmentType === "string" ? body.adjustmentType.trim() : "";
-	const reason = typeof body.reason === "string" ? body.reason.trim() : "";
-	const amountCents = body.amountCents;
-
-	const currencyCode =
-		typeof body.currencyCode === "string" && body.currencyCode.trim()
-			? body.currencyCode.trim().toUpperCase()
-			: undefined;
-
-	const referenceType =
-		typeof body.referenceType === "string" &&
-		body.referenceType.trim().length > 0
-			? body.referenceType.trim()
-			: null;
-
-	const referenceId =
-		typeof body.referenceId === "string" && body.referenceId.trim().length > 0
-			? body.referenceId.trim()
-			: null;
-
-	const approvedDecisionId =
-		typeof body.approvedDecisionId === "string" &&
-		body.approvedDecisionId.trim().length > 0
-			? body.approvedDecisionId.trim()
-			: null;
-
-	const input: CreateBillingAdjustmentInput = {
+function buildAdjustmentInput(
+	body: CreateBillingAdjustmentPayload,
+	tenantOrganizationId: string,
+	defaultAdminUserId: string,
+): CreateBillingAdjustmentInput {
+	return {
 		organizationId: tenantOrganizationId,
-		customerId,
-		adminUserId,
-		adjustmentType: adjustmentType as BillingAdjustmentType,
-		amountCents: amountCents as number,
-		currencyCode,
-		reason,
-		referenceType,
-		referenceId,
-		approvedDecisionId,
+		customerId: body.customerId.trim(),
+		adminUserId: optionalTrimmed(body.adminUserId) ?? defaultAdminUserId,
+		adjustmentType: body.adjustmentType.trim() as BillingAdjustmentType,
+		amountCents: body.amountCents,
+		currencyCode: optionalTrimmed(body.currencyCode)?.toUpperCase(),
+		reason: body.reason.trim(),
+		referenceType: optionalTrimmed(body.referenceType),
+		referenceId: optionalTrimmed(body.referenceId),
+		approvedDecisionId: optionalTrimmed(body.approvedDecisionId),
 	};
+}
 
+function parseAdjustmentPayload(
+	body: CreateBillingAdjustmentPayload,
+	tenantOrganizationId: string,
+	defaultAdminUserId: string,
+): {
+	input: CreateBillingAdjustmentInput;
+	options: CreateAdjustmentOptions;
+} {
+	assertMatchingOrganization(body, tenantOrganizationId);
+	const input = buildAdjustmentInput(
+		body,
+		tenantOrganizationId,
+		defaultAdminUserId,
+	);
 	const validation = validateCreateBillingAdjustmentInput(input);
 	if (!validation.valid || !validation.data) {
 		throw new AppError(validation.errors.join("; "), 400);
 	}
-
 	const options: CreateAdjustmentOptions = {
 		notes: typeof body.notes === "string" ? body.notes : null,
-		entryType:
-			typeof body.entryType === "string" &&
-			isBillingLedgerEntryType(body.entryType)
-				? body.entryType
-				: undefined,
-		direction:
-			typeof body.direction === "string" &&
-			isBillingLedgerDirection(body.direction)
-				? body.direction
-				: undefined,
+		entryType: body.entryType,
+		direction: body.direction,
 	};
-
 	return { input: validation.data, options };
 }
 
-async function handleApplyAdjustment(
+async function listMismatchesHandler(
 	c: BillingContext,
 	billingService: BillingReconciliationService,
 ) {
 	try {
 		const tenant = getRequiredTenant(c);
+		const mismatches = await billingService.listMismatches(
+			tenant.organization.id,
+		);
+		return c.json({ mismatches });
+	} catch (error) {
+		return toJsonError(c, error);
+	}
+}
+
+async function getCreditBalanceHandler(
+	c: BillingContext,
+	billingService: BillingReconciliationService,
+) {
+	try {
+		const tenant = getRequiredTenant(c);
+		const customerId = requireNonEmptyCustomerId(c);
+		const existing = await billingService.getCreditBalance(
+			tenant.organization.id,
+			customerId,
+		);
+		const creditBalance = existing ?? {
+			organizationId: tenant.organization.id,
+			customerId,
+			balanceCents: 0,
+			currencyCode: "USD",
+		};
+		return c.json({ creditBalance, ...creditBalance });
+	} catch (error) {
+		return toJsonError(c, error);
+	}
+}
+
+async function getLedgerHandler(
+	c: BillingContext,
+	billingService: BillingReconciliationService,
+) {
+	try {
+		const tenant = getRequiredTenant(c);
+		const customerId = requireNonEmptyCustomerId(c);
+		const ledger = await billingService.listLedgerEntries(
+			tenant.organization.id,
+			customerId,
+		);
+		return c.json({ ledger, ledgerEntries: ledger });
+	} catch (error) {
+		return toJsonError(c, error);
+	}
+}
+
+async function listAdjustmentsHandler(
+	c: BillingContext,
+	billingService: BillingReconciliationService,
+	customerIdQuery?: string,
+) {
+	try {
+		const tenant = getRequiredTenant(c);
+		const customerId = customerIdQuery?.trim() || undefined;
+		const adjustments = await billingService.listAdjustments(
+			tenant.organization.id,
+			customerId,
+		);
+		return c.json({ adjustments });
+	} catch (error) {
+		return toJsonError(c, error);
+	}
+}
+
+async function handleApplyAdjustment(
+	c: BillingContext,
+	billingService: BillingReconciliationService,
+	body: CreateBillingAdjustmentPayload,
+) {
+	try {
+		const tenant = getRequiredTenant(c);
 		const defaultAdminId = tenant.user?.id || getRequiredIdentity(c).uid;
-		const { input, options } = await parseAdjustmentPayload(
-			c,
+		const { input, options } = parseAdjustmentPayload(
+			body,
 			tenant.organization.id,
 			defaultAdminId,
 		);
-
 		const outcome = await billingService.applyAdjustment(input, options);
 		if (outcome.alreadyExisted) {
 			throw new DuplicateAdjustmentError(
@@ -158,7 +244,6 @@ async function handleApplyAdjustment(
 				outcome.adjustment,
 			);
 		}
-
 		return c.json(outcome, 201);
 	} catch (error) {
 		if (error instanceof InsufficientCreditBalanceError) {
@@ -167,17 +252,11 @@ async function handleApplyAdjustment(
 				new AppError(error.message, 409, "INSUFFICIENT_CREDIT_BALANCE"),
 			);
 		}
-		if (error instanceof DuplicateAdjustmentError) {
-			return toJsonError(c, error);
-		}
 		return toJsonError(c, error);
 	}
 }
 
-export function buildAdminBillingRoutes(
-	options: AdminBillingRoutesOptions,
-): Hono<{ Variables: Partial<ApiVariables> }> {
-	const router = new Hono<{ Variables: Partial<ApiVariables> }>();
+export function buildAdminBillingRoutes(options: AdminBillingRoutesOptions) {
 	const repository =
 		options.repository ?? options.organizationService?.repository;
 	if (!repository) {
@@ -186,98 +265,42 @@ export function buildAdminBillingRoutes(
 		);
 	}
 	const { authVerifier, billingReconciliationService } = options;
-
-	router.get(
-		"/mismatches",
+	const admin = [
 		requireAuth(authVerifier),
 		requireTenant(repository),
 		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				const tenant = getRequiredTenant(c);
-				const mismatches = await billingReconciliationService.listMismatches(
-					tenant.organization.id,
-				);
-				return c.json({ mismatches });
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
+	] as const;
 
-	router.get(
-		"/customers/:customerId/credit-balance",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				const tenant = getRequiredTenant(c);
-				const customerId = requireNonEmptyCustomerId(c);
-				const existing = await billingReconciliationService.getCreditBalance(
-					tenant.organization.id,
-					customerId,
-				);
-				const creditBalance = existing ?? {
-					organizationId: tenant.organization.id,
-					customerId,
-					balanceCents: 0,
-					currencyCode: "USD",
-				};
-				return c.json({ creditBalance, ...creditBalance });
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	router.get(
-		"/customers/:customerId/ledger",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				const tenant = getRequiredTenant(c);
-				const customerId = requireNonEmptyCustomerId(c);
-				const ledger = await billingReconciliationService.listLedgerEntries(
-					tenant.organization.id,
-					customerId,
-				);
-				return c.json({ ledger, ledgerEntries: ledger });
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	router.get(
-		"/adjustments",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				const tenant = getRequiredTenant(c);
-				const customerId = c.req.query("customerId")?.trim() || undefined;
-				const adjustments = await billingReconciliationService.listAdjustments(
-					tenant.organization.id,
-					customerId,
-				);
-				return c.json({ adjustments });
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	router.post(
-		"/adjustments",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => handleApplyAdjustment(c, billingReconciliationService),
-	);
-
-	return router;
+	return new Hono<{ Variables: Partial<ApiVariables> }>()
+		.get("/mismatches", ...admin, (c) =>
+			listMismatchesHandler(c, billingReconciliationService),
+		)
+		.get("/customers/:customerId/credit-balance", ...admin, (c) =>
+			getCreditBalanceHandler(c, billingReconciliationService),
+		)
+		.get("/customers/:customerId/ledger", ...admin, (c) =>
+			getLedgerHandler(c, billingReconciliationService),
+		)
+		.get("/adjustments", ...admin, queryValidator(CustomerIdQuerySchema), (c) =>
+			listAdjustmentsHandler(
+				c,
+				billingReconciliationService,
+				c.req.valid("query").customerId,
+			),
+		)
+		.post(
+			"/adjustments",
+			...admin,
+			jsonValidator(CreateBillingAdjustmentPayloadSchema, {
+				invalidJsonMessage: "Invalid JSON payload.",
+			}),
+			(c) =>
+				handleApplyAdjustment(
+					c,
+					billingReconciliationService,
+					c.req.valid("json"),
+				),
+		);
 }
+
+export type AdminBillingRoutesType = ReturnType<typeof buildAdminBillingRoutes>;

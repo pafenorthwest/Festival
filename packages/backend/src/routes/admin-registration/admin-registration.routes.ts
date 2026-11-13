@@ -1,5 +1,9 @@
-import { isAccompanistDivisionSelectionPolicy } from "@festival/common";
-import { Hono } from "hono";
+import {
+	DropRegistrationBodySchema,
+	PromoteWaitlistBodySchema,
+	TransferRegistrationBodySchema,
+} from "@festival/common";
+import { type Context, Hono } from "hono";
 import {
 	type ApiVariables,
 	getRequiredIdentity,
@@ -13,25 +17,22 @@ import type { AuthVerifier } from "../../auth/types.js";
 import { AppError } from "../../errors/app-error.js";
 import type { DropTransferService } from "../../registration/drop-transfer-service.js";
 import type { RegistrationChangeRepository } from "../../registration/registration-change-repository.js";
+import type { OrganizationRepository } from "../../repo/organization-repository.js";
 import type { OrganizationService } from "../../services/organization-service.js";
+import {
+	type CoLocatedRouteSecurity,
+	defineRouteSecurity,
+} from "../shared/route-security-metadata.js";
+import {
+	jsonValidator,
+	preValidationGuard,
+} from "../shared/schema-validator.js";
+import {
+	ADMIN_REGISTRATION_CATALOG_ROUTE_SECURITY,
+	buildAdminRegistrationCatalogRoutes,
+} from "./admin-registration-catalog.routes.js";
 
-function assertAllowedFields(
-	payload: unknown,
-	allowed: readonly string[],
-	label: string,
-): void {
-	if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
-	const allowedFields = new Set(allowed);
-	const extraFields = Object.keys(payload).filter(
-		(field) => !allowedFields.has(field),
-	);
-	if (extraFields.length > 0) {
-		throw new AppError(
-			`${label} cannot include browser-controlled fields: ${extraFields.join(", ")}.`,
-			400,
-		);
-	}
-}
+type AdminEnv = { Variables: Partial<ApiVariables> };
 
 export interface AdminRegistrationRoutesOptions {
 	organizationService: OrganizationService;
@@ -40,11 +41,44 @@ export interface AdminRegistrationRoutesOptions {
 	registrationChangeRepository?: RegistrationChangeRepository;
 }
 
+const REG_BASE =
+	"/organizations/:slug/festivals/:festivalShortName/registrations";
+
+const adminActionRoute = (
+	method: "GET" | "POST",
+	suffix: string,
+): CoLocatedRouteSecurity =>
+	defineRouteSecurity({
+		method,
+		path: `${REG_BASE}${suffix}`,
+		authenticationClass: "admin",
+		csrfRequired: false,
+		browserAllowed: true,
+	});
+
+export const ADMIN_REGISTRATION_ACTIONS_ROUTE_SECURITY = [
+	adminActionRoute("POST", "/:id/drop"),
+	adminActionRoute("POST", "/:id/transfer"),
+	adminActionRoute("POST", "/:id/promote"),
+	adminActionRoute("GET", "/:id/change-log"),
+] as const satisfies readonly CoLocatedRouteSecurity[];
+
+export const ADMIN_REGISTRATION_ROUTE_SECURITY = [
+	...ADMIN_REGISTRATION_CATALOG_ROUTE_SECURITY,
+	...ADMIN_REGISTRATION_ACTIONS_ROUTE_SECURITY,
+] as const satisfies readonly CoLocatedRouteSecurity[];
+
+export {
+	ADMIN_REGISTRATION_CATALOG_ROUTE_SECURITY,
+	buildAdminRegistrationCatalogRoutes,
+};
+
 function requireDropTransferService(
 	service: DropTransferService | undefined,
 ): DropTransferService {
-	if (!service)
+	if (!service) {
 		throw new AppError("Feature 'drop_and_transfer' is not enabled.", 404);
+	}
 	return service;
 }
 
@@ -57,463 +91,281 @@ function requireChangeRepository(
 	return repo;
 }
 
+async function resolveFestivalForRegistration(
+	c: Context<AdminEnv>,
+	repository: OrganizationRepository,
+) {
+	const tenant = getRequiredTenant(c);
+	const festivalShortName = c.req.param("festivalShortName");
+	const id = c.req.param("id");
+	if (!festivalShortName || !id) {
+		throw new AppError(
+			"Festival short name and registration ID are required.",
+			400,
+		);
+	}
+	const festival = await repository.findFestivalByShortName(
+		tenant.organization.id,
+		festivalShortName,
+	);
+	if (!festival) {
+		throw new AppError("Festival not found.", 404);
+	}
+	return { tenant, festival, id };
+}
+
+type ResolvedAdminAction = {
+	tenant: ReturnType<typeof getRequiredTenant>;
+	festival: NonNullable<
+		Awaited<ReturnType<OrganizationRepository["findFestivalByShortName"]>>
+	>;
+	id: string;
+	service: DropTransferService;
+	entitlement: Awaited<ReturnType<DropTransferService["getEntitlement"]>>;
+};
+
+const RESOLVED_ADMIN_ACTION = new WeakMap<Request, ResolvedAdminAction>();
+
+async function resolveScopedEntitlement(input: {
+	service: DropTransferService;
+	id: string;
+	organizationId: string;
+	festivalId: string;
+}) {
+	const entitlement = await input.service.getEntitlement(
+		input.id,
+		input.organizationId,
+	);
+	if (
+		!entitlement ||
+		(entitlement.festivalId && entitlement.festivalId !== input.festivalId)
+	) {
+		throw new AppError("Registration not found.", 404);
+	}
+	return entitlement;
+}
+
+async function resolveAndCacheAdminAction(
+	c: Context<AdminEnv>,
+	options: AdminRegistrationRoutesOptions,
+): Promise<ResolvedAdminAction> {
+	const existing = RESOLVED_ADMIN_ACTION.get(c.req.raw);
+	if (existing) return existing;
+	const { tenant, festival, id } = await resolveFestivalForRegistration(
+		c,
+		options.organizationService.repository,
+	);
+	const service = requireDropTransferService(options.dropTransferService);
+	const entitlement = await resolveScopedEntitlement({
+		service,
+		id,
+		organizationId: tenant.organization.id,
+		festivalId: festival.id,
+	});
+	const resolved = { tenant, festival, id, service, entitlement };
+	RESOLVED_ADMIN_ACTION.set(c.req.raw, resolved);
+	return resolved;
+}
+
+function extractTargetFestivalClassId(body: {
+	targetFestivalClassId?: string;
+	targetClassId?: string;
+	destinationFestivalClassId?: string;
+}): string {
+	const target =
+		body.targetFestivalClassId?.trim() ||
+		body.targetClassId?.trim() ||
+		body.destinationFestivalClassId?.trim() ||
+		"";
+	if (!target) {
+		throw new AppError("Target festival class ID is required.", 400);
+	}
+	return target;
+}
+
+async function handleAdminDropRegistration(
+	c: Context<AdminEnv>,
+	options: AdminRegistrationRoutesOptions,
+	body: {
+		requestRefund?: boolean;
+		issueRefund?: boolean;
+		refund?: boolean;
+		refundAmountCents?: number;
+		amountCents?: number;
+		reason?: string | null;
+		refundReason?: string | null;
+	},
+) {
+	try {
+		const { tenant, festival, id, service } = await resolveAndCacheAdminAction(
+			c,
+			options,
+		);
+		const actor = getRequiredIdentity(c);
+		const requestRefund =
+			body.requestRefund === true ||
+			body.issueRefund === true ||
+			body.refund === true;
+		const refundAmountCents = body.refundAmountCents ?? body.amountCents;
+		return c.json(
+			await service.dropRegistration({
+				classEntitlementId: id,
+				organizationId: tenant.organization.id,
+				festivalId: festival.id,
+				actorUid: actor.uid,
+				actorRole: "admin",
+				reason: typeof body.reason === "string" ? body.reason : null,
+				requestRefund,
+				issueRefund: requestRefund,
+				refundAmountCents,
+				refundReason:
+					typeof body.refundReason === "string" ? body.refundReason : undefined,
+			}),
+		);
+	} catch (error) {
+		return toJsonError(c, error);
+	}
+}
+
+async function handleAdminTransferRegistration(
+	c: Context<AdminEnv>,
+	options: AdminRegistrationRoutesOptions,
+	body: {
+		targetFestivalClassId?: string;
+		targetClassId?: string;
+		destinationFestivalClassId?: string;
+		reason?: string | null;
+	},
+) {
+	try {
+		const { tenant, festival, id, service, entitlement } =
+			await resolveAndCacheAdminAction(c, options);
+		const actor = getRequiredIdentity(c);
+		const targetFestivalClassId = extractTargetFestivalClassId(body);
+		return c.json(
+			await service.transferRegistration({
+				classEntitlementId: id,
+				targetFestivalClassId,
+				organizationId: tenant.organization.id,
+				festivalId: festival.id,
+				sourceFestivalClassId: entitlement?.festivalClassId ?? "",
+				actorUid: actor.uid,
+				actorRole: "admin",
+				reason: typeof body.reason === "string" ? body.reason : null,
+			}),
+		);
+	} catch (error) {
+		return toJsonError(c, error);
+	}
+}
+
+async function handleAdminPromoteRegistration(
+	c: Context<AdminEnv>,
+	options: AdminRegistrationRoutesOptions,
+	body: { reason?: string | null },
+) {
+	try {
+		const { tenant, festival, id, service } = await resolveAndCacheAdminAction(
+			c,
+			options,
+		);
+		const actor = getRequiredIdentity(c);
+		return c.json(
+			await service.promoteRegistration({
+				classEntitlementId: id,
+				organizationId: tenant.organization.id,
+				festivalId: festival.id,
+				actorUid: actor.uid,
+				actorRole: "admin",
+				reason: typeof body.reason === "string" ? body.reason : null,
+			}),
+		);
+	} catch (error) {
+		return toJsonError(c, error);
+	}
+}
+
+async function handleAdminGetChangeLog(
+	c: Context<AdminEnv>,
+	options: AdminRegistrationRoutesOptions,
+) {
+	try {
+		const { tenant, festival, id } = await resolveFestivalForRegistration(
+			c,
+			options.organizationService.repository,
+		);
+		if (options.dropTransferService) {
+			await resolveScopedEntitlement({
+				service: options.dropTransferService,
+				id,
+				organizationId: tenant.organization.id,
+				festivalId: festival.id,
+			});
+		}
+		const repo = requireChangeRepository(
+			options.registrationChangeRepository ??
+				options.dropTransferService?.changeRepository,
+		);
+		const changeLogs = await repo.listChangeLogsForEntitlement(
+			tenant.organization.id,
+			id,
+		);
+		return c.json({ changeLogs });
+	} catch (error) {
+		return toJsonError(c, error);
+	}
+}
+
+export function buildAdminRegistrationActionsRoutes(
+	options: AdminRegistrationRoutesOptions,
+) {
+	const auth = requireAuth(options.authVerifier);
+	const tenant = requireTenant(options.organizationService.repository);
+	const admin = requireTenantRole(["Admin"]);
+	const guardAction = preValidationGuard<AdminEnv>(async (c) => {
+		await resolveAndCacheAdminAction(c, options);
+	});
+
+	return new Hono<AdminEnv>()
+		.post(
+			`${REG_BASE}/:id/drop`,
+			auth,
+			tenant,
+			admin,
+			guardAction,
+			jsonValidator(DropRegistrationBodySchema, { allowEmptyJsonObject: true }),
+			(c) => handleAdminDropRegistration(c, options, c.req.valid("json")),
+		)
+		.post(
+			`${REG_BASE}/:id/transfer`,
+			auth,
+			tenant,
+			admin,
+			guardAction,
+			jsonValidator(TransferRegistrationBodySchema, {
+				invalidJsonMessage: "Transfer request is invalid.",
+				fallbackErrorMessage: "Transfer request is invalid.",
+			}),
+			(c) => handleAdminTransferRegistration(c, options, c.req.valid("json")),
+		)
+		.post(
+			`${REG_BASE}/:id/promote`,
+			auth,
+			tenant,
+			admin,
+			guardAction,
+			jsonValidator(PromoteWaitlistBodySchema, { allowEmptyJsonObject: true }),
+			(c) => handleAdminPromoteRegistration(c, options, c.req.valid("json")),
+		)
+		.get(`${REG_BASE}/:id/change-log`, auth, tenant, admin, (c) =>
+			handleAdminGetChangeLog(c, options),
+		);
+}
+
 export function buildAdminRegistrationRoutes(
 	options: AdminRegistrationRoutesOptions,
-): Hono<{ Variables: Partial<ApiVariables> }> {
-	const router = new Hono<{ Variables: Partial<ApiVariables> }>();
-	const { organizationService, authVerifier } = options;
-	const repository = organizationService.repository;
-
-	router.get(
-		"/organizations/:slug/admin/accompanist-policy",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				const tenant = getRequiredTenant(c);
-				return c.json({
-					policy: await organizationService.getAccompanistDivisionPolicy(
-						tenant.organization.id,
-					),
-				});
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	router.post(
-		"/organizations/:slug/admin/accompanist-policy",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				const payload = await c.req.json();
-				assertAllowedFields(payload, ["policy"], "Accompanist policy request");
-				if (
-					!payload ||
-					typeof payload !== "object" ||
-					!isAccompanistDivisionSelectionPolicy(
-						(payload as { policy?: unknown }).policy,
-					)
-				) {
-					throw new AppError("Accompanist division policy is invalid.", 400);
-				}
-				const tenant = getRequiredTenant(c);
-				return c.json({
-					policy: await organizationService.updateAccompanistDivisionPolicy({
-						organizationId: tenant.organization.id,
-						policy: (
-							payload as { policy: "exactly_one" | "one_to_two" | "one_to_all" }
-						).policy,
-					}),
-				});
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	router.get(
-		"/organizations/:slug/admin/registration-configuration",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				return c.json(
-					await organizationService.getRegistrationConfigurationForTenant(
-						getRequiredTenant(c),
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	router.post(
-		"/organizations/:slug/admin/registration-age-date",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				const payload = await c.req.json();
-				assertAllowedFields(
-					payload,
-					["registrationAgeDate"],
-					"Registration age configuration",
-				);
-				return c.json(
-					await organizationService.updateRegistrationAgeDateForTenant(
-						getRequiredTenant(c),
-						(payload as { registrationAgeDate?: unknown })?.registrationAgeDate,
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	for (const [kind, path] of [
-		["class_subtype", "class-subtypes"],
-		["instrument", "instruments"],
-	] as const) {
-		router.post(
-			`/organizations/:slug/admin/${path}`,
-			requireAuth(authVerifier),
-			requireTenant(repository),
-			requireTenantRole(["Admin"]),
-			async (c) => {
-				try {
-					const payload = await c.req.json();
-					assertAllowedFields(
-						payload,
-						kind === "class_subtype"
-							? ["displayName", "requiredSubtypeId"]
-							: ["displayName"],
-						"Registration catalog request",
-					);
-					c.status(201);
-					return c.json(
-						await organizationService.createRegistrationCatalogValueForTenant(
-							getRequiredTenant(c),
-							kind,
-							(payload as { displayName?: unknown })?.displayName,
-							(payload as { requiredSubtypeId?: unknown })?.requiredSubtypeId,
-						),
-					);
-				} catch (error) {
-					return toJsonError(c, error);
-				}
-			},
-		);
-	}
-
-	for (const [kind, path] of [
-		["class_subtype", "class-subtypes"],
-		["instrument", "instruments"],
-	] as const) {
-		router.post(
-			`/organizations/:slug/admin/${path}/reorder`,
-			requireAuth(authVerifier),
-			requireTenant(repository),
-			requireTenantRole(["Admin"]),
-			async (c) => {
-				try {
-					const payload = await c.req.json();
-					assertAllowedFields(
-						payload,
-						["ids"],
-						"Registration catalog reorder request",
-					);
-					return c.json(
-						await organizationService.reorderRegistrationCatalogValuesForTenant(
-							getRequiredTenant(c),
-							kind,
-							(payload as { ids?: unknown })?.ids,
-						),
-					);
-				} catch (error) {
-					return toJsonError(c, error);
-				}
-			},
-		);
-		router.post(
-			`/organizations/:slug/admin/${path}/:id`,
-			requireAuth(authVerifier),
-			requireTenant(repository),
-			requireTenantRole(["Admin"]),
-			async (c) => {
-				try {
-					const payload = await c.req.json();
-					assertAllowedFields(
-						payload,
-						kind === "class_subtype"
-							? ["displayName", "isActive", "requiredSubtypeId"]
-							: ["displayName", "isActive"],
-						"Registration catalog update request",
-					);
-					return c.json(
-						await organizationService.updateRegistrationCatalogValueForTenant(
-							getRequiredTenant(c),
-							kind,
-							c.req.param("id"),
-							payload as {
-								displayName?: unknown;
-								isActive?: unknown;
-								requiredSubtypeId?: unknown;
-							},
-						),
-					);
-				} catch (error) {
-					return toJsonError(c, error);
-				}
-			},
-		);
-	}
-
-	const base =
-		"/organizations/:slug/festivals/:festivalShortName/registrations";
-
-	router.post(
-		`${base}/:id/drop`,
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				const tenant = getRequiredTenant(c);
-				const actor = getRequiredIdentity(c);
-				const festivalShortName = c.req.param("festivalShortName");
-				const id = c.req.param("id");
-
-				const festival = await repository.findFestivalByShortName(
-					tenant.organization.id,
-					festivalShortName,
-				);
-				if (!festival) throw new AppError("Festival not found.", 404);
-
-				const service = requireDropTransferService(options.dropTransferService);
-				const entitlement = await service.getEntitlement(
-					id,
-					tenant.organization.id,
-				);
-				if (
-					!entitlement ||
-					(entitlement.festivalId && entitlement.festivalId !== festival.id)
-				) {
-					throw new AppError("Registration not found.", 404);
-				}
-
-				let body: Record<string, unknown> = {};
-				try {
-					const b = await c.req.json();
-					if (b && typeof b === "object" && !Array.isArray(b)) {
-						body = b as Record<string, unknown>;
-					}
-				} catch {
-					// body is optional for drop
-				}
-
-				const requestRefund =
-					body.requestRefund === true ||
-					body.issueRefund === true ||
-					body.refund === true;
-				const refundAmountCents =
-					typeof body.refundAmountCents === "number"
-						? body.refundAmountCents
-						: typeof body.amountCents === "number"
-							? body.amountCents
-							: undefined;
-				const reason = typeof body.reason === "string" ? body.reason : null;
-				const refundReason =
-					typeof body.refundReason === "string" ? body.refundReason : undefined;
-
-				const result = await service.dropRegistration({
-					classEntitlementId: id,
-					organizationId: tenant.organization.id,
-					festivalId: festival.id,
-					actorUid: actor.uid,
-					actorRole: "admin",
-					reason,
-					requestRefund,
-					issueRefund: requestRefund,
-					refundAmountCents,
-					refundReason,
-				});
-
-				return c.json(result);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	router.post(
-		`${base}/:id/transfer`,
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				const tenant = getRequiredTenant(c);
-				const actor = getRequiredIdentity(c);
-				const festivalShortName = c.req.param("festivalShortName");
-				const id = c.req.param("id");
-
-				const festival = await repository.findFestivalByShortName(
-					tenant.organization.id,
-					festivalShortName,
-				);
-				if (!festival) throw new AppError("Festival not found.", 404);
-
-				const service = requireDropTransferService(options.dropTransferService);
-				const entitlement = await service.getEntitlement(
-					id,
-					tenant.organization.id,
-				);
-				if (
-					!entitlement ||
-					(entitlement.festivalId && entitlement.festivalId !== festival.id)
-				) {
-					throw new AppError("Registration not found.", 404);
-				}
-
-				let body: Record<string, unknown> = {};
-				try {
-					const b = await c.req.json();
-					if (b && typeof b === "object" && !Array.isArray(b)) {
-						body = b as Record<string, unknown>;
-					} else {
-						throw new AppError("Transfer request is invalid.", 400);
-					}
-				} catch (err) {
-					if (err instanceof AppError) throw err;
-					throw new AppError("Transfer request is invalid.", 400);
-				}
-
-				const targetFestivalClassId =
-					typeof body.targetFestivalClassId === "string"
-						? body.targetFestivalClassId.trim()
-						: typeof body.targetClassId === "string"
-							? body.targetClassId.trim()
-							: typeof body.destinationFestivalClassId === "string"
-								? body.destinationFestivalClassId.trim()
-								: "";
-
-				if (!targetFestivalClassId) {
-					throw new AppError("Target festival class ID is required.", 400);
-				}
-
-				const reason = typeof body.reason === "string" ? body.reason : null;
-
-				const result = await service.transferRegistration({
-					classEntitlementId: id,
-					targetFestivalClassId,
-					organizationId: tenant.organization.id,
-					festivalId: festival.id,
-					sourceFestivalClassId: entitlement.festivalClassId,
-					actorUid: actor.uid,
-					actorRole: "admin",
-					reason,
-				});
-
-				return c.json(result);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	router.post(
-		`${base}/:id/promote`,
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				const tenant = getRequiredTenant(c);
-				const actor = getRequiredIdentity(c);
-				const festivalShortName = c.req.param("festivalShortName");
-				const id = c.req.param("id");
-
-				const festival = await repository.findFestivalByShortName(
-					tenant.organization.id,
-					festivalShortName,
-				);
-				if (!festival) throw new AppError("Festival not found.", 404);
-
-				const service = requireDropTransferService(options.dropTransferService);
-				const entitlement = await service.getEntitlement(
-					id,
-					tenant.organization.id,
-				);
-				if (
-					!entitlement ||
-					(entitlement.festivalId && entitlement.festivalId !== festival.id)
-				) {
-					throw new AppError("Registration not found.", 404);
-				}
-
-				let body: Record<string, unknown> = {};
-				try {
-					const b = await c.req.json();
-					if (b && typeof b === "object" && !Array.isArray(b)) {
-						body = b as Record<string, unknown>;
-					}
-				} catch {
-					// body is optional for promote
-				}
-
-				const reason = typeof body.reason === "string" ? body.reason : null;
-
-				const result = await service.promoteRegistration({
-					classEntitlementId: id,
-					organizationId: tenant.organization.id,
-					festivalId: festival.id,
-					actorUid: actor.uid,
-					actorRole: "admin",
-					reason,
-				});
-
-				return c.json(result);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	router.get(
-		`${base}/:id/change-log`,
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				const tenant = getRequiredTenant(c);
-				const festivalShortName = c.req.param("festivalShortName");
-				const id = c.req.param("id");
-
-				const festival = await repository.findFestivalByShortName(
-					tenant.organization.id,
-					festivalShortName,
-				);
-				if (!festival) throw new AppError("Festival not found.", 404);
-
-				if (options.dropTransferService) {
-					const entitlement = await options.dropTransferService.getEntitlement(
-						id,
-						tenant.organization.id,
-					);
-					if (
-						!entitlement ||
-						(entitlement.festivalId && entitlement.festivalId !== festival.id)
-					) {
-						throw new AppError("Registration not found.", 404);
-					}
-				}
-
-				const repo = requireChangeRepository(
-					options.registrationChangeRepository ??
-						options.dropTransferService?.changeRepository,
-				);
-
-				const changeLogs = await repo.listChangeLogsForEntitlement(
-					tenant.organization.id,
-					id,
-				);
-
-				return c.json({ changeLogs });
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	return router;
+) {
+	return new Hono<AdminEnv>()
+		.route("/", buildAdminRegistrationCatalogRoutes(options))
+		.route("/", buildAdminRegistrationActionsRoutes(options));
 }

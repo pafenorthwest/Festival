@@ -1,11 +1,10 @@
-import type {
-	AppUserPayload,
-	AppUserResponse,
-	AuthenticatedUser,
-	LoginEventInput,
-	LoginEventResponse,
+import {
+	type AppUserPayload,
+	type AppUserResponse,
+	type AuthenticatedUser,
+	LoginEventInputSchema,
+	type LoginEventResponse,
 } from "@festival/common";
-import { isAuthLoginProvider } from "@festival/common";
 import type { Context, MiddlewareHandler } from "hono";
 import { Hono } from "hono";
 import type { AuthVerifier } from "../auth/types.js";
@@ -13,6 +12,35 @@ import { AppError } from "../errors/app-error.js";
 import { jsonError as safeJsonError } from "../errors/json-error.js";
 import type { AppUserRepository } from "../repo/app-user-repository.js";
 import { appUserInputFromIdentity } from "../repo/app-user-repository.js";
+import {
+	type CoLocatedRouteSecurity,
+	defineRouteSecurity,
+} from "./shared/route-security-metadata.js";
+import { jsonValidator } from "./shared/schema-validator.js";
+
+export const AUTH_ROUTE_SECURITY = [
+	defineRouteSecurity({
+		method: "POST",
+		path: "/sync",
+		authenticationClass: "firebase",
+		csrfRequired: false,
+		browserAllowed: true,
+	}),
+	defineRouteSecurity({
+		method: "POST",
+		path: "/login-event",
+		authenticationClass: "firebase",
+		csrfRequired: false,
+		browserAllowed: true,
+	}),
+	defineRouteSecurity({
+		method: "GET",
+		path: "/me",
+		authenticationClass: "firebase",
+		csrfRequired: false,
+		browserAllowed: true,
+	}),
+] as const satisfies readonly CoLocatedRouteSecurity[];
 
 type AuthVariables = {
 	firebaseIdentity: AuthenticatedUser;
@@ -94,26 +122,6 @@ function requireSyncedAppUser(
 	};
 }
 
-async function readLoginEventInput(c: Context): Promise<LoginEventInput> {
-	let payload: unknown;
-	try {
-		payload = await c.req.json();
-	} catch {
-		throw new AppError("Request body must be valid JSON.", 400);
-	}
-
-	if (!payload || typeof payload !== "object") {
-		throw new AppError("Request body must be a JSON object.", 400);
-	}
-
-	const provider = (payload as { provider?: unknown }).provider;
-	if (!isAuthLoginProvider(provider)) {
-		throw new AppError("provider must be one of: google, password.", 400);
-	}
-
-	return { provider };
-}
-
 function requestIp(c: Context, trustProxyHeaders: boolean): string | undefined {
 	if (!trustProxyHeaders) {
 		return undefined;
@@ -131,43 +139,50 @@ export function buildAuthRouter(
 	authVerifier: AuthVerifier,
 	appUserRepository: AppUserRepository,
 	trustProxyHeaders = false,
-): Hono<{ Variables: AuthVariables }> {
-	const router = new Hono<{ Variables: AuthVariables }>();
+) {
 	const firebaseAuth = requireFirebaseAuth(authVerifier);
 	const syncedAppUser = requireSyncedAppUser(appUserRepository);
 
-	router.post("/sync", firebaseAuth, async (c) => {
-		try {
-			const user = await appUserRepository.upsertAppUser(
-				appUserInputFromIdentity(c.var.firebaseIdentity),
-			);
-			return c.json({ user: appUserPayload(user) } satisfies AppUserResponse);
-		} catch (error) {
-			return jsonError(c, error);
-		}
-	});
+	return new Hono<{ Variables: AuthVariables }>()
+		.post("/sync", firebaseAuth, async (c) => {
+			try {
+				const user = await appUserRepository.upsertAppUser(
+					appUserInputFromIdentity(c.var.firebaseIdentity),
+				);
+				return c.json({ user: appUserPayload(user) } satisfies AppUserResponse);
+			} catch (error) {
+				return jsonError(c, error);
+			}
+		})
+		.post(
+			"/login-event",
+			firebaseAuth,
+			syncedAppUser,
+			jsonValidator(LoginEventInputSchema, {
+				invalidJsonMessage: "Request body must be valid JSON.",
+				fallbackErrorMessage: "Request body must be a JSON object.",
+			}),
+			async (c) => {
+				try {
+					const payload = c.req.valid("json");
+					await appUserRepository.insertLoginEvent({
+						userId: c.var.appUser.id,
+						firebaseUid: c.var.firebaseIdentity.uid,
+						provider: payload.provider,
+						ipAddress: requestIp(c, trustProxyHeaders),
+						userAgent:
+							c.req.header("user-agent")?.trim().slice(0, 256) || undefined,
+					});
 
-	router.post("/login-event", firebaseAuth, syncedAppUser, async (c) => {
-		try {
-			const payload = await readLoginEventInput(c);
-			await appUserRepository.insertLoginEvent({
-				userId: c.var.appUser.id,
-				firebaseUid: c.var.firebaseIdentity.uid,
-				provider: payload.provider,
-				ipAddress: requestIp(c, trustProxyHeaders),
-				userAgent:
-					c.req.header("user-agent")?.trim().slice(0, 256) || undefined,
-			});
-
-			return c.json({ status: "ok" } satisfies LoginEventResponse);
-		} catch (error) {
-			return jsonError(c, error);
-		}
-	});
-
-	router.get("/me", firebaseAuth, syncedAppUser, (c) => {
-		return c.json({ user: c.var.appUser } satisfies AppUserResponse);
-	});
-
-	return router;
+					return c.json({ status: "ok" } satisfies LoginEventResponse);
+				} catch (error) {
+					return jsonError(c, error);
+				}
+			},
+		)
+		.get("/me", firebaseAuth, syncedAppUser, (c) => {
+			return c.json({ user: c.var.appUser } satisfies AppUserResponse);
+		});
 }
+
+export type AuthRoutesType = ReturnType<typeof buildAuthRouter>;
