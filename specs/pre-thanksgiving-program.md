@@ -24,7 +24,7 @@ flowchart TD
 - [x] **D1 (#361 Approval Policy — DECIDED 2026-11-11)**: Active paid Teacher Membership + checked opt-in box **auto-creates / auto-approves** public directory visibility immediately (`approved`), with Admin retaining a one-click visibility toggle. *(`S03` unblocked -> `READY`.)*
 - [x] **D2 (#357 Checkout Edge Cases B1/B2 — DECIDED 2026-11-11)**: Defer `B1`/`B2` to the December Week 1 bug-fix sprint (since November live traffic is teacher memberships).
 - [x] **D3 (#354 QA Dump Cleanup — DECIDED 2026-11-11)**: Stripped `+8,592` lines of `tasks/festival-registration-ui/validation/browser-*results.json` (5 files) on `ericp/registration-flow-redesign` prior to merging `#354`.
-- [ ] **D4 (Production Infrastructure)**: Confirm target `<prod-domain>`, Ubuntu 24.04 host access, and production Shopify organization ownership so Live Ops (`S05`) starts Nov 14 without delay. *(Blocks `S05` execution until confirmed.)*
+- [ ] **D4 (Production Infrastructure)**: `<prod-domain>` **CONFIRMED `2026-11-12` as `artsfestival.online`** (`https://artsfestival.online`); remaining items (DNS cutover access, Ubuntu 24.04 host SSH access, production Firebase project access, and production Shopify organization ownership) scheduled for Monday `2026-11-16` *(blocks `S05` execution until confirmed)*.
 
 ---
 
@@ -144,13 +144,13 @@ Every Antigravity session follows 4 strict context-management commitments plus t
 1. **Ubuntu 24.04 Host & Network Hardening (`#95`, `Nov 14–15`)**:
    - Clone `/opt/Festival` at `v0.3.0`, run [01-host.sh](../cloud-setup/01-host.sh) as `root` (add 4 GB swap if 2 GB RAM), enable UFW (`IPV6=yes`, allow `80`/`443`/mgmt `22`, deny `3000`/`5432`/`8080`), configure DNS + TLS reverse proxy (`X-Forwarded-Proto https`, `Cross-Origin-Opener-Policy: same-origin-allow-popups`, raw webhook body preserved).
 2. **Live Firebase & Stack Bring-Up (`Nov 16–17`)**:
-   - Create production Firebase project + Web App (Google + Email link enabled, `<prod-domain>` authorized, Admin service account JSON).
+   - Create production Firebase project + Web App (Google + Email link enabled, `artsfestival.online` authorized, Admin service account JSON).
    - Populate all 15 variables in `/opt/Festival/cloud-setup/.env` (`chmod 600`): `DB_PASSWORD`, `FIREBASE_*` (3), `FRONT_FIREBASE_*` (4), `FESTIVAL_SECRET_KEYS_JSON`, `FESTIVAL_ACTIVE_SECRET_KEY_ID`, `FESTIVAL_PUBLIC_ORIGIN`, `API_ALLOWED_ORIGINS`, `TRUST_PROXY_HEADERS=true`, `FESTIVAL_RECONCILIATION_TOKEN`, optional `ENABLE_DROP_TRANSFER=false`.
    - Run [02-validate-env.sh](../cloud-setup/02-validate-env.sh), [03-prepare-images.sh](../cloud-setup/03-prepare-images.sh), and `docker compose up -d`; set GitHub `production` environment secrets (`DEPLOY_HOST`, `DEPLOY_SSH_PRIVATE_KEY`, `DEPLOY_PUBLIC_URL`).
 3. **Live Shopify Onboarding & Checkout Extension (`Nov 18–20`)**:
    - Production Shopify Store + Custom Admin App in same org (`Embedded = false`, `2026-07` webhooks, all 11 scopes: `read_customers,read_orders,read_products,write_products,write_inventory,read_publications,write_publications,customer_read_customers,customer_read_draft_orders,customer_read_metaobjects,customer_read_orders`).
    - Headless channel -> Confidential Customer Account API client (`customer_read_orders`, callback `/api/customer-auth/callback`, logout `/org/pafe/account`) + Storefront token.
-   - Deploy `packages/shopify-confirmation` (`shopify app deploy --config production`) and set **Festival application origin** = `https://<prod-domain>` & **slug** = `pafe` on Thank-you & Order-status blocks.
+   - Deploy `packages/shopify-confirmation` (`shopify app deploy --config production`) and set **Festival application origin** = `https://artsfestival.online` & **slug** = `pafe` on Thank-you & Order-status blocks.
    - Create `pafe` org via Firebase Admin, connect Shopify in `/org/pafe/admin/integrations` (confirming auto-registered `ORDERS_PAID` webhook), seed `#360` concertos via `docker compose run --rm -v /opt/Festival:/work:ro -w /work postgres psql ...`, and verify live Teacher Membership + `#361` Directory on `v0.3.0`.
 
 ---
