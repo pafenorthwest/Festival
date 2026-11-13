@@ -95,6 +95,7 @@ import {
 	hasForbiddenBrowserHeaders,
 } from "./routes/private-runtime.routes.js";
 import { assertRouteSecurityInventory } from "./routes/route-security.js";
+import { PeriodicLeaseReaper } from "./runtime/periodic-lease-reaper.js";
 import { apiRequestSecurity } from "./security/request-security.js";
 import { AccompanistMembershipService } from "./services/accompanist-membership-service.js";
 import { AdminClassCatalogService } from "./services/admin-class-catalog.service.js";
@@ -635,5 +636,18 @@ export async function createApp(options: CreateAppOptions = {}) {
 	);
 	assertRouteSecurityInventory(app.routes);
 
-	return { app, env };
+	const reaper = env.databaseSchema
+		? new PeriodicLeaseReaper({
+				schema: env.databaseSchema,
+				webhookBatchLimit: (limit) =>
+					shopifyWebhookService.getAvailableReclaimSlots(limit),
+				onReclaimedWebhookIds: (ids) =>
+					shopifyWebhookService.enqueueReclaimedDeliveries(ids),
+			})
+		: undefined;
+	const drain = () => shopifyWebhookService.drain();
+	const stopReaper = (): Promise<void> =>
+		reaper ? reaper.stop() : Promise.resolve();
+
+	return { app, env, drain, reaper, stopReaper };
 }

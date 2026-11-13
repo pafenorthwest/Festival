@@ -9,5 +9,9 @@
 		"lib": ["ES2022", "DOM"],
 		"types": ["bun"]
 	},
-	"include": ["src/**/*.ts", "tests/**/*.ts"]
+	"include": [
+		"src/**/*.ts",
+		"scripts/reap-class-checkout-executions.ts",
+		"tests/**/*.ts"
+	]
 }

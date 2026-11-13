@@ -2786,6 +2786,13 @@ CREATE INDEX idx_checkout_intents_org_class ON orgs.checkout_intents USING btree
 
 
 --
+-- Name: idx_class_checkout_executions_running_lease; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_class_checkout_executions_running_lease ON orgs.class_checkout_executions USING btree (organization_id, lease_expires_at) WHERE (state = 'running'::text);
+
+
+--
 -- Name: idx_class_entitlements_checkout_intent; Type: INDEX; Schema: orgs; Owner: -
 --
 

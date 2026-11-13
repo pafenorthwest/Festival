@@ -131,6 +131,15 @@ export class WebhookWorkerQueue {
 		return this.stats();
 	}
 
+	getAvailableReclaimSlots(limit = this.maxBacklog): number {
+		if (!Number.isFinite(limit) || limit <= 0) {
+			return 0;
+		}
+		const occupied =
+			this.queue.length + this.activeIds.size + this.pendingRecoveryIds.size;
+		return Math.max(0, Math.min(Math.trunc(limit), this.maxBacklog - occupied));
+	}
+
 	isQueuedOrActive(deliveryId: string): boolean {
 		return this.activeIds.has(deliveryId) || this.queue.includes(deliveryId);
 	}
@@ -154,6 +163,7 @@ export class WebhookWorkerQueue {
 	}
 
 	drain(): Promise<void> {
+		this.dispatch();
 		if (
 			this.queue.length === 0 &&
 			this.activeIds.size === 0 &&
