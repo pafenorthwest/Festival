@@ -136,6 +136,38 @@ export async function processDropRefundWorkflow(params: {
 	return executeVerifiedRefund(params, amountCents, currency, refundReason);
 }
 
+async function dispatchProviderRefund(
+	changeRepo: RegistrationChangeRepository,
+	provider: ShopifyRefundProvider,
+	refundEvent: RefundEvent,
+	entitlement: ClassEntitlement,
+	refundRequest: ShopifyLineTargetedRefundRequest,
+): Promise<RefundEvent> {
+	try {
+		const result = await provider.createRefund(refundRequest);
+		validateLineTargetedRefundResponse(refundRequest, result);
+		return (
+			(await changeRepo.updateRefundEventStatus({
+				id: refundEvent.id,
+				organizationId: entitlement.organizationId,
+				status: "completed",
+				shopifyRefundId: result.id,
+			})) ?? { ...refundEvent, status: "completed", shopifyRefundId: result.id }
+		);
+	} catch (error) {
+		const failureReason =
+			error instanceof Error ? error.message : "Shopify refund failed";
+		return (
+			(await changeRepo.updateRefundEventStatus({
+				id: refundEvent.id,
+				organizationId: entitlement.organizationId,
+				status: "failed",
+				failureReason,
+			})) ?? { ...refundEvent, status: "failed", failureReason }
+		);
+	}
+}
+
 async function executeVerifiedRefund(
 	params: {
 		changeRepo: RegistrationChangeRepository;
@@ -171,37 +203,20 @@ async function executeVerifiedRefund(
 	});
 	if (!provider || isPartial) return refundEvent;
 
-	const refundRequest: ShopifyLineTargetedRefundRequest = {
-		orderId: entitlement.shopifyOrderGid,
-		paymentIntentId: entitlement.checkoutIntentId,
-		refundEventId: refundEvent.id,
-		idempotencyKey: `refund-event:${refundEvent.id}`,
-		shopifyOrderLineId: entitlement.shopifyOrderLineGid,
-		amountCents,
-		currency,
-		reason: refundReason,
-	};
-	try {
-		const result = await provider.createRefund(refundRequest);
-		validateLineTargetedRefundResponse(refundRequest, result);
-		return (
-			(await params.changeRepo.updateRefundEventStatus({
-				id: refundEvent.id,
-				organizationId: entitlement.organizationId,
-				status: "completed",
-				shopifyRefundId: result.id,
-			})) ?? { ...refundEvent, status: "completed", shopifyRefundId: result.id }
-		);
-	} catch (error) {
-		const failureReason =
-			error instanceof Error ? error.message : "Shopify refund failed";
-		return (
-			(await params.changeRepo.updateRefundEventStatus({
-				id: refundEvent.id,
-				organizationId: entitlement.organizationId,
-				status: "failed",
-				failureReason,
-			})) ?? { ...refundEvent, status: "failed", failureReason }
-		);
-	}
+	return dispatchProviderRefund(
+		params.changeRepo,
+		provider,
+		refundEvent,
+		entitlement,
+		{
+			orderId: entitlement.shopifyOrderGid,
+			paymentIntentId: entitlement.checkoutIntentId,
+			refundEventId: refundEvent.id,
+			idempotencyKey: `refund-event:${refundEvent.id}`,
+			shopifyOrderLineId: entitlement.shopifyOrderLineGid,
+			amountCents,
+			currency,
+			reason: refundReason,
+		},
+	);
 }

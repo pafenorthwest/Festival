@@ -2,8 +2,6 @@ import {
 	AppError,
 	type CustomerClassRegistrationsResponse,
 	deriveFestivalMetadataCutoff,
-	type FestivalClassConfiguration,
-	type FestivalRecord,
 	isFestivalRegistrationOpen,
 	type OrganizationRecord,
 	type RegistrationEligibleClass,
@@ -15,17 +13,22 @@ import {
 } from "../../infra/s11-infra.js";
 import type { CheckoutRepository } from "./checkout-types.js";
 import {
+	countConfirmedByClassIds,
+	listClassRegistrationsFromPorts,
+	requireCustomerChildAge,
+	requireCustomerQueryFestival,
+	requireValidDivisionTeacher,
+	resolveCustomerAccessFromOrg,
+} from "./customer-registration-port-queries.js";
+import {
 	buildJoinedRegistrationItems,
-	buildPortRegistrationItem,
 	queryClassRegistrationsJoinedSql,
-	queryConfirmedCountsSql,
 	toRegistrationEligibleClassDto,
 } from "./customer-registration-query-helpers.js";
 import type {
 	CheckoutCatalogReadPort,
 	CheckoutCommerceReadPort,
 	CheckoutCustomerIdentityPort,
-	CheckoutCustomerSessionRecord,
 	CheckoutOrganizationReadPort,
 	CheckoutTeacherDirectoryPort,
 } from "./ports.js";
@@ -112,42 +115,49 @@ export class CustomerRegistrationQueryService {
 		teacherId: string,
 	): Promise<{ classes: RegistrationEligibleClass[] }> {
 		const access = await this.resolveCustomerAccess(slug, sessionId);
-		const festival = await this.requireFestival(
-			access.organization.id,
+		const orgId = access.organization.id;
+		const festival = await requireCustomerQueryFestival(
+			this.catalog,
+			orgId,
 			festivalShortName,
 		);
-		const childAge = await this.requireChildAge(
-			access.organization.id,
+		const childAge = await requireCustomerChildAge(
+			this.customers,
+			orgId,
 			access.customerId,
 			childId,
+			this.now().toISOString(),
 		);
-		await this.requireValidTeacher(
-			access.organization.id,
+		await requireValidDivisionTeacher(
+			this.teachers,
+			orgId,
 			divisionId,
 			teacherId,
 		);
+		return this.loadAndFilterEligibleClasses(
+			orgId,
+			festival,
+			divisionId,
+			childAge,
+		);
+	}
 
-		const timezone =
-			(await this.organizations.getOrganizationTimezone(
-				access.organization.id,
-			)) || "UTC";
+	private async loadAndFilterEligibleClasses(
+		orgId: string,
+		festival: Awaited<ReturnType<typeof requireCustomerQueryFestival>>,
+		divisionId: string,
+		childAge: number,
+	): Promise<{ classes: RegistrationEligibleClass[] }> {
+		const [timezone, allClasses, subtypes] = await Promise.all([
+			this.organizations.getOrganizationTimezone(orgId),
+			this.catalog.listFestivalClassConfigurations(orgId, festival.id, true),
+			this.catalog.listRegistrationCatalogValues(orgId, "class_subtype", false),
+		]);
 		const isRegistrationOpen = isFestivalRegistrationOpen(
 			festival,
 			this.now(),
-			timezone,
+			timezone || "UTC",
 		);
-		const [allClasses, subtypes] = await Promise.all([
-			this.catalog.listFestivalClassConfigurations(
-				access.organization.id,
-				festival.id,
-				true,
-			),
-			this.catalog.listRegistrationCatalogValues(
-				access.organization.id,
-				"class_subtype",
-				false,
-			),
-		]);
 		const eligible = allClasses.filter(
 			(item) =>
 				item.isActive &&
@@ -155,8 +165,9 @@ export class CustomerRegistrationQueryService {
 				childAge >= item.minimumAge &&
 				childAge <= item.maximumAge,
 		);
-		const placedCounts = await this.countConfirmedByClassIds(
-			access.organization.id,
+		const placedCounts = await countConfirmedByClassIds(
+			{ schema: this.schema, commerce: this.commerce },
+			orgId,
 			eligible.map((item) => item.id),
 		);
 		const subtypeById = new Map(subtypes.map((s) => [s.id, s]));
@@ -180,7 +191,11 @@ export class CustomerRegistrationQueryService {
 		const access = await this.resolveCustomerAccess(slug, sessionId);
 		const trimmedShortName = festivalShortName?.trim() ?? "";
 		const targetFestival = trimmedShortName
-			? await this.requireFestival(access.organization.id, trimmedShortName)
+			? await requireCustomerQueryFestival(
+					this.catalog,
+					access.organization.id,
+					trimmedShortName,
+				)
 			: null;
 		const [festivals, timezone] = await Promise.all([
 			targetFestival
@@ -195,7 +210,6 @@ export class CustomerRegistrationQueryService {
 				deriveFestivalMetadataCutoff(f.startDate, tz),
 			]),
 		);
-
 		if (this.schema) {
 			const rows = await queryClassRegistrationsJoinedSql(
 				this.schema,
@@ -211,133 +225,26 @@ export class CustomerRegistrationQueryService {
 				),
 			};
 		}
-
-		return this.listClassRegistrationsFromPorts(
-			access.organization.id,
-			access.customerId,
+		return listClassRegistrationsFromPorts(this.portDeps(), {
+			organizationId: access.organization.id,
+			customerId: access.customerId,
 			targetFestival,
 			festivals,
 			editCutoffs,
-		);
-	}
-
-	private async listClassRegistrationsFromPorts(
-		organizationId: string,
-		customerId: string,
-		targetFestival: FestivalRecord | null,
-		festivals: FestivalRecord[],
-		editCutoffs: Map<string, Date>,
-	): Promise<CustomerClassRegistrationsResponse> {
-		const entitlements = await this.commerce.listClassEntitlements({
-			organizationId,
-			parentCustomerId: customerId,
-			...(targetFestival ? { festivalId: targetFestival.id } : {}),
 		});
-		if (entitlements.length === 0) {
-			return { registrations: [] };
-		}
-		const uniqueChildIds = Array.from(
-			new Set(entitlements.map((e) => e.childId)),
-		);
-		const uniqueOrderGids = Array.from(
-			new Set(entitlements.map((e) => e.shopifyOrderGid)),
-		);
-		const [children, metadataMap, orderProjections, classConfigsByFestival] =
-			await Promise.all([
-				this.customers.findChildrenByIds
-					? this.customers.findChildrenByIds(
-							organizationId,
-							customerId,
-							uniqueChildIds,
-						)
-					: this.customers.listChildren(organizationId, customerId),
-				this.checkout.listRegistrationMetadataByEntitlementIds
-					? this.checkout.listRegistrationMetadataByEntitlementIds(
-							organizationId,
-							entitlements.map((e) => e.id),
-						)
-					: Promise.resolve(new Map()),
-				this.commerce.listOrderProjectionsByGids
-					? this.commerce.listOrderProjectionsByGids(
-							organizationId,
-							uniqueOrderGids,
-						)
-					: Promise.resolve([]),
-				this.loadClassConfigsByFestival(organizationId, festivals),
-			]);
+	}
 
-		const childrenById = new Map(
-			children.map((c) => [c.id, { id: c.id, name: c.displayName }]),
-		);
-		const paidAtByOrderGid = new Map(
-			orderProjections.map((p) => [
-				p.shopifyOrderGid,
-				p.fullyPaidAtIso ?? null,
-			]),
-		);
-		const nowMs = this.now().getTime();
+	private portDeps() {
 		return {
-			registrations: entitlements.map((entitlement) =>
-				buildPortRegistrationItem(entitlement, {
-					childrenById,
-					classConfigsByFestival,
-					metadataByEntitlementId: metadataMap,
-					paidAtByOrderGid,
-					editCutoffs,
-					nowMs,
-				}),
-			),
+			organizations: this.organizations,
+			catalog: this.catalog,
+			customers: this.customers,
+			teachers: this.teachers,
+			commerce: this.commerce,
+			checkout: this.checkout,
+			schema: this.schema,
+			now: this.now,
 		};
-	}
-
-	private async loadClassConfigsByFestival(
-		organizationId: string,
-		festivals: FestivalRecord[],
-	): Promise<Map<string, Map<string, FestivalClassConfiguration>>> {
-		const entries = await Promise.all(
-			festivals.map(async (f) => {
-				const configs = await this.catalog.listFestivalClassConfigurations(
-					organizationId,
-					f.id,
-					false,
-				);
-				return [f.id, new Map(configs.map((c) => [c.id, c]))] as const;
-			}),
-		);
-		return new Map(entries);
-	}
-
-	private async countConfirmedByClassIds(
-		organizationId: string,
-		festivalClassIds: readonly string[],
-	): Promise<Map<string, number>> {
-		if (festivalClassIds.length === 0) return new Map();
-		if (this.schema) {
-			return queryConfirmedCountsSql(
-				this.schema,
-				organizationId,
-				festivalClassIds,
-			);
-		}
-		if (this.commerce.countConfirmedClassEntitlementsByClassIds) {
-			return this.commerce.countConfirmedClassEntitlementsByClassIds(
-				organizationId,
-				festivalClassIds,
-			);
-		}
-		const entries = await Promise.all(
-			festivalClassIds.map(
-				async (id) =>
-					[
-						id,
-						await this.commerce.countConfirmedClassEntitlements(
-							organizationId,
-							id,
-						),
-					] as const,
-			),
-		);
-		return new Map(entries);
 	}
 
 	private async resolveOrganizationBySlug(
@@ -348,11 +255,7 @@ export class CustomerRegistrationQueryService {
 			const bytes = value
 				? Buffer.byteLength(JSON.stringify(value), "utf8")
 				: 0;
-			return {
-				value,
-				ttlMs: this.organizationCacheTtlMs,
-				bytes,
-			};
+			return { value, ttlMs: this.organizationCacheTtlMs, bytes };
 		});
 		if (!org) {
 			throw new AppError("Organization not found.", 404);
@@ -364,125 +267,12 @@ export class CustomerRegistrationQueryService {
 		slug: string,
 		sessionId: string | undefined,
 	): Promise<{ organization: OrganizationRecord; customerId: string }> {
-		if (!sessionId) {
-			throw new AppError("Customer authentication is required.", 401);
-		}
 		const organization = await this.resolveOrganizationBySlug(slug);
-		const session = await this.fetchSession(organization.id, sessionId);
-		const nowMs = this.now().getTime();
-		if (!session || session.organizationId !== organization.id) {
-			throw new AppError("Customer authentication is required.", 401);
-		}
-		if (session.revokedAtIso) {
-			throw new AppError("Customer session has ended.", 401);
-		}
-		const expiry =
-			session.absoluteExpiresAtIso ??
-			session.expiresAtIso ??
-			session.idleExpiresAtIso;
-		if (expiry && Date.parse(expiry) <= nowMs) {
-			throw new AppError("Customer session expired.", 401);
-		}
-		return { organization, customerId: session.customerId };
-	}
-
-	private async fetchSession(
-		organizationId: string,
-		sessionId: string,
-	): Promise<CheckoutCustomerSessionRecord | null> {
-		if (this.customers.getSession.length >= 2) {
-			return (
-				this.customers.getSession as (
-					orgId: string,
-					sid: string,
-				) => Promise<CheckoutCustomerSessionRecord | null>
-			)(organizationId, sessionId);
-		}
-		return (
-			this.customers.getSession as (
-				sid: string,
-			) => Promise<CheckoutCustomerSessionRecord | null>
-		)(sessionId);
-	}
-
-	private async requireFestival(
-		organizationId: string,
-		festivalShortName: string,
-	): Promise<FestivalRecord> {
-		const festival = await this.catalog.findFestivalByShortName(
-			organizationId,
-			festivalShortName.trim(),
+		return resolveCustomerAccessFromOrg(
+			this.customers,
+			organization,
+			sessionId,
+			this.now().getTime(),
 		);
-		if (!festival) {
-			throw new AppError("Festival not found.", 404);
-		}
-		return festival;
-	}
-
-	private async requireChildAge(
-		organizationId: string,
-		customerId: string,
-		childId: string,
-	): Promise<number> {
-		if (!childId.trim()) {
-			throw new AppError("Child selection is required.", 400);
-		}
-		const child = await this.customers.findChild(
-			organizationId,
-			customerId,
-			childId.trim(),
-		);
-		if (!child) {
-			throw new AppError("Selected child was not found.", 404);
-		}
-		const snapshot = await this.customers.findActiveChildAgeSnapshot(
-			organizationId,
-			child.id,
-			this.now().toISOString(),
-		);
-		if (!snapshot) {
-			throw new AppError("An active child age snapshot is required.", 400);
-		}
-		return snapshot.age;
-	}
-
-	private async requireValidTeacher(
-		organizationId: string,
-		divisionId: string,
-		teacherId: string,
-	): Promise<void> {
-		if (!divisionId.trim() || !teacherId.trim()) {
-			throw new AppError("Division and teacher selection are required.", 400);
-		}
-		if (this.teachers.findActiveTeacherEntitlementGrant) {
-			const grant = await (
-				this.teachers.findActiveTeacherEntitlementGrant as (input: {
-					organizationId: string;
-					customerId: string;
-					divisionId: string;
-				}) => Promise<unknown>
-			)({
-				organizationId,
-				customerId: teacherId.trim(),
-				divisionId: divisionId.trim(),
-			});
-			if (!grant) {
-				throw new AppError(
-					"Selected teacher does not hold an active membership for this division.",
-					400,
-				);
-			}
-			return;
-		}
-		const teachers = await this.teachers.listActiveTeachersForDivision(
-			organizationId,
-			divisionId.trim(),
-		);
-		if (!teachers.some((t) => t.id === teacherId.trim())) {
-			throw new AppError(
-				"Selected teacher does not hold an active membership for this division.",
-				400,
-			);
-		}
 	}
 }

@@ -1,8 +1,4 @@
-import {
-	AppError,
-	type FestivalClassConfiguration,
-	type FestivalClassWaitlistEntry,
-} from "@festival/common";
+import { AppError, type FestivalClassWaitlistEntry } from "@festival/common";
 import type { ClassCheckoutEventBus } from "./events.js";
 import type {
 	CheckoutCatalogReadPort,
@@ -12,8 +8,11 @@ import type {
 import {
 	assertWaitlistJoinEligibility,
 	buildRosterDtos,
+	countConfirmedForWaitlist,
+	hasActiveWaitlistEntitlement,
 	type ParentWaitlistEntryDto,
 	resolveFestivalClassWaitlistTarget,
+	resolveWaitlistClassConfig,
 	type WaitlistRosterEntryDto,
 } from "./waitlist-helpers.js";
 import type { WaitlistRepository } from "./waitlist-repository.js";
@@ -112,18 +111,26 @@ export class WaitlistService {
 		if (!child) {
 			throw new AppError("Selected child was not found.", 404);
 		}
-		const festivalClass = await this.resolveClassConfig(
+		const festivalClass = await resolveWaitlistClassConfig(
+			this.catalog,
 			params.organizationId,
 			params.festivalClassId,
 			params.festivalId,
 			params.festivalShortName,
 		);
 		const [confirmedCount, hasActiveEntitlement] = await Promise.all([
-			this.countConfirmed(params.organizationId, festivalClass.id),
-			this.hasActiveEntitlement(
+			countConfirmedForWaitlist(
+				params.organizationId,
+				festivalClass.id,
+				this.entitlementCount,
+				this.entitlementRepository,
+			),
+			hasActiveWaitlistEntitlement(
 				params.organizationId,
 				festivalClass.id,
 				child.id,
+				this.hasActiveEntitlementFn,
+				this.entitlementRepository,
 			),
 		]);
 		assertWaitlistJoinEligibility({
@@ -249,91 +256,5 @@ export class WaitlistService {
 			}),
 		);
 		return buildRosterDtos(entries, childrenById, parentsById);
-	}
-
-	private async resolveClassConfig(
-		organizationId: string,
-		festivalClassId: string,
-		festivalId?: string,
-		festivalShortName?: string,
-	): Promise<FestivalClassConfiguration> {
-		if (this.catalog.findFestivalClassConfigurationById) {
-			const fc =
-				festivalId &&
-				this.catalog.findFestivalClassConfigurationById.length >= 3
-					? await (
-							this.catalog.findFestivalClassConfigurationById as (
-								orgId: string,
-								festId: string,
-								clsId: string,
-							) => Promise<FestivalClassConfiguration | null>
-						)(organizationId, festivalId, festivalClassId)
-					: await (
-							this.catalog.findFestivalClassConfigurationById as (
-								orgId: string,
-								clsId: string,
-							) => Promise<FestivalClassConfiguration | null>
-						)(organizationId, festivalClassId);
-			if (fc) return fc;
-		}
-		const festivals = await this.catalog.listFestivals(organizationId);
-		const target = resolveFestivalClassWaitlistTarget(
-			festivals,
-			festivalShortName,
-			festivalId,
-		);
-		if (!target) {
-			throw new AppError("Festival not found.", 404);
-		}
-		const list = await this.catalog.listFestivalClassConfigurations(
-			organizationId,
-			target.id,
-			false,
-		);
-		const found = list.find((c) => c.id === festivalClassId);
-		if (!found) {
-			throw new AppError("Festival class was not found.", 404);
-		}
-		return found;
-	}
-
-	private async countConfirmed(
-		organizationId: string,
-		festivalClassId: string,
-	): Promise<number> {
-		if (this.entitlementCount) {
-			return this.entitlementCount(organizationId, festivalClassId);
-		}
-		if (this.entitlementRepository?.countConfirmedClassEntitlements) {
-			return this.entitlementRepository.countConfirmedClassEntitlements(
-				organizationId,
-				festivalClassId,
-			);
-		}
-		return 0;
-	}
-
-	private async hasActiveEntitlement(
-		organizationId: string,
-		festivalClassId: string,
-		childId: string,
-	): Promise<boolean> {
-		if (this.hasActiveEntitlementFn) {
-			return this.hasActiveEntitlementFn(
-				organizationId,
-				festivalClassId,
-				childId,
-			);
-		}
-		if (this.entitlementRepository?.listClassEntitlements) {
-			const existing = await this.entitlementRepository.listClassEntitlements({
-				organizationId,
-				festivalClassId,
-				childId,
-				status: "confirmed",
-			});
-			return existing.length > 0;
-		}
-		return false;
 	}
 }

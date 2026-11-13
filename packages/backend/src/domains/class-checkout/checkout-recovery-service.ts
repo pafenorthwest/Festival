@@ -19,6 +19,7 @@ import {
 } from "./checkout-recovery-helpers.js";
 import type {
 	CheckoutRecoveryRepository,
+	CheckoutRecoveryRequestRecord,
 	RecoverableCheckoutIntentRecord,
 } from "./checkout-recovery-types.js";
 import type { CheckoutRepository } from "./checkout-types.js";
@@ -45,6 +46,48 @@ export interface CheckoutRecoveryServiceDependencies {
 	auditLogger?: CheckoutRecoveryAuditLogger;
 	eventBus?: ClassCheckoutEventBus;
 	now?: () => Date;
+}
+
+async function validateAndConsumeRecoveryRequest(
+	recoveryRepo: CheckoutRecoveryRepository,
+	params: ResumeCustomerCheckoutParams,
+	now: Date,
+): Promise<{
+	consumed: CheckoutRecoveryRequestRecord;
+	sourceIntent: RecoverableCheckoutIntentRecord;
+}> {
+	const tokenHash = hashRecoveryToken(params.token);
+	const existing = await recoveryRepo.findRecoveryRequestByTokenHash(
+		tokenHash,
+		params.organizationId,
+	);
+	const valid = assertRecoveryRequestPending(existing, now.getTime());
+	if (valid.customerId !== params.customer.customerId) {
+		throw new AppError("Recovery token does not belong to this customer.", 403);
+	}
+	const intent = recoveryRepo.findIntentById
+		? await recoveryRepo.findIntentById(
+				params.organizationId,
+				valid.sourceCheckoutIntentId,
+			)
+		: null;
+	const sourceIntent = assertSourceIntentValid(intent);
+	if (recoveryRepo.hasCompletedOrderOrEntitlement) {
+		const completed = await recoveryRepo.hasCompletedOrderOrEntitlement(
+			params.organizationId,
+			sourceIntent.id,
+			sourceIntent.correlationId,
+		);
+		if (completed) {
+			throw new AppError("Source checkout is already completed.", 409);
+		}
+	}
+	const consumed = await recoveryRepo.consumeRecoveryRequest({
+		tokenHash,
+		organizationId: params.organizationId,
+		consumedAtIso: now.toISOString(),
+	});
+	return { consumed, sourceIntent };
 }
 
 export class CheckoutRecoveryService {
@@ -198,42 +241,11 @@ export class CheckoutRecoveryService {
 		intentId: string;
 		correlationId: string;
 	}> {
-		const tokenHash = hashRecoveryToken(params.token);
-		const existing =
-			await this.deps.recoveryRepo.findRecoveryRequestByTokenHash(
-				tokenHash,
-				params.organizationId,
-			);
-		const valid = assertRecoveryRequestPending(existing, this.now().getTime());
-		if (valid.customerId !== params.customer.customerId) {
-			throw new AppError(
-				"Recovery token does not belong to this customer.",
-				403,
-			);
-		}
-		const intent = this.deps.recoveryRepo.findIntentById
-			? await this.deps.recoveryRepo.findIntentById(
-					params.organizationId,
-					valid.sourceCheckoutIntentId,
-				)
-			: null;
-		const sourceIntent = assertSourceIntentValid(intent);
-		if (this.deps.recoveryRepo.hasCompletedOrderOrEntitlement) {
-			const completed =
-				await this.deps.recoveryRepo.hasCompletedOrderOrEntitlement(
-					params.organizationId,
-					sourceIntent.id,
-					sourceIntent.correlationId,
-				);
-			if (completed) {
-				throw new AppError("Source checkout is already completed.", 409);
-			}
-		}
-		const consumed = await this.deps.recoveryRepo.consumeRecoveryRequest({
-			tokenHash,
-			organizationId: params.organizationId,
-			consumedAtIso: this.now().toISOString(),
-		});
+		const { consumed, sourceIntent } = await validateAndConsumeRecoveryRequest(
+			this.deps.recoveryRepo,
+			params,
+			this.now(),
+		);
 		const customerRecord = await this.deps.customers.getCustomer(
 			params.organizationId,
 			params.customer.customerId,

@@ -298,6 +298,26 @@ export interface ExecuteClaimedParams {
 	windowCtx?: WindowCtx;
 }
 
+async function assertReplacementNotBlocked(
+	executions: NonNullable<CheckoutRepository["classExecutions"]> | undefined,
+	input: StartClassCheckoutInput,
+): Promise<void> {
+	if (
+		executions &&
+		(await executions.isUnissuedCartReplacementBlocked({
+			organizationId: input.organizationId,
+			customerId: input.customerId,
+			replacementKey: input.idempotencyKey,
+		}))
+	) {
+		throw new AppError(
+			"A payment has already been observed for the replaced checkout attempt.",
+			409,
+			"checkout_restart_payment_uncertain",
+		);
+	}
+}
+
 export async function executeClaimedCheckout(
 	ctx: ExecutionRuntimeCtx,
 	params: ExecuteClaimedParams,
@@ -332,20 +352,7 @@ export async function executeClaimedCheckout(
 		knownCartId,
 		claim,
 	});
-	if (
-		executions &&
-		(await executions.isUnissuedCartReplacementBlocked({
-			organizationId: input.organizationId,
-			customerId: input.customerId,
-			replacementKey: input.idempotencyKey,
-		}))
-	) {
-		throw new AppError(
-			"A payment has already been observed for the replaced checkout attempt.",
-			409,
-			"checkout_restart_payment_uncertain",
-		);
-	}
+	await assertReplacementNotBlocked(executions, input);
 	emitCheckoutEvents(ctx, {
 		organizationId: input.organizationId,
 		customerId: input.customerId,

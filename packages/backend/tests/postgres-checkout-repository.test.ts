@@ -63,7 +63,8 @@ describe("PostgresCheckoutRepository", () => {
 	it("persists and reads safe idempotency outcomes with expiry and ownership constraints", async () => {
 		const flat = normalized(await source());
 		expect(flat).toContain(
-			"INSERT INTO ${schema}.checkout_intents ( id, correlation_id, organization_id, customer_id, session_id, idempotency_key",
+			"INSERT INTO $" +
+				"{schema}.checkout_intents ( id, correlation_id, organization_id, customer_id, session_id, idempotency_key",
 		);
 		expect(flat).toContain('intent.status === "checkout_started"');
 		expect(flat).toContain(
@@ -86,10 +87,12 @@ describe("PostgresCheckoutRepository", () => {
 		const raw = await source();
 		const flat = normalized(raw);
 		expect(flat).toContain(
-			"FROM ${safeSchema}.registration_repertoire_items WHERE organization_id = $1 AND registration_metadata_id = ANY($2::text[])",
+			"FROM $" +
+				"{safeSchema}.registration_repertoire_items WHERE organization_id = $1 AND registration_metadata_id = ANY($2::text[])",
 		);
 		expect(flat).toContain(
-			"FROM ${safeSchema}.registration_repertoire_item_contributors WHERE organization_id = $1 AND registration_repertoire_item_id = ANY($2::text[])",
+			"FROM $" +
+				"{safeSchema}.registration_repertoire_item_contributors WHERE organization_id = $1 AND registration_repertoire_item_id = ANY($2::text[])",
 		);
 		expect(raw).not.toContain("itemRows.map(async");
 	});
@@ -97,13 +100,16 @@ describe("PostgresCheckoutRepository", () => {
 	it("updates registration metadata within a scoped transaction", async () => {
 		const flat = normalized(await source());
 		expect(flat).toContain(
-			"DELETE FROM ${safeSchema}.registration_repertoire_items WHERE registration_metadata_id = $1 AND organization_id = $2",
+			"DELETE FROM $" +
+				"{safeSchema}.registration_repertoire_items WHERE registration_metadata_id = $1 AND organization_id = $2",
 		);
 		expect(flat).toContain(
-			"UPDATE ${safeSchema}.registration_metadata SET accompanist_membership_id = $1, repertoire_json = $2::jsonb WHERE id = $3 AND organization_id = $4",
+			"UPDATE $" +
+				"{safeSchema}.registration_metadata SET accompanist_membership_id = $1, repertoire_json = $2::jsonb WHERE id = $3 AND organization_id = $4",
 		);
 		expect(flat).toContain(
-			"UPDATE ${safeSchema}.registration_metadata SET repertoire_json = $1::jsonb WHERE id = $2 AND organization_id = $3",
+			"UPDATE $" +
+				"{safeSchema}.registration_metadata SET repertoire_json = $1::jsonb WHERE id = $2 AND organization_id = $3",
 		);
 	});
 });

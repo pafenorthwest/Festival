@@ -287,7 +287,7 @@ export async function validateAccompanistSelection(
 	organizationId: string,
 	accompanistId: string | null | undefined,
 ): Promise<AccompanistMembershipGrant | null> {
-	if (!accompanistId || !accompanistId.trim()) return null;
+	if (!accompanistId?.trim()) return null;
 	if (!teachers.findCurrentAccompanistMembershipGrant) {
 		throw new AppError("Accompanist membership lookup is not available.", 400);
 	}

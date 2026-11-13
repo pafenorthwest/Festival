@@ -177,6 +177,40 @@ export interface RestartUnissuedCartInput {
 	recoveryReference: string;
 }
 
+async function loadRestartResources(
+	deps: RecoveryOpsDeps,
+	input: RestartUnissuedCartInput,
+	intentId: string,
+	intentLines: CheckoutIntentLineItemRecord[],
+) {
+	const festival = await deps.catalog.findFestivalByShortName(
+		input.organizationId,
+		input.festivalShortName.trim(),
+	);
+	const [snapshots, children, classes] = await Promise.all([
+		deps.checkout.listCheckoutRegistrationSnapshots?.(
+			input.organizationId,
+			intentId,
+		) ?? Promise.resolve([]),
+		deps.customers.listChildren(input.organizationId, input.customerId),
+		festival
+			? deps.catalog.listFestivalClassConfigurations(
+					input.organizationId,
+					festival.id,
+					false,
+				)
+			: Promise.resolve([]),
+	]);
+	return {
+		snapshots,
+		lookups: {
+			intentLinesById: new Map(intentLines.map((line) => [line.id, line])),
+			childById: new Map(children.map((c) => [c.id, c])),
+			classById: new Map(classes.map((c) => [c.id, c])),
+		},
+	};
+}
+
 export async function restartUnissuedCartOp(
 	deps: RecoveryOpsDeps,
 	input: RestartUnissuedCartInput,
@@ -196,24 +230,12 @@ export async function restartUnissuedCartOp(
 		? await deps.checkout.findIntentById(input.organizationId, record.intentId)
 		: null;
 	if (!intent) throw new AppError("Checkout intent not found.", 404);
-	const festival = await deps.catalog.findFestivalByShortName(
-		input.organizationId,
-		input.festivalShortName.trim(),
+	const { snapshots, lookups } = await loadRestartResources(
+		deps,
+		input,
+		record.intentId,
+		intent.lines ?? [],
 	);
-	const [snapshots, children, classes] = await Promise.all([
-		deps.checkout.listCheckoutRegistrationSnapshots(
-			input.organizationId,
-			record.intentId,
-		),
-		deps.customers.listChildren(input.organizationId, input.customerId),
-		festival
-			? deps.catalog.listFestivalClassConfigurations(
-					input.organizationId,
-					festival.id,
-					false,
-				)
-			: Promise.resolve([]),
-	]);
 	const restarted = await executions.restartUnissuedInvalidCart({
 		organizationId: input.organizationId,
 		customerId: input.customerId,
@@ -226,13 +248,6 @@ export async function restartUnissuedCartOp(
 			"checkout_restart_unavailable",
 		);
 	}
-	const lookups = {
-		intentLinesById: new Map(
-			(intent.lines ?? []).map((line) => [line.id, line]),
-		),
-		childById: new Map(children.map((c) => [c.id, c])),
-		classById: new Map(classes.map((c) => [c.id, c])),
-	};
 	return {
 		replacementKey: restarted.replacementKey,
 		registrations: snapshots.map((entry) =>
