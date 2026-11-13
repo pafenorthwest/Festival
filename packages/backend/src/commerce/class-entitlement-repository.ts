@@ -1,96 +1,90 @@
 import { randomUUID } from "node:crypto";
-import type {
-	ClassEntitlement,
-	ClassEntitlementStatus,
-	CreateClassEntitlementInput,
-} from "@festival/common";
 import {
 	assertValidClassEntitlementInput,
+	type ClassEntitlement,
+	type ClassEntitlementStatus,
+	type CreateClassEntitlementInput,
 	isClassEntitlementStatus,
 } from "@festival/common";
-import { sql } from "bun";
-import { withInMemoryCapacityLock } from "../repo/in-memory-capacity-lock.js";
-import { initializePostgresSchema } from "../repo/postgres-schema.js";
 import {
-	countConfirmedClassEntitlements,
-	countConfirmedClassEntitlementsByClassIds,
-} from "./postgres-class-entitlement-count.js";
+	type ClassEntitlementFilter,
+	type ClassEntitlementRepository,
+	PaidLineConflictError,
+	PostgresClassEntitlementRepository,
+} from "../domains/commerce-projection/index.js";
+import { withInMemoryCapacityLock } from "../repo/in-memory-capacity-lock.js";
 
-function schemaName(value: string) {
-	if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(value)) {
-		throw new Error("Database schema is invalid.");
+export {
+	type ClassEntitlementFilter,
+	type ClassEntitlementRepository,
+	PostgresClassEntitlementRepository,
+};
+
+function matchesClassEntitlement(
+	existing: ClassEntitlement,
+	input: CreateClassEntitlementInput,
+): boolean {
+	return (
+		existing.organizationId === input.organizationId &&
+		existing.festivalId === input.festivalId &&
+		existing.festivalClassId === input.festivalClassId &&
+		existing.parentCustomerId === input.parentCustomerId &&
+		existing.childId === input.childId &&
+		existing.checkoutIntentId === input.checkoutIntentId &&
+		existing.checkoutIntentLineId === (input.checkoutIntentLineId ?? null) &&
+		existing.shopifyOrderGid === input.shopifyOrderGid &&
+		existing.shopifyOrderLineGid === input.shopifyOrderLineGid &&
+		existing.paidAmountCents === input.paidAmountCents &&
+		existing.paidCurrencyCode === input.paidCurrencyCode &&
+		existing.status === (input.status ?? "confirmed")
+	);
+}
+
+function findExistingInMemoryEntitlement(
+	entitlements: Map<string, ClassEntitlement>,
+	entitlementsByLine: Map<string, string>,
+	entitlementsByIntentLine: Map<string, string>,
+	input: CreateClassEntitlementInput,
+): ClassEntitlement | null {
+	const lineKey = `${input.organizationId}\u0000${input.shopifyOrderLineGid}`;
+	const existingLineId = entitlementsByLine.get(lineKey);
+	if (existingLineId) {
+		const existing = entitlements.get(existingLineId);
+		if (existing) {
+			if (!matchesClassEntitlement(existing, input)) {
+				throw new PaidLineConflictError();
+			}
+			return { ...existing };
+		}
 	}
-	return value;
-}
-
-export interface ClassEntitlementFilter {
-	organizationId?: string;
-	festivalId?: string;
-	festivalClassId?: string;
-	festivalClassIds?: string[];
-	parentCustomerId?: string;
-	childId?: string;
-	childIds?: string[];
-	status?: ClassEntitlementStatus;
-}
-
-export interface ClassEntitlementRepository {
-	ensureReady(): Promise<void>;
-	createClassEntitlement(
-		input: CreateClassEntitlementInput,
-	): Promise<ClassEntitlement>;
-	getClassEntitlement(
-		organizationId: string,
-		id: string,
-	): Promise<ClassEntitlement | null>;
-	listClassEntitlements(
-		filter: ClassEntitlementFilter,
-	): Promise<ClassEntitlement[]>;
-	findClassEntitlementByOrderLine(
-		organizationId: string,
-		shopifyOrderLineGid: string,
-	): Promise<ClassEntitlement | null>;
-	findClassEntitlementByIntentId(
-		organizationId: string,
-		checkoutIntentId: string,
-	): Promise<ClassEntitlement | null>;
-	findClassEntitlementByIntentLineId(
-		organizationId: string,
-		checkoutIntentLineId: string,
-	): Promise<ClassEntitlement | null>;
-	countConfirmedClassEntitlements(
-		organizationId: string,
-		festivalClassId: string,
-	): Promise<number>;
-	countConfirmedClassEntitlementsByClassIds?(
-		organizationId: string,
-		festivalClassIds: readonly string[],
-	): Promise<Map<string, number>>;
-	updateClassEntitlementStatus(
-		organizationId: string,
-		id: string,
-		status: ClassEntitlementStatus,
-		expectedStatus?: ClassEntitlementStatus | ClassEntitlementStatus[],
-	): Promise<ClassEntitlement | null>;
-	updateClassEntitlement(
-		organizationId: string,
-		id: string,
-		updates: {
-			festivalClassId?: string;
-			status?: ClassEntitlementStatus;
-			expectedStatus?: ClassEntitlementStatus | ClassEntitlementStatus[];
-		},
-		expectedStatus?: ClassEntitlementStatus | ClassEntitlementStatus[],
-	): Promise<ClassEntitlement | null>;
+	if (input.checkoutIntentLineId) {
+		const intentLineKey = `${input.organizationId}\u0000${input.checkoutIntentLineId}`;
+		const existingByIntentLineId = entitlementsByIntentLine.get(intentLineKey);
+		if (existingByIntentLineId) {
+			const existing = entitlements.get(existingByIntentLineId);
+			if (existing) {
+				if (existing.shopifyOrderLineGid !== input.shopifyOrderLineGid) {
+					throw new Error(
+						"Class entitlement conflict: checkout intent line already fulfilled by a different order line.",
+					);
+				}
+				if (!matchesClassEntitlement(existing, input)) {
+					throw new PaidLineConflictError();
+				}
+				return { ...existing };
+			}
+		}
+	}
+	return null;
 }
 
 export class InMemoryClassEntitlementRepository
 	implements ClassEntitlementRepository
 {
 	private readonly entitlements = new Map<string, ClassEntitlement>();
-	private readonly byOrderLine = new Map<string, string>();
-	private readonly byIntent = new Map<string, string>();
-	private readonly byIntentLine = new Map<string, string>();
+	private readonly entitlementsByLine = new Map<string, string>();
+	private readonly entitlementsByIntent = new Map<string, string>();
+	private readonly entitlementsByIntentLine = new Map<string, string>();
 
 	constructor(private readonly now: () => Date = () => new Date()) {}
 
@@ -101,32 +95,16 @@ export class InMemoryClassEntitlementRepository
 	): Promise<ClassEntitlement> {
 		return withInMemoryCapacityLock(() => {
 			assertValidClassEntitlementInput(input);
-			if (input.checkoutIntentLineId) {
-				const intentLineKey = `${input.organizationId}\u0000${input.checkoutIntentLineId}`;
-				const existingIntentLineId = this.byIntentLine.get(intentLineKey);
-				if (existingIntentLineId) {
-					const existing = this.entitlements.get(existingIntentLineId);
-					if (existing) {
-						if (existing.shopifyOrderLineGid === input.shopifyOrderLineGid) {
-							return { ...existing };
-						}
-						throw new Error(
-							"Class entitlement conflict: checkout intent line already fulfilled by a different order line.",
-						);
-					}
-				}
-			}
-
-			const lineKey = `${input.organizationId}\u0000${input.shopifyOrderLineGid}`;
-			const existingLineId = this.byOrderLine.get(lineKey);
-			if (existingLineId) {
-				const existing = this.entitlements.get(existingLineId);
-				if (existing) return { ...existing };
-			}
-			const id = input.id ?? randomUUID();
+			const existing = findExistingInMemoryEntitlement(
+				this.entitlements,
+				this.entitlementsByLine,
+				this.entitlementsByIntentLine,
+				input,
+			);
+			if (existing) return existing;
 			const nowIso = this.now().toISOString();
 			const record: ClassEntitlement = {
-				id,
+				id: input.id ?? randomUUID(),
 				organizationId: input.organizationId,
 				festivalId: input.festivalId,
 				festivalClassId: input.festivalClassId,
@@ -145,16 +123,17 @@ export class InMemoryClassEntitlementRepository
 				createdAt: input.createdAt ?? nowIso,
 				updatedAt: input.updatedAt ?? nowIso,
 			};
-			this.entitlements.set(id, record);
-			this.byOrderLine.set(lineKey, id);
-			this.byIntent.set(
+			this.entitlements.set(record.id, record);
+			const lineKey = `${input.organizationId}\u0000${input.shopifyOrderLineGid}`;
+			this.entitlementsByLine.set(lineKey, record.id);
+			this.entitlementsByIntent.set(
 				`${input.organizationId}\u0000${input.checkoutIntentId}`,
-				id,
+				record.id,
 			);
-			if (input.checkoutIntentLineId) {
-				this.byIntentLine.set(
-					`${input.organizationId}\u0000${input.checkoutIntentLineId}`,
-					id,
+			if (record.checkoutIntentLineId) {
+				this.entitlementsByIntentLine.set(
+					`${input.organizationId}\u0000${record.checkoutIntentLineId}`,
+					record.id,
 				);
 			}
 			return { ...record };
@@ -174,68 +153,73 @@ export class InMemoryClassEntitlementRepository
 		filter: ClassEntitlementFilter,
 	): Promise<ClassEntitlement[]> {
 		return [...this.entitlements.values()]
-			.filter((record) => {
+			.filter((r) => {
 				if (
 					filter.organizationId &&
-					record.organizationId !== filter.organizationId
-				)
+					r.organizationId !== filter.organizationId
+				) {
 					return false;
-				if (filter.festivalId && record.festivalId !== filter.festivalId)
+				}
+				if (filter.festivalId && r.festivalId !== filter.festivalId) {
 					return false;
+				}
 				if (
 					filter.festivalClassId &&
-					record.festivalClassId !== filter.festivalClassId
-				)
+					r.festivalClassId !== filter.festivalClassId
+				) {
 					return false;
+				}
 				if (
 					filter.festivalClassIds &&
-					!filter.festivalClassIds.includes(record.festivalClassId)
-				)
+					!filter.festivalClassIds.includes(r.festivalClassId)
+				) {
 					return false;
+				}
 				if (
 					filter.parentCustomerId &&
-					record.parentCustomerId !== filter.parentCustomerId
-				)
+					r.parentCustomerId !== filter.parentCustomerId
+				) {
 					return false;
-				if (filter.childId && record.childId !== filter.childId) return false;
-				if (filter.childIds && !filter.childIds.includes(record.childId))
+				}
+				if (filter.childId && r.childId !== filter.childId) return false;
+				if (filter.childIds && !filter.childIds.includes(r.childId)) {
 					return false;
-				if (filter.status && record.status !== filter.status) return false;
+				}
+				if (filter.status && r.status !== filter.status) return false;
 				return true;
 			})
-			.sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-			.map((record) => ({ ...record }));
+			.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+			.map((r) => ({ ...r }));
 	}
 
 	async findClassEntitlementByOrderLine(
 		organizationId: string,
 		shopifyOrderLineGid: string,
 	): Promise<ClassEntitlement | null> {
-		const id = this.byOrderLine.get(
+		const id = this.entitlementsByLine.get(
 			`${organizationId}\u0000${shopifyOrderLineGid}`,
 		);
-		if (!id) return null;
-		return this.getClassEntitlement(organizationId, id);
+		return id ? this.getClassEntitlement(organizationId, id) : null;
 	}
 
 	async findClassEntitlementByIntentId(
 		organizationId: string,
 		checkoutIntentId: string,
 	): Promise<ClassEntitlement | null> {
-		const id = this.byIntent.get(`${organizationId}\u0000${checkoutIntentId}`);
-		if (!id) return null;
-		return this.getClassEntitlement(organizationId, id);
+		const id = this.entitlementsByIntent.get(
+			`${organizationId}\u0000${checkoutIntentId}`,
+		);
+		return id ? this.getClassEntitlement(organizationId, id) : null;
 	}
 
 	async findClassEntitlementByIntentLineId(
 		organizationId: string,
 		checkoutIntentLineId: string,
 	): Promise<ClassEntitlement | null> {
-		const id = this.byIntentLine.get(
+		const id = this.entitlementsByIntentLine.get(
 			`${organizationId}\u0000${checkoutIntentLineId}`,
 		);
-		if (!id) return null;
-		return this.getClassEntitlement(organizationId, id);
+		return id ? this.getClassEntitlement(organizationId, id) : null;
 	}
 
 	async countConfirmedClassEntitlements(
@@ -315,321 +299,14 @@ export class InMemoryClassEntitlementRepository
 				const expected = Array.isArray(expectedCondition)
 					? expectedCondition
 					: [expectedCondition];
-				if (!expected.includes(record.status)) {
-					return null;
-				}
+				if (!expected.includes(record.status)) return null;
 			}
-			if (updates.status !== undefined) {
-				record.status = updates.status;
-			}
+			if (updates.status !== undefined) record.status = updates.status;
 			if (updates.festivalClassId !== undefined) {
 				record.festivalClassId = updates.festivalClassId;
 			}
 			record.updatedAt = this.now().toISOString();
 			return { ...record };
 		});
-	}
-}
-
-function classEntitlementFromRow(
-	row: Record<string, unknown>,
-): ClassEntitlement {
-	return {
-		id: String(row.id),
-		organizationId: String(row.organization_id),
-		festivalId: String(row.festival_id),
-		festivalClassId: String(row.festival_class_id),
-		parentCustomerId: String(row.parent_customer_id),
-		childId: String(row.child_id),
-		checkoutIntentId: String(row.checkout_intent_id),
-		checkoutIntentLineId:
-			row.checkout_intent_line_id !== null &&
-			row.checkout_intent_line_id !== undefined
-				? String(row.checkout_intent_line_id)
-				: null,
-		shopifyOrderGid: String(row.shopify_order_gid),
-		shopifyOrderLineGid: String(row.shopify_order_line_gid),
-		paidAmountCents: Number(row.paid_amount_cents),
-		paidCurrencyCode: String(row.paid_currency_code),
-		status: row.status as ClassEntitlementStatus,
-		admittedCartReference:
-			row.admitted_cart_reference !== null &&
-			row.admitted_cart_reference !== undefined
-				? String(row.admitted_cart_reference)
-				: null,
-		capacityAtAllocation:
-			row.capacity_at_allocation !== null &&
-			row.capacity_at_allocation !== undefined
-				? Number(row.capacity_at_allocation)
-				: null,
-		placedCountBeforeAllocation:
-			row.placed_count_before_allocation !== null &&
-			row.placed_count_before_allocation !== undefined
-				? Number(row.placed_count_before_allocation)
-				: null,
-		createdAt: String(row.created_at),
-		updatedAt: String(row.updated_at),
-	};
-}
-
-export class PostgresClassEntitlementRepository
-	implements ClassEntitlementRepository
-{
-	private readonly schema: string;
-
-	constructor(schema: string) {
-		this.schema = schemaName(schema);
-	}
-
-	async ensureReady(): Promise<void> {
-		await initializePostgresSchema(this.schema);
-	}
-
-	async createClassEntitlement(
-		input: CreateClassEntitlementInput,
-	): Promise<ClassEntitlement> {
-		await this.ensureReady();
-		assertValidClassEntitlementInput(input);
-		const id = input.id ?? randomUUID();
-		const rows = (await sql.unsafe(
-			`INSERT INTO ${this.schema}.class_entitlements (
-				id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at, updated_at
-			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW(),NOW())
-			ON CONFLICT DO NOTHING
-			RETURNING id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text`,
-			[
-				id,
-				input.organizationId,
-				input.festivalId,
-				input.festivalClassId,
-				input.parentCustomerId,
-				input.childId,
-				input.checkoutIntentId,
-				input.checkoutIntentLineId ?? null,
-				input.shopifyOrderGid,
-				input.shopifyOrderLineGid,
-				input.paidAmountCents,
-				input.paidCurrencyCode,
-				input.status ?? "confirmed",
-				input.admittedCartReference ?? null,
-				input.capacityAtAllocation ?? null,
-				input.placedCountBeforeAllocation ?? null,
-			],
-		)) as Array<Record<string, unknown>>;
-		if (rows[0]) return classEntitlementFromRow(rows[0]);
-
-		if (input.checkoutIntentLineId) {
-			const existingByLine = await this.findClassEntitlementByIntentLineId(
-				input.organizationId,
-				input.checkoutIntentLineId,
-			);
-			if (existingByLine) {
-				if (existingByLine.shopifyOrderLineGid === input.shopifyOrderLineGid) {
-					return existingByLine;
-				}
-				throw new Error(
-					"Class entitlement conflict: checkout intent line already fulfilled by a different order line.",
-				);
-			}
-		}
-
-		const existing = await this.findClassEntitlementByOrderLine(
-			input.organizationId,
-			input.shopifyOrderLineGid,
-		);
-		if (!existing) {
-			throw new Error("Class entitlement could not be created.");
-		}
-		return existing;
-	}
-
-	async getClassEntitlement(
-		organizationId: string,
-		id: string,
-	): Promise<ClassEntitlement | null> {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text
-			FROM ${this.schema}.class_entitlements
-			WHERE organization_id = $1 AND id = $2`,
-			[organizationId, id],
-		)) as Array<Record<string, unknown>>;
-		return rows[0] ? classEntitlementFromRow(rows[0]) : null;
-	}
-
-	async listClassEntitlements(
-		filter: ClassEntitlementFilter,
-	): Promise<ClassEntitlement[]> {
-		await this.ensureReady();
-		const conditions: string[] = [];
-		const params: unknown[] = [];
-		if (filter.organizationId) {
-			params.push(filter.organizationId);
-			conditions.push(`organization_id = $${params.length}`);
-		}
-		if (filter.festivalId) {
-			params.push(filter.festivalId);
-			conditions.push(`festival_id = $${params.length}`);
-		}
-		if (filter.festivalClassId) {
-			params.push(filter.festivalClassId);
-			conditions.push(`festival_class_id = $${params.length}`);
-		}
-		if (filter.festivalClassIds) {
-			params.push(sql.array(filter.festivalClassIds, "text"));
-			conditions.push(`festival_class_id = ANY($${params.length}::text[])`);
-		}
-		if (filter.parentCustomerId) {
-			params.push(filter.parentCustomerId);
-			conditions.push(`parent_customer_id = $${params.length}`);
-		}
-		if (filter.childId) {
-			params.push(filter.childId);
-			conditions.push(`child_id = $${params.length}`);
-		}
-		if (filter.childIds) {
-			params.push(sql.array(filter.childIds, "text"));
-			conditions.push(`child_id = ANY($${params.length}::text[])`);
-		}
-		if (filter.status) {
-			params.push(filter.status);
-			conditions.push(`status = $${params.length}`);
-		}
-		const whereClause =
-			conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text
-			FROM ${this.schema}.class_entitlements
-			${whereClause}
-			ORDER BY created_at DESC`,
-			params,
-		)) as Array<Record<string, unknown>>;
-		return rows.map(classEntitlementFromRow);
-	}
-
-	async findClassEntitlementByOrderLine(
-		organizationId: string,
-		shopifyOrderLineGid: string,
-	): Promise<ClassEntitlement | null> {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text
-			FROM ${this.schema}.class_entitlements
-			WHERE organization_id = $1 AND shopify_order_line_gid = $2`,
-			[organizationId, shopifyOrderLineGid],
-		)) as Array<Record<string, unknown>>;
-		return rows[0] ? classEntitlementFromRow(rows[0]) : null;
-	}
-
-	async findClassEntitlementByIntentId(
-		organizationId: string,
-		checkoutIntentId: string,
-	): Promise<ClassEntitlement | null> {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text
-			FROM ${this.schema}.class_entitlements
-			WHERE organization_id = $1 AND checkout_intent_id = $2`,
-			[organizationId, checkoutIntentId],
-		)) as Array<Record<string, unknown>>;
-		return rows[0] ? classEntitlementFromRow(rows[0]) : null;
-	}
-
-	async findClassEntitlementByIntentLineId(
-		organizationId: string,
-		checkoutIntentLineId: string,
-	): Promise<ClassEntitlement | null> {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text
-			FROM ${this.schema}.class_entitlements
-			WHERE organization_id = $1 AND checkout_intent_line_id = $2`,
-			[organizationId, checkoutIntentLineId],
-		)) as Array<Record<string, unknown>>;
-		return rows[0] ? classEntitlementFromRow(rows[0]) : null;
-	}
-
-	async countConfirmedClassEntitlements(
-		organizationId: string,
-		festivalClassId: string,
-	): Promise<number> {
-		await this.ensureReady();
-		return countConfirmedClassEntitlements(
-			sql,
-			this.schema,
-			organizationId,
-			festivalClassId,
-		);
-	}
-
-	async countConfirmedClassEntitlementsByClassIds(
-		organizationId: string,
-		festivalClassIds: readonly string[],
-	): Promise<Map<string, number>> {
-		if (festivalClassIds.length === 0) return new Map();
-		await this.ensureReady();
-		return countConfirmedClassEntitlementsByClassIds({
-			database: sql,
-			schema: this.schema,
-			organizationId,
-			festivalClassIds,
-		});
-	}
-
-	async updateClassEntitlementStatus(
-		organizationId: string,
-		id: string,
-		status: ClassEntitlementStatus,
-		expectedStatus?: ClassEntitlementStatus | ClassEntitlementStatus[],
-	): Promise<ClassEntitlement | null> {
-		return this.updateClassEntitlement(
-			organizationId,
-			id,
-			{ status },
-			expectedStatus,
-		);
-	}
-
-	async updateClassEntitlement(
-		organizationId: string,
-		id: string,
-		updates: {
-			festivalClassId?: string;
-			status?: ClassEntitlementStatus;
-			expectedStatus?: ClassEntitlementStatus | ClassEntitlementStatus[];
-		},
-		expectedStatus?: ClassEntitlementStatus | ClassEntitlementStatus[],
-	): Promise<ClassEntitlement | null> {
-		await this.ensureReady();
-		const setClauses: string[] = ["updated_at = NOW()"];
-		const params: unknown[] = [organizationId, id];
-		const whereClauses: string[] = ["organization_id = $1", "id = $2"];
-		if (updates.status !== undefined) {
-			if (!isClassEntitlementStatus(updates.status)) {
-				throw new Error("Class entitlement status is invalid.");
-			}
-			params.push(updates.status);
-			setClauses.push(`status = $${params.length}`);
-		}
-		if (updates.festivalClassId !== undefined) {
-			params.push(updates.festivalClassId);
-			setClauses.push(`festival_class_id = $${params.length}`);
-		}
-		const expectedCondition = expectedStatus ?? updates.expectedStatus;
-		if (expectedCondition !== undefined) {
-			const expected = Array.isArray(expectedCondition)
-				? expectedCondition
-				: [expectedCondition];
-			params.push(expected);
-			whereClauses.push(`status = ANY($${params.length})`);
-		}
-		const rows = (await sql.unsafe(
-			`UPDATE ${this.schema}.class_entitlements
-			SET ${setClauses.join(", ")}
-			WHERE ${whereClauses.join(" AND ")}
-			RETURNING id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text`,
-			params,
-		)) as Array<Record<string, unknown>>;
-		return rows[0] ? classEntitlementFromRow(rows[0]) : null;
 	}
 }

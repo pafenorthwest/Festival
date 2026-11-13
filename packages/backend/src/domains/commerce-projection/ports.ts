@@ -1,6 +1,7 @@
 import type {
 	CustomerMailingAddress,
 	EntitlementClass,
+	EntitlementGrantSnapshot,
 	FestivalClassConfiguration,
 	FestivalRecord,
 	OrganizationRecord,
@@ -9,7 +10,9 @@ import type {
 	ShopifyVerificationStatus,
 	ShopifyWebhookFailureCategory,
 	ShopifyWebhookReadinessStatus,
+	UpdateCustomerProfileInput,
 } from "@festival/common";
+import type { CheckoutRepository } from "../class-checkout/index.js";
 
 export interface ProductPortRecord {
 	id: string;
@@ -155,23 +158,14 @@ export interface CommerceOrganizationPort {
 	): Promise<ShopifyIntegrationPortRecord>;
 	updateShopifyWebhookReadiness(
 		input: UpdateShopifyWebhookReadinessPortInput,
-	): Promise<void>;
+	): Promise<unknown>;
 	getPublicShopifyCatalogDomain?(
 		organizationId: string,
 	): Promise<string | null>;
-	listEntitlementGrantSnapshots?(input: {
-		organizationId: string;
-		customerId?: string;
-		entitlementClass?: EntitlementClass;
-	}): Promise<
-		Array<{
-			id: string;
-			customerId: string;
-			divisionIds: string[];
-			startsOn: string;
-			endsOn: string;
-		}>
-	>;
+	listEntitlementGrantSnapshots?(
+		organizationId: string,
+		customerId?: string,
+	): Promise<EntitlementGrantSnapshot[]>;
 	createEntitlementGrantSnapshot?(input: {
 		organizationId: string;
 		customerId: string;
@@ -199,26 +193,39 @@ export interface CommerceCustomerPort {
 		id: string;
 		organizationId: string;
 		shopifyCustomerGid: string | null;
-		email: { value: string };
-		name: { value: string };
+		email: { value: string | null };
+		name: { value: string | null };
 	} | null>;
 	getConsentedCustomer?(
 		organizationId: string,
 		customerId: string,
-	): Promise<{ id: string; staffAccessConsent?: boolean } | null>;
+		privacyNoticeVersion: string,
+	): Promise<{
+		id: string;
+		organizationId: string;
+		shopifyCustomerGid: string | null;
+		email: { value: string | null };
+		name: { value: string | null };
+		phone?: { value: string | null };
+		mailingAddress?: { value: CustomerMailingAddress | null };
+		staffAccessConsent?: boolean;
+	} | null>;
 	applyCustomerProfile?(input: {
-		organizationId: string;
 		customerId: string;
-		name?: string;
-		email?: string;
-		phone?: string;
-		mailingAddress?: CustomerMailingAddress;
-	}): Promise<void>;
-	recordStaffAccessConsent?(input: {
 		organizationId: string;
+		source: "shopify" | "festival";
+		updatedAtIso: string;
+		profile: Partial<UpdateCustomerProfileInput>;
+	}): Promise<unknown>;
+	recordStaffAccessConsent?(consent: {
 		customerId: string;
+		organizationId: string;
+		privacyNoticeVersion: string;
 		consentedAtIso: string;
-		source: string;
-		referenceId?: string;
-	}): Promise<void>;
+	}): Promise<unknown>;
 }
+
+export type CommerceCheckoutPort = Pick<
+	CheckoutRepository,
+	"findIntentByCorrelation"
+>;
