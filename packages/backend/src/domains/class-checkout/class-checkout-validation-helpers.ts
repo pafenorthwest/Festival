@@ -2,7 +2,6 @@ import {
 	AppError,
 	type ClassRegistrationSnapshot,
 	type FestivalClassConfiguration,
-	type FestivalRecord,
 	type RepertoirePiece,
 } from "@festival/common";
 

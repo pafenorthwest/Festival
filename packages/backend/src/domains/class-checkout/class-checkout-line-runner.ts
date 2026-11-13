@@ -1,12 +1,8 @@
-import type {
-	RegistrationCatalogValue as _RCV,
-	AccompanistMembershipGrant,
-} from "@festival/common";
+import type { AccompanistMembershipGrant } from "@festival/common";
 import {
 	AppError,
 	type ClassCheckoutLineItemInput,
 	type ClassRegistrationSnapshot,
-	doesClassRequireConcerto,
 	type FestivalClassConfiguration,
 	type FestivalRecord,
 	type RegistrationCatalogValue,
@@ -19,18 +15,20 @@ import {
 	type StartClassCheckoutInput,
 } from "./class-checkout-errors.js";
 import {
+	buildValidatedLineData,
+	resolveFestivalByShortNameLookup,
+	resolveLinePiecesAndInstrument,
+} from "./class-checkout-line-helpers.js";
+import {
 	calculateTotalAmount,
 	resolveFestivalClassConfiguration,
-	resolvePieceCatalogWorks,
 	resolveTargetFestival,
 	validateAccompanistSelection,
 	validateActiveChildAgeSnapshot,
-	validateAndNormalizeRepertoirePieces,
 	validateChildAgeRange,
 	validateChildOwnership,
 	validateTeacherEntitlement,
 } from "./class-checkout-validation.js";
-import { captureLineRegistrationSnapshot } from "./class-checkout-validation-helpers.js";
 import type {
 	CheckoutCatalogReadPort,
 	CheckoutChildAgeSnapshotRecord,
@@ -107,37 +105,21 @@ async function resolveTeacherName(
 	return contacts.get(teacherId)?.name?.trim() || null;
 }
 
-async function validateSingleClassLine(
+async function resolveValidatedClassForLine(
 	deps: ClassLineValidationDeps,
 	input: StartClassCheckoutInput,
 	festivalId: string,
-	line: ClassCheckoutLineItemInput,
+	festivalClassId: string,
 	maps: CatalogMaps,
-): Promise<ValidatedClassLineData> {
-	const child = await memoizeLookup(maps.children, line.childId, () =>
-		validateChildOwnership(
-			deps.customers,
-			input.organizationId,
-			input.customerId,
-			line.childId,
-		),
-	);
-	const ageSnap = await memoizeLookup(maps.ageSnapshots, child.id, () =>
-		validateActiveChildAgeSnapshot(
-			deps.customers,
-			input.organizationId,
-			child.id,
-			deps.now(),
-		),
-	);
-	const preResolved = maps.preResolvedClasses.get(line.festivalClassId);
+): Promise<FestivalClassConfiguration> {
+	const preResolved = maps.preResolvedClasses.get(festivalClassId);
 	const festivalClass =
 		preResolved ??
 		(await resolveFestivalClassConfiguration(
 			deps.catalog,
 			input.organizationId,
 			festivalId,
-			line.festivalClassId,
+			festivalClassId,
 		));
 	if (!festivalClass.isActive) {
 		throw input.festivalShortName
@@ -153,14 +135,23 @@ async function validateSingleClassLine(
 			400,
 		);
 	}
-	validateChildAgeRange(ageSnap.age, festivalClass);
-	const teacherKey = `${line.teacherId}:${festivalClass.divisionId}`;
+	return festivalClass;
+}
+
+async function resolveLineParticipants(
+	deps: ClassLineValidationDeps,
+	input: StartClassCheckoutInput,
+	line: ClassCheckoutLineItemInput,
+	divisionId: string,
+	maps: CatalogMaps,
+) {
+	const teacherKey = `${line.teacherId}:${divisionId}`;
 	const teacherGrant = await memoizeLookup(maps.teacherGrants, teacherKey, () =>
 		validateTeacherEntitlement(
 			deps.teachers,
 			input.organizationId,
 			line.teacherId,
-			festivalClass.divisionId,
+			divisionId,
 			deps.now(),
 		),
 	);
@@ -185,64 +176,86 @@ async function validateSingleClassLine(
 				),
 			)
 		: null;
-	const worksMap = await resolvePieceCatalogWorks(line.pieces ?? [], {
-		catalogWorkReader: deps.repertoire,
-		organizationId: input.organizationId,
-	});
-	const subtype = maps.subtypeMap.get(festivalClass.classSubtypeId) ?? null;
-	const pieces = validateAndNormalizeRepertoirePieces(
-		line.pieces ?? [],
-		festivalClass,
-		{
-			requireConcertoCatalogWork: doesClassRequireConcerto(
-				festivalClass,
-				subtype,
-			),
-			preResolvedWorksById: worksMap,
-		},
+	return { teacherGrant, teacherName, accompanistGrant };
+}
+
+async function resolveLineChildAndAge(
+	deps: ClassLineValidationDeps,
+	input: StartClassCheckoutInput,
+	childId: string,
+	maps: CatalogMaps,
+) {
+	const child = await memoizeLookup(maps.children, childId, () =>
+		validateChildOwnership(
+			deps.customers,
+			input.organizationId,
+			input.customerId,
+			childId,
+		),
 	);
-	let inst: RegistrationCatalogValue | undefined;
-	if (line.instrumentId !== undefined) {
-		if (typeof line.instrumentId !== "string" || !line.instrumentId.trim()) {
-			throw new AppError(
-				"Selected instrument is invalid.",
-				400,
-				"instrument_invalid",
-			);
-		}
-		inst = maps.instrumentMap.get(line.instrumentId.trim());
-		if (!inst) {
-			throw new AppError(
-				"Selected instrument is invalid.",
-				400,
-				"instrument_invalid",
-			);
-		}
-	}
-	return {
+	const ageSnap = await memoizeLookup(maps.ageSnapshots, child.id, () =>
+		validateActiveChildAgeSnapshot(
+			deps.customers,
+			input.organizationId,
+			child.id,
+			deps.now(),
+		),
+	);
+	return { child, ageSnap };
+}
+
+async function validateSingleClassLine(
+	deps: ClassLineValidationDeps,
+	input: StartClassCheckoutInput,
+	festivalId: string,
+	line: ClassCheckoutLineItemInput,
+	maps: CatalogMaps,
+): Promise<ValidatedClassLineData> {
+	const { child, ageSnap } = await resolveLineChildAndAge(
+		deps,
+		input,
+		line.childId,
+		maps,
+	);
+	const festivalClass = await resolveValidatedClassForLine(
+		deps,
+		input,
+		festivalId,
+		line.festivalClassId,
+		maps,
+	);
+	validateChildAgeRange(ageSnap.age, festivalClass);
+	const { teacherGrant, teacherName, accompanistGrant } =
+		await resolveLineParticipants(
+			deps,
+			input,
+			line,
+			festivalClass.divisionId,
+			maps,
+		);
+	const subtype = maps.subtypeMap.get(festivalClass.classSubtypeId) ?? null;
+	const { pieces, instrument } = await resolveLinePiecesAndInstrument({
+		repertoire: deps.repertoire,
+		organizationId: input.organizationId,
+		line,
+		festivalClass,
+		subtype,
+		instrumentMap: maps.instrumentMap,
+	});
+	return buildValidatedLineData({
 		child,
 		festivalClass,
-		pieces,
-		teacherMembershipId: teacherGrant.id,
-		accompanistMembershipId: accompanistGrant?.id ?? null,
+		line,
+		divisionName: maps.divisionMap.get(festivalClass.divisionId) ?? null,
+		subtype,
 		currencyCode: maps.currencyCode,
-		registrationSnapshot: captureLineRegistrationSnapshot({
-			festivalId: festivalClass.festivalId,
-			festivalClass,
-			divisionName: maps.divisionMap.get(festivalClass.divisionId) ?? null,
-			subtypeName: subtype?.displayName ?? null,
-			currencyCode: maps.currencyCode,
-			teacherId: line.teacherId,
-			teacherMembershipId: teacherGrant.id,
-			teacherName,
-			accompanistId: line.accompanistId ?? null,
-			accompanistMembershipId: accompanistGrant?.id ?? null,
-			accompanistName: accompanistGrant ? accompanistGrant.contact.name : null,
-			instrument: inst ? { id: inst.id, name: inst.displayName } : "unknown",
-			pieces,
-			capturedAtIso: maps.capturedAtIso,
-		}),
-	};
+		capturedAtIso: maps.capturedAtIso,
+		teacherGrant,
+		teacherName,
+		accompanistGrant,
+		pieces,
+		instrument,
+	});
 }
 
 async function resolveFestivalContextForLines(
@@ -261,34 +274,13 @@ async function resolveFestivalContextForLines(
 			throw new AppError("Festival not found.", 404);
 		}
 		if (deps.catalog.findActiveFestivalClassByShortName) {
-			let resolvedFestivalId = input.festivalId ?? "";
-			let resolvedFestival: FestivalRecord | undefined;
-			for (const line of lineInputs) {
-				if (preResolvedClasses.has(line.festivalClassId)) continue;
-				const result = await deps.catalog.findActiveFestivalClassByShortName(
-					input.organizationId,
-					trimmed,
-					line.festivalClassId,
-					input.festivalId,
-				);
-				if (!result) {
-					throw new AppError("Festival class configuration not found.", 404);
-				}
-				const fc = "festivalClass" in result ? result.festivalClass : result;
-				if ("festival" in result && result.festival) {
-					resolvedFestival = result.festival;
-				}
-				if (resolvedFestivalId && fc.festivalId !== resolvedFestivalId) {
-					throw new AppError("Festival class configuration not found.", 404);
-				}
-				resolvedFestivalId = fc.festivalId;
-				preResolvedClasses.set(line.festivalClassId, fc);
-			}
-			return {
-				festival: resolvedFestival,
-				festivalId: resolvedFestivalId,
+			return resolveFestivalByShortNameLookup(
+				deps.catalog,
+				input,
+				trimmed,
+				lineInputs,
 				preResolvedClasses,
-			};
+			);
 		}
 		const festivals = await deps.catalog.listFestivals(input.organizationId);
 		const festival = resolveTargetFestival(festivals, trimmed);
@@ -305,6 +297,56 @@ async function resolveFestivalContextForLines(
 		throw new AppError("Festival not found.", 404);
 	}
 	return { festival, festivalId: festival.id, preResolvedClasses };
+}
+
+async function loadLineCatalogMaps(
+	deps: ClassLineValidationDeps,
+	input: StartClassCheckoutInput,
+	lineInputs: ClassCheckoutLineItemInput[],
+	currencyCode: string,
+): Promise<{
+	festival?: FestivalRecord;
+	festivalId: string;
+	subtypes: RegistrationCatalogValue[];
+	maps: CatalogMaps;
+}> {
+	const [
+		{ festival, festivalId, preResolvedClasses },
+		divisions,
+		subtypes,
+		instruments,
+	] = await Promise.all([
+		resolveFestivalContextForLines(deps, input, lineInputs),
+		deps.catalog.listDivisions(input.organizationId, false),
+		deps.catalog.listRegistrationCatalogValues(
+			input.organizationId,
+			"class_subtype",
+			false,
+		),
+		deps.catalog.listRegistrationCatalogValues(
+			input.organizationId,
+			"instrument",
+			true,
+		),
+	]);
+	return {
+		festival,
+		festivalId,
+		subtypes,
+		maps: {
+			divisionMap: new Map(divisions.map((d) => [d.id, d.displayName])),
+			subtypeMap: new Map(subtypes.map((s) => [s.id, s])),
+			instrumentMap: new Map(instruments.map((i) => [i.id, i])),
+			preResolvedClasses,
+			currencyCode,
+			capturedAtIso: deps.now().toISOString(),
+			children: new Map(),
+			ageSnapshots: new Map(),
+			teacherGrants: new Map(),
+			teacherNames: new Map(),
+			accompanistGrants: new Map(),
+		},
+	};
 }
 
 export async function validateAndPrepareClassLines(
@@ -326,38 +368,12 @@ export async function validateAndPrepareClassLines(
 		throw new AppError("Organization was not found.", 404);
 	}
 	const currencyCode = organization.defaultCurrencyCode?.trim() || "USD";
-	const [
-		{ festival, festivalId, preResolvedClasses },
-		divisions,
-		subtypes,
-		instruments,
-	] = await Promise.all([
-		resolveFestivalContextForLines(deps, input, lineInputs),
-		deps.catalog.listDivisions(input.organizationId, false),
-		deps.catalog.listRegistrationCatalogValues(
-			input.organizationId,
-			"class_subtype",
-			false,
-		),
-		deps.catalog.listRegistrationCatalogValues(
-			input.organizationId,
-			"instrument",
-			true,
-		),
-	]);
-	const maps: CatalogMaps = {
-		divisionMap: new Map(divisions.map((d) => [d.id, d.displayName])),
-		subtypeMap: new Map(subtypes.map((s) => [s.id, s])),
-		instrumentMap: new Map(instruments.map((i) => [i.id, i])),
-		preResolvedClasses,
+	const { festival, festivalId, subtypes, maps } = await loadLineCatalogMaps(
+		deps,
+		input,
+		lineInputs,
 		currencyCode,
-		capturedAtIso: deps.now().toISOString(),
-		children: new Map(),
-		ageSnapshots: new Map(),
-		teacherGrants: new Map(),
-		teacherNames: new Map(),
-		accompanistGrants: new Map(),
-	};
+	);
 	const validatedLines: ValidatedClassLineData[] = [];
 	for (const line of lineInputs) {
 		validatedLines.push(

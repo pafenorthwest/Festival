@@ -1,8 +1,4 @@
-import {
-	AppError,
-	type ClassEntitlement,
-	type ClassEntitlementStatus,
-} from "@festival/common";
+import { AppError, type ClassEntitlement } from "@festival/common";
 
 export class AsyncLock {
 	private readonly queues = new Map<string, Promise<void>>();

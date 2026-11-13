@@ -111,6 +111,72 @@ async function releaseLegacyVerifyClaimRetryable(
 	});
 }
 
+async function acquireLegacyVerifyClaim(
+	executions: ClassCheckoutExecutionRepository,
+	execution: ClassCheckoutExecution,
+	intent: CheckoutIntentRecord,
+): Promise<ClassCheckoutClaim> {
+	const owner = `verify_${randomUUID()}`;
+	const claimed = await executions.claim({
+		organizationId: intent.organizationId,
+		intentId: intent.id,
+		owner,
+		allowCompleted: true,
+	});
+	if (!claimed) {
+		throw new ClassCheckoutRecoveryRequiredError(execution, true);
+	}
+	return {
+		organizationId: claimed.organizationId,
+		intentId: claimed.intentId,
+		owner,
+		generation: claimed.generation,
+	};
+}
+
+async function inspectLegacyCartOrFail(
+	deps: ReplayHandoffDeps,
+	executions: ClassCheckoutExecutionRepository,
+	activeClaim: ClassCheckoutClaim,
+	params: {
+		intent: CheckoutIntentRecord;
+		shopifyCartId: string;
+		binding: ClassCheckoutStorefrontBinding;
+		execution: ClassCheckoutExecution;
+		hasOuterClaim: boolean;
+	},
+) {
+	const inspectCart = deps.storefront.inspectCart;
+	if (!inspectCart) {
+		const updated = await recordRecoveryRequiredFromClaim(
+			executions,
+			activeClaim,
+			"checkout_storefront_verification_required",
+		);
+		throw new ClassCheckoutRecoveryRequiredError(
+			updated ?? params.execution,
+			true,
+		);
+	}
+	try {
+		return await inspectCart({
+			organizationId: params.intent.organizationId,
+			shopifyCartId: params.shopifyCartId,
+			expectedStorefrontBinding: params.binding,
+		});
+	} catch (error) {
+		if (!params.hasOuterClaim) {
+			await releaseLegacyVerifyClaimRetryable(
+				executions,
+				activeClaim,
+				params.execution.checkpoint,
+			);
+		}
+		if (error instanceof AppError) throw error;
+		throw new ClassCheckoutCartObservationError(params.shopifyCartId);
+	}
+}
+
 export async function verifyLegacyCartEvidence(
 	deps: ReplayHandoffDeps,
 	params: {
@@ -126,57 +192,17 @@ export async function verifyLegacyCartEvidence(
 	if (!executions) return params.execution;
 	const activeClaim =
 		params.claim ??
-		(await (async () => {
-			const owner = `verify_${randomUUID()}`;
-			const claimed = await executions.claim({
-				organizationId: params.intent.organizationId,
-				intentId: params.intent.id,
-				owner,
-				allowCompleted: true,
-			});
-			if (!claimed) {
-				throw new ClassCheckoutRecoveryRequiredError(params.execution, true);
-			}
-			return {
-				organizationId: claimed.organizationId,
-				intentId: claimed.intentId,
-				owner,
-				generation: claimed.generation,
-			};
-		})());
-	const releaseIfOwned = async (reason: string) => {
-		const updated = await recordRecoveryRequiredFromClaim(
+		(await acquireLegacyVerifyClaim(
 			executions,
-			activeClaim,
-			reason,
-		);
-		throw new ClassCheckoutRecoveryRequiredError(
-			updated ?? params.execution,
-			true,
-		);
-	};
-	const inspectCart = deps.storefront.inspectCart;
-	if (!inspectCart) {
-		return releaseIfOwned("checkout_storefront_verification_required");
-	}
-	let evidence: Awaited<ReturnType<typeof inspectCart>>;
-	try {
-		evidence = await inspectCart({
-			organizationId: params.intent.organizationId,
-			shopifyCartId: params.shopifyCartId,
-			expectedStorefrontBinding: params.binding,
-		});
-	} catch (error) {
-		if (!params.claim) {
-			await releaseLegacyVerifyClaimRetryable(
-				executions,
-				activeClaim,
-				params.execution.checkpoint,
-			);
-		}
-		if (error instanceof AppError) throw error;
-		throw new ClassCheckoutCartObservationError(params.shopifyCartId);
-	}
+			params.execution,
+			params.intent,
+		));
+	const evidence = await inspectLegacyCartOrFail(
+		deps,
+		executions,
+		activeClaim,
+		{ ...params, hasOuterClaim: Boolean(params.claim) },
+	);
 	if (
 		!matchesInspectedCartEvidence(
 			params.intent,
@@ -184,7 +210,15 @@ export async function verifyLegacyCartEvidence(
 			evidence,
 		)
 	) {
-		await releaseIfOwned("checkout_storefront_verification_required");
+		const updated = await recordRecoveryRequiredFromClaim(
+			executions,
+			activeClaim,
+			"checkout_storefront_verification_required",
+		);
+		throw new ClassCheckoutRecoveryRequiredError(
+			updated ?? params.execution,
+			true,
+		);
 	}
 	if (!params.claim) {
 		await executions.transition({
@@ -203,6 +237,32 @@ export async function verifyLegacyCartEvidence(
 	return params.execution;
 }
 
+function assertVerifiedCheckoutUrl(
+	checkoutUrl: string,
+	shopDomain: string,
+): void {
+	try {
+		const parsed = new URL(checkoutUrl);
+		if (
+			parsed.protocol !== "https:" ||
+			parsed.hostname.toLowerCase() !== shopDomain.toLowerCase()
+		) {
+			throw new AppError(
+				"Shopify checkout URL verification failed.",
+				503,
+				"checkout_retryable_upstream",
+			);
+		}
+	} catch (urlError) {
+		if (urlError instanceof AppError) throw urlError;
+		throw new AppError(
+			"Shopify checkout URL verification failed.",
+			503,
+			"checkout_retryable_upstream",
+		);
+	}
+}
+
 export async function runReplayCheckoutWithTimeout(
 	deps: ReplayHandoffDeps,
 	params: {
@@ -216,8 +276,7 @@ export async function runReplayCheckoutWithTimeout(
 	const current = await deps.organizations.getShopifyIntegration(
 		params.organizationId,
 	);
-	const currentBinding = deps.resolveBinding(current);
-	if (!deps.sameBinding(currentBinding, params.binding)) {
+	if (!deps.sameBinding(deps.resolveBinding(current), params.binding)) {
 		throw new ClassCheckoutStorefrontChangedBeforeRequestError();
 	}
 	const controller = new AbortController();
@@ -240,27 +299,7 @@ export async function runReplayCheckoutWithTimeout(
 		void checkoutPromise.catch(() => undefined);
 		const result = await Promise.race([checkoutPromise, timeoutPromise]);
 		if (timedOut) throw buildReplayTimeoutError();
-		try {
-			const parsed = new URL(result.checkoutUrl);
-			if (
-				parsed.protocol !== "https:" ||
-				parsed.hostname.toLowerCase() !==
-					params.binding.shopDomain.toLowerCase()
-			) {
-				throw new AppError(
-					"Shopify checkout URL verification failed.",
-					503,
-					"checkout_retryable_upstream",
-				);
-			}
-		} catch (urlError) {
-			if (urlError instanceof AppError) throw urlError;
-			throw new AppError(
-				"Shopify checkout URL verification failed.",
-				503,
-				"checkout_retryable_upstream",
-			);
-		}
+		assertVerifiedCheckoutUrl(result.checkoutUrl, params.binding.shopDomain);
 		return result;
 	} catch (error) {
 		if (timedOut) {
@@ -285,6 +324,55 @@ export async function runReplayCheckoutWithTimeout(
 	}
 }
 
+function buildResolvedReplayStatus(
+	intentStatus: ClassCheckoutReplayState["intentStatus"],
+	exec: ClassCheckoutExecution | null,
+): ClassCheckoutRecoveryStatus {
+	if (!exec) {
+		return {
+			status: "resolved",
+			recoveryReference: "",
+			reasonCode:
+				intentStatus === "approved"
+					? "checkout_already_completed"
+					: "checkout_needs_review",
+			retryAllowed: false,
+		};
+	}
+	return (
+		resolvedCheckoutStatus(intentStatus, exec) ?? {
+			status: "resolved",
+			recoveryReference: exec.recoveryReference,
+			reasonCode: "checkout_already_completed",
+			retryAllowed: false,
+		}
+	);
+}
+
+const TERMINAL_INTENT_STATUSES = [
+	"approved",
+	"rejected",
+	"needs_review",
+	"superseded",
+];
+
+async function recordReplayExpiryIfNeeded(
+	checkout: CheckoutRepository,
+	intent: CheckoutIntentRecord,
+	initialExecution: ClassCheckoutExecution,
+): Promise<never> {
+	const recorded = await checkout.classExecutions?.recordApplicationExpiry({
+		organizationId: intent.organizationId,
+		intentId: intent.id,
+		expectedGeneration: initialExecution.generation,
+	});
+	const exec =
+		recorded ??
+		(await checkout.classExecutions?.get(intent.organizationId, intent.id)) ??
+		initialExecution;
+	throw new ClassCheckoutRecoveryRequiredError(exec, true);
+}
+
 export async function evaluatePostLookupReplayState(
 	deps: Pick<ReplayHandoffDeps, "checkout" | "now">,
 	params: {
@@ -302,51 +390,23 @@ export async function evaluatePostLookupReplayState(
 	if (
 		state &&
 		params.initialExecution &&
-		state.intentStatus !== "approved" &&
-		state.intentStatus !== "rejected" &&
-		state.intentStatus !== "needs_review" &&
-		state.intentStatus !== "superseded" &&
+		!TERMINAL_INTENT_STATUSES.includes(state.intentStatus) &&
 		expiredByClock
 	) {
-		const recorded =
-			await deps.checkout.classExecutions?.recordApplicationExpiry({
-				organizationId: params.intent.organizationId,
-				intentId: params.intent.id,
-				expectedGeneration: params.initialExecution.generation,
-			});
-		const exec =
-			recorded ??
-			(await deps.checkout.classExecutions?.get(
-				params.intent.organizationId,
-				params.intent.id,
-			)) ??
-			params.initialExecution;
-		throw new ClassCheckoutRecoveryRequiredError(exec, true);
+		await recordReplayExpiryIfNeeded(
+			deps.checkout,
+			params.intent,
+			params.initialExecution,
+		);
 	}
 	if (!state) return null;
-	if (
-		["approved", "rejected", "needs_review", "superseded"].includes(
-			state.intentStatus,
-		)
-	) {
-		const exec = params.initialExecution;
-		const status: ClassCheckoutRecoveryStatus = exec
-			? (resolvedCheckoutStatus(state.intentStatus, exec) ?? {
-					status: "resolved",
-					recoveryReference: exec.recoveryReference,
-					reasonCode: "checkout_already_completed",
-					retryAllowed: false,
-				})
-			: {
-					status: "resolved",
-					recoveryReference: "",
-					reasonCode:
-						state.intentStatus === "approved"
-							? "checkout_already_completed"
-							: "checkout_needs_review",
-					retryAllowed: false,
-				};
-		return { withheldReason: status };
+	if (TERMINAL_INTENT_STATUSES.includes(state.intentStatus)) {
+		return {
+			withheldReason: buildResolvedReplayStatus(
+				state.intentStatus,
+				params.initialExecution,
+			),
+		};
 	}
 	if (
 		params.initialExecution &&

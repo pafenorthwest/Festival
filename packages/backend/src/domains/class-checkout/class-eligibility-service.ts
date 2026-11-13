@@ -58,12 +58,7 @@ export class ClassEligibilityService {
 			throw new AppError("Customer ID is required.", 400);
 		}
 		if (!input.items || input.items.length === 0) {
-			return {
-				isEligible: true,
-				eligible: true,
-				results: [],
-				items: [],
-			};
+			return { isEligible: true, eligible: true, results: [], items: [] };
 		}
 		const uniqueChildIds = Array.from(
 			new Set(input.items.map((item) => item.childId)),
@@ -74,7 +69,6 @@ export class ClassEligibilityService {
 			uniqueChildIds,
 			preloaded?.children,
 		);
-
 		const targetFestival =
 			preloaded?.festival ??
 			(await this.resolveTargetFestival(
@@ -88,18 +82,38 @@ export class ClassEligibilityService {
 				input.organizationId,
 				targetFestival,
 			));
+		const { classes, subtypes, activeEntitlements } =
+			await this.loadEligibilityResources(
+				input,
+				targetFestival.id,
+				uniqueChildIds,
+				preloaded,
+			);
+		return evaluatePurchaseEligibility({
+			organizationId: input.organizationId,
+			festivalId: targetFestival.id,
+			items: input.items,
+			classes,
+			subtypes,
+			activeEntitlements,
+			isRegistrationOpen,
+			mode: input.mode,
+		});
+	}
+
+	private async loadEligibilityResources(
+		input: EvaluatePurchaseEligibilityInput,
+		festivalId: string,
+		uniqueChildIds: string[],
+		preloaded?: EligibilityLookups,
+	) {
 		const uniqueClassIds = Array.from(
 			new Set(input.items.map((item) => item.festivalClassId)),
 		);
-
 		const [initialClasses, subtypes, activeEntitlements] = await Promise.all([
 			preloaded?.classes
 				? Promise.resolve(preloaded.classes)
-				: this.loadClasses(
-						input.organizationId,
-						targetFestival.id,
-						uniqueClassIds,
-					),
+				: this.loadClasses(input.organizationId, festivalId, uniqueClassIds),
 			preloaded?.subtypes
 				? Promise.resolve(preloaded.subtypes)
 				: this.catalog.listRegistrationCatalogValues(
@@ -111,7 +125,7 @@ export class ClassEligibilityService {
 				? Promise.resolve(preloaded.entitlements)
 				: this.loadEntitlements(
 						input.organizationId,
-						targetFestival.id,
+						festivalId,
 						uniqueClassIds,
 						uniqueChildIds,
 					),
@@ -128,22 +142,15 @@ export class ClassEligibilityService {
 			extraClassIds.length > 0
 				? await this.loadClasses(
 						input.organizationId,
-						targetFestival.id,
+						festivalId,
 						extraClassIds,
 					)
 				: [];
-		const classes = [...initialClasses, ...extraClasses];
-
-		return evaluatePurchaseEligibility({
-			organizationId: input.organizationId,
-			festivalId: targetFestival.id,
-			items: input.items,
-			classes,
+		return {
+			classes: [...initialClasses, ...extraClasses],
 			subtypes,
 			activeEntitlements,
-			isRegistrationOpen,
-			mode: input.mode,
-		});
+		};
 	}
 
 	private async verifyOwnedChildren(
