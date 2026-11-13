@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type {
-	CustomerMailingAddress,
 	FestivalChildAgeSnapshot,
 	FestivalChildRecord,
 } from "@festival/common";
@@ -16,190 +15,31 @@ import type {
 	CustomerSessionTokenReplacementInput,
 	CustomerSessionTouchInput,
 	CustomerStaffAccessConsentRecord,
-	FestivalCustomerRecord,
 } from "./customer-account-repository.js";
-
-interface IntegrationRow {
-	organization_id: string;
-	storefront_domain: string;
-	client_id: string;
-	encrypted_client_secret: string;
-	readiness: "unknown" | "ready" | "failed";
-	can_read_orders: boolean;
-	integration_version: number | string;
-	verified_at: string | null;
-	last_error: string | null;
-	created_at: string;
-	updated_at: string;
-}
-interface SessionRow {
-	session_id: string;
-	customer_id: string;
-	organization_id: string;
-	shopify_customer_gid: string;
-	encrypted_tokens: string;
-	csrf_token: string;
-	integration_version: number | string;
-	created_at: string;
-	last_seen_at: string;
-	expires_at: string;
-	revoked_at: string | null;
-}
-interface CustomerRow {
-	id: string;
-	organization_id: string;
-	shopify_customer_gid: string;
-	name: string | null;
-	name_source: "shopify" | "festival" | null;
-	name_updated_at: string | null;
-	email: string | null;
-	email_source: "shopify" | "festival" | null;
-	email_updated_at: string | null;
-	mailing_address: CustomerMailingAddress | string | null;
-	mailing_address_source: "shopify" | "festival" | null;
-	mailing_address_updated_at: string | null;
-	phone: string | null;
-	phone_source: "shopify" | "festival" | null;
-	phone_updated_at: string | null;
-	created_at: string;
-	updated_at: string;
-}
-interface StateRow {
-	state_hash: string;
-	organization_id: string;
-	nonce: string;
-	return_to: string;
-	offering_id: string | null;
-	expires_at: string;
-}
-interface ChildRow {
-	id: string;
-	organization_id: string;
-	parent_customer_id: string;
-	display_name: string;
-	created_at: string;
-}
-interface ChildAgeSnapshotRow {
-	id: string;
-	child_id: string;
-	organization_id: string;
-	age: number;
-	created_at: string;
-	valid_until: string;
-	superseded_at: string | null;
-}
-interface ConsentRow {
-	customer_id: string;
-	organization_id: string;
-	privacy_notice_version: string;
-	consented_at: string;
-}
-
-function schemaName(value: string) {
-	if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value))
-		throw new Error("Invalid DB_SCHEMA.");
-	return value;
-}
-function integration(row: IntegrationRow): CustomerAccountIntegrationRecord {
-	return {
-		organizationId: row.organization_id,
-		storefrontDomain: row.storefront_domain,
-		clientId: row.client_id,
-		encryptedClientSecret: row.encrypted_client_secret,
-		readiness: row.readiness,
-		canReadOrders: row.can_read_orders,
-		integrationVersion: Number(row.integration_version),
-		verifiedAtIso: row.verified_at ?? undefined,
-		lastError: row.last_error ?? undefined,
-		createdAtIso: row.created_at,
-		updatedAtIso: row.updated_at,
-	};
-}
-function session(row: SessionRow): CustomerSessionRecord {
-	return {
-		sessionId: row.session_id,
-		customerId: row.customer_id,
-		organizationId: row.organization_id,
-		shopifyCustomerGid: row.shopify_customer_gid,
-		encryptedTokens: row.encrypted_tokens,
-		csrfToken: row.csrf_token,
-		integrationVersion: Number(row.integration_version),
-		createdAtIso: row.created_at,
-		lastSeenAtIso: row.last_seen_at,
-		expiresAtIso: row.expires_at,
-		revokedAtIso: row.revoked_at ?? undefined,
-	};
-}
-function mailingAddress(
-	value: CustomerRow["mailing_address"],
-): CustomerMailingAddress | null {
-	if (!value) return null;
-	return typeof value === "string"
-		? (JSON.parse(value) as CustomerMailingAddress)
-		: value;
-}
-function field<T>(
-	value: T | null,
-	source: "shopify" | "festival" | null,
-	updatedAtIso: string | null,
-) {
-	return { value, source, updatedAtIso };
-}
-function customer(row: CustomerRow): FestivalCustomerRecord {
-	return {
-		id: row.id,
-		organizationId: row.organization_id,
-		shopifyCustomerGid: row.shopify_customer_gid,
-		name: field(row.name, row.name_source, row.name_updated_at),
-		email: field(row.email, row.email_source, row.email_updated_at),
-		mailingAddress: field(
-			mailingAddress(row.mailing_address),
-			row.mailing_address_source,
-			row.mailing_address_updated_at,
-		),
-		phone: field(row.phone, row.phone_source, row.phone_updated_at),
-		createdAtIso: row.created_at,
-		updatedAtIso: row.updated_at,
-	};
-}
-function childRecord(row: ChildRow): FestivalChildRecord {
-	return {
-		id: row.id,
-		organizationId: row.organization_id,
-		parentCustomerId: row.parent_customer_id,
-		displayName: row.display_name,
-		createdAtIso: row.created_at,
-	};
-}
-function childAgeSnapshot(row: ChildAgeSnapshotRow): FestivalChildAgeSnapshot {
-	return {
-		id: row.id,
-		childId: row.child_id,
-		organizationId: row.organization_id,
-		age: row.age,
-		createdAtIso: row.created_at,
-		validUntilIso: row.valid_until,
-		...(row.superseded_at ? { supersededAtIso: row.superseded_at } : {}),
-	};
-}
-function consentRecord(row: ConsentRow): CustomerStaffAccessConsentRecord {
-	return {
-		customerId: row.customer_id,
-		organizationId: row.organization_id,
-		privacyNoticeVersion: row.privacy_notice_version,
-		consentedAtIso: row.consented_at,
-	};
-}
-function stateRecord(r: StateRow): CustomerOAuthStateRecord {
-	return {
-		stateHash: r.state_hash,
-		organizationId: r.organization_id,
-		nonce: r.nonce,
-		returnTo: r.return_to,
-		offeringId: r.offering_id ?? undefined,
-		expiresAtIso: r.expires_at,
-	};
-}
+import {
+	type ChildAgeSnapshotRow,
+	type ChildRow,
+	type ConsentRow,
+	type CustomerRow,
+	childAgeSnapshot,
+	childRecord,
+	consentRecord,
+	customer,
+	type IntegrationRow,
+	integration,
+	type SessionRow,
+	type StateRow,
+	schemaName,
+	session,
+	stateRecord,
+} from "./postgres-customer-account-mappers.js";
+import {
+	type CreateChildWithAgeSnapshotInput,
+	insertChildWithAgeSnapshotCte,
+	queryChildrenByIds,
+	queryJoinedSessionCustomerIntegration,
+	updateCustomerProfileRow,
+} from "./postgres-customer-account-queries.js";
 
 export class PostgresCustomerAccountRepository
 	implements CustomerAccountRepository
@@ -244,7 +84,10 @@ export class PostgresCustomerAccountRepository
 			);
 			return updated;
 		});
-		return integration(rows[0]);
+		const updatedRow = rows[0];
+		if (!updatedRow)
+			throw new Error("Customer Account integration upsert failed.");
+		return integration(updatedRow);
 	}
 	async setIntegrationReadiness(
 		id: string,
@@ -336,6 +179,17 @@ export class PostgresCustomerAccountRepository
 		)) as SessionRow[];
 		return rows[0] ? session(rows[0]) : null;
 	}
+	async findSessionCustomerAndIntegration(
+		sessionId: string,
+		organizationId: string,
+	) {
+		await this.ensureReady();
+		return queryJoinedSessionCustomerIntegration(
+			this.schema,
+			sessionId,
+			organizationId,
+		);
+	}
 	async getCustomer(organizationId: string, customerId: string) {
 		await this.ensureReady();
 		const rows = (await sql.unsafe(
@@ -375,35 +229,7 @@ export class PostgresCustomerAccountRepository
 	}
 	async applyCustomerProfile(input: ApplyCustomerProfileInput) {
 		await this.ensureReady();
-		const values = [
-			input.organizationId,
-			input.customerId,
-			input.source,
-			input.updatedAtIso,
-			input.profile.name ?? null,
-			input.profile.email ?? null,
-			input.profile.mailingAddress ?? null,
-			input.profile.phone ?? null,
-		];
-		const rows = (await sql.unsafe(
-			`UPDATE ${this.schema}.festival_customers SET
-			name=CASE WHEN $5::text IS NULL OR ($3='shopify' AND name_source='festival') OR name_updated_at>$4 THEN name ELSE $5 END,
-			name_source=CASE WHEN $5::text IS NULL OR ($3='shopify' AND name_source='festival') OR name_updated_at>$4 THEN name_source ELSE $3 END,
-			name_updated_at=CASE WHEN $5::text IS NULL OR ($3='shopify' AND name_source='festival') OR name_updated_at>$4 THEN name_updated_at ELSE $4 END,
-			email=CASE WHEN $6::text IS NULL OR ($3='shopify' AND email_source='festival') OR email_updated_at>$4 THEN email ELSE $6 END,
-			email_source=CASE WHEN $6::text IS NULL OR ($3='shopify' AND email_source='festival') OR email_updated_at>$4 THEN email_source ELSE $3 END,
-			email_updated_at=CASE WHEN $6::text IS NULL OR ($3='shopify' AND email_source='festival') OR email_updated_at>$4 THEN email_updated_at ELSE $4 END,
-			mailing_address=CASE WHEN $7::jsonb IS NULL OR ($3='shopify' AND mailing_address_source='festival') OR mailing_address_updated_at>$4 THEN mailing_address ELSE $7::jsonb END,
-			mailing_address_source=CASE WHEN $7::jsonb IS NULL OR ($3='shopify' AND mailing_address_source='festival') OR mailing_address_updated_at>$4 THEN mailing_address_source ELSE $3 END,
-			mailing_address_updated_at=CASE WHEN $7::jsonb IS NULL OR ($3='shopify' AND mailing_address_source='festival') OR mailing_address_updated_at>$4 THEN mailing_address_updated_at ELSE $4 END,
-			phone=CASE WHEN $8::text IS NULL OR ($3='shopify' AND phone_source='festival') OR phone_updated_at>$4 THEN phone ELSE $8 END,
-			phone_source=CASE WHEN $8::text IS NULL OR ($3='shopify' AND phone_source='festival') OR phone_updated_at>$4 THEN phone_source ELSE $3 END,
-			phone_updated_at=CASE WHEN $8::text IS NULL OR ($3='shopify' AND phone_source='festival') OR phone_updated_at>$4 THEN phone_updated_at ELSE $4 END,
-			updated_at=GREATEST(updated_at,$4)
-			WHERE organization_id=$1 AND id=$2 RETURNING *`,
-			values,
-		)) as CustomerRow[];
-		return rows[0] ? customer(rows[0]) : null;
+		return updateCustomerProfileRow(this.schema, input);
 	}
 	async recordStaffAccessConsent(consent: CustomerStaffAccessConsentRecord) {
 		await this.ensureReady();
@@ -536,6 +362,19 @@ export class PostgresCustomerAccountRepository
 		)) as ChildRow[];
 		return rows[0] ? childRecord(rows[0]) : null;
 	}
+	async findChildrenByIds(
+		organizationId: string,
+		parentCustomerId: string,
+		childIds: readonly string[],
+	): Promise<FestivalChildRecord[]> {
+		if (childIds.length === 0) return [];
+		await this.ensureReady();
+		return queryChildrenByIds(
+			this.schema,
+			{ organizationId, parentCustomerId },
+			childIds,
+		);
+	}
 	async listChildren(
 		organizationId: string,
 		parentCustomerId: string,
@@ -557,8 +396,6 @@ export class PostgresCustomerAccountRepository
 		const id = randomUUID();
 		const createdAtIso = input.createdAtIso ?? new Date().toISOString();
 		await sql.begin(async (transaction) => {
-			// Serialize snapshot replacement per child so only one concurrent writer
-			// can observe the previous active row before inserting its replacement.
 			await transaction.unsafe(
 				"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
 				[
@@ -604,5 +441,9 @@ export class PostgresCustomerAccountRepository
 			[organizationId, childId],
 		)) as ChildAgeSnapshotRow[];
 		return rows.map(childAgeSnapshot);
+	}
+	async createChildWithAgeSnapshot(input: CreateChildWithAgeSnapshotInput) {
+		await this.ensureReady();
+		return insertChildWithAgeSnapshotCte(this.schema, input);
 	}
 }

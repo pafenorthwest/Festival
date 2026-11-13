@@ -1,1 +1,1 @@
-export * from "../customer/bounded-async-cache.js";
+export * from "../lib/bounded-async-cache.js";

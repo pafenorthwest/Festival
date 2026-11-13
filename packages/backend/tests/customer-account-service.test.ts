@@ -7,6 +7,7 @@ import {
 import { InMemoryCheckoutRepository } from "../src/checkout/checkout-repository.js";
 import { InMemoryMembershipCommerceRepository } from "../src/commerce/membership-commerce-repository.js";
 import type {
+	CustomerAccountRepository,
 	CustomerSessionTokenReplacementInput,
 	CustomerSessionTouchInput,
 } from "../src/customer/customer-account-repository.js";
@@ -1961,5 +1962,81 @@ describe("CustomerAccountService", () => {
 				},
 			),
 		).rejects.toMatchObject({ status: 400 });
+	});
+
+	it("caches organization lookup and registration age configuration in bounded caches", async () => {
+		const f = await fixture();
+		await f.organizations.updateRegistrationAgeConfiguration({
+			organizationId: f.org.id,
+			registrationAgeDate: "2026-06-01",
+		});
+		const auth = await f.authenticate();
+		const session = await f.repository.getSession(auth.sessionId);
+		if (!session) throw new Error("session");
+
+		const initialMetrics = f.service.cacheMetrics();
+		expect(initialMetrics.organizationBySlug).toBeDefined();
+		expect(initialMetrics.registrationAgeConfig).toBeDefined();
+		const initialOrgHits = initialMetrics.organizationBySlug.hits;
+		const initialAgeHits = initialMetrics.registrationAgeConfig.hits;
+
+		await f.service.session("festival", auth.sessionId);
+		expect(f.service.cacheMetrics().organizationBySlug.hits).toBeGreaterThan(
+			initialOrgHits,
+		);
+
+		const hitsBeforeProfile = f.service.cacheMetrics().organizationBySlug.hits;
+		await f.service.customerProfile("festival", auth.sessionId);
+		expect(f.service.cacheMetrics().organizationBySlug.hits).toBeGreaterThan(
+			hitsBeforeProfile,
+		);
+
+		const created = await f.service.createChild(
+			"festival",
+			auth.sessionId,
+			session.csrfToken,
+			"https://festival.example.com",
+			{ displayName: "Kiddo", birthday: "2016-06-01" },
+		);
+
+		await f.service.refreshChildAgeSnapshot(
+			"festival",
+			auth.sessionId,
+			session.csrfToken,
+			"https://festival.example.com",
+			created.child.id,
+			{ birthday: "2016-06-01" },
+		);
+		expect(f.service.cacheMetrics().registrationAgeConfig.hits).toBeGreaterThan(
+			initialAgeHits,
+		);
+	});
+	it("falls back to separate repository calls when optimized methods are not available", async () => {
+		const f = await fixture();
+		await f.organizations.updateRegistrationAgeConfiguration({
+			organizationId: f.org.id,
+			registrationAgeDate: "2026-06-01",
+		});
+		const auth = await f.authenticate();
+		const session = await f.repository.getSession(auth.sessionId);
+		if (!session) throw new Error("session");
+
+		delete (f.repository as Partial<CustomerAccountRepository>)
+			.findSessionCustomerAndIntegration;
+		delete (f.repository as Partial<CustomerAccountRepository>)
+			.createChildWithAgeSnapshot;
+
+		const sessionResult = await f.service.session("festival", auth.sessionId);
+		expect(sessionResult.session.authenticated).toBe(true);
+
+		const created = await f.service.createChild(
+			"festival",
+			auth.sessionId,
+			session.csrfToken,
+			"https://festival.example.com",
+			{ displayName: "FallbackChild", birthday: "2016-06-01" },
+		);
+		expect(created.child.displayName).toBe("FallbackChild");
+		expect(created.ageSnapshot.age).toBe(10);
 	});
 });

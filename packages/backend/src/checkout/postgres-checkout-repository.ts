@@ -35,6 +35,7 @@ import {
 	schemaName,
 } from "./postgres-checkout-helpers.js";
 import { PostgresClassCheckoutExecutionRepository } from "./postgres-class-checkout-execution.js";
+import { queryRegistrationMetadataByEntitlementIds } from "./postgres-registration-metadata-queries.js";
 
 export class PostgresCheckoutRepository implements CheckoutRepository {
 	private readonly schema: string;
@@ -708,6 +709,18 @@ export class PostgresCheckoutRepository implements CheckoutRepository {
 			organizationId,
 		);
 		return registrationMetadataFromRow(rows[0], repertoireItems);
+	}
+	async listRegistrationMetadataByEntitlementIds(
+		organizationId: string,
+		classEntitlementIds: readonly string[],
+	): Promise<Map<string, ClassRegistrationMetadata>> {
+		if (classEntitlementIds.length === 0) return new Map();
+		await this.ensureReady();
+		return queryRegistrationMetadataByEntitlementIds(
+			this.schema,
+			organizationId,
+			classEntitlementIds,
+		);
 	}
 	private async registrationRepertoireItems(
 		registrationMetadataId: string,

@@ -15,7 +15,8 @@
 		"reap:class-checkout": "bun ./dist/scripts/reap-class-checkout-executions.js",
 		"test": "bun test",
 		"seed:test-data": "bun run scripts/load-test-data.ts",
-		"perf:children": "bun run ./scripts/perf-500-children.ts"
+		"perf:children": "bun run ./scripts/perf-500-children.ts",
+		"perf:scenarios": "bun run ./scripts/perf-advanced-scenarios.ts"
 	},
 	"type": "module"
 }

@@ -136,6 +136,27 @@ export class InMemoryCustomerAccountRepository
 	async getSession(id: string) {
 		return this.sessions.get(id) ?? null;
 	}
+	async findSessionCustomerAndIntegration(
+		sessionId: string,
+		organizationId: string,
+	): Promise<
+		| {
+				session: CustomerSessionRecord;
+				customer: FestivalCustomerRecord | null;
+				integration: CustomerAccountIntegrationRecord | null;
+		  }
+		| { organizationMismatch: true }
+		| null
+	> {
+		const session = this.sessions.get(sessionId);
+		if (!session) return null;
+		if (session.organizationId !== organizationId) {
+			return { organizationMismatch: true };
+		}
+		const customer = await this.getCustomer(organizationId, session.customerId);
+		const integration = await this.getIntegration(organizationId);
+		return { session, customer, integration };
+	}
 	async getCustomer(organizationId: string, customerId: string) {
 		const customer = this.customers.get(customerId);
 		return customer?.organizationId === organizationId ? customer : null;
@@ -352,6 +373,20 @@ export class InMemoryCustomerAccountRepository
 			? child
 			: null;
 	}
+	async findChildrenByIds(
+		organizationId: string,
+		parentCustomerId: string,
+		childIds: readonly string[],
+	): Promise<FestivalChildRecord[]> {
+		if (childIds.length === 0) return [];
+		const targetIds = new Set(childIds);
+		return [...this.children.values()].filter(
+			(child) =>
+				child.organizationId === organizationId &&
+				child.parentCustomerId === parentCustomerId &&
+				targetIds.has(child.id),
+		);
+	}
 	async listChildren(organizationId: string, parentCustomerId: string) {
 		return [...this.children.values()].filter(
 			(child) =>
@@ -409,5 +444,23 @@ export class InMemoryCustomerAccountRepository
 				snapshot.organizationId === organizationId &&
 				snapshot.childId === childId,
 		);
+	}
+	async createChildWithAgeSnapshot(input: {
+		child: Omit<FestivalChildRecord, "id" | "createdAtIso">;
+		snapshot: Omit<
+			FestivalChildAgeSnapshot,
+			"id" | "childId" | "organizationId" | "createdAtIso" | "supersededAtIso"
+		>;
+	}): Promise<{
+		child: FestivalChildRecord;
+		ageSnapshot: FestivalChildAgeSnapshot;
+	}> {
+		const child = await this.createChild(input.child);
+		const ageSnapshot = await this.createChildAgeSnapshot({
+			...input.snapshot,
+			organizationId: input.child.organizationId,
+			childId: child.id,
+		});
+		return { child, ageSnapshot };
 	}
 }

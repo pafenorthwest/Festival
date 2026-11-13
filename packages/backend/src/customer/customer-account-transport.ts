@@ -1,7 +1,7 @@
 import { resolve4, resolve6 } from "node:dns/promises";
 import { Agent, request as httpsRequest } from "node:https";
 import { BlockList, isIP } from "node:net";
-import { BoundedAsyncCache } from "./bounded-async-cache.js";
+import { BoundedAsyncCache } from "../lib/bounded-async-cache.js";
 
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_RESPONSE_BYTES = 512 * 1024;

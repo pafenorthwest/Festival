@@ -12,6 +12,7 @@ import {
 } from "@festival/common";
 import type { TenantContext } from "../auth/tenant-context.js";
 import { AppError } from "../errors/app-error.js";
+import type { DomainCacheInvalidator } from "../lib/domain-cache-invalidator.js";
 import type {
 	OrganizationRepository,
 	ProductRecord,
@@ -61,6 +62,8 @@ const silentCleanupFailureLogger: ShopifyCleanupFailureLogger = {
 };
 
 export class ShopifyMembershipProductService {
+	private cacheInvalidator?: DomainCacheInvalidator;
+
 	constructor(
 		private readonly repository: OrganizationRepository,
 		private readonly secretKeyring: ShopifySecretKeyring,
@@ -72,6 +75,18 @@ export class ShopifyMembershipProductService {
 			mutationAudit,
 		),
 	) {}
+
+	bindCacheInvalidator(invalidator: DomainCacheInvalidator): void {
+		this.cacheInvalidator = invalidator;
+	}
+
+	private emitMembershipChanged(tenant: TenantContext): void {
+		this.cacheInvalidator?.emit({
+			type: "MembershipChanged",
+			organizationId: tenant.organization.id,
+			slug: tenant.organization.slug,
+		});
+	}
 
 	async createMembershipProduct(
 		tenant: TenantContext,
@@ -146,9 +161,11 @@ export class ShopifyMembershipProductService {
 			if (!updated) {
 				throw new AppError("Teacher membership offering was not found.", 502);
 			}
+			this.emitMembershipChanged(tenant);
 			return toSummary(updated, product, variant);
 		} catch (error) {
 			if (shopifyMutated) {
+				this.emitMembershipChanged(tenant);
 				this.cleanupFailureLogger.error(
 					"Shopify membership product update requires manual reconciliation.",
 					{
@@ -269,6 +286,7 @@ export class ShopifyMembershipProductService {
 			});
 			if (!updated)
 				throw new AppError("Accompanist offering was not found.", 404);
+			this.emitMembershipChanged(tenant);
 			return toSummary(updated, product, variant);
 		} catch (error) {
 			throw toAppError(error);
@@ -390,6 +408,7 @@ export class ShopifyMembershipProductService {
 				productNameSnapshot: confirmedProduct.title,
 			});
 
+			this.emitMembershipChanged(tenant);
 			return toSummary(record, confirmedProduct, variant);
 		} catch (error) {
 			if (createdProductGid) {
@@ -462,6 +481,7 @@ export class ShopifyMembershipProductService {
 			isActive: false,
 		});
 		if (!retired) throw new AppError("Membership offering was not found.", 404);
+		this.emitMembershipChanged(tenant);
 	}
 
 	private async loadOperationContext(

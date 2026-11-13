@@ -47,6 +47,7 @@ import {
 import type { TenantContext } from "../auth/tenant-context.js";
 import type { MembershipCommerceRepository } from "../commerce/membership-commerce-repository.js";
 import { AppError } from "../errors/app-error.js";
+import type { DomainCacheInvalidator } from "../lib/domain-cache-invalidator.js";
 import type {
 	CreateFestivalClassConfigurationInput,
 	MembershipWithOrganization,
@@ -137,6 +138,8 @@ function handleCatalogRepositoryError(error: unknown): never {
 }
 
 export class OrganizationService {
+	private cacheInvalidator?: DomainCacheInvalidator;
+
 	constructor(
 		readonly repository: OrganizationRepository,
 		private readonly adminClassCatalogService?: AdminClassCatalogService,
@@ -147,6 +150,23 @@ export class OrganizationService {
 			"countConfirmedClassEntitlements"
 		>,
 	) {}
+
+	bindCacheInvalidator(invalidator: DomainCacheInvalidator): void {
+		this.cacheInvalidator = invalidator;
+	}
+
+	private emitFestivalCatalogUpdated(
+		organizationId: string,
+		slug?: string,
+		festivalId?: string,
+	): void {
+		this.cacheInvalidator?.emit({
+			type: "FestivalCatalogUpdated",
+			organizationId,
+			slug,
+			festivalId,
+		});
+	}
 
 	async getSession(identity?: AuthenticatedUser): Promise<SessionResponse> {
 		if (!identity) {
@@ -236,6 +256,11 @@ export class OrganizationService {
 			role: "Admin",
 			origin: "creator",
 		});
+		this.cacheInvalidator?.emit({
+			type: "OrgUpdated",
+			organizationId: organization.id,
+			slug: organization.slug,
+		});
 
 		return {
 			organization,
@@ -257,7 +282,10 @@ export class OrganizationService {
 		organizationId: string;
 		policy: import("@festival/common").AccompanistDivisionSelectionPolicy;
 	}) {
-		return this.repository.updateAccompanistDivisionPolicy(options);
+		const updated =
+			await this.repository.updateAccompanistDivisionPolicy(options);
+		this.emitFestivalCatalogUpdated(options.organizationId);
+		return updated;
 	}
 
 	async listDivisions(organizationId: string, activeOnly?: boolean) {
@@ -321,13 +349,17 @@ export class OrganizationService {
 		value: unknown,
 	) {
 		try {
-			return {
-				ageConfiguration:
-					await this.repository.updateRegistrationAgeConfiguration({
-						organizationId: tenant.organization.id,
-						registrationAgeDate: validateRegistrationAgeDate(value),
-					}),
-			};
+			const ageConfiguration =
+				await this.repository.updateRegistrationAgeConfiguration({
+					organizationId: tenant.organization.id,
+					registrationAgeDate: validateRegistrationAgeDate(value),
+				});
+			this.cacheInvalidator?.emit({
+				type: "RegistrationAgeConfigUpdated",
+				organizationId: tenant.organization.id,
+				slug: tenant.organization.slug,
+			});
+			return { ageConfiguration };
 		} catch (error) {
 			throw new AppError(
 				error instanceof Error
@@ -347,15 +379,18 @@ export class OrganizationService {
 		const displayName = this.requireDivisionName(value);
 		const parsedRequiredSubtypeId = parseRequiredSubtypeId(requiredSubtypeId);
 		try {
-			return {
-				value: await this.repository.createRegistrationCatalogValue({
-					organizationId: tenant.organization.id,
-					kind,
-					displayName,
-					normalizedName: divisionNameUniquenessKey(displayName),
-					requiredSubtypeId: parsedRequiredSubtypeId,
-				}),
-			};
+			const created = await this.repository.createRegistrationCatalogValue({
+				organizationId: tenant.organization.id,
+				kind,
+				displayName,
+				normalizedName: divisionNameUniquenessKey(displayName),
+				requiredSubtypeId: parsedRequiredSubtypeId,
+			});
+			this.emitFestivalCatalogUpdated(
+				tenant.organization.id,
+				tenant.organization.slug,
+			);
+			return { value: created };
 		} catch (error) {
 			handleCatalogRepositoryError(error);
 		}
@@ -403,6 +438,10 @@ export class OrganizationService {
 			});
 			if (!value)
 				throw new AppError("Registration catalog value not found.", 404);
+			this.emitFestivalCatalogUpdated(
+				tenant.organization.id,
+				tenant.organization.slug,
+			);
 			return { value };
 		} catch (error) {
 			handleCatalogRepositoryError(error);
@@ -420,13 +459,16 @@ export class OrganizationService {
 		)
 			throw new AppError("Registration catalog order is invalid.", 400);
 		try {
-			return {
-				values: await this.repository.reorderRegistrationCatalogValues(
-					tenant.organization.id,
-					kind,
-					ids,
-				),
-			};
+			const values = await this.repository.reorderRegistrationCatalogValues(
+				tenant.organization.id,
+				kind,
+				ids,
+			);
+			this.emitFestivalCatalogUpdated(
+				tenant.organization.id,
+				tenant.organization.slug,
+			);
+			return { values };
 		} catch (error) {
 			throw new AppError(
 				error instanceof Error
@@ -444,13 +486,16 @@ export class OrganizationService {
 		const displayName = this.requireDivisionName(input?.displayName);
 		await this.assertUniqueDivisionName(tenant.organization.id, displayName);
 		try {
-			return {
-				division: await this.repository.createDivision({
-					organizationId: tenant.organization.id,
-					displayName,
-					normalizedName: divisionNameUniquenessKey(displayName),
-				}),
-			};
+			const division = await this.repository.createDivision({
+				organizationId: tenant.organization.id,
+				displayName,
+				normalizedName: divisionNameUniquenessKey(displayName),
+			});
+			this.emitFestivalCatalogUpdated(
+				tenant.organization.id,
+				tenant.organization.slug,
+			);
+			return { division };
 		} catch (error) {
 			if (
 				error instanceof Error &&
@@ -511,6 +556,10 @@ export class OrganizationService {
 			throw error;
 		}
 		if (!division) throw new AppError("Division not found.", 404);
+		this.emitFestivalCatalogUpdated(
+			tenant.organization.id,
+			tenant.organization.slug,
+		);
 		return { division };
 	}
 
@@ -526,12 +575,15 @@ export class OrganizationService {
 			throw new AppError("divisionIds must be an array of division IDs.", 400);
 		}
 		try {
-			return {
-				divisions: await this.repository.reorderDivisions(
-					tenant.organization.id,
-					input.divisionIds,
-				),
-			};
+			const divisions = await this.repository.reorderDivisions(
+				tenant.organization.id,
+				input.divisionIds,
+			);
+			this.emitFestivalCatalogUpdated(
+				tenant.organization.id,
+				tenant.organization.slug,
+			);
+			return { divisions };
 		} catch (error) {
 			if (
 				error instanceof Error &&
@@ -562,12 +614,16 @@ export class OrganizationService {
 				400,
 			);
 		}
-		return {
-			timezone: await this.repository.updateOrganizationTimezone(
-				tenant.organization.id,
-				input.timezone,
-			),
-		};
+		const timezone = await this.repository.updateOrganizationTimezone(
+			tenant.organization.id,
+			input.timezone,
+		);
+		this.cacheInvalidator?.emit({
+			type: "OrgUpdated",
+			organizationId: tenant.organization.id,
+			slug: tenant.organization.slug,
+		});
+		return { timezone };
 	}
 
 	private requireDivisionName(value: unknown): string {
@@ -838,6 +894,11 @@ export class OrganizationService {
 			registrationOpensAt: windowValidation.opensAtIso,
 			registrationClosesAt: windowValidation.closesAtIso,
 		});
+		this.emitFestivalCatalogUpdated(
+			tenant.organization.id,
+			tenant.organization.slug,
+			festival.id,
+		);
 
 		return {
 			festival: toFestivalSummary(festival),
@@ -887,6 +948,11 @@ export class OrganizationService {
 				registrationOpensAt: validation.opensAtIso,
 				registrationClosesAt: validation.closesAtIso,
 			},
+		);
+		this.emitFestivalCatalogUpdated(
+			tenant.organization.id,
+			tenant.organization.slug,
+			updated.id,
 		);
 		return { festival: toFestivalSummary(updated) };
 	}
@@ -946,13 +1012,17 @@ export class OrganizationService {
 			shortName,
 		);
 		if (!festival) throw new AppError("Festival not found.", 404);
+		const updated = await this.repository.setPrimaryFestival(
+			tenant.organization.id,
+			festival.id,
+		);
+		this.emitFestivalCatalogUpdated(
+			tenant.organization.id,
+			tenant.organization.slug,
+			updated.id,
+		);
 		return {
-			festival: toFestivalSummary(
-				await this.repository.setPrimaryFestival(
-					tenant.organization.id,
-					festival.id,
-				),
-			),
+			festival: toFestivalSummary(updated),
 		};
 	}
 
@@ -1037,6 +1107,11 @@ export class OrganizationService {
 				festivalId: festival.id,
 				classSubtypeId: created.id,
 			});
+			this.emitFestivalCatalogUpdated(
+				tenant.organization.id,
+				tenant.organization.slug,
+				festival.id,
+			);
 			return { value: created };
 		} catch (error) {
 			handleCatalogRepositoryError(error);
@@ -1094,12 +1169,18 @@ export class OrganizationService {
 		actorUid?: string,
 	): Promise<FestivalClassConfiguration> {
 		if (this.adminClassCatalogService) {
-			return this.adminClassCatalogService.createClass(
+			const created = await this.adminClassCatalogService.createClass(
 				orgSlug,
 				festivalShortName,
 				input,
 				actorUid,
 			);
+			this.emitFestivalCatalogUpdated(
+				created.organizationId,
+				orgSlug,
+				created.festivalId,
+			);
+			return created;
 		}
 
 		const organization = await this.repository.findOrganizationBySlug(orgSlug);
@@ -1144,6 +1225,11 @@ export class OrganizationService {
 				},
 				actorUid,
 			);
+		this.emitFestivalCatalogUpdated(
+			created.organizationId,
+			orgSlug,
+			created.festivalId,
+		);
 		return created;
 	}
 
@@ -1158,13 +1244,19 @@ export class OrganizationService {
 		actorUid?: string,
 	): Promise<FestivalClassConfiguration> {
 		if (this.adminClassCatalogService) {
-			return this.adminClassCatalogService.updateClass(
+			const updated = await this.adminClassCatalogService.updateClass(
 				orgSlug,
 				festivalShortName,
 				classId,
 				input,
 				actorUid,
 			);
+			this.emitFestivalCatalogUpdated(
+				updated.organizationId,
+				orgSlug,
+				updated.festivalId,
+			);
+			return updated;
 		}
 
 		const organization = await this.repository.findOrganizationBySlug(orgSlug);
@@ -1213,6 +1305,11 @@ export class OrganizationService {
 								)
 						: undefined,
 				);
+			this.emitFestivalCatalogUpdated(
+				updated.organizationId,
+				orgSlug,
+				updated.festivalId,
+			);
 			return updated;
 		} catch (error) {
 			if (

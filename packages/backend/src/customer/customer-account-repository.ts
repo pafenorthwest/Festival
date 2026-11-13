@@ -189,6 +189,11 @@ export interface CustomerAccountRepository {
 		parentCustomerId: string,
 		childId: string,
 	): Promise<FestivalChildRecord | null>;
+	findChildrenByIds(
+		organizationId: string,
+		parentCustomerId: string,
+		childIds: readonly string[],
+	): Promise<FestivalChildRecord[]>;
 	listChildren(
 		organizationId: string,
 		parentCustomerId: string,
@@ -207,4 +212,26 @@ export interface CustomerAccountRepository {
 		organizationId: string,
 		childId: string,
 	): Promise<FestivalChildAgeSnapshot[]>;
+	createChildWithAgeSnapshot?(input: {
+		child: Omit<FestivalChildRecord, "id" | "createdAtIso">;
+		snapshot: Omit<
+			FestivalChildAgeSnapshot,
+			"id" | "childId" | "organizationId" | "createdAtIso" | "supersededAtIso"
+		>;
+	}): Promise<{
+		child: FestivalChildRecord;
+		ageSnapshot: FestivalChildAgeSnapshot;
+	}>;
+	findSessionCustomerAndIntegration?(
+		sessionId: string,
+		organizationId: string,
+	): Promise<
+		| {
+				session: CustomerSessionRecord;
+				customer: FestivalCustomerRecord | null;
+				integration: CustomerAccountIntegrationRecord | null;
+		  }
+		| { organizationMismatch: true }
+		| null
+	>;
 }

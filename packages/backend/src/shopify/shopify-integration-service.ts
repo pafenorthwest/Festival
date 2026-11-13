@@ -13,6 +13,7 @@ import {
 } from "@festival/common";
 import type { TenantContext } from "../auth/tenant-context.js";
 import { AppError } from "../errors/app-error.js";
+import type { DomainCacheInvalidator } from "../lib/domain-cache-invalidator.js";
 import type {
 	OrganizationRepository,
 	ShopifyIntegrationRecord,
@@ -107,12 +108,30 @@ function failureCategory(error: unknown): ShopifyFailureCategory {
 }
 
 export class ShopifyIntegrationService {
+	private cacheInvalidator?: DomainCacheInvalidator;
+
 	constructor(
 		private readonly repository: OrganizationRepository,
 		private readonly secretKeyring: ShopifySecretKeyring,
 		private readonly connectivityTester: ShopifyConnectivityTester,
 		private readonly webhookSubscriptions?: ShopifyWebhookSubscriptionReconciler,
 	) {}
+
+	bindCacheInvalidator(invalidator: DomainCacheInvalidator): void {
+		this.cacheInvalidator = invalidator;
+	}
+
+	private emitSecretRotated(
+		tenant: TenantContext,
+		integrationVersion: number,
+	): void {
+		this.cacheInvalidator?.emit({
+			type: "ShopifySecretRotated",
+			organizationId: tenant.organization.id,
+			slug: tenant.organization.slug,
+			integrationVersion,
+		});
+	}
 
 	async getSettingsForTenant(
 		tenant: TenantContext,
@@ -210,6 +229,7 @@ export class ShopifyIntegrationService {
 				existing.integrationVersion,
 			);
 		}
+		this.emitSecretRotated(tenant, saved.integrationVersion);
 
 		const lastTestedAtIso = new Date().toISOString();
 		let verified: ShopifyIntegrationRecord;
@@ -233,6 +253,7 @@ export class ShopifyIntegrationService {
 				grantedScopes: result.grantedScopes,
 				capabilities,
 			});
+			this.emitSecretRotated(tenant, verified.integrationVersion);
 		} catch (error) {
 			const failed = await this.repository.updateShopifyVerification({
 				organizationId: tenant.organization.id,
@@ -241,6 +262,7 @@ export class ShopifyIntegrationService {
 				lastError: publicErrorMessage(error),
 				lastFailureCategory: failureCategory(error),
 			});
+			this.emitSecretRotated(tenant, failed.integrationVersion);
 
 			return {
 				settings: toPublicSettings(failed),

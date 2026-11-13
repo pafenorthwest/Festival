@@ -1,0 +1,220 @@
+export interface CacheMetrics {
+	hits: number;
+	misses: number;
+	coalesced: number;
+	evictions: number;
+	expirations: number;
+	errors: number;
+	entries: number;
+	retainedBytes: number;
+}
+
+export interface BoundedAsyncCacheOptions<V = unknown> {
+	maxEntries: number;
+	maxEntryBytes: number;
+	maxTotalBytes: number;
+	cacheNullish?: boolean;
+	now?: () => number;
+	onEvict?: (value: V) => void;
+}
+
+interface Entry<V> {
+	value: V;
+	expiresAtMs: number;
+	bytes: number;
+}
+
+interface PendingEntry<K, V> {
+	key: K;
+	promise: Promise<V>;
+	invalidatedPredicates: Array<(key: K, value: V) => boolean>;
+	superseded: boolean;
+}
+
+export class BoundedAsyncCache<K, V> {
+	private entries = new Map<K, Entry<V>>();
+	private pending = new Map<K, PendingEntry<K, V>>();
+	private inFlight = new Set<PendingEntry<K, V>>();
+	private counters = {
+		hits: 0,
+		misses: 0,
+		coalesced: 0,
+		evictions: 0,
+		expirations: 0,
+		errors: 0,
+	};
+	private retainedBytes = 0;
+	private readonly cacheNullish: boolean;
+
+	constructor(private options: BoundedAsyncCacheOptions<V>) {
+		if (
+			!Number.isInteger(options.maxEntries) ||
+			options.maxEntries <= 0 ||
+			!Number.isFinite(options.maxEntryBytes) ||
+			options.maxEntryBytes <= 0 ||
+			!Number.isFinite(options.maxTotalBytes) ||
+			options.maxTotalBytes <= 0
+		) {
+			throw new Error("Cache bounds must be positive.");
+		}
+		this.cacheNullish = options.cacheNullish ?? false;
+	}
+
+	private now(): number {
+		return this.options.now?.() ?? Date.now();
+	}
+
+	private isSkippedNullish(value: V): boolean {
+		return !this.cacheNullish && (value === null || value === undefined);
+	}
+
+	private remove(key: K, reason?: "eviction" | "expiration"): void {
+		const entry = this.entries.get(key);
+		if (!entry) return;
+		this.entries.delete(key);
+		this.retainedBytes -= entry.bytes;
+		this.options.onEvict?.(entry.value);
+		if (reason === "eviction") this.counters.evictions++;
+		if (reason === "expiration") this.counters.expirations++;
+	}
+
+	private expireEntries(): void {
+		const now = this.now();
+		for (const [key, entry] of this.entries) {
+			if (entry.expiresAtMs <= now) this.remove(key, "expiration");
+		}
+	}
+
+	get(key: K): V | undefined {
+		const entry = this.entries.get(key);
+		if (!entry) {
+			this.counters.misses++;
+			return undefined;
+		}
+		if (entry.expiresAtMs <= this.now()) {
+			this.remove(key, "expiration");
+			this.counters.misses++;
+			return undefined;
+		}
+		this.entries.delete(key);
+		this.entries.set(key, entry);
+		this.counters.hits++;
+		return entry.value;
+	}
+
+	set(key: K, value: V, ttlMs: number, bytes: number): void {
+		if (
+			!Number.isFinite(ttlMs) ||
+			ttlMs <= 0 ||
+			bytes < 0 ||
+			bytes > this.options.maxEntryBytes ||
+			bytes > this.options.maxTotalBytes
+		) {
+			throw new Error("Cache entry exceeds configured bounds.");
+		}
+		if (this.isSkippedNullish(value)) {
+			this.remove(key);
+			return;
+		}
+		this.expireEntries();
+		this.remove(key);
+		while (
+			this.entries.size >= this.options.maxEntries ||
+			this.retainedBytes + bytes > this.options.maxTotalBytes
+		) {
+			const oldest = this.entries.keys().next().value as K | undefined;
+			if (oldest === undefined) break;
+			this.remove(oldest, "eviction");
+		}
+		this.entries.set(key, {
+			value,
+			expiresAtMs: this.now() + ttlMs,
+			bytes,
+		});
+		this.retainedBytes += bytes;
+	}
+
+	deleteWhere(predicate: (key: K, value: V) => boolean): void {
+		for (const [key, entry] of this.entries) {
+			if (predicate(key, entry.value)) this.remove(key);
+		}
+		for (const pendingEntry of this.inFlight) {
+			pendingEntry.invalidatedPredicates.push(predicate);
+		}
+		this.pending.clear();
+	}
+
+	private shouldStoreLoaded(entry: PendingEntry<K, V>, value: V): boolean {
+		return (
+			!this.isSkippedNullish(value) &&
+			!entry.superseded &&
+			!this.entries.has(entry.key) &&
+			!entry.invalidatedPredicates.some((pred) => pred(entry.key, value))
+		);
+	}
+
+	private startLoad(
+		key: K,
+		loader: () => Promise<{ value: V; ttlMs: number; bytes: number }>,
+	): Promise<V> {
+		this.pending.delete(key);
+		for (const active of this.inFlight) {
+			if (active.key === key) active.superseded = true;
+		}
+		const entry: PendingEntry<K, V> = {
+			key,
+			promise: Promise.resolve(undefined as never),
+			invalidatedPredicates: [],
+			superseded: false,
+		};
+		this.inFlight.add(entry);
+		entry.promise = loader()
+			.then((loaded) => {
+				if (this.shouldStoreLoaded(entry, loaded.value)) {
+					this.set(key, loaded.value, loaded.ttlMs, loaded.bytes);
+				}
+				return loaded.value;
+			})
+			.catch((error) => {
+				this.counters.errors++;
+				throw error;
+			})
+			.finally(() => {
+				this.inFlight.delete(entry);
+				if (this.pending.get(key) === entry) this.pending.delete(key);
+			});
+		if (!entry.superseded && !entry.invalidatedPredicates.length) {
+			this.pending.set(key, entry);
+		}
+		return entry.promise;
+	}
+
+	async getOrLoad(
+		key: K,
+		loader: () => Promise<{ value: V; ttlMs: number; bytes: number }>,
+		force = false,
+	): Promise<V> {
+		if (!force) {
+			const cached = this.get(key);
+			if (cached !== undefined) return cached;
+			const existing = this.pending.get(key);
+			if (existing) {
+				this.counters.coalesced++;
+				return existing.promise;
+			}
+		} else {
+			this.remove(key);
+			this.counters.misses++;
+		}
+		return this.startLoad(key, loader);
+	}
+
+	metrics(): CacheMetrics {
+		this.expireEntries();
+		return {
+			...this.counters,
+			entries: this.entries.size,
+			retainedBytes: this.retainedBytes,
+		};
+	}
+}

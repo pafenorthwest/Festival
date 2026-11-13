@@ -1,3 +1,4 @@
+import { sql } from "bun";
 import { getAuth } from "firebase-admin/auth";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -67,6 +68,7 @@ import {
 } from "./customer/customer-availability-repository.js";
 import { CustomerAvailabilityService } from "./customer/customer-availability-service.js";
 import { PostgresCustomerAccountRepository } from "./customer/postgres-customer-account-repository.js";
+import { DomainCacheInvalidator } from "./lib/domain-cache-invalidator.js";
 import { DropTransferService } from "./registration/drop-transfer-service.js";
 import {
 	InMemoryRegistrationChangeRepository,
@@ -164,6 +166,7 @@ export interface CreateAppOptions {
 	participantProfileService?: ParticipantProfileService;
 	waitlistRepository?: WaitlistRepository;
 	waitlistService?: WaitlistService;
+	cacheInvalidator?: DomainCacheInvalidator;
 }
 
 export async function createApp(options: CreateAppOptions = {}) {
@@ -180,6 +183,10 @@ export async function createApp(options: CreateAppOptions = {}) {
 
 	if (env.databaseUrl) {
 		process.env.DATABASE_URL = env.databaseUrl;
+	}
+
+	if (sql.options && env.databasePoolMax) {
+		sql.options.max = env.databasePoolMax;
 	}
 
 	const repository =
@@ -439,6 +446,14 @@ export async function createApp(options: CreateAppOptions = {}) {
 			secretKeyring,
 			shopifyOrderProjectionService,
 		);
+	const cacheInvalidator =
+		options.cacheInvalidator ?? new DomainCacheInvalidator();
+	organizationService.bindCacheInvalidator?.(cacheInvalidator);
+	customerAccountService?.bindCacheInvalidator?.(cacheInvalidator);
+	publicMembershipProductService.bindCacheInvalidator?.(cacheInvalidator);
+	shopifyMembershipProductService?.bindCacheInvalidator?.(cacheInvalidator);
+	shopifyIntegrationService?.bindCacheInvalidator?.(cacheInvalidator);
+	shopifyWebhookService.bindCacheInvalidator?.(cacheInvalidator);
 	const membershipStatusService =
 		options.membershipStatusService ??
 		new MembershipStatusService(repository, commerceRepository);
