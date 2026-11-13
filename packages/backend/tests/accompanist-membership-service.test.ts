@@ -1,11 +1,226 @@
 import { describe, expect, it } from "bun:test";
-import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
-import { AccompanistMembershipConflictError } from "../src/repo/organization-repository.js";
-import { AccompanistMembershipService } from "../src/services/accompanist-membership-service.js";
+import { randomUUID } from "node:crypto";
+import type {
+	AccompanistMembershipGrant,
+	CreateEntitlementGrantSnapshotInput,
+	EntitlementGrantSnapshot,
+	OrganizationDivision,
+} from "@festival/common";
+import { lifecycleForEntitlementRead } from "../src/commerce/entitlement-lifecycle.js";
+import {
+	AccompanistMembershipConflictError,
+	type CreateAccompanistMembershipGrantInput,
+	type CreateMembershipProductRecordInput,
+	type MembershipCustomerContact,
+	MembershipEntitlementService,
+	type ProductRecord,
+} from "../src/domains/teacher-directory/index.js";
+
+function createEntitlementTestStore(getNow: () => Date) {
+	const orgs = new Map<string, { id: string; name: string; slug: string }>();
+	const divisions = new Map<string, OrganizationDivision>();
+	const products = new Map<string, ProductRecord>();
+	const teacherGrants = new Map<string, EntitlementGrantSnapshot>();
+	const accompanistGrants = new Map<string, AccompanistMembershipGrant>();
+	const revokedIds = new Set<string>();
+	const contacts = new Map<string, MembershipCustomerContact>();
+	const identityEmails = new Map<string, string>();
+
+	const store = {
+		async createOrganization(input: { name: string; slug: string }) {
+			const org = { id: randomUUID(), ...input };
+			orgs.set(org.id, org);
+			return org;
+		},
+		async createDivision(input: {
+			organizationId: string;
+			displayName: string;
+			normalizedName: string;
+		}) {
+			const nowIso = getNow().toISOString();
+			const div: OrganizationDivision = {
+				id: randomUUID(),
+				...input,
+				displayOrder: 0,
+				isActive: true,
+				createdAtIso: nowIso,
+				updatedAtIso: nowIso,
+			};
+			divisions.set(div.id, div);
+			return div;
+		},
+		async listDivisions(organizationId: string, activeOnly = false) {
+			return [...divisions.values()].filter(
+				(d) =>
+					d.organizationId === organizationId && (!activeOnly || d.isActive),
+			);
+		},
+		async getOrganizationTimezone() {
+			return "UTC";
+		},
+		async getAccompanistDivisionPolicy(organizationId: string) {
+			return {
+				organizationId,
+				policy: "one_to_all" as const,
+				updatedAtIso: getNow().toISOString(),
+			};
+		},
+		async createMembershipProductRecord(
+			input: CreateMembershipProductRecordInput,
+		) {
+			const nowIso = getNow().toISOString();
+			const prod: ProductRecord = {
+				id: randomUUID(),
+				...input,
+				productCategory: "membership",
+				createdAtIso: nowIso,
+				updatedAtIso: nowIso,
+			};
+			products.set(prod.id, prod);
+			return prod;
+		},
+		async listMembershipProductRecords(organizationId: string) {
+			return [...products.values()].filter(
+				(p) => p.organizationId === organizationId,
+			);
+		},
+		async findMembershipProductRecordByClass(
+			organizationId: string,
+			entitlementClass: string,
+		) {
+			return (
+				[...products.values()].find(
+					(p) =>
+						p.organizationId === organizationId &&
+						p.entitlementClass === entitlementClass &&
+						p.isActive,
+				) ?? null
+			);
+		},
+		async createEntitlementGrantSnapshot(
+			input: CreateEntitlementGrantSnapshotInput,
+		) {
+			const grant: EntitlementGrantSnapshot = {
+				...input,
+				id: randomUUID(),
+				createdAtIso: getNow().toISOString(),
+			};
+			teacherGrants.set(grant.id, grant);
+			if (input.verifiedIdentityEmail) {
+				identityEmails.set(
+					`${input.organizationId}\0${input.customerId}`,
+					input.verifiedIdentityEmail,
+				);
+			}
+			return grant;
+		},
+		async listEntitlementGrantSnapshots(
+			organizationId: string,
+			customerId?: string,
+		) {
+			const today = getNow().toISOString().slice(0, 10);
+			return [...teacherGrants.values()]
+				.filter(
+					(g) =>
+						g.organizationId === organizationId &&
+						(!customerId || g.customerId === customerId),
+				)
+				.map((g) => ({
+					...g,
+					status: revokedIds.has(g.id)
+						? ("revoked" as const)
+						: lifecycleForEntitlementRead(g, today),
+				}));
+		},
+		async findMembershipCustomerContacts(
+			organizationId: string,
+			customerIds: string[],
+		) {
+			const map = new Map<string, MembershipCustomerContact>();
+			for (const id of customerIds) {
+				const explicit = contacts.get(`${organizationId}\0${id}`);
+				const identityEmail = identityEmails.get(`${organizationId}\0${id}`);
+				const email = explicit?.email ?? identityEmail;
+				if (explicit || email) {
+					map.set(id, {
+						...explicit,
+						customerId: id,
+						...(email ? { email } : {}),
+					});
+				}
+			}
+			return map;
+		},
+		async revokeEntitlement(input: {
+			organizationId?: string;
+			entitlementId: string;
+			actorUserId?: string;
+			reason?: string;
+			revokedAtIso?: string;
+		}) {
+			revokedIds.add(input.entitlementId);
+			return { existing: false };
+		},
+		async createAccompanistMembershipGrant(
+			input: CreateAccompanistMembershipGrantInput,
+		) {
+			const today = getNow().toISOString().slice(0, 10);
+			const status = lifecycleForEntitlementRead(input, today);
+			const grant: AccompanistMembershipGrant = {
+				...input,
+				id: randomUUID(),
+				status,
+				isCurrent: status === "active",
+				createdAtIso: getNow().toISOString(),
+			};
+			accompanistGrants.set(grant.id, grant);
+			return grant;
+		},
+		async listAccompanistMembershipGrants(input: {
+			organizationId: string;
+			customerId?: string;
+			currentOnly?: boolean;
+		}) {
+			const today = getNow().toISOString().slice(0, 10);
+			return [...accompanistGrants.values()]
+				.map((g) => {
+					const status = revokedIds.has(g.id)
+						? ("revoked" as const)
+						: lifecycleForEntitlementRead(g, today);
+					return {
+						...g,
+						status,
+						isCurrent: status === "active",
+					};
+				})
+				.filter(
+					(g) =>
+						g.organizationId === input.organizationId &&
+						(!input.customerId || g.customerId === input.customerId) &&
+						(!input.currentOnly || g.status === "active"),
+				);
+		},
+		setCustomerContact(
+			organizationId: string,
+			contact: MembershipCustomerContact,
+		) {
+			const name = contact.name?.trim();
+			const email = contact.email?.trim();
+			contacts.set(`${organizationId}\0${contact.customerId}`, {
+				customerId: contact.customerId,
+				...(name ? { name } : {}),
+				...(email ? { email } : {}),
+				...(contact.phone ? { phone: contact.phone } : {}),
+				...(contact.city ? { city: contact.city } : {}),
+			});
+		},
+	};
+	return store;
+}
 
 async function setup() {
 	let now = new Date("2026-09-12T12:00:00.000Z");
-	const repository = new InMemoryOrganizationRepository(() => now);
+	const repository = createEntitlementTestStore(() => now);
 	const organization = await repository.createOrganization({
 		name: "Festival",
 		slug: "festival",
@@ -15,7 +230,26 @@ async function setup() {
 		displayName: "Piano",
 		normalizedName: "piano",
 	});
-	const service = new AccompanistMembershipService(repository, () => now);
+	const domainService = new MembershipEntitlementService({
+		entitlements: repository,
+		products: repository,
+		organizations: repository,
+		now: () => now,
+	});
+	const service = {
+		acquire: (
+			input: Parameters<typeof domainService.acquireAccompanistMembership>[0],
+		) => domainService.acquireAccompanistMembership(input),
+		listCurrentRoster: (organizationId: string) =>
+			domainService.listCurrentRoster(organizationId),
+		listEntitlementReport: (
+			organizationId: string,
+			filters: Parameters<typeof domainService.listEntitlementReport>[1],
+			page: Parameters<typeof domainService.listEntitlementReport>[2],
+		) => domainService.listEntitlementReport(organizationId, filters, page),
+		getSummaryCounts: (organizationId: string) =>
+			domainService.getSummaryCounts(organizationId),
+	};
 	return {
 		repository,
 		organization,

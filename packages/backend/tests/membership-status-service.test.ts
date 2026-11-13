@@ -1,86 +1,113 @@
 import { describe, expect, it } from "bun:test";
-import { InMemoryMembershipCommerceRepository } from "../src/commerce/membership-commerce-repository.js";
-import { MembershipStatusService } from "../src/commerce/membership-status-service.js";
-import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
+import type { EntitlementGrantSnapshot } from "@festival/common";
+import {
+	MembershipEntitlementService,
+	type MembershipEntitlementServiceDeps,
+} from "../src/domains/teacher-directory/index.js";
 
-describe("MembershipStatusService", () => {
+function createEntitlementGrant(
+	overrides: Partial<EntitlementGrantSnapshot>,
+): EntitlementGrantSnapshot {
+	return {
+		id: "grant-1",
+		organizationId: "org-1",
+		customerId: "cust-1",
+		entitlementClass: "teacher_membership",
+		offeringId: "off-1",
+		durationDays: 365,
+		divisionId: "div-piano",
+		divisionNameSnapshot: "Piano",
+		paidAmount: "75.00",
+		paidCurrencyCode: "USD",
+		checkoutIntentId: "intent-1",
+		shopifyOrderGid: "gid://shopify/Order/1",
+		shopifyOrderLineGid: "gid://shopify/LineItem/1",
+		startsOn: "2026-08-14",
+		endsOn: "2027-08-14",
+		status: "active",
+		createdAtIso: "2026-08-14T12:00:00.000Z",
+		...overrides,
+	};
+}
+
+function createDeps(
+	now: Date,
+	grants: EntitlementGrantSnapshot[],
+	decisions: Array<{ status: string }> = [],
+): MembershipEntitlementServiceDeps {
+	return {
+		now: () => now,
+		organizations: {
+			getOrganizationTimezone: async () => "America/Los_Angeles",
+			listDivisions: async () => [],
+		},
+		entitlements: {
+			listEntitlementGrantSnapshots: async (_orgId, customerId) =>
+				grants.filter(
+					(grant) => !customerId || grant.customerId === customerId,
+				),
+			findMembershipCustomerContacts: async () => new Map(),
+			createAccompanistMembershipGrant: async () => {
+				throw new Error("Unexpected call");
+			},
+			listAccompanistMembershipGrants: async () => [],
+		},
+		products: {
+			findMembershipProductRecordByClass: async () => ({
+				id: "off-1",
+				organizationId: "org-1",
+				productCategory: "membership",
+				entitlementClass: "teacher_membership",
+				durationDays: 365,
+				isActive: true,
+				shopifyProductGid: "gid://shopify/Product/1",
+				shopifyVariantGid: "gid://shopify/ProductVariant/1",
+				productNameSnapshot: "Teacher Membership",
+				createdAtIso: "2026-01-01T00:00:00.000Z",
+				updatedAtIso: "2026-01-01T00:00:00.000Z",
+			}),
+			listMembershipProductRecords: async () => [],
+			getAccompanistDivisionPolicy: async () => ({
+				organizationId: "org-1",
+				policy: "one_to_all",
+				updatedAtIso: "2026-01-01T00:00:00.000Z",
+			}),
+		},
+		commerce: {
+			listCustomerDecisions: async () => decisions,
+		},
+	};
+}
+
+describe("MembershipEntitlementService.listCustomerMembershipStatus", () => {
 	it("maps supersededOn for superseded grants and null for non-superseded grants", async () => {
 		const now = new Date("2027-07-25T18:00:00.000Z");
-		const organizations = new InMemoryOrganizationRepository(() => now);
-		const organization = await organizations.createOrganization({
-			name: "Festival",
-			slug: "festival",
-		});
-		await organizations.updateOrganizationTimezone(
-			organization.id,
-			"America/Los_Angeles",
-		);
-		const piano = await organizations.createDivision({
-			organizationId: organization.id,
-			displayName: "Piano",
-			normalizedName: "piano",
-		});
-		const offering = await organizations.createMembershipProductRecord({
-			organizationId: organization.id,
-			entitlementClass: "teacher_membership",
-			durationDays: 365,
-			isActive: true,
-			shopifyProductGid: "gid://shopify/Product/1",
-			shopifyVariantGid: "gid://shopify/ProductVariant/1",
-			productNameSnapshot: "Teacher Membership",
-		});
+		const grants = [
+			createEntitlementGrant({
+				id: "grant-prior",
+				paidAmount: "75.00",
+				checkoutIntentId: "intent-prior",
+				startsOn: "2026-08-14",
+				endsOn: "2027-08-14",
+				supersededOn: "2027-07-20",
+				status: "superseded",
+			}),
+			createEntitlementGrant({
+				id: "grant-renewed",
+				paidAmount: "85.00",
+				checkoutIntentId: "intent-renewed",
+				startsOn: "2027-07-20",
+				endsOn: "2028-08-13",
+				status: "active",
+			}),
+		];
 
-		await organizations.createEntitlementGrantSnapshot({
-			organizationId: organization.id,
-			customerId: "cust-1",
-			entitlementClass: "teacher_membership",
-			offeringId: offering.id,
-			durationDays: 365,
-			divisionId: piano.id,
-			divisionNameSnapshot: piano.displayName,
-			paidAmount: "75.00",
-			paidCurrencyCode: "USD",
-			checkoutIntentId: "intent-prior",
-			shopifyOrderGid: "gid://shopify/Order/prior",
-			shopifyOrderLineGid: "gid://shopify/LineItem/prior",
-			startsOn: "2026-08-14",
-			endsOn: "2027-08-14",
-			supersededOn: "2027-07-20",
-			status: "superseded",
-			verifiedIdentityEmail: "teacher@example.test",
-		});
-
-		await organizations.createEntitlementGrantSnapshot({
-			organizationId: organization.id,
-			customerId: "cust-1",
-			entitlementClass: "teacher_membership",
-			offeringId: offering.id,
-			durationDays: 365,
-			divisionId: piano.id,
-			divisionNameSnapshot: piano.displayName,
-			paidAmount: "85.00",
-			paidCurrencyCode: "USD",
-			checkoutIntentId: "intent-renewed",
-			shopifyOrderGid: "gid://shopify/Order/renewed",
-			shopifyOrderLineGid: "gid://shopify/LineItem/renewed",
-			startsOn: "2027-07-20",
-			endsOn: "2028-07-19",
-			status: "active",
-			verifiedIdentityEmail: "teacher@example.test",
-		});
-
-		const commerce = new InMemoryMembershipCommerceRepository(
-			organizations,
-			undefined,
-			() => now,
-		);
-		const service = new MembershipStatusService(
-			organizations,
-			commerce,
-			() => now,
+		const service = new MembershipEntitlementService(createDeps(now, grants));
+		const response = await service.listCustomerMembershipStatus(
+			"org-1",
+			"cust-1",
 		);
 
-		const response = await service.listForCustomer(organization.id, "cust-1");
 		expect(response.memberships).toEqual([
 			{
 				status: "superseded",
@@ -105,6 +132,44 @@ describe("MembershipStatusService", () => {
 				startsOn: "2027-07-20",
 				endsOn: "2028-08-13",
 				supersededOn: null,
+			},
+		]);
+	});
+
+	it("maps validation states alongside grants", async () => {
+		const now = new Date("2027-07-25T18:00:00.000Z");
+		const service = new MembershipEntitlementService(
+			createDeps(
+				now,
+				[],
+				[
+					{ status: "pending_validation" },
+					{ status: "rejected" },
+					{ status: "needs_review" },
+				],
+			),
+		);
+		const response = await service.listCustomerMembershipStatus(
+			"org-1",
+			"cust-1",
+		);
+		expect(response.memberships).toEqual([
+			{
+				status: "processing",
+				entitlementClass: "teacher_membership",
+				displayName: "Teacher Membership",
+			},
+			{
+				status: "rejected",
+				entitlementClass: "teacher_membership",
+				displayName: "Teacher Membership",
+				reasonCode: "validation_rejected",
+			},
+			{
+				status: "needs_review",
+				entitlementClass: "teacher_membership",
+				displayName: "Teacher Membership",
+				reasonCode: "validation_needs_review",
 			},
 		]);
 	});
