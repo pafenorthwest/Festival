@@ -51,7 +51,22 @@ bun run --cwd packages/backend perf:scenarios
 ```
 
 ## Delivery
-Pending execution.
+- `[G1]`: Extracted per-domain DI composition modules under `packages/backend/src/composition/` (`auth.ts`, `tenant-org.ts`, `catalog-repertoire.ts`, `customer-identity.ts`, `teacher-directory.ts`, `commerce-projection.ts`, `class-checkout.ts`, `volunteers-comms.ts`, `runtime.ts`), reduced `packages/backend/src/app.ts` from `668` to `208` lines, updated `packages/backend/scripts/reap-class-checkout-recovery.ts`, retired 3 unreferenced Wave 3 checkout shims (`class-checkout-recovery.ts`, `postgres-class-checkout-execution.ts`, `postgres-registration-metadata-queries.ts`), and added 500-line ceiling enforcement for `app.ts` and `composition/*.ts` in `packages/backend/tests/architecture-boundaries.test.ts` (7/7 pass, 0 exemptions).
+- `[G2]`: Full workspace verification and 500-parent `perf:scenarios` benchmark passed against PostgreSQL 17 with 0 errors and 0 warnings.
+- `[G3]`: Bumped `"version": "0.4.0"` across all 5 `package.json` manifests (`package.json`, `packages/common/package.json`, `packages/backend/package.json`, `packages/frontend/package.json`, `packages/shopify-confirmation/package.json`) and authored `## [0.4.0] - 2026-11-13` in `CHANGELOG.md`.
+- `[G3]/[G4]` cutover gate: Paused before `main -> release` promotion, annotated tag `v0.4.0` push, and `.github/workflows/deploy.yml` rollout pending explicit user confirmation (`S05` currently `BLOCKED (D4)`).
 
 ## Quality gate results
-Pending execution.
+- `bun run verify:toolchain`: exit 0 (Bun 1.4.2, TypeScript 5.9.3)
+- `bun run format:check`: exit 0 (798 files)
+- `bun run lint`: exit 0 (798 files, 0 warnings/errors)
+- `bun run build`: exit 0
+- `bun run --cwd packages/backend lint` (`tsc -p tsconfig.json --noEmit`): exit 0
+- `bun run --cwd packages/frontend check:types`: exit 0
+- `bun run check:sql`: exit 0 (501 files)
+- `bun run test:common`: 360 pass, 0 fail (23 files)
+- `bun run test:frontend`: 476 pass, 0 fail (54 files)
+- `bun run test:confirmation`: 20 pass, 0 fail (1 file)
+- Backend tests (Postgres 17): `migrate-runner.test.ts` 9 pass (1 file) + remaining 151 files 1616 pass = 1625 pass, 0 fail, 0 skip
+- `bun run --cwd packages/backend perf:scenarios`: exit 0, 100% HTTP 2xx across all 4 scenarios (0 errors)
+- `code-review.md`: `Findings status: none`, `Findings JSON: []`, `Verdict: patch is correct`

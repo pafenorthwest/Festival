@@ -1,6 +1,6 @@
 import { sql } from "bun";
-import { PostgresClassCheckoutExecutionRepository } from "../src/checkout/postgres-class-checkout-execution.js";
 import { loadEnv } from "../src/config/env.js";
+import { PostgresClassCheckoutExecutionRepository } from "../src/domains/class-checkout/index.js";
 import { postgresSchemaName } from "../src/repo/postgres-schema.js";
 
 // A bounded maintenance pass. It never calls Shopify or recreates a cart.

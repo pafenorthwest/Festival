@@ -1,131 +1,66 @@
 import { sql } from "bun";
-import { getAuth } from "firebase-admin/auth";
-import { Hono } from "hono";
-import { cors } from "hono/cors";
-import {
-	type CustomClaimsWriter,
-	FirebaseCustomClaimsWriter,
-	NoopCustomClaimsWriter,
-	PostgresCustomClaimsLock,
-} from "./auth/custom-claims.js";
-import { getFirebaseApp } from "./auth/firebase-app.js";
-import { createFirebaseAuthVerifier } from "./auth/firebase-auth-verifier.js";
-import {
-	FirebaseClaimsReconciliationService as DefaultFirebaseClaimsReconciliationService,
-	type FirebaseClaimsReconciliationService,
-	PostgresFirebaseClaimsSource,
-} from "./auth/firebase-claims-reconciliation.js";
+import type { CustomClaimsWriter } from "./auth/custom-claims.js";
+import type { FirebaseClaimsReconciliationService } from "./auth/firebase-claims-reconciliation.js";
 import type { AuthVerifier } from "./auth/types.js";
-import { BillingReconciliationService } from "./billing/billing-reconciliation-service.js";
+import type { BillingReconciliationService } from "./billing/billing-reconciliation-service.js";
+import type { BillingRepository } from "./billing/billing-repository.js";
+import type { CheckoutRecoveryRepository } from "./checkout/checkout-recovery-repository.js";
+import type { CheckoutRecoveryService } from "./checkout/checkout-recovery-service.js";
+import type { CheckoutRepository } from "./checkout/checkout-repository.js";
+import type { ClassCheckoutService } from "./checkout/class-checkout-service.js";
+import type { MembershipCheckoutService } from "./checkout/membership-checkout-service.js";
+import type { ClassEntitlementRepository } from "./commerce/class-entitlement-repository.js";
+import type { MembershipCommerceRepository } from "./commerce/membership-commerce-repository.js";
+import type { MembershipStatusService } from "./commerce/membership-status-service.js";
+import type { ShopifyOrderProjectionService } from "./commerce/shopify-order-projection-service.js";
+import type { ShopifyWebhookService } from "./commerce/shopify-webhook-service.js";
+import type { CommunicationRepository } from "./communication/communication-repository.js";
+import type { CommunicationService } from "./communication/communication-service.js";
+import { createAuthComposition } from "./composition/auth.js";
 import {
-	type BillingRepository,
-	InMemoryBillingRepository,
-} from "./billing/billing-repository.js";
-import { PostgresBillingRepository } from "./billing/postgres-billing-repository.js";
+	createCatalogRepertoireComposition,
+	createRepertoireRepository,
+} from "./composition/catalog-repertoire.js";
 import {
-	type CheckoutRecoveryRepository,
-	InMemoryCheckoutRecoveryRepository,
-} from "./checkout/checkout-recovery-repository.js";
-import { CheckoutRecoveryService } from "./checkout/checkout-recovery-service.js";
+	createClassCheckoutComposition,
+	createClassCheckoutRepositories,
+} from "./composition/class-checkout.js";
+import { createCommerceProjectionComposition } from "./composition/commerce-projection.js";
 import {
-	type CheckoutRepository,
-	InMemoryCheckoutRepository,
-} from "./checkout/checkout-repository.js";
+	createCustomerIdentityComposition,
+	createCustomerIdentityRepositories,
+} from "./composition/customer-identity.js";
 import {
-	ClassCheckoutService,
-	consoleClassCheckoutFailureLogger,
-} from "./checkout/class-checkout-service.js";
-import { MembershipCheckoutService } from "./checkout/membership-checkout-service.js";
-import { PostgresCheckoutRecoveryRepository } from "./checkout/postgres-checkout-recovery-repository.js";
-import { PostgresCheckoutRepository } from "./checkout/postgres-checkout-repository.js";
-import { ShopifyMembershipCheckoutClient } from "./checkout/shopify-membership-checkout-client.js";
+	bindDomainCacheInvalidators,
+	buildRuntimeApp,
+	type RuntimeDependencies,
+} from "./composition/runtime.js";
+import { createTeacherDirectoryComposition } from "./composition/teacher-directory.js";
 import {
-	type ClassEntitlementRepository,
-	InMemoryClassEntitlementRepository,
-	PostgresClassEntitlementRepository,
-} from "./commerce/class-entitlement-repository.js";
-import {
-	InMemoryMembershipCommerceRepository,
-	type MembershipCommerceRepository,
-} from "./commerce/membership-commerce-repository.js";
-import { MembershipStatusService } from "./commerce/membership-status-service.js";
-import { PostgresMembershipCommerceRepository } from "./commerce/postgres-membership-commerce-repository.js";
-import { ShopifyOrderProjectionService } from "./commerce/shopify-order-projection-service.js";
-import { ShopifyWebhookService } from "./commerce/shopify-webhook-service.js";
-import {
-	type CommunicationRepository,
-	InMemoryCommunicationRepository,
-} from "./communication/communication-repository.js";
-import { CommunicationService } from "./communication/communication-service.js";
-import { PostgresCommunicationRepository } from "./communication/postgres-communication-repository.js";
-import { type AppEnv, LOCAL_API_ORIGINS, loadEnv } from "./config/env.js";
+	createTenantOrgComposition,
+	createTenantOrgRepositories,
+} from "./composition/tenant-org.js";
+import { createVolunteersCommsComposition } from "./composition/volunteers-comms.js";
+import { type AppEnv, loadEnv } from "./config/env.js";
 import type { CustomerAccountRepository } from "./customer/customer-account-repository.js";
-import { CustomerAccountService } from "./customer/customer-account-service.js";
-import {
-	type CustomerAvailabilityRepository,
-	InMemoryCustomerAvailabilityRepository,
-	PostgresCustomerAvailabilityRepository,
-} from "./customer/customer-availability-repository.js";
-import { CustomerAvailabilityService } from "./customer/customer-availability-service.js";
-import { PostgresCustomerAccountRepository } from "./customer/postgres-customer-account-repository.js";
+import type { CustomerAccountService } from "./customer/customer-account-service.js";
+import type { CustomerAvailabilityRepository } from "./customer/customer-availability-repository.js";
+import type { CustomerAvailabilityService } from "./customer/customer-availability-service.js";
 import { DomainCacheInvalidator } from "./lib/domain-cache-invalidator.js";
-import { DropTransferService } from "./registration/drop-transfer-service.js";
-import {
-	InMemoryRegistrationChangeRepository,
-	PostgresRegistrationChangeRepository,
-	type RegistrationChangeRepository,
-} from "./registration/registration-change-repository.js";
-import {
-	InMemoryRepertoireRepository,
-	PostgresRepertoireRepository,
-	type RepertoireRepository,
-} from "./repertoire/index.js";
+import type { DropTransferService } from "./registration/drop-transfer-service.js";
+import type { RegistrationChangeRepository } from "./registration/registration-change-repository.js";
+import type { RepertoireRepository } from "./repertoire/index.js";
 import type { AppUserRepository } from "./repo/app-user-repository.js";
-import { InMemoryAppUserRepository } from "./repo/in-memory-app-user-repository.js";
 import type { OrganizationRepository } from "./repo/organization-repository.js";
-import { PostgresAppUserRepository } from "./repo/postgres-app-user-repository.js";
-import { PostgresOrganizationRepository } from "./repo/postgres-organization-repository.js";
-import { PostgresRoomRepository } from "./rooms/postgres-room-repository.js";
-import {
-	InMemoryRoomRepository,
-	type RoomRepository,
-} from "./rooms/room-repository.js";
-import { buildApiRouter } from "./routes/api-router.js";
-import { buildAuthRouter } from "./routes/auth-router.js";
-import {
-	buildPrivateRuntimeRouter,
-	hasForbiddenBrowserHeaders,
-} from "./routes/private-runtime.routes.js";
-import { assertRouteSecurityInventory } from "./routes/route-security.js";
-import { PeriodicLeaseReaper } from "./runtime/periodic-lease-reaper.js";
-import { apiRequestSecurity } from "./security/request-security.js";
-import { AccompanistMembershipService } from "./services/accompanist-membership-service.js";
-import { AdminClassCatalogService } from "./services/admin-class-catalog.service.js";
-import { AdminClassShopifySync } from "./services/admin-class-shopify-sync.js";
-import { OrganizationService } from "./services/organization-service.js";
-import { ParticipantProfileService } from "./services/participant-profile-service.js";
-import { ShopifyAdminApiClient } from "./shopify/admin-api-client.js";
-import { FileShopifyMutationAuditWriter } from "./shopify/admin-mutation-audit.js";
-import { ShopifySecretKeyring } from "./shopify/encryption.js";
-import { PublicMembershipProductService } from "./shopify/public-membership-product-service.js";
-import { ShopifyIntegrationDiagnosticService } from "./shopify/shopify-integration-diagnostic-service.js";
+import type { RoomRepository } from "./rooms/room-repository.js";
+import type { AdminClassCatalogService } from "./services/admin-class-catalog.service.js";
+import type { ParticipantProfileService } from "./services/participant-profile-service.js";
+import type { PublicMembershipProductService } from "./shopify/public-membership-product-service.js";
+import type { ShopifyIntegrationDiagnosticService } from "./shopify/shopify-integration-diagnostic-service.js";
 import type { ShopifyIntegrationService } from "./shopify/shopify-integration-service.js";
-import { ShopifyIntegrationService as DefaultShopifyIntegrationService } from "./shopify/shopify-integration-service.js";
-import { ShopifyMembershipProductService } from "./shopify/shopify-membership-product-service.js";
-import { ShopifyProductLifecycleService } from "./shopify/shopify-product-lifecycle-service.js";
-import { TokenlessShopifyPublicCatalogClient } from "./shopify/shopify-public-catalog-client.js";
-import { ShopifyWebhookSubscriptionService } from "./shopify/shopify-webhook-subscription-service.js";
-import { PostgresVolunteerRepository } from "./volunteers/postgres-volunteer-repository.js";
-import {
-	InMemoryVolunteerRepository,
-	type VolunteerRepository,
-} from "./volunteers/volunteer-repository.js";
-import {
-	InMemoryWaitlistRepository,
-	PostgresWaitlistRepository,
-	type WaitlistRepository,
-	WaitlistService,
-} from "./waitlist/index.js";
+import type { ShopifyMembershipProductService } from "./shopify/shopify-membership-product-service.js";
+import type { VolunteerRepository } from "./volunteers/volunteer-repository.js";
+import type { WaitlistRepository, WaitlistService } from "./waitlist/index.js";
 
 export interface CreateAppOptions {
 	env?: AppEnv;
@@ -169,500 +104,105 @@ export interface CreateAppOptions {
 	cacheInvalidator?: DomainCacheInvalidator;
 }
 
-export async function createApp(options: CreateAppOptions = {}) {
+function resolveRuntimeEnv(options: CreateAppOptions): AppEnv {
 	const env =
 		options.env ??
 		loadEnv({
 			requireDatabase: !options.repository,
 			requireFirebaseAdmin: !options.authVerifier,
 		});
-
 	if (options.enableDropTransfer !== undefined) {
 		env.enableDropTransfer = options.enableDropTransfer;
 	}
-
 	if (env.databaseUrl) {
 		process.env.DATABASE_URL = env.databaseUrl;
 	}
-
 	if (sql.options && env.databasePoolMax) {
 		sql.options.max = env.databasePoolMax;
 	}
+	return env;
+}
 
-	const repository =
-		options.repository ??
-		new PostgresOrganizationRepository(
-			env.databaseSchema ??
-				(() => {
-					throw new Error("DB_SCHEMA is required for the runtime repository.");
-				})(),
-		);
-	await repository.ensureReady();
+async function composeAppDependencies(
+	options: CreateAppOptions,
+	env: AppEnv,
+): Promise<RuntimeDependencies> {
+	const tenantOrgRepos = await createTenantOrgRepositories(options, env);
+	const auth = createAuthComposition(options, env);
+	const checkoutRepos = await createClassCheckoutRepositories(options, env);
+	const customerRepos = await createCustomerIdentityRepositories(options, env);
+	const repertoireRepository = await createRepertoireRepository(options, env);
 
-	const authVerifier =
-		options.authVerifier ??
-		createFirebaseAuthVerifier(
-			env as Required<Pick<AppEnv, "firebaseProjectId">> & AppEnv,
-		);
-	// Firebase custom claims can only be written with service-account
-	// credentials (firebaseClientEmail + firebasePrivateKey). Without
-	// them, fall back to a no-op writer rather than fail startup or
-	// throw on every write in local dev / tests.
-	const customClaimsWriter =
-		options.customClaimsWriter ??
-		(env.firebaseClientEmail && env.firebasePrivateKey
-			? new FirebaseCustomClaimsWriter(
-					getAuth(getFirebaseApp(env)),
-					new PostgresCustomClaimsLock(),
-				)
-			: new NoopCustomClaimsWriter());
-	const firebaseClaimsReconciliationService =
-		options.firebaseClaimsReconciliationService ??
-		(env.databaseSchema && env.firebaseClientEmail && env.firebasePrivateKey
-			? new DefaultFirebaseClaimsReconciliationService(
-					new PostgresFirebaseClaimsSource(env.databaseSchema),
-					new FirebaseCustomClaimsWriter(
-						getAuth(getFirebaseApp(env)),
-						new PostgresCustomClaimsLock(),
-					),
-				)
-			: undefined);
-	const appUserRepository =
-		options.appUserRepository ??
-		(env.databaseSchema
-			? new PostgresAppUserRepository(env.databaseSchema)
-			: new InMemoryAppUserRepository());
-	await appUserRepository.ensureReady();
-	const shopifyAdminApiClient = new ShopifyAdminApiClient();
-	const shopifyMutationAuditWriter = new FileShopifyMutationAuditWriter(
-		env.shopifyAdminAuditPath,
-	);
-	const shopifyLifecycleService = new ShopifyProductLifecycleService(
-		shopifyAdminApiClient,
-		shopifyMutationAuditWriter,
-	);
-	const secretKeyring = ShopifySecretKeyring.fromEnvironment(
-		env.festivalSecretKeysJson,
-		env.festivalActiveSecretKeyId,
-	);
-	const adminClassShopifySync = new AdminClassShopifySync(
-		repository,
-		shopifyLifecycleService,
-		secretKeyring ?? undefined,
-	);
-	const checkoutRepository =
-		options.checkoutRepository ??
-		(env.databaseSchema
-			? new PostgresCheckoutRepository(env.databaseSchema)
-			: new InMemoryCheckoutRepository());
-	if (checkoutRepository instanceof PostgresCheckoutRepository)
-		await checkoutRepository.ensureReady();
-	const commerceRepository =
-		options.commerceRepository ??
-		(env.databaseSchema
-			? new PostgresMembershipCommerceRepository(env.databaseSchema)
-			: new InMemoryMembershipCommerceRepository(
-					repository,
-					checkoutRepository,
-				));
-	await commerceRepository.ensureReady();
-	const adminClassCatalogService =
-		options.adminClassCatalogService ??
-		new AdminClassCatalogService(
-			repository,
-			adminClassShopifySync,
-			commerceRepository,
-		);
-	const roomRepository =
-		options.roomRepository ??
-		(env.databaseSchema
-			? new PostgresRoomRepository(env.databaseSchema)
-			: new InMemoryRoomRepository());
-	if (roomRepository instanceof PostgresRoomRepository)
-		await roomRepository.ensureReady();
-	const organizationService = new OrganizationService(
-		repository,
-		adminClassCatalogService,
-		{ enableDropTransfer: Boolean(env.enableDropTransfer) },
-		roomRepository,
-		commerceRepository,
-	);
-	const shopifyWebhookSubscriptionService = secretKeyring
-		? new ShopifyWebhookSubscriptionService(
-				repository,
-				secretKeyring,
-				shopifyAdminApiClient,
-				env.publicOrigin,
-			)
-		: undefined;
-	const shopifyIntegrationService =
-		options.shopifyIntegrationService ??
-		(secretKeyring
-			? new DefaultShopifyIntegrationService(
-					repository,
-					secretKeyring,
-					shopifyAdminApiClient,
-					shopifyWebhookSubscriptionService,
-				)
-			: undefined);
-	const shopifyMembershipProductService =
-		options.shopifyMembershipProductService ??
-		(secretKeyring
-			? new ShopifyMembershipProductService(
-					repository,
-					secretKeyring,
-					shopifyAdminApiClient,
-					shopifyMutationAuditWriter,
-					undefined,
-					shopifyLifecycleService,
-				)
-			: undefined);
-	const shopifyPublicCatalogClient = new TokenlessShopifyPublicCatalogClient();
-	const publicMembershipProductService =
-		options.publicMembershipProductService ??
-		new PublicMembershipProductService(
-			repository,
-			shopifyPublicCatalogClient,
-			secretKeyring ?? undefined,
-		);
-	const shopifyIntegrationDiagnosticService =
-		options.shopifyIntegrationDiagnosticService ??
-		new ShopifyIntegrationDiagnosticService(
-			repository,
-			shopifyPublicCatalogClient,
-			secretKeyring ?? undefined,
-			shopifyWebhookSubscriptionService,
-		);
-	const customerAccountRepository =
-		options.customerAccountRepository ??
-		(env.databaseSchema
-			? new PostgresCustomerAccountRepository(env.databaseSchema)
-			: undefined);
-	if (customerAccountRepository) await customerAccountRepository.ensureReady();
-	const repertoireRepository =
-		options.repertoireRepository ??
-		(env.databaseSchema
-			? new PostgresRepertoireRepository(env.databaseSchema)
-			: new InMemoryRepertoireRepository());
-	if (repertoireRepository instanceof PostgresRepertoireRepository)
-		await repertoireRepository.ensureReady();
-	const customerAccountService =
-		options.customerAccountService ??
-		(secretKeyring && customerAccountRepository && env.publicOrigin
-			? new CustomerAccountService(
-					customerAccountRepository,
-					repository,
-					secretKeyring,
-					{
-						publicOrigin: env.publicOrigin,
-						idleDays: env.customerSessionIdleDays,
-						absoluteDays: env.customerSessionAbsoluteDays,
-						transportOptions: {
-							dnsMaxEntries: env.customerDnsCacheMaxEntries,
-							dnsTtlMs: (env.customerDnsCacheTtlSeconds ?? 60) * 1_000,
-							maxEntryBytes: env.customerCacheMaxEntryBytes,
-							maxTotalBytes: Math.floor(
-								(env.customerCacheMaxTotalBytes ?? 16 * 1_024 * 1_024) / 4,
-							),
-						},
-						discoveryCacheMaxEntries: env.customerDiscoveryCacheMaxEntries,
-						discoveryCacheTtlMs:
-							(env.customerDiscoveryCacheTtlSeconds ?? 300) * 1_000,
-						discoveryCacheMaxTotalBytes: Math.floor(
-							(env.customerCacheMaxTotalBytes ?? 16 * 1_024 * 1_024) / 4,
-						),
-						jwksCacheMaxEntries: env.customerJwksCacheMaxEntries,
-						jwksCacheTtlMs: (env.customerJwksCacheTtlSeconds ?? 300) * 1_000,
-						jwksCacheMaxTotalBytes: Math.floor(
-							(env.customerCacheMaxTotalBytes ?? 16 * 1_024 * 1_024) / 2,
-						),
-						cacheMaxEntryBytes: env.customerCacheMaxEntryBytes,
-					},
-					commerceRepository,
-					checkoutRepository,
-					repertoireRepository,
-				)
-			: undefined);
-	const customerAvailabilityRepository =
-		options.customerAvailabilityRepository ??
-		(env.databaseSchema
-			? new PostgresCustomerAvailabilityRepository(env.databaseSchema)
-			: new InMemoryCustomerAvailabilityRepository());
-	if (
-		customerAvailabilityRepository instanceof
-		PostgresCustomerAvailabilityRepository
-	)
-		await customerAvailabilityRepository.ensureReady();
-	const customerAvailabilityService =
-		options.customerAvailabilityService ??
-		(customerAccountRepository && customerAccountService
-			? new CustomerAvailabilityService(
-					customerAvailabilityRepository,
-					repository,
-					customerAccountRepository,
-					customerAccountService,
-				)
-			: undefined);
-	const membershipCheckoutService =
-		options.membershipCheckoutService ??
-		(secretKeyring
-			? new MembershipCheckoutService(
-					repository,
-					publicMembershipProductService,
-					checkoutRepository,
-					new ShopifyMembershipCheckoutClient(repository, secretKeyring),
-					commerceRepository,
-				)
-			: undefined);
-	const classCheckoutService =
-		options.classCheckoutService ??
-		(secretKeyring && customerAccountRepository
-			? new ClassCheckoutService(
-					repository,
-					customerAccountRepository,
-					checkoutRepository,
-					new ShopifyMembershipCheckoutClient(repository, secretKeyring),
-					commerceRepository,
-					undefined,
-					consoleClassCheckoutFailureLogger,
-					repertoireRepository,
-				)
-			: undefined);
-	const shopifyOrderProjectionService =
-		options.shopifyOrderProjectionService ??
-		new ShopifyOrderProjectionService(
-			repository,
-			checkoutRepository,
-			commerceRepository,
-			shopifyAdminApiClient,
-			secretKeyring,
-			customerAccountRepository,
-		);
-	const shopifyWebhookService =
-		options.shopifyWebhookService ??
-		new ShopifyWebhookService(
-			repository,
-			commerceRepository,
-			secretKeyring,
-			shopifyOrderProjectionService,
-		);
+	const commerceProjection = await createCommerceProjectionComposition({
+		options,
+		env,
+		repository: tenantOrgRepos.repository,
+		checkoutRepository: checkoutRepos.checkoutRepository,
+		customerAccountRepository: customerRepos.customerAccountRepository,
+	});
+	const catalogRepertoire = await createCatalogRepertoireComposition({
+		options,
+		env,
+		repository: tenantOrgRepos.repository,
+		adminClassShopifySync: commerceProjection.adminClassShopifySync,
+		commerceRepository: commerceProjection.commerceRepository,
+		repertoireRepository,
+	});
+	const tenantOrg = createTenantOrgComposition({
+		env,
+		repositories: tenantOrgRepos,
+		adminClassCatalogService: catalogRepertoire.adminClassCatalogService,
+		commerceRepository: commerceProjection.commerceRepository,
+	});
+	const customerIdentity = createCustomerIdentityComposition({
+		options,
+		env,
+		repositories: customerRepos,
+		repository: tenantOrg.repository,
+		secretKeyring: commerceProjection.secretKeyring,
+		commerceRepository: commerceProjection.commerceRepository,
+		checkoutRepository: checkoutRepos.checkoutRepository,
+		repertoireRepository: catalogRepertoire.repertoireRepository,
+	});
+	const teacherDirectory = createTeacherDirectoryComposition({
+		options,
+		repository: tenantOrg.repository,
+		commerceRepository: commerceProjection.commerceRepository,
+	});
+	const classCheckout = createClassCheckoutComposition({
+		options,
+		env,
+		repositories: checkoutRepos,
+		repository: tenantOrg.repository,
+		customerAccountRepository: customerIdentity.customerAccountRepository,
+		commerceRepository: commerceProjection.commerceRepository,
+		classEntitlementRepository: commerceProjection.classEntitlementRepository,
+		repertoireRepository: catalogRepertoire.repertoireRepository,
+		secretKeyring: commerceProjection.secretKeyring,
+		publicMembershipProductService:
+			commerceProjection.publicMembershipProductService,
+	});
+	const volunteersComms = await createVolunteersCommsComposition(options, env);
 	const cacheInvalidator =
 		options.cacheInvalidator ?? new DomainCacheInvalidator();
-	organizationService.bindCacheInvalidator?.(cacheInvalidator);
-	customerAccountService?.bindCacheInvalidator?.(cacheInvalidator);
-	publicMembershipProductService.bindCacheInvalidator?.(cacheInvalidator);
-	shopifyMembershipProductService?.bindCacheInvalidator?.(cacheInvalidator);
-	shopifyIntegrationService?.bindCacheInvalidator?.(cacheInvalidator);
-	shopifyWebhookService.bindCacheInvalidator?.(cacheInvalidator);
-	const membershipStatusService =
-		options.membershipStatusService ??
-		new MembershipStatusService(repository, commerceRepository);
-	const accompanistMembershipService = new AccompanistMembershipService(
-		repository,
-	);
-	const volunteerRepository =
-		options.volunteerRepository ??
-		(env.databaseSchema
-			? new PostgresVolunteerRepository(env.databaseSchema)
-			: new InMemoryVolunteerRepository());
-	if (volunteerRepository instanceof PostgresVolunteerRepository)
-		await volunteerRepository.ensureReady();
-	const classEntitlementRepository =
-		options.classEntitlementRepository ??
-		(env.databaseSchema
-			? new PostgresClassEntitlementRepository(env.databaseSchema)
-			: new InMemoryClassEntitlementRepository());
-	if (classEntitlementRepository instanceof PostgresClassEntitlementRepository)
-		await classEntitlementRepository.ensureReady();
-	const registrationChangeRepository =
-		options.registrationChangeRepository ??
-		(env.databaseSchema
-			? new PostgresRegistrationChangeRepository(env.databaseSchema)
-			: new InMemoryRegistrationChangeRepository());
-	if (
-		registrationChangeRepository instanceof PostgresRegistrationChangeRepository
-	)
-		await registrationChangeRepository.ensureReady();
-	const dropTransferService =
-		options.dropTransferService !== undefined
-			? options.dropTransferService
-			: env.enableDropTransfer
-				? new DropTransferService({
-						entitlements: classEntitlementRepository,
-						changes: registrationChangeRepository,
-						classQuery: repository,
-					})
-				: undefined;
-	const billingRepository =
-		options.billingRepository ??
-		(env.databaseSchema
-			? new PostgresBillingRepository(env.databaseSchema)
-			: new InMemoryBillingRepository());
-	if (billingRepository instanceof PostgresBillingRepository)
-		await billingRepository.ensureReady();
-	const billingReconciliationService =
-		options.billingReconciliationService ??
-		new BillingReconciliationService(billingRepository);
-	const communicationRepository =
-		options.communicationRepository ??
-		(env.databaseSchema
-			? new PostgresCommunicationRepository(env.databaseSchema)
-			: new InMemoryCommunicationRepository());
-	if (communicationRepository instanceof PostgresCommunicationRepository)
-		await communicationRepository.ensureReady();
-	const communicationService =
-		options.communicationService ??
-		new CommunicationService({
-			repository: communicationRepository,
-		});
-	const checkoutRecoveryRepository =
-		options.checkoutRecoveryRepository ??
-		(env.databaseSchema
-			? new PostgresCheckoutRecoveryRepository(env.databaseSchema)
-			: new InMemoryCheckoutRecoveryRepository());
-	if (checkoutRecoveryRepository instanceof PostgresCheckoutRecoveryRepository)
-		await checkoutRecoveryRepository.ensureReady();
-	const checkoutRecoveryService =
-		options.checkoutRecoveryService ??
-		new CheckoutRecoveryService({
-			recoveryRepository: checkoutRecoveryRepository,
-			organizationRepository: repository,
-			commerceRepository,
-			checkoutRepository,
-			storefront: secretKeyring
-				? new ShopifyMembershipCheckoutClient(repository, secretKeyring)
-				: undefined,
-			listings: publicMembershipProductService,
-		});
-	const participantProfileService =
-		options.participantProfileService ??
-		new ParticipantProfileService(repository, customerAccountService);
-	const waitlistRepository =
-		options.waitlistRepository ??
-		(env.databaseSchema
-			? new PostgresWaitlistRepository(env.databaseSchema)
-			: new InMemoryWaitlistRepository());
-	if (waitlistRepository instanceof PostgresWaitlistRepository) {
-		await waitlistRepository.ensureReady();
-	}
-	const waitlistService =
-		options.waitlistService ??
-		(customerAccountRepository
-			? new WaitlistService({
-					waitlistRepo: waitlistRepository,
-					orgRepo: repository,
-					customerRepo: customerAccountRepository,
-					entitlementCount: (orgId: string, classId: string) =>
-						commerceRepository.countConfirmedClassEntitlements(orgId, classId),
-					entitlementRepository: commerceRepository,
-				})
-			: undefined);
 
-	const app = new Hono();
-	const allowedApiOrigins = new Set(env.allowedApiOrigins ?? LOCAL_API_ORIGINS);
-	const publicCors = cors({
-		origin: (origin) => (allowedApiOrigins.has(origin) ? origin : undefined),
-		allowHeaders: ["Authorization", "Content-Type", "X-CSRF-Token"],
-		allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-		credentials: true,
-	});
-	const publicRequestSecurity = apiRequestSecurity();
-	const isNonBrowserApiSubpath = (path: string) =>
-		path === "/api/internal" ||
-		path.startsWith("/api/internal/") ||
-		path === "/api/shopify/webhooks/orders-paid";
+	return {
+		env,
+		cacheInvalidator,
+		auth,
+		tenantOrg,
+		catalogRepertoire,
+		customerIdentity,
+		teacherDirectory,
+		commerceProjection,
+		classCheckout,
+		volunteersComms,
+	};
+}
 
-	app.post("/api/shopify/webhooks/orders-paid", (c) =>
-		shopifyWebhookService.handle(c),
-	);
-	app.route(
-		"/api/internal",
-		buildPrivateRuntimeRouter({
-			env,
-			repository,
-			commerceRepository,
-			shopifyOrderProjectionService,
-			shopifyWebhookService,
-			firebaseClaimsReconciliationService,
-			hasShopifyKeyring: Boolean(secretKeyring),
-		}),
-	);
-
-	app.use("/api/*", async (c, next) => {
-		if (isNonBrowserApiSubpath(c.req.path)) {
-			return c.json({ error: "Not found." }, 404);
-		}
-		return publicCors(c, next);
-	});
-	app.use("/api/*", async (c, next) => {
-		if (isNonBrowserApiSubpath(c.req.path)) {
-			return c.json({ error: "Not found." }, 404);
-		}
-		return publicRequestSecurity(c, next);
-	});
-
-	app.get("/health", (c) => {
-		c.header("Cache-Control", "no-store");
-		if (hasForbiddenBrowserHeaders(c)) {
-			return c.json({ error: "Not found." }, 404);
-		}
-		return c.json({ status: "ok" });
-	});
-
-	app.route(
-		"/api",
-		buildApiRouter({
-			organizationService,
-			authVerifier,
-			shopifyIntegrationService,
-			shopifyMembershipProductService,
-			customerAccountService,
-			customerAvailabilityService,
-			publicMembershipProductService,
-			shopifyIntegrationDiagnosticService,
-			membershipCheckoutService,
-			membershipStatusService,
-			accompanistMembershipService,
-			commerceRepository,
-			checkoutRepository,
-			shopifyOrderProjectionService,
-			volunteerRepository,
-			classCheckoutService,
-			customClaimsWriter,
-			repertoireRepository,
-			dropTransferService,
-			enableDropTransfer: Boolean(env.enableDropTransfer),
-			registrationChangeRepository,
-			billingReconciliationService,
-			communicationService,
-			checkoutRecoveryService,
-			participantProfileService,
-			waitlistService,
-			publicOrigin: env.publicOrigin,
-		}),
-	);
-	app.route(
-		"/api/v1/auth",
-		buildAuthRouter(
-			authVerifier,
-			appUserRepository,
-			env.trustProxyHeaders ?? false,
-		),
-	);
-	assertRouteSecurityInventory(app.routes);
-
-	const reaper = env.databaseSchema
-		? new PeriodicLeaseReaper({
-				schema: env.databaseSchema,
-				webhookBatchLimit: (limit) =>
-					shopifyWebhookService.getAvailableReclaimSlots(limit),
-				onReclaimedWebhookIds: (ids) =>
-					shopifyWebhookService.enqueueReclaimedDeliveries(ids),
-			})
-		: undefined;
-	const drain = () => shopifyWebhookService.drain();
-	const stopReaper = (): Promise<void> =>
-		reaper ? reaper.stop() : Promise.resolve();
-
-	return { app, env, drain, reaper, stopReaper };
+export async function createApp(options: CreateAppOptions = {}) {
+	const env = resolveRuntimeEnv(options);
+	const deps = await composeAppDependencies(options, env);
+	bindDomainCacheInvalidators(deps);
+	return buildRuntimeApp(deps);
 }
