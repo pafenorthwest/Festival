@@ -11,7 +11,8 @@
 	"scripts": {
 		"dev": "bun --watch src/index.ts",
 		"lint": "tsc -p tsconfig.json --noEmit",
-		"build": "tsc -p tsconfig.build.json",
+		"build": "tsc -p tsconfig.build.json && bun build ./scripts/reap-class-checkout-executions.ts ./scripts/reap-class-checkout-recovery.ts ./scripts/reconcile-firebase-claims.ts ./scripts/reconcile-shopify-orders.ts --target=bun --outdir ./dist/scripts --packages=external",
+		"reap:class-checkout": "bun ./dist/scripts/reap-class-checkout-executions.js",
 		"test": "bun test",
 		"seed:test-data": "bun run scripts/load-test-data.ts",
 		"perf:children": "bun run ./scripts/perf-500-children.ts",
