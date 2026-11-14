@@ -43,6 +43,7 @@ export interface TenantRepository {
 	findOrganizationById(
 		organizationId: string,
 	): Promise<OrganizationRecord | null>;
+	listOrganizationSlugs(): Promise<Array<Pick<OrganizationRecord, "slug">>>;
 	findOrganizationBySlug(slug: string): Promise<OrganizationRecord | null>;
 	findOrganizationByName(name: string): Promise<OrganizationRecord | null>;
 	findOrganizationByShopDomain(
@@ -105,6 +106,13 @@ export class PostgresTenantRepository implements TenantRepository {
 			[organizationId],
 		)) as OrganizationRow[];
 		return rows[0] ? mapOrganization(rows[0]) : null;
+	}
+
+	async listOrganizationSlugs() {
+		await this.ensureReady();
+		return (await sql.unsafe(
+			`SELECT slug FROM ${this.schema}.organizations ORDER BY slug COLLATE "C"`,
+		)) as Array<Pick<OrganizationRecord, "slug">>;
 	}
 
 	async findOrganizationBySlug(

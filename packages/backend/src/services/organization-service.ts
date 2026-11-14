@@ -296,6 +296,9 @@ export class OrganizationService extends OrganizationCatalogServiceFacade {
 	getSession(identity?: AuthenticatedUser) {
 		return this.tenantOrgService.getSession(identity);
 	}
+	listPublicOrganizations() {
+		return this.tenantOrgService.listPublicOrganizations();
+	}
 	listMemberships(identity: AuthenticatedUser) {
 		return this.tenantOrgService.listMemberships(identity);
 	}

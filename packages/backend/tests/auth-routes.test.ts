@@ -130,6 +130,36 @@ describe("auth routes", () => {
 		});
 	});
 
+	it("lists only stored organization slugs for anonymous visitors", async () => {
+		const { app } = await createTestApp();
+		const url = "http://test/api/organizations";
+		const empty = await app.fetch(new Request(url));
+		expect(empty.status).toBe(200);
+		expect(await empty.json()).toEqual({ organizations: [] });
+
+		for (const organization of [
+			{ name: "Zeta Festival", shortName: "Zeta" },
+			{ name: "Northwest Performing Arts Festival", shortName: "PAFE-NW" },
+		]) {
+			const created = await app.fetch(
+				new Request(
+					url,
+					withAuth("user", {
+						method: "POST",
+						body: JSON.stringify(organization),
+					}),
+				),
+			);
+			expect(created.status).toBe(201);
+		}
+
+		const response = await app.fetch(new Request(url));
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({
+			organizations: [{ slug: "pafe-nw" }, { slug: "zeta" }],
+		});
+	});
+
 	it("requires a valid Firebase token for a session without requiring membership", async () => {
 		const { app } = await createTestApp();
 

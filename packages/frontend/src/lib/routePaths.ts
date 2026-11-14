@@ -1,5 +1,8 @@
+export const STAFF_ORGANIZATION_CHOOSER_PATH = "/admin/organizations";
+
 export type AppRoute =
 	| { kind: "home" }
+	| { kind: "staff-organization-chooser" }
 	| { kind: "privacy-policy" }
 	| { kind: "create-org" }
 	| { kind: "invite"; token: string }

@@ -153,11 +153,7 @@ export function useFestivalLifecycle(
 	createEffect(() => {
 		const currentRoute = state.route();
 		const membership = state.sessionMembership();
-		const singleOrg =
-			state.memberships().length === 1 ? state.memberships()[0] : null;
-		if (currentRoute.kind === "home" && singleOrg) {
-			state.navigate(buildOrgPath(singleOrg.organizationSlug));
-		} else if (
+		if (
 			currentRoute.kind === "create-org" &&
 			membership &&
 			state.createdOrganizationSlug() !== membership.organizationSlug

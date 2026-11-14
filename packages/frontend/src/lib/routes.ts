@@ -1,4 +1,7 @@
-import type { AppRoute } from "./routePaths.js";
+import {
+	type AppRoute,
+	STAFF_ORGANIZATION_CHOOSER_PATH,
+} from "./routePaths.js";
 
 export * from "./routePaths.js";
 
@@ -59,6 +62,11 @@ function decodeRouteSegment(value: string): string {
 }
 
 const ROUTE_PATTERNS: readonly RoutePattern[] = [
+	{
+		segments: STAFF_ORGANIZATION_CHOOSER_PATH.slice(1).split("/"),
+		allowTrailingSlash: true,
+		build: () => ({ kind: "staff-organization-chooser" }),
+	},
 	{
 		segments: ["privacy-policy"],
 		build: () => ({ kind: "privacy-policy" }),

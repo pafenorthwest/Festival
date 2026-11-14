@@ -394,6 +394,10 @@ export interface OrganizationFestivalListResponse {
 	festivals: FestivalSummary[];
 }
 
+export interface PublicOrganizationListResponse {
+	organizations: Array<Pick<OrganizationRecord, "slug">>;
+}
+
 export interface PublicOrganizationLandingResponse {
 	organization: Pick<OrganizationRecord, "name" | "slug">;
 	festivals: FestivalSummary[];

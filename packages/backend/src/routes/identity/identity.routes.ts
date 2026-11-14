@@ -42,6 +42,7 @@ const identityRoute = (
 export const IDENTITY_ROUTE_SECURITY = [
 	identityRoute("GET", "/bootstrap", "public"),
 	identityRoute("GET", "/firebase-session", "firebase"),
+	identityRoute("GET", "/organizations", "public"),
 	identityRoute("POST", "/organizations", "firebase"),
 	identityRoute("GET", "/memberships", "firebase"),
 	identityRoute("POST", "/invites", "admin"),
@@ -183,6 +184,9 @@ export function buildIdentityRoutes(options: IdentityRoutesOptions) {
 			withIdentityJson(c, () =>
 				organizationService.getSession(getRequiredIdentity(c)),
 			),
+		)
+		.get("/organizations", (c) =>
+			withIdentityJson(c, () => organizationService.listPublicOrganizations()),
 		)
 		.post(
 			"/organizations",

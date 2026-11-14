@@ -10,6 +10,7 @@ import {
 	type OrganizationLandingResponse,
 	type OrganizationMembershipListResponse,
 	type OrganizationSession,
+	type PublicOrganizationListResponse,
 	type SessionResponse,
 	type UpdateOrganizationTimezoneInput,
 	validateOrganizationName,
@@ -67,6 +68,10 @@ export class TenantOrganizationService {
 			membership: membership ? toSessionMembership(membership) : undefined,
 		};
 		return { session };
+	}
+
+	async listPublicOrganizations(): Promise<PublicOrganizationListResponse> {
+		return { organizations: await this.tenants.listOrganizationSlugs() };
 	}
 
 	async listMemberships(

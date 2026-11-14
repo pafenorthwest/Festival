@@ -30,6 +30,7 @@ import {
 	buildPrivacyPolicyPath,
 	isOrganizationPageRoute,
 	parseRoute,
+	STAFF_ORGANIZATION_CHOOSER_PATH,
 } from "../src/lib/routes.js";
 
 describe("route helpers", () => {
@@ -59,6 +60,9 @@ describe("route helpers", () => {
 	});
 	it("parses onboarding routes", () => {
 		expect(parseRoute("/")).toEqual({ kind: "home" });
+		expect(parseRoute(STAFF_ORGANIZATION_CHOOSER_PATH)).toEqual({
+			kind: "staff-organization-chooser",
+		});
 		expect(parseRoute("/privacy-policy")).toEqual({
 			kind: "privacy-policy",
 		});

@@ -6,7 +6,10 @@ import {
 	getMemberships,
 	getOrganization,
 } from "../lib/api.js";
-import { buildOrgPath } from "../lib/routes.js";
+import {
+	buildOrgPath,
+	STAFF_ORGANIZATION_CHOOSER_PATH,
+} from "../lib/routes.js";
 import type { FestivalAppState } from "./createFestivalAppState.js";
 
 export async function getIdToken(user: User | null): Promise<string | null> {
@@ -46,7 +49,7 @@ export function createFestivalDataLoaders(state: FestivalAppState) {
 		state.setMemberships(membershipResponse.memberships);
 
 		if (membershipResponse.memberships.length > 1) {
-			state.navigate("/");
+			state.navigate(STAFF_ORGANIZATION_CHOOSER_PATH);
 			return;
 		}
 

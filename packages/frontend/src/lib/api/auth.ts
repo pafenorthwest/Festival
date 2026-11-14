@@ -3,6 +3,7 @@ import type {
 	LoginEventInput,
 	LoginEventResponse,
 	OrganizationMembershipListResponse,
+	PublicOrganizationListResponse,
 	SessionResponse,
 } from "@festival/common";
 import { hc } from "hono/client";
@@ -27,6 +28,11 @@ function createAuthClient(useApiBase = true, idToken?: string) {
 	return hc<AuthRoutesType>(`${apiPrefix(useApiBase)}/v1/auth`, {
 		fetch: createRpcFetch({ idToken }),
 	});
+}
+
+export function listPublicOrganizations(): Promise<PublicOrganizationListResponse> {
+	const endpoint = createOrgAdminClient().organizations;
+	return rpcCall(endpoint.$get(), `${apiPrefix(true)}${endpoint.$path()}`);
 }
 
 export async function getBootstrap(): Promise<SessionResponse> {
