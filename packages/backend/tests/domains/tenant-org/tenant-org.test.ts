@@ -250,6 +250,28 @@ describe("domains/tenant-org services (unit)", () => {
 });
 
 describe("domains/tenant-org Postgres 17 integration", () => {
+	integrationIt("lists organization slugs in stored sort order", async () => {
+		await withApplicationRollback(async (fixture) => {
+			const tenants = fixture.repository(
+				new PostgresTenantRepository(fixture.schema),
+			);
+			const slug = fixture.id("org-list");
+			for (const suffix of ["z", "a"]) {
+				const shortName = `${slug}-${suffix}`;
+				const organization = await tenants.createOrganization({
+					name: `Tenant ${shortName}`,
+					slug: shortName,
+				});
+				fixture.trackOrganization(organization.id);
+			}
+			const organizations = await tenants.listOrganizationSlugs();
+			expect(organizations.filter((org) => org.slug.startsWith(slug))).toEqual([
+				{ slug: `${slug}-a` },
+				{ slug: `${slug}-z` },
+			]);
+		});
+	});
+
 	integrationIt(
 		"persists tenant org, timezone, age config, accompanist policy, app users, memberships, invites, and rooms",
 		async () => {

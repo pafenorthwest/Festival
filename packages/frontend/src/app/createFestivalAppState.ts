@@ -110,9 +110,6 @@ function createShellDerived(
 	const sessionMembership = createMemo(
 		() => signals.session().membership ?? null,
 	);
-	const shouldShowOrgChooser = createMemo(
-		() => route().kind === "home" && signals.memberships().length > 1,
-	);
 	const authenticatedUser = createMemo(() => {
 		const user = signals.firebaseUser();
 		return user ? toAuthenticatedUser(user) : null;
@@ -145,7 +142,6 @@ function createShellDerived(
 		isDropTransferEnabled,
 		route,
 		sessionMembership,
-		shouldShowOrgChooser,
 		get slug() {
 			const current = route();
 			if ("slug" in current && typeof current.slug === "string") {

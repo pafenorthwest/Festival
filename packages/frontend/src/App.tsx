@@ -8,7 +8,6 @@ import { AppHeader } from "./components/AppHeader.js";
 import { OrganizationSideNavigation } from "./components/OrganizationSideNavigation.js";
 import { SignInModal } from "./components/SignInModal.js";
 import { isOrganizationPageRoute } from "./lib/routes.js";
-import { OrganizationChooser } from "./pages/OrganizationChooser.js";
 
 export default function App(props: RouteSectionProps) {
 	const app = useFestivalAppController();
@@ -30,7 +29,6 @@ export default function App(props: RouteSectionProps) {
 			>
 				<AppHeader app={app} />
 				<AppBanners app={app} />
-				<OrganizationChooser app={app} />
 
 				<div
 					class="application-page-layout"

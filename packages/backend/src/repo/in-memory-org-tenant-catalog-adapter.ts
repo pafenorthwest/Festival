@@ -91,6 +91,11 @@ class InMemoryTenantAdapterBase
 	async findOrganizationById(organizationId: string) {
 		return this.state.organizations.get(organizationId) ?? null;
 	}
+	async listOrganizationSlugs() {
+		return [...this.state.organizationsBySlug.keys()]
+			.sort()
+			.map((slug) => ({ slug }));
+	}
 	async findOrganizationBySlug(slug: string) {
 		const id = this.state.organizationsBySlug.get(slug);
 		return id ? (this.state.organizations.get(id) ?? null) : null;

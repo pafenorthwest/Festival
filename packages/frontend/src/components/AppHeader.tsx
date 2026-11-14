@@ -12,6 +12,7 @@ import {
 	buildOrgPath,
 	buildOrgRootPath,
 	isOrganizationPageRoute,
+	STAFF_ORGANIZATION_CHOOSER_PATH,
 } from "../lib/routes.js";
 import { Button } from "./Button.js";
 
@@ -82,6 +83,19 @@ export function AppHeader(props: AppHeaderProps) {
 		props.app.navigate(path);
 	}
 
+	function staffAdminPath() {
+		if (
+			props.app.route().kind !== "home" ||
+			!props.app.session().authenticated
+		) {
+			return null;
+		}
+		const memberships = props.app.memberships();
+		if (memberships.length > 1) return STAFF_ORGANIZATION_CHOOSER_PATH;
+		const [membership] = memberships;
+		return membership ? buildOrgPath(membership.organizationSlug) : null;
+	}
+
 	function logout() {
 		const organizationSlug = slug();
 		const session = customerIdentity.customerSession();
@@ -110,15 +124,7 @@ export function AppHeader(props: AppHeaderProps) {
 				<header class="masthead">
 					<div>
 						<p class="eyebrow">Music Festival Administration</p>
-						<Show
-							when={props.app.isAdminRoute()}
-							fallback={
-								<>
-									<h1>Festival</h1>
-									<p class="lede">General Informtion.</p>
-								</>
-							}
-						>
+						<Show when={props.app.isAdminRoute()} fallback={<h1>Festival</h1>}>
 							<h1>{props.app.adminBreadcrumb()}</h1>
 						</Show>
 					</div>
@@ -131,6 +137,17 @@ export function AppHeader(props: AppHeaderProps) {
 							<div class="identity-email">
 								{props.app.session().user?.email}
 							</div>
+							<Show when={staffAdminPath()} keyed>
+								{(path) => (
+									<a
+										class="home-admin-link"
+										href={path}
+										data-preload-path={path}
+									>
+										Admin
+									</a>
+								)}
+							</Show>
 						</div>
 					</Show>
 					<Show

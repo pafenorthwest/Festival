@@ -204,6 +204,7 @@ interface PreloadablePage {
 
 export const routePages = {
 	home: null,
+	"staff-organization-chooser": null,
 	"privacy-policy": PrivacyPolicyPage,
 	"create-org": CreateOrganizationPage,
 	invite: InviteLandingPage,

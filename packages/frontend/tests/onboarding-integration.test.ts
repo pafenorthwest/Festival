@@ -139,14 +139,19 @@ describe("organization onboarding integration", () => {
 		);
 	});
 
-	it("renders the cold-start header on the home page", async () => {
+	it("shows the new-organization signup copy and keeps its sign-in action", async () => {
 		const homePage = await Bun.file("src/pages/HomePage.tsx").text();
 		const appHeader = await Bun.file("src/components/AppHeader.tsx").text();
 
-		expect(homePage).toContain("<h1>Getting Started</h1>");
-		expect(homePage).toContain('<p class="lede">Sign up to get started.</p>');
+		expect(homePage).toContain("<h1>Start a new organization</h1>");
+		expect(homePage).toMatch(
+			/<p>\s*Sign up here with Google or Email to create a new organization\s*<\/p>/,
+		);
+		expect(homePage).not.toContain('<p class="lede">');
+		expect(homePage).toContain('props.app.openSignInModal("create-org")');
+		expect(homePage).toContain("Sign Up or Sign In");
 		expect(appHeader).toContain("<h1>Festival</h1>");
-		expect(appHeader).toContain('<p class="lede">General Informtion.</p>');
+		expect(appHeader).not.toContain("General Informtion.");
 	});
 
 	it("shows only safe Shopify identity and capability diagnostics", async () => {
@@ -252,14 +257,19 @@ describe("organization onboarding integration", () => {
 		expect(source).toContain("getOrganization");
 	});
 
-	it("uses the canonical organization route and an org chooser for multiple memberships", async () => {
-		const source = await readFrontendSource();
+	it("routes staff with multiple memberships to the Admin organization chooser", async () => {
+		const loaders = await Bun.file(
+			"src/app/createFestivalDataLoaders.ts",
+		).text();
+		const routes = await Bun.file("src/app/AppRoutes.tsx").text();
+		const chooser = await Bun.file("src/pages/OrganizationChooser.tsx").text();
 
-		expect(source).toContain("buildOrgPath(membership.organizationSlug)");
-		expect(source).toContain("Choose an organization");
-		expect(source).toContain("memberships().length > 1");
-		expect(source).toContain("organization-choice");
-		expect(source).not.toContain("/o/");
+		expect(loaders).toMatch(
+			/if \(membershipResponse\.memberships\.length > 1\) \{\s*state\.navigate\(STAFF_ORGANIZATION_CHOOSER_PATH\);/,
+		);
+		expect(routes).toContain("path={STAFF_ORGANIZATION_CHOOSER_PATH}");
+		expect(chooser).toContain("Choose an organization");
+		expect(chooser).toContain("buildOrgPath(membership.organizationSlug)");
 	});
 
 	it("keeps logout implemented as Firebase sign-out instead of a no-op", async () => {

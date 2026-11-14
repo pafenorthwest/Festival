@@ -1,9 +1,10 @@
 import { Route, type RouteSectionProps, useParams } from "@solidjs/router";
-import { Show } from "solid-js";
 import { AdminOrgProvider } from "../domains/admin-org/AdminOrgContext.js";
 import { CustomerIdentityProvider } from "../domains/customer/CustomerIdentityContext.js";
 import { ClassRegistrationProvider } from "../domains/registration/ClassRegistrationContext.js";
+import { STAFF_ORGANIZATION_CHOOSER_PATH } from "../lib/routes.js";
 import { HomePage } from "../pages/HomePage.js";
+import { OrganizationChooser } from "../pages/OrganizationChooser.js";
 import { adminRoutes, withCat, withDir, withVol } from "./AdminRoutes.js";
 import { useFestivalShell } from "./FestivalShellContext.js";
 import * as Pages from "./lazyPages.js";
@@ -195,11 +196,14 @@ export function AppRoutes() {
 				path="/"
 				component={() => {
 					const app = useFestivalShell();
-					return (
-						<Show when={!app.shouldShowOrgChooser()}>
-							<HomePage app={app} />
-						</Show>
-					);
+					return <HomePage app={app} />;
+				}}
+			/>
+			<Route
+				path={STAFF_ORGANIZATION_CHOOSER_PATH}
+				component={() => {
+					const app = useFestivalShell();
+					return <OrganizationChooser app={app} />;
 				}}
 			/>
 			<Route path="/privacy-policy" component={Pages.PrivacyPolicyPage} />

@@ -220,6 +220,12 @@ describe("repository nginx security policy", () => {
 					registered.filter((route) => !isPrivate(route)),
 				),
 			).toEqual([]);
+			const organizationsPath = "/api/organizations";
+			expect(proxiesRoute(locations, "GET", organizationsPath)).toBe(true);
+			expect(proxiesRoute(locations, "POST", organizationsPath)).toBe(true);
+			expect(proxiesRoute(locations, "OPTIONS", organizationsPath)).toBe(true);
+			expect(proxiesRoute(locations, "PATCH", organizationsPath)).toBe(false);
+			expect(proxiesRoute(locations, "DELETE", organizationsPath)).toBe(false);
 			const restartPath =
 				"/api/organizations/festival/customer/festivals/spring/registration/checkout/restart";
 			expect(proxiesRoute(locations, "GET", restartPath)).toBe(true);
