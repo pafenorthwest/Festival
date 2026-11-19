@@ -115,6 +115,7 @@ export function OrganizationSideNavigation(props: {
 		)
 			return;
 		event.preventDefault();
+		props.app.setParentNavigationOpen(false);
 		props.app.navigate(path);
 	}
 	return (

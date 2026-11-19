@@ -1,5 +1,5 @@
 import type { User } from "firebase/auth";
-import { createEffect, onCleanup, onMount } from "solid-js";
+import { batch, createEffect, onCleanup, onMount } from "solid-js";
 import { acceptInvite } from "../lib/api.js";
 import {
 	clearPendingIntent,
@@ -27,6 +27,7 @@ const ORGANIZATION_LOAD_ROUTE_KINDS = new Set<AppRoute["kind"]>([
 	"org-admin-memberships",
 	"org-admin-festivals",
 	"org-admin-divisions",
+	"org-admin-settings",
 	"org-admin-volunteers",
 	"org-admin-rooms",
 	"org-admin-concerto-repertoire",
@@ -105,9 +106,13 @@ function registerAuthLifecycle(
 ) {
 	onMount(() => {
 		const unsubscribe = subscribeToAuthChanges((user) => {
-			if (state.firebaseUser()?.uid !== user?.uid)
-				state.resetOnboardingFlowState();
-			state.setFirebaseUser(user);
+			batch(() => {
+				if (state.firebaseUser()?.uid !== user?.uid)
+					state.resetOnboardingFlowState();
+				state.setFirebaseUser(user);
+				if (user) state.setIsSessionLoading(true);
+				state.setIsAuthResolved(true);
+			});
 			void (async () => {
 				try {
 					if (user && readPendingIntent()) {
@@ -147,7 +152,7 @@ export function useFestivalLifecycle(
 			currentRoute.slug &&
 			state.firebaseUser()
 		) {
-			void loaders.loadOrganization(currentRoute.slug);
+			void loaders.loadOrganization(currentRoute.slug).catch(() => {});
 		}
 	});
 

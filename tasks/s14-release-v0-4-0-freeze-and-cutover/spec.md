@@ -51,10 +51,27 @@ bun run --cwd packages/backend perf:scenarios
 ```
 
 ## Delivery
-- `[G1]`: PR `#382` extracted per-domain DI composition modules under `packages/backend/src/composition/` (`auth.ts`, `tenant-org.ts`, `catalog-repertoire.ts`, `customer-identity.ts`, `teacher-directory.ts`, `commerce-projection.ts`, `class-checkout.ts`, `volunteers-comms.ts`, `runtime.ts`), reduced `packages/backend/src/app.ts` to `212` lines (`<=500`), updated `packages/backend/scripts/reap-class-checkout-recovery.ts`, retired 3 unreferenced Wave 3 checkout shims (`class-checkout-recovery.ts`, `postgres-class-checkout-execution.ts`, `postgres-registration-metadata-queries.ts`), and enforces 0-exemption boundaries via `architecture-boundaries.test.ts` + `file-size-ratchet.test.ts` (`11/11` pass).
-- `[G2]`: Fresh `2026-11-18` verification gate passed across all `852` Biome files, `528` SQL-checked backend files, `254` test files (`2,736` pass / `0` fail locally; `migrate-runner.test.ts` `9/9` pass on local Postgres 17.11; full Postgres 17 integration + schema-parity verified in GitHub Actions `Pull Request Checks / verify`), and `perf:scenarios` exit 0 (plus PR `#382` 500-parent local Postgres 17 benchmark).
-- `[G3]`: All 5 `package.json` manifests are at `"0.4.0"` (`package.json`, `packages/common/package.json`, `packages/backend/package.json`, `packages/frontend/package.json`, `packages/shopify-confirmation/package.json`), `CHANGELOG.md` is updated to `## [0.4.0] - 2026-11-18` citing `#423` (`S20`), `#424` (`S18`), `#425` (`@festival/shopify-confirmation`), and `#427` (`S19`), and all 19 upstream code packets (`S00`–`S04`, `S06`–`S13`, `S15`–`S20`) + `#425` + `#426` are merged on `main`. `main -> release` promotion, annotated tag `v0.4.0`, and GitHub Release `v0.4.0` are queued behind the explicit user confirmation gate.
-- `[G4]`: Live production host deployment remains pending `S05` (`BLOCKED (D4)` unless `production` GitHub Environment secrets `DEPLOY_HOST`, `DEPLOY_SSH_PRIVATE_KEY`, and `DEPLOY_PUBLIC_URL` are configured).
+- `[G1]` `DONE`: PR `#382` extracted per-domain DI composition modules under `packages/backend/src/composition/` (`auth.ts`, `tenant-org.ts`, `catalog-repertoire.ts`, `customer-identity.ts`, `teacher-directory.ts`, `commerce-projection.ts`, `class-checkout.ts`, `volunteers-comms.ts`, `runtime.ts`), reduced `packages/backend/src/app.ts` to `212` lines (`<=500`), updated `packages/backend/scripts/reap-class-checkout-recovery.ts`, retired 3 unreferenced Wave 3 checkout shims (`class-checkout-recovery.ts`, `postgres-class-checkout-execution.ts`, `postgres-registration-metadata-queries.ts`), and enforces 0-exemption boundaries via `architecture-boundaries.test.ts` + `file-size-ratchet.test.ts` (`11/11` pass).
+- `[G2]` `DONE`: Fresh `2026-11-18` verification gate passed across all `852` Biome files, `528` SQL-checked backend files, `254` test files (`2,736` pass / `0` fail locally; `migrate-runner.test.ts` `9/9` pass on local Postgres 17.11; full Postgres 17 integration + schema-parity verified in GitHub Actions `Pull Request Checks / verify` Run `44416260584` and Run `44430999183`), and `perf:scenarios` exit 0 (plus PR `#382` 500-parent local Postgres 17 benchmark).
+- `[G3]` `DONE`: All 5 `package.json` manifests are at `"0.4.0"` (`package.json`, `packages/common/package.json`, `packages/backend/package.json`, `packages/frontend/package.json`, `packages/shopify-confirmation/package.json`), `CHANGELOG.md` is updated to `## [0.4.0] - 2026-11-18` citing `#423` (`S20`), `#424` (`S18`), `#425` (`@festival/shopify-confirmation`), and `#427` (`S19`), and all 19 upstream code packets (`S00`–`S04`, `S06`–`S13`, `S15`–`S20`) + `#425` + `#426` are merged on `main`. Cutover artifacts:
+  - Release Prep PR `#428` merged to `origin/main` (`a65c690fc23c089ba3eb5644e0bcf219ccf2f06d`); `Pull Request Checks / verify` Run `44416260584` `SUCCESS`.
+  - Promotion PR `#429` (`main -> release`) merged to `origin/release` (`364e543bb5ceac1f2a9b2205f7145921f0da62fa`); `Pull Request Checks / verify` Run `44430999183` `SUCCESS`.
+  - `Continuous Deployment` (`deploy.yml`) on `release`: Run `44431387848` (`success`, all 4 jobs `success`).
+  - Annotated tag `v0.4.0`: tag object `c872d5577685e5853030bf96d3d93633ff9dff18` -> `364e543bb5ceac1f2a9b2205f7145921f0da62fa`.
+  - GitHub Release `v0.4.0`: `https://github.com/pafenorthwest/Festival/releases/tag/v0.4.0`.
+  - `Continuous Deployment` (`deploy.yml`) on `refs/tags/v0.4.0`: Run `44432128555` (`target_environment=production`, all 4 jobs `success`), publishing:
+    - `ghcr.io/pafenorthwest/festival-backend:v0.4.0` + `:latest` (`sha256:9d4f955d9677e4ad1de195d316eae56ad9c60ce22294a044332c1eefd05ae3a2`)
+    - `ghcr.io/pafenorthwest/festival-frontend:v0.4.0` + `:latest` (`sha256:c32bbd3266e2ecbe7b234f194eecfa98746cff9dc051f33b946778294ec6ac9d`)
+- `[G4]` Ready for `S05` live bring-up: `Deploy to Target Host` and `Post-Deploy Health & Smoke Verification` on `refs/tags/v0.4.0` (Run `44432128555`) skipped cleanly with `configured=false` because `production` environment secrets (`DEPLOY_HOST`, `DEPLOY_SSH_PRIVATE_KEY`, `DEPLOY_PUBLIC_URL` / `D4`) are not yet configured.
+- Integration UI walkthrough (`https://int.artsfestival.online`, `2026-11-18`):
+  - Phases 1 (Public) & 2 (Authenticated Customer) PASS at SHA `8d0c5bb` after PR `#435` (`Integration Deployment` Run `44457776486`) shipped and verified live fixes closing Issues `#431`–`#434`.
+  - Phase 3 (Authenticated Admin) PASS at `main` SHA `650ccac` after PR `#440` (`Integration Deployment` Run `44465072507`) closed Issues `#437`, `#438`, and `#439` (`0` console errors, `0` HTTP `5xx` errors):
+    - Admin directory moderation (`approved`/`rejected` toggle, `#361`, `#416`): PASS (Teachers verified & reverted; `0` Accompanist listings in `pafe`).
+    - Admin Teacher division editor (strictly 1 active division, `#418`): PASS (single-division enforcement + immediate card unlock after `#437` fix; reverted cleanly).
+    - Admin Concerto Repertoire CSV (`#359`): PASS (template download, catalog export, dry-run diff preview). Note: Concerto typeahead (`#362`) is parent/customer-flow only (`FestivalPieceEditor`/`FestivalRepertoireModal`) with `0` works in catalog.
+    - Modals (`FestivalClassModal` & `FestivalClassWaitlistModal`, `#336`): PASS (viewport-anchored Portal backdrop, zero clipping, single `Close` button after `#439` fix).
+    - Direct admin subroute navigation (`/settings`, `/roster`, `/rooms`, `/volunteers`): PASS after `#438` fix.
+  - Ready to advance `release` branch and cut `v0.4.1`.
 
 ## Quality gate results
 - `bun run verify:toolchain`: exit 0 (`Bun 1.4.2`, `TypeScript 5.9.3`)
@@ -68,4 +85,13 @@ bun run --cwd packages/backend perf:scenarios
 - `bun run test` (local unit suite): exit 0 (`2,736` pass, `0` fail, `159` Postgres-gated skip across `254` files: `common` 382, `backend` 1750, `frontend` 583, `shopify-confirmation` 21)
 - `bun test packages/backend/tests/migrate-runner.test.ts` (local Postgres 17.11): exit 0 (`9` pass, `0` fail, `0` skip)
 - `bun run --cwd packages/backend perf:scenarios`: exit 0 (`0` 5xx errors; PR `#382` local Postgres 17 baseline 100% HTTP 2xx)
-- GitHub Actions `Pull Request Checks / verify` (PostgreSQL 17 integration + schema parity): pending release prep PR check.
+- GitHub Actions `Pull Request Checks / verify` (PostgreSQL 17 integration + schema parity):
+  - Release Prep PR `#428` (`main`): Run `44416260584` `SUCCESS`
+  - Promotion PR `#429` (`main -> release`): Run `44430999183` `SUCCESS`
+  - Integration Walkthrough Fixes PR `#435` (`main`, `8d0c5bb`): Runs `44456521852`, `44457286532` `SUCCESS`
+- GitHub Actions `Integration Deployment`:
+  - `main` (`8d0c5bb`, PR `#435`): Run `44457776486` `success`
+  - `main` (`650ccac`, PR `#440`): Run `44465072507` `success`
+- GitHub Actions `Continuous Deployment` (`deploy.yml`):
+  - `release` branch (`364e543bb5ceac1f2a9b2205f7145921f0da62fa`): Run `44431387848` `success` (all 4 jobs `success`)
+  - `refs/tags/v0.4.0` (`target_environment=production`): Run `44432128555` `success` (all 4 jobs `success`; GHCR images published; host deploy/smoke skipped cleanly with `configured=false` pending `D4` secrets)

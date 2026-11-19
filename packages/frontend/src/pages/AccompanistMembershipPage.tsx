@@ -259,17 +259,17 @@ export function AccompanistMembershipPage(props: { slug: string }) {
 							required
 						/>
 					</label>
-					<fieldset>
+					<fieldset class="field">
 						<legend>Divisions</legend>
 						<For each={divisions()}>
 							{(division) => (
-								<label>
+								<label class="membership-consent">
 									<input
 										type="checkbox"
 										checked={selected().includes(division.id)}
 										onChange={() => toggle(division.id)}
-									/>{" "}
-									{division.displayName}
+									/>
+									<span>{division.displayName}</span>
 								</label>
 							)}
 						</For>

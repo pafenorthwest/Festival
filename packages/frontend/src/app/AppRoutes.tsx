@@ -46,9 +46,10 @@ function publicOrgRoutes() {
 		<>
 			<Route
 				path="/"
-				component={() => (
-					<Pages.OrganizationRootPage app={useFestivalShell()} />
-				)}
+				component={() => {
+					const app = useFestivalShell();
+					return <Pages.OrganizationRootPage app={app} />;
+				}}
 			/>
 			<Route
 				path="/directory"
@@ -66,9 +67,10 @@ function publicOrgRoutes() {
 			/>
 			<Route
 				path="/checkout-recovery/:token"
-				component={() => (
-					<Pages.CustomerCheckoutRecoveryPage app={useFestivalShell()} />
-				)}
+				component={() => {
+					const app = useFestivalShell();
+					return <Pages.CustomerCheckoutRecoveryPage app={app} />;
+				}}
 			/>
 			<Route
 				path="/account"
@@ -155,9 +157,10 @@ function festivalRoutes() {
 				path="/festival/:festivalSlug"
 				component={() => {
 					const p = useParams();
+					const app = useFestivalShell();
 					return (
 						<Pages.FestivalLandingPage
-							app={useFestivalShell()}
+							app={app}
 							slug={p.slug ?? ""}
 							festivalSlug={p.festivalSlug ?? ""}
 						/>
@@ -226,19 +229,25 @@ export function AppRoutes() {
 			<Route path="/privacy-policy" component={Pages.PrivacyPolicyPage} />
 			<Route
 				path="/create-organization"
-				component={() => (
-					<AdminOrgProvider>
-						<Pages.CreateOrganizationPage app={useFestivalShell()} />
-					</AdminOrgProvider>
-				)}
+				component={() => {
+					const app = useFestivalShell();
+					return (
+						<AdminOrgProvider>
+							<Pages.CreateOrganizationPage app={app} />
+						</AdminOrgProvider>
+					);
+				}}
 			/>
 			<Route
 				path="/invite/:token"
-				component={() => (
-					<AdminOrgProvider>
-						<Pages.InviteLandingPage app={useFestivalShell()} />
-					</AdminOrgProvider>
-				)}
+				component={() => {
+					const app = useFestivalShell();
+					return (
+						<AdminOrgProvider>
+							<Pages.InviteLandingPage app={app} />
+						</AdminOrgProvider>
+					);
+				}}
 			/>
 			<Route path={["/org/:slug", "/organizations/:slug"]}>
 				{publicOrgRoutes()}

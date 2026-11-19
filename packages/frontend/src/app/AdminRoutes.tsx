@@ -77,23 +77,32 @@ export function adminRoutes() {
 			/>
 			<Route
 				path="/admin/users"
-				component={() => (
-					<AdminOrgProvider>
-						<Pages.AdminUsersPage app={useFestivalShell()} />
-					</AdminOrgProvider>
-				)}
+				component={() => {
+					const app = useFestivalShell();
+					return (
+						<AdminOrgProvider>
+							<Pages.AdminUsersPage app={app} />
+						</AdminOrgProvider>
+					);
+				}}
 			/>
 			<Route
 				path="/admin/divisions"
-				component={() => (
-					<AdminOrgProvider>
-						<Pages.AdminDivisionsPage app={useFestivalShell()} />
-					</AdminOrgProvider>
-				)}
+				component={() => {
+					const app = useFestivalShell();
+					return (
+						<AdminOrgProvider>
+							<Pages.AdminDivisionsPage app={app} />
+						</AdminOrgProvider>
+					);
+				}}
 			/>
 			<Route
 				path="/admin/settings"
-				component={() => <Pages.AdminSettingsPage app={useFestivalShell()} />}
+				component={() => {
+					const app = useFestivalShell();
+					return <Pages.AdminSettingsPage app={app} />;
+				}}
 			/>
 			<Route
 				path="/admin/integrations"
@@ -133,24 +142,21 @@ export function adminRoutes() {
 				path="/admin/concerto-repertoire"
 				component={() => {
 					const slug = useParams().slug ?? "";
-					return (
-						<Pages.AdminConcertoRepertoirePage
-							app={useFestivalShell()}
-							slug={slug}
-						/>
-					);
+					const app = useFestivalShell();
+					return <Pages.AdminConcertoRepertoirePage app={app} slug={slug} />;
 				}}
 			/>
 			<Route
 				path="/admin/checkout-recovery"
 				component={() => {
 					const p = useParams();
+					const app = useFestivalShell();
 					return (
 						<ClassRegistrationProvider
 							slug={p.slug ?? ""}
 							festivalSlug={p.festivalSlug ?? ""}
 						>
-							<Pages.AdminCheckoutRecoveryPage app={useFestivalShell()} />
+							<Pages.AdminCheckoutRecoveryPage app={app} />
 						</ClassRegistrationProvider>
 					);
 				}}

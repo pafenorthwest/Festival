@@ -149,12 +149,6 @@ export function FestivalClassWaitlistModal(
 							</div>
 						</div>
 					</Show>
-
-					<div class="modal-actions">
-						<Button type="button" variant="secondary" onClick={props.onClose}>
-							Close
-						</Button>
-					</div>
 				</section>
 			</ModalBackdrop>
 		</Show>

@@ -289,11 +289,19 @@ function ModerationProfilesList(props: { store: ModerationStore }) {
 										...updated,
 										role: "Teacher",
 									}),
+									updatingKey:
+										s().updatingKey === rowKey ? null : s().updatingKey,
 								})
 							}
 							onDivisionBusyChange={(busy) =>
 								!props.store.disposed &&
-								props.store.patch({ updatingKey: busy ? rowKey : null })
+								props.store.patch({
+									updatingKey: busy
+										? rowKey
+										: s().updatingKey === rowKey
+											? null
+											: s().updatingKey,
+								})
 							}
 							onError={(error) =>
 								!props.store.disposed && props.store.patch({ error })

@@ -115,6 +115,13 @@ select {
 	background: rgba(255, 255, 255, 0.94);
 }
 
+input[type="radio"] {
+	width: auto;
+	padding: 0;
+	border: 0;
+	background: transparent;
+}
+
 input[aria-invalid="true"] {
 	border-color: var(--bullet-error);
 	box-shadow: 0 0 0 3px rgba(185, 77, 54, 0.16);
@@ -981,6 +988,20 @@ button.compact-header-button {
 	margin: 0;
 }
 
+.field-radio {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+.field-radio input[type="radio"] {
+	width: auto;
+	flex-shrink: 0;
+	margin: 0;
+	padding: 0;
+}
+
 .customer-child-status {
 	margin-top: 0;
 	padding-top: 0;
@@ -1349,13 +1370,13 @@ form.shopify-integration-card {
 	background: rgba(31, 122, 87, 0.08);
 }
 
-.admin-membership-item div,
+.admin-membership-item > div:not([class]),
 .admin-membership-meta {
 	display: grid;
 	gap: 0.25rem;
 }
 
-.admin-membership-item span,
+.admin-membership-item span:not([class]),
 .membership-prerequisite p {
 	margin: 0;
 	color: var(--bullet-soft-ink);

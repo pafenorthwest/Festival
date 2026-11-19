@@ -58,6 +58,9 @@ function createShellSignals() {
 	const [statusMessage, setStatusMessage] = createSignal("");
 	const [errorMessage, setErrorMessage] = createSignal("");
 	const [isBusy, setIsBusy] = createSignal(false);
+	const [isAuthResolved, setIsAuthResolved] = createSignal(false);
+	const [isSessionLoading, setIsSessionLoading] = createSignal(false);
+	const [isOrganizationLoading, setIsOrganizationLoading] = createSignal(false);
 	const [signInModalKind, setSignInModalKind] =
 		createSignal<SignInModalKind | null>(null);
 	const [signInStep, setSignInStep] = createSignal<SignInStep>("method");
@@ -73,7 +76,10 @@ function createShellSignals() {
 		createdOrganizationSlug,
 		errorMessage,
 		firebaseUser,
+		isAuthResolved,
 		isBusy,
+		isOrganizationLoading,
+		isSessionLoading,
 		memberships,
 		needsEmailLinkConfirmation,
 		organization,
@@ -83,7 +89,10 @@ function createShellSignals() {
 		setCreatedOrganizationSlug,
 		setErrorMessage,
 		setFirebaseUser,
+		setIsAuthResolved,
 		setIsBusy,
+		setIsOrganizationLoading,
+		setIsSessionLoading,
 		setMemberships,
 		setNeedsEmailLinkConfirmation,
 		setOrganization,
@@ -116,6 +125,12 @@ function createShellDerived(
 		return user ? toAuthenticatedUser(user) : null;
 	});
 	const isAdminMember = createMemo(() => sessionMembership()?.role === "Admin");
+	const isSessionHydrating = createMemo(
+		() =>
+			!signals.isAuthResolved() ||
+			signals.isSessionLoading() ||
+			signals.isOrganizationLoading(),
+	);
 	const isDropTransferEnabled = createMemo(() =>
 		computeIsDropTransferEnabled(signals.organization()),
 	);
@@ -141,6 +156,7 @@ function createShellDerived(
 		isAdminRoute,
 		isAdminSubRoute,
 		isDropTransferEnabled,
+		isSessionHydrating,
 		route,
 		sessionMembership,
 		get slug() {

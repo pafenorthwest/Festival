@@ -155,6 +155,51 @@ describe("customer identity organization session scope", () => {
 		}
 	});
 
+	it("keeps isCustomerSessionLoading false during same-org focus/pageshow revalidation after initial anonymous resolution", async () => {
+		const originalWindow = globalThis.window;
+		const events = new EventTarget();
+		globalThis.window = events as Window & typeof globalThis;
+		const view = mountScopeIdentity({
+			kind: "org-customer-account-memberships",
+			slug,
+		});
+		try {
+			expect(view.isCustomerSessionLoading()).toBe(true);
+			view.requests[0].resolve(anonymous);
+			await Bun.sleep(0);
+
+			expect(view.isCustomerSessionLoading()).toBe(false);
+			expect(view.customerSession()).toEqual({ authenticated: false });
+
+			events.dispatchEvent(new Event("focus"));
+			expect(view.requests).toHaveLength(2);
+			expect(view.isCustomerSessionLoading()).toBe(false);
+
+			view.requests[1].resolve(anonymous);
+			await Bun.sleep(0);
+			expect(view.isCustomerSessionLoading()).toBe(false);
+		} finally {
+			view.dispose();
+			globalThis.window = originalWindow;
+		}
+	});
+
+	it("shares customer identity state between CustomerAccountPageLayout and AppHeader and uses SPA link navigation for Customer account", () => {
+		const layoutSource = readFileSync(
+			new URL("../src/pages/CustomerAccountPageLayout.tsx", import.meta.url),
+			"utf8",
+		);
+		const headerSource = readFileSync(
+			new URL("../src/components/AppHeader.tsx", import.meta.url),
+			"utf8",
+		);
+
+		expect(layoutSource).toContain("useOptionalCustomerIdentity");
+		expect(layoutSource).toContain("isCustomerSessionLoading");
+		expect(headerSource).toContain("href={accountPath()}");
+		expect(headerSource).toContain("follow(event, accountPath())");
+	});
+
 	it("resets on org switch, non-customer routes, and sign-out while dropping stale prior-org responses", async () => {
 		const view = mountScopeIdentity();
 		try {

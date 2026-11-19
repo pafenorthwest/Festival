@@ -257,6 +257,13 @@ describe("Festival Admin Classes waitlist roster integration", () => {
 		expect(lineCount).toBeLessThanOrEqual(200);
 	});
 
+	it("renders exactly one Close button in FestivalClassWaitlistModal", () => {
+		const closeButtonMatches = waitlistModalComponent.match(
+			/<Button[^>]*>\s*Close\s*<\/Button>/g,
+		);
+		expect(closeButtonMatches).toHaveLength(1);
+	});
+
 	it("wires waitlistClass signal and mounts FestivalClassWaitlistModal within 300 lines", () => {
 		expect(classesPage).toContain("waitlistClass");
 		expect(classesPage).toContain("setWaitlistClass");

@@ -425,7 +425,7 @@ export function AdminMembershipProductsPage(
 					<legend>Division selection</legend>
 					<For each={choices}>
 						{([value, label]) => (
-							<label>
+							<label class="field-radio">
 								<input
 									type="radio"
 									name="accompanist-division-policy"

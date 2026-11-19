@@ -59,8 +59,8 @@ async function submitTeacherDivisionUpdate(options: {
 	} finally {
 		if (!isDisposed()) {
 			setSaving(false);
-			props.onBusyChange?.(false);
 		}
+		props.onBusyChange?.(false);
 	}
 }
 

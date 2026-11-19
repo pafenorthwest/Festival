@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.1] - 2026-11-19
+
+### Changed
+
+- Updated S14 walkthrough verification ledgers for Phase 1, 2, and 3 sign-off (`#436`, `#441`).
+- Bumped root and workspace package versions (`@festival/common`, `@festival/backend`, `@festival/frontend`, and `@festival/shopify-confirmation`) in lockstep to `0.4.1`.
+
+### Fixed
+
+- Resolved Phase 1 & 2 walkthrough defects (`#435`): fixed inline `useFestivalShell()` JSX click handlers (`#431`), restored Shopify customer session persistence (`#432`), fixed header Sign in and Customer account navigation (`#433`), and polished accompanist Divisions checkboxes and mobile Festival Home navigation (`#434`).
+- Resolved Phase 3 authenticated admin walkthrough defects (`#440`): fixed Teacher division editor stuck `Updating…` state (`#437`), fixed direct navigation hydration and loading on `/org/:slug/admin/{settings,roster,rooms,volunteers}` (`#438`), and polished membership directory badge/radio CSS and duplicate Waitlist modal `Close` buttons (`#439`).
+
 ## [0.4.0] - 2026-11-18
 
 ### Added

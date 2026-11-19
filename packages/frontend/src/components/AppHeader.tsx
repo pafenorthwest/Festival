@@ -72,6 +72,8 @@ export function AppHeader(props: AppHeaderProps) {
 			: null) ?? festivalSlug();
 	const cartPath = () =>
 		buildFestivalCartPath(slug() ?? "", cartFestivalSlug() ?? "");
+	const accountPath = () =>
+		buildOrgCustomerAccountMembershipsPath(slug() ?? "");
 	const cartCount = () => {
 		if (hasPendingCheckout()) {
 			return pendingCheckout.checkout()?.registrationCount ?? null;
@@ -247,21 +249,27 @@ export function AppHeader(props: AppHeaderProps) {
 							</span>
 						</a>
 					</Show>
-					<button
+					<a
 						class="parent-header-button parent-account-button"
-						type="button"
+						classList={{
+							active: props.app
+								.route()
+								.kind.startsWith("org-customer-account-"),
+						}}
+						href={accountPath()}
+						onClick={(event) => follow(event, accountPath())}
 						aria-label="Customer account"
-						onClick={() =>
-							props.app.navigate(
-								buildOrgCustomerAccountMembershipsPath(slug() ?? ""),
-							)
+						aria-current={
+							props.app.route().kind.startsWith("org-customer-account-")
+								? "page"
+								: undefined
 						}
 					>
 						<span class="material-symbols-outlined" aria-hidden="true">
 							person
 						</span>
 						<span class="parent-header-label">Account</span>
-					</button>
+					</a>
 					<Show when={!customerIdentity.isCustomerSessionLoading()}>
 						<Show
 							when={customerIdentity.customerSession().authenticated}

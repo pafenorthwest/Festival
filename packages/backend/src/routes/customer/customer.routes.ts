@@ -87,6 +87,7 @@ async function sessionHandler(
 	c: CustomerContext,
 	service?: CustomerAccountService,
 ) {
+	c.header("Cache-Control", "no-store");
 	try {
 		assertNoBearerPrincipal(c.req.header("Authorization"));
 		const accountService = requireCustomerAccountService(service);

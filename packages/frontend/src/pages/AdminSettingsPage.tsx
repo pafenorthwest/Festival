@@ -1,4 +1,4 @@
-import { createSignal, For, onMount, Show } from "solid-js";
+import { createEffect, createSignal, For, Show } from "solid-js";
 import { listIanaTimezones } from "../app/adminDivisions.js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { AccessDeniedPanel } from "../components/AccessDeniedPanel.js";
@@ -10,43 +10,88 @@ import {
 	updateAdminTimezone,
 } from "../lib/api.js";
 
-export function AdminSettingsPage(props: { app: FestivalAppController }) {
+type AdminSettingsApp = Pick<
+	FestivalAppController,
+	"firebaseUser" | "isAdminMember" | "route"
+>;
+
+export function createAdminSettingsState(
+	app: AdminSettingsApp,
+	deps = {
+		getAdminTimezone,
+		getAdminRegistrationConfiguration,
+	},
+) {
 	const [timezone, setTimezone] = createSignal("");
 	const [timezoneDraft, setTimezoneDraft] = createSignal("");
 	const [registrationAgeDate, setRegistrationAgeDate] = createSignal("");
 	const [isLoading, setIsLoading] = createSignal(true);
-	const [isSaving, setIsSaving] = createSignal(false);
 	const [error, setError] = createSignal("");
+	let latestRequest = 0;
 
-	onMount(() => {
-		const route = props.app.route();
-		const user = props.app.firebaseUser();
-		if (route.kind !== "org-admin-settings" || !user) return;
+	createEffect(() => {
+		const route = app.route();
+		const user = app.firebaseUser();
+		const isAdmin = app.isAdminMember();
+		const requestId = ++latestRequest;
+		if (route.kind !== "org-admin-settings" || !user || !isAdmin) {
+			setIsLoading(false);
+			return;
+		}
+		setIsLoading(true);
+		setError("");
 		void (async () => {
 			try {
+				const token = await user.getIdToken();
 				const [timezoneResponse, registrationResponse] = await Promise.all([
-					getAdminTimezone(await user.getIdToken(), route.slug),
-					getAdminRegistrationConfiguration(
-						await user.getIdToken(),
-						route.slug,
-					),
+					deps.getAdminTimezone(token, route.slug),
+					deps.getAdminRegistrationConfiguration(token, route.slug),
 				]);
+				if (requestId !== latestRequest) return;
 				setTimezone(timezoneResponse.timezone);
 				setTimezoneDraft(timezoneResponse.timezone);
 				setRegistrationAgeDate(
 					registrationResponse.ageConfiguration?.registrationAgeDate ?? "",
 				);
 			} catch (reason) {
+				if (requestId !== latestRequest) return;
 				setError(
 					reason instanceof Error
 						? reason.message
 						: "Organization settings could not be loaded.",
 				);
 			} finally {
-				setIsLoading(false);
+				if (requestId === latestRequest) setIsLoading(false);
 			}
 		})();
 	});
+
+	return {
+		timezone,
+		setTimezone,
+		timezoneDraft,
+		setTimezoneDraft,
+		registrationAgeDate,
+		setRegistrationAgeDate,
+		isLoading,
+		error,
+		setError,
+	};
+}
+
+export function AdminSettingsPage(props: { app: FestivalAppController }) {
+	const {
+		timezone,
+		setTimezone,
+		timezoneDraft,
+		setTimezoneDraft,
+		registrationAgeDate,
+		setRegistrationAgeDate,
+		isLoading,
+		error,
+		setError,
+	} = createAdminSettingsState(props.app);
+	const [isSaving, setIsSaving] = createSignal(false);
 
 	async function saveTimezone() {
 		const route = props.app.route();

@@ -38,7 +38,9 @@ export function createCustomerIdentityState(
 		createSignal<CustomerSession>(unauthenticated);
 	const [isCustomerSessionLoading, setIsCustomerSessionLoading] =
 		createSignal(false);
+	const [customerSessionError, setCustomerSessionError] = createSignal("");
 	let latestRequest = 0;
+	let loadedSlug: string | null = null;
 	let disposed = false;
 	const pendingCheckout = createPendingCheckoutState(pendingDependencies);
 	const activeOrgSlug = createMemo(() => {
@@ -58,9 +60,11 @@ export function createCustomerIdentityState(
 		}
 		const request = ++latestRequest;
 		if (!targetSlug) {
+			loadedSlug = null;
 			batch(() => {
 				pendingCheckout.clear(true);
 				setCustomerSession(unauthenticated);
+				setCustomerSessionError("");
 				setIsCustomerSessionLoading(false);
 			});
 			return unauthenticated;
@@ -68,10 +72,13 @@ export function createCustomerIdentityState(
 
 		const isCurrentRequest = () =>
 			!disposed && request === latestRequest && activeOrgSlug() === targetSlug;
-		setIsCustomerSessionLoading(true);
+		const isInitialLoad = loadedSlug !== targetSlug;
+		if (isInitialLoad) setIsCustomerSessionLoading(true);
+		setCustomerSessionError("");
 		try {
 			const { session } = await fetchSession(targetSlug);
 			if (!isCurrentRequest()) return unauthenticated;
+			loadedSlug = targetSlug;
 			batch(() => {
 				if (session.authenticated) {
 					shell.parentRegistration.bindSession(targetSlug, session.csrfToken);
@@ -82,13 +89,16 @@ export function createCustomerIdentityState(
 					pendingCheckout.clearOrganization(targetSlug);
 				}
 				setCustomerSession(session);
+				setCustomerSessionError("");
 			});
 			return session;
-		} catch {
+		} catch (error) {
 			if (isCurrentRequest()) {
+				loadedSlug = targetSlug;
 				batch(() => {
 					pendingCheckout.clear(true);
 					setCustomerSession(unauthenticated);
+					setCustomerSessionError(error instanceof Error ? error.message : "");
 				});
 			}
 			return unauthenticated;
@@ -99,9 +109,11 @@ export function createCustomerIdentityState(
 
 	createEffect(
 		on(activeOrgSlug, (slug) => {
+			loadedSlug = null;
 			batch(() => {
 				if (pendingCheckout.ownerSlug() !== slug) pendingCheckout.clear(true);
 				setCustomerSession(unauthenticated);
+				setCustomerSessionError("");
 				void refreshCustomerSession();
 			});
 		}),
@@ -140,6 +152,7 @@ export function createCustomerIdentityState(
 
 	return {
 		customerSession,
+		customerSessionError,
 		isCustomerSessionLoading,
 		refreshCustomerSession,
 		pendingCheckout,

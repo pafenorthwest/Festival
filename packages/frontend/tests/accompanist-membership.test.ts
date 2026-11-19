@@ -488,4 +488,28 @@ describe("AccompanistMembershipPage rendered DOM interactions", () => {
 			expect(textOf(ctx.root)).toContain("Sign in to continue");
 			expect(allEls(ctx.root).find((el) => el.tag === "form")).toBeUndefined();
 		}));
+
+	it("renders division checkboxes inline beside their labels matching the Public Directory checkbox layout", () =>
+		withAccompanistDom({ existingProfile: null }, async (ctx) => {
+			const fieldset = allEls(ctx.root).find(
+				(el) => el.tag === "fieldset" && textOf(el).includes("Divisions"),
+			);
+			expect(fieldset).toBeDefined();
+			expect(fieldset?.props.class).toBe("field");
+
+			const divisionLabels = fieldset
+				? allEls(fieldset).filter((el) => el.tag === "label")
+				: [];
+			expect(divisionLabels.length).toBeGreaterThan(0);
+			for (const label of divisionLabels) {
+				expect(label.props.class).toBe("membership-consent");
+				const checkbox = allEls(label).find(
+					(el) => el.tag === "input" && el.props.type === "checkbox",
+				);
+				const textSpan = allEls(label).find((el) => el.tag === "span");
+				expect(checkbox).toBeDefined();
+				expect(textSpan).toBeDefined();
+				if (textSpan) expect(textOf(textSpan)).toContain("Piano");
+			}
+		}));
 });
