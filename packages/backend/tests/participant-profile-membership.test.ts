@@ -16,6 +16,12 @@ async function setup() {
 		name: "Other",
 		slug: "other",
 	});
+	const defaultDivision = await repository.createDivision({
+		organizationId: org.id,
+		displayName: "Piano",
+		normalizedName: "piano",
+	});
+	const divisionsByOrg = new Map([[org.id, defaultDivision]]);
 	const sessionAccess = { organizationId: org.id, customerId: "customer-1" };
 	const customerAccountService = {
 		formAccess: async () => sessionAccess,
@@ -33,7 +39,6 @@ async function setup() {
 	const payload = {
 		displayName: "Participant",
 		publicDirectoryOptIn: true,
-		divisionIds: [],
 	};
 
 	async function grant(
@@ -47,11 +52,15 @@ async function setup() {
 	) {
 		const organizationId = options.organizationId ?? org.id;
 		const customerId = options.customerId ?? sessionAccess.customerId;
-		const division = await repository.createDivision({
-			organizationId,
-			displayName: "Piano",
-			normalizedName: "piano",
-		});
+		let division = divisionsByOrg.get(organizationId);
+		if (!division) {
+			division = await repository.createDivision({
+				organizationId,
+				displayName: "Piano",
+				normalizedName: "piano",
+			});
+			divisionsByOrg.set(organizationId, division);
+		}
 		const startsOn = options.startsOn ?? "2026-05-15";
 		const endsOn = options.endsOn ?? "2026-06-15";
 		if (role === "accompanist") {
@@ -105,7 +114,15 @@ async function setup() {
 		repository,
 		org,
 		otherOrg,
+		defaultDivision,
 		grant,
+		supersede(entitlementId: string, supersededOn: string) {
+			(
+				repository as unknown as {
+					state: { entitlementSupersededOn: Map<string, string> };
+				}
+			).state.entitlementSupersededOn.set(entitlementId, supersededOn);
+		},
 		setNow(value: string) {
 			now = new Date(value);
 		},
@@ -113,7 +130,10 @@ async function setup() {
 			const body = { ...payload, publicDirectoryOptIn };
 			return role === "teacher"
 				? service.upsertTeacherProfile(context, body)
-				: service.upsertAccompanistProfile(context, body);
+				: service.upsertAccompanistProfile(context, {
+						...body,
+						divisionIds: [defaultDivision.id],
+					});
 		},
 		async read(role: Role) {
 			return role === "teacher"
@@ -184,7 +204,8 @@ describe("Participant profile membership prerequisite", () => {
 				organization_id: fixture.org.id,
 				customer_id: "customer-1",
 				public_directory_opt_in: true,
-				approval_status: role === "teacher" ? "approved" : "pending",
+				approval_status: "approved",
+				division_ids: [fixture.defaultDivision.id],
 			});
 			expect(await fixture.read(role)).toEqual(profile);
 		});
@@ -194,13 +215,6 @@ describe("Participant profile membership prerequisite", () => {
 				const fixture = await setup();
 				const membership = await fixture.grant(role);
 				const original = await fixture.save(role);
-				if (role === "teacher") {
-					await fixture.repository.updateTeacherProfileApproval(
-						fixture.org.id,
-						original.id,
-						"approved",
-					);
-				}
 				if (lapse === "expired") {
 					fixture.setNow("2026-06-15T12:00:00Z");
 				} else {
@@ -213,37 +227,93 @@ describe("Participant profile membership prerequisite", () => {
 					});
 				}
 				expect((await fixture.read(role)).id).toBe(original.id);
-				if (role === "teacher") {
-					expect(
-						await fixture.repository.getPublicDirectoryProfiles(fixture.org.id),
-					).toEqual([]);
-					await expect(fixture.save("teacher", true)).rejects.toMatchObject({
-						status: 403,
-						code: "active_membership_required",
-					});
-				}
+				expect(
+					await fixture.repository.getPublicDirectoryProfiles(fixture.org.id),
+				).toEqual([]);
+				await expect(fixture.save(role, true)).rejects.toMatchObject({
+					status: 403,
+					code: "active_membership_required",
+				});
 				expect(await fixture.save(role, false)).toMatchObject({
 					id: original.id,
 					public_directory_opt_in: false,
 				});
 			});
 		}
+
+		it(`auto-approves existing opted-out or pending active ${role} immediately on opt-in`, async () => {
+			const fixture = await setup();
+			await fixture.grant(role);
+			const created = await fixture.save(role, false);
+			expect(created.approval_status).toBe("pending");
+			const optedIn = await fixture.save(role, true);
+			expect(optedIn).toMatchObject({
+				id: created.id,
+				public_directory_opt_in: true,
+				approval_status: "approved",
+			});
+		});
 	}
 
-	it("auto-approves existing opted-out or pending active teacher immediately on opt-in", async () => {
+	it("excludes superseded accompanists from public directory and preserves sticky rejected status across edits", async () => {
 		const fixture = await setup();
-		await fixture.grant("teacher");
-		const created = await fixture.save("teacher", false);
-		await fixture.repository.updateTeacherProfileApproval(
+		const grant = await fixture.grant("accompanist");
+		const created = await fixture.save("accompanist", true);
+		expect(created.approval_status).toBe("approved");
+		expect(
+			await fixture.repository.getPublicDirectoryProfiles(fixture.org.id),
+		).toMatchObject([
+			{
+				displayName: "Participant",
+				role: "Accompanist",
+				isActiveMember: true,
+			},
+		]);
+
+		await fixture.repository.updateAccompanistProfileApproval(
 			fixture.org.id,
 			created.id,
-			"pending",
+			"rejected",
 		);
-		const optedIn = await fixture.save("teacher", true);
-		expect(optedIn).toMatchObject({
+		const editedWhileRejected = await fixture.save("accompanist", true);
+		expect(editedWhileRejected.approval_status).toBe("rejected");
+		expect(
+			await fixture.repository.getPublicDirectoryProfiles(fixture.org.id),
+		).toEqual([]);
+
+		await fixture.repository.updateAccompanistProfileApproval(
+			fixture.org.id,
+			created.id,
+			"approved",
+		);
+		expect(
+			(await fixture.repository.getPublicDirectoryProfiles(fixture.org.id))
+				.length,
+		).toBe(1);
+
+		fixture.supersede(grant.id, "2026-05-15");
+		expect(
+			await fixture.repository.findCurrentAccompanistMembershipGrant({
+				organizationId: fixture.org.id,
+				customerId: "customer-1",
+			}),
+		).toBeNull();
+		expect(
+			await fixture.repository.listAccompanistMembershipGrants({
+				organizationId: fixture.org.id,
+				customerId: "customer-1",
+			}),
+		).toMatchObject([{ id: grant.id, status: "superseded", isCurrent: false }]);
+		expect(
+			await fixture.repository.getPublicDirectoryProfiles(fixture.org.id),
+		).toEqual([]);
+		await expect(fixture.save("accompanist", true)).rejects.toMatchObject({
+			status: 403,
+			code: "active_membership_required",
+		});
+		expect(await fixture.save("accompanist", false)).toMatchObject({
 			id: created.id,
-			public_directory_opt_in: true,
-			approval_status: "approved",
+			public_directory_opt_in: false,
 		});
 	});
 });

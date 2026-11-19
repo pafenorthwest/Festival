@@ -1,3 +1,5 @@
+import type {} from "@shopify/ui-extensions/purchase.thank-you.block.render";
+
 export const RETURN_BUTTON_LABEL = "Return to Festival account";
 const DEFAULT_ORIGIN = "https://festival.passmore.xyz";
 
@@ -37,6 +39,7 @@ export function mountReturnButton(
 	isEditor: boolean,
 ): () => void {
 	const container = document.createElement("s-stack");
+	container.setAttribute("gap", "none");
 	document.body.appendChild(container);
 	const update = () => {
 		const href = festivalAccountReturnUrl(settings.value);
@@ -54,7 +57,11 @@ export function mountReturnButton(
 		button.setAttribute("href", href);
 		button.setAttribute("variant", "primary");
 		button.textContent = RETURN_BUTTON_LABEL;
-		container.replaceChildren(button);
+		// Shopify sizing supports pixels; 40px approximates two blank text lines.
+		const spacer = document.createElement("s-box");
+		spacer.blockSize = "40px";
+		spacer.accessibilityVisibility = "hidden";
+		container.replaceChildren(button, spacer);
 	};
 	update();
 	const unsubscribe = settings.subscribe(update);

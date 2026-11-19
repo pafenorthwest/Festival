@@ -1,4 +1,8 @@
-import type { SaveCustomerFestivalAvailabilityRequest } from "@festival/common";
+import {
+	CustomerAvailabilityQuerySchema,
+	SaveCustomerFestivalAvailabilityInputSchema,
+	type SaveCustomerFestivalAvailabilityRequest,
+} from "@festival/common";
 import { type Context, Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import { type ApiVariables, toJsonError } from "../../auth/tenant-context.js";
@@ -7,10 +11,38 @@ import type { CustomerAvailabilityService } from "../../customer/customer-availa
 import { AppError } from "../../errors/app-error.js";
 import { assertNoBearerPrincipal } from "../customer-auth/customer-auth.routes.js";
 import { resolveRequestOrigin } from "../shared/csrf-guard.js";
+import {
+	type CoLocatedRouteSecurity,
+	defineRouteSecurity,
+} from "../shared/route-security-metadata.js";
+import {
+	jsonValidator,
+	preValidationGuard,
+	queryValidator,
+} from "../shared/schema-validator.js";
+
+export const CUSTOMER_AVAILABILITY_ROUTE_SECURITY = [
+	defineRouteSecurity({
+		method: "GET",
+		path: "/availability",
+		authenticationClass: "customer",
+		csrfRequired: false,
+		browserAllowed: true,
+	}),
+	defineRouteSecurity({
+		method: "PUT",
+		path: "/availability",
+		authenticationClass: "customer",
+		csrfRequired: true,
+		browserAllowed: true,
+	}),
+] as const satisfies readonly CoLocatedRouteSecurity[];
 
 export interface CustomerAvailabilityRoutesOptions {
 	customerAvailabilityService?: CustomerAvailabilityService;
 }
+
+type AvailabilityContext = Context<{ Variables: Partial<ApiVariables> }>;
 
 function requireCustomerAvailabilityService(
 	service: CustomerAvailabilityService | undefined,
@@ -29,24 +61,11 @@ function requireOrganizationSlug(c: Context): string {
 	return slug;
 }
 
-async function readAvailabilityPayload(
-	c: Context,
-): Promise<SaveCustomerFestivalAvailabilityRequest> {
-	try {
-		return (await c.req.json()) as SaveCustomerFestivalAvailabilityRequest;
-	} catch {
-		throw new AppError(
-			"Availability request is invalid.",
-			400,
-			"invalid_availability",
-		);
-	}
-}
-
 async function getAvailabilityHandler(
-	c: Context<{ Variables: Partial<ApiVariables> }>,
-	service?: CustomerAvailabilityService,
-): Promise<Response> {
+	c: AvailabilityContext,
+	service: CustomerAvailabilityService | undefined,
+	festivalId?: string,
+) {
 	try {
 		assertNoBearerPrincipal(c.req.header("Authorization"));
 		const availabilityService = requireCustomerAvailabilityService(service);
@@ -55,7 +74,7 @@ async function getAvailabilityHandler(
 			await availabilityService.getAvailability(
 				requireOrganizationSlug(c),
 				getCookie(c, CUSTOMER_SESSION_COOKIE),
-				c.req.query("festivalId"),
+				festivalId,
 			),
 		);
 	} catch (error) {
@@ -64,13 +83,13 @@ async function getAvailabilityHandler(
 }
 
 async function putAvailabilityHandler(
-	c: Context<{ Variables: Partial<ApiVariables> }>,
-	service?: CustomerAvailabilityService,
-): Promise<Response> {
+	c: AvailabilityContext,
+	service: CustomerAvailabilityService | undefined,
+	body: SaveCustomerFestivalAvailabilityRequest,
+) {
 	try {
 		assertNoBearerPrincipal(c.req.header("Authorization"));
 		const availabilityService = requireCustomerAvailabilityService(service);
-		const body = await readAvailabilityPayload(c);
 		c.header("Cache-Control", "no-store");
 		return c.json(
 			await availabilityService.saveAvailability(
@@ -88,16 +107,41 @@ async function putAvailabilityHandler(
 
 export function buildCustomerAvailabilityRoutes(
 	options: CustomerAvailabilityRoutesOptions,
-): Hono<{ Variables: Partial<ApiVariables> }> {
-	const router = new Hono<{ Variables: Partial<ApiVariables> }>();
+) {
 	const { customerAvailabilityService } = options;
-
-	router.get("/availability", (c) =>
-		getAvailabilityHandler(c, customerAvailabilityService),
-	);
-	router.put("/availability", (c) =>
-		putAvailabilityHandler(c, customerAvailabilityService),
-	);
-
-	return router;
+	const guardAvailability = preValidationGuard((c) => {
+		assertNoBearerPrincipal(c.req.header("Authorization"));
+		requireCustomerAvailabilityService(customerAvailabilityService);
+		requireOrganizationSlug(c);
+	});
+	return new Hono<{ Variables: Partial<ApiVariables> }>()
+		.get(
+			"/availability",
+			guardAvailability,
+			queryValidator(CustomerAvailabilityQuerySchema),
+			(c) =>
+				getAvailabilityHandler(
+					c,
+					customerAvailabilityService,
+					c.req.valid("query").festivalId,
+				),
+		)
+		.put(
+			"/availability",
+			guardAvailability,
+			jsonValidator(SaveCustomerFestivalAvailabilityInputSchema, {
+				invalidJsonMessage: "Availability request is invalid.",
+				errorCode: "invalid_availability",
+			}),
+			(c) =>
+				putAvailabilityHandler(
+					c,
+					customerAvailabilityService,
+					c.req.valid("json"),
+				),
+		);
 }
+
+export type CustomerAvailabilityRoutesType = ReturnType<
+	typeof buildCustomerAvailabilityRoutes
+>;

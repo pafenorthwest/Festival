@@ -1,3 +1,7 @@
+import {
+	CustomerOrdersQuerySchema,
+	UpdateCustomerProfileRouteBodySchema,
+} from "@festival/common";
 import { type Context, Hono } from "hono";
 import { deleteCookie, getCookie } from "hono/cookie";
 import { type ApiVariables, toJsonError } from "../../auth/tenant-context.js";
@@ -8,10 +12,59 @@ import {
 import { AppError } from "../../errors/app-error.js";
 import { assertNoBearerPrincipal } from "../customer-auth/customer-auth.routes.js";
 import { resolveRequestOrigin } from "../shared/csrf-guard.js";
+import {
+	type CoLocatedRouteSecurity,
+	defineRouteSecurity,
+} from "../shared/route-security-metadata.js";
+import {
+	jsonValidator,
+	preValidationGuard,
+	queryValidator,
+} from "../shared/schema-validator.js";
+
+export const CUSTOMER_ROUTE_SECURITY = [
+	defineRouteSecurity({
+		method: "GET",
+		path: "/session",
+		authenticationClass: "customer",
+		csrfRequired: false,
+		browserAllowed: true,
+	}),
+	defineRouteSecurity({
+		method: "GET",
+		path: "/profile",
+		authenticationClass: "customer",
+		csrfRequired: false,
+		browserAllowed: true,
+	}),
+	defineRouteSecurity({
+		method: "POST",
+		path: "/profile",
+		authenticationClass: "customer",
+		csrfRequired: true,
+		browserAllowed: true,
+	}),
+	defineRouteSecurity({
+		method: "GET",
+		path: "/orders",
+		authenticationClass: "customer",
+		csrfRequired: false,
+		browserAllowed: true,
+	}),
+	defineRouteSecurity({
+		method: "POST",
+		path: "/logout",
+		authenticationClass: "customer",
+		csrfRequired: true,
+		browserAllowed: true,
+	}),
+] as const satisfies readonly CoLocatedRouteSecurity[];
 
 export interface CustomerRoutesOptions {
 	customerAccountService?: CustomerAccountService;
 }
+
+type CustomerContext = Context<{ Variables: Partial<ApiVariables> }>;
 
 function requireCustomerAccountService(
 	service: CustomerAccountService | undefined,
@@ -31,9 +84,9 @@ function requireOrganizationSlug(c: Context): string {
 }
 
 async function sessionHandler(
-	c: Context<{ Variables: Partial<ApiVariables> }>,
+	c: CustomerContext,
 	service?: CustomerAccountService,
-): Promise<Response> {
+) {
 	try {
 		assertNoBearerPrincipal(c.req.header("Authorization"));
 		const accountService = requireCustomerAccountService(service);
@@ -49,9 +102,9 @@ async function sessionHandler(
 }
 
 async function getProfileHandler(
-	c: Context<{ Variables: Partial<ApiVariables> }>,
+	c: CustomerContext,
 	service?: CustomerAccountService,
-): Promise<Response> {
+) {
 	try {
 		assertNoBearerPrincipal(c.req.header("Authorization"));
 		const accountService = requireCustomerAccountService(service);
@@ -67,9 +120,10 @@ async function getProfileHandler(
 }
 
 async function postProfileHandler(
-	c: Context<{ Variables: Partial<ApiVariables> }>,
-	service?: CustomerAccountService,
-): Promise<Response> {
+	c: CustomerContext,
+	service: CustomerAccountService | undefined,
+	body: unknown,
+) {
 	try {
 		assertNoBearerPrincipal(c.req.header("Authorization"));
 		const accountService = requireCustomerAccountService(service);
@@ -79,7 +133,7 @@ async function postProfileHandler(
 				getCookie(c, CUSTOMER_SESSION_COOKIE),
 				c.req.header("X-CSRF-Token"),
 				resolveRequestOrigin(c),
-				await c.req.json(),
+				body,
 			),
 		);
 	} catch (error) {
@@ -88,9 +142,10 @@ async function postProfileHandler(
 }
 
 async function ordersHandler(
-	c: Context<{ Variables: Partial<ApiVariables> }>,
+	c: CustomerContext,
 	service?: CustomerAccountService,
-): Promise<Response> {
+	after?: string,
+) {
 	try {
 		assertNoBearerPrincipal(c.req.header("Authorization"));
 		const accountService = requireCustomerAccountService(service);
@@ -98,7 +153,7 @@ async function ordersHandler(
 			await accountService.orders(
 				requireOrganizationSlug(c),
 				getCookie(c, CUSTOMER_SESSION_COOKIE),
-				c.req.query("after"),
+				after,
 			),
 		);
 	} catch (error) {
@@ -107,9 +162,9 @@ async function ordersHandler(
 }
 
 async function logoutHandler(
-	c: Context<{ Variables: Partial<ApiVariables> }>,
+	c: CustomerContext,
 	service?: CustomerAccountService,
-): Promise<Response> {
+) {
 	try {
 		assertNoBearerPrincipal(c.req.header("Authorization"));
 		const accountService = requireCustomerAccountService(service);
@@ -127,17 +182,30 @@ async function logoutHandler(
 	}
 }
 
-export function buildCustomerRoutes(
-	options: CustomerRoutesOptions,
-): Hono<{ Variables: Partial<ApiVariables> }> {
-	const router = new Hono<{ Variables: Partial<ApiVariables> }>();
+export function buildCustomerRoutes(options: CustomerRoutesOptions) {
 	const { customerAccountService } = options;
-
-	router.get("/session", (c) => sessionHandler(c, customerAccountService));
-	router.get("/profile", (c) => getProfileHandler(c, customerAccountService));
-	router.post("/profile", (c) => postProfileHandler(c, customerAccountService));
-	router.get("/orders", (c) => ordersHandler(c, customerAccountService));
-	router.post("/logout", (c) => logoutHandler(c, customerAccountService));
-
-	return router;
+	const guardCustomerAccount = preValidationGuard((c) => {
+		assertNoBearerPrincipal(c.req.header("Authorization"));
+		requireCustomerAccountService(customerAccountService);
+		requireOrganizationSlug(c);
+	});
+	return new Hono<{ Variables: Partial<ApiVariables> }>()
+		.get("/session", (c) => sessionHandler(c, customerAccountService))
+		.get("/profile", (c) => getProfileHandler(c, customerAccountService))
+		.post(
+			"/profile",
+			guardCustomerAccount,
+			jsonValidator(UpdateCustomerProfileRouteBodySchema),
+			(c) => postProfileHandler(c, customerAccountService, c.req.valid("json")),
+		)
+		.get(
+			"/orders",
+			guardCustomerAccount,
+			queryValidator(CustomerOrdersQuerySchema),
+			(c) =>
+				ordersHandler(c, customerAccountService, c.req.valid("query").after),
+		)
+		.post("/logout", (c) => logoutHandler(c, customerAccountService));
 }
+
+export type CustomerRoutesType = ReturnType<typeof buildCustomerRoutes>;

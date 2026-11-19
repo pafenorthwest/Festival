@@ -1,7 +1,10 @@
 import { spyOn } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { sql, type TransactionSQL } from "bun";
-import { initializePostgresSchema } from "../src/repo/postgres-schema.js";
+import {
+	initializePostgresSchema,
+	provisionPostgresTestSchema,
+} from "../src/repo/postgres-schema.js";
 import { assertApplicationFixtureSql } from "./postgres-application-sql-guard.js";
 
 if (process.env.POSTGRES_INTEGRATION_URL && !process.env.DATABASE_URL) {
@@ -25,7 +28,8 @@ export async function ensureApplicationSchemaReady(
 	if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(resolvedSchema))
 		throw new Error("Invalid application schema.");
 	if (process.env.POSTGRES_APPLICATION_CATALOG_VERIFIED !== "1") {
-		applicationSchemaInitPromise ??= initializePostgresSchema(resolvedSchema)
+		applicationSchemaInitPromise ??= provisionPostgresTestSchema(resolvedSchema)
+			.then(() => initializePostgresSchema(resolvedSchema))
 			.then(() => {
 				process.env.POSTGRES_APPLICATION_CATALOG_VERIFIED = "1";
 			})

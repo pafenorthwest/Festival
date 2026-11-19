@@ -8,6 +8,8 @@ import {
 class Element {
 	children: Element[] = [];
 	attributes: Record<string, string> = {};
+	blockSize = "";
+	accessibilityVisibility = "";
 	textContent = "";
 	removed = false;
 	constructor(readonly tagName: string) {}
@@ -57,15 +59,21 @@ function fixture(value: Record<string, unknown>, editor = false) {
 }
 
 describe("Shopify confirmation return", () => {
-	it("renders the exact label and tenant account handoff, without customer selectors", () => {
+	it("renders the exact label, tenant account handoff, and two blank lines below", () => {
 		const f = fixture({ organization_slug: "pafe" });
-		const button = f.body.children[0].children[0];
+		const container = f.body.children[0];
+		const [button, spacer] = container.children;
 		expect(button.tagName).toBe("s-button");
 		expect(button.textContent).toBe("Return to Festival account");
 		expect(button.attributes).toEqual({
 			href: "https://festival.passmore.xyz/org/pafe/account?checkout=processing",
 			variant: "primary",
 		});
+		expect(container.attributes.gap).toBe("none");
+		expect(container.children).toHaveLength(2);
+		expect(spacer.tagName).toBe("s-box");
+		expect(spacer.blockSize).toBe("40px");
+		expect(spacer.accessibilityVisibility).toBe("hidden");
 	});
 	it("uses the configured deployment and organization without leaking another tenant", () => {
 		expect(
@@ -75,6 +83,14 @@ describe("Shopify confirmation return", () => {
 			}),
 		).toBe(
 			"https://festival.example.com/org/north-west/account?checkout=processing",
+		);
+		expect(
+			fixture({
+				festival_origin: "https://int.artsfestival.online",
+				organization_slug: "pafe",
+			}).body.children[0].children[0].attributes.href,
+		).toBe(
+			"https://int.artsfestival.online/org/pafe/account?checkout=processing",
 		);
 	});
 	it.each([
@@ -112,15 +128,24 @@ describe("Shopify confirmation return", () => {
 		const f = fixture({}, true);
 		expect(f.body.children[0].children[0].tagName).toBe("s-text");
 		f.update({ organization_slug: "pafe" });
-		expect(f.body.children[0].children).toHaveLength(1);
+		expect(f.body.children[0].children).toHaveLength(2);
 		expect(f.body.children[0].children[0].tagName).toBe("s-button");
 		f.update({ organization_slug: "north" });
-		expect(f.body.children[0].children[0].attributes.href).toContain(
-			"/org/north/account",
+		expect(f.body.children[0].children[0].attributes.href).toBe(
+			"https://festival.passmore.xyz/org/north/account?checkout=processing",
 		);
+		expect(f.body.children[0].children).toHaveLength(2);
+		f.update({ organization_slug: "../invalid" });
+		expect(f.body.children[0].children).toHaveLength(1);
+		expect(f.body.children[0].children[0].tagName).toBe("s-text");
 		f.dispose();
 		expect(f.unsubscribed()).toBe(true);
 		expect(f.body.children[0].removed).toBe(true);
+	});
+	it("removes both button and spacing when customer settings become invalid", () => {
+		const f = fixture({ organization_slug: "pafe" });
+		f.update({});
+		expect(f.body.children[0].children).toEqual([]);
 	});
 	it("configures only the Thank you and Order status targets with no network or API access", async () => {
 		const config = Bun.TOML.parse(

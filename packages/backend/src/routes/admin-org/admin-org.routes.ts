@@ -1,7 +1,14 @@
-import type {
-	CreateFestivalInput,
-	UpdateFestivalRegistrationWindowInput,
+import {
+	type CreateFestivalInput,
+	CreateFestivalInputSchema,
+	CreateOrganizationDivisionInputSchema,
+	ReorderOrganizationDivisionsInputSchema,
+	type UpdateFestivalRegistrationWindowInput,
+	UpdateFestivalRegistrationWindowInputSchema,
+	UpdateOrganizationDivisionInputSchema,
+	UpdateOrganizationTimezoneInputSchema,
 } from "@festival/common";
+import type { Context } from "hono";
 import { Hono } from "hono";
 import {
 	type ApiVariables,
@@ -9,532 +16,351 @@ import {
 	requireAuth,
 	requireTenant,
 	requireTenantRole,
-	toJsonError,
 } from "../../auth/tenant-context.js";
-import type { AuthVerifier } from "../../auth/types.js";
 import { requireAdminIntent } from "../../auth/volunteer-context.js";
-import { AppError } from "../../errors/app-error.js";
 import type { OrganizationService } from "../../services/organization-service.js";
+import {
+	type CoLocatedRouteSecurity,
+	defineRouteSecurity,
+} from "../shared/route-security-metadata.js";
+import { jsonValidator } from "../shared/schema-validator.js";
+import {
+	ADMIN_FESTIVAL_CATALOG_ROUTE_SECURITY,
+	type AdminOrgRoutesOptions,
+	assertAdminOrgAllowedFields,
+	buildAdminFestivalCatalogRoutes,
+	withAdminOrgJson,
+} from "./admin-festival-catalog.routes.js";
 
-function assertAllowedFields(
-	payload: unknown,
-	allowed: readonly string[],
-	label: string,
-): void {
-	if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
-	const allowedFields = new Set(allowed);
-	const extraFields = Object.keys(payload).filter(
-		(field) => !allowedFields.has(field),
+const coreRoute = (
+	method: CoLocatedRouteSecurity["method"],
+	path: string,
+	authenticationClass: CoLocatedRouteSecurity["authenticationClass"] = "admin",
+) =>
+	defineRouteSecurity({
+		method,
+		path,
+		authenticationClass,
+		csrfRequired: false,
+		browserAllowed: true,
+	});
+
+export const ADMIN_ORG_CORE_ROUTE_SECURITY = [
+	coreRoute("GET", "/organizations/:slug/admin/users"),
+	coreRoute("DELETE", "/organizations/:slug/admin/memberships/:membershipId"),
+	coreRoute("DELETE", "/organizations/:slug/admin/invites/:inviteId"),
+	coreRoute("GET", "/organizations/:slug/admin/festivals", "volunteer-admin"),
+	coreRoute("POST", "/organizations/:slug/admin/festivals"),
+	coreRoute(
+		"POST",
+		"/organizations/:slug/admin/festivals/:festivalShortName/primary",
+	),
+	coreRoute("GET", "/organizations/:slug/admin/festivals/:festivalShortName"),
+	coreRoute(
+		"PUT",
+		"/organizations/:slug/admin/festivals/:festivalShortName/registration-window",
+	),
+	coreRoute(
+		"PATCH",
+		"/organizations/:slug/admin/festivals/:festivalShortName/registration-window",
+	),
+	coreRoute("GET", "/organizations/:slug/admin/divisions"),
+	coreRoute("POST", "/organizations/:slug/admin/divisions"),
+	coreRoute("POST", "/organizations/:slug/admin/divisions/reorder"),
+	coreRoute("POST", "/organizations/:slug/admin/divisions/:divisionId"),
+	coreRoute("GET", "/organizations/:slug/admin/timezone"),
+	coreRoute("POST", "/organizations/:slug/admin/timezone"),
+] as const satisfies readonly CoLocatedRouteSecurity[];
+
+export { ADMIN_FESTIVAL_CATALOG_ROUTE_SECURITY };
+
+export const ADMIN_ORG_ROUTE_SECURITY = [
+	...ADMIN_ORG_CORE_ROUTE_SECURITY,
+	...ADMIN_FESTIVAL_CATALOG_ROUTE_SECURITY,
+] as const satisfies readonly CoLocatedRouteSecurity[];
+
+type ApiContext = Context<{ Variables: Partial<ApiVariables> }>;
+
+function handleCreateFestival(
+	c: ApiContext,
+	organizationService: OrganizationService,
+	payload: CreateFestivalInput,
+) {
+	return withAdminOrgJson(
+		c,
+		() =>
+			organizationService.createFestivalForTenant(
+				getRequiredTenant(c),
+				payload,
+			),
+		201,
 	);
-	if (extraFields.length > 0) {
-		throw new AppError(
-			`${label} cannot include browser-controlled fields: ${extraFields.join(", ")}.`,
-			400,
-		);
-	}
 }
 
-export function buildAdminOrgRoutes(options: {
-	organizationService: OrganizationService;
-	authVerifier: AuthVerifier;
-}): Hono<{ Variables: Partial<ApiVariables> }> {
-	const router = new Hono<{ Variables: Partial<ApiVariables> }>();
-	const { organizationService, authVerifier } = options;
-	const repository = organizationService.repository;
-
-	router.get(
-		"/organizations/:slug/admin/users",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				return c.json(
-					await organizationService.listAdminUsersForTenant(
-						getRequiredTenant(c),
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
+function handleUpdateRegistrationWindow(
+	c: ApiContext,
+	organizationService: OrganizationService,
+	payload: UpdateFestivalRegistrationWindowInput,
+) {
+	return withAdminOrgJson(c, () =>
+		organizationService.updateFestivalRegistrationWindowForTenant(
+			getRequiredTenant(c),
+			c.req.param("festivalShortName") ?? "",
+			payload,
+		),
 	);
+}
 
-	router.delete(
-		"/organizations/:slug/admin/memberships/:membershipId",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				return c.json(
-					await organizationService.deleteMembershipForTenant(
+function buildAdminOrgMemberRoutes(options: AdminOrgRoutesOptions) {
+	const { organizationService, authVerifier } = options;
+	const auth = requireAuth(authVerifier);
+	const tenant = requireTenant(organizationService.repository);
+	const admin = requireTenantRole(["Admin"]);
+
+	return new Hono<{ Variables: Partial<ApiVariables> }>()
+		.get("/organizations/:slug/admin/users", auth, tenant, admin, (c) =>
+			withAdminOrgJson(c, () =>
+				organizationService.listAdminUsersForTenant(getRequiredTenant(c)),
+			),
+		)
+		.delete(
+			"/organizations/:slug/admin/memberships/:membershipId",
+			auth,
+			tenant,
+			admin,
+			(c) =>
+				withAdminOrgJson(c, () =>
+					organizationService.deleteMembershipForTenant(
 						getRequiredTenant(c),
 						c.req.param("membershipId"),
 					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	router.delete(
-		"/organizations/:slug/admin/invites/:inviteId",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				return c.json(
-					await organizationService.cancelInviteForTenant(
+				),
+		)
+		.delete(
+			"/organizations/:slug/admin/invites/:inviteId",
+			auth,
+			tenant,
+			admin,
+			(c) =>
+				withAdminOrgJson(c, () =>
+					organizationService.cancelInviteForTenant(
 						getRequiredTenant(c),
 						c.req.param("inviteId"),
 					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
+				),
+		);
+}
 
-	router.get(
-		"/organizations/:slug/admin/festivals",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireAdminIntent(),
-		async (c) => {
-			try {
-				return c.json(
-					await organizationService.listFestivalsForTenant(
-						getRequiredTenant(c),
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
+function buildAdminOrgFestivalCollectionRoutes(options: AdminOrgRoutesOptions) {
+	const { organizationService, authVerifier } = options;
+	const auth = requireAuth(authVerifier);
+	const tenant = requireTenant(organizationService.repository);
+	const admin = requireTenantRole(["Admin"]);
 
-	router.post(
-		"/organizations/:slug/admin/festivals",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				const payload = (await c.req.json()) as CreateFestivalInput;
-				c.status(201);
-				return c.json(
-					await organizationService.createFestivalForTenant(
-						getRequiredTenant(c),
-						payload,
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
+	return new Hono<{ Variables: Partial<ApiVariables> }>()
+		.get(
+			"/organizations/:slug/admin/festivals",
+			auth,
+			tenant,
+			requireAdminIntent(),
+			(c) =>
+				withAdminOrgJson(c, () =>
+					organizationService.listFestivalsForTenant(getRequiredTenant(c)),
+				),
+		)
+		.post(
+			"/organizations/:slug/admin/festivals",
+			auth,
+			tenant,
+			admin,
+			jsonValidator(CreateFestivalInputSchema),
+			(c) => handleCreateFestival(c, organizationService, c.req.valid("json")),
+		);
+}
 
-	router.post(
-		"/organizations/:slug/admin/festivals/:festivalShortName/primary",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				return c.json(
-					await organizationService.setPrimaryFestivalForTenant(
+function buildAdminOrgFestivalItemRoutes(options: AdminOrgRoutesOptions) {
+	const { organizationService, authVerifier } = options;
+	const auth = requireAuth(authVerifier);
+	const tenant = requireTenant(organizationService.repository);
+	const admin = requireTenantRole(["Admin"]);
+
+	return new Hono<{ Variables: Partial<ApiVariables> }>()
+		.post(
+			"/organizations/:slug/admin/festivals/:festivalShortName/primary",
+			auth,
+			tenant,
+			admin,
+			(c) =>
+				withAdminOrgJson(c, () =>
+					organizationService.setPrimaryFestivalForTenant(
 						getRequiredTenant(c),
 						c.req.param("festivalShortName"),
 					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	router.get(
-		"/organizations/:slug/admin/festivals/:festivalShortName",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				return c.json(
-					await organizationService.getAdminFestivalForTenant(
+				),
+		)
+		.get(
+			"/organizations/:slug/admin/festivals/:festivalShortName",
+			auth,
+			tenant,
+			admin,
+			(c) =>
+				withAdminOrgJson(c, () =>
+					organizationService.getAdminFestivalForTenant(
 						getRequiredTenant(c),
 						c.req.param("festivalShortName"),
 					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
+				),
+		);
+}
 
-	router.put(
-		"/organizations/:slug/admin/festivals/:festivalShortName/registration-window",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				const payload = await c.req.json();
-				assertAllowedFields(
-					payload,
+function buildAdminOrgRegistrationWindowRoutes(options: AdminOrgRoutesOptions) {
+	const { organizationService, authVerifier } = options;
+	const auth = requireAuth(authVerifier);
+	const tenant = requireTenant(organizationService.repository);
+	const admin = requireTenantRole(["Admin"]);
+	const windowPath =
+		"/organizations/:slug/admin/festivals/:festivalShortName/registration-window" as const;
+
+	const validateWindow = jsonValidator(
+		UpdateFestivalRegistrationWindowInputSchema,
+		{
+			errorCode: "invalid_registration_window",
+			preCheck: (raw) =>
+				assertAdminOrgAllowedFields(
+					raw,
 					["registrationOpensAt", "registrationClosesAt"],
 					"Festival registration window request",
-				);
-				return c.json(
-					await organizationService.updateFestivalRegistrationWindowForTenant(
+				),
+		},
+	);
+
+	return new Hono<{ Variables: Partial<ApiVariables> }>()
+		.put(windowPath, auth, tenant, admin, validateWindow, (c) =>
+			handleUpdateRegistrationWindow(
+				c,
+				organizationService,
+				c.req.valid("json"),
+			),
+		)
+		.patch(windowPath, auth, tenant, admin, validateWindow, (c) =>
+			handleUpdateRegistrationWindow(
+				c,
+				organizationService,
+				c.req.valid("json"),
+			),
+		);
+}
+
+function buildAdminOrgDivisionCollectionRoutes(options: AdminOrgRoutesOptions) {
+	const { organizationService, authVerifier } = options;
+	const auth = requireAuth(authVerifier);
+	const tenant = requireTenant(organizationService.repository);
+	const admin = requireTenantRole(["Admin"]);
+
+	return new Hono<{ Variables: Partial<ApiVariables> }>()
+		.get("/organizations/:slug/admin/divisions", auth, tenant, admin, (c) =>
+			withAdminOrgJson(c, () =>
+				organizationService.listDivisionsForTenant(getRequiredTenant(c)),
+			),
+		)
+		.post(
+			"/organizations/:slug/admin/divisions",
+			auth,
+			tenant,
+			admin,
+			jsonValidator(CreateOrganizationDivisionInputSchema),
+			(c) =>
+				withAdminOrgJson(
+					c,
+					() =>
+						organizationService.createDivisionForTenant(
+							getRequiredTenant(c),
+							c.req.valid("json"),
+						),
+					201,
+				),
+		);
+}
+
+function buildAdminOrgDivisionMutationRoutes(options: AdminOrgRoutesOptions) {
+	const { organizationService, authVerifier } = options;
+	const auth = requireAuth(authVerifier);
+	const tenant = requireTenant(organizationService.repository);
+	const admin = requireTenantRole(["Admin"]);
+
+	return new Hono<{ Variables: Partial<ApiVariables> }>()
+		.post(
+			"/organizations/:slug/admin/divisions/reorder",
+			auth,
+			tenant,
+			admin,
+			jsonValidator(ReorderOrganizationDivisionsInputSchema),
+			(c) =>
+				withAdminOrgJson(c, () =>
+					organizationService.reorderDivisionsForTenant(
 						getRequiredTenant(c),
-						c.req.param("festivalShortName"),
-						payload as UpdateFestivalRegistrationWindowInput,
+						c.req.valid("json"),
 					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	router.patch(
-		"/organizations/:slug/admin/festivals/:festivalShortName/registration-window",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				const payload = await c.req.json();
-				assertAllowedFields(
-					payload,
-					["registrationOpensAt", "registrationClosesAt"],
-					"Festival registration window request",
-				);
-				return c.json(
-					await organizationService.updateFestivalRegistrationWindowForTenant(
-						getRequiredTenant(c),
-						c.req.param("festivalShortName"),
-						payload as UpdateFestivalRegistrationWindowInput,
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	router.get(
-		"/organizations/:slug/admin/festivals/:festivalShortName/class-subtypes",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				return c.json(
-					await organizationService.listFestivalClassSubtypesForTenant(
-						getRequiredTenant(c),
-						c.req.param("festivalShortName"),
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	router.post(
-		"/organizations/:slug/admin/festivals/:festivalShortName/class-subtypes",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				const payload = await c.req.json();
-				assertAllowedFields(
-					payload,
-					["displayName", "requiredSubtypeId"],
-					"Festival class subtype request",
-				);
-				c.status(201);
-				return c.json(
-					await organizationService.createFestivalClassSubtypeForTenant(
-						getRequiredTenant(c),
-						c.req.param("festivalShortName"),
-						(payload as { displayName?: unknown })?.displayName,
-						(payload as { requiredSubtypeId?: unknown })?.requiredSubtypeId,
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	router.get(
-		"/organizations/:slug/admin/festivals/:festivalShortName/rooms",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				return c.json(
-					await organizationService.listRoomsForTenant(
-						getRequiredTenant(c),
-						c.req.param("festivalShortName"),
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	router.post(
-		"/organizations/:slug/admin/festivals/:festivalShortName/rooms",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				const payload = await c.req.json();
-				assertAllowedFields(
-					payload,
-					["name", "pianoConfigurations"],
-					"Room request",
-				);
-				c.status(201);
-				return c.json(
-					await organizationService.createRoomForTenant(
-						getRequiredTenant(c),
-						c.req.param("festivalShortName"),
-						payload,
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	router.get(
-		"/organizations/:slug/admin/festivals/:festivalShortName/classes",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				return c.json(
-					await organizationService.listFestivalClasses(
-						getRequiredTenant(c).organization.slug,
-						c.req.param("festivalShortName"),
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	router.post(
-		"/organizations/:slug/admin/festivals/:festivalShortName/classes",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				return c.json(
-					await organizationService.createFestivalClass(
-						getRequiredTenant(c).organization.slug,
-						c.req.param("festivalShortName"),
-						await c.req.json(),
-						getRequiredTenant(c).identity.uid,
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	router.patch(
-		"/organizations/:slug/admin/festivals/:festivalShortName/classes/:classId",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				return c.json(
-					await organizationService.updateFestivalClass(
-						getRequiredTenant(c).organization.slug,
-						c.req.param("festivalShortName"),
-						c.req.param("classId"),
-						await c.req.json(),
-						getRequiredTenant(c).identity.uid,
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	router.post(
-		"/organizations/:slug/admin/festivals/:festivalShortName/classes/:classId",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				return c.json(
-					await organizationService.updateFestivalClass(
-						getRequiredTenant(c).organization.slug,
-						c.req.param("festivalShortName"),
-						c.req.param("classId"),
-						await c.req.json(),
-						getRequiredTenant(c).identity.uid,
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	router.get(
-		"/organizations/:slug/admin/divisions",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				return c.json(
-					await organizationService.listDivisionsForTenant(
-						getRequiredTenant(c),
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	router.post(
-		"/organizations/:slug/admin/divisions",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				const payload = await c.req.json();
-				assertAllowedFields(
-					payload,
-					["displayName"],
-					"Division create request",
-				);
-				c.status(201);
-				return c.json(
-					await organizationService.createDivisionForTenant(
-						getRequiredTenant(c),
-						payload,
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	router.post(
-		"/organizations/:slug/admin/divisions/reorder",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				const payload = await c.req.json();
-				assertAllowedFields(
-					payload,
-					["divisionIds"],
-					"Division reorder request",
-				);
-				return c.json(
-					await organizationService.reorderDivisionsForTenant(
-						getRequiredTenant(c),
-						payload,
-					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	router.post(
-		"/organizations/:slug/admin/divisions/:divisionId",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				const payload = await c.req.json();
-				assertAllowedFields(
-					payload,
-					["displayName", "isActive"],
-					"Division update request",
-				);
-				return c.json(
-					await organizationService.updateDivisionForTenant(
+				),
+		)
+		.post(
+			"/organizations/:slug/admin/divisions/:divisionId",
+			auth,
+			tenant,
+			admin,
+			jsonValidator(UpdateOrganizationDivisionInputSchema),
+			(c) =>
+				withAdminOrgJson(c, () =>
+					organizationService.updateDivisionForTenant(
 						getRequiredTenant(c),
 						c.req.param("divisionId"),
-						payload,
+						c.req.valid("json"),
 					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
+				),
+		);
+}
 
-	router.get(
-		"/organizations/:slug/admin/timezone",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				return c.json(
-					await organizationService.getTimezoneForTenant(getRequiredTenant(c)),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
+function buildAdminOrgTimezoneRoutes(options: AdminOrgRoutesOptions) {
+	const { organizationService, authVerifier } = options;
+	const auth = requireAuth(authVerifier);
+	const tenant = requireTenant(organizationService.repository);
+	const admin = requireTenantRole(["Admin"]);
 
-	router.post(
-		"/organizations/:slug/admin/timezone",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				const payload = await c.req.json();
-				assertAllowedFields(payload, ["timezone"], "Timezone update request");
-				return c.json(
-					await organizationService.updateTimezoneForTenant(
+	return new Hono<{ Variables: Partial<ApiVariables> }>()
+		.get("/organizations/:slug/admin/timezone", auth, tenant, admin, (c) =>
+			withAdminOrgJson(c, () =>
+				organizationService.getTimezoneForTenant(getRequiredTenant(c)),
+			),
+		)
+		.post(
+			"/organizations/:slug/admin/timezone",
+			auth,
+			tenant,
+			admin,
+			jsonValidator(UpdateOrganizationTimezoneInputSchema),
+			(c) =>
+				withAdminOrgJson(c, () =>
+					organizationService.updateTimezoneForTenant(
 						getRequiredTenant(c),
-						payload,
+						c.req.valid("json"),
 					),
-				);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
+				),
+		);
+}
 
-	return router;
+export function buildAdminOrgCoreRoutes(options: AdminOrgRoutesOptions) {
+	return new Hono<{ Variables: Partial<ApiVariables> }>()
+		.route("/", buildAdminOrgMemberRoutes(options))
+		.route("/", buildAdminOrgFestivalCollectionRoutes(options))
+		.route("/", buildAdminOrgFestivalItemRoutes(options))
+		.route("/", buildAdminOrgRegistrationWindowRoutes(options))
+		.route("/", buildAdminOrgDivisionCollectionRoutes(options))
+		.route("/", buildAdminOrgDivisionMutationRoutes(options))
+		.route("/", buildAdminOrgTimezoneRoutes(options));
+}
+
+export function buildAdminOrgRoutes(options: AdminOrgRoutesOptions) {
+	return new Hono<{ Variables: Partial<ApiVariables> }>()
+		.route("/", buildAdminOrgCoreRoutes(options))
+		.route("/", buildAdminFestivalCatalogRoutes(options));
 }

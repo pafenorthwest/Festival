@@ -204,3 +204,64 @@ export function decideMembershipPolling(input: {
 	if (input.checkoutReturn || processing) return "continue";
 	return "idle";
 }
+
+export interface MembershipAcquisitionState {
+	teacherDisabled: boolean;
+	accompanistDisabled: boolean;
+}
+
+export interface MembershipAcquisitionInput {
+	memberships: readonly CustomerMembershipStatusEntry[];
+	loading: boolean;
+	error: string;
+	checkoutProcessing?: boolean;
+}
+
+export function isBlockingMembershipStatus(
+	status: CustomerMembershipStatusEntry["status"],
+): boolean {
+	switch (status) {
+		case "active":
+		case "scheduled":
+		case "processing":
+		case "needs_review":
+			return true;
+		case "expired":
+		case "revoked":
+		case "superseded":
+		case "rejected":
+			return false;
+		default: {
+			const unexpectedStatus: never = status;
+			throw new Error(`Unsupported membership status: ${unexpectedStatus}`);
+		}
+	}
+}
+
+function hasBlockingEntitlement(
+	memberships: readonly CustomerMembershipStatusEntry[],
+	entitlementClass: CustomerMembershipStatusEntry["entitlementClass"],
+): boolean {
+	return memberships.some(
+		(entry) =>
+			entry.entitlementClass === entitlementClass &&
+			isBlockingMembershipStatus(entry.status),
+	);
+}
+
+export function resolveMembershipAcquisitionState(
+	input: MembershipAcquisitionInput,
+): MembershipAcquisitionState {
+	if (input.loading || Boolean(input.error)) {
+		return { teacherDisabled: true, accompanistDisabled: true };
+	}
+	return {
+		teacherDisabled:
+			Boolean(input.checkoutProcessing) ||
+			hasBlockingEntitlement(input.memberships, "teacher_membership"),
+		accompanistDisabled: hasBlockingEntitlement(
+			input.memberships,
+			"accompanist_membership",
+		),
+	};
+}

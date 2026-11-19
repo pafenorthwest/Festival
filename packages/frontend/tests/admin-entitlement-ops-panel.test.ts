@@ -37,6 +37,38 @@ afterEach(() => {
 });
 
 describe("Admin entitlement operations API client helpers (#127)", () => {
+	it("keeps a realistic-length Firebase token separate from CSRF across every admin mutation helper", async () => {
+		mockFetch({});
+		const idToken = `eyJhbGciOiJSUzI1NiJ9.${"a".repeat(700)}.signature`;
+		await api.triggerAdminEntitlementReconciliation(idToken, "festival");
+		await api.declineAdminValidationDecision(
+			idToken,
+			"festival",
+			"decision-1",
+			{ confirmed: true, note: "Reviewed" },
+		);
+		await api.approveAdminValidationDecision(
+			idToken,
+			"festival",
+			"decision-2",
+			{ confirmed: true, note: "Reviewed" },
+		);
+		await api.revokeAdminEntitlement(idToken, "festival", "entitlement-1", {
+			confirmed: true,
+			reason: "Duplicate",
+		});
+		await api.invalidateAdminCheckoutIntent("festival", "intent-1", idToken);
+		await api.recoverAdminCheckoutIntent("festival", "intent-1", idToken);
+		expect(fetchCalls).toHaveLength(6);
+		for (const call of fetchCalls) {
+			const headers = new Headers(call.init?.headers);
+			expect(headers.get("Authorization")).toBe(`Bearer ${idToken}`);
+			expect(headers.get("X-CSRF-Token")).toBe("admin-csrf");
+			expect(headers.get("X-CSRF-Token")?.length).toBeLessThanOrEqual(256);
+			expect(String(call.init?.body)).not.toContain(idToken);
+		}
+	});
+
 	it("fetches admin entitlement operations snapshot with auth token and signal", async () => {
 		mockFetch({
 			summaryCounts: {

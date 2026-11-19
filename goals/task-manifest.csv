@@ -48,3 +48,5 @@ number,taskname,first_create_date,first_create_hhmmss,first_create_git_hash
 47,issue-258-paid-line-correlation,2026-10-04,000000,-------
 48,pr-250,2026-10-04,000000,-------
 49,class-checkout-hardening,2026-10-04,000000,-------
+50,customer-expired-checkout-restart,2026-11-15,000000,-------
+51,pending-shopify-checkout-restoration,2026-11-16,000000,-------

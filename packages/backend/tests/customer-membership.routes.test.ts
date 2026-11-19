@@ -300,9 +300,9 @@ describe("Customer Membership Routes", () => {
 			"X-CSRF-Token": "csrf_token",
 			Origin: "https://example.com",
 		};
-		const payload = { divisionIds: ["div_1"], staffAccessConsent: true };
+		const payload = { divisionIds: ["div_1"] };
 
-		it("handles valid session and CSRF to acquire", async () => {
+		it("handles valid session and CSRF to acquire without recording staff access consent", async () => {
 			const services = createFakeServices();
 			const app = createTestApp(services);
 			const res = await req(
@@ -315,13 +315,8 @@ describe("Customer Membership Routes", () => {
 			expect(res.status).toBe(200);
 			expect(res.headers.get("Cache-Control")).toBe("no-store");
 			expect(await res.json()).toEqual({ acquired: true });
-			expect(services.calls.order).toEqual([
-				"recordConsent",
-				"acquireAccompanist",
-			]);
-			expect(services.calls.recordConsent).toEqual([
-				{ organizationId: "org_1", customerId: "cust_1" },
-			]);
+			expect(services.calls.order).toEqual(["acquireAccompanist"]);
+			expect(services.calls.recordConsent).toEqual([]);
 			expect(services.calls.acquireAccompanist[0]).toEqual({
 				organizationId: "org_1",
 				customerId: "cust_1",
@@ -329,21 +324,19 @@ describe("Customer Membership Routes", () => {
 			});
 		});
 
-		for (const consent of [undefined, false, "true", 1, null]) {
-			it(`rejects consent ${String(consent)} without recording or acquisition`, async () => {
-				const services = createFakeServices();
-				const response = await req(
-					createTestApp(services),
-					"POST",
-					"/accompanist-membership",
-					validHeaders,
-					JSON.stringify({ ...payload, staffAccessConsent: consent }),
-				);
-				expect(response.status).toBe(400);
-				expect(services.calls.recordConsent).toEqual([]);
-				expect(services.calls.acquireAccompanist).toEqual([]);
-			});
-		}
+		it("rejects deprecated staffAccessConsent field with 400", async () => {
+			const services = createFakeServices();
+			const response = await req(
+				createTestApp(services),
+				"POST",
+				"/accompanist-membership",
+				validHeaders,
+				JSON.stringify({ ...payload, staffAccessConsent: true }),
+			);
+			expect(response.status).toBe(400);
+			expect(services.calls.recordConsent).toEqual([]);
+			expect(services.calls.acquireAccompanist).toEqual([]);
+		});
 
 		for (const invalid of [
 			"{",
@@ -351,7 +344,7 @@ describe("Customer Membership Routes", () => {
 			"[]",
 			JSON.stringify({ ...payload, customerId: "forged" }),
 		]) {
-			it(`rejects invalid payload ${invalid} before recording consent`, async () => {
+			it(`rejects invalid payload ${invalid} without acquisition`, async () => {
 				const services = createFakeServices();
 				const response = await req(
 					createTestApp(services),
@@ -366,28 +359,11 @@ describe("Customer Membership Routes", () => {
 			});
 		}
 
-		it("does not acquire membership if consent persistence fails", async () => {
-			const services = createFakeServices();
-			services.customerAccountService.recordCheckoutStaffAccessConsent =
-				async () => {
-					throw new AppError("Consent unavailable.", 503);
-				};
-			const response = await req(
-				createTestApp(services),
-				"POST",
-				"/accompanist-membership",
-				validHeaders,
-				JSON.stringify(payload),
-			);
-			expect(response.status).toBe(503);
-			expect(services.calls.acquireAccompanist).toEqual([]);
-		});
-
 		for (const headers of [
 			{ ...JSON_HDR, "X-CSRF-Token": "csrf_token" },
 			{ ...AUTH, ...JSON_HDR },
 		]) {
-			it("requires session and CSRF before recording consent", async () => {
+			it("requires session and CSRF before acquisition", async () => {
 				const services = createFakeServices();
 				const response = await req(
 					createTestApp(services),

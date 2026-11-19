@@ -6,6 +6,7 @@ import { createEffect, createSignal, For, Show } from "solid-js";
 import { getClassWaitlistRoster } from "../lib/api.js";
 import { formatWaitlistTimestamp } from "../pages/festivalAdminClassesHelpers.js";
 import { Button } from "./Button.js";
+import { ModalBackdrop } from "./ModalBackdrop.js";
 
 export { formatWaitlistTimestamp };
 
@@ -66,7 +67,7 @@ export function FestivalClassWaitlistModal(
 
 	return (
 		<Show when={props.isOpen && props.classItem}>
-			<div class="modal-backdrop" role="presentation">
+			<ModalBackdrop>
 				<section
 					class="modal-card panel flow-panel waitlist-modal-card"
 					role="dialog"
@@ -155,7 +156,7 @@ export function FestivalClassWaitlistModal(
 						</Button>
 					</div>
 				</section>
-			</div>
+			</ModalBackdrop>
 		</Show>
 	);
 }

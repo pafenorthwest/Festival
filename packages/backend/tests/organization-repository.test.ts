@@ -1,7 +1,32 @@
-import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
-import { sql } from "bun";
+import { describe, expect, it } from "bun:test";
+import type {
+	ProfileApprovalStatus,
+	TeacherProfileRecord,
+} from "@festival/common";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
 import { PostgresOrganizationRepository } from "../src/repo/postgres-organization-repository.js";
+import { withApplicationRollback } from "./postgres-application-fixture.js";
+
+type UpdateTeacherDivisionsPort = {
+	updateTeacherProfileDivisions(
+		organizationId: string,
+		profileId: string,
+		divisionIds: string[],
+	): Promise<TeacherProfileRecord | null>;
+};
+
+function updateInMemTeacherDivisions(
+	repo: InMemoryOrganizationRepository,
+	organizationId: string,
+	profileId: string,
+	divisionIds: string[],
+): Promise<TeacherProfileRecord | null> {
+	return (
+		repo as unknown as UpdateTeacherDivisionsPort
+	).updateTeacherProfileDivisions(organizationId, profileId, divisionIds);
+}
+
+const integrationIt = process.env.POSTGRES_INTEGRATION_URL ? it : it.skip;
 
 describe("InMemoryOrganizationRepository currency and findOrganizationById", () => {
 	it("defaults defaultCurrencyCode to USD when creating an organization", async () => {
@@ -40,87 +65,48 @@ describe("InMemoryOrganizationRepository currency and findOrganizationById", () 
 });
 
 describe("PostgresOrganizationRepository currency and findOrganizationById", () => {
-	let repo: PostgresOrganizationRepository;
-	let unsafeSpy: ReturnType<typeof spyOn>;
+	integrationIt(
+		"creates with defaultCurrencyCode and queries by id in PostgreSQL 17",
+		async () => {
+			await withApplicationRollback(async (fixture) => {
+				const repo = fixture.repository(
+					new PostgresOrganizationRepository(fixture.schema),
+				);
+				const slug = fixture.id("cad-fest");
+				const created = await repo.createOrganization({
+					name: `Org ${slug}`,
+					slug,
+					defaultCurrencyCode: "CAD",
+				});
+				expect(created.defaultCurrencyCode).toBe("CAD");
 
-	beforeEach(() => {
-		repo = new PostgresOrganizationRepository("test_schema");
-		spyOn(repo, "ensureReady").mockResolvedValue();
-		unsafeSpy = spyOn(sql, "unsafe");
-	});
+				const found = await repo.findOrganizationById(created.id);
+				expect(found).not.toBeNull();
+				expect(found?.id).toBe(created.id);
+				expect(found?.defaultCurrencyCode).toBe("CAD");
 
-	afterEach(() => {
-		unsafeSpy.mockRestore();
-	});
+				const missing = await repo.findOrganizationById(fixture.id("missing"));
+				expect(missing).toBeNull();
+			});
+		},
+	);
 
-	it("findOrganizationById queries by id and maps default_currency_code", async () => {
-		const dbRow = {
-			id: "org-123",
-			name: "Vancouver Music Fest",
-			slug: "van-fest",
-			timezone: "America/Vancouver",
-			default_currency_code: "CAD",
-			created_at: "2026-01-01T00:00:00.000Z",
-		};
-		unsafeSpy.mockResolvedValueOnce([dbRow]);
-
-		const org = await repo.findOrganizationById("org-123");
-		expect(org).not.toBeNull();
-		expect(org?.id).toBe("org-123");
-		expect(org?.defaultCurrencyCode).toBe("CAD");
-		expect(org?.timezone).toBe("America/Vancouver");
-		expect(unsafeSpy).toHaveBeenCalledWith(
-			expect.stringContaining("WHERE id = $1"),
-			["org-123"],
-		);
-	});
-
-	it("findOrganizationById returns null when not found", async () => {
-		unsafeSpy.mockResolvedValueOnce([]);
-
-		const org = await repo.findOrganizationById("missing-id");
-		expect(org).toBeNull();
-	});
-
-	it("falls back to USD if default_currency_code is null or undefined", async () => {
-		const dbRow = {
-			id: "org-legacy",
-			name: "Legacy Org",
-			slug: "legacy-org",
-			timezone: "UTC",
-			default_currency_code: null,
-			created_at: "2026-01-01T00:00:00.000Z",
-		};
-		unsafeSpy.mockResolvedValueOnce([dbRow]);
-
-		const org = await repo.findOrganizationById("org-legacy");
-		expect(org).not.toBeNull();
-		expect(org?.defaultCurrencyCode).toBe("USD");
-	});
-
-	it("createOrganization passes defaultCurrencyCode and returns mapped record", async () => {
-		const returnedRow = {
-			id: "new-org-id",
-			name: "UK Festival",
-			slug: "uk-fest",
-			timezone: "UTC",
-			default_currency_code: "GBP",
-			created_at: "2026-01-01T00:00:00.000Z",
-		};
-		unsafeSpy.mockResolvedValueOnce([returnedRow]);
-
-		const org = await repo.createOrganization({
-			name: "UK Festival",
-			slug: "uk-fest",
-			defaultCurrencyCode: "GBP",
-		});
-
-		expect(org.defaultCurrencyCode).toBe("GBP");
-		expect(unsafeSpy).toHaveBeenCalledWith(
-			expect.stringContaining("INSERT INTO test_schema.organizations"),
-			expect.arrayContaining(["UK Festival", "uk-fest", "GBP"]),
-		);
-	});
+	integrationIt(
+		"defaults default_currency_code to USD when omitted",
+		async () => {
+			await withApplicationRollback(async (fixture) => {
+				const repo = fixture.repository(
+					new PostgresOrganizationRepository(fixture.schema),
+				);
+				const slug = fixture.id("usd-fest");
+				const created = await repo.createOrganization({
+					name: `Org ${slug}`,
+					slug,
+				});
+				expect(created.defaultCurrencyCode).toBe("USD");
+			});
+		},
+	);
 });
 
 describe("InMemoryOrganizationRepository targeted membership grant lookups", () => {
@@ -461,5 +447,145 @@ describe("InMemoryOrganizationRepository targeted membership grant lookups", () 
 			customerId: "acc-multi",
 		});
 		expect(foundMulti?.id).toBe("acc-grant-a");
+	});
+
+	it("updateTeacherProfileDivisions updates division_ids, preserves approval_status, and returns null for missing or cross-org profileId", async () => {
+		const { repo, org, div1, div2 } = await setupRepo();
+		const otherOrg = await repo.createOrganization({
+			name: "Other Org",
+			slug: "other-org",
+		});
+		const otherDiv = await repo.createDivision({
+			organizationId: otherOrg.id,
+			displayName: "Voice",
+			normalizedName: "voice",
+		});
+		const approved = await repo.upsertTeacherProfile({
+			organizationId: org.id,
+			customerId: "t-app",
+			displayName: "Approved Teacher",
+			publicDirectoryOptIn: true,
+			divisionIds: [div1.id],
+		});
+		const pending = await repo.upsertTeacherProfile({
+			organizationId: org.id,
+			customerId: "t-pend",
+			displayName: "Pending Teacher",
+			publicDirectoryOptIn: false,
+			divisionIds: [div1.id],
+		});
+		const rejected = await repo.upsertTeacherProfile({
+			organizationId: org.id,
+			customerId: "t-rej",
+			displayName: "Rejected Teacher",
+			publicDirectoryOptIn: true,
+			divisionIds: [div1.id],
+		});
+		await repo.updateTeacherProfileApproval(org.id, rejected.id, "rejected");
+
+		for (const [profileId, expectedStatus] of [
+			[approved.id, "approved"],
+			[pending.id, "pending"],
+			[rejected.id, "rejected"],
+		] as const satisfies ReadonlyArray<[string, ProfileApprovalStatus]>) {
+			const updated = await updateInMemTeacherDivisions(
+				repo,
+				org.id,
+				profileId,
+				[div2.id],
+			);
+			expect(updated?.division_ids).toEqual([div2.id]);
+			expect(updated?.approval_status).toBe(expectedStatus);
+		}
+
+		expect(
+			await updateInMemTeacherDivisions(repo, org.id, "missing-profile", [
+				div2.id,
+			]),
+		).toBeNull();
+		expect(
+			await updateInMemTeacherDivisions(repo, otherOrg.id, approved.id, [
+				otherDiv.id,
+			]),
+		).toBeNull();
+	});
+
+	it("findActiveTeacherEntitlementGrant and listActiveTeachersForDivision resolve from teacher_profiles.division_ids when profile exists and fall back to grant.divisionId otherwise", async () => {
+		const { repo, org, div1, div2, teacherOffering } = await setupRepo();
+		const grant = await repo.createEntitlementGrantSnapshot({
+			organizationId: org.id,
+			customerId: "teacher-effective",
+			entitlementClass: "teacher_membership",
+			offeringId: teacherOffering.id,
+			durationDays: 365,
+			divisionId: div1.id,
+			divisionNameSnapshot: div1.displayName,
+			paidAmount: "50.00",
+			paidCurrencyCode: "USD",
+			checkoutIntentId: "intent-eff",
+			shopifyOrderGid: "gid://shopify/Order/eff",
+			shopifyOrderLineGid: "gid://shopify/LineItem/eff",
+			startsOn: "2026-01-01",
+			endsOn: "2027-01-01",
+			status: "active",
+			verifiedIdentityEmail: "effective@example.com",
+		});
+
+		expect(
+			await repo.findActiveTeacherEntitlementGrant({
+				organizationId: org.id,
+				customerId: "teacher-effective",
+				divisionId: div1.id,
+			}),
+		).toEqual(grant);
+		expect(
+			await repo.findActiveTeacherEntitlementGrant({
+				organizationId: org.id,
+				customerId: "teacher-effective",
+				divisionId: div2.id,
+			}),
+		).toBeNull();
+		expect(
+			(await repo.listActiveTeachersForDivision(org.id, div1.id)).map(
+				(t) => t.id,
+			),
+		).toEqual(["teacher-effective"]);
+		expect(await repo.listActiveTeachersForDivision(org.id, div2.id)).toEqual(
+			[],
+		);
+
+		const profile = await repo.upsertTeacherProfile({
+			organizationId: org.id,
+			customerId: "teacher-effective",
+			displayName: "Effective Teacher",
+			publicDirectoryOptIn: true,
+			divisionIds: [div1.id],
+		});
+		await updateInMemTeacherDivisions(repo, org.id, profile.id, [div2.id]);
+
+		expect(
+			await repo.findActiveTeacherEntitlementGrant({
+				organizationId: org.id,
+				customerId: "teacher-effective",
+				divisionId: div1.id,
+			}),
+		).toBeNull();
+		expect(
+			(
+				await repo.findActiveTeacherEntitlementGrant({
+					organizationId: org.id,
+					customerId: "teacher-effective",
+					divisionId: div2.id,
+				})
+			)?.id,
+		).toBe(grant.id);
+		expect(await repo.listActiveTeachersForDivision(org.id, div1.id)).toEqual(
+			[],
+		);
+		expect(
+			(await repo.listActiveTeachersForDivision(org.id, div2.id)).map(
+				(t) => t.id,
+			),
+		).toEqual(["teacher-effective"]);
 	});
 });

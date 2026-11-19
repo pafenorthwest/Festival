@@ -200,7 +200,7 @@ describe("Registration Selection APIs (#143)", () => {
 			authVerifier: new MockAuthVerifier(),
 			customerAccountService: f.service,
 		});
-		for (let index = 0; index < 20; index++) {
+		for (let index = 0; index < 100; index++) {
 			await f.repertoire.addCatalogWork({
 				organizationId: f.org.id,
 				title: `A Sonata ${index}`,
@@ -234,6 +234,53 @@ describe("Registration Selection APIs (#143)", () => {
 		expect(works.map((work) => work.id)).toEqual([concerto.id]);
 		const noMatch = await app.request(`${path}?q=missing`, { headers });
 		expect(await noMatch.json()).toEqual({ works: [] });
+		expect(
+			(
+				await app.request(
+					path.replace(f.festival.shortName, "missing-festival"),
+					{ headers },
+				)
+			).status,
+		).toBe(404);
+
+		f.repertoire.seedCanonicalWork({
+			id: "inactive-concerto",
+			organizationId: f.org.id,
+			title: "A Inactive Concerto",
+			composerName: "Test Composer",
+			classifications: ["concerto"],
+			isActive: false,
+		});
+		for (let index = 0; index < 100; index++) {
+			f.repertoire.seedCanonicalWork({
+				id: `concerto-study-${index}`,
+				organizationId: f.org.id,
+				title: `Concerto Study ${String(index).padStart(3, "0")}`,
+				composerName: "A Composer",
+				classifications: ["concerto"],
+				isActive: true,
+			});
+		}
+		f.repertoire.seedCanonicalWork({
+			id: "exact-concerto",
+			organizationId: f.org.id,
+			title: "Concerto",
+			composerName: "A Composer",
+			classifications: ["concerto"],
+			isActive: true,
+		});
+		const rankedResponse = await app.request(`${path}?q=cOnCeRtO`, { headers });
+		expect(rankedResponse.status).toBe(200);
+		const ranked = (await rankedResponse.json()) as {
+			works: Array<{ id: string }>;
+		};
+		expect(ranked.works).toHaveLength(100);
+		expect(ranked.works.slice(0, 3).map((work) => work.id)).toEqual([
+			"exact-concerto",
+			"concerto-study-0",
+			"concerto-study-1",
+		]);
+		expect(ranked.works.at(-1)?.id).toBe("concerto-study-98");
 	});
 
 	it("rejects unauthenticated requests and invalid sessions", async () => {

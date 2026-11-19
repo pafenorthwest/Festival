@@ -486,6 +486,12 @@ describe("CustomerAccountService - Customer Class Registrations", () => {
 			displayName: "Solo",
 			normalizedName: "solo",
 		});
+		const concertoSubtype = await f.orgRepo.createRegistrationCatalogValue({
+			organizationId: f.org.id,
+			kind: "class_subtype",
+			displayName: "Concerto",
+			normalizedName: "concerto",
+		});
 
 		// Create festival class in festival 1
 		const festClass1 = await f.orgRepo.createFestivalClassConfiguration({
@@ -508,8 +514,8 @@ describe("CustomerAccountService - Customer Class Registrations", () => {
 		const festClass2 = await f.orgRepo.createFestivalClassConfiguration({
 			organizationId: f.org.id,
 			festivalId: f.festival2.id,
-			displayName: "Piano Solo Level 2",
-			classSubtypeId: subtype.id,
+			displayName: "Piano Level 2",
+			classSubtypeId: concertoSubtype.id,
 			divisionId: division.id,
 			minimumAge: 8,
 			maximumAge: 12,
@@ -596,8 +602,10 @@ describe("CustomerAccountService - Customer Class Registrations", () => {
 			(r) => r.entitlement.id === entitlement1.id,
 		);
 		expect(reg1).toBeDefined();
+		expect(reg1?.entitlement.festivalShortName).toBe("fest2026");
 		expect(reg1?.festivalClass?.id).toBe(festClass1.id);
 		expect(reg1?.festivalClass?.displayName).toBe("Piano Solo Level 1");
+		expect(reg1?.festivalClass?.requiresConcerto).toBe(false);
 		expect(reg1?.child?.id).toBe(child.id);
 		expect(reg1?.child?.name).toBe("Emma Watson");
 		expect(reg1?.metadata?.id).toBe(meta1.id);
@@ -607,8 +615,10 @@ describe("CustomerAccountService - Customer Class Registrations", () => {
 			(r) => r.entitlement.id === entitlement2.id,
 		);
 		expect(reg2).toBeDefined();
+		expect(reg2?.entitlement.festivalShortName).toBe("fest2027");
 		expect(reg2?.festivalClass?.id).toBe(festClass2.id);
-		expect(reg2?.festivalClass?.displayName).toBe("Piano Solo Level 2");
+		expect(reg2?.festivalClass?.displayName).toBe("Piano Level 2");
+		expect(reg2?.festivalClass?.requiresConcerto).toBe(true);
 		expect(reg2?.child?.id).toBe(child.id);
 		expect(reg2?.child?.name).toBe("Emma Watson");
 		expect(reg2?.metadata).toBeNull(); // No metadata linked for intent 2

@@ -14,7 +14,12 @@ COPY packages/backend packages/backend
 RUN rm -rf packages/common/dist packages/common/tsconfig.tsbuildinfo \
 	packages/backend/dist packages/backend/tsconfig.tsbuildinfo \
 	&& bun run build:common \
-	&& bun run build:backend
+	&& bun run build:backend \
+	&& test -f packages/backend/dist/index.js \
+	&& test -f packages/backend/dist/scripts/reap-class-checkout-executions.js \
+	&& test -f packages/backend/dist/scripts/reap-class-checkout-recovery.js \
+	&& test -f packages/backend/dist/scripts/reconcile-firebase-claims.js \
+	&& test -f packages/backend/dist/scripts/reconcile-shopify-orders.js
 
 FROM oven/bun:1.4.2-alpine AS runtime
 WORKDIR /app

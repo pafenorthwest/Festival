@@ -1,10 +1,11 @@
-import type {
-	AdminEntitlementOperationsResponse,
-	AdminReconciliationRunSummary,
-	AdminUnresolvedValidationDecision,
-	AdminValidationDecisionResolutionAudit,
+import {
+	AdminDecisionResolutionPayloadSchema,
+	type AdminEntitlementOperationsResponse,
+	type AdminReconciliationRunSummary,
+	type AdminUnresolvedValidationDecision,
+	type AdminValidationDecisionResolutionAudit,
 } from "@festival/common";
-import { Hono, type MiddlewareHandler } from "hono";
+import { type Context, Hono, type MiddlewareHandler } from "hono";
 import {
 	type ApiVariables,
 	getRequiredTenant,
@@ -29,6 +30,45 @@ import { AppError } from "../errors/app-error.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
 import type { AccompanistMembershipService } from "../services/accompanist-membership-service.js";
 import { assertAllowedFields } from "./admin-shopify/admin-shopify.routes.js";
+import {
+	type CoLocatedRouteSecurity,
+	defineRouteSecurity,
+} from "./shared/route-security-metadata.js";
+import {
+	jsonValidator,
+	preValidationGuard,
+} from "./shared/schema-validator.js";
+
+export const ADMIN_ENTITLEMENTS_ROUTE_SECURITY = [
+	defineRouteSecurity({
+		method: "GET",
+		path: "/organizations/:slug/admin/entitlements/operations",
+		authenticationClass: "admin",
+		csrfRequired: false,
+		browserAllowed: true,
+	}),
+	defineRouteSecurity({
+		method: "POST",
+		path: "/organizations/:slug/admin/entitlements/reconcile",
+		authenticationClass: "admin",
+		csrfRequired: true,
+		browserAllowed: true,
+	}),
+	defineRouteSecurity({
+		method: "POST",
+		path: "/organizations/:slug/admin/entitlements/decisions/:decisionId/decline",
+		authenticationClass: "admin",
+		csrfRequired: true,
+		browserAllowed: true,
+	}),
+	defineRouteSecurity({
+		method: "POST",
+		path: "/organizations/:slug/admin/entitlements/decisions/:decisionId/approve",
+		authenticationClass: "admin",
+		csrfRequired: true,
+		browserAllowed: true,
+	}),
+] as const satisfies readonly CoLocatedRouteSecurity[];
 
 export interface AdminEntitlementsRoutesOptions {
 	authVerifier: AuthVerifier;
@@ -38,6 +78,8 @@ export interface AdminEntitlementsRoutesOptions {
 	checkoutRepository?: CheckoutRepository;
 	shopifyOrderProjectionService?: ShopifyOrderProjectionService;
 }
+
+type AdminContext = Context<{ Variables: Partial<ApiVariables> }>;
 
 function requireAdminCsrf(): MiddlewareHandler<{
 	Variables: Partial<ApiVariables>;
@@ -55,10 +97,7 @@ function requireAdminCsrf(): MiddlewareHandler<{
 	};
 }
 
-function parseDecisionResolutionInput(payload: unknown): {
-	confirmed: true;
-	note: string;
-} {
+function assertDecisionResolutionInput(payload: unknown): void {
 	assertAllowedFields(
 		payload,
 		["confirmed", "note"],
@@ -67,18 +106,16 @@ function parseDecisionResolutionInput(payload: unknown): {
 	if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
 		throw new AppError("Decision resolution request is invalid.", 400);
 	}
-	const record = payload as { confirmed?: unknown; note?: unknown };
-	if (record.confirmed !== true) {
+	const { confirmed, note } = payload as {
+		confirmed?: unknown;
+		note?: unknown;
+	};
+	if (confirmed !== true) {
 		throw new AppError("Decision resolution confirmation is required.", 400);
 	}
-	if (
-		typeof record.note !== "string" ||
-		!record.note.trim() ||
-		record.note.trim().length > 500
-	) {
+	if (typeof note !== "string" || !note.trim() || note.trim().length > 500) {
 		throw new AppError("A resolution note is required.", 400);
 	}
-	return { confirmed: true, note: record.note.trim() };
 }
 
 function toRunSummary(
@@ -111,12 +148,13 @@ function toAuditDto(
 	};
 }
 
-function toDecisionSummary(
-	decision: MembershipValidationDecision,
-	intentsById: Map<string, CheckoutIntentRecord>,
-	contacts: Map<string, { name?: string | null; email?: string | null }>,
-	productNames: Map<string, string>,
-): AdminUnresolvedValidationDecision {
+function toDecisionSummary(input: {
+	decision: MembershipValidationDecision;
+	intentsById: Map<string, CheckoutIntentRecord>;
+	contacts: Map<string, { name?: string | null; email?: string | null }>;
+	productNames: Map<string, string>;
+}): AdminUnresolvedValidationDecision {
+	const { decision, intentsById, contacts, productNames } = input;
 	const intent = decision.checkoutIntentId
 		? intentsById.get(decision.checkoutIntentId)
 		: undefined;
@@ -153,6 +191,26 @@ function toDecisionSummary(
 	};
 }
 
+async function loadDecisionIntents(
+	organizationId: string,
+	decisions: MembershipValidationDecision[],
+	checkoutRepository?: CheckoutRepository,
+) {
+	const intentsById = new Map<string, CheckoutIntentRecord>();
+	if (!checkoutRepository?.findIntentById) return intentsById;
+	for (const decision of decisions) {
+		const intentId = decision.checkoutIntentId;
+		if (intentId && !intentsById.has(intentId)) {
+			const intent = await checkoutRepository.findIntentById(
+				organizationId,
+				intentId,
+			);
+			if (intent) intentsById.set(intent.id, intent);
+		}
+	}
+	return intentsById;
+}
+
 async function enrichUnresolvedDecisions(input: {
 	organizationId: string;
 	decisions: MembershipValidationDecision[];
@@ -161,21 +219,11 @@ async function enrichUnresolvedDecisions(input: {
 }): Promise<AdminUnresolvedValidationDecision[]> {
 	const { organizationId, decisions, repository, checkoutRepository } = input;
 	if (decisions.length === 0) return [];
-	const intentsById = new Map<string, CheckoutIntentRecord>();
-	if (checkoutRepository?.findIntentById) {
-		for (const decision of decisions) {
-			if (
-				decision.checkoutIntentId &&
-				!intentsById.has(decision.checkoutIntentId)
-			) {
-				const intent = await checkoutRepository.findIntentById(
-					organizationId,
-					decision.checkoutIntentId,
-				);
-				if (intent) intentsById.set(intent.id, intent);
-			}
-		}
-	}
+	const intentsById = await loadDecisionIntents(
+		organizationId,
+		decisions,
+		checkoutRepository,
+	);
 	const customerIds = [
 		...new Set(
 			decisions
@@ -197,7 +245,7 @@ async function enrichUnresolvedDecisions(input: {
 		products.map((product) => [product.id, product.productNameSnapshot]),
 	);
 	return decisions.map((decision) =>
-		toDecisionSummary(decision, intentsById, contacts, productNames),
+		toDecisionSummary({ decision, intentsById, contacts, productNames }),
 	);
 }
 
@@ -248,183 +296,201 @@ async function executeManualApprove(input: {
 	};
 }
 
-function registerDecisionRoutes(
-	router: Hono<{ Variables: Partial<ApiVariables> }>,
+function getEntitlementOperationsHandler(
+	c: AdminContext,
 	options: AdminEntitlementsRoutesOptions,
-	nowFn: () => Date,
 ) {
-	const {
-		authVerifier,
-		repository,
-		commerceRepository,
-		shopifyOrderProjectionService,
-	} = options;
-	const guards = [
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		requireAdminCsrf(),
-	] as const;
+	return respondNoStoreJson(c, async () => {
+		const { accompanistMembershipService, commerceRepository, repository } =
+			options;
+		assertOperationsAvailable(accompanistMembershipService);
+		assertOperationsAvailable(commerceRepository);
+		const organizationId = getRequiredTenant(c).organization.id;
+		const [summaryCounts, rawRuns, rawDecisions] = await Promise.all([
+			accompanistMembershipService.getSummaryCounts(organizationId),
+			commerceRepository.listReconciliationRuns(organizationId, 10),
+			commerceRepository.listUnresolvedDecisions(organizationId),
+		]);
+		const reconciliationRuns = rawRuns.map(toRunSummary);
+		const unresolvedDecisions = await enrichUnresolvedDecisions({
+			organizationId,
+			decisions: rawDecisions,
+			repository,
+			checkoutRepository: options.checkoutRepository,
+		});
+		const response: AdminEntitlementOperationsResponse = {
+			summaryCounts,
+			latestReconciliationRun: reconciliationRuns[0] ?? null,
+			reconciliationRuns,
+			unresolvedDecisions,
+		};
+		return response;
+	});
+}
 
-	router.post(
-		"/organizations/:slug/admin/entitlements/decisions/:decisionId/decline",
-		...guards,
-		async (c) => {
-			try {
-				if (!commerceRepository) {
-					throw new AppError(
-						"Entitlement operations service is unavailable.",
-						503,
-					);
-				}
-				const input = parseDecisionResolutionInput(await c.req.json());
-				const tenant = getRequiredTenant(c);
-				const resolved = await commerceRepository.resolveDecisionManually({
-					organizationId: tenant.organization.id,
-					decisionId: c.req.param("decisionId"),
-					finalStatus: "rejected",
-					actorUserId: tenant.user.id,
-					note: input.note,
-					resolvedAtIso: nowFn().toISOString(),
-				});
-				c.header("Cache-Control", "no-store");
-				return c.json({
-					decision: resolved.decision,
-					audit: toAuditDto(resolved.audit),
-				});
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
+function reconcileEntitlementsHandler(
+	c: AdminContext,
+	options: AdminEntitlementsRoutesOptions,
+) {
+	return respondNoStoreJson(c, async () => {
+		const { shopifyOrderProjectionService, commerceRepository } = options;
+		if (!shopifyOrderProjectionService || !commerceRepository) {
+			throw new AppError("Shopify order reconciliation is unavailable.", 503);
+		}
+		const organizationId = getRequiredTenant(c).organization.id;
+		let counts: { discoveredCount: number; processedCount: number };
+		try {
+			counts = await shopifyOrderProjectionService.reconcile(organizationId);
+		} catch {
+			throw new AppError("Shopify order reconciliation failed.", 503);
+		}
+		const latest = (
+			await commerceRepository.listReconciliationRuns(organizationId, 1)
+		)[0];
+		if (!latest) {
+			throw new AppError("Shopify order reconciliation failed.", 503);
+		}
+		return {
+			discoveredCount: counts.discoveredCount,
+			processedCount: counts.processedCount,
+			run: toRunSummary(latest),
+		};
+	});
+}
 
-	router.post(
-		"/organizations/:slug/admin/entitlements/decisions/:decisionId/approve",
-		...guards,
-		async (c) => {
-			try {
-				if (!commerceRepository || !shopifyOrderProjectionService) {
-					throw new AppError(
-						"Entitlement operations service is unavailable.",
-						503,
-					);
-				}
-				const input = parseDecisionResolutionInput(await c.req.json());
-				const tenant = getRequiredTenant(c);
-				const body = await executeManualApprove({
-					organizationId: tenant.organization.id,
-					decisionId: c.req.param("decisionId"),
-					actorUserId: tenant.user.id,
-					note: input.note,
-					resolvedAtIso: nowFn().toISOString(),
-					commerceRepository,
-					shopifyOrderProjectionService,
-				});
-				c.header("Cache-Control", "no-store");
-				return c.json(body);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
+function requireDecisionId(c: AdminContext): string {
+	const decisionId = c.req.param("decisionId");
+	if (!decisionId) {
+		throw new AppError("Decision ID is required.", 400);
+	}
+	return decisionId;
+}
+
+function assertOperationsAvailable(ready: unknown): asserts ready {
+	if (!ready) {
+		throw new AppError("Entitlement operations service is unavailable.", 503);
+	}
+}
+
+async function respondNoStoreJson<T>(c: AdminContext, work: () => Promise<T>) {
+	try {
+		const payload = await work();
+		c.header("Cache-Control", "no-store");
+		return c.json(payload);
+	} catch (error) {
+		return toJsonError(c, error);
+	}
+}
+
+const decisionResolutionValidator = jsonValidator(
+	AdminDecisionResolutionPayloadSchema,
+	{
+		preCheck: assertDecisionResolutionInput,
+	},
+);
+
+interface DecisionResolutionHandlerInput {
+	options: AdminEntitlementsRoutesOptions;
+	nowFn: () => Date;
+	input: { confirmed: true; note: string };
+}
+
+function declineDecisionHandler(
+	c: AdminContext,
+	params: DecisionResolutionHandlerInput,
+) {
+	return respondNoStoreJson(c, async () => {
+		const { commerceRepository } = params.options;
+		assertOperationsAvailable(commerceRepository);
+		const tenant = getRequiredTenant(c);
+		const resolved = await commerceRepository.resolveDecisionManually({
+			organizationId: tenant.organization.id,
+			decisionId: requireDecisionId(c),
+			finalStatus: "rejected",
+			actorUserId: tenant.user.id,
+			note: params.input.note.trim(),
+			resolvedAtIso: params.nowFn().toISOString(),
+		});
+		return { decision: resolved.decision, audit: toAuditDto(resolved.audit) };
+	});
+}
+
+function approveDecisionHandler(
+	c: AdminContext,
+	params: DecisionResolutionHandlerInput,
+) {
+	return respondNoStoreJson(c, async () => {
+		const { commerceRepository, shopifyOrderProjectionService } =
+			params.options;
+		assertOperationsAvailable(commerceRepository);
+		assertOperationsAvailable(shopifyOrderProjectionService);
+		const tenant = getRequiredTenant(c);
+		return executeManualApprove({
+			organizationId: tenant.organization.id,
+			decisionId: requireDecisionId(c),
+			actorUserId: tenant.user.id,
+			note: params.input.note.trim(),
+			resolvedAtIso: params.nowFn().toISOString(),
+			commerceRepository,
+			shopifyOrderProjectionService,
+		});
+	});
 }
 
 export function buildAdminEntitlementsRoutes(
 	options: AdminEntitlementsRoutesOptions,
-): Hono<{ Variables: Partial<ApiVariables> }> {
-	const router = new Hono<{ Variables: Partial<ApiVariables> }>();
-	const {
-		authVerifier,
-		repository,
-		accompanistMembershipService,
-		commerceRepository,
-		checkoutRepository,
-		shopifyOrderProjectionService,
-	} = options;
+) {
+	const { authVerifier, repository } = options;
 	const nowFn = (repository as { now?: () => Date }).now ?? (() => new Date());
-
-	router.get(
-		"/organizations/:slug/admin/entitlements/operations",
+	const admin = [
 		requireAuth(authVerifier),
 		requireTenant(repository),
 		requireTenantRole(["Admin"]),
-		async (c) => {
-			try {
-				if (!accompanistMembershipService || !commerceRepository) {
-					throw new AppError(
-						"Entitlement operations service is unavailable.",
-						503,
-					);
-				}
-				const organizationId = getRequiredTenant(c).organization.id;
-				const [summaryCounts, rawRuns, rawDecisions] = await Promise.all([
-					accompanistMembershipService.getSummaryCounts(organizationId),
-					commerceRepository.listReconciliationRuns(organizationId, 10),
-					commerceRepository.listUnresolvedDecisions(organizationId),
-				]);
-				const reconciliationRuns = rawRuns.map(toRunSummary);
-				const unresolvedDecisions = await enrichUnresolvedDecisions({
-					organizationId,
-					decisions: rawDecisions,
-					repository,
-					checkoutRepository,
-				});
-				const response: AdminEntitlementOperationsResponse = {
-					summaryCounts,
-					latestReconciliationRun: reconciliationRuns[0] ?? null,
-					reconciliationRuns,
-					unresolvedDecisions,
-				};
-				c.header("Cache-Control", "no-store");
-				return c.json(response);
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
+	] as const;
+	const adminCsrf = [...admin, requireAdminCsrf()] as const;
+	const requireDeclineGuard = preValidationGuard(() => {
+		assertOperationsAvailable(options.commerceRepository);
+	});
+	const requireApproveGuard = preValidationGuard(() => {
+		assertOperationsAvailable(options.commerceRepository);
+		assertOperationsAvailable(options.shopifyOrderProjectionService);
+	});
 
-	router.post(
-		"/organizations/:slug/admin/entitlements/reconcile",
-		requireAuth(authVerifier),
-		requireTenant(repository),
-		requireTenantRole(["Admin"]),
-		requireAdminCsrf(),
-		async (c) => {
-			try {
-				if (!shopifyOrderProjectionService || !commerceRepository) {
-					throw new AppError(
-						"Shopify order reconciliation is unavailable.",
-						503,
-					);
-				}
-				const organizationId = getRequiredTenant(c).organization.id;
-				let counts: { discoveredCount: number; processedCount: number };
-				try {
-					counts =
-						await shopifyOrderProjectionService.reconcile(organizationId);
-				} catch {
-					throw new AppError("Shopify order reconciliation failed.", 503);
-				}
-				const runs = await commerceRepository.listReconciliationRuns(
-					organizationId,
-					1,
-				);
-				const latest = runs[0];
-				if (!latest) {
-					throw new AppError("Shopify order reconciliation failed.", 503);
-				}
-				c.header("Cache-Control", "no-store");
-				return c.json({
-					discoveredCount: counts.discoveredCount,
-					processedCount: counts.processedCount,
-					run: toRunSummary(latest),
-				});
-			} catch (error) {
-				return toJsonError(c, error);
-			}
-		},
-	);
-
-	registerDecisionRoutes(router, options, nowFn);
-	return router;
+	return new Hono<{ Variables: Partial<ApiVariables> }>()
+		.get("/organizations/:slug/admin/entitlements/operations", ...admin, (c) =>
+			getEntitlementOperationsHandler(c, options),
+		)
+		.post(
+			"/organizations/:slug/admin/entitlements/reconcile",
+			...adminCsrf,
+			(c) => reconcileEntitlementsHandler(c, options),
+		)
+		.post(
+			"/organizations/:slug/admin/entitlements/decisions/:decisionId/decline",
+			...adminCsrf,
+			requireDeclineGuard,
+			decisionResolutionValidator,
+			(c) =>
+				declineDecisionHandler(c, {
+					options,
+					nowFn,
+					input: c.req.valid("json"),
+				}),
+		)
+		.post(
+			"/organizations/:slug/admin/entitlements/decisions/:decisionId/approve",
+			...adminCsrf,
+			requireApproveGuard,
+			decisionResolutionValidator,
+			(c) =>
+				approveDecisionHandler(c, {
+					options,
+					nowFn,
+					input: c.req.valid("json"),
+				}),
+		);
 }
+
+export type AdminEntitlementsRoutesType = ReturnType<
+	typeof buildAdminEntitlementsRoutes
+>;

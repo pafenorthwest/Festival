@@ -97,6 +97,31 @@ export class InMemoryCustomerAccountRepository
 		this.integrations.set(organizationId, record);
 		return record;
 	}
+	async recordIntegrationHealth(
+		organizationId: string,
+		expectedIntegrationVersion: number,
+		observation: Parameters<
+			CustomerAccountRepository["recordIntegrationHealth"]
+		>[2],
+	) {
+		const existing = this.integrations.get(organizationId);
+		if (existing?.integrationVersion !== expectedIntegrationVersion)
+			return false;
+		const patch =
+			observation.kind === "order_access"
+				? { canReadOrders: observation.canReadOrders }
+				: {
+						readiness: "ready" as const,
+						verifiedAtIso: observation.verifiedAtIso,
+						lastError: undefined,
+					};
+		this.integrations.set(organizationId, {
+			...existing,
+			...patch,
+			updatedAtIso: new Date().toISOString(),
+		});
+		return true;
+	}
 	async putOAuthState(state: CustomerOAuthStateRecord) {
 		this.states.set(state.stateHash, state);
 	}
@@ -135,6 +160,27 @@ export class InMemoryCustomerAccountRepository
 	}
 	async getSession(id: string) {
 		return this.sessions.get(id) ?? null;
+	}
+	async findSessionCustomerAndIntegration(
+		sessionId: string,
+		organizationId: string,
+	): Promise<
+		| {
+				session: CustomerSessionRecord;
+				customer: FestivalCustomerRecord | null;
+				integration: CustomerAccountIntegrationRecord | null;
+		  }
+		| { organizationMismatch: true }
+		| null
+	> {
+		const session = this.sessions.get(sessionId);
+		if (!session) return null;
+		if (session.organizationId !== organizationId) {
+			return { organizationMismatch: true };
+		}
+		const customer = await this.getCustomer(organizationId, session.customerId);
+		const integration = await this.getIntegration(organizationId);
+		return { session, customer, integration };
 	}
 	async getCustomer(organizationId: string, customerId: string) {
 		const customer = this.customers.get(customerId);
@@ -312,9 +358,18 @@ export class InMemoryCustomerAccountRepository
 		this.sessions.set(session.sessionId, updated);
 		return updated;
 	}
-	async revokeSession(id: string, at: string) {
+	async revokeSession(
+		id: string,
+		at: string,
+		expectedEncryptedTokens?: string,
+	) {
 		const session = this.sessions.get(id);
-		if (session && !session.revokedAtIso)
+		if (
+			session &&
+			!session.revokedAtIso &&
+			(expectedEncryptedTokens === undefined ||
+				session.encryptedTokens === expectedEncryptedTokens)
+		)
 			this.sessions.set(id, { ...session, revokedAtIso: at });
 	}
 	async revokeOrganizationSessions(org: string, at: string) {
@@ -351,6 +406,20 @@ export class InMemoryCustomerAccountRepository
 			child.parentCustomerId === parentCustomerId
 			? child
 			: null;
+	}
+	async findChildrenByIds(
+		organizationId: string,
+		parentCustomerId: string,
+		childIds: readonly string[],
+	): Promise<FestivalChildRecord[]> {
+		if (childIds.length === 0) return [];
+		const targetIds = new Set(childIds);
+		return [...this.children.values()].filter(
+			(child) =>
+				child.organizationId === organizationId &&
+				child.parentCustomerId === parentCustomerId &&
+				targetIds.has(child.id),
+		);
 	}
 	async listChildren(organizationId: string, parentCustomerId: string) {
 		return [...this.children.values()].filter(
@@ -409,5 +478,23 @@ export class InMemoryCustomerAccountRepository
 				snapshot.organizationId === organizationId &&
 				snapshot.childId === childId,
 		);
+	}
+	async createChildWithAgeSnapshot(input: {
+		child: Omit<FestivalChildRecord, "id" | "createdAtIso">;
+		snapshot: Omit<
+			FestivalChildAgeSnapshot,
+			"id" | "childId" | "organizationId" | "createdAtIso" | "supersededAtIso"
+		>;
+	}): Promise<{
+		child: FestivalChildRecord;
+		ageSnapshot: FestivalChildAgeSnapshot;
+	}> {
+		const child = await this.createChild(input.child);
+		const ageSnapshot = await this.createChildAgeSnapshot({
+			...input.snapshot,
+			organizationId: input.child.organizationId,
+			childId: child.id,
+		});
+		return { child, ageSnapshot };
 	}
 }

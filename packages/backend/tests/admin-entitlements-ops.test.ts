@@ -19,6 +19,7 @@ import type {
 const NOW = new Date("2026-08-28T18:10:00.000Z");
 const AES_KEY = Buffer.alloc(32, 7).toString("base64");
 const SCHEDULER_TOKEN = "private-scheduler-token-do-not-leak";
+const FIREBASE_ID_TOKEN = `eyJhbGciOiJSUzI1NiJ9.${"a".repeat(700)}.signature`;
 
 class FakeOrders implements ShopifyPaidOrderReader {
 	readonly listed: ShopifyPaidOrder[] = [];
@@ -48,7 +49,7 @@ const TEST_USERS: Record<string, AuthenticatedUser> = {
 
 class FakeAuth implements AuthVerifier {
 	async verify(token: string): Promise<AuthenticatedUser> {
-		const user = TEST_USERS[token];
+		const user = TEST_USERS[token === FIREBASE_ID_TOKEN ? "admin" : token];
 		if (!user) throw new Error("Invalid token");
 		return user;
 	}
@@ -388,6 +389,30 @@ describe("Admin Entitlement Operations & Lifecycle Controls (#127)", () => {
 		expect(opsRes.status).toBe(200);
 		expect(opsRes.headers.get("Cache-Control")).toBe("no-store");
 		expect((await opsRes.json()).summaryCounts).toEqual(expectedCounts);
+	});
+
+	it("accepts a realistic-length Firebase bearer with separate CSRF and retains header enforcement", async () => {
+		const f = await createOpsFixture();
+		const path = "/api/organizations/festival/admin/entitlements/reconcile";
+		expect(
+			(await adminPost(f, path, { token: FIREBASE_ID_TOKEN, csrf: "" })).status,
+		).toBe(403);
+		expect(
+			(
+				await adminPost(f, path, {
+					token: FIREBASE_ID_TOKEN,
+					csrf: FIREBASE_ID_TOKEN,
+				})
+			).status,
+		).toBe(403);
+		expect(
+			(
+				await adminPost(f, path, {
+					token: FIREBASE_ID_TOKEN,
+					csrf: "admin-csrf",
+				})
+			).status,
+		).toBe(200);
 	});
 
 	it("allows admin reconciliation with CSRF and records safe failure diagnostics", async () => {

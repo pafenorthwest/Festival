@@ -45,7 +45,20 @@ window.fetch = async (input, init) => {
 			body = { error: "Teacher profile not found." };
 		}
 	} else if (url.endsWith("/divisions")) {
-		body = { divisions: [] };
+		body = {
+			divisions: [
+				{
+					id: "11111111-1111-4111-8111-111111111111",
+					displayName: "Piano",
+					displayOrder: 1,
+				},
+				{
+					id: "22222222-2222-4222-8222-222222222222",
+					displayName: "Strings",
+					displayOrder: 2,
+				},
+			],
+		};
 	} else throw new Error(`Unexpected fixture request: ${url}`);
 	return new Response(JSON.stringify(body), {
 		status,
@@ -115,6 +128,7 @@ async function verify() {
 			status: "active",
 			entitlementClass: "teacher_membership",
 			displayName: "Teacher Membership",
+			divisionName: "Piano",
 		},
 	];
 	const refresh = [...(root?.querySelectorAll("button") ?? [])].find(
@@ -136,6 +150,23 @@ async function verify() {
 		root?.textContent?.includes("Public Teacher Directory") &&
 			!window.location.search,
 		"Confirmed membership renders directory card and clears processing handoff",
+	);
+	const teacherCard = root?.querySelector(
+		'section[aria-labelledby="teacher-directory-card-heading"]',
+	);
+	assert(
+		Boolean(teacherCard?.textContent?.includes("Public Teacher Directory")),
+		"Teacher card displays Public Teacher Directory heading",
+	);
+	assert(
+		Boolean(teacherCard?.textContent?.includes("Piano")),
+		"Teacher card renders assigned Teacher division text read-only",
+	);
+	const teacherCheckboxes =
+		teacherCard?.querySelectorAll('input[type="checkbox"]') ?? [];
+	assert(
+		teacherCheckboxes.length === 1,
+		"Teacher card renders only 1 opt-in checkbox and zero division checkboxes",
 	);
 	if (results)
 		results.textContent = `PASS: ${checks.length} account return checks\n${checks.join("\n")}`;

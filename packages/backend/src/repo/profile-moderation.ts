@@ -1,11 +1,12 @@
 import type { ProfileApprovalStatus } from "@festival/common";
 
 /**
- * Resolves teacher profile approval status during a customer profile upsert.
- * Admin-hidden ('rejected') profiles cannot be bypassed by customer edits;
- * opted-in active teachers are auto-approved and remain approved across edits.
+ * Resolves participant (teacher or accompanist) profile approval status during
+ * a customer profile upsert. Admin-hidden ('rejected') profiles cannot be
+ * bypassed by customer edits; opted-in active members are auto-approved and
+ * remain approved across edits.
  */
-export function resolveTeacherProfileApprovalStatus(
+export function resolveParticipantProfileApprovalStatus(
 	existingStatus: ProfileApprovalStatus | null | undefined,
 	publicDirectoryOptIn: boolean,
 ): ProfileApprovalStatus {
@@ -17,6 +18,9 @@ export function resolveTeacherProfileApprovalStatus(
 	}
 	return existingStatus ?? "pending";
 }
+
+export const resolveTeacherProfileApprovalStatus =
+	resolveParticipantProfileApprovalStatus;
 
 /**
  * Determines whether an edit to an existing participant profile must be

@@ -1,27 +1,47 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { loadEnv } from "../src/config/env.js";
+import {
+	buildDatabaseUrl,
+	loadEnv,
+	parseDatabasePoolMax,
+} from "../src/config/env.js";
 import { SHOPIFY_ADMIN_AUDIT_PATH as DEFAULT_SHOPIFY_ADMIN_AUDIT_PATH } from "../src/shopify/admin-mutation-audit.js";
 
 const originalShopifyAdminAuditPath = process.env.SHOPIFY_ADMIN_AUDIT_PATH;
 const originalTenantReconcileTokens =
 	process.env.FESTIVAL_TENANT_RECONCILIATION_TOKENS_JSON;
+const originalDbUser = process.env.DB_USER;
+const originalDbPassword = process.env.DB_PASSWORD;
+const originalDbHost = process.env.DB_HOST;
+const originalDbPort = process.env.DB_PORT;
+const originalDatabase = process.env.DATABASE;
+const originalDbSsl = process.env.DB_SSL;
+const originalDbPoolMax = process.env.DB_POOL_MAX;
+
+function restoreEnv(key: string, value: string | undefined) {
+	if (value === undefined) {
+		delete process.env[key];
+	} else {
+		process.env[key] = value;
+	}
+}
 
 function loadTestEnv() {
 	return loadEnv({ requireDatabase: false, requireFirebaseAdmin: false });
 }
 
 afterEach(() => {
-	if (originalShopifyAdminAuditPath === undefined) {
-		delete process.env.SHOPIFY_ADMIN_AUDIT_PATH;
-	} else {
-		process.env.SHOPIFY_ADMIN_AUDIT_PATH = originalShopifyAdminAuditPath;
-	}
-	if (originalTenantReconcileTokens === undefined) {
-		delete process.env.FESTIVAL_TENANT_RECONCILIATION_TOKENS_JSON;
-	} else {
-		process.env.FESTIVAL_TENANT_RECONCILIATION_TOKENS_JSON =
-			originalTenantReconcileTokens;
-	}
+	restoreEnv("SHOPIFY_ADMIN_AUDIT_PATH", originalShopifyAdminAuditPath);
+	restoreEnv(
+		"FESTIVAL_TENANT_RECONCILIATION_TOKENS_JSON",
+		originalTenantReconcileTokens,
+	);
+	restoreEnv("DB_USER", originalDbUser);
+	restoreEnv("DB_PASSWORD", originalDbPassword);
+	restoreEnv("DB_HOST", originalDbHost);
+	restoreEnv("DB_PORT", originalDbPort);
+	restoreEnv("DATABASE", originalDatabase);
+	restoreEnv("DB_SSL", originalDbSsl);
+	restoreEnv("DB_POOL_MAX", originalDbPoolMax);
 });
 
 describe("loadEnv Shopify mutation audit path", () => {
@@ -82,5 +102,82 @@ describe("loadEnv Shopify mutation audit path", () => {
 		expect(loadTestEnv).toThrow(
 			"Invalid FESTIVAL_TENANT_RECONCILIATION_TOKENS_JSON: entries must map organizationId to non-empty token.",
 		);
+	});
+});
+
+describe("parseDatabasePoolMax", () => {
+	it("returns undefined for undefined or whitespace values", () => {
+		expect(parseDatabasePoolMax(undefined)).toBeUndefined();
+		expect(parseDatabasePoolMax("")).toBeUndefined();
+		expect(parseDatabasePoolMax("   ")).toBeUndefined();
+	});
+
+	it("parses valid positive integer strings", () => {
+		expect(parseDatabasePoolMax("80")).toBe(80);
+		expect(parseDatabasePoolMax(" 50 ")).toBe(50);
+		expect(parseDatabasePoolMax("1")).toBe(1);
+	});
+
+	it("rejects non-positive numbers and non-integers", () => {
+		expect(() => parseDatabasePoolMax("0")).toThrow(
+			"Invalid DB_POOL_MAX value: 0",
+		);
+		expect(() => parseDatabasePoolMax("-5")).toThrow(
+			"Invalid DB_POOL_MAX value: -5",
+		);
+		expect(() => parseDatabasePoolMax("12.5")).toThrow(
+			"Invalid DB_POOL_MAX value: 12.5",
+		);
+		expect(() => parseDatabasePoolMax("invalid")).toThrow(
+			"Invalid DB_POOL_MAX value: invalid",
+		);
+	});
+});
+
+describe("buildDatabaseUrl", () => {
+	function setDbEnv() {
+		process.env.DB_USER = "testuser";
+		process.env.DB_PASSWORD = "testpassword";
+		process.env.DB_HOST = "localhost";
+		process.env.DB_PORT = "5432";
+		process.env.DATABASE = "testdb";
+		process.env.DB_SSL = "false";
+	}
+
+	it("builds a clean database url with sslmode", () => {
+		setDbEnv();
+
+		expect(buildDatabaseUrl()).toBe(
+			"postgresql://testuser:testpassword@localhost:5432/testdb?sslmode=disable",
+		);
+	});
+
+	it("respects sslmode require when DB_SSL is enabled", () => {
+		setDbEnv();
+		process.env.DB_SSL = "true";
+
+		expect(buildDatabaseUrl()).toBe(
+			"postgresql://testuser:testpassword@localhost:5432/testdb?sslmode=require",
+		);
+	});
+});
+
+describe("loadEnv databasePoolMax", () => {
+	it("defaults max connection pool size to 80 when DB_POOL_MAX is unset", () => {
+		delete process.env.DB_POOL_MAX;
+
+		expect(loadTestEnv().databasePoolMax).toBe(80);
+	});
+
+	it("loads configured max connection pool size from DB_POOL_MAX", () => {
+		process.env.DB_POOL_MAX = "40";
+
+		expect(loadTestEnv().databasePoolMax).toBe(40);
+	});
+
+	it("rejects invalid DB_POOL_MAX values", () => {
+		process.env.DB_POOL_MAX = "not-a-number";
+
+		expect(loadTestEnv).toThrow("Invalid DB_POOL_MAX value: not-a-number");
 	});
 });

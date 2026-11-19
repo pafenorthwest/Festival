@@ -11,100 +11,74 @@ if (process.env.POSTGRES_INTEGRATION_URL && !process.env.DATABASE_URL) {
 }
 
 const schema = `it_initializer_${randomUUID().replaceAll("-", "")}`;
+const missingSchema = `it_missing_${randomUUID().replaceAll("-", "")}`;
 const integrationTest = process.env.POSTGRES_INTEGRATION_URL ? test : test.skip;
 let schemaCreated = false;
 
 afterAll(async () => {
+	if (!process.env.POSTGRES_INTEGRATION_URL) return;
+	await sql.unsafe(`DROP SCHEMA IF EXISTS ${missingSchema} CASCADE`);
 	if (!schemaCreated) return;
 	await sql.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
 });
 
 integrationTest(
-	"initializes current tables over baseline parents without composite unique keys",
+	"rejects missing schema or missing schema_migrations with zero DDL executed",
 	async () => {
+		await expect(initializePostgresSchema(missingSchema)).rejects.toThrow();
+
+		const missingRows = await sql`
+			SELECT schema_name
+			FROM information_schema.schemata
+			WHERE schema_name = ${missingSchema}
+		`;
+		expect(missingRows).toHaveLength(0);
+
 		await sql.unsafe(`CREATE SCHEMA ${schema}`);
 		schemaCreated = true;
-		await sql.unsafe(`
-			CREATE TABLE ${schema}.organizations (id TEXT PRIMARY KEY);
-			CREATE TABLE ${schema}.registration_catalog_values (
-				id TEXT PRIMARY KEY,
-				organization_id TEXT NOT NULL,
-				kind TEXT NOT NULL,
-				display_name TEXT NOT NULL,
-				normalized_name TEXT NOT NULL,
-				is_active BOOLEAN NOT NULL DEFAULT TRUE,
-				display_order INTEGER NOT NULL,
-				required_subtype_id TEXT NULL,
-				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-			);
-			CREATE TABLE ${schema}.checkout_intents (
-				id TEXT PRIMARY KEY,
-				correlation_id TEXT NOT NULL,
-				organization_id TEXT NOT NULL,
-				customer_id TEXT NOT NULL,
-				session_id TEXT NOT NULL,
-				idempotency_key TEXT NOT NULL,
-				intent_type TEXT NOT NULL DEFAULT 'membership',
-				offering_id TEXT,
-				entitlement_class TEXT,
-				duration_days INTEGER,
-				festival_class_id TEXT,
-				child_id TEXT,
-				shopify_product_gid TEXT NOT NULL,
-				shopify_variant_gid TEXT NOT NULL,
-				policy_version TEXT,
-				division_id TEXT,
-				division_name_snapshot TEXT,
-				staff_access_consent BOOLEAN NOT NULL DEFAULT FALSE,
-				amount TEXT NOT NULL,
-				currency_code TEXT NOT NULL,
-				line_identity_protocol TEXT,
-				cart_reference TEXT,
-				status TEXT NOT NULL,
-				expires_at TIMESTAMPTZ NOT NULL,
-				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-			);
-		`);
-
-		await initializePostgresSchema(schema);
-
-		const rows = await sql.unsafe(
-			`SELECT to_regclass($1) AS subtypes, to_regclass($2) AS recovery_requests`,
-			[
-				`${schema}.festival_class_subtypes`,
-				`${schema}.checkout_recovery_requests`,
-			],
+		await sql.unsafe(
+			`CREATE TABLE ${schema}.organizations (id TEXT PRIMARY KEY)`,
 		);
-		expect(rows[0]).toEqual({
-			subtypes: `${schema}.festival_class_subtypes`,
-			recovery_requests: `${schema}.checkout_recovery_requests`,
-		});
+
+		await expect(initializePostgresSchema(schema)).rejects.toThrow();
+
+		const tables = await sql`
+			SELECT tablename
+			FROM pg_tables
+			WHERE schemaname = ${schema}
+			ORDER BY tablename
+		`;
+		expect(tables).toEqual([{ tablename: "organizations" }]);
 	},
 );
 
 integrationTest(
-	"preserves existing reference indexes when initializing a current schema",
+	"succeeds on canonically provisioned schema without modifying pg_indexes or executing DDL",
 	async () => {
 		const restoredSchema = `it_restored_${randomUUID().replaceAll("-", "")}`;
 		const referenceIndexes = () => sql`
 			SELECT tablename, indexname, indexdef
 			FROM pg_indexes
 			WHERE schemaname = ${restoredSchema}
-			  AND tablename IN (
-				  'registration_catalog_values', 'festival_children',
-				  'festival_class_configurations', 'festival_class_waitlist_entries',
-				  'checkout_intents'
-			  )
 			ORDER BY tablename, indexname
+		`;
+		const schemaTables = () => sql`
+			SELECT tablename
+			FROM pg_tables
+			WHERE schemaname = ${restoredSchema}
+			ORDER BY tablename
 		`;
 
 		await sql.unsafe(`CREATE SCHEMA ${restoredSchema}`);
 		try {
 			await sql.unsafe(buildCanonicalPostgresSchemaSql(restoredSchema));
 			const originalIndexes = await referenceIndexes();
+			const originalTables = await schemaTables();
+
 			await initializePostgresSchema(restoredSchema);
+
 			expect(await referenceIndexes()).toEqual(originalIndexes);
+			expect(await schemaTables()).toEqual(originalTables);
 		} finally {
 			await sql.unsafe(`DROP SCHEMA ${restoredSchema} CASCADE`);
 		}

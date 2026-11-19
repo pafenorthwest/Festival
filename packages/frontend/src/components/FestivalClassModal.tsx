@@ -13,6 +13,7 @@ import {
 	validatePrice,
 } from "../pages/festivalAdminClassesHelpers.js";
 import { Button } from "./Button.js";
+import { ModalBackdrop } from "./ModalBackdrop.js";
 
 interface FestivalClassModalProps {
 	isOpen: boolean;
@@ -99,7 +100,7 @@ export function FestivalClassModal(props: FestivalClassModalProps) {
 
 	return (
 		<Show when={props.isOpen}>
-			<div class="modal-backdrop" role="presentation">
+			<ModalBackdrop>
 				<section
 					class="modal-card panel flow-panel class-modal-card"
 					role="dialog"
@@ -345,7 +346,7 @@ export function FestivalClassModal(props: FestivalClassModalProps) {
 						</div>
 					</form>
 				</section>
-			</div>
+			</ModalBackdrop>
 		</Show>
 	);
 }

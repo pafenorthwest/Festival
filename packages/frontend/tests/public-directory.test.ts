@@ -45,8 +45,16 @@ function profile(
 	return { displayName, role, approvedDivisions: [], isActiveMember: true };
 }
 
-const appSource = await Bun.file(
-	new URL("../src/App.tsx", import.meta.url),
+const appRoutesSource = await Bun.file(
+	new URL("../src/app/AppRoutes.tsx", import.meta.url),
+).text();
+
+const lazyPagesSource = await Bun.file(
+	new URL("../src/app/lazyPages.ts", import.meta.url),
+).text();
+
+const routesSource = await Bun.file(
+	new URL("../src/lib/routes.ts", import.meta.url),
 ).text();
 
 const sideNavigationSource = await Bun.file(
@@ -93,15 +101,19 @@ describe("public directory routing, navigation, and API", () => {
 		expect(sideNavigationSource).toContain("groups");
 	});
 
-	it("wires public directory route and page component in App.tsx", () => {
-		expect(appSource).toMatch(
-			/PublicDirectoryPage[\s\S]*?from\s*["']\.\/(?:pages\/PublicDirectoryPage|app\/lazyPages)(?:\.js)?["']/,
+	it("wires public directory route and page component in AppRoutes.tsx", () => {
+		expect(lazyPagesSource).toMatch(
+			/export const PublicDirectoryPage = lazyPage\(\(\) =>[\s\S]*?import\(["']\.\.\/pages\/PublicDirectoryPage(?:\.js)?["']\)/,
 		);
-		expect(appSource).toContain('app.route().kind === "org-public-directory"');
-		expect(appSource).toContain("<PublicDirectoryPage");
-		expect(appSource).toContain(
-			"slug={(app.route() as { slug: string }).slug}",
+		expect(lazyPagesSource).toContain(
+			'"org-public-directory": PublicDirectoryPage',
 		);
+		expect(routesSource).toContain('"org-public-directory"');
+		expect(appRoutesSource).toContain(
+			'import * as Pages from "./lazyPages.js"',
+		);
+		expect(appRoutesSource).toContain('path="/directory"');
+		expect(appRoutesSource).toContain("<Pages.PublicDirectoryPage slug={slug}");
 	});
 
 	it("fetches public directory profiles from GET /api/org-info/:orgSlug/directory/profiles", async () => {
@@ -452,9 +464,10 @@ interface DirectoryFilterHelpers {
 	) => Array<{ id: string; name: string }>;
 }
 
-describe("active-member teacher filtering and directory search/division filters", () => {
+describe("active-member teacher and accompanist filtering and directory search/division filters", () => {
 	const piano = { id: "div-piano", name: "Piano" };
 	const strings = { id: "div-strings", name: "Strings" };
+	const voice = { id: "div-voice", name: "Voice" };
 	const names = (l?: PublicDirectoryProfileDto[]) =>
 		l?.map((p) => p.displayName);
 	const sample: PublicDirectoryProfileDto[] = [
@@ -464,21 +477,32 @@ describe("active-member teacher filtering and directory search/division filters"
 			...profile("Niccolo Paganini", "Teacher"),
 			approvedDivisions: [strings, piano],
 		},
-		{ ...profile("Gerald Moore", "Accompanist"), isActiveMember: false },
+		{
+			...profile("Gerald Moore", "Accompanist"),
+			approvedDivisions: [voice],
+			isActiveMember: false,
+		},
+		{
+			...profile("Ava Piano", "Accompanist"),
+			approvedDivisions: [piano],
+			isActiveMember: true,
+		},
 	];
 
-	it("omits inactive Teachers and filters/collects divisions deterministically", async () => {
-		expect(names(partitionDirectoryProfiles(sample).teachers)).toEqual([
+	it("omits inactive Teachers and Accompanists while keeping active members and filtering deterministically", async () => {
+		const partitioned = partitionDirectoryProfiles(sample);
+		expect(names(partitioned.teachers)).toEqual([
 			"Clara Schumann",
 			"Niccolo Paganini",
 		]);
+		expect(names(partitioned.accompanists)).toEqual(["Ava Piano"]);
 		const path = "../src/pages/publicDirectoryHelpers.js";
 		const h = (await import(path)) as DirectoryFilterHelpers;
 		expect(h.collectDirectoryDivisions?.(sample)).toEqual([piano, strings]);
 		expect(names(h.filterDirectoryProfiles?.(sample))).toEqual([
 			"Clara Schumann",
 			"Niccolo Paganini",
-			"Gerald Moore",
+			"Ava Piano",
 		]);
 		const byQuery = h.filterDirectoryProfiles?.(sample, { query: " STRINGS " });
 		expect(names(byQuery)).toEqual(["Niccolo Paganini"]);

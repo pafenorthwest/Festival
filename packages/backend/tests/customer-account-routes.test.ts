@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { createHash } from "node:crypto";
 import type { AuthenticatedUser } from "@festival/common";
 import { createApp } from "../src/app.js";
 import type { AuthVerifier } from "../src/auth/types.js";
@@ -8,6 +9,11 @@ import type { CustomerAccountService } from "../src/customer/customer-account-se
 import { AppError } from "../src/errors/app-error.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
 import type { PublicMembershipProductService } from "../src/shopify/public-membership-product-service.js";
+
+function browserCookie(state: string): string {
+	const hash = createHash("sha256").update(state).digest("hex");
+	return `__Host-festival_customer_oauth_${hash}=${state}`;
+}
 
 class Auth implements AuthVerifier {
 	async verify(token: string): Promise<AuthenticatedUser> {
@@ -24,7 +30,7 @@ function service(overrides: Record<string, unknown> = {}) {
 	return {
 		getSettings: async () => ({ settings: null }),
 		saveAndVerify: async () => ({ settings: {} }),
-		start: async () => "https://accounts.shopify.com/auth",
+		start: async () => "https://accounts.shopify.com/auth?state=state",
 		callback: async () => ({
 			sessionId: "opaque-session",
 			returnTo: "/org/festival/account",
@@ -139,6 +145,7 @@ describe("customer account routes", () => {
 		const a = await app();
 		const response = await a.request(
 			"/api/customer-auth/callback?state=state&code=code",
+			{ headers: { Cookie: browserCookie("state") } },
 		);
 		expect(response.status).toBe(302);
 		const cookie = response.headers.get("set-cookie") ?? "";
@@ -453,7 +460,7 @@ describe("customer account routes", () => {
 			service({
 				start: async (...args: unknown[]) => {
 					startArguments = args;
-					return "https://accounts.shopify.com/auth";
+					return "https://accounts.shopify.com/auth?state=state";
 				},
 				callback: async (...args: unknown[]) => {
 					const validate = args[2] as (
@@ -479,6 +486,7 @@ describe("customer account routes", () => {
 		expect(startArguments).toEqual(["festival", undefined, "offering_123"]);
 		const callback = await a.request(
 			"/api/customer-auth/callback?state=state&code=code",
+			{ headers: { Cookie: browserCookie("state") } },
 		);
 		expect(callback.status).toBe(302);
 		expect(callback.headers.get("location")).toBe(
@@ -562,9 +570,12 @@ describe("customer account routes", () => {
 		);
 		const response = await a.request(
 			"/api/customer-auth/callback?state=state&code=code",
+			{ headers: { Cookie: browserCookie("state") } },
 		);
 		expect(response.status).toBe(409);
-		expect(response.headers.get("set-cookie")).toBeNull();
+		expect(response.headers.get("set-cookie")).not.toContain(
+			"festival_customer_session=",
+		);
 	});
 
 	it("redirects an OAuth denial to a safe local failure state without a cookie", async () => {
@@ -576,11 +587,14 @@ describe("customer account routes", () => {
 		);
 		const response = await a.request(
 			"/api/customer-auth/callback?error=access_denied&state=opaque-state",
+			{ headers: { Cookie: browserCookie("opaque-state") } },
 		);
 		expect(response.status).toBe(302);
 		expect(response.headers.get("location")).toBe(
 			"/org/festival/membership?purchaseError=authentication",
 		);
-		expect(response.headers.get("set-cookie")).toBeNull();
+		expect(response.headers.get("set-cookie")).not.toContain(
+			"festival_customer_session=",
+		);
 	});
 });

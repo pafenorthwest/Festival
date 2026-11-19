@@ -169,16 +169,20 @@ describe("frontend feature gating for drop and transfer", () => {
 		it("verifies createFestivalAppState implementation and state exposure", async () => {
 			const source = await read("../src/app/createFestivalAppState.ts");
 
+			expect(source).toContain("function computeIsDropTransferEnabled(");
 			expect(source).toContain(
-				"const isDropTransferEnabled = createMemo(() => {",
-			);
-			expect(source).toContain(
-				"const fromOrg = organization()?.features?.dropTransfer;",
+				"const fromOrg = organization?.features?.dropTransfer;",
 			);
 			expect(source).toContain(
 				'if (typeof fromOrg === "boolean") return fromOrg;',
 			);
 			expect(source).toContain("FRONT_ENABLE_DROP_TRANSFER");
+			expect(source).toContain(
+				"const isDropTransferEnabled = createMemo(() =>",
+			);
+			expect(source).toContain(
+				"computeIsDropTransferEnabled(signals.organization())",
+			);
 			expect(source).toMatch(
 				/return\s*\{[\s\S]*?\bisDropTransferEnabled\b[\s\S]*?\};/,
 			);

@@ -8,6 +8,7 @@ import {
 	CreateFestivalForm,
 	FestivalRegistrationWindowEditor,
 } from "../components/FestivalRegistrationWindowEditor.js";
+import { useCatalogRepertoire } from "../domains/catalog/CatalogRepertoireContext.js";
 import {
 	createFestivalClassSubtype,
 	listFestivalClassSubtypes,
@@ -25,6 +26,7 @@ interface AdminFestivalsPageProps {
 }
 
 export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
+	const catalog = useCatalogRepertoire();
 	const [classSubtypesByFestival, setClassSubtypesByFestival] = createSignal<
 		Record<string, RegistrationCatalogValue[]>
 	>({});
@@ -48,7 +50,7 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 	createEffect(() => {
 		const route = props.app.route();
 		const user = props.app.firebaseUser();
-		const festivals = props.app.festivals();
+		const festivals = catalog.festivals();
 		if (
 			route.kind !== "org-admin-festivals" ||
 			!user ||
@@ -171,7 +173,7 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 	}
 
 	async function handleSetPrimary(shortName: string, name: string) {
-		const current = props.app.festivals().find((item) => item.isPrimary);
+		const current = catalog.festivals().find((item) => item.isPrimary);
 		if (
 			!confirm(
 				`Make ${name} primary instead of ${current?.name ?? "the current Festival"}?`,
@@ -212,7 +214,7 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 					</div>
 				</header>
 				<div class="festival-list">
-					<For each={props.app.festivals()}>
+					<For each={catalog.festivals()}>
 						{(festival) => {
 							const hasClassSubtypes = () =>
 								(classSubtypesByFestival()[festival.shortName] ?? []).length >
@@ -297,7 +299,7 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 												(await props.app.firebaseUser()?.getIdToken()) ?? null
 											}
 											onSaved={(updated) => {
-												props.app.setFestivals((current) =>
+												catalog.setFestivals((current) =>
 													current.map((item) =>
 														item.shortName === festival.shortName
 															? updated
@@ -315,14 +317,14 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 					</For>
 				</div>
 				<CreateFestivalForm
-					draft={props.app.festivalDraft()}
-					hasNameError={props.app.hasFestivalNameError()}
-					showNameValidation={props.app.shouldShowFestivalNameValidation()}
-					nameValidationMessage={props.app.festivalNameValidationMessage()}
+					draft={catalog.festivalDraft()}
+					hasNameError={catalog.hasFestivalNameError()}
+					showNameValidation={catalog.shouldShowFestivalNameValidation()}
+					nameValidationMessage={catalog.festivalNameValidationMessage()}
 					isBusy={props.app.isBusy()}
-					onUpdateDraft={props.app.setFestivalDraft}
-					onTouchName={() => props.app.setFestivalNameTouched(true)}
-					onSubmit={props.app.handleCreateFestival}
+					onUpdateDraft={catalog.setFestivalDraft}
+					onTouchName={() => catalog.setFestivalNameTouched(true)}
+					onSubmit={catalog.handleCreateFestival}
 				/>
 				<section
 					class="festival-subtypes-card"
@@ -345,7 +347,7 @@ export function AdminFestivalsPage(props: AdminFestivalsPageProps) {
 							}}
 						>
 							<option value="">Select a festival</option>
-							<For each={props.app.festivals()}>
+							<For each={catalog.festivals()}>
 								{(festival) => (
 									<option value={festival.shortName}>{festival.name}</option>
 								)}

@@ -3,6 +3,7 @@ api_version = "2026-07"
 [[extensions]]
 name = "Return to Festival account"
 handle = "festival-account-return"
+uid = "f16f85a2-ceea-7fb3-f6d9-ba216bfe6ba0791b0dd8"
 type = "ui_extension"
 
 [[extensions.targeting]]

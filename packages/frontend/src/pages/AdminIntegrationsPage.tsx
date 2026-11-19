@@ -9,6 +9,7 @@ import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { AccessDeniedPanel } from "../components/AccessDeniedPanel.js";
 import { Button } from "../components/Button.js";
 import { CustomerAccountAdminCard } from "../components/CustomerAccountAdminCard.js";
+import { useAdminCommerce } from "../domains/admin-commerce/AdminCommerceContext.js";
 import { runShopifyDiagnostics } from "../lib/api.js";
 
 interface AdminIntegrationsPageProps {
@@ -78,13 +79,14 @@ function currentShopifyAppUrl(app: FestivalAppController): string {
 }
 
 export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
+	const adminCommerce = useAdminCommerce();
 	const [isRunningDiagnostics, setIsRunningDiagnostics] = createSignal(false);
 	const [diagnosticResults, setDiagnosticResults] = createSignal<
 		ShopifyIntegrationDiagnosticCheck[]
 	>([]);
 	const [diagnosticError, setDiagnosticError] = createSignal("");
 	const diagnosticsAvailable = () => {
-		const settings = props.app.shopifySettings();
+		const settings = adminCommerce.shopifySettings();
 		return (
 			settings?.verificationStatus === "ok" &&
 			Boolean(settings.verifiedShopDomain)
@@ -174,7 +176,7 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 						event.preventDefault();
 						setDiagnosticResults([]);
 						setDiagnosticError("");
-						void props.app.handleSaveShopifySettings();
+						void adminCommerce.handleSaveShopifySettings();
 					}}
 				>
 					<div class="shopify-card-header">
@@ -183,14 +185,14 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 							<p>Store credentials and verify Admin API access.</p>
 						</div>
 						<span
-							class={`shopify-status shopify-status-${props.app.shopifySettings()?.verificationStatus ?? "unknown"}`}
+							class={`shopify-status shopify-status-${adminCommerce.shopifySettings()?.verificationStatus ?? "unknown"}`}
 						>
 							{shopifyStatusLabel(
-								props.app.shopifySettings()?.verificationStatus,
+								adminCommerce.shopifySettings()?.verificationStatus,
 							)}
 						</span>
 					</div>
-					<Show when={props.app.shopifySettings()} keyed>
+					<Show when={adminCommerce.shopifySettings()} keyed>
 						{(settings) => (
 							<div class="shopify-verified-settings">
 								<section aria-label="Store and credential verification">
@@ -261,9 +263,9 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 							type="text"
 							autocomplete="off"
 							placeholder="example.myshopify.com"
-							value={props.app.shopifyDraft().storeUrl}
+							value={adminCommerce.shopifyDraft().storeUrl}
 							onInput={(event) =>
-								props.app.setShopifyDraft((current) => ({
+								adminCommerce.setShopifyDraft((current) => ({
 									...current,
 									storeUrl: event.currentTarget.value,
 								}))
@@ -275,9 +277,9 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 						<input
 							type="text"
 							autocomplete="off"
-							value={props.app.shopifyDraft().clientId}
+							value={adminCommerce.shopifyDraft().clientId}
 							onInput={(event) =>
-								props.app.setShopifyDraft((current) => ({
+								adminCommerce.setShopifyDraft((current) => ({
 									...current,
 									clientId: event.currentTarget.value,
 								}))
@@ -290,13 +292,13 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 							type="password"
 							autocomplete="new-password"
 							placeholder={
-								props.app.shopifySettings()?.hasClientSecret
+								adminCommerce.shopifySettings()?.hasClientSecret
 									? "Leave blank to keep existing secret"
 									: ""
 							}
-							value={props.app.shopifyDraft().clientSecret}
+							value={adminCommerce.shopifyDraft().clientSecret}
 							onInput={(event) =>
-								props.app.setShopifyDraft((current) => ({
+								adminCommerce.setShopifyDraft((current) => ({
 									...current,
 									clientSecret: event.currentTarget.value,
 								}))
@@ -309,13 +311,13 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 							type="password"
 							autocomplete="new-password"
 							placeholder={
-								props.app.shopifySettings()?.hasStorefrontPrivateToken
+								adminCommerce.shopifySettings()?.hasStorefrontPrivateToken
 									? "Leave blank to keep existing token"
 									: "Optional"
 							}
-							value={props.app.shopifyDraft().storefrontPrivateToken}
+							value={adminCommerce.shopifyDraft().storefrontPrivateToken}
 							onInput={(event) =>
-								props.app.setShopifyDraft((current) => ({
+								adminCommerce.setShopifyDraft((current) => ({
 									...current,
 									storefrontPrivateToken: event.currentTarget.value,
 								}))
@@ -323,16 +325,19 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 						/>
 						<small>Stored securely and used only by Festival’s backend.</small>
 					</label>
-					<Show when={props.app.shopifySettings()?.lastError} keyed>
+					<Show when={adminCommerce.shopifySettings()?.lastError} keyed>
 						{(lastError) => <p class="shopify-error-text">{lastError}</p>}
 					</Show>
 					<Button
 						type="submit"
 						disabled={
-							!props.app.isAdminMember() || props.app.isShopifyTesting()
+							!props.app.isAdminMember() || adminCommerce.isShopifyTesting()
 						}
 					>
-						<Show when={props.app.isShopifyTesting()} fallback="Save & Test">
+						<Show
+							when={adminCommerce.isShopifyTesting()}
+							fallback="Save & Test"
+						>
 							<span class="button-spinner" aria-hidden="true" />
 							<span>Testing</span>
 						</Show>

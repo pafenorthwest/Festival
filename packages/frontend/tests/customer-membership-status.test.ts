@@ -1,12 +1,17 @@
 import { describe, expect, it } from "bun:test";
-import type { CustomerMembershipStatusEntry } from "@festival/common";
+import {
+	CUSTOMER_MEMBERSHIP_STATUSES,
+	type CustomerMembershipStatusEntry,
+} from "@festival/common";
 import {
 	customerMembershipViewModel,
 	decideMembershipPolling,
 	formatMembershipMoney,
+	isBlockingMembershipStatus,
 	MEMBERSHIP_POLL_INTERVAL_MS,
 	MEMBERSHIP_POLL_MAX_DURATION_MS,
 	membershipStatusSignature,
+	resolveMembershipAcquisitionState,
 } from "../src/pages/customerMembershipStatus.js";
 
 const base = {
@@ -215,5 +220,169 @@ describe("customer membership polling policy", () => {
 				elapsedMs: MEMBERSHIP_POLL_MAX_DURATION_MS,
 			}),
 		).toBe("timeout");
+	});
+});
+
+function classMembership(
+	entitlementClass: CustomerMembershipStatusEntry["entitlementClass"],
+	status: CustomerMembershipStatusEntry["status"],
+): CustomerMembershipStatusEntry {
+	return {
+		entitlementClass,
+		displayName:
+			entitlementClass === "teacher_membership"
+				? "Teacher Membership"
+				: "Accompanist Membership",
+		status,
+	};
+}
+
+describe("membership acquisition state evaluation", () => {
+	const blockingStatuses = [
+		"active",
+		"scheduled",
+		"processing",
+		"needs_review",
+	] as const;
+	const nonBlockingStatuses = [
+		"expired",
+		"revoked",
+		"superseded",
+		"rejected",
+	] as const;
+
+	it("classifies all 8 CUSTOMER_MEMBERSHIP_STATUSES into blocking and non-blocking", () => {
+		expect(CUSTOMER_MEMBERSHIP_STATUSES).toHaveLength(8);
+		expect(new Set([...blockingStatuses, ...nonBlockingStatuses])).toEqual(
+			new Set(CUSTOMER_MEMBERSHIP_STATUSES),
+		);
+		for (const status of blockingStatuses) {
+			expect(isBlockingMembershipStatus(status)).toBe(true);
+		}
+		for (const status of nonBlockingStatuses) {
+			expect(isBlockingMembershipStatus(status)).toBe(false);
+		}
+	});
+
+	it("evaluates all 4 ownership combinations independently", () => {
+		const baseInput = { loading: false, error: "" };
+		expect(
+			resolveMembershipAcquisitionState({ ...baseInput, memberships: [] }),
+		).toEqual({
+			teacherDisabled: false,
+			accompanistDisabled: false,
+		});
+		expect(
+			resolveMembershipAcquisitionState({
+				...baseInput,
+				memberships: [classMembership("teacher_membership", "active")],
+			}),
+		).toEqual({
+			teacherDisabled: true,
+			accompanistDisabled: false,
+		});
+		expect(
+			resolveMembershipAcquisitionState({
+				...baseInput,
+				memberships: [classMembership("accompanist_membership", "active")],
+			}),
+		).toEqual({
+			teacherDisabled: false,
+			accompanistDisabled: true,
+		});
+		expect(
+			resolveMembershipAcquisitionState({
+				...baseInput,
+				memberships: [
+					classMembership("teacher_membership", "active"),
+					classMembership("accompanist_membership", "active"),
+				],
+			}),
+		).toEqual({
+			teacherDisabled: true,
+			accompanistDisabled: true,
+		});
+	});
+
+	it("isolates teacher and accompanist classes across every status and mixed history", () => {
+		const baseInput = { loading: false, error: "" };
+		for (const status of blockingStatuses) {
+			expect(
+				resolveMembershipAcquisitionState({
+					...baseInput,
+					memberships: [classMembership("teacher_membership", status)],
+				}),
+			).toEqual({ teacherDisabled: true, accompanistDisabled: false });
+			expect(
+				resolveMembershipAcquisitionState({
+					...baseInput,
+					memberships: [classMembership("accompanist_membership", status)],
+				}),
+			).toEqual({ teacherDisabled: false, accompanistDisabled: true });
+		}
+		for (const status of nonBlockingStatuses) {
+			expect(
+				resolveMembershipAcquisitionState({
+					...baseInput,
+					memberships: [
+						classMembership("teacher_membership", status),
+						classMembership("accompanist_membership", status),
+					],
+				}),
+			).toEqual({ teacherDisabled: false, accompanistDisabled: false });
+		}
+		expect(
+			resolveMembershipAcquisitionState({
+				...baseInput,
+				memberships: [
+					classMembership("teacher_membership", "expired"),
+					classMembership("teacher_membership", "active"),
+					classMembership("accompanist_membership", "revoked"),
+				],
+			}),
+		).toEqual({ teacherDisabled: true, accompanistDisabled: false });
+		expect(
+			resolveMembershipAcquisitionState({
+				...baseInput,
+				memberships: [
+					classMembership("teacher_membership", "superseded"),
+					classMembership("accompanist_membership", "expired"),
+					classMembership("accompanist_membership", "scheduled"),
+				],
+			}),
+		).toEqual({ teacherDisabled: false, accompanistDisabled: true });
+	});
+
+	it("fails closed on loading or error and scopes checkoutProcessing to teacher", () => {
+		expect(
+			resolveMembershipAcquisitionState({
+				memberships: [],
+				loading: true,
+				error: "",
+			}),
+		).toEqual({ teacherDisabled: true, accompanistDisabled: true });
+		expect(
+			resolveMembershipAcquisitionState({
+				memberships: [],
+				loading: false,
+				error: "Festival membership status could not be loaded.",
+			}),
+		).toEqual({ teacherDisabled: true, accompanistDisabled: true });
+		expect(
+			resolveMembershipAcquisitionState({
+				memberships: [],
+				loading: false,
+				error: "",
+				checkoutProcessing: true,
+			}),
+		).toEqual({ teacherDisabled: true, accompanistDisabled: false });
+		expect(
+			resolveMembershipAcquisitionState({
+				memberships: [classMembership("accompanist_membership", "active")],
+				loading: false,
+				error: "",
+				checkoutProcessing: true,
+			}),
+		).toEqual({ teacherDisabled: true, accompanistDisabled: true });
 	});
 });

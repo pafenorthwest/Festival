@@ -51,7 +51,21 @@ bun run --cwd packages/backend perf:scenarios
 ```
 
 ## Delivery
-Pending execution.
+- `[G1]`: PR `#382` extracted per-domain DI composition modules under `packages/backend/src/composition/` (`auth.ts`, `tenant-org.ts`, `catalog-repertoire.ts`, `customer-identity.ts`, `teacher-directory.ts`, `commerce-projection.ts`, `class-checkout.ts`, `volunteers-comms.ts`, `runtime.ts`), reduced `packages/backend/src/app.ts` to `212` lines (`<=500`), updated `packages/backend/scripts/reap-class-checkout-recovery.ts`, retired 3 unreferenced Wave 3 checkout shims (`class-checkout-recovery.ts`, `postgres-class-checkout-execution.ts`, `postgres-registration-metadata-queries.ts`), and enforces 0-exemption boundaries via `architecture-boundaries.test.ts` + `file-size-ratchet.test.ts` (`11/11` pass).
+- `[G2]`: Fresh `2026-11-18` verification gate passed across all `852` Biome files, `528` SQL-checked backend files, `254` test files (`2,736` pass / `0` fail locally; `migrate-runner.test.ts` `9/9` pass on local Postgres 17.11; full Postgres 17 integration + schema-parity verified in GitHub Actions `Pull Request Checks / verify`), and `perf:scenarios` exit 0 (plus PR `#382` 500-parent local Postgres 17 benchmark).
+- `[G3]`: All 5 `package.json` manifests are at `"0.4.0"` (`package.json`, `packages/common/package.json`, `packages/backend/package.json`, `packages/frontend/package.json`, `packages/shopify-confirmation/package.json`), `CHANGELOG.md` is updated to `## [0.4.0] - 2026-11-18` citing `#423` (`S20`), `#424` (`S18`), `#425` (`@festival/shopify-confirmation`), and `#427` (`S19`), and all 19 upstream code packets (`S00`–`S04`, `S06`–`S13`, `S15`–`S20`) + `#425` + `#426` are merged on `main`. `main -> release` promotion, annotated tag `v0.4.0`, and GitHub Release `v0.4.0` are queued behind the explicit user confirmation gate.
+- `[G4]`: Live production host deployment remains pending `S05` (`BLOCKED (D4)` unless `production` GitHub Environment secrets `DEPLOY_HOST`, `DEPLOY_SSH_PRIVATE_KEY`, and `DEPLOY_PUBLIC_URL` are configured).
 
 ## Quality gate results
-Pending execution.
+- `bun run verify:toolchain`: exit 0 (`Bun 1.4.2`, `TypeScript 5.9.3`)
+- `bun run format:check`: exit 0 (`852` files)
+- `bun run lint`: exit 0 (`852` files, 0 warnings/errors)
+- `bun run build`: exit 0 (`common`, `backend`, `frontend`, `shopify-confirmation`)
+- `bun run --cwd packages/frontend check:types`: exit 0
+- `bunx --bun tsc -p packages/backend/tsconfig.json --noEmit`: exit 0
+- `bun run check:sql`: exit 0 (`528` backend TypeScript files)
+- `bun test packages/backend/tests/architecture-boundaries.test.ts packages/backend/tests/file-size-ratchet.test.ts`: exit 0 (`11` pass, `0` fail)
+- `bun run test` (local unit suite): exit 0 (`2,736` pass, `0` fail, `159` Postgres-gated skip across `254` files: `common` 382, `backend` 1750, `frontend` 583, `shopify-confirmation` 21)
+- `bun test packages/backend/tests/migrate-runner.test.ts` (local Postgres 17.11): exit 0 (`9` pass, `0` fail, `0` skip)
+- `bun run --cwd packages/backend perf:scenarios`: exit 0 (`0` 5xx errors; PR `#382` local Postgres 17 baseline 100% HTTP 2xx)
+- GitHub Actions `Pull Request Checks / verify` (PostgreSQL 17 integration + schema parity): pending release prep PR check.

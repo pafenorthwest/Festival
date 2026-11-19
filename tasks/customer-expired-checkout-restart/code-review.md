@@ -1,0 +1,164 @@
+# Code Review
+- Task name: customer-expired-checkout-restart
+- Findings status: none
+
+## Context
+- Landing base override: `main`, matching initial HEAD `981bc942635dce1d1fcfebe94f76f51c63c6ccfb` and the intended narrow PR. The parent confirmed that the configured experimental base is 477 commits behind main with no unique commits; shared configuration was left unchanged.
+- Excluded pre-existing user changes: `AGENTS.md` and `bun.lock`. Reviewed the complete task-owned application diff, all untracked feature files, and final goal/spec documentation.
+- Application scope: 25 tracked/untracked source and test files. Deterministic SHA256 over sorted path names and file contents: `3e7c626a387915a6fdcd74693aade97096ca38ae8c85c795c4e69364baef3adc`. It matches the fingerprint captured before landing validation; no application source/test drift occurred during the final gates.
+- Base branch: main
+- Diff command: `git diff --cached; git diff; inspect listed untracked files`
+- Changed files:
+  - `goals/customer-expired-checkout-restart/establish-goals.v0.md`
+  - `goals/customer-expired-checkout-restart/goals.v0.md`
+  - `goals/task-manifest.csv`
+  - `packages/backend/src/checkout/class-checkout-execution.ts`
+  - `packages/backend/src/checkout/in-memory-checkout-query-helpers.ts`
+  - `packages/backend/src/checkout/in-memory-class-checkout-execution-helpers.ts`
+  - `packages/backend/src/domains/class-checkout/checkout-execution-helpers.ts`
+  - `packages/backend/src/domains/class-checkout/checkout-execution-repository.ts`
+  - `packages/backend/src/domains/class-checkout/checkout-execution-restart-queries.ts`
+  - `packages/backend/src/domains/class-checkout/checkout-execution-types.ts`
+  - `packages/backend/src/domains/class-checkout/class-checkout-errors.ts`
+  - `packages/backend/src/domains/class-checkout/class-checkout-execution-runner.ts`
+  - `packages/backend/src/domains/class-checkout/class-checkout-recovery-ops.ts`
+  - `packages/backend/src/domains/class-checkout/class-checkout-recovery-preflight.ts`
+  - `packages/backend/src/domains/class-checkout/class-checkout-replay-helpers.ts`
+  - `packages/backend/src/domains/class-checkout/class-checkout-restart-selections.ts`
+  - `packages/backend/tests/class-checkout-service.test.ts`
+  - `packages/backend/tests/customer-registration.routes.test.ts`
+  - `packages/backend/tests/postgres-class-checkout-recovery.integration.test.ts`
+  - `packages/backend/tests/postgres-expired-checkout-restart-payment.integration.test.ts`
+  - `packages/common/src/registration.ts`
+  - `packages/frontend/src/components/FestivalRegistrationCartView.tsx`
+  - `packages/frontend/src/pages/checkoutRecoveryPresentation.ts`
+  - `packages/frontend/src/pages/registrationCartState.ts`
+  - `packages/frontend/tests/checkoutRecoveryPresentation.test.ts`
+  - `packages/frontend/tests/class-checkout-hook.test.ts`
+  - `packages/frontend/tests/fixtures/class-checkout-hook.ts`
+  - `packages/frontend/tests/registrationCartState.test.ts`
+  - `tasks/customer-expired-checkout-restart/code-review.md`
+  - `tasks/customer-expired-checkout-restart/spec.md`
+- Citation candidates (verify before use):
+  - `goals/task-manifest.csv:51-51`
+  - `packages/backend/src/checkout/class-checkout-execution.ts:253-266`
+  - `packages/backend/src/checkout/in-memory-checkout-query-helpers.ts:78-79`
+  - `packages/backend/src/checkout/in-memory-checkout-query-helpers.ts:83-90`
+  - `packages/backend/src/checkout/in-memory-class-checkout-execution-helpers.ts:219-219`
+  - `packages/backend/src/checkout/in-memory-class-checkout-execution-helpers.ts:233-233`
+  - `packages/backend/src/checkout/in-memory-class-checkout-execution-helpers.ts:235-240`
+  - `packages/backend/src/checkout/in-memory-class-checkout-execution-helpers.ts:243-243`
+  - `packages/backend/src/checkout/in-memory-class-checkout-execution-helpers.ts:246-246`
+  - `packages/backend/src/checkout/in-memory-class-checkout-execution-helpers.ts:249-270`
+  - `packages/backend/src/checkout/in-memory-class-checkout-execution-helpers.ts:284-287`
+  - `packages/backend/src/checkout/in-memory-class-checkout-execution-helpers.ts:316-325`
+  - `packages/backend/src/checkout/in-memory-class-checkout-execution-helpers.ts:348-380`
+  - `packages/backend/src/domains/class-checkout/checkout-execution-helpers.ts:108-108`
+  - `packages/backend/src/domains/class-checkout/checkout-execution-helpers.ts:110-117`
+  - `packages/backend/src/domains/class-checkout/checkout-execution-helpers.ts:121-123`
+  - `packages/backend/src/domains/class-checkout/checkout-execution-helpers.ts:130-141`
+  - `packages/backend/src/domains/class-checkout/checkout-execution-repository.ts:222-235`
+  - `packages/backend/src/domains/class-checkout/checkout-execution-restart-queries.ts:1-1`
+  - `packages/backend/src/domains/class-checkout/checkout-execution-restart-queries.ts:11-11`
+  - `packages/backend/src/domains/class-checkout/checkout-execution-restart-queries.ts:111-111`
+  - `packages/backend/src/domains/class-checkout/checkout-execution-restart-queries.ts:116-116`
+  - `packages/backend/src/domains/class-checkout/checkout-execution-restart-queries.ts:143-144`
+  - `packages/backend/src/domains/class-checkout/checkout-execution-restart-queries.ts:147-153`
+  - `packages/backend/src/domains/class-checkout/checkout-execution-restart-queries.ts:167-167`
+  - `packages/backend/src/domains/class-checkout/checkout-execution-restart-queries.ts:169-175`
+  - `packages/backend/src/domains/class-checkout/checkout-execution-restart-queries.ts:220-220`
+  - `packages/backend/src/domains/class-checkout/checkout-execution-restart-queries.ts:228-228`
+  - `packages/backend/src/domains/class-checkout/checkout-execution-restart-queries.ts:231-238`
+  - `packages/backend/src/domains/class-checkout/checkout-execution-restart-queries.ts:282-303`
+  - `packages/backend/src/domains/class-checkout/checkout-execution-restart-queries.ts:346-346`
+  - `packages/backend/src/domains/class-checkout/checkout-execution-restart-queries.ts:412-419`
+  - `packages/backend/src/domains/class-checkout/checkout-execution-restart-queries.ts:452-481`
+  - `packages/backend/src/domains/class-checkout/checkout-execution-types.ts:123-124`
+  - `packages/backend/src/domains/class-checkout/checkout-execution-types.ts:131-131`
+  - `packages/backend/src/domains/class-checkout/checkout-execution-types.ts:192-194`
+  - `packages/backend/src/domains/class-checkout/class-checkout-errors.ts:63-66`
+  - `packages/backend/src/domains/class-checkout/class-checkout-execution-runner.ts:39-39`
+  - `packages/backend/src/domains/class-checkout/class-checkout-execution-runner.ts:421-421`
+  - `packages/backend/src/domains/class-checkout/class-checkout-recovery-ops.ts:1-2`
+  - `packages/backend/src/domains/class-checkout/class-checkout-recovery-ops.ts:123-123`
+  - `packages/backend/src/domains/class-checkout/class-checkout-recovery-ops.ts:139-139`
+  - `packages/backend/src/domains/class-checkout/class-checkout-recovery-ops.ts:150-163`
+  - `packages/backend/src/domains/class-checkout/class-checkout-recovery-ops.ts:176-203`
+  - `packages/backend/src/domains/class-checkout/class-checkout-recovery-ops.ts:21-32`
+  - `packages/backend/src/domains/class-checkout/class-checkout-recovery-ops.ts:8-8`
+  - `packages/backend/src/domains/class-checkout/class-checkout-recovery-ops.ts:82-82`
+  - `packages/backend/src/domains/class-checkout/class-checkout-recovery-ops.ts:84-84`
+  - `packages/backend/src/domains/class-checkout/class-checkout-recovery-ops.ts:88-91`
+  - `packages/backend/src/domains/class-checkout/class-checkout-recovery-ops.ts:96-100`
+  - `packages/backend/src/domains/class-checkout/class-checkout-recovery-preflight.ts:157-157`
+  - `packages/backend/src/domains/class-checkout/class-checkout-recovery-preflight.ts:2-2`
+  - `packages/backend/src/domains/class-checkout/class-checkout-recovery-preflight.ts:201-203`
+  - `packages/backend/src/domains/class-checkout/class-checkout-recovery-preflight.ts:204-204`
+  - `packages/backend/src/domains/class-checkout/class-checkout-recovery-preflight.ts:208-208`
+  - `packages/backend/src/domains/class-checkout/class-checkout-recovery-preflight.ts:212-229`
+  - `packages/backend/src/domains/class-checkout/class-checkout-recovery-preflight.ts:234-234`
+  - `packages/backend/src/domains/class-checkout/class-checkout-recovery-preflight.ts:24-24`
+  - `packages/backend/src/domains/class-checkout/class-checkout-replay-helpers.ts:2-2`
+  - `packages/backend/src/domains/class-checkout/class-checkout-replay-helpers.ts:382-393`
+  - `packages/backend/src/domains/class-checkout/class-checkout-replay-helpers.ts:436-456`
+  - `packages/backend/src/domains/class-checkout/class-checkout-replay-helpers.ts:481-481`
+  - `packages/backend/src/domains/class-checkout/class-checkout-replay-helpers.ts:485-487`
+  - `packages/backend/tests/class-checkout-service.test.ts:436-485`
+  - `packages/backend/tests/class-checkout-service.test.ts:487-762`
+  - `packages/backend/tests/customer-registration.routes.test.ts:308-308`
+  - `packages/backend/tests/customer-registration.routes.test.ts:478-478`
+  - `packages/backend/tests/customer-registration.routes.test.ts:491-548`
+  - `packages/backend/tests/postgres-class-checkout-recovery.integration.test.ts:822-965`
+  - `packages/common/src/registration.ts:437-440`
+  - `packages/frontend/src/components/FestivalRegistrationCartView.tsx:2-2`
+  - `packages/frontend/src/components/FestivalRegistrationCartView.tsx:55-58`
+  - `packages/frontend/src/components/FestivalRegistrationCartView.tsx:60-60`
+  - `packages/frontend/src/components/FestivalRegistrationCartView.tsx:77-77`
+  - `packages/frontend/src/components/FestivalRegistrationCartView.tsx:92-101`
+  - `packages/frontend/src/pages/registrationCartState.ts:174-174`
+  - `packages/frontend/src/pages/registrationCartState.ts:195-195`
+  - `packages/frontend/src/pages/registrationCartState.ts:221-223`
+  - `packages/frontend/src/pages/registrationCartState.ts:227-229`
+  - `packages/frontend/src/pages/registrationCartState.ts:231-231`
+  - `packages/frontend/src/pages/registrationCartState.ts:253-253`
+  - `packages/frontend/src/pages/registrationCartState.ts:269-269`
+  - `packages/frontend/src/pages/registrationCartState.ts:325-325`
+  - `packages/frontend/tests/class-checkout-hook.test.ts:16-20`
+  - `packages/frontend/tests/fixtures/class-checkout-hook.ts:104-104`
+  - `packages/frontend/tests/fixtures/class-checkout-hook.ts:111-114`
+  - `packages/frontend/tests/fixtures/class-checkout-hook.ts:121-126`
+  - `packages/frontend/tests/fixtures/class-checkout-hook.ts:169-181`
+  - `packages/frontend/tests/fixtures/class-checkout-hook.ts:204-204`
+  - `packages/frontend/tests/fixtures/class-checkout-hook.ts:219-222`
+  - `packages/frontend/tests/fixtures/class-checkout-hook.ts:3-3`
+  - `packages/frontend/tests/fixtures/class-checkout-hook.ts:347-352`
+  - `packages/frontend/tests/fixtures/class-checkout-hook.ts:365-375`
+  - `packages/frontend/tests/fixtures/class-checkout-hook.ts:430-572`
+  - `packages/frontend/tests/fixtures/class-checkout-hook.ts:45-45`
+  - `packages/frontend/tests/fixtures/class-checkout-hook.ts:615-615`
+  - `packages/frontend/tests/fixtures/class-checkout-hook.ts:626-628`
+  - `packages/frontend/tests/fixtures/class-checkout-hook.ts:67-67`
+  - `packages/frontend/tests/registrationCartState.test.ts:12-12`
+  - `packages/frontend/tests/registrationCartState.test.ts:27-32`
+  - `packages/frontend/tests/registrationCartState.test.ts:36-36`
+  - `packages/frontend/tests/registrationCartState.test.ts:41-47`
+  - `packages/frontend/tests/registrationCartState.test.ts:58-58`
+  - `packages/frontend/tests/registrationCartState.test.ts:60-68`
+
+## Findings JSON
+```json
+[]
+```
+
+## Verdict
+- Verdict: patch is correct
+- Confidence: 0.88
+- Justification: The final task-owned patch scopes expiry restart to the authenticated owner and festival, serializes replacement with payment handling, preserves source creation/expiry/recovery and existing event timestamps, and records one durable replacement identity. Canonical frozen selections survive reload and partial metadata persistence; current cart edits and unrelated items are preserved before explicit checkout review. Ancestor payment checks withhold unsafe handoff, and the existing rejected-execution payment guard records late source payments for review without duplicate grants. Actual CCR and legacy UUID routes, the returned replacement UUID, lost-response status refresh, repeated replacement chains, session renewal, and frontend state transitions have regression coverage. No actionable correctness, security, performance, or scope regression remains.
+
+## Final landing evidence
+
+- Reviewed final `class-checkout-restart-selections.ts`, the lost-restart-response status regression, and `postgres-expired-checkout-restart-payment.integration.test.ts`. Prior reported status-refresh finding is resolved in final source and covered by its service regression.
+- Read the final landing validation section of `spec.md`; the verification owner reported every pinned gate passed against unchanged application content. Global format/lint passed 814 files, SQL checker passed 505 backend TypeScript files, backend/frontend no-emit types passed, and all four production build stages passed.
+- Final suites: backend 1,742 passing tests across 154 files (10,190 assertions) with isolated PostgreSQL 17 enabled; frontend 522 across 60 files; common 365 across 23 files; confirmation 20 across one file. Aggregate: 2,649 passing tests across 238 files. Exact commands and `/private/tmp/festival-expired-land-*` logs are recorded in the spec.
+- The reviewer ran the earlier full frontend/common/confirmation suites and static build/type/format/lint/SQL stages. Final landing rerun evidence comes from the independent verification owner; application content fingerprint stayed identical.
+- `git diff --check -- packages` passed. No production/business database or Shopify order/payment was mutated. No source edits, staging, commit, push, or external messages were performed by this reviewer.

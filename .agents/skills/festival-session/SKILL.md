@@ -23,15 +23,21 @@ Execute pre-Thanksgiving program packets (`s00`–`s14`) deterministically with 
 
 ## Step 1: Preflight & Goal Lock
 
-1. Read the program and architecture anchors (targeted sections only):
-   - `specs/pre-thanksgiving-program.md` — verify packet scope and confirm all upstream dependencies are marked `DONE`.
+1. Sync remote refs first and verify upstream ledger state against `origin/main` (never trust a potentially stale local `main` or worktree `HEAD`):
+   ```powershell
+   git fetch origin --prune
+   git show origin/main:specs/pre-thanksgiving-program.md
+   ```
+   Confirm the target packet's upstream dependencies are all marked `DONE` on `origin/main` before proceeding.
+2. Read the program and architecture anchors (targeted sections only):
+   - `specs/pre-thanksgiving-program.md` (verified against `origin/main`) — verify packet scope and confirm all upstream dependencies are marked `DONE`.
    - `specs/bounded-contexts-2026.md` — confirm owning bounded context, permitted ports, and cross-context invariants.
    - `goals/<slug>/goals.vN.md` and `tasks/<slug>/spec.md` — review locked goals, success criteria, and path boundaries.
-2. Enforce goal state before touching code:
+3. Enforce goal state before touching code:
    - **`State: locked`**: Required before any runtime or test file edits.
    - **`State: blocked`**: Halt immediately and escalate the blocking ambiguity to the user.
    - **`State: draft`**: Resolve open ambiguities with the user, lock `goals/<slug>/establish-goals.vN.md` and `goals/<slug>/goals.vN.md` (`State: locked`), and re-validate before proceeding.
-3. Run the packet validator ([validate-packet.ps1](./scripts/validate-packet.ps1)):
+4. Run the packet validator ([validate-packet.ps1](./scripts/validate-packet.ps1)):
    ```powershell
    pwsh -NoProfile -File .agents/skills/festival-session/scripts/validate-packet.ps1 -TaskName <slug>
    ```
@@ -41,7 +47,12 @@ Execute pre-Thanksgiving program packets (`s00`–`s14`) deterministically with 
 
 ## Step 2: Branch & Scope Lock
 
-1. Dispatch a git subagent to create or verify a dedicated packet branch using a conventional prefix (`chore/<slug>`, `fix/<slug>`, `feat/<slug>`, or `refactor/<slug>`).
+1. Dispatch a git subagent to create or reset a dedicated packet branch directly off `origin/main` using a conventional prefix (`chore/<slug>`, `fix/<slug>`, `feat/<slug>`, or `refactor/<slug>`) and sync locked dependencies:
+   ```powershell
+   git fetch origin --prune
+   git checkout -B <prefix>/<slug> origin/main
+   bun install --frozen-lockfile
+   ```
 2. Restrict edits strictly to paths listed under `### In scope` in `tasks/<slug>/spec.md` (plus `tasks/<slug>/` review/spec updates and the packet row in `specs/pre-thanksgiving-program.md` at handoff).
 3. Never stage, modify, or delete unrelated `goals/` or `tasks/` directories or pre-existing untracked workspace files.
 
@@ -81,4 +92,9 @@ Execute pre-Thanksgiving program packets (`s00`–`s14`) deterministically with 
    pwsh -NoProfile -File .agents/skills/festival-session/scripts/validate-packet.ps1 -TaskName <slug> -RequireCodeReview
    ```
 4. Finalize `## Delivery` and `## Quality gate results` in `tasks/<slug>/spec.md`.
-5. Dispatch a git subagent to stage **only** in-scope packet files, create a conventional commit, and mark the packet `DONE` in `specs/pre-thanksgiving-program.md`.
+5. Dispatch a git subagent to execute ledger handoff and CI-gated PR merge:
+   - Stage **only** in-scope packet files, mark the packet `DONE` in `specs/pre-thanksgiving-program.md`, and create a conventional commit.
+   - Push the packet branch to `origin` (`git push -u origin <prefix>/<slug>`) and open a PR against `main` (`gh pr create --base main ...`).
+   - Wait for `Pull Request Checks / verify` (`pr-checks.yml`) to pass green (`gh pr checks <pr_number> --watch --interval 10`); fix any CI failure on the branch before merging—never merge on failing or pending checks.
+   - Pause first whenever the packet spec or user requests explicit confirmation, then merge the PR into `main` (`gh pr merge <pr_number> --merge`).
+   - Run `git fetch origin --prune` and confirm `origin/main` carries the merged commit (`git rev-parse origin/main`).

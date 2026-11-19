@@ -1,6 +1,12 @@
 import { describe, expect, it } from "bun:test";
-import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
-import { PublicMembershipProductService } from "../src/shopify/public-membership-product-service.js";
+import type { OrganizationRecord } from "@festival/common";
+import { TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS } from "@festival/common";
+import {
+	type ProductRecord,
+	PublicMembershipProductService,
+	type PublicMembershipProductServiceDeps,
+} from "../src/domains/teacher-directory/index.js";
+import { DomainCacheInvalidator } from "../src/lib/domain-cache-invalidator.js";
 import type {
 	PublicShopifyCatalogProduct,
 	ShopifyPublicCatalogClient,
@@ -15,50 +21,62 @@ class Catalog implements ShopifyPublicCatalogClient {
 	}
 }
 
-async function addTenant(
-	repository: InMemoryOrganizationRepository,
-	slug: string,
-	shopNumber: number,
-) {
-	const organization = await repository.createOrganization({
-		name: `Organization ${shopNumber}`,
-		slug,
-	});
-	const domain = `festival-${shopNumber}.myshopify.com`;
-	await repository.upsertShopifyIntegration({
-		organizationId: organization.id,
-		storeDomain: domain,
-		clientId: `client-${shopNumber}`,
-		encryptedClientSecret: "must-not-be-loaded",
-	});
-	await repository.updateShopifyVerification({
-		organizationId: organization.id,
-		verificationStatus: "ok",
-		verifiedAtIso: new Date().toISOString(),
-		lastTestedAtIso: new Date().toISOString(),
-		verifiedShopGid: `gid://shopify/Shop/${shopNumber}`,
-		verifiedShopDomain: domain,
-		grantedScopes: ["read_products"],
-		capabilities: {
-			read_products: "granted",
-			write_products: "missing",
-			write_inventory: "missing",
-			read_orders: "missing",
-			write_orders: "disabled",
+interface TenantSeed {
+	org: OrganizationRecord;
+	domain?: string;
+	offering?: ProductRecord;
+}
+
+function createDeps(
+	tenants: TenantSeed[],
+	catalog: Catalog,
+): PublicMembershipProductServiceDeps {
+	return {
+		catalog,
+		organizations: {
+			findOrganizationBySlug: async (slug) =>
+				tenants.find((t) => t.org.slug === slug)?.org ?? null,
+			getPublicShopifyCatalogDomain: async (organizationId) =>
+				tenants.find((t) => t.org.id === organizationId)?.domain ?? null,
+			getShopifyIntegration: async () => null,
 		},
-	});
-	const productGid = `gid://shopify/Product/${shopNumber}`;
-	const variantGid = `gid://shopify/ProductVariant/${shopNumber}`;
-	const offering = await repository.createMembershipProductRecord({
-		organizationId: organization.id,
-		entitlementClass: "teacher_membership",
-		durationDays: 365,
-		isActive: true,
-		shopifyProductGid: productGid,
-		shopifyVariantGid: variantGid,
-		productNameSnapshot: "Stale local name",
-	});
-	return { organization, offering, productGid, variantGid };
+		products: {
+			findMembershipProductRecordByClass: async (organizationId, cls) => {
+				const tenant = tenants.find((t) => t.org.id === organizationId);
+				if (tenant?.offering?.entitlementClass === cls) {
+					return tenant.offering;
+				}
+				return null;
+			},
+		},
+	};
+}
+
+function makeTenant(slug: string, shopNumber: number): TenantSeed {
+	return {
+		org: {
+			id: `org-${shopNumber}`,
+			name: `Organization ${shopNumber}`,
+			slug,
+			timezone: "UTC",
+			defaultCurrencyCode: "USD",
+			createdAtIso: "2026-01-01T00:00:00.000Z",
+		},
+		domain: `festival-${shopNumber}.myshopify.com`,
+		offering: {
+			id: `off-${shopNumber}`,
+			organizationId: `org-${shopNumber}`,
+			productCategory: "membership",
+			entitlementClass: TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
+			durationDays: 365,
+			isActive: true,
+			shopifyProductGid: `gid://shopify/Product/${shopNumber}`,
+			shopifyVariantGid: `gid://shopify/ProductVariant/${shopNumber}`,
+			productNameSnapshot: "Stale local name",
+			createdAtIso: "2026-01-01T00:00:00.000Z",
+			updatedAtIso: "2026-01-01T00:00:00.000Z",
+		},
+	};
 }
 
 function publicProduct(
@@ -81,10 +99,24 @@ function publicProduct(
 
 describe("public membership product service", () => {
 	it("returns an empty public listing without calling Shopify when no active offering exists", async () => {
-		const repository = new InMemoryOrganizationRepository();
-		await repository.createOrganization({ name: "Festival", slug: "festival" });
 		const catalog = new Catalog();
-		const service = new PublicMembershipProductService(repository, catalog);
+		const service = new PublicMembershipProductService(
+			createDeps(
+				[
+					{
+						org: {
+							id: "org-empty",
+							name: "Festival",
+							slug: "festival",
+							timezone: "UTC",
+							defaultCurrencyCode: "USD",
+							createdAtIso: "2026-01-01T00:00:00.000Z",
+						},
+					},
+				],
+				catalog,
+			),
+		);
 		expect(await service.list("festival")).toEqual({
 			organization: { slug: "festival", name: "Festival" },
 			membershipProducts: [],
@@ -92,32 +124,60 @@ describe("public membership product service", () => {
 		expect(catalog.calls).toBe(0);
 	});
 
-	it("rejects unavailable, mismatched, and cross-tenant offering selections", async () => {
-		const repository = new InMemoryOrganizationRepository();
-		const first = await addTenant(repository, "first", 1);
-		const second = await addTenant(repository, "second", 2);
+	it("rejects unavailable, mismatched, and cross-tenant offering selections and invalidates on MembershipChanged", async () => {
+		const first = makeTenant("first", 1);
+		const second = makeTenant("second", 2);
 		const catalog = new Catalog();
-		const service = new PublicMembershipProductService(repository, catalog);
+		const invalidator = new DomainCacheInvalidator();
+		const service = new PublicMembershipProductService(
+			createDeps([first, second], catalog),
+		);
+		service.bindCacheInvalidator(invalidator);
+
+		const firstOffering = first.offering as ProductRecord;
+		const secondOffering = second.offering as ProductRecord;
 
 		catalog.products.set(
-			first.productGid,
-			publicProduct(first.productGid, first.variantGid, false),
+			firstOffering.shopifyProductGid,
+			publicProduct(
+				firstOffering.shopifyProductGid,
+				firstOffering.shopifyVariantGid,
+				false,
+			),
 		);
 		await expect(
-			service.resolvePurchasable("first", first.offering.id),
+			service.resolvePurchasable("first", firstOffering.id),
 		).rejects.toThrow("unavailable");
 
 		catalog.products.set(
-			first.productGid,
-			publicProduct(first.productGid, first.variantGid, true),
+			firstOffering.shopifyProductGid,
+			publicProduct(
+				firstOffering.shopifyProductGid,
+				firstOffering.shopifyVariantGid,
+				true,
+			),
 		);
 		await expect(
-			service.resolvePurchasable("first", second.offering.id),
+			service.resolvePurchasable("first", secondOffering.id),
 		).rejects.toThrow("unavailable");
 
+		await service.list("first");
+		const callsAfterWarm = catalog.calls;
+		await service.list("first");
+		expect(catalog.calls).toBe(callsAfterWarm);
+
+		invalidator.emit({
+			type: "MembershipChanged",
+			organizationId: first.org.id,
+		});
+
 		catalog.products.set(
-			first.productGid,
-			publicProduct(first.productGid, second.variantGid, true),
+			firstOffering.shopifyProductGid,
+			publicProduct(
+				firstOffering.shopifyProductGid,
+				secondOffering.shopifyVariantGid,
+				true,
+			),
 		);
 		await expect(service.list("first")).rejects.toThrow(
 			"temporarily unavailable",

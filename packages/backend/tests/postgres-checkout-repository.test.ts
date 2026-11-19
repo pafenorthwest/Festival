@@ -1,16 +1,22 @@
 import { describe, expect, it } from "bun:test";
-import { PostgresCheckoutRepository } from "../src/checkout/postgres-checkout-repository.js";
+import { PostgresCheckoutRepository } from "../src/domains/class-checkout/checkout-intent-repository.js";
 import { buildCanonicalPostgresSchemaSql } from "../src/repo/postgres-schema.js";
 
 async function source() {
-	return (
-		await Bun.file(
-			new URL(
-				"../src/checkout/postgres-checkout-repository.ts",
-				import.meta.url,
-			),
-		).text()
-	).replace(/\r\n/g, "\n");
+	const files = [
+		"../src/domains/class-checkout/checkout-intent-repository.ts",
+		"../src/domains/class-checkout/checkout-intent-queries.ts",
+		"../src/domains/class-checkout/checkout-intent-helpers.ts",
+		"../src/domains/class-checkout/registration-metadata-queries.ts",
+	];
+	const texts = await Promise.all(
+		files.map((rel) => Bun.file(new URL(rel, import.meta.url)).text()),
+	);
+	return texts.join("\n").replace(/\r\n/g, "\n");
+}
+
+function normalized(value: string): string {
+	return value.replace(/\s+/g, " ");
 }
 
 describe("PostgresCheckoutRepository", () => {
@@ -30,84 +36,80 @@ describe("PostgresCheckoutRepository", () => {
 	});
 
 	it("serializes local processing intent checks without holding the transaction across Shopify", async () => {
-		const value = await source();
-		expect(value).toContain("return sql.begin(async (tx) => {");
-		expect(value).toContain("pg_advisory_xact_lock(hashtextextended($1, 0))");
-		expect(value).toContain(
-			"session_id = $3 AND idempotency_key = $4 FOR UPDATE",
+		const raw = await source();
+		const flat = normalized(raw);
+		expect(raw).toContain("sql.begin((tx) =>");
+		expect(flat).toContain("pg_advisory_xact_lock(hashtextextended($1, 0))");
+		expect(flat).toContain(
+			"AND session_id = $3 AND idempotency_key = $4 FOR UPDATE",
 		);
-		expect(value).toContain(
+		expect(flat).toContain(
 			"status IN ('creating', 'ready', 'checkout_started') AND expires_at > NOW()",
 		);
-		expect(value).not.toContain(
+		expect(flat).not.toContain(
 			"SET status = 'superseded' WHERE organization_id = $1 AND customer_id = $2 AND status = 'ready'",
 		);
-		expect(value).not.toContain("createCart(");
-		expect(value).not.toContain("checkoutUrl");
+		expect(raw).not.toContain("createCart(");
+		expect(raw).not.toContain("checkoutUrl");
 	});
 
 	it("checks a scheduled entitlement only within the checkout entitlement class", async () => {
-		const value = await source();
-		const scheduledCheck = value.slice(
-			value.indexOf("const activeGrant ="),
-			value.indexOf("const existingRows ="),
-		);
-
-		expect(scheduledCheck).toContain("grants.entitlement_class = $3");
-		expect(scheduledCheck).toContain("record.entitlementClass");
+		const raw = await source();
+		const flat = normalized(raw);
+		expect(flat).toContain("grants.entitlement_class = $3");
+		expect(flat).toContain("input.entitlementClass");
 	});
 
 	it("persists and reads safe idempotency outcomes with expiry and ownership constraints", async () => {
-		const value = await source();
-		expect(value).toContain(
+		const flat = normalized(await source());
+		expect(flat).toContain(
 			"INSERT INTO $" +
-				"{this.schema}.checkout_intents (id, correlation_id, organization_id, customer_id, session_id, idempotency_key",
+				"{schema}.checkout_intents ( id, correlation_id, organization_id, customer_id, session_id, idempotency_key",
 		);
-		expect(value).toContain("status IN ('ready', 'checkout_started')");
-		expect(value).toContain("expires_at > NOW()");
-		expect(value).toContain(
-			"organization_id = $1 AND customer_id = $2 AND session_id = $3 AND idempotency_key = $4",
+		expect(flat).toContain('intent.status === "checkout_started"');
+		expect(flat).toContain(
+			"Date.parse(cart.expiresAtIso) > Date.parse(nowIso)",
 		);
-		expect(value).toContain("SET status = 'checkout_started'");
-		expect(value).toContain("SET status = 'failed'");
+		expect(flat).toContain(
+			"WHERE organization_id = $1 AND customer_id = $2 AND session_id = $3 AND idempotency_key = $4",
+		);
+		expect(flat).toContain("SET status = 'checkout_started'");
+		expect(flat).toContain("SET status = 'failed'");
 	});
 
 	it("persists and hydrates the durable line-identity protocol marker", async () => {
-		const value = await source();
-		expect(value).toContain("line_identity_protocol");
-		expect(value).toContain("lineIdentityProtocol:");
+		const raw = await source();
+		expect(raw).toContain("line_identity_protocol");
+		expect(raw).toContain("lineIdentityProtocol:");
 	});
 
-	it("loads repertoire snapshots with one tenant-scoped joined query", async () => {
-		const value = await source();
-		expect(value).toContain(
-			[
-				"LEFT JOIN $",
-				"{this.schema}.registration_repertoire_item_contributors AS contributor",
-			].join(""),
+	it("loads repertoire snapshots with tenant-scoped bulk queries", async () => {
+		const raw = await source();
+		const flat = normalized(raw);
+		expect(flat).toContain(
+			"FROM $" +
+				"{safeSchema}.registration_repertoire_items WHERE organization_id = $1 AND registration_metadata_id = ANY($2::text[])",
 		);
-		expect(value).toContain(
-			"WHERE item.registration_metadata_id = $1 AND item.organization_id = $2",
+		expect(flat).toContain(
+			"FROM $" +
+				"{safeSchema}.registration_repertoire_item_contributors WHERE organization_id = $1 AND registration_repertoire_item_id = ANY($2::text[])",
 		);
-		expect(value).toContain(
-			"contributor.organization_id = item.organization_id",
-		);
-		expect(value).not.toContain("itemRows.map(async");
+		expect(raw).not.toContain("itemRows.map(async");
 	});
 
 	it("updates registration metadata within a scoped transaction", async () => {
-		const value = await source();
-		expect(value).toContain(
+		const flat = normalized(await source());
+		expect(flat).toContain(
 			"DELETE FROM $" +
-				"{this.schema}.registration_repertoire_items WHERE registration_metadata_id = $1 AND organization_id = $2",
+				"{safeSchema}.registration_repertoire_items WHERE registration_metadata_id = $1 AND organization_id = $2",
 		);
-		expect(value).toContain(
+		expect(flat).toContain(
 			"UPDATE $" +
-				"{this.schema}.registration_metadata SET accompanist_membership_id = $1, repertoire_json = $2 WHERE id = $3 AND organization_id = $4",
+				"{safeSchema}.registration_metadata SET accompanist_membership_id = $1, repertoire_json = $2::jsonb WHERE id = $3 AND organization_id = $4",
 		);
-		expect(value).toContain(
+		expect(flat).toContain(
 			"UPDATE $" +
-				"{this.schema}.registration_metadata SET repertoire_json = $1 WHERE id = $2 AND organization_id = $3",
+				"{safeSchema}.registration_metadata SET repertoire_json = $1::jsonb WHERE id = $2 AND organization_id = $3",
 		);
 	});
 });

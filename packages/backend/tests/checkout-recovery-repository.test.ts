@@ -1,497 +1,315 @@
-import { describe, expect, it } from "bun:test";
-import { InMemoryCheckoutRecoveryRepository } from "../src/checkout/checkout-recovery-repository.js";
-import type { CheckoutIntentRecord } from "../src/checkout/checkout-repository.js";
-import { PostgresCheckoutRecoveryRepository } from "../src/checkout/postgres-checkout-recovery-repository.js";
-import { buildCanonicalPostgresSchemaSql } from "../src/repo/postgres-schema.js";
+import { afterEach, describe, expect, it } from "bun:test";
+import { sql } from "bun";
+import { PostgresCheckoutRecoveryRepository } from "../src/domains/class-checkout/checkout-recovery-repository.js";
+import {
+	currentPostgresFixture,
+	resetPostgresFixture,
+} from "./postgres-test-fixture.js";
 
-function makeIntent(
-	overrides: Partial<CheckoutIntentRecord> = {},
-): CheckoutIntentRecord {
-	return {
-		id: "intent-1",
-		correlationId: "corr-1",
-		organizationId: "org-1",
-		customerId: "cust-1",
-		sessionId: "session-1",
-		idempotencyKey: "idem-1",
-		intentType: "membership",
-		offeringId: "offering-1",
-		entitlementClass: "teacher_membership",
-		durationDays: 365,
-		festivalClassId: null,
-		childId: null,
-		shopifyProductGid: "gid://shopify/Product/1",
-		shopifyVariantGid: "gid://shopify/ProductVariant/1",
-		policyVersion: "v1",
-		divisionId: null,
-		divisionNameSnapshot: null,
-		staffAccessConsent: false,
-		amount: "50.00",
-		currencyCode: "USD",
-		cartReference: null,
-		status: "ready",
-		expiresAtIso: "2030-01-01T00:00:00.000Z",
-		createdAtIso: "2026-09-27T10:00:00.000Z",
-		...overrides,
-	};
+const currentSchema = currentPostgresFixture("checkout_recovery");
+const postgresTest = process.env.POSTGRES_INTEGRATION_URL ? it : it.skip;
+
+async function setupFixture() {
+	const schema = await currentSchema();
+	await sql.unsafe(`
+		INSERT INTO ${schema}.organizations (id, name, slug)
+		VALUES ('org-1', 'Org 1', 'org-1'), ('org-2', 'Org 2', 'org-2');
+		INSERT INTO ${schema}.products (
+			id, organization_id, product_category, entitlement_class,
+			duration_days, shopify_product_gid, shopify_variant_gid, product_name_snapshot
+		) VALUES (
+			'off-1', 'org-1', 'membership', 'teacher_membership',
+			365, 'gid://shopify/Product/1', 'gid://shopify/ProductVariant/1', 'Membership'
+		);
+		INSERT INTO ${schema}.organization_divisions (
+			id, organization_id, display_name, normalized_name, display_order
+		) VALUES ('div-1', 'org-1', 'Piano', 'piano', 0);
+		INSERT INTO ${schema}.registration_catalog_values (
+			id, organization_id, kind, display_name, normalized_name, display_order
+		) VALUES ('sub-1', 'org-1', 'class_subtype', 'Solo', 'solo', 0);
+		INSERT INTO ${schema}.festivals (
+			id, organization_id, code, short_name, is_primary, name, start_date, end_date
+		) VALUES ('fest-1', 'org-1', 'FEST', 'fest', TRUE, 'Festival', '2027-01-01', '2027-01-02');
+		INSERT INTO ${schema}.festival_customers (
+			id, organization_id, shopify_customer_gid, created_at, updated_at
+		) VALUES
+			('cust-1', 'org-1', 'gid://shopify/Customer/1', NOW(), NOW()),
+			('cust-2', 'org-1', 'gid://shopify/Customer/2', NOW(), NOW());
+		INSERT INTO ${schema}.festival_children (
+			id, organization_id, parent_customer_id, display_name, created_at
+		) VALUES ('child-1', 'org-1', 'cust-1', 'Child 1', NOW());
+		INSERT INTO ${schema}.festival_class_configurations (
+			id, organization_id, festival_id, display_name, class_subtype_id,
+			division_id, minimum_age, maximum_age, price, maximum_performance_pieces,
+			performance_minutes, capacity, shopify_product_gid, shopify_variant_gid
+		) VALUES (
+			'cls-1', 'org-1', 'fest-1', 'Class 1', 'sub-1', 'div-1',
+			5, 18, '50.00', 2, 10, 5, 'gid://shopify/Product/2', 'gid://shopify/ProductVariant/2'
+		);
+	`);
+	return schema;
 }
 
-async function postgresRepositorySource(): Promise<string> {
-	return (
-		await Bun.file(
-			new URL(
-				"../src/checkout/postgres-checkout-recovery-repository.ts",
-				import.meta.url,
-			),
-		).text()
-	).replace(/\r\n/g, "\n");
+async function seedIntent(
+	schema: string,
+	params: {
+		id: string;
+		organizationId?: string;
+		customerId?: string;
+		correlationId?: string;
+		intentType?: "membership" | "class_entry";
+		status?: string;
+	},
+) {
+	const orgId = params.organizationId ?? "org-1";
+	const offeringId = orgId === "org-1" ? "off-1" : null;
+	await sql.unsafe(
+		`INSERT INTO ${schema}.checkout_intents (
+			id, correlation_id, organization_id, customer_id, session_id,
+			idempotency_key, intent_type, offering_id, entitlement_class,
+			duration_days, shopify_product_gid, shopify_variant_gid,
+			policy_version, division_id, division_name_snapshot,
+			staff_access_consent, amount, currency_code, status, expires_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $5, $6, $7, 'teacher_membership',
+			365, 'gid://shopify/Product/1', 'gid://shopify/ProductVariant/1',
+			'v1', 'div-1', 'Piano', TRUE, '75.00', 'USD', $8, '2030-01-01T00:00:00.000Z'
+		)`,
+		[
+			params.id,
+			params.correlationId ?? `corr-${params.id}`,
+			orgId,
+			params.customerId ?? "cust-1",
+			`sess-${params.id}`,
+			params.intentType ?? "membership",
+			offeringId,
+			params.status ?? "ready",
+		],
+	);
 }
 
-describe("CheckoutRecoveryRepository", () => {
-	describe("InMemoryCheckoutRecoveryRepository", () => {
-		it("lists recoverable intents for customer excluding approved or superseded", async () => {
-			const repo = new InMemoryCheckoutRecoveryRepository();
-			repo.addIntent(
-				makeIntent({
-					id: "intent-ready",
-					correlationId: "c-1",
-					status: "ready",
-				}),
-			);
-			repo.addIntent(
-				makeIntent({
-					id: "intent-failed",
-					correlationId: "c-2",
-					status: "failed",
-				}),
-			);
-			repo.addIntent(
-				makeIntent({
-					id: "intent-expired",
-					correlationId: "c-3",
-					status: "expired",
-				}),
-			);
-			repo.addIntent(
-				makeIntent({
-					id: "intent-started",
-					correlationId: "c-4",
-					status: "checkout_started",
-				}),
-			);
-			repo.addIntent(
-				makeIntent({
-					id: "intent-approved",
-					correlationId: "c-5",
-					status: "approved",
-				}),
-			);
-			repo.addIntent(
-				makeIntent({
-					id: "intent-superseded",
-					correlationId: "c-6",
-					status: "superseded",
-				}),
-			);
+describe("PostgresCheckoutRecoveryRepository integration", () => {
+	afterEach(async () => {
+		if (!process.env.POSTGRES_INTEGRATION_URL) return;
+		const schema = await currentSchema();
+		await resetPostgresFixture(schema);
+	});
+
+	postgresTest(
+		"lists recoverable membership intents excluding approved, superseded, and class_entry",
+		async () => {
+			const schema = await setupFixture();
+			const repo = new PostgresCheckoutRecoveryRepository(schema);
+			await seedIntent(schema, { id: "i-ready", status: "ready" });
+			await seedIntent(schema, { id: "i-failed", status: "failed" });
+			await seedIntent(schema, { id: "i-expired", status: "expired" });
+			await seedIntent(schema, { id: "i-started", status: "checkout_started" });
+			await seedIntent(schema, { id: "i-approved", status: "approved" });
+			await seedIntent(schema, { id: "i-super", status: "superseded" });
+			await seedIntent(schema, {
+				id: "i-class",
+				intentType: "class_entry",
+				status: "ready",
+			});
 
 			const results = await repo.listRecoverableIntents({
 				organizationId: "org-1",
 				customerId: "cust-1",
 			});
 			const ids = results.map((r) => r.id);
-			expect(ids).toContain("intent-ready");
-			expect(ids).toContain("intent-failed");
-			expect(ids).toContain("intent-expired");
-			expect(ids).toContain("intent-started");
-			expect(ids).not.toContain("intent-approved");
-			expect(ids).not.toContain("intent-superseded");
-		});
+			expect(ids).toContain("i-ready");
+			expect(ids).toContain("i-failed");
+			expect(ids).toContain("i-expired");
+			expect(ids).toContain("i-started");
+			expect(ids).not.toContain("i-approved");
+			expect(ids).not.toContain("i-super");
+			expect(ids).not.toContain("i-class");
+		},
+	);
 
-		it("excludes class_entry checkout intents from recoverable intent query list", async () => {
-			const repo = new InMemoryCheckoutRecoveryRepository();
-			repo.addIntent(
-				makeIntent({
-					id: "intent-membership",
-					intentType: "membership",
-					status: "ready",
-				}),
-			);
-			repo.addIntent(
-				makeIntent({
-					id: "intent-class-entry",
-					intentType: "class_entry",
-					status: "ready",
-				}),
-			);
-
-			const results = await repo.listRecoverableIntents({
-				organizationId: "org-1",
-				customerId: "cust-1",
+	postgresTest(
+		"excludes intents with order projections or class/membership entitlements and enforces tenant isolation",
+		async () => {
+			const schema = await setupFixture();
+			const repo = new PostgresCheckoutRecoveryRepository(schema);
+			await seedIntent(schema, {
+				id: "i-order",
+				correlationId: "corr-order",
 			});
-			const ids = results.map((r) => r.id);
-			expect(ids).toContain("intent-membership");
-			expect(ids).not.toContain("intent-class-entry");
-		});
-
-		it("excludes intents with completed order projection from recoverable listing", async () => {
-			const repo = new InMemoryCheckoutRecoveryRepository();
-			repo.addIntent(
-				makeIntent({
-					id: "intent-has-order",
-					correlationId: "corr-paid",
-					status: "ready",
-				}),
-			);
-			repo.addIntent(
-				makeIntent({
-					id: "intent-recoverable",
-					correlationId: "corr-clean",
-					status: "ready",
-				}),
-			);
-			repo.addOrderProjection({
-				organizationId: "org-1",
-				correlationId: "corr-paid",
+			await seedIntent(schema, { id: "i-class-ent" });
+			await seedIntent(schema, { id: "i-mem-ent" });
+			await seedIntent(schema, { id: "i-ok" });
+			await seedIntent(schema, {
+				id: "i-other-org",
+				organizationId: "org-2",
 			});
+			await seedIntent(schema, { id: "i-other-cust", customerId: "cust-2" });
+
+			await sql.unsafe(
+				`INSERT INTO ${schema}.shopify_order_projections (
+					organization_id, shopify_order_gid, correlation_id, created_at, updated_at
+				) VALUES ('org-1', 'gid://shopify/Order/1', 'corr-order', NOW(), NOW())`,
+			);
+			await sql.unsafe(
+				`INSERT INTO ${schema}.class_entitlements (
+					id, organization_id, festival_id, festival_class_id, parent_customer_id,
+					child_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid,
+					paid_amount_cents, paid_currency_code, status
+				) VALUES (
+					'ce-1', 'org-1', 'fest-1', 'cls-1', 'cust-1',
+					'child-1', 'i-class-ent', 'gid://shopify/Order/2', 'gid://shopify/LineItem/2',
+					5000, 'USD', 'confirmed'
+				)`,
+			);
+			await sql.unsafe(
+				`INSERT INTO ${schema}.membership_entitlements (
+					id, organization_id, customer_id, entitlement_class, source,
+					offering_id, starts_on, ends_on
+				) VALUES (
+					'me-1', 'org-1', 'cust-1', 'teacher_membership', 'teacher_checkout',
+					'off-1', '2026-01-01', '2027-01-01'
+				);
+				INSERT INTO ${schema}.teacher_membership_entitlement_details (
+					entitlement_id, checkout_intent_id, shopify_order_gid,
+					shopify_order_line_gid, paid_amount, paid_currency_code, duration_days
+				) VALUES (
+					'me-1', 'i-mem-ent', 'gid://shopify/Order/3',
+					'gid://shopify/LineItem/3', '75.00', 'USD', 365
+				);`,
+			);
 
 			const results = await repo.listRecoverableIntents("org-1", "cust-1");
-			expect(results.map((r) => r.id)).toEqual(["intent-recoverable"]);
-		});
+			expect(results.map((r) => r.id)).toEqual(["i-ok"]);
+			expect(
+				await repo.hasCompletedOrderOrEntitlement(
+					"org-1",
+					"i-mem-ent",
+					"corr-i-mem-ent",
+				),
+			).toBeTrue();
+		},
+	);
 
-		it("excludes intents with class or membership entitlement from recoverable listing", async () => {
-			const repo = new InMemoryCheckoutRecoveryRepository();
-			repo.addIntent(
-				makeIntent({
-					id: "intent-class",
-					correlationId: "c-class",
-					status: "ready",
-				}),
-			);
-			repo.addIntent(
-				makeIntent({
-					id: "intent-member",
-					correlationId: "c-member",
-					status: "ready",
-				}),
-			);
-			repo.addIntent(
-				makeIntent({
-					id: "intent-ok",
-					correlationId: "c-ok",
-					status: "ready",
-				}),
-			);
-
-			repo.addClassEntitlement({
-				organizationId: "org-1",
-				checkoutIntentId: "intent-class",
+	postgresTest(
+		"invalidates intents, cancels pending requests, and guards completed intents",
+		async () => {
+			const schema = await setupFixture();
+			const repo = new PostgresCheckoutRecoveryRepository(schema);
+			await seedIntent(schema, { id: "i-inv", status: "ready" });
+			await seedIntent(schema, {
+				id: "i-paid",
+				correlationId: "corr-paid",
+				status: "ready",
 			});
-			repo.addMembershipEntitlement({
-				organizationId: "org-1",
-				checkoutIntentId: "intent-member",
-			});
+			await sql.unsafe(
+				`INSERT INTO ${schema}.shopify_order_projections (
+					organization_id, shopify_order_gid, correlation_id, created_at, updated_at
+				) VALUES ('org-1', 'gid://shopify/Order/99', 'corr-paid', NOW(), NOW())`,
+			);
 
-			const results = await repo.listRecoverableIntents({
+			const req = await repo.createRecoveryRequest({
 				organizationId: "org-1",
 				customerId: "cust-1",
-			});
-			expect(results.map((r) => r.id)).toEqual(["intent-ok"]);
-		});
-
-		it("enforces tenant and customer isolation when listing recoverable intents", async () => {
-			const repo = new InMemoryCheckoutRecoveryRepository();
-			repo.addIntent(
-				makeIntent({
-					id: "intent-org1-cust1",
-					organizationId: "org-1",
-					customerId: "cust-1",
-				}),
-			);
-			repo.addIntent(
-				makeIntent({
-					id: "intent-org2-cust1",
-					organizationId: "org-2",
-					customerId: "cust-1",
-				}),
-			);
-			repo.addIntent(
-				makeIntent({
-					id: "intent-org1-cust2",
-					organizationId: "org-1",
-					customerId: "cust-2",
-				}),
-			);
-
-			const results = await repo.listRecoverableIntents({
-				organizationId: "org-1",
-				customerId: "cust-1",
-			});
-			expect(results.map((r) => r.id)).toEqual(["intent-org1-cust1"]);
-		});
-
-		it("atomically invalidates intent and cancels pending recovery requests", async () => {
-			const repo = new InMemoryCheckoutRecoveryRepository();
-			repo.addIntent(makeIntent({ id: "intent-inv", status: "ready" }));
-			const request = await repo.createRecoveryRequest({
-				organizationId: "org-1",
-				customerId: "cust-1",
-				sourceCheckoutIntentId: "intent-inv",
-				tokenHash: "token-hash-1",
-				requestedByActorUid: "admin-uid",
+				sourceCheckoutIntentId: "i-inv",
+				tokenHash: "tok-inv",
+				requestedByActorUid: "admin-1",
 				expiresAtIso: "2030-01-01T00:00:00.000Z",
 			});
-			expect(request.status).toBe("pending");
+			expect(req.status).toBe("pending");
 
 			await repo.invalidateIntent({
 				organizationId: "org-1",
-				intentId: "intent-inv",
+				intentId: "i-inv",
 			});
-
-			const updatedReq =
-				await repo.findRecoveryRequestByTokenHash("token-hash-1");
-			expect(updatedReq?.status).toBe("cancelled");
-
-			const recoverable = await repo.listRecoverableIntents("org-1", "cust-1");
-			expect(recoverable).toHaveLength(0);
-		});
-
-		it("guards against invalidation if order projection or entitlement exists", async () => {
-			const repo = new InMemoryCheckoutRecoveryRepository();
-			repo.addIntent(
-				makeIntent({
-					id: "intent-order",
-					correlationId: "corr-order",
-					status: "ready",
-				}),
-			);
-			repo.addIntent(
-				makeIntent({
-					id: "intent-entitlement",
-					correlationId: "corr-ent",
-					status: "ready",
-				}),
+			const afterInv = await repo.findRecoveryRequestByTokenHash("tok-inv");
+			expect(afterInv?.status).toBe("cancelled");
+			expect(await repo.listRecoverableIntents("org-1", "cust-1")).toHaveLength(
+				0,
 			);
 
-			repo.addOrderProjection({
-				organizationId: "org-1",
-				correlationId: "corr-order",
-			});
-			repo.addClassEntitlement({
-				organizationId: "org-1",
-				checkoutIntentId: "intent-entitlement",
-			});
-
-			await expect(
-				repo.invalidateIntent({
-					organizationId: "org-1",
-					intentId: "intent-order",
-				}),
-			).rejects.toThrow("Cannot invalidate checkout intent");
-
-			await expect(
-				repo.invalidateIntent({
-					organizationId: "org-1",
-					intentId: "intent-entitlement",
-				}),
-			).rejects.toThrow("Cannot invalidate checkout intent");
-		});
-
-		it("creates recovery request, cancels previous pending request, and guards against order", async () => {
-			const repo = new InMemoryCheckoutRecoveryRepository();
-			repo.addIntent(makeIntent({ id: "intent-rec", status: "failed" }));
-
-			const first = await repo.createRecoveryRequest({
-				organizationId: "org-1",
-				customerId: "cust-1",
-				sourceCheckoutIntentId: "intent-rec",
-				tokenHash: "hash-first",
-				requestedByActorUid: "admin-uid",
-				expiresAtIso: "2030-01-01T00:00:00.000Z",
-			});
-			expect(first.status).toBe("pending");
-
-			const second = await repo.createRecoveryRequest({
-				organizationId: "org-1",
-				customerId: "cust-1",
-				sourceCheckoutIntentId: "intent-rec",
-				tokenHash: "hash-second",
-				requestedByActorUid: "admin-uid",
-				expiresAtIso: "2030-01-01T00:00:00.000Z",
-			});
-			expect(second.status).toBe("pending");
-
-			const firstUpdated =
-				await repo.findRecoveryRequestByTokenHash("hash-first");
-			expect(firstUpdated?.status).toBe("cancelled");
-
-			repo.addOrderProjection({
-				organizationId: "org-1",
-				correlationId: "corr-1",
-			});
+			await expect(repo.invalidateIntent("org-1", "i-paid")).rejects.toThrow(
+				"Cannot invalidate checkout intent",
+			);
 			await expect(
 				repo.createRecoveryRequest({
 					organizationId: "org-1",
 					customerId: "cust-1",
-					sourceCheckoutIntentId: "intent-rec",
-					tokenHash: "hash-third",
-					requestedByActorUid: "admin-uid",
+					sourceCheckoutIntentId: "i-paid",
+					tokenHash: "tok-paid",
+					requestedByActorUid: "admin-1",
 					expiresAtIso: "2030-01-01T00:00:00.000Z",
 				}),
 			).rejects.toThrow("Cannot recover checkout intent");
-		});
+		},
+	);
 
-		it("looks up recovery request by token hash and handles expiration", async () => {
-			const repo = new InMemoryCheckoutRecoveryRepository();
-			repo.addIntent(
-				makeIntent({
-					id: "intent-active",
-					correlationId: "c-active",
-					status: "failed",
-				}),
-			);
-			repo.addIntent(
-				makeIntent({
-					id: "intent-exp",
-					correlationId: "c-exp",
-					status: "failed",
-				}),
-			);
+	postgresTest(
+		"supersedes prior pending requests and consumes recovery tokens once before expiry",
+		async () => {
+			const schema = await setupFixture();
+			const repo = new PostgresCheckoutRecoveryRepository(schema);
+			await seedIntent(schema, { id: "i-rec", status: "failed" });
+			await seedIntent(schema, { id: "i-exp", status: "failed" });
 
 			await repo.createRecoveryRequest({
 				organizationId: "org-1",
 				customerId: "cust-1",
-				sourceCheckoutIntentId: "intent-active",
-				tokenHash: "hash-active",
-				requestedByActorUid: "admin-uid",
+				sourceCheckoutIntentId: "i-rec",
+				tokenHash: "tok-1",
+				requestedByActorUid: "admin-1",
 				expiresAtIso: "2030-01-01T00:00:00.000Z",
 			});
-
-			await repo.createRecoveryRequest({
+			const second = await repo.createRecoveryRequest({
 				organizationId: "org-1",
 				customerId: "cust-1",
-				sourceCheckoutIntentId: "intent-exp",
-				tokenHash: "hash-expired",
-				requestedByActorUid: "admin-uid",
-				expiresAtIso: "2020-01-01T00:00:00.000Z",
-			});
-
-			const active = await repo.findRecoveryRequestByTokenHash("hash-active");
-			expect(active).not.toBeNull();
-			expect(active?.tokenHash).toBe("hash-active");
-			expect(active?.status).toBe("pending");
-
-			const activeWithWrongOrg = await repo.findRecoveryRequestByTokenHash(
-				"hash-active",
-				"wrong-org",
-			);
-			expect(activeWithWrongOrg).toBeNull();
-
-			const expired = await repo.findRecoveryRequestByTokenHash("hash-expired");
-			expect(expired).not.toBeNull();
-			expect(expired?.status).toBe("expired");
-
-			const nonExistent =
-				await repo.findRecoveryRequestByTokenHash("hash-unknown");
-			expect(nonExistent).toBeNull();
-		});
-
-		it("consumes recovery request and rejects repeated or expired consumption", async () => {
-			const repo = new InMemoryCheckoutRecoveryRepository();
-			repo.addIntent(
-				makeIntent({
-					id: "intent-consume-valid",
-					correlationId: "c-cv",
-					status: "ready",
-				}),
-			);
-			repo.addIntent(
-				makeIntent({
-					id: "intent-consume-past",
-					correlationId: "c-cp",
-					status: "ready",
-				}),
-			);
-
-			await repo.createRecoveryRequest({
-				organizationId: "org-1",
-				customerId: "cust-1",
-				sourceCheckoutIntentId: "intent-consume-valid",
-				tokenHash: "hash-valid",
-				requestedByActorUid: "admin-uid",
+				sourceCheckoutIntentId: "i-rec",
+				tokenHash: "tok-2",
+				requestedByActorUid: "admin-1",
 				expiresAtIso: "2030-01-01T00:00:00.000Z",
 			});
-
-			await repo.createRecoveryRequest({
-				organizationId: "org-1",
-				customerId: "cust-1",
-				sourceCheckoutIntentId: "intent-consume-past",
-				tokenHash: "hash-past",
-				requestedByActorUid: "admin-uid",
-				expiresAtIso: "2025-01-01T00:00:00.000Z",
-			});
+			expect((await repo.findRecoveryRequestByTokenHash("tok-1"))?.status).toBe(
+				"cancelled",
+			);
+			expect(
+				await repo.findRecoveryRequestByTokenHash("tok-2", "org-2"),
+			).toBeNull();
+			expect(
+				(await repo.getRecoveryRequestById("org-1", second.id))?.tokenHash,
+			).toBe("tok-2");
 
 			const consumed = await repo.consumeRecoveryRequest({
-				tokenHash: "hash-valid",
+				tokenHash: "tok-2",
 				organizationId: "org-1",
-				consumedAtIso: "2026-09-27T12:00:00.000Z",
+				consumedAtIso: "2026-06-01T00:00:00.000Z",
 			});
 			expect(consumed.status).toBe("consumed");
-			expect(consumed.consumedAtIso).toBe("2026-09-27T12:00:00.000Z");
-
+			expect(consumed.consumedAtIso).toBeTruthy();
 			await expect(
 				repo.consumeRecoveryRequest({
-					tokenHash: "hash-valid",
+					tokenHash: "tok-2",
 					organizationId: "org-1",
+					consumedAtIso: "2026-06-01T00:01:00.000Z",
 				}),
-			).rejects.toThrow("Recovery request is not pending");
+			).rejects.toThrow("not pending");
 
+			await repo.createRecoveryRequest({
+				organizationId: "org-1",
+				customerId: "cust-1",
+				sourceCheckoutIntentId: "i-exp",
+				tokenHash: "tok-expired",
+				requestedByActorUid: "admin-1",
+				expiresAtIso: "2020-01-01T00:00:00.000Z",
+			});
 			await expect(
 				repo.consumeRecoveryRequest({
-					tokenHash: "hash-past",
+					tokenHash: "tok-expired",
 					organizationId: "org-1",
-					consumedAtIso: "2026-09-27T12:00:00.000Z",
+					consumedAtIso: "2026-06-01T00:00:00.000Z",
 				}),
-			).rejects.toThrow("Recovery request has expired");
-		});
-	});
-
-	describe("PostgresCheckoutRecoveryRepository structure and schema", () => {
-		it("defines checkout_recovery_requests schema with tenant isolation and required indexes", () => {
-			const sql = buildCanonicalPostgresSchemaSql("public");
-			expect(sql).toContain(
-				"CREATE TABLE IF NOT EXISTS public.checkout_recovery_requests",
-			);
-			expect(sql).toContain(
-				"source_checkout_intent_id TEXT NOT NULL REFERENCES public.checkout_intents",
-			);
-			expect(sql).toContain("token_hash TEXT NOT NULL");
-			expect(sql).toContain("idx_recovery_requests_org_cust");
-			expect(sql).toContain("idx_recovery_requests_token_hash");
-		});
-
-		it("rejects unsafe schema names", () => {
+			).rejects.toThrow("has expired");
 			expect(
-				() =>
-					new PostgresCheckoutRecoveryRepository("public; DROP TABLE users"),
-			).toThrow("Database schema is invalid.");
-		});
-
-		it("strictly adheres to file line boundaries (< 400 lines)", async () => {
-			const source = await postgresRepositorySource();
-			const lines = source.split("\n").length;
-			expect(lines).toBeLessThan(400);
-		});
-
-		it("implements row locking FOR UPDATE, strict tenant isolation, and atomic state guards", async () => {
-			const source = await postgresRepositorySource();
-			expect(source).toContain("FOR UPDATE");
-			expect(source).toContain("organization_id = $1");
-			expect(source).toContain("shopify_order_projections");
-			expect(source).toContain("class_entitlements");
-			expect(source).toContain("teacher_membership_entitlement_details");
-			expect(source).toContain("status = 'superseded'");
-			expect(source).toContain("status = 'cancelled'");
-			expect(source).toContain("status = 'consumed'");
-		});
-	});
+				(await repo.findRecoveryRequestByTokenHash("tok-expired"))?.status,
+			).toBe("expired");
+		},
+	);
 });

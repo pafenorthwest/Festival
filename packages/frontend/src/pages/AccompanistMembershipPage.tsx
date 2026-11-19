@@ -5,14 +5,17 @@ import {
 	acquireAccompanistMembership,
 	customerAccompanistMembershipSignInPath,
 	getAccompanistMembershipForm,
+	getCustomerAccompanistProfile,
 	getCustomerProfile,
 	getCustomerSession,
+	upsertCustomerAccompanistProfile,
 } from "../lib/api.js";
 import {
 	buildOrgCustomerAccountMembershipsPath,
 	buildOrgRootPath,
 } from "../lib/routes.js";
 import { loadAfterCustomerSession } from "./accompanistMembershipGate.js";
+import { resolveInitialAccompanistDirectoryOptIn } from "./teacherDirectoryHelpers.js";
 
 export function AccompanistMembershipPage(props: { slug: string }) {
 	const [csrfToken, setCsrfToken] = createSignal("");
@@ -24,7 +27,8 @@ export function AccompanistMembershipPage(props: { slug: string }) {
 		Array<{ id: string; displayName: string }>
 	>([]);
 	const [selected, setSelected] = createSignal<string[]>([]);
-	const [staffAccessConsent, setStaffAccessConsent] = createSignal(false);
+	const [publicDirectoryOptIn, setPublicDirectoryOptIn] = createSignal(true);
+	const [membershipActivated, setMembershipActivated] = createSignal(false);
 	const [loading, setLoading] = createSignal(true);
 	const [authenticated, setAuthenticated] = createSignal(false);
 	const [needsSignIn, setNeedsSignIn] = createSignal(false);
@@ -41,13 +45,14 @@ export function AccompanistMembershipPage(props: { slug: string }) {
 					Promise.all([
 						getCustomerProfile(props.slug),
 						getAccompanistMembershipForm(props.slug),
+						getCustomerAccompanistProfile(props.slug),
 					]),
 			);
 			if (!result.authenticated || !result.session.session.authenticated) {
 				setNeedsSignIn(true);
 				return;
 			}
-			const [profile, form] = result.protectedData;
+			const [profile, form, existingProfile] = result.protectedData;
 			setCsrfToken(result.session.session.csrfToken);
 			setName(profile.profile.name ?? "");
 			setEmail(profile.profile.email ?? "");
@@ -58,6 +63,9 @@ export function AccompanistMembershipPage(props: { slug: string }) {
 				form.policy.policy === "one_to_all"
 					? form.divisions.map((division) => division.id)
 					: form.divisions.slice(0, 1).map((division) => division.id),
+			);
+			setPublicDirectoryOptIn(
+				resolveInitialAccompanistDirectoryOptIn(existingProfile),
 			);
 			setAuthenticated(true);
 		} catch (reason) {
@@ -117,28 +125,43 @@ export function AccompanistMembershipPage(props: { slug: string }) {
 	}
 	async function submit(event: SubmitEvent) {
 		event.preventDefault();
-		if (!staffAccessConsent() || submitting()) return;
+		if (submitting()) return;
 		setError("");
 		setSubmitting(true);
+		let activated = membershipActivated();
 		try {
-			await acquireAccompanistMembership(props.slug, csrfToken(), {
-				name: name(),
-				email: email(),
-				city: city(),
-				phone: phone(),
+			if (!activated) {
+				await acquireAccompanistMembership(props.slug, csrfToken(), {
+					name: name(),
+					email: email(),
+					city: city(),
+					phone: phone(),
+					divisionIds: selected(),
+				});
+				activated = true;
+				setMembershipActivated(true);
+			}
+			await upsertCustomerAccompanistProfile(props.slug, csrfToken(), {
+				displayName: name().trim(),
+				publicDirectoryOptIn: publicDirectoryOptIn(),
 				divisionIds: selected(),
-				staffAccessConsent: staffAccessConsent(),
 			});
-			setStaffAccessConsent(false);
 			window.location.assign(
 				buildOrgCustomerAccountMembershipsPath(props.slug),
 			);
 		} catch (reason) {
-			setError(
-				reason instanceof Error
-					? reason.message
-					: "Accompanist membership could not be saved.",
-			);
+			if (activated) {
+				const detail = reason instanceof Error ? ` (${reason.message})` : "";
+				setError(
+					`Your accompanist membership was activated, but your Public Directory preference could not be saved${detail}. You can update your directory listing on Account Memberships.`,
+				);
+			} else {
+				setError(
+					reason instanceof Error
+						? reason.message
+						: "Accompanist membership could not be saved.",
+				);
+			}
 		} finally {
 			setSubmitting(false);
 		}
@@ -254,27 +277,17 @@ export function AccompanistMembershipPage(props: { slug: string }) {
 					<label class="membership-consent">
 						<input
 							type="checkbox"
-							checked={staffAccessConsent()}
+							checked={publicDirectoryOptIn()}
 							disabled={submitting()}
-							required
-							aria-describedby="accompanist-consent-required"
-							onInput={(event) =>
-								setStaffAccessConsent(event.currentTarget.checked)
+							onChange={(event) =>
+								setPublicDirectoryOptIn(event.currentTarget.checked)
 							}
 						/>
 						<span>
-							Agree to sharing Shopify-provided contact details to support my
-							membership
+							List my name and approved divisions in the Public Directory
 						</span>
 					</label>
-					<p class="muted" id="accompanist-consent-required">
-						Required to acquire this membership. See our{" "}
-						<a href="/privacy-policy">Privacy Policy</a> for details.
-					</p>
-					<Button
-						type="submit"
-						disabled={!staffAccessConsent() || submitting()}
-					>
+					<Button type="submit" disabled={submitting()}>
 						{submitting() ? "Saving…" : "Activate membership"}
 					</Button>
 				</form>

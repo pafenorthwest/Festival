@@ -2,6 +2,10 @@ import type { CustomerMembershipStatusEntry } from "@festival/common";
 import { createSignal, For, onCleanup, Show } from "solid-js";
 import { Button } from "../components/Button.js";
 import { getCustomerMembershipStatus } from "../lib/api.js";
+import {
+	buildOrgAccompanistMembershipPath,
+	buildOrgMembershipPath,
+} from "../lib/routes.js";
 import { CustomerAccountPageLayout } from "./CustomerAccountPageLayout.js";
 import { CustomerTeacherDirectoryCard } from "./CustomerTeacherDirectoryCard.js";
 import {
@@ -9,9 +13,14 @@ import {
 	decideMembershipPolling,
 	hasProcessingMembership,
 	MEMBERSHIP_POLL_INTERVAL_MS,
+	type MembershipAcquisitionState,
 	membershipStatusSignature,
+	resolveMembershipAcquisitionState,
 } from "./customerMembershipStatus.js";
-import { hasActiveTeacherMembership } from "./teacherDirectoryHelpers.js";
+import {
+	hasActiveAccompanistMembership,
+	hasActiveTeacherMembership,
+} from "./teacherDirectoryHelpers.js";
 
 function membershipDisplayName(entitlementClass: string): string {
 	const name = entitlementClass.split("_", 1)[0] ?? "";
@@ -35,6 +44,7 @@ function createMembershipPollStore(getSlug: () => string) {
 	>([]);
 	const [loading, setLoading] = createSignal(true);
 	const [refreshing, setRefreshing] = createSignal(false);
+	const [statusVerified, setStatusVerified] = createSignal(false);
 	const [error, setError] = createSignal("");
 	const [pollTimedOut, setPollTimedOut] = createSignal(false);
 	const [checkoutProcessing, setCheckoutProcessing] = createSignal(false);
@@ -46,6 +56,8 @@ function createMembershipPollStore(getSlug: () => string) {
 		setLoading,
 		refreshing,
 		setRefreshing,
+		statusVerified,
+		setStatusVerified,
 		error,
 		setError,
 		pollTimedOut,
@@ -58,6 +70,7 @@ function createMembershipPollStore(getSlug: () => string) {
 		sawProcessing: false,
 		membershipRequestInFlight: false,
 		checkoutReturn: false,
+		authenticated: false,
 		disposed: false,
 	};
 }
@@ -92,12 +105,15 @@ async function requestMembershipStatus(
 		const response = await getCustomerMembershipStatus(store.getSlug());
 		if (store.disposed) return null;
 		store.setMemberships(response.memberships);
+		store.setStatusVerified(true);
 		return response.memberships;
 	} catch {
-		if (!store.disposed)
+		if (!store.disposed) {
+			store.setStatusVerified(false);
 			store.setError(
 				"Festival membership status could not be loaded. Please try again.",
 			);
+		}
 		return null;
 	} finally {
 		store.membershipRequestInFlight = false;
@@ -280,26 +296,99 @@ function FestivalMembershipsSection(props: { store: MembershipPollStore }) {
 	);
 }
 
-export function CustomerAccountMembershipsPage(props: { slug: string }) {
-	const store = createMembershipPollStore(() => props.slug);
+function registerMembershipLifecycle(store: MembershipPollStore) {
 	onCleanup(() => {
 		store.disposed = true;
 		stopMembershipPolling(store);
 	});
+	if (typeof window === "undefined") return;
+	const onPageShow = (event: PageTransitionEvent) => {
+		if (!event.persisted || !store.authenticated || store.disposed) return;
+		store.setStatusVerified(false);
+		void refreshMembershipStatus(store);
+	};
+	window.addEventListener("pageshow", onPageShow);
+	onCleanup(() => window.removeEventListener("pageshow", onPageShow));
+}
+
+function handleAuthenticatedSession(store: MembershipPollStore) {
+	store.authenticated = true;
+	store.checkoutReturn =
+		new URLSearchParams(window.location.search).get("checkout") ===
+		"processing";
+	store.setCheckoutProcessing(store.checkoutReturn);
+	void initializeMembershipStatus(store);
+}
+
+function AcquireMembershipsActions(props: {
+	slug: string;
+	state: MembershipAcquisitionState;
+	onNavigate: (path: string) => void;
+}) {
+	const teacherPath = () => buildOrgMembershipPath(props.slug);
+	const accompanistPath = () => buildOrgAccompanistMembershipPath(props.slug);
+	return (
+		<div class="customer-membership-acquire-actions">
+			<Button
+				type="button"
+				disabled={props.state.teacherDisabled}
+				data-preload-path={teacherPath()}
+				onClick={() => {
+					if (props.state.teacherDisabled) return;
+					props.onNavigate(teacherPath());
+				}}
+			>
+				Annual Teacher
+			</Button>
+			<Button
+				type="button"
+				disabled={props.state.accompanistDisabled}
+				data-preload-path={accompanistPath()}
+				onClick={() => {
+					if (props.state.accompanistDisabled) return;
+					props.onNavigate(accompanistPath());
+				}}
+			>
+				Annual Accompanist
+			</Button>
+		</div>
+	);
+}
+
+export function CustomerAccountMembershipsPage(props: {
+	slug: string;
+	onNavigate?: (path: string) => void;
+}) {
+	const store = createMembershipPollStore(() => props.slug);
+	registerMembershipLifecycle(store);
+	const navigate = (path: string) => {
+		if (props.onNavigate) {
+			props.onNavigate(path);
+			return;
+		}
+		window.location.assign(path);
+	};
+	const acquisition = () =>
+		resolveMembershipAcquisitionState({
+			memberships: store.memberships(),
+			loading: store.loading() || store.refreshing() || !store.statusVerified(),
+			error: store.error(),
+			checkoutProcessing: store.checkoutProcessing(),
+		});
 
 	return (
 		<CustomerAccountPageLayout
 			slug={props.slug}
-			onAuthenticated={() => {
-				store.checkoutReturn =
-					new URLSearchParams(window.location.search).get("checkout") ===
-					"processing";
-				store.setCheckoutProcessing(store.checkoutReturn);
-				void initializeMembershipStatus(store);
-			}}
+			onAuthenticated={() => handleAuthenticatedSession(store)}
 		>
 			{(session) => (
 				<>
+					<h1>Acquire Memberships</h1>
+					<AcquireMembershipsActions
+						slug={props.slug}
+						state={acquisition()}
+						onNavigate={navigate}
+					/>
 					<h1>Memberships</h1>
 					<FestivalMembershipsSection store={store} />
 					<Show when={hasActiveTeacherMembership(store.memberships())}>
@@ -307,6 +396,17 @@ export function CustomerAccountMembershipsPage(props: { slug: string }) {
 							slug={props.slug}
 							csrfToken={session.csrfToken}
 							memberships={store.memberships()}
+							onSaved={() => void refreshMembershipStatus(store)}
+						/>
+					</Show>
+					<Show when={hasActiveAccompanistMembership(store.memberships())}>
+						{/* biome-ignore lint/a11y/useValidAriaRole: role selects the participant directory card variant, not a DOM ARIA role. */}
+						<CustomerTeacherDirectoryCard
+							role="accompanist"
+							slug={props.slug}
+							csrfToken={session.csrfToken}
+							memberships={store.memberships()}
+							onSaved={() => void refreshMembershipStatus(store)}
 						/>
 					</Show>
 				</>

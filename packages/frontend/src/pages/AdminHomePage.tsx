@@ -1,8 +1,10 @@
 import { Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { Button } from "../components/Button.js";
+import { useVolunteers } from "../domains/volunteers/VolunteersContext.js";
 import {
 	buildOrgAdminCheckoutRecoveryPath,
+	buildOrgAdminConcertoRepertoirePath,
 	buildOrgAdminDivisionsPath,
 	buildOrgAdminFestivalsPath,
 	buildOrgAdminIntegrationsPath,
@@ -18,6 +20,7 @@ interface AdminHomePageProps {
 }
 
 export function AdminHomePage(props: AdminHomePageProps) {
+	const volunteers = useVolunteers();
 	return (
 		<section class="panel org-shell">
 			<header class="org-header">
@@ -191,7 +194,7 @@ export function AdminHomePage(props: AdminHomePageProps) {
 				<button
 					type="button"
 					class="admin-workflow-card"
-					disabled={!props.app.hasVolunteerAdminIntent()}
+					disabled={!volunteers.hasVolunteerAdminIntent()}
 					data-preload-path={
 						props.app.sessionMembership()
 							? buildOrgAdminVolunteersPath(
@@ -201,7 +204,7 @@ export function AdminHomePage(props: AdminHomePageProps) {
 					}
 					onClick={() => {
 						const membership = props.app.sessionMembership();
-						if (!membership || !props.app.hasVolunteerAdminIntent()) {
+						if (!membership || !volunteers.hasVolunteerAdminIntent()) {
 							return;
 						}
 
@@ -240,6 +243,25 @@ export function AdminHomePage(props: AdminHomePageProps) {
 				>
 					<strong>Checkout Recovery</strong>
 					<span>Recover and manage interrupted checkout sessions.</span>
+				</button>
+				<button
+					type="button"
+					class="admin-workflow-card concerto-repertoire-card"
+					disabled={!props.app.isAdminMember()}
+					data-preload-path={buildOrgAdminConcertoRepertoirePath(
+						props.app.slug,
+					)}
+					onClick={() => {
+						if (!props.app.isAdminMember()) return;
+						props.app.navigate(
+							buildOrgAdminConcertoRepertoirePath(props.app.slug),
+						);
+					}}
+				>
+					<strong>Concerto Repertoire</strong>
+					<span>
+						Download templates, preview CSV diffs, and replace concerto catalog.
+					</span>
 				</button>
 			</div>
 		</section>

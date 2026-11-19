@@ -44,7 +44,30 @@ bun run check:sql
 ```
 
 ## Delivery
-Pending execution.
+- **`[G1]` Graceful `SIGTERM`/`SIGINT` Drain & Lifecycle Coordination**:
+  - `packages/backend/src/index.ts` and `packages/backend/src/app.ts`: exposed `drain()` on `createApp()` and implemented `registerGracefulShutdown` / `shutdownRuntime` (`DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS = 15_000` via `FESTIVAL_SHUTDOWN_DRAIN_TIMEOUT_MS` with `.unref()` timeout timer), deduplicating signals, isolating each teardown step (`stopServer`, `stopReaper`, `drain`, `closeDatabase`) in independent `try/catch` blocks, suppressing late post-timeout `drain()` rejections, and starting/stopping `PeriodicLeaseReaper` when PostgreSQL is configured.
+  - `packages/backend/src/commerce/shopify-webhook-service.ts` and `packages/backend/src/commerce/webhook-worker-queue.ts`: exposed `drain()` awaiting active webhook jobs and `getAvailableReclaimSlots()` / `retainForRecovery` overflow handling.
+- **`[G2]` Partial Index Migration & PostgreSQL 17 Schema Parity**:
+  - `database/migrations/20261115010000_idx_class_checkout_executions_running.sql` and `database/postgres17-schema.sql`: added partial index `idx_class_checkout_executions_running_lease` on `orgs.class_checkout_executions USING btree (organization_id, lease_expires_at) WHERE (state = 'running'::text)` in lockstep with `pg_dump --schema-only --schema=orgs` canonical ordering.
+- **`[G3]` Compiled Runtime & Reaper CLI Entrypoints in Docker**:
+  - `packages/backend/scripts/reap-class-checkout-executions.ts`, `packages/backend/package.json`, `packages/backend/tsconfig.json`, and `docker/backend.Dockerfile`: bundled `reap-class-checkout-executions.js`, `reap-class-checkout-recovery.js`, `reconcile-firebase-claims.js`, and `reconcile-shopify-orders.js` into `packages/backend/dist/scripts/`, wired `"reap:class-checkout": "bun ./dist/scripts/reap-class-checkout-executions.js"`, and verified/copied compiled artifacts into the `runtime` container stage without TypeScript sources.
+- **`[G4]` Durable `FOR UPDATE SKIP LOCKED` Lease Reaper & Auth Hygiene**:
+  - `packages/backend/src/runtime/periodic-lease-reaper.ts` and `packages/backend/src/checkout/reap-class-checkout-recovery.ts`: implemented `PeriodicLeaseReaper` (`.unref()` interval timer) and standalone `FOR UPDATE SKIP LOCKED` helpers reclaiming stale 15-minute `orgs.shopify_webhook_deliveries` leases (bounded by available live `WebhookWorkerQueue` capacity and skipped on consumerless CLI runs), recovering expired `running` `orgs.class_checkout_executions` rows under `pg_try_advisory_xact_lock(hashtextextended(organization_id || ':checkout:' || intent_id, 0))` while preserving `CHECK` constraints, and batch-purging expired `orgs.shopify_customer_oauth_states` and `orgs.shopify_customer_sessions` rows.
+- **`[G5]` Modular Size Guardrails, Test Suites, Review & Ledger Handoff**:
+  - `packages/backend/tests/graceful-shutdown.test.ts` (`476`L) and `packages/backend/tests/lease-reaper.integration.test.ts` (`497`L): added deterministic shutdown, error-isolation, capacity-bound, schema parity, and concurrent PostgreSQL 17 `SKIP LOCKED` tests; all modified/created files stay within `<=500`L/file, `<=250`L/class, and `<=60`L/function.
+  - `tasks/s08-graceful-shutdown-and-lease-reaper/code-review.md` and `specs/pre-thanksgiving-program.md` (`S08` marked `DONE`).
+- **Exceptions**: None.
+- **Deferred work**: None.
 
 ## Quality gate results
-Pending execution.
+- Packet validator (`validate-packet.ps1 -TaskName s08-graceful-shutdown-and-lease-reaper -RequireCodeReview`): `PASS` — `PACKET VALID: task=s08-graceful-shutdown-and-lease-reaper iteration=v0 state=locked goals=5 codeReview=valid(none)` (`exit=0`).
+- `bun run verify:toolchain`: `PASS` — Bun `1.4.2` and TypeScript `5.9.3` (`exit=0`).
+- `bun run format:check`: `PASS` — `535` files checked, `0` issues (`exit=0`).
+- `bun run lint`: `PASS` — `535` files checked, `0` warnings, `0` errors (`exit=0`).
+- `bun run build`: `PASS` — compiled `packages/backend/dist/index.js` and bundled `packages/backend/dist/scripts/{reap-class-checkout-executions.js,reap-class-checkout-recovery.js,reconcile-firebase-claims.js,reconcile-shopify-orders.js}` alongside `@festival/common`, `@festival/frontend`, and `@festival/shopify-confirmation` (`exit=0`).
+- `bun run --cwd packages/frontend check:types`: `PASS` — `0` errors (`exit=0`).
+- `bunx --bun tsc -p packages/backend/tsconfig.json --noEmit`: `PASS` — `0` errors across `src/**/*.ts`, `scripts/**/*.ts`, and `tests/**/*.ts` (`exit=0`).
+- `bun run check:sql`: `PASS` — `285` backend TypeScript files validated, `0` errors (`exit=0`).
+- `bun run check:schema-parity` (against PostgreSQL `17.11` `pg_dump --schema-only --schema=orgs` after applying `scripts/migrate.ts`): `PASS` — `Schema parity check passed.` (`exit=0`).
+- `bun run test` (workspace unit/contract + PostgreSQL `17.11` integration suites): `PASS` — `@festival/common`, `@festival/backend`, `@festival/frontend`, and `@festival/shopify-confirmation` green (`0` failures), including `packages/backend/tests/graceful-shutdown.test.ts` (`9/9` pass, `58` `expect()` calls) and `packages/backend/tests/lease-reaper.integration.test.ts` (`5/5` pass, `28` `expect()` calls against PostgreSQL `17.11`).
+- Code review (`tasks/s08-graceful-shutdown-and-lease-reaper/code-review.md`): verdict `patch is correct` (confidence: high; `0` findings, `Findings status: none`, `Findings JSON: []`).

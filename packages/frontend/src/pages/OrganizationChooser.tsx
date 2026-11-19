@@ -8,10 +8,12 @@ interface OrganizationChooserProps {
 
 export function OrganizationChooser(props: OrganizationChooserProps) {
 	return (
-		<Show when={props.app.shouldShowOrgChooser()}>
-			<section class="panel flow-panel" aria-label="Organization chooser">
-				<h2>Choose an organization</h2>
-				<p>Select the organization workspace you want to enter.</p>
+		<section class="panel flow-panel" aria-label="Organization chooser">
+			<h2>Choose an organization</h2>
+			<Show
+				when={props.app.memberships().length > 0}
+				fallback={<a href="/">Return to the home page</a>}
+			>
 				<div class="organization-list">
 					<For each={props.app.memberships()}>
 						{(membership) => (
@@ -29,7 +31,7 @@ export function OrganizationChooser(props: OrganizationChooserProps) {
 						)}
 					</For>
 				</div>
-			</section>
-		</Show>
+			</Show>
+		</section>
 	);
 }

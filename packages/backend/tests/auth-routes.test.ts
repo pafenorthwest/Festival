@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import type { AuthenticatedUser } from "@festival/common";
 import { createApp } from "../src/app.js";
 import type { AuthVerifier } from "../src/auth/types.js";
@@ -25,9 +25,10 @@ class FakeAuthVerifier implements AuthVerifier {
 
 async function createTestApp(trustProxyHeaders = false) {
 	const appUserRepository = new InMemoryAppUserRepository();
+	const repository = new InMemoryOrganizationRepository();
 	const result = await createApp({
 		env: { port: 3000, trustProxyHeaders },
-		repository: new InMemoryOrganizationRepository(),
+		repository,
 		appUserRepository,
 		authVerifier: new FakeAuthVerifier({
 			user: {
@@ -43,7 +44,7 @@ async function createTestApp(trustProxyHeaders = false) {
 		}),
 	});
 
-	return { ...result, appUserRepository };
+	return { ...result, appUserRepository, repository };
 }
 
 function withAuth(token: string, init?: RequestInit): RequestInit {
@@ -128,6 +129,91 @@ describe("auth routes", () => {
 		expect(await credentialedResponse.json()).toEqual({
 			error: "Authorization is not accepted on the bootstrap route.",
 		});
+	});
+
+	it("caches public organization slugs including an empty list and refreshes after creation", async () => {
+		const { app, repository } = await createTestApp();
+		const reads = spyOn(repository, "listOrganizationSlugs");
+		const url = "http://test/api/organizations";
+		async function getOrganizations() {
+			const response = await app.fetch(new Request(url));
+			expect(response.status).toBe(200);
+			return response.json();
+		}
+
+		expect(await getOrganizations()).toEqual({ organizations: [] });
+		expect(await getOrganizations()).toEqual({ organizations: [] });
+		expect(reads).toHaveBeenCalledTimes(1);
+
+		for (const organization of [
+			{ name: "Zeta Festival", shortName: "Zeta" },
+			{ name: "Northwest Performing Arts Festival", shortName: "PAFE-NW" },
+		]) {
+			const created = await app.fetch(
+				new Request(
+					url,
+					withAuth("user", {
+						method: "POST",
+						body: JSON.stringify(organization),
+					}),
+				),
+			);
+			expect(created.status).toBe(201);
+		}
+		expect(reads).toHaveBeenCalledTimes(1);
+
+		const expected = {
+			organizations: [{ slug: "pafe-nw" }, { slug: "zeta" }],
+		};
+		expect(await getOrganizations()).toEqual(expected);
+		expect(await getOrganizations()).toEqual(expected);
+		expect(reads).toHaveBeenCalledTimes(2);
+	});
+
+	it("shares a repository read between concurrent public organization requests on a cold cache", async () => {
+		const { app, repository } = await createTestApp();
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const reads = spyOn(
+			repository,
+			"listOrganizationSlugs",
+		).mockImplementationOnce(async () => {
+			started.resolve();
+			await release.promise;
+			return [];
+		});
+
+		const first = app.request("/api/organizations");
+		await started.promise;
+		const second = app.request("/api/organizations");
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		release.resolve();
+
+		for (const response of await Promise.all([first, second])) {
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({ organizations: [] });
+		}
+		expect(reads).toHaveBeenCalledTimes(1);
+	});
+
+	it("serves public organization lists above the cache size limit", async () => {
+		const { app, repository } = await createTestApp();
+		const organizations = Array.from({ length: 12_000 }, (_, index) => ({
+			slug: `festival-${String(index).padStart(7, "0")}`,
+		}));
+		const reads = spyOn(repository, "listOrganizationSlugs").mockResolvedValue(
+			organizations,
+		);
+
+		const first = await app.request("/api/organizations");
+		const second = await app.request("/api/organizations");
+		for (const response of [first, second]) {
+			expect(response.status).toBe(200);
+			expect((await response.json()).organizations).toHaveLength(
+				organizations.length,
+			);
+		}
+		expect(reads).toHaveBeenCalledTimes(2);
 	});
 
 	it("requires a valid Firebase token for a session without requiring membership", async () => {

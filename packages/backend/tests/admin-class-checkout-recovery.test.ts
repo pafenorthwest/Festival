@@ -84,6 +84,71 @@ describe("class checkout operator recovery routes", () => {
 		"X-CSRF-Token": "operator-command",
 		"Content-Type": "application/json",
 	};
+	for (const endpoint of ["reap", "recovery/resolve"]) {
+		const body = JSON.stringify({
+			action: "abandon_unknown",
+			expectedGeneration: 2,
+			reason: "Reviewed the unresolved provider call",
+			acknowledgeUnknown: true,
+		});
+		it.each([
+			["https://Festival.Example:443", "https://festival.example"],
+			["https://Festival.Example/", "https://festival.example"],
+			["http://LOCALHOST:80", "http://localhost"],
+			["https://Festival.Example:8443", "https://festival.example:8443"],
+		])(`accepts equivalent configured origin %s for ${endpoint}`, async (publicOrigin, origin) => {
+			const f = await fixture({ publicOrigin });
+			const result = await f.app.request(`${base}/${endpoint}`, {
+				method: "POST",
+				headers: { ...headers, Origin: origin },
+				body,
+			});
+			expect(result.status).toBe(200);
+			expect(f.calls).toHaveLength(1);
+		});
+		it.each([
+			undefined,
+			"",
+			"null",
+			"not-a-url",
+			"mailto:operator@festival.example",
+			"file:///festival",
+			"https://operator:secret@festival.example",
+			"https://@festival.example",
+			"https://festival.example/admin",
+			"https://festival.example/.",
+			"https://festival.example?mode=admin",
+			"https://festival.example?",
+			"https://festival.example#admin",
+		])(`rejects invalid configured origin %s for ${endpoint}`, async (publicOrigin) => {
+			const f = await fixture({ publicOrigin });
+			const result = await f.app.request(`${base}/${endpoint}`, {
+				method: "POST",
+				headers,
+				body,
+			});
+			expect(result.status).toBe(403);
+			expect(await result.json()).toEqual({ error: "CSRF validation failed." });
+			expect(f.calls).toEqual([]);
+		});
+		it.each([
+			undefined,
+			"",
+			"   ",
+		])(`requires CSRF evidence %s with a normalized origin for ${endpoint}`, async (csrf) => {
+			const f = await fixture({ publicOrigin: "https://Festival.Example:443" });
+			const requestHeaders = new Headers(headers);
+			requestHeaders.delete("X-CSRF-Token");
+			if (csrf !== undefined) requestHeaders.set("X-CSRF-Token", csrf);
+			const result = await f.app.request(`${base}/${endpoint}`, {
+				method: "POST",
+				headers: requestHeaders,
+				body,
+			});
+			expect(result.status).toBe(403);
+			expect(f.calls).toEqual([]);
+		});
+	}
 	it("requires admin tenant membership for evidence and resolution", async () => {
 		const f = await fixture();
 		for (const token of ["reader", "outsider"]) {

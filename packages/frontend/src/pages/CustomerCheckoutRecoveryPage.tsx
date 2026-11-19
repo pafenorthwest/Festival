@@ -1,10 +1,10 @@
-import { createEffect, createSignal, onMount, Show } from "solid-js";
+import { createEffect, createSignal, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { Button } from "../components/Button.js";
+import { useCustomerIdentity } from "../domains/customer/CustomerIdentityContext.js";
 import {
 	customerCheckoutRecoverySignInPath,
 	getCustomerCheckoutRecoveryReview,
-	getCustomerSession,
 	type RecoveryReviewDto,
 	resumeCustomerCheckoutRecovery,
 } from "../lib/api.js";
@@ -106,6 +106,7 @@ export function resolveErrorMessage(err: unknown): string {
 export function CustomerCheckoutRecoveryPage(
 	props: CustomerCheckoutRecoveryPageProps,
 ) {
+	const customerIdentity = useCustomerIdentity();
 	const [review, setReview] = createSignal<RecoveryReviewDto | null>(null);
 	const [isLoading, setIsLoading] = createSignal(false);
 	const [loadError, setLoadError] = createSignal<string | null>(null);
@@ -121,19 +122,6 @@ export function CustomerCheckoutRecoveryPage(
 		const r = route();
 		return "token" in r && typeof r.token === "string" ? r.token : "";
 	};
-
-	onMount(async () => {
-		if (!props.app.customerSession().authenticated && slug()) {
-			try {
-				const sessionRes = await getCustomerSession(slug());
-				if (sessionRes.session?.authenticated) {
-					props.app.setCustomerSession(sessionRes.session);
-				}
-			} catch {
-				// unauthenticated handled by fallback
-			}
-		}
-	});
 
 	async function loadReview() {
 		const s = slug();
@@ -152,7 +140,7 @@ export function CustomerCheckoutRecoveryPage(
 	}
 
 	createEffect(() => {
-		if (props.app.customerSession().authenticated && slug() && token()) {
+		if (customerIdentity.customerSession().authenticated && slug() && token()) {
 			void loadReview();
 		}
 	});
@@ -160,7 +148,7 @@ export function CustomerCheckoutRecoveryPage(
 	async function handleResumePurchase() {
 		const s = slug();
 		const t = token();
-		const session = props.app.customerSession();
+		const session = customerIdentity.customerSession();
 		const csrf = session.authenticated ? session.csrfToken : "";
 		if (!s || !t) return;
 
@@ -205,7 +193,7 @@ export function CustomerCheckoutRecoveryPage(
 
 	return (
 		<Show
-			when={!props.app.isCustomerSessionLoading()}
+			when={!customerIdentity.isCustomerSessionLoading()}
 			fallback={
 				<section class="panel flow-panel" aria-busy="true">
 					<p role="status">Checking your sign-in status…</p>
@@ -213,7 +201,7 @@ export function CustomerCheckoutRecoveryPage(
 			}
 		>
 			<Show
-				when={props.app.customerSession().authenticated}
+				when={customerIdentity.customerSession().authenticated}
 				fallback={
 					<section class="panel flow-panel customer-recovery-gate">
 						<header class="admin-page-header">

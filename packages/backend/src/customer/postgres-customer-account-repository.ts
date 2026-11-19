@@ -1,10 +1,15 @@
-import { randomUUID } from "node:crypto";
 import type {
-	CustomerMailingAddress,
 	FestivalChildAgeSnapshot,
 	FestivalChildRecord,
 } from "@festival/common";
-import { sql } from "bun";
+import {
+	type CreateChildWithAgeSnapshotInput,
+	type CustomerSessionRepository,
+	PostgresChildProfileRepository,
+	PostgresCustomerIntegrationRepository,
+	PostgresCustomerProfileRepository,
+	PostgresCustomerSessionRepository,
+} from "../domains/customer-identity/index.js";
 import { initializePostgresSchema } from "../repo/postgres-schema.js";
 import type {
 	ApplyCustomerProfileInput,
@@ -16,209 +21,31 @@ import type {
 	CustomerSessionTokenReplacementInput,
 	CustomerSessionTouchInput,
 	CustomerStaffAccessConsentRecord,
-	FestivalCustomerRecord,
 } from "./customer-account-repository.js";
 
-interface IntegrationRow {
-	organization_id: string;
-	storefront_domain: string;
-	client_id: string;
-	encrypted_client_secret: string;
-	readiness: "unknown" | "ready" | "failed";
-	can_read_orders: boolean;
-	integration_version: number | string;
-	verified_at: string | null;
-	last_error: string | null;
-	created_at: string;
-	updated_at: string;
-}
-interface SessionRow {
-	session_id: string;
-	customer_id: string;
-	organization_id: string;
-	shopify_customer_gid: string;
-	encrypted_tokens: string;
-	csrf_token: string;
-	integration_version: number | string;
-	created_at: string;
-	last_seen_at: string;
-	expires_at: string;
-	revoked_at: string | null;
-}
-interface CustomerRow {
-	id: string;
-	organization_id: string;
-	shopify_customer_gid: string;
-	name: string | null;
-	name_source: "shopify" | "festival" | null;
-	name_updated_at: string | null;
-	email: string | null;
-	email_source: "shopify" | "festival" | null;
-	email_updated_at: string | null;
-	mailing_address: CustomerMailingAddress | string | null;
-	mailing_address_source: "shopify" | "festival" | null;
-	mailing_address_updated_at: string | null;
-	phone: string | null;
-	phone_source: "shopify" | "festival" | null;
-	phone_updated_at: string | null;
-	created_at: string;
-	updated_at: string;
-}
-interface StateRow {
-	state_hash: string;
-	organization_id: string;
-	nonce: string;
-	return_to: string;
-	offering_id: string | null;
-	expires_at: string;
-}
-interface ChildRow {
-	id: string;
-	organization_id: string;
-	parent_customer_id: string;
-	display_name: string;
-	created_at: string;
-}
-interface ChildAgeSnapshotRow {
-	id: string;
-	child_id: string;
-	organization_id: string;
-	age: number;
-	created_at: string;
-	valid_until: string;
-	superseded_at: string | null;
-}
-interface ConsentRow {
-	customer_id: string;
-	organization_id: string;
-	privacy_notice_version: string;
-	consented_at: string;
-}
-
-function schemaName(value: string) {
-	if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value))
-		throw new Error("Invalid DB_SCHEMA.");
-	return value;
-}
-function integration(row: IntegrationRow): CustomerAccountIntegrationRecord {
-	return {
-		organizationId: row.organization_id,
-		storefrontDomain: row.storefront_domain,
-		clientId: row.client_id,
-		encryptedClientSecret: row.encrypted_client_secret,
-		readiness: row.readiness,
-		canReadOrders: row.can_read_orders,
-		integrationVersion: Number(row.integration_version),
-		verifiedAtIso: row.verified_at ?? undefined,
-		lastError: row.last_error ?? undefined,
-		createdAtIso: row.created_at,
-		updatedAtIso: row.updated_at,
-	};
-}
-function session(row: SessionRow): CustomerSessionRecord {
-	return {
-		sessionId: row.session_id,
-		customerId: row.customer_id,
-		organizationId: row.organization_id,
-		shopifyCustomerGid: row.shopify_customer_gid,
-		encryptedTokens: row.encrypted_tokens,
-		csrfToken: row.csrf_token,
-		integrationVersion: Number(row.integration_version),
-		createdAtIso: row.created_at,
-		lastSeenAtIso: row.last_seen_at,
-		expiresAtIso: row.expires_at,
-		revokedAtIso: row.revoked_at ?? undefined,
-	};
-}
-function mailingAddress(
-	value: CustomerRow["mailing_address"],
-): CustomerMailingAddress | null {
-	if (!value) return null;
-	return typeof value === "string"
-		? (JSON.parse(value) as CustomerMailingAddress)
-		: value;
-}
-function field<T>(
-	value: T | null,
-	source: "shopify" | "festival" | null,
-	updatedAtIso: string | null,
-) {
-	return { value, source, updatedAtIso };
-}
-function customer(row: CustomerRow): FestivalCustomerRecord {
-	return {
-		id: row.id,
-		organizationId: row.organization_id,
-		shopifyCustomerGid: row.shopify_customer_gid,
-		name: field(row.name, row.name_source, row.name_updated_at),
-		email: field(row.email, row.email_source, row.email_updated_at),
-		mailingAddress: field(
-			mailingAddress(row.mailing_address),
-			row.mailing_address_source,
-			row.mailing_address_updated_at,
-		),
-		phone: field(row.phone, row.phone_source, row.phone_updated_at),
-		createdAtIso: row.created_at,
-		updatedAtIso: row.updated_at,
-	};
-}
-function childRecord(row: ChildRow): FestivalChildRecord {
-	return {
-		id: row.id,
-		organizationId: row.organization_id,
-		parentCustomerId: row.parent_customer_id,
-		displayName: row.display_name,
-		createdAtIso: row.created_at,
-	};
-}
-function childAgeSnapshot(row: ChildAgeSnapshotRow): FestivalChildAgeSnapshot {
-	return {
-		id: row.id,
-		childId: row.child_id,
-		organizationId: row.organization_id,
-		age: row.age,
-		createdAtIso: row.created_at,
-		validUntilIso: row.valid_until,
-		...(row.superseded_at ? { supersededAtIso: row.superseded_at } : {}),
-	};
-}
-function consentRecord(row: ConsentRow): CustomerStaffAccessConsentRecord {
-	return {
-		customerId: row.customer_id,
-		organizationId: row.organization_id,
-		privacyNoticeVersion: row.privacy_notice_version,
-		consentedAtIso: row.consented_at,
-	};
-}
-function stateRecord(r: StateRow): CustomerOAuthStateRecord {
-	return {
-		stateHash: r.state_hash,
-		organizationId: r.organization_id,
-		nonce: r.nonce,
-		returnTo: r.return_to,
-		offeringId: r.offering_id ?? undefined,
-		expiresAtIso: r.expires_at,
-	};
-}
-
+/** Thin legacy facade composing the split customer-identity Postgres repositories. */
 export class PostgresCustomerAccountRepository
 	implements CustomerAccountRepository
 {
-	constructor(private schema: string) {
-		this.schema = schemaName(schema);
+	readonly integrations: PostgresCustomerIntegrationRepository;
+	readonly sessions: PostgresCustomerSessionRepository;
+	readonly profiles: PostgresCustomerProfileRepository;
+	readonly children: PostgresChildProfileRepository;
+
+	constructor(private readonly schema: string) {
+		this.integrations = new PostgresCustomerIntegrationRepository(schema);
+		this.sessions = new PostgresCustomerSessionRepository(schema);
+		this.profiles = new PostgresCustomerProfileRepository(schema);
+		this.children = new PostgresChildProfileRepository(schema);
 	}
+
 	async ensureReady() {
 		await initializePostgresSchema(this.schema);
 	}
-	async getIntegration(id: string) {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`SELECT * FROM ${this.schema}.shopify_customer_account_integrations WHERE organization_id=$1`,
-			[id],
-		)) as IntegrationRow[];
-		return rows[0] ? integration(rows[0]) : null;
+	getIntegration(id: string) {
+		return this.integrations.getIntegration(id);
 	}
-	async upsertIntegration(
+	upsertIntegration(
 		input: Pick<
 			CustomerAccountIntegrationRecord,
 			| "organizationId"
@@ -227,26 +54,9 @@ export class PostgresCustomerAccountRepository
 			| "encryptedClientSecret"
 		>,
 	) {
-		await this.ensureReady();
-		const rows = await sql.begin(async (transaction) => {
-			const updated = (await transaction.unsafe(
-				`INSERT INTO ${this.schema}.shopify_customer_account_integrations (organization_id,storefront_domain,client_id,encrypted_client_secret) VALUES ($1,$2,$3,$4) ON CONFLICT (organization_id) DO UPDATE SET storefront_domain=EXCLUDED.storefront_domain,client_id=EXCLUDED.client_id,encrypted_client_secret=EXCLUDED.encrypted_client_secret,readiness='unknown',can_read_orders=FALSE,integration_version=${this.schema}.shopify_customer_account_integrations.integration_version+1,verified_at=NULL,last_error=NULL,updated_at=NOW() RETURNING *`,
-				[
-					input.organizationId,
-					input.storefrontDomain,
-					input.clientId,
-					input.encryptedClientSecret,
-				],
-			)) as IntegrationRow[];
-			await transaction.unsafe(
-				`UPDATE ${this.schema}.shopify_customer_sessions SET revoked_at=$2 WHERE organization_id=$1 AND revoked_at IS NULL`,
-				[input.organizationId, new Date().toISOString()],
-			);
-			return updated;
-		});
-		return integration(rows[0]);
+		return this.integrations.upsertIntegration(input);
 	}
-	async setIntegrationReadiness(
+	setIntegrationReadiness(
 		id: string,
 		input: {
 			readiness: "ready" | "failed";
@@ -255,354 +65,138 @@ export class PostgresCustomerAccountRepository
 			lastError?: string;
 		},
 	) {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`UPDATE ${this.schema}.shopify_customer_account_integrations SET readiness=$2,can_read_orders=$3,verified_at=$4,last_error=$5,updated_at=NOW() WHERE organization_id=$1 RETURNING *`,
-			[
-				id,
-				input.readiness,
-				input.canReadOrders,
-				input.verifiedAtIso ?? null,
-				input.lastError ?? null,
-			],
-		)) as IntegrationRow[];
-		if (!rows[0]) throw new Error("Customer Account integration not found.");
-		return integration(rows[0]);
+		return this.integrations.setIntegrationReadiness(id, input);
 	}
-	async putOAuthState(s: CustomerOAuthStateRecord) {
-		await this.ensureReady();
-		await sql.unsafe(
-			`INSERT INTO ${this.schema}.shopify_customer_oauth_states(state_hash,organization_id,nonce,return_to,offering_id,expires_at) VALUES($1,$2,$3,$4,$5,$6)`,
-			[
-				s.stateHash,
-				s.organizationId,
-				s.nonce,
-				s.returnTo,
-				s.offeringId ?? null,
-				s.expiresAtIso,
-			],
+	putOAuthState(s: CustomerOAuthStateRecord) {
+		return this.sessions.putOAuthState(s);
+	}
+	recordIntegrationHealth(
+		id: string,
+		version: number,
+		observation: Parameters<
+			CustomerAccountRepository["recordIntegrationHealth"]
+		>[2],
+	) {
+		return this.integrations.recordIntegrationHealth(id, version, observation);
+	}
+	consumeOAuthState(hash: string, now: string) {
+		return this.sessions.consumeOAuthState(hash, now);
+	}
+	createCustomerSession(s: Omit<CustomerSessionRecord, "customerId">) {
+		return this.sessions.createCustomerSession(s);
+	}
+	getSession(id: string) {
+		return this.sessions.getSession(id);
+	}
+	findSessionCustomerAndIntegration(sessionId: string, organizationId: string) {
+		return this.sessions.findSessionCustomerAndIntegration(
+			sessionId,
+			organizationId,
 		);
 	}
-	async consumeOAuthState(hash: string, now: string) {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`DELETE FROM ${this.schema}.shopify_customer_oauth_states WHERE state_hash=$1 AND expires_at>$2 RETURNING *`,
-			[hash, now],
-		)) as StateRow[];
-		return rows[0] ? stateRecord(rows[0]) : null;
+	touchSession(input: CustomerSessionTouchInput) {
+		return this.sessions.touchSession(input);
 	}
-	async createCustomerSession(s: Omit<CustomerSessionRecord, "customerId">) {
-		await this.ensureReady();
-		return sql.begin(async (transaction) => {
-			const customerRows = (await transaction.unsafe(
-				`INSERT INTO ${this.schema}.festival_customers(id,organization_id,shopify_customer_gid,created_at,updated_at) VALUES($1,$2,$3,$4,$4) ON CONFLICT (organization_id,shopify_customer_gid) DO UPDATE SET shopify_customer_gid=EXCLUDED.shopify_customer_gid RETURNING *`,
-				[
-					`cus_${randomUUID()}`,
-					s.organizationId,
-					s.shopifyCustomerGid,
-					s.createdAtIso,
-				],
-			)) as CustomerRow[];
-			const resolved = customerRows[0];
-			if (!resolved) throw new Error("Festival customer resolution failed.");
-			const sessionRows = (await transaction.unsafe(
-				`INSERT INTO ${this.schema}.shopify_customer_sessions(session_id,customer_id,organization_id,shopify_customer_gid,encrypted_tokens,csrf_token,integration_version,created_at,last_seen_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-				[
-					s.sessionId,
-					resolved.id,
-					s.organizationId,
-					s.shopifyCustomerGid,
-					s.encryptedTokens,
-					s.csrfToken,
-					s.integrationVersion,
-					s.createdAtIso,
-					s.lastSeenAtIso,
-					s.expiresAtIso,
-				],
-			)) as SessionRow[];
-			const createdSession = sessionRows[0];
-			if (!createdSession) throw new Error("Customer session creation failed.");
-			return {
-				customer: customer(resolved),
-				session: session(createdSession),
-			};
-		});
+	replaceSessionTokens(input: CustomerSessionTokenReplacementInput) {
+		return this.sessions.replaceSessionTokens(input);
 	}
-	async getSession(id: string) {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`SELECT * FROM ${this.schema}.shopify_customer_sessions WHERE session_id=$1`,
-			[id],
-		)) as SessionRow[];
-		return rows[0] ? session(rows[0]) : null;
-	}
-	async getCustomer(organizationId: string, customerId: string) {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`SELECT * FROM ${this.schema}.festival_customers WHERE organization_id=$1 AND id=$2`,
-			[organizationId, customerId],
-		)) as CustomerRow[];
-		return rows[0] ? customer(rows[0]) : null;
-	}
-	async getCustomerByShopifyGid(
-		organizationId: string,
-		shopifyCustomerGid: string,
+	withSessionRefreshLock<T>(
+		sessionId: string,
+		operation: (sessions: CustomerSessionRepository) => Promise<T>,
 	) {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`SELECT * FROM ${this.schema}.festival_customers WHERE organization_id=$1 AND shopify_customer_gid=$2`,
-			[organizationId, shopifyCustomerGid],
-		)) as CustomerRow[];
-		return rows[0] ? customer(rows[0]) : null;
+		return this.sessions.withSessionRefreshLock(sessionId, operation);
 	}
-	async recordVerifiedShopifyEmail(input: {
+	revokeSession(id: string, at: string, expectedEncryptedTokens?: string) {
+		return this.sessions.revokeSession(id, at, expectedEncryptedTokens);
+	}
+	revokeOrganizationSessions(org: string, at: string) {
+		return this.sessions.revokeOrganizationSessions(org, at);
+	}
+	getCustomer(organizationId: string, customerId: string) {
+		return this.profiles.getCustomer(organizationId, customerId);
+	}
+	getCustomerByShopifyGid(organizationId: string, shopifyCustomerGid: string) {
+		return this.profiles.getCustomerByShopifyGid(
+			organizationId,
+			shopifyCustomerGid,
+		);
+	}
+	recordVerifiedShopifyEmail(input: {
 		organizationId: string;
 		customerId: string;
 		email: string;
 		verifiedAtIso: string;
 	}) {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`UPDATE ${this.schema}.festival_customers SET email=$3,email_source='shopify',email_updated_at=$4,updated_at=GREATEST(updated_at,$4) WHERE organization_id=$1 AND id=$2 RETURNING *`,
-			[
-				input.organizationId,
-				input.customerId,
-				input.email,
-				input.verifiedAtIso,
-			],
-		)) as CustomerRow[];
-		return rows[0] ? customer(rows[0]) : null;
+		return this.profiles.recordVerifiedShopifyEmail(input);
 	}
-	async applyCustomerProfile(input: ApplyCustomerProfileInput) {
-		await this.ensureReady();
-		const values = [
-			input.organizationId,
-			input.customerId,
-			input.source,
-			input.updatedAtIso,
-			input.profile.name ?? null,
-			input.profile.email ?? null,
-			input.profile.mailingAddress ?? null,
-			input.profile.phone ?? null,
-		];
-		const rows = (await sql.unsafe(
-			`UPDATE ${this.schema}.festival_customers SET
-			name=CASE WHEN $5::text IS NULL OR ($3='shopify' AND name_source='festival') OR name_updated_at>$4 THEN name ELSE $5 END,
-			name_source=CASE WHEN $5::text IS NULL OR ($3='shopify' AND name_source='festival') OR name_updated_at>$4 THEN name_source ELSE $3 END,
-			name_updated_at=CASE WHEN $5::text IS NULL OR ($3='shopify' AND name_source='festival') OR name_updated_at>$4 THEN name_updated_at ELSE $4 END,
-			email=CASE WHEN $6::text IS NULL OR ($3='shopify' AND email_source='festival') OR email_updated_at>$4 THEN email ELSE $6 END,
-			email_source=CASE WHEN $6::text IS NULL OR ($3='shopify' AND email_source='festival') OR email_updated_at>$4 THEN email_source ELSE $3 END,
-			email_updated_at=CASE WHEN $6::text IS NULL OR ($3='shopify' AND email_source='festival') OR email_updated_at>$4 THEN email_updated_at ELSE $4 END,
-			mailing_address=CASE WHEN $7::jsonb IS NULL OR ($3='shopify' AND mailing_address_source='festival') OR mailing_address_updated_at>$4 THEN mailing_address ELSE $7::jsonb END,
-			mailing_address_source=CASE WHEN $7::jsonb IS NULL OR ($3='shopify' AND mailing_address_source='festival') OR mailing_address_updated_at>$4 THEN mailing_address_source ELSE $3 END,
-			mailing_address_updated_at=CASE WHEN $7::jsonb IS NULL OR ($3='shopify' AND mailing_address_source='festival') OR mailing_address_updated_at>$4 THEN mailing_address_updated_at ELSE $4 END,
-			phone=CASE WHEN $8::text IS NULL OR ($3='shopify' AND phone_source='festival') OR phone_updated_at>$4 THEN phone ELSE $8 END,
-			phone_source=CASE WHEN $8::text IS NULL OR ($3='shopify' AND phone_source='festival') OR phone_updated_at>$4 THEN phone_source ELSE $3 END,
-			phone_updated_at=CASE WHEN $8::text IS NULL OR ($3='shopify' AND phone_source='festival') OR phone_updated_at>$4 THEN phone_updated_at ELSE $4 END,
-			updated_at=GREATEST(updated_at,$4)
-			WHERE organization_id=$1 AND id=$2 RETURNING *`,
-			values,
-		)) as CustomerRow[];
-		return rows[0] ? customer(rows[0]) : null;
+	applyCustomerProfile(input: ApplyCustomerProfileInput) {
+		return this.profiles.applyCustomerProfile(input);
 	}
-	async recordStaffAccessConsent(consent: CustomerStaffAccessConsentRecord) {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`INSERT INTO ${this.schema}.festival_customer_staff_consents(customer_id,organization_id,privacy_notice_version,consented_at) VALUES($1,$2,$3,$4) ON CONFLICT (customer_id,privacy_notice_version) DO UPDATE SET consented_at=LEAST(${this.schema}.festival_customer_staff_consents.consented_at,EXCLUDED.consented_at) RETURNING *`,
-			[
-				consent.customerId,
-				consent.organizationId,
-				consent.privacyNoticeVersion,
-				consent.consentedAtIso,
-			],
-		)) as ConsentRow[];
-		if (!rows[0]) throw new Error("Customer consent persistence failed.");
-		return consentRecord(rows[0]);
+	recordStaffAccessConsent(consent: CustomerStaffAccessConsentRecord) {
+		return this.profiles.recordStaffAccessConsent(consent);
 	}
-	async getConsentedCustomer(
+	getConsentedCustomer(
 		organizationId: string,
 		customerId: string,
 		privacyNoticeVersion: string,
 	) {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`SELECT c.* FROM ${this.schema}.festival_customers c JOIN ${this.schema}.festival_customer_staff_consents consent ON consent.customer_id=c.id AND consent.organization_id=c.organization_id WHERE c.organization_id=$1 AND c.id=$2 AND consent.privacy_notice_version=$3`,
-			[organizationId, customerId, privacyNoticeVersion],
-		)) as CustomerRow[];
-		return rows[0] ? customer(rows[0]) : null;
+		return this.profiles.getConsentedCustomer(
+			organizationId,
+			customerId,
+			privacyNoticeVersion,
+		);
 	}
-	async searchConsentedCustomers(
+	searchConsentedCustomers(
 		organizationId: string,
 		query: string,
 		privacyNoticeVersion: string,
 		limit: number,
 	) {
-		await this.ensureReady();
-		const escaped = query.replace(/[\\%_]/g, (value) => `\\${value}`);
-		const rows = (await sql.unsafe(
-			`SELECT c.* FROM ${this.schema}.festival_customers c JOIN ${this.schema}.festival_customer_staff_consents consent ON consent.customer_id=c.id AND consent.organization_id=c.organization_id WHERE c.organization_id=$1 AND consent.privacy_notice_version=$2 AND (LOWER(c.name) LIKE LOWER($3) ESCAPE '\\' OR LOWER(c.email) LIKE LOWER($3) ESCAPE '\\' OR c.phone LIKE $3 ESCAPE '\\') ORDER BY LOWER(COALESCE(c.name,'')),c.id LIMIT $4`,
-			[organizationId, privacyNoticeVersion, `%${escaped}%`, limit],
-		)) as CustomerRow[];
-		return rows.map(customer);
+		return this.profiles.searchConsentedCustomers(
+			organizationId,
+			query,
+			privacyNoticeVersion,
+			limit,
+		);
 	}
-	async recordCustomerProfileAccessAudit(
-		audit: CustomerProfileAccessAuditRecord,
+	recordCustomerProfileAccessAudit(audit: CustomerProfileAccessAuditRecord) {
+		return this.profiles.recordCustomerProfileAccessAudit(audit);
+	}
+	createChild(input: Omit<FestivalChildRecord, "id" | "createdAtIso">) {
+		return this.children.createChild(input);
+	}
+	findChild(organizationId: string, parentCustomerId: string, childId: string) {
+		return this.children.findChild(organizationId, parentCustomerId, childId);
+	}
+	findChildrenByIds(
+		organizationId: string,
+		parentCustomerId: string,
+		childIds: readonly string[],
 	) {
-		await this.ensureReady();
-		await sql.unsafe(
-			`INSERT INTO ${this.schema}.festival_customer_profile_access_audit(organization_id,actor_uid,action,target_customer_id,result_count,occurred_at) VALUES($1,$2,$3,$4,$5,$6)`,
-			[
-				audit.organizationId,
-				audit.actorUid,
-				audit.action,
-				audit.targetCustomerId ?? null,
-				audit.resultCount ?? null,
-				audit.occurredAtIso,
-			],
+		return this.children.findChildrenByIds(
+			organizationId,
+			parentCustomerId,
+			childIds,
 		);
 	}
-	async touchSession(input: CustomerSessionTouchInput) {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`UPDATE ${this.schema}.shopify_customer_sessions SET last_seen_at=GREATEST(last_seen_at,$4) WHERE session_id=$1 AND organization_id=$2 AND integration_version=$3 AND revoked_at IS NULL AND expires_at>$4 AND last_seen_at>$5 RETURNING *`,
-			[
-				input.sessionId,
-				input.organizationId,
-				input.integrationVersion,
-				input.seenAtIso,
-				input.idleCutoffIso,
-			],
-		)) as SessionRow[];
-		return rows[0] ? session(rows[0]) : null;
+	listChildren(organizationId: string, parentCustomerId: string) {
+		return this.children.listChildren(organizationId, parentCustomerId);
 	}
-	async replaceSessionTokens(input: CustomerSessionTokenReplacementInput) {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`UPDATE ${this.schema}.shopify_customer_sessions SET encrypted_tokens=$5,last_seen_at=GREATEST(last_seen_at,$6),expires_at=LEAST(expires_at,$7) WHERE session_id=$1 AND organization_id=$2 AND integration_version=$3 AND encrypted_tokens=$4 AND revoked_at IS NULL AND expires_at>$6 AND last_seen_at>$8 RETURNING *`,
-			[
-				input.sessionId,
-				input.organizationId,
-				input.integrationVersion,
-				input.expectedEncryptedTokens,
-				input.replacementEncryptedTokens,
-				input.seenAtIso,
-				input.replacementExpiresAtIso,
-				input.idleCutoffIso,
-			],
-		)) as SessionRow[];
-		return rows[0] ? session(rows[0]) : null;
-	}
-	async revokeSession(id: string, at: string) {
-		await this.ensureReady();
-		await sql.unsafe(
-			`UPDATE ${this.schema}.shopify_customer_sessions SET revoked_at=$2 WHERE session_id=$1`,
-			[id, at],
-		);
-	}
-	async revokeOrganizationSessions(org: string, at: string) {
-		await this.ensureReady();
-		await sql.unsafe(
-			`UPDATE ${this.schema}.shopify_customer_sessions SET revoked_at=$2 WHERE organization_id=$1 AND revoked_at IS NULL`,
-			[org, at],
-		);
-	}
-	async createChild(
-		input: Omit<FestivalChildRecord, "id" | "createdAtIso">,
-	): Promise<FestivalChildRecord> {
-		await this.ensureReady();
-		const id = randomUUID();
-		const createdAtIso = new Date().toISOString();
-		await sql.unsafe(
-			`INSERT INTO ${this.schema}.festival_children (id,organization_id,parent_customer_id,display_name,created_at) VALUES ($1,$2,$3,$4,$5)`,
-			[
-				id,
-				input.organizationId,
-				input.parentCustomerId,
-				input.displayName,
-				createdAtIso,
-			],
-		);
-		return { ...input, id, createdAtIso };
-	}
-	async findChild(
-		organizationId: string,
-		parentCustomerId: string,
-		childId: string,
-	): Promise<FestivalChildRecord | null> {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`SELECT id,organization_id,parent_customer_id,display_name,created_at FROM ${this.schema}.festival_children WHERE organization_id = $1 AND parent_customer_id = $2 AND id = $3 LIMIT 1`,
-			[organizationId, parentCustomerId, childId],
-		)) as ChildRow[];
-		return rows[0] ? childRecord(rows[0]) : null;
-	}
-	async listChildren(
-		organizationId: string,
-		parentCustomerId: string,
-	): Promise<FestivalChildRecord[]> {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`SELECT id,organization_id,parent_customer_id,display_name,created_at FROM ${this.schema}.festival_children WHERE organization_id=$1 AND parent_customer_id=$2`,
-			[organizationId, parentCustomerId],
-		)) as ChildRow[];
-		return rows.map(childRecord);
-	}
-	async createChildAgeSnapshot(
+	createChildAgeSnapshot(
 		input: Omit<
 			FestivalChildAgeSnapshot,
 			"id" | "createdAtIso" | "supersededAtIso"
 		> & { createdAtIso?: string },
-	): Promise<FestivalChildAgeSnapshot> {
-		await this.ensureReady();
-		const id = randomUUID();
-		const createdAtIso = input.createdAtIso ?? new Date().toISOString();
-		await sql.begin(async (transaction) => {
-			// Serialize snapshot replacement per child so only one concurrent writer
-			// can observe the previous active row before inserting its replacement.
-			await transaction.unsafe(
-				"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-				[
-					`child-age-snapshot:${JSON.stringify([this.schema, input.organizationId, input.childId])}`,
-				],
-			);
-			await transaction.unsafe(
-				`UPDATE ${this.schema}.festival_child_age_snapshots SET superseded_at=$3 WHERE organization_id=$1 AND child_id=$2 AND superseded_at IS NULL`,
-				[input.organizationId, input.childId, createdAtIso],
-			);
-			await transaction.unsafe(
-				`INSERT INTO ${this.schema}.festival_child_age_snapshots (id,child_id,organization_id,age,created_at,valid_until) VALUES ($1,$2,$3,$4,$5,$6)`,
-				[
-					id,
-					input.childId,
-					input.organizationId,
-					input.age,
-					createdAtIso,
-					input.validUntilIso,
-				],
-			);
-		});
-		return { ...input, id, createdAtIso };
+	) {
+		return this.children.createChildAgeSnapshot(input);
 	}
-	async findActiveChildAgeSnapshot(
-		organizationId: string,
-		childId: string,
-	): Promise<FestivalChildAgeSnapshot | null> {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`SELECT id,child_id,organization_id,age,created_at,valid_until,superseded_at FROM ${this.schema}.festival_child_age_snapshots WHERE organization_id = $1 AND child_id = $2 AND superseded_at IS NULL ORDER BY created_at DESC, id DESC LIMIT 1`,
-			[organizationId, childId],
-		)) as ChildAgeSnapshotRow[];
-		return rows[0] ? childAgeSnapshot(rows[0]) : null;
+	findActiveChildAgeSnapshot(organizationId: string, childId: string) {
+		return this.children.findActiveChildAgeSnapshot(organizationId, childId);
 	}
-	async listChildAgeSnapshots(
-		organizationId: string,
-		childId: string,
-	): Promise<FestivalChildAgeSnapshot[]> {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`SELECT id,child_id,organization_id,age,created_at,valid_until,superseded_at FROM ${this.schema}.festival_child_age_snapshots WHERE organization_id=$1 AND child_id=$2`,
-			[organizationId, childId],
-		)) as ChildAgeSnapshotRow[];
-		return rows.map(childAgeSnapshot);
+	listChildAgeSnapshots(organizationId: string, childId: string) {
+		return this.children.listChildAgeSnapshots(organizationId, childId);
+	}
+	createChildWithAgeSnapshot(input: CreateChildWithAgeSnapshotInput) {
+		return this.children.createChildWithAgeSnapshot(input);
 	}
 }

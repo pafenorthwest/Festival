@@ -1026,9 +1026,10 @@ describe("ShopifyAdminApiClient", () => {
 		});
 		expect(graphqlBody?.variables).toEqual({
 			first: 1,
-			query: "financial_status:paid processed_at:>='2026-08-28T00:00:00.000Z'",
+			query: "financial_status:paid updated_at:>='2026-08-28T00:00:00.000Z'",
 		});
 		expect(graphqlBody?.query).toContain("query ListPaidOrdersSince");
+		expect(graphqlBody?.query).toContain("sortKey: UPDATED_AT");
 		expect(graphqlBody?.query.match(/customAttributes/g)?.length).toBe(2);
 	});
 

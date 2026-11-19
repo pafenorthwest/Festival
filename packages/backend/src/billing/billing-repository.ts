@@ -1,99 +1,35 @@
 import { randomUUID } from "node:crypto";
 import type {
 	BillingAdjustment,
-	BillingAdjustmentType,
-	BillingLedgerDirection,
 	BillingLedgerEntry,
-	BillingLedgerEntryType,
 	BillingMismatchRecord,
 	CreateBillingAdjustmentInput,
 	CreditBalance,
 } from "@festival/common";
-import { AppError } from "../errors/app-error.js";
+import {
+	type BillingRepository,
+	type CreateAdjustmentOptions,
+	type CreateAdjustmentResult,
+	DuplicateAdjustmentError,
+	InsufficientCreditBalanceError,
+	resolveAdjustmentDirection,
+	resolveLedgerEntryType,
+} from "../domains/commerce-projection/index.js";
+import {
+	detectPaidUnregisteredMismatches,
+	detectPartialPaymentMismatches,
+	detectRegisteredUnpaidMismatches,
+} from "./in-memory-billing-mismatches.js";
 
-export class DuplicateAdjustmentError extends AppError {
-	constructor(
-		message = "Adjustment with this reference already exists.",
-		readonly existingAdjustment?: BillingAdjustment,
-	) {
-		super(message, 409, "DUPLICATE_ADJUSTMENT");
-	}
-}
-
-export class InsufficientCreditBalanceError extends AppError {
-	constructor(message = "Credit balance cannot be negative.") {
-		super(message, 400, "INSUFFICIENT_CREDIT_BALANCE");
-	}
-}
-
-export interface CreateAdjustmentOptions {
-	notes?: string | null;
-	entryType?: BillingLedgerEntryType;
-	direction?: BillingLedgerDirection;
-}
-
-export interface CreateAdjustmentResult {
-	adjustment: BillingAdjustment;
-	ledgerEntry: BillingLedgerEntry;
-	creditBalance: CreditBalance;
-}
-
-export interface BillingRepository {
-	createAdjustmentWithLedger(
-		input: CreateBillingAdjustmentInput,
-		options?: CreateAdjustmentOptions,
-	): Promise<CreateAdjustmentResult>;
-
-	getCreditBalance(
-		organizationId: string,
-		customerId: string,
-	): Promise<CreditBalance | null>;
-
-	listLedgerEntries(
-		organizationId: string,
-		customerId: string,
-	): Promise<BillingLedgerEntry[]>;
-
-	listAdjustments(
-		organizationId: string,
-		customerId?: string,
-	): Promise<BillingAdjustment[]>;
-
-	findAdjustmentByReference(
-		organizationId: string,
-		referenceType: string | null | undefined,
-		referenceId: string,
-	): Promise<BillingAdjustment | null>;
-
-	listMismatches(organizationId: string): Promise<BillingMismatchRecord[]>;
-}
-
-export function resolveAdjustmentDirection(
-	adjustmentType: BillingAdjustmentType,
-	explicitDirection?: BillingLedgerDirection,
-): BillingLedgerDirection {
-	if (explicitDirection) return explicitDirection;
-	switch (adjustmentType) {
-		case "credit_issue":
-		case "refund":
-			return "inflow";
-		case "credit_apply":
-		case "manual_charge":
-		case "write_off":
-			return "outflow";
-	}
-}
-
-export function resolveLedgerEntryType(
-	adjustmentType: BillingAdjustmentType,
-	direction: BillingLedgerDirection,
-	explicitEntryType?: BillingLedgerEntryType,
-): BillingLedgerEntryType {
-	if (explicitEntryType) return explicitEntryType;
-	if (adjustmentType === "credit_issue") return "credit";
-	if (adjustmentType === "credit_apply") return "debit";
-	return direction === "inflow" ? "credit" : "adjustment";
-}
+export {
+	type BillingRepository,
+	type CreateAdjustmentOptions,
+	type CreateAdjustmentResult,
+	DuplicateAdjustmentError,
+	InsufficientCreditBalanceError,
+	resolveAdjustmentDirection,
+	resolveLedgerEntryType,
+};
 
 export interface SeedOrderProjection {
 	organizationId: string;
@@ -113,7 +49,7 @@ export interface SeedClassEntitlement {
 	shopifyOrderGid: string;
 	paidAmountCents: number;
 	paidCurrencyCode: string;
-	status: "confirmed" | "waitlisted" | "cancelled" | "revoked";
+	status: string;
 }
 
 export interface SeedCheckoutIntentLine {
@@ -192,7 +128,6 @@ export class InMemoryBillingRepository implements BillingRepository {
 				);
 			}
 		}
-
 		const balanceKey = `${input.organizationId}:${input.customerId}`;
 		const current = this.creditBalances.get(balanceKey) ?? {
 			organizationId: input.organizationId,
@@ -200,7 +135,6 @@ export class InMemoryBillingRepository implements BillingRepository {
 			balanceCents: 0,
 			currencyCode: input.currencyCode ?? "USD",
 		};
-
 		const direction = resolveAdjustmentDirection(
 			input.adjustmentType,
 			options?.direction,
@@ -210,17 +144,36 @@ export class InMemoryBillingRepository implements BillingRepository {
 			direction,
 			options?.entryType,
 		);
-
-		const delta =
-			direction === "inflow" ? input.amountCents : -input.amountCents;
-		const newBalance = current.balanceCents + delta;
+		const newBalance =
+			current.balanceCents +
+			(direction === "inflow" ? input.amountCents : -input.amountCents);
 		if (newBalance < 0) {
 			throw new InsufficientCreditBalanceError(
 				`Adjustment would result in negative credit balance: ${newBalance} cents. Available: ${current.balanceCents} cents.`,
 			);
 		}
+		return this.recordAdjustmentRecords(
+			input,
+			balanceKey,
+			current.currencyCode,
+			entryType,
+			direction,
+			newBalance,
+			options?.notes ?? null,
+		);
+	}
 
+	private recordAdjustmentRecords(
+		input: CreateBillingAdjustmentInput,
+		balanceKey: string,
+		fallbackCurrency: string,
+		entryType: BillingLedgerEntry["entryType"],
+		direction: BillingLedgerEntry["direction"],
+		newBalance: number,
+		notes: string | null,
+	): CreateAdjustmentResult {
 		const nowIso = new Date().toISOString();
+		const currencyCode = input.currencyCode ?? fallbackCurrency;
 		const adjustment: BillingAdjustment = {
 			id: randomUUID(),
 			organizationId: input.organizationId,
@@ -228,7 +181,7 @@ export class InMemoryBillingRepository implements BillingRepository {
 			adminUserId: input.adminUserId,
 			adjustmentType: input.adjustmentType,
 			amountCents: input.amountCents,
-			currencyCode: input.currencyCode ?? current.currencyCode,
+			currencyCode,
 			reason: input.reason,
 			referenceType: input.referenceType ?? null,
 			referenceId: input.referenceId ?? null,
@@ -236,7 +189,6 @@ export class InMemoryBillingRepository implements BillingRepository {
 			createdAtIso: nowIso,
 		};
 		this.adjustments.push(adjustment);
-
 		const ledgerEntry: BillingLedgerEntry = {
 			id: randomUUID(),
 			organizationId: input.organizationId,
@@ -245,23 +197,21 @@ export class InMemoryBillingRepository implements BillingRepository {
 			amountCents: input.amountCents,
 			direction,
 			balanceAfterCents: newBalance,
-			currencyCode: adjustment.currencyCode,
+			currencyCode,
 			adjustmentId: adjustment.id,
-			notes: options?.notes ?? null,
+			notes,
 			createdAtIso: nowIso,
 		};
 		this.ledgerEntries.push(ledgerEntry);
-
-		const updatedBalance: CreditBalance = {
+		const creditBalance: CreditBalance = {
 			organizationId: input.organizationId,
 			customerId: input.customerId,
 			balanceCents: newBalance,
-			currencyCode: adjustment.currencyCode,
+			currencyCode,
 			updatedAtIso: nowIso,
 		};
-		this.creditBalances.set(balanceKey, updatedBalance);
-
-		return { adjustment, ledgerEntry, creditBalance: updatedBalance };
+		this.creditBalances.set(balanceKey, creditBalance);
+		return { adjustment, ledgerEntry, creditBalance };
 	}
 
 	async getCreditBalance(
@@ -316,185 +266,20 @@ export class InMemoryBillingRepository implements BillingRepository {
 	async listMismatches(
 		organizationId: string,
 	): Promise<BillingMismatchRecord[]> {
-		const results: BillingMismatchRecord[] = [
+		const state = {
+			orderProjections: this.orderProjections,
+			classEntitlements: this.classEntitlements,
+			checkoutIntents: this.checkoutIntents,
+			checkoutIntentLines: this.checkoutIntentLines,
+			checkoutCarts: this.checkoutCarts,
+		};
+		return [
 			...this.seededMismatches.filter(
 				(m) => m.organizationId === organizationId,
 			),
+			...detectPaidUnregisteredMismatches(organizationId, state),
+			...detectRegisteredUnpaidMismatches(organizationId, state),
+			...detectPartialPaymentMismatches(organizationId, state),
 		];
-
-		// 1. paid_unregistered: Order projection is fully paid, but no confirmed entitlement
-		for (const order of this.orderProjections) {
-			if (order.organizationId !== organizationId || !order.fullyPaidAt)
-				continue;
-			const entitlement = this.classEntitlements.find(
-				(e) =>
-					e.organizationId === organizationId &&
-					e.shopifyOrderGid === order.shopifyOrderGid &&
-					e.status === "confirmed",
-			);
-			if (!entitlement) {
-				const intent = this.checkoutIntents.find(
-					(ci) =>
-						ci.organizationId === organizationId &&
-						ci.correlationId === order.correlationId,
-				);
-				const cart = intent?.cartReference
-					? this.checkoutCarts.find(
-							(cc) =>
-								cc.organizationId === organizationId &&
-								cc.reference === intent.cartReference,
-						)
-					: undefined;
-				const customerId =
-					intent?.customerId ??
-					cart?.customerId ??
-					order.shopifyCustomerGid ??
-					"unknown";
-				const amountCents = intent?.amount
-					? Math.round(Number.parseFloat(intent.amount) * 100)
-					: null;
-				results.push({
-					id: randomUUID(),
-					organizationId,
-					customerId,
-					mismatchType: "paid_unregistered",
-					description:
-						"Shopify order is fully paid but no class entitlement was created.",
-					shopifyOrderId: order.shopifyOrderGid,
-					amountCents,
-					currencyCode: order.currencyCode ?? "USD",
-					createdAtIso: new Date().toISOString(),
-				});
-			}
-		}
-
-		// 2. registered_unpaid: Confirmed entitlement, but order projection is missing or not fully paid and paidAmountCents == 0
-		for (const entitlement of this.classEntitlements) {
-			if (
-				entitlement.organizationId !== organizationId ||
-				entitlement.status !== "confirmed"
-			)
-				continue;
-			const order = this.orderProjections.find(
-				(o) =>
-					o.organizationId === organizationId &&
-					o.shopifyOrderGid === entitlement.shopifyOrderGid,
-			);
-			if (!order?.fullyPaidAt && entitlement.paidAmountCents === 0) {
-				results.push({
-					id: randomUUID(),
-					organizationId,
-					customerId: entitlement.parentCustomerId,
-					mismatchType: "registered_unpaid",
-					description:
-						"Class entitlement is registered but payment has not been received.",
-					entitlementId: entitlement.id,
-					shopifyOrderId: entitlement.shopifyOrderGid,
-					amountCents: 0,
-					currencyCode: entitlement.paidCurrencyCode,
-					createdAtIso: new Date().toISOString(),
-				});
-			}
-		}
-
-		// 3. partial_payment: Confirmed entitlement where paidAmountCents < expected from line or intent
-		for (const entitlement of this.classEntitlements) {
-			if (
-				entitlement.organizationId !== organizationId ||
-				entitlement.status !== "confirmed" ||
-				entitlement.paidAmountCents <= 0
-			)
-				continue;
-
-			const intent = this.checkoutIntents.find(
-				(ci) =>
-					ci.organizationId === organizationId &&
-					ci.id === entitlement.checkoutIntentId,
-			);
-
-			if (entitlement.checkoutIntentLineId) {
-				const line = intent
-					? this.checkoutIntentLines.find(
-							(cil) =>
-								cil.id === entitlement.checkoutIntentLineId &&
-								cil.checkoutIntentId === entitlement.checkoutIntentId &&
-								(cil.organizationId === undefined ||
-									cil.organizationId === organizationId),
-						)
-					: undefined;
-
-				if (!line) {
-					results.push({
-						id: randomUUID(),
-						organizationId,
-						customerId: entitlement.parentCustomerId,
-						mismatchType: "partial_payment",
-						description:
-							"Missing or invalid checkout intent line for confirmed class entitlement.",
-						entitlementId: entitlement.id,
-						shopifyOrderId: entitlement.shopifyOrderGid,
-						amountCents: entitlement.paidAmountCents,
-						currencyCode: entitlement.paidCurrencyCode,
-						createdAtIso: new Date().toISOString(),
-					});
-					continue;
-				}
-
-				const expectedAmount = line.amount;
-				const expectedCurrency =
-					line.currencyCode ?? intent?.currencyCode ?? "USD";
-				const expectedCents = Math.round(
-					Number.parseFloat(expectedAmount) * 100,
-				);
-
-				if (
-					entitlement.paidAmountCents < expectedCents ||
-					entitlement.paidCurrencyCode !== expectedCurrency
-				) {
-					results.push({
-						id: randomUUID(),
-						organizationId,
-						customerId: entitlement.parentCustomerId,
-						mismatchType: "partial_payment",
-						description: "Partial payment received for class entitlement.",
-						entitlementId: entitlement.id,
-						shopifyOrderId: entitlement.shopifyOrderGid,
-						amountCents: entitlement.paidAmountCents,
-						currencyCode: entitlement.paidCurrencyCode,
-						createdAtIso: new Date().toISOString(),
-					});
-				}
-				continue;
-			}
-
-			// Legacy / singleton without checkoutIntentLineId: fallback to intent.amount
-			if (!intent) continue;
-
-			if (intent.amount) {
-				const expectedCurrency = intent.currencyCode ?? "USD";
-				const expectedCents = Math.round(
-					Number.parseFloat(intent.amount) * 100,
-				);
-				if (
-					entitlement.paidAmountCents < expectedCents ||
-					entitlement.paidCurrencyCode !== expectedCurrency
-				) {
-					results.push({
-						id: randomUUID(),
-						organizationId,
-						customerId: entitlement.parentCustomerId,
-						mismatchType: "partial_payment",
-						description: "Partial payment received for class entitlement.",
-						entitlementId: entitlement.id,
-						shopifyOrderId: entitlement.shopifyOrderGid,
-						amountCents: entitlement.paidAmountCents,
-						currencyCode: entitlement.paidCurrencyCode,
-						createdAtIso: new Date().toISOString(),
-					});
-				}
-			}
-		}
-
-		return results;
 	}
 }

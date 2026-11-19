@@ -819,3 +819,237 @@ postgresTest(
 		).toBe("prepared");
 	},
 );
+
+async function expiredAttachedFixture() {
+	const f = await fixture();
+	const worker = required(
+		await f.repository.claim({ ...f.input, owner: "worker" }),
+	);
+	await f.repository.transition({
+		claim: { ...f.input, owner: "worker", generation: worker.generation },
+		checkpoint: "attached",
+		shopifyCartId: "remote-cart",
+		state: "completed",
+		releaseLease: true,
+		eventType: "cart_attached",
+	});
+	await sql.unsafe(`INSERT INTO ${f.schema}.checkout_carts (reference,shopify_cart_id,organization_id,customer_id,session_id,integration_version,status,expires_at)
+		VALUES ('admitted','remote-cart','org','customer','session',1,'checkout_started',NOW()-INTERVAL '1 minute')`);
+	await sql.unsafe(
+		`UPDATE ${f.schema}.checkout_intents SET status='checkout_started', cart_reference='admitted', expires_at=NOW()-INTERVAL '1 minute' WHERE id='intent'`,
+	);
+	return f;
+}
+
+for (const status of ["rejected", "needs_review", "superseded"] as const) {
+	postgresTest(
+		`issued ${status} checkout remains a tenant-scoped candidate and blocks a fresh class intent`,
+		async () => {
+			const f = await expiredAttachedFixture();
+			await sql.unsafe(
+				`UPDATE ${f.schema}.checkout_intents SET status=$1 WHERE id='intent'`,
+				[status],
+			);
+			const before = await f.repository.events("org", "intent");
+			const pending = await f.checkout.listPendingClassCheckouts(
+				"org",
+				"customer",
+			);
+			expect(pending.complete).toBe(true);
+			expect(pending.candidates).toHaveLength(1);
+			expect(pending.candidates[0].intent.status).toBe(status);
+			expect(
+				(await f.checkout.listPendingClassCheckouts("other", "customer"))
+					.candidates,
+			).toHaveLength(0);
+			expect(
+				(await f.checkout.listPendingClassCheckouts("org", "other")).candidates,
+			).toHaveLength(0);
+			expect(
+				await f.checkout.hasProcessingIntent(
+					"org",
+					"customer",
+					new Date().toISOString(),
+				),
+			).toBe(true);
+			expect(
+				await f.checkout.createIntent({
+					organizationId: "org",
+					customerId: "customer",
+					sessionId: "fresh-session",
+					idempotencyKey: "fresh-key",
+					intentType: "class_entry",
+					shopifyProductGid: "product",
+					shopifyVariantGid: "variant",
+					amount: "50.00",
+					currencyCode: "USD",
+					expiresAtIso: new Date(Date.now() + 3600000).toISOString(),
+				}),
+			).toEqual({ kind: "in_progress" });
+			expect(await f.repository.events("org", "intent")).toEqual(before);
+		},
+	);
+}
+
+postgresTest(
+	"pending discovery excludes approved purchases and safe predispatch expiry without writes",
+	async () => {
+		const f = await fixture();
+		expect(
+			(await f.checkout.listPendingClassCheckouts("org", "customer"))
+				.candidates,
+		).toHaveLength(1);
+		await sql.unsafe(
+			`UPDATE ${f.schema}.checkout_intents SET expires_at=NOW()-INTERVAL '1 minute' WHERE id='intent'`,
+		);
+		const before = await f.repository.get("org", "intent");
+		expect(
+			(await f.checkout.listPendingClassCheckouts("org", "customer"))
+				.candidates,
+		).toHaveLength(0);
+		expect(await f.repository.get("org", "intent")).toEqual(before);
+		await sql.unsafe(
+			`UPDATE ${f.schema}.checkout_intents SET status='approved' WHERE id='intent'`,
+		);
+		expect(
+			(await f.checkout.listPendingClassCheckouts("org", "customer"))
+				.candidates,
+		).toHaveLength(0);
+	},
+);
+
+postgresTest(
+	"pending discovery signals incomplete candidate lists rather than silently choosing the newest checkout",
+	async () => {
+		const f = await fixture();
+		await sql.unsafe(
+			`UPDATE ${f.schema}.checkout_intents SET status='failed' WHERE id='intent'`,
+		);
+		for (let index = 0; index < 21; index++) {
+			const id = `historical-${index}`;
+			await sql.unsafe(
+				`INSERT INTO ${f.schema}.checkout_carts (reference,shopify_cart_id,organization_id,customer_id,session_id,integration_version,status,expires_at) VALUES ($1,$2,'org','customer','old',1,'expired',NOW()-INTERVAL '1 hour')`,
+				[id, `${id}-remote`],
+			);
+			await sql.unsafe(
+				`INSERT INTO ${f.schema}.checkout_intents (id,correlation_id,organization_id,customer_id,session_id,idempotency_key,intent_type,shopify_product_gid,shopify_variant_gid,amount,currency_code,cart_reference,status,expires_at) VALUES ($1,$2,'org','customer','old',$1,'class_entry','product','variant','50','USD',$1,'expired',NOW()-INTERVAL '1 hour')`,
+				[id, `${id}-correlation`],
+			);
+		}
+		const pending = await f.checkout.listPendingClassCheckouts(
+			"org",
+			"customer",
+		);
+		expect(pending.complete).toBe(false);
+		expect(pending.candidates).toHaveLength(20);
+	},
+);
+
+postgresTest(
+	"expired attached checkout stays discoverable and concurrent restart cannot supersede it",
+	async () => {
+		const f = await expiredAttachedFixture();
+		const before = required(await f.repository.get("org", "intent"));
+		const eventsBefore = await f.repository.events("org", "intent");
+		const intentBefore = (
+			await sql.unsafe(
+				`SELECT status,created_at::text,expires_at::text FROM ${f.schema}.checkout_intents WHERE id='intent'`,
+			)
+		)[0];
+		expect(
+			await f.repository.findUnissuedInvalidCartRestart({
+				...f.input,
+				festivalShortName: "fest",
+			}),
+		).toBeNull();
+		expect(
+			await Promise.all([
+				f.repository.restartUnissuedInvalidCart(f.input),
+				f.repository.restartUnissuedInvalidCart(f.input),
+			]),
+		).toEqual([null, null]);
+		expect(await f.repository.get("org", "intent")).toEqual(before);
+		expect(await f.repository.events("org", "intent")).toEqual(eventsBefore);
+		expect(
+			(
+				await sql.unsafe(
+					`SELECT status,created_at::text,expires_at::text FROM ${f.schema}.checkout_intents WHERE id='intent'`,
+				)
+			)[0],
+		).toEqual(intentBefore);
+		const candidates = await f.checkout.listPendingClassCheckouts(
+			"org",
+			"customer",
+		);
+		expect(candidates.complete).toBe(true);
+		expect(candidates.candidates).toHaveLength(1);
+		expect(candidates.candidates[0].execution?.recoveryReference).toBe(
+			before.recoveryReference,
+		);
+		expect(
+			await f.checkout.hasProcessingIntent(
+				"org",
+				"customer",
+				new Date().toISOString(),
+			),
+		).toBe(true);
+		await f.repository.observePayment({
+			...f.input,
+			shopifyOrderGid: "partial-order",
+			approved: false,
+		});
+		expect(await f.repository.restartUnissuedInvalidCart(f.input)).toBeNull();
+	},
+);
+
+for (const unsafe of [
+	"unexpired",
+	"running",
+	"unknown",
+	"needs_review",
+	"order",
+	"decision",
+] as const) {
+	postgresTest(`expired attached restart refuses ${unsafe}`, async () => {
+		const f = await expiredAttachedFixture();
+		if (unsafe === "unexpired")
+			await sql.unsafe(
+				`UPDATE ${f.schema}.checkout_intents SET expires_at=NOW()+INTERVAL '1 hour' WHERE id='intent'`,
+			);
+		if (unsafe === "running")
+			await sql.unsafe(
+				`UPDATE ${f.schema}.class_checkout_executions SET state='running',lease_owner='worker',lease_expires_at=NOW()+INTERVAL '1 hour' WHERE intent_id='intent'`,
+			);
+		if (unsafe === "unknown")
+			await sql.unsafe(
+				`UPDATE ${f.schema}.class_checkout_executions SET state='recovery_required',result_code='checkout_creation_unknown' WHERE intent_id='intent'`,
+			);
+		if (unsafe === "needs_review")
+			await sql.unsafe(
+				`UPDATE ${f.schema}.checkout_intents SET status='needs_review' WHERE id='intent'`,
+			);
+		if (unsafe === "order")
+			await sql.unsafe(
+				`INSERT INTO ${f.schema}.shopify_order_projections (organization_id,shopify_order_gid,correlation_id,created_at,updated_at) VALUES ('org','unpaid-order','correlation',NOW(),NOW())`,
+			);
+		if (unsafe === "decision")
+			await sql.unsafe(
+				`INSERT INTO ${f.schema}.membership_validation_decisions (id,organization_id,customer_id,checkout_intent_id,shopify_order_gid,status,created_at,updated_at) VALUES ('pending','org','customer','intent','order','pending_validation',NOW(),NOW())`,
+			);
+		expect(await f.repository.restartUnissuedInvalidCart(f.input)).toBeNull();
+	});
+}
+
+postgresTest(
+	"expired attached restart refuses a stale source when a newer checkout already exists",
+	async () => {
+		const f = await expiredAttachedFixture();
+		await sql.unsafe(`INSERT INTO ${f.schema}.checkout_intents (id,correlation_id,organization_id,customer_id,session_id,idempotency_key,intent_type,shopify_product_gid,shopify_variant_gid,amount,currency_code,status,expires_at)
+		VALUES ('new','new-correlation','org','customer','session','new-key','class_entry','product','variant','50.00','USD','creating',NOW()+INTERVAL '1 hour')`);
+		await f.repository.prepare({ ...f.input, intentId: "new" });
+		expect(await f.repository.restartUnissuedInvalidCart(f.input)).toBeNull();
+		expect(await f.repository.get("org", "intent")).toMatchObject({
+			state: "completed",
+		});
+	},
+);

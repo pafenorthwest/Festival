@@ -13,6 +13,20 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: festival_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d festival_test"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
 
     steps:
       - name: Check out repository
@@ -31,10 +45,49 @@ jobs:
       - name: Format check
         run: bun run format:check
 
+      - name: Lint
+        run: bun run lint
+
       - name: Build
         run: bun run build
 
+      - name: Frontend typecheck
+        run: bun run --cwd packages/frontend check:types
+
+      - name: Backend & test typecheck
+        run: bunx --bun tsc -p packages/backend/tsconfig.json --noEmit
+
+      - name: SQL parameter check
+        run: bun run check:sql
+
+      - name: Schema parity check
+        id: schema_parity
+        run: |
+          set -euo pipefail
+          docker run --rm --network host -e PGPASSWORD=postgres postgres:17-alpine \
+            psql -h 127.0.0.1 -p 5432 -U postgres -d postgres -v ON_ERROR_STOP=1 \
+            -c "DROP DATABASE IF EXISTS festival_parity;" \
+            -c "CREATE DATABASE festival_parity;"
+          docker run --rm --network host -e PGPASSWORD=postgres -v "${PWD}:/workspace:ro" -w /workspace postgres:17-alpine \
+            psql -h 127.0.0.1 -p 5432 -U postgres -d festival_parity -v ON_ERROR_STOP=1 -f database/postgres17-schema.sql
+          DATABASE_URL="postgres://postgres:postgres@127.0.0.1:5432/festival_parity" bun run migrate
+          docker run --rm --network host -e PGPASSWORD=postgres postgres:17-alpine \
+            pg_dump -h 127.0.0.1 -p 5432 -U postgres -d festival_parity \
+            --schema-only --schema=orgs --no-owner --no-privileges > /tmp/migrated-schema.sql
+          bun run check:schema-parity /tmp/migrated-schema.sql
+
+      - name: Clean up schema parity database
+        if: always() && (steps.schema_parity.outcome == 'success' || steps.schema_parity.outcome == 'failure')
+        run: |
+          docker run --rm --network host -e PGPASSWORD=postgres postgres:17-alpine \
+            psql -h 127.0.0.1 -p 5432 -U postgres -d postgres -v ON_ERROR_STOP=1 \
+            -c "DROP DATABASE IF EXISTS festival_parity;"
+          rm -f /tmp/migrated-schema.sql
+
       - name: Test
+        env:
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/festival_test
+          POSTGRES_INTEGRATION_URL: postgres://postgres:postgres@127.0.0.1:5432/festival_test
         run: bun run test
 
   deploy-integration:
@@ -66,6 +119,11 @@ jobs:
             git diff --quiet
             git diff --cached --quiet
             bash cloud-setup/03-prepare-images.sh
+            docker compose --env-file cloud-setup/.env -f cloud-setup/compose.yml up -d postgres --wait
+            docker run --rm --network festival-cloud_default --env-file cloud-setup/.env \
+              -e DB_HOST=postgres -e DB_PORT=5432 -e DATABASE=festival_octv3_db \
+              -e DB_USER=festivaladmin -e DB_SSL=false -e DB_SCHEMA=orgs \
+              -v "${PWD}:/app:ro" -w /app oven/bun:1.4.2 bun run scripts/migrate.ts
             docker compose --env-file cloud-setup/.env -f cloud-setup/compose.yml up -d --no-build --pull never
 
   smoke-test:

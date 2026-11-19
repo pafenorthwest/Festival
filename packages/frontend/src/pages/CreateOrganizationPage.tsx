@@ -3,6 +3,7 @@ import { ORGANIZATION_ROLES } from "@festival/common";
 import { For, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { Button } from "../components/Button.js";
+import { useAdminOrg } from "../domains/admin-org/AdminOrgContext.js";
 import { buildOrgPath } from "../lib/routes.js";
 
 interface CreateOrganizationPageProps {
@@ -10,6 +11,7 @@ interface CreateOrganizationPageProps {
 }
 
 export function CreateOrganizationPage(props: CreateOrganizationPageProps) {
+	const adminOrg = useAdminOrg();
 	return (
 		<>
 			<section class="panel flow-panel">
@@ -31,14 +33,14 @@ export function CreateOrganizationPage(props: CreateOrganizationPageProps) {
 						<span>Organization name</span>
 						<input
 							type="text"
-							value={props.app.organizationName()}
+							value={adminOrg.organizationName()}
 							onInput={(event) => {
-								props.app.setOrganizationNameTouched(true);
-								props.app.setOrganizationName(event.currentTarget.value);
+								adminOrg.setOrganizationNameTouched(true);
+								adminOrg.setOrganizationName(event.currentTarget.value);
 							}}
 							placeholder="Performing Arts Festival"
-							aria-invalid={props.app.hasOrganizationNameError()}
-							readOnly={props.app.organizationCreated()}
+							aria-invalid={adminOrg.hasOrganizationNameError()}
+							readOnly={adminOrg.organizationCreated()}
 						/>
 						<small>The full name of your organization</small>
 					</label>
@@ -46,32 +48,32 @@ export function CreateOrganizationPage(props: CreateOrganizationPageProps) {
 						<span>Short name</span>
 						<input
 							type="text"
-							value={props.app.organizationShortName()}
+							value={adminOrg.organizationShortName()}
 							onInput={(event) => {
-								props.app.setOrganizationShortNameTouched(true);
-								props.app.setOrganizationShortName(event.currentTarget.value);
+								adminOrg.setOrganizationShortNameTouched(true);
+								adminOrg.setOrganizationShortName(event.currentTarget.value);
 							}}
 							placeholder="pafe"
-							aria-invalid={props.app.hasOrganizationShortNameError()}
-							readOnly={props.app.organizationCreated()}
+							aria-invalid={adminOrg.hasOrganizationShortNameError()}
+							readOnly={adminOrg.organizationCreated()}
 						/>
 						<small>Easy to remember short name: up to 16 characters</small>
 						<small>Letters, numbers, and hyphens only</small>
 					</label>
 					<Show
 						when={
-							props.app.shouldShowOrganizationValidation() &&
-							props.app.organizationValidationMessage()
+							adminOrg.shouldShowOrganizationValidation() &&
+							adminOrg.organizationValidationMessage()
 						}
 					>
 						<section class="banner error-banner validation-banner">
-							{props.app.organizationValidationMessage()}
+							{adminOrg.organizationValidationMessage()}
 						</section>
 					</Show>
 					<Button
 						type="button"
-						onClick={props.app.handleCreateOrganization}
-						disabled={props.app.isBusy() || props.app.organizationCreated()}
+						onClick={adminOrg.handleCreateOrganization}
+						disabled={props.app.isBusy() || adminOrg.organizationCreated()}
 					>
 						Create organization
 					</Button>
@@ -80,10 +82,10 @@ export function CreateOrganizationPage(props: CreateOrganizationPageProps) {
 
 			<Show when={props.app.sessionMembership()} keyed>
 				{(membership) => (
-					<Show when={props.app.organizationCreated()}>
+					<Show when={adminOrg.organizationCreated()}>
 						<section
 							class="panel flow-panel"
-							ref={(element) => props.app.setInvitePanelRef(element)}
+							ref={(element) => adminOrg.setInvitePanelRef(element)}
 						>
 							<h3>Invite administrators and reviewers</h3>
 							<p>Optional: send out additional invites before continuing.</p>
@@ -91,9 +93,9 @@ export function CreateOrganizationPage(props: CreateOrganizationPageProps) {
 								<span>Email</span>
 								<input
 									type="email"
-									value={props.app.inviteDraft().email}
+									value={adminOrg.inviteDraft().email}
 									onInput={(event) =>
-										props.app.setInviteDraft((current) => ({
+										adminOrg.setInviteDraft((current) => ({
 											...current,
 											email: event.currentTarget.value,
 										}))
@@ -103,9 +105,9 @@ export function CreateOrganizationPage(props: CreateOrganizationPageProps) {
 							<label class="field">
 								<span>Role</span>
 								<select
-									value={props.app.inviteDraft().role}
+									value={adminOrg.inviteDraft().role}
 									onInput={(event) =>
-										props.app.setInviteDraft((current) => ({
+										adminOrg.setInviteDraft((current) => ({
 											...current,
 											role: event.currentTarget.value as OrganizationRole,
 										}))
@@ -119,10 +121,10 @@ export function CreateOrganizationPage(props: CreateOrganizationPageProps) {
 							<div class="stack-actions">
 								<Button
 									type="button"
-									onClick={props.app.handleCreateInvite}
+									onClick={adminOrg.handleCreateInvite}
 									disabled={props.app.isBusy()}
 								>
-									{props.app.createdInvites().length > 0
+									{adminOrg.createdInvites().length > 0
 										? "Send another invite"
 										: "Send invite"}
 								</Button>
@@ -139,7 +141,7 @@ export function CreateOrganizationPage(props: CreateOrganizationPageProps) {
 									Continue to organization
 								</Button>
 							</div>
-							<Show when={props.app.inviteFeedback()} keyed>
+							<Show when={adminOrg.inviteFeedback()} keyed>
 								{(feedback) => (
 									<div
 										class={`invite-feedback invite-feedback-${feedback.status}`}
@@ -155,9 +157,9 @@ export function CreateOrganizationPage(props: CreateOrganizationPageProps) {
 									</div>
 								)}
 							</Show>
-							<Show when={props.app.createdInvites().length > 0}>
+							<Show when={adminOrg.createdInvites().length > 0}>
 								<ul class="invite-list">
-									<For each={props.app.createdInvites()}>
+									<For each={adminOrg.createdInvites()}>
 										{(entry) => (
 											<li>
 												<strong>{entry.email}</strong>

@@ -1,5 +1,7 @@
 import type {
+	AccompanistProfileRecord,
 	CustomerMembershipStatusEntry,
+	MembershipDivisionSelectionPolicy,
 	PublicOrganizationDivision,
 	TeacherProfileRecord,
 } from "@festival/common";
@@ -18,7 +20,7 @@ export interface StorageLike {
 }
 
 export interface TeacherDirectoryDraftInput {
-	profile: TeacherProfileRecord | null;
+	profile: TeacherProfileRecord | AccompanistProfileRecord | null;
 	customerName?: string | null;
 	activeDivisionIds?: readonly string[];
 	pendingOptIn?: boolean | null;
@@ -49,6 +51,16 @@ export function resolveInitialCheckoutDirectoryOptIn(
 ): boolean {
 	return typeof pendingPreference === "boolean"
 		? pendingPreference
+		: DEFAULT_TEACHER_DIRECTORY_OPT_IN;
+}
+export function resolveInitialAccompanistDirectoryOptIn(
+	existingProfile?: Pick<
+		AccompanistProfileRecord,
+		"public_directory_opt_in"
+	> | null,
+): boolean {
+	return existingProfile
+		? existingProfile.public_directory_opt_in
 		: DEFAULT_TEACHER_DIRECTORY_OPT_IN;
 }
 export function readPendingTeacherDirectoryOptIn(
@@ -97,23 +109,64 @@ export function hasActiveTeacherMembership(
 	);
 }
 
-export function resolveActiveTeacherGrantDivisionIds(
+export function hasActiveAccompanistMembership(
+	memberships: readonly CustomerMembershipStatusEntry[],
+): boolean {
+	return memberships.some(
+		(entry) =>
+			entry.entitlementClass === "accompanist_membership" &&
+			entry.status === "active",
+	);
+}
+
+function resolveActiveGrantDivisionIdsByClass(
 	memberships: readonly CustomerMembershipStatusEntry[],
 	divisions: readonly PublicOrganizationDivision[],
+	entitlementClass: CustomerMembershipStatusEntry["entitlementClass"],
 ): string[] {
 	const activeNames = new Set<string>();
 	for (const entry of memberships) {
 		if (
-			entry.entitlementClass === "teacher_membership" &&
-			entry.status === "active" &&
-			entry.divisionName?.trim()
+			entry.entitlementClass !== entitlementClass ||
+			entry.status !== "active" ||
+			!entry.divisionName?.trim()
 		) {
-			activeNames.add(entry.divisionName.trim().toLowerCase());
+			continue;
+		}
+		const normalizedFull = entry.divisionName.trim().toLowerCase();
+		activeNames.add(normalizedFull);
+		if (entitlementClass === "accompanist_membership") {
+			for (const part of normalizedFull.split(",")) {
+				const trimmed = part.trim();
+				if (trimmed) activeNames.add(trimmed);
+			}
 		}
 	}
 	return divisions
 		.filter((div) => activeNames.has(div.displayName.trim().toLowerCase()))
 		.map((div) => div.id);
+}
+
+export function resolveActiveTeacherGrantDivisionIds(
+	memberships: readonly CustomerMembershipStatusEntry[],
+	divisions: readonly PublicOrganizationDivision[],
+): string[] {
+	return resolveActiveGrantDivisionIdsByClass(
+		memberships,
+		divisions,
+		"teacher_membership",
+	);
+}
+
+export function resolveActiveAccompanistGrantDivisionIds(
+	memberships: readonly CustomerMembershipStatusEntry[],
+	divisions: readonly PublicOrganizationDivision[],
+): string[] {
+	return resolveActiveGrantDivisionIdsByClass(
+		memberships,
+		divisions,
+		"accompanist_membership",
+	);
 }
 
 export function computeTeacherDirectoryVisibility(
@@ -175,4 +228,57 @@ export function toggleDivisionSelection(
 	if (checked) next.add(divisionId);
 	else next.delete(divisionId);
 	return [...next];
+}
+
+const ACCOMPANIST_POLICY_HINTS: Record<
+	MembershipDivisionSelectionPolicy,
+	string
+> = {
+	exactly_one: "Select exactly 1 division.",
+	one_to_two: "Select 1 or 2 divisions.",
+	one_to_all: "Select 1 or more divisions.",
+};
+
+export function formatAccompanistDivisionPolicyHint(
+	policy: MembershipDivisionSelectionPolicy,
+): string {
+	return ACCOMPANIST_POLICY_HINTS[policy];
+}
+
+export function isAccompanistDivisionCheckboxDisabled(
+	policy: MembershipDivisionSelectionPolicy,
+	selectedIds: readonly string[],
+	divisionId: string,
+): boolean {
+	const isSelected = selectedIds.includes(divisionId);
+	if (policy === "exactly_one") {
+		if (selectedIds.length > 1) return !isSelected;
+		return selectedIds.length === 1 && isSelected;
+	}
+	if (policy === "one_to_two") {
+		return !isSelected && selectedIds.length >= 2;
+	}
+	return false;
+}
+
+export function toggleAccompanistDivisionSelection(
+	policy: MembershipDivisionSelectionPolicy,
+	selectedIds: readonly string[],
+	divisionId: string,
+): string[] {
+	const unique = [...new Set(selectedIds)];
+	const isSelected = unique.includes(divisionId);
+	if (policy === "exactly_one") {
+		if (unique.length > 1) {
+			return isSelected ? unique.filter((id) => id !== divisionId) : unique;
+		}
+		return isSelected ? unique : [divisionId];
+	}
+	if (isSelected) {
+		return unique.filter((id) => id !== divisionId);
+	}
+	if (policy === "one_to_two" && unique.length >= 2) {
+		return unique;
+	}
+	return [...unique, divisionId];
 }

@@ -1,27 +1,17 @@
 import { randomUUID } from "node:crypto";
-import type { RoomPianoConfiguration } from "@festival/common";
+import type {
+	CreateRoomInput,
+	RoomRecord,
+	RoomRepository,
+} from "../domains/tenant-org/index.js";
 
-export interface RoomRecord {
-	id: string;
-	organizationId: string;
-	festivalId: string;
-	name: string;
-	pianoConfigurations: RoomPianoConfiguration[];
-	createdAtIso: string;
-}
+export type {
+	CreateRoomInput,
+	RoomRecord,
+	RoomRepository,
+} from "../domains/tenant-org/index.js";
 
-export interface CreateRoomInput {
-	organizationId: string;
-	festivalId: string;
-	name: string;
-	pianoConfigurations: RoomPianoConfiguration[];
-}
-
-export interface RoomRepository {
-	createRoom(input: CreateRoomInput): Promise<RoomRecord>;
-	listRooms(organizationId: string, festivalId: string): Promise<RoomRecord[]>;
-}
-
+/** In-memory RoomRepository adapter retained for non-S09 tests until S14. */
 export class InMemoryRoomRepository implements RoomRepository {
 	private readonly rooms = new Map<string, RoomRecord>();
 

@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 64">
+  <defs>
+    <g id="blossom" stroke="#b94d36" stroke-width=".65" stroke-opacity=".5">
+      <path d="M0-5C-6-13-13-5-6 0c-9 3-6 12 1 8 1 8 11 8 10 0 7 4 11-5 2-8C14-5 6-13 0-5Z" />
+      <path d="M0 2v-4m0 4-4-1m4 1-2 4m2-4 3 3m-3-3 4-2" fill="none" stroke-linecap="round" />
+      <circle cy="2" r="1.2" fill="#b94d36" stroke="none" />
+    </g>
+  </defs>
+  <g transform="translate(483)">
+    <g fill="none" stroke="#b94d36" stroke-linecap="round">
+      <path d="M135 55C112 44 85 35 42 25M112 46C111 35 105 24 95 17M90 38C80 29 72 21 69 12M72 33C63 38 55 42 47 42m73 7 4-14" stroke-width="1.5" opacity=".44" />
+      <path d="M52 27c-11-2-20-4-29-3m76 3 10-7m-39-5-13-4" opacity=".33" />
+    </g>
+    <g fill="#b94d36" opacity=".22">
+      <path d="M26 42c-5-1-7-4-6-7 4 0 7 2 6 7m58 9c-4 1-8-1-8-4 4-1 7 0 8 4m46-29c-3-2-4-5-2-7 4 2 5 5 2 7M10 31c-4 0-7-2-7-4 3-2 6 0 7 4" />
+      <ellipse cx="56" cy="11" rx="4.2" ry="2.4" transform="rotate(26 56 11)" />
+      <ellipse cx="109" cy="19" rx="4.2" ry="2.4" transform="rotate(-23 109 19)" />
+    </g>
+    <use href="#blossom" fill="#f5e5dd" transform="translate(37 23) rotate(-19) scale(1.12)" />
+    <use href="#blossom" fill="#f9eee9" transform="translate(68 11) rotate(16) scale(.69)" />
+    <use href="#blossom" fill="#ecd9d0" transform="translate(71 30) rotate(19) scale(.84)" />
+    <use href="#blossom" fill="#f9eee9" transform="translate(47 41) rotate(-17) scale(.72)" />
+    <use href="#blossom" fill="#f5e5dd" transform="translate(95 17) rotate(-12) scale(1.12)" />
+    <use href="#blossom" fill="#ecd9d0" transform="translate(115 43) rotate(25) scale(.82)" />
+    <use href="#blossom" fill="#f9eee9" transform="translate(125 34) rotate(-13) scale(.52)" />
+  </g>
+</svg>

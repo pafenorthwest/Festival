@@ -1,39 +1,28 @@
-import {
-	type CanonicalWork,
-	isCatalogWorkClassifiedAsConcerto,
-	type RepertoireCatalogWork,
-	type RepertoirePiece,
-} from "@festival/common";
-import { createEffect, createSignal, For, Index, Show } from "solid-js";
+import type { CanonicalWork, RepertoirePiece } from "@festival/common";
+import { batch, createSignal, Index, Show } from "solid-js";
 import {
 	applyCatalogWorkSelection,
 	arePiecesValid,
 	createEmptyPieceDraft,
+	getRepertoirePolicyError,
 	pieceDraftToRepertoirePiece,
 	type RepertoirePieceDraft,
 	repertoirePieceToDraft,
-	validatePieceCatalogWork,
 	validatePieceComposer,
 	validatePieceDuration,
 	validatePieceTitle,
 } from "../pages/festivalRegistrationHelpers.js";
 import { Button } from "./Button.js";
+import { ConcertoTitleField } from "./ConcertoTitleField.js";
 
 interface FestivalRepertoireModalProps {
-	isOpen: boolean;
+	organizationSlug: string;
+	festivalSlug: string;
 	maxPieces: 1 | 2 | 3;
+	performanceMinutes?: number;
 	initialPieces: RepertoirePiece[];
-	requiresConcerto?: boolean;
-	catalogSearch?: {
-		query: () => string;
-		setQuery: (value: string) => void;
-		results: () => readonly CanonicalWork[];
-		loading: () => boolean;
-		error: () => string | undefined;
-		retry: () => void;
-	};
-	catalogWorks?: readonly (CanonicalWork | RepertoireCatalogWork)[];
-	onSave: (pieces: RepertoirePiece[]) => void;
+	suggestConcertos: boolean;
+	onSave: (pieces: RepertoirePiece[]) => Promise<void>;
 	onClose: () => void;
 }
 
@@ -44,24 +33,10 @@ export function FestivalRepertoireModal(props: FestivalRepertoireModalProps) {
 			: [createEmptyPieceDraft()],
 	);
 	const [activePieceIndex, setActivePieceIndex] = createSignal(0);
+	const [activePieceRevision, setActivePieceRevision] = createSignal(1);
 	const [touched, setTouched] = createSignal(false);
-
-	createEffect(() => {
-		if (props.isOpen) {
-			setActivePieceIndex(0);
-		}
-	});
-
-	const concertoCatalogWorks = (selectedId?: string | null) =>
-		(props.catalogWorks ?? []).filter(
-			(work) =>
-				(work.id === selectedId ||
-					!props.catalogSearch ||
-					props.catalogSearch
-						.results()
-						.some((result) => result.id === work.id)) &&
-				isCatalogWorkClassifiedAsConcerto(work),
-		);
+	const [saving, setSaving] = createSignal(false);
+	const [error, setError] = createSignal<string>();
 
 	function updatePieceField<K extends keyof RepertoirePieceDraft>(
 		index: number,
@@ -75,12 +50,10 @@ export function FestivalRepertoireModal(props: FestivalRepertoireModalProps) {
 		);
 	}
 
-	function handleSelectCatalogWork(index: number, workId: string) {
+	function handleSelectCatalogWork(index: number, work: CanonicalWork) {
 		setPieces((current) =>
 			current.map((item, i) =>
-				i === index
-					? applyCatalogWorkSelection(item, workId, props.catalogWorks)
-					: item,
+				i === index ? applyCatalogWorkSelection(item, work.id, [work]) : item,
 			),
 		);
 	}
@@ -95,116 +68,84 @@ export function FestivalRepertoireModal(props: FestivalRepertoireModalProps) {
 
 	function handleRemovePiece(index: number) {
 		if (pieces().length > 1) {
-			setPieces((current) => {
-				const next = current.filter((_, i) => i !== index);
-				setActivePieceIndex((prev) => {
-					if (prev >= next.length) {
-						return next.length - 1;
-					}
-					if (prev > index) {
-						return prev - 1;
-					}
-					return prev;
-				});
-				return next;
+			const remaining = pieces().filter((_, i) => i !== index);
+			batch(() => {
+				setPieces(remaining);
+				setActivePieceIndex(Math.min(index, remaining.length - 1));
+				setActivePieceRevision((revision) => revision + 1);
 			});
 		}
 	}
 
-	function handleSave(event: Event) {
+	async function handleSave(event: Event) {
 		event.preventDefault();
+		if (saving()) return;
+		setError(undefined);
 		setTouched(true);
-		if (
-			!arePiecesValid(pieces(), {
-				requiresConcerto: props.requiresConcerto,
-				catalogWorks: props.catalogWorks,
-			})
-		) {
+		if (!arePiecesValid(pieces())) {
 			const invalidIndex = pieces().findIndex(
 				(p) =>
-					(props.requiresConcerto &&
-						validatePieceCatalogWork(p, true, props.catalogWorks)) ||
-					validatePieceTitle(p.title) ||
+					validatePieceTitle(p.title, p.catalogWorkId) ||
 					validatePieceComposer(p.composer) ||
 					validatePieceDuration(p.durationMinutes, p.durationSeconds),
 			);
 			if (invalidIndex !== -1) setActivePieceIndex(invalidIndex);
 			return;
 		}
-		props.onSave(pieces().map(pieceDraftToRepertoirePiece));
-		props.onClose();
+		const savedPieces = pieces().map(pieceDraftToRepertoirePiece);
+		const policyError = getRepertoirePolicyError(
+			savedPieces,
+			props.maxPieces,
+			props.performanceMinutes,
+		);
+		if (policyError) {
+			setError(policyError);
+			return;
+		}
+		setSaving(true);
+		try {
+			await props.onSave(savedPieces);
+			props.onClose();
+		} catch (cause) {
+			setError(
+				cause instanceof Error
+					? cause.message
+					: "Repertoire could not be saved. Please try again.",
+			);
+		} finally {
+			setSaving(false);
+		}
 	}
 
 	return (
-		<Show when={props.isOpen}>
-			<div
-				class="modal-backdrop"
-				role="dialog"
-				aria-modal="true"
-				aria-labelledby="modal-repertoire-title"
-			>
-				<div class="panel modal-card repertoire-modal-card">
-					<header class="admin-page-header">
-						<div>
-							<h3
-								id="modal-repertoire-title"
-								data-testid="modal-repertoire-title"
-							>
-								Repertoire Details
-							</h3>
-							<p class="muted">
-								Enter between 1 and {props.maxPieces} pieces performed for this
-								class.
-							</p>
-						</div>
-					</header>
+		<div
+			class="modal-backdrop"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="modal-repertoire-title"
+		>
+			<div class="panel modal-card repertoire-modal-card">
+				<header class="admin-page-header">
+					<div>
+						<h3
+							id="modal-repertoire-title"
+							data-testid="modal-repertoire-title"
+						>
+							Repertoire Details
+						</h3>
+						<p class="muted">
+							Enter between 1 and {props.maxPieces} pieces performed for this
+							class.
+						</p>
+					</div>
+				</header>
 
-					<form class="flow-panel" onSubmit={handleSave}>
-						<Show when={props.requiresConcerto && props.catalogSearch}>
-							{(search) => (
-								<>
-									<label class="field">
-										<span>Search the concerto catalog</span>
-										<input
-											type="search"
-											placeholder="Work title or composer"
-											value={search().query()}
-											onInput={(event) =>
-												search().setQuery(event.currentTarget.value)
-											}
-											onKeyDown={(event) => {
-												if (event.key === "Enter") event.preventDefault();
-											}}
-										/>
-									</label>
-									<div aria-live="polite">
-										<Show when={search().loading()}>
-											<p>Searching the catalog…</p>
-										</Show>
-										<Show when={search().error()}>
-											<p>{search().error()}</p>
-											<Button
-												type="button"
-												variant="secondary"
-												onClick={search().retry}
-											>
-												Retry search
-											</Button>
-										</Show>
-										<Show
-											when={
-												!search().loading() &&
-												!search().error() &&
-												search().results().length === 0
-											}
-										>
-											<p>No concertos match this search.</p>
-										</Show>
-									</div>
-								</>
-							)}
-						</Show>
-
+				<form onSubmit={(event) => void handleSave(event)} noValidate>
+					<fieldset
+						class="flow-panel"
+						style="border: 0; padding: 0; margin: 0; min-inline-size: 0;"
+						disabled={saving()}
+					>
 						<Show when={pieces().length > 1}>
 							<div
 								class="repertoire-modal-pagination repertoire-modal-pagination-top"
@@ -258,90 +199,72 @@ export function FestivalRepertoireModal(props: FestivalRepertoireModalProps) {
 											</Show>
 										</div>
 
-										<Show when={props.requiresConcerto}>
-											<label
-												class="field"
-												for={`repertoire-piece-${index}-catalog-work`}
-											>
-												<span>Concerto Catalog Work</span>
-												<select
-													id={`repertoire-piece-${index}-catalog-work`}
-													name={`repertoire-piece-${index}-catalog-work`}
-													onChange={(e) =>
-														handleSelectCatalogWork(
-															index,
-															e.currentTarget.value,
-														)
-													}
+										<Show
+											when={props.suggestConcertos}
+											fallback={
+												<label
+													class="field"
+													for={`repertoire-piece-${index}-title`}
 												>
-													<option value="" selected={!piece().catalogWorkId}>
-														Select a concerto work…
-													</option>
-													<For
-														each={concertoCatalogWorks(piece().catalogWorkId)}
-													>
-														{(work) => (
-															<option
-																value={work.id}
-																selected={piece().catalogWorkId === work.id}
-															>
-																{work.composerName
-																	? `${work.title} — ${work.composerName}`
-																	: work.title}
-															</option>
-														)}
-													</For>
-												</select>
-												<Show
-													when={
-														touched() &&
-														validatePieceCatalogWork(
-															piece(),
-															true,
-															props.catalogWorks,
-														)
-													}
-												>
-													<p class="field-error" role="alert">
-														{validatePieceCatalogWork(
-															piece(),
-															true,
-															props.catalogWorks,
-														)}
-													</p>
-												</Show>
-											</label>
-										</Show>
-
-										<label
-											class="field"
-											for={`repertoire-piece-${index}-title`}
+													<span>Title</span>
+													<input
+														id={`repertoire-piece-${index}-title`}
+														name={`repertoire-piece-${index}-title`}
+														data-testid={`input-piece-title-${index}`}
+														type="text"
+														value={piece().title}
+														onInput={(e) =>
+															updatePieceField(
+																index,
+																"title",
+																e.currentTarget.value,
+															)
+														}
+														placeholder="e.g. Moonlight Sonata"
+														required
+													/>
+												</label>
+											}
 										>
-											<span>Title</span>
-											<input
-												id={`repertoire-piece-${index}-title`}
-												name={`repertoire-piece-${index}-title`}
-												data-testid={`input-piece-title-${index}`}
-												type="text"
-												value={piece().title}
-												onInput={(e) =>
-													updatePieceField(
-														index,
-														"title",
-														e.currentTarget.value,
-													)
-												}
-												placeholder="e.g. Moonlight Sonata"
-												required
-											/>
-											<Show
-												when={touched() && validatePieceTitle(piece().title)}
-											>
-												<p class="field-error" role="alert">
-													{validatePieceTitle(piece().title)}
-												</p>
+											<Show when={activePieceRevision()} keyed>
+												{(_revision) => (
+													<ConcertoTitleField
+														id={`repertoire-piece-${index}-title`}
+														name={`repertoire-piece-${index}-title`}
+														testId={`input-piece-title-${index}`}
+														organizationSlug={props.organizationSlug}
+														festivalSlug={props.festivalSlug}
+														title={piece().title}
+														catalogWorkId={piece().catalogWorkId}
+														onTitleInput={(title) =>
+															updatePieceField(index, "title", title)
+														}
+														onSelect={(work) =>
+															handleSelectCatalogWork(index, work)
+														}
+														onManual={() =>
+															updatePieceField(
+																index,
+																"catalogWorkId",
+																undefined,
+															)
+														}
+													/>
+												)}
 											</Show>
-										</label>
+										</Show>
+										<Show
+											when={
+												touched() &&
+												validatePieceTitle(piece().title, piece().catalogWorkId)
+											}
+										>
+											{(titleError) => (
+												<p class="field-error" role="alert">
+													{titleError()}
+												</p>
+											)}
+										</Show>
 
 										<label
 											class="field"
@@ -515,9 +438,14 @@ export function FestivalRepertoireModal(props: FestivalRepertoireModalProps) {
 							</Button>
 						</Show>
 
+						<Show when={error()}>
+							<p class="field-error" role="alert">
+								{error()}
+							</p>
+						</Show>
 						<div class="division-actions" style="margin-top: 1rem;">
 							<Button type="submit" data-testid="btn-save-repertoire">
-								Save repertoire
+								{saving() ? "Saving…" : "Save repertoire"}
 							</Button>
 							<Button
 								type="button"
@@ -528,9 +456,9 @@ export function FestivalRepertoireModal(props: FestivalRepertoireModalProps) {
 								Cancel
 							</Button>
 						</div>
-					</form>
-				</div>
+					</fieldset>
+				</form>
 			</div>
-		</Show>
+		</div>
 	);
 }

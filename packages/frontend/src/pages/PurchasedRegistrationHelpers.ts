@@ -14,6 +14,27 @@ export interface PurchasedRegistrationGroup {
 	registrations: CustomerClassRegistrationItem[];
 }
 
+export function getEditableRegistrationPieces(
+	registration: CustomerClassRegistrationItem,
+): RepertoirePiece[] {
+	const metadata = registration.metadata;
+	if (!metadata) return [];
+	const itemsByOrder = new Map(
+		metadata.repertoireItems.map((item) => [item.displayOrder, item]),
+	);
+	return metadata.repertoireJson.map((piece, index) => {
+		// JSON records the family's selection. The normalized row also reflects staff approvals and catalog deletions.
+		if (
+			!piece.catalogWorkId ||
+			itemsByOrder.get(index + 1)?.catalogWorkId !== null
+		) {
+			return { ...piece };
+		}
+		const { catalogWorkId: _snapshotId, ...fields } = piece;
+		return fields;
+	});
+}
+
 export function groupPurchasedRegistrations(
 	registrations: readonly CustomerClassRegistrationItem[],
 	festivalId = "",

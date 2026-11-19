@@ -1,6 +1,7 @@
 import {
 	type CanonicalWork,
 	doesClassRequireConcerto,
+	getRepertoireTitleLimit,
 	isCatalogWorkClassifiedAsConcerto,
 	type RepertoirePiece,
 } from "@festival/common";
@@ -26,8 +27,16 @@ export function createEmptyPieceDraft(): RepertoirePieceDraft {
 	};
 }
 
-export function validatePieceTitle(title: string): string | null {
-	if (!title?.trim()) return "Title is required.";
+export function validatePieceTitle(
+	title: string,
+	catalogWorkId?: string | null,
+): string | null {
+	const trimmedTitle = title?.trim();
+	if (!trimmedTitle) return "Title is required.";
+	const limit = getRepertoireTitleLimit(catalogWorkId);
+	if (trimmedTitle.length > limit) {
+		return `Title cannot exceed ${limit} characters.`;
+	}
 	return null;
 }
 
@@ -112,9 +121,7 @@ export function validatePieceCatalogWork(
 			: optionsOrRequiresConcerto;
 	if (!options?.requiresConcerto) return null;
 	const workId = piece.catalogWorkId?.trim();
-	if (!workId) {
-		return "Concerto classes require selecting a concerto work from the catalog.";
-	}
+	if (!workId) return null;
 	if (options.catalogWorks) {
 		const work = options.catalogWorks.find((w) => w.id === workId);
 		if (!work || !isCatalogWorkClassifiedAsConcerto(work)) {
@@ -218,7 +225,7 @@ export function arePiecesValid(
 	if (pieces.length === 0) return false;
 	return pieces.every(
 		(p) =>
-			!validatePieceTitle(p.title) &&
+			!validatePieceTitle(p.title, p.catalogWorkId) &&
 			!validatePieceComposer(p.composer) &&
 			!validatePieceDuration(p.durationMinutes, p.durationSeconds) &&
 			!validatePieceCatalogWork(p, options),

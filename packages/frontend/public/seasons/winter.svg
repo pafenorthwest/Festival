@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 64">
+  <defs>
+    <path id="arm" d="M0 0v-17m0 7-4-4m4 4 4-4" />
+    <g id="snowflake" fill="none" stroke="#4459d6" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.15">
+      <use href="#arm" />
+      <use href="#arm" transform="rotate(60)" />
+      <use href="#arm" transform="rotate(120)" />
+      <use href="#arm" transform="rotate(180)" />
+      <use href="#arm" transform="rotate(240)" />
+      <use href="#arm" transform="rotate(300)" />
+      <path d="m0-4 3.46 2v4L0 4l-3.46-2v-4Z" fill="#eef0fb" />
+    </g>
+  </defs>
+  <g transform="translate(484)">
+    <path d="M5 64c20-5 36-13 57-11 18 2 22 6 43 4 11-1 22-6 34-4v11Z" fill="#d6dbf1" opacity=".57" />
+    <path d="M53 64c19-4 33 0 52-4 12-2 23-6 35-3v7Z" fill="#d6dbf1" opacity=".52" />
+    <use href="#snowflake" transform="translate(40 31) rotate(15) scale(.72)" opacity=".47" />
+    <use href="#snowflake" transform="translate(81 28) rotate(-12) scale(1.18)" opacity=".43" />
+    <use href="#snowflake" transform="translate(117 40) rotate(11) scale(.64)" opacity=".52" />
+    <g fill="#4459d6" opacity=".27">
+      <circle cx="16" cy="38" r="1.25" />
+      <circle cx="26" cy="17" r="1.7" />
+      <circle cx="59" cy="12" r="1.25" />
+      <circle cx="57" cy="46" r="1.7" />
+      <circle cx="108" cy="19" r="1.6" />
+      <circle cx="123" cy="13" r="1.25" />
+      <circle cx="137" cy="32" r="1.7" />
+    </g>
+  </g>
+</svg>

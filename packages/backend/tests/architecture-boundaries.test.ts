@@ -414,3 +414,26 @@ test("flags escapes, forbidden packages, unknown contexts, 501-line files, re-ex
 		"permitted-backend-layer,forbidden-package,forbidden-package,known-context,known-context,line-ceiling,line-ceiling,cross-domain-dag,cross-domain-dag",
 	);
 });
+
+test("enforces 500-line ceiling on backend app.ts and composition modules", () => {
+	const appPath = resolve(repositoryRoot, "packages/backend/src/app.ts");
+	const appContent = TypeScript.sys.readFile(appPath);
+	expect(appContent).toBeDefined();
+	expect(countFileLines(appContent ?? "")).toBeLessThanOrEqual(
+		MAX_DOMAIN_FILE_LINES,
+	);
+
+	const compositionDir = resolve(
+		repositoryRoot,
+		"packages/backend/src/composition",
+	);
+	if (TypeScript.sys.directoryExists(compositionDir)) {
+		for (const file of TypeScript.sys.readDirectory(compositionDir, [".ts"])) {
+			const content = TypeScript.sys.readFile(file);
+			expect(content).toBeDefined();
+			expect(countFileLines(content ?? "")).toBeLessThanOrEqual(
+				MAX_DOMAIN_FILE_LINES,
+			);
+		}
+	}
+});

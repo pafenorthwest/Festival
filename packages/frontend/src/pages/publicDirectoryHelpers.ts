@@ -17,10 +17,10 @@ export interface DirectoryFilterCriteria {
 function isEligibleDirectoryProfile(
 	profile: PublicDirectoryProfileDto,
 ): boolean {
-	if (profile.role === "Teacher") {
+	if (profile.role === "Teacher" || profile.role === "Accompanist") {
 		return profile.isActiveMember === true;
 	}
-	return profile.role === "Accompanist";
+	return false;
 }
 
 export function sortProfilesByName(
@@ -89,10 +89,10 @@ export function partitionDirectoryProfiles(
 	const list = profiles ?? [];
 	return {
 		teachers: sortProfilesByName(
-			list.filter((p) => p.role === "Teacher" && p.isActiveMember),
+			list.filter((p) => p.role === "Teacher" && p.isActiveMember === true),
 		),
 		accompanists: sortProfilesByName(
-			list.filter((p) => p.role === "Accompanist"),
+			list.filter((p) => p.role === "Accompanist" && p.isActiveMember === true),
 		),
 	};
 }

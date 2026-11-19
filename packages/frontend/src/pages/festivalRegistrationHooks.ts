@@ -257,59 +257,53 @@ export function useRegistrationWaitlist(input: RegistrationWaitlistInput) {
 export function useConcertoCatalogSearch(
 	slug: Accessor<string>,
 	festivalSlug: Accessor<string>,
-	enabled: Accessor<boolean>,
+	query: Accessor<string>,
 ) {
-	const [query, setQuery] = createSignal("");
-	const [catalogWorks, setCatalogWorks] = createSignal<CanonicalWork[]>([]);
 	const [results, setResults] = createSignal<CanonicalWork[]>([]);
 	const [loading, setLoading] = createSignal(false);
 	const [error, setError] = createSignal<string>();
 	const [retryCount, setRetryCount] = createSignal(0);
 
 	createEffect(() => {
-		slug();
-		setCatalogWorks([]);
-	});
-
-	createEffect(() => {
 		const organizationSlug = slug();
 		const festival = festivalSlug();
-		const search = query().trim();
+		const title = query().trim();
 		retryCount();
-		if (!enabled()) return;
-		let cancelled = false;
-		setLoading(true);
-		setError(undefined);
 		setResults([]);
+		setError(undefined);
+		setLoading(Boolean(organizationSlug && festival && title));
+		if (!organizationSlug || !festival || !title) return;
+
+		const controller = new AbortController();
 		const timer = setTimeout(() => {
-			void searchRegistrationConcertoCatalog(organizationSlug, festival, search)
+			void searchRegistrationConcertoCatalog(
+				organizationSlug,
+				festival,
+				title,
+				{
+					signal: controller.signal,
+				},
+			)
 				.then(({ works }) => {
-					if (cancelled) return;
-					setResults(works);
-					setCatalogWorks((known) => [
-						...new Map(
-							[...known, ...works].map((work) => [work.id, work]),
-						).values(),
-					]);
+					if (!controller.signal.aborted) setResults(works);
 				})
 				.catch(() => {
-					if (!cancelled) setError("Could not search the concerto catalog.");
+					if (!controller.signal.aborted) {
+						setError("Could not search the concerto catalog.");
+					}
 				})
 				.finally(() => {
-					if (!cancelled) setLoading(false);
+					if (!controller.signal.aborted) setLoading(false);
 				});
 		}, 250);
 		onCleanup(() => {
-			cancelled = true;
 			clearTimeout(timer);
+			controller.abort();
 		});
 	});
 
 	return {
-		catalogWorks,
 		results,
-		query,
-		setQuery,
 		loading,
 		error,
 		retry: () => setRetryCount((count) => count + 1),

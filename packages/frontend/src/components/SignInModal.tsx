@@ -26,9 +26,9 @@ export function SignInModal(props: SignInModalProps) {
 								<span>Name</span>
 								<input
 									type="text"
-									value={props.app.inviteName()}
+									value={props.app.signInInviteName?.() ?? ""}
 									onInput={(event) =>
-										props.app.setInviteName(event.currentTarget.value)
+										props.app.setSignInInviteName?.(event.currentTarget.value)
 									}
 									placeholder="Your full name"
 								/>

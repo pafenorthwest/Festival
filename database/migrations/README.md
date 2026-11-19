@@ -3,11 +3,15 @@
 ## Current schema snapshot
 
 [`database/postgres17-schema.sql`](../postgres17-schema.sql) is a generated,
-schema-only PostgreSQL 17 snapshot of an empty database after running the full
-[`initializePostgresSchema`](../../packages/backend/src/repo/postgres-schema.ts)
-runtime initializer for `orgs`. Refresh it from a freshly initialized database
-when the runtime schema changes. It contains the schema needed to bootstrap a
-fresh database, without application data.
+schema-only PostgreSQL 17 snapshot of the canonical
+[`orgs` schema](../../packages/backend/src/repo/postgres-schema.ts).
+Refresh it from a freshly initialized PostgreSQL 17 database when the canonical
+schema changes.
+
+The local and cloud Docker Compose stacks mount this snapshot as
+`/docker-entrypoint-initdb.d/01-bootstrap.sql`. The PostgreSQL entrypoint
+loads it when initializing a new data directory. It skips initialization scripts
+on retained volumes, including databases that lack a migration ledger.
 
 ## Versioned migrations
 
@@ -18,17 +22,30 @@ timestamped filenames.
 YYYYMMDDHHMMSS_<description>.sql
 ```
 
-Apply the migrations needed to bring an existing database up to date. A fresh
-database restored from the current snapshot or created by the current runtime
-initializer already has the corresponding schema changes.
+Applied migrations are recorded in `orgs.schema_migrations` (`version`,
+`filename`, `checksum`, `applied_at`). Run pending migrations in order with:
+
+```powershell
+bun run migrate
+```
+
+[`scripts/migrate.ts`](../../scripts/migrate.ts) acquires a PostgreSQL advisory
+lock, creates `orgs.schema_migrations` if missing, verifies SHA-256 checksums
+for previously applied files, and applies each pending `.sql` file in its own
+transaction. The snapshot contains the current schema and an empty
+`orgs.schema_migrations` table. Run `bun run migrate` against the bootstrapped
+database before adding application data to apply pending files and populate the
+ledger. Continue using `bun run migrate` to upgrade retained databases.
 
 ## PAFE concerto catalog
 
-After creating the `pafe` organization, run this data migration from the
-repository root with PostgreSQL 17 `psql` and the target connection string.
+After creating the `pafe` organization, run this manual `\copy` bootstrap seed
+from the repository root with PostgreSQL 17 `psql` and the target connection
+string (it is kept outside `database/migrations/` so `bun run migrate` does not
+execute `psql` meta-commands).
 
 ```powershell
-psql -X --dbname $env:DATABASE_URL --file database/migrations/20261109000000_load_pafe_concertos.sql
+psql -X --dbname $env:DATABASE_URL --file database/bootstrap/20261109000000_load_pafe_concertos.sql
 ```
 
 The [UTF-8 CSV](../bootstrap/pafe-concertos.csv) has the fixed header

@@ -1,3 +1,9 @@
+export const MAX_CATALOG_WORK_TITLE_LENGTH = 300;
+
+export function getRepertoireTitleLimit(catalogWorkId?: string | null): number {
+	return catalogWorkId?.trim() ? MAX_CATALOG_WORK_TITLE_LENGTH : 200;
+}
+
 export const REPERTOIRE_REVIEW_STATUSES = [
 	"pending",
 	"claimed",
@@ -471,8 +477,10 @@ export function validateAddCatalogWorkInput(
 	const title = asTrimmed(body.title);
 	if (title.length === 0) {
 		errors.push("Title is required.");
-	} else if (title.length > 300) {
-		errors.push("Title must be 300 characters or less.");
+	} else if (title.length > MAX_CATALOG_WORK_TITLE_LENGTH) {
+		errors.push(
+			`Title must be ${MAX_CATALOG_WORK_TITLE_LENGTH} characters or less.`,
+		);
 	}
 
 	const composer = asTrimmed(body.composer) || asTrimmed(body.composerName);

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { CustomerMailingAddress } from "@festival/common";
 import { sql } from "bun";
 import { PostgresOrganizationRepository } from "../src/repo/postgres-organization-repository.js";
+import { provisionPostgresTestSchema } from "../src/repo/postgres-schema.js";
 
 if (process.env.POSTGRES_INTEGRATION_URL && !process.env.DATABASE_URL) {
 	process.env.DATABASE_URL = process.env.POSTGRES_INTEGRATION_URL;
@@ -17,6 +18,7 @@ for (const role of ["teacher", "accompanist"] as const) {
 			async () => {
 				const schema = `profile_postal_${randomUUID().replaceAll("-", "")}`;
 				try {
+					await provisionPostgresTestSchema(schema);
 					const repository = new PostgresOrganizationRepository(schema);
 					const organization = await repository.createOrganization({
 						name: "Postal profile test",
