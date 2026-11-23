@@ -116,4 +116,43 @@ describe("AdminEntitlementReportPanel contract and auth handling", () => {
 		expect(source).toContain("await user.getIdToken(),");
 		expect(source).toContain("route.slug,");
 	});
+
+	it("renders all five entitlement status badges and counts in a wrapping horizontal list", async () => {
+		const panelSource = await Bun.file(
+			new URL("../src/pages/AdminEntitlementReportPanel.tsx", import.meta.url),
+		).text();
+		const styles = await Bun.file(
+			new URL("../src/styles.css", import.meta.url),
+		).text();
+		const { ENTITLEMENT_STATUS_FILTER_OPTIONS, entitlementStatusBadgeClass } =
+			await import("../src/pages/adminEntitlementReportHelpers.js");
+
+		expect(ENTITLEMENT_STATUS_FILTER_OPTIONS.map((o) => o.label)).toEqual([
+			"Active",
+			"Scheduled",
+			"Superseded",
+			"Expired",
+			"Revoked",
+		]);
+		expect(entitlementStatusBadgeClass("active")).toBe("badge badge-active");
+		expect(entitlementStatusBadgeClass("scheduled")).toBe(
+			"badge badge-processing",
+		);
+		expect(entitlementStatusBadgeClass("superseded")).toBe(
+			"badge badge-inactive",
+		);
+		expect(entitlementStatusBadgeClass("expired")).toBe("badge badge-inactive");
+		expect(entitlementStatusBadgeClass("revoked")).toBe("badge badge-rejected");
+
+		expect(panelSource).toContain("<ul");
+		expect(panelSource).toContain('class="entitlement-summary-counts"');
+		expect(panelSource).toContain('<li class="entitlement-summary-card">');
+
+		expect(styles).toMatch(
+			/\.entitlement-summary-counts\s*\{[\s\S]*?display:\s*flex;[\s\S]*?flex-wrap:\s*wrap;[\s\S]*?align-items:\s*center;[\s\S]*?gap:\s*[^;]+;/,
+		);
+		expect(styles).toMatch(
+			/\.entitlement-summary-card\s*\{[\s\S]*?display:\s*inline-flex;[\s\S]*?align-items:\s*center;[\s\S]*?gap:\s*[^;]+;[\s\S]*?white-space:\s*nowrap;/,
+		);
+	});
 });

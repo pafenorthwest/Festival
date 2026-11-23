@@ -1182,6 +1182,7 @@ describe("AccompanistMembershipService.listEntitlementReport", () => {
 			pageSize: 100,
 			totalPages: 1,
 			divisions: [],
+			editableDivisions: [],
 		});
 	});
 

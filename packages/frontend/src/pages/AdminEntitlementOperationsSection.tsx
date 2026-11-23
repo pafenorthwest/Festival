@@ -1,132 +1,21 @@
 import type {
-	AdminEntitlementOperationsResponse,
-	AdminReconciliationRunSummary,
 	AdminUnresolvedValidationDecision,
 	AdminValidationDecisionAction,
 } from "@festival/common";
-import {
-	createEffect,
-	createSignal,
-	For,
-	onCleanup,
-	Show,
-	untrack,
-} from "solid-js";
-import type { FestivalAppController } from "../app/useFestivalAppController.js";
+import { createSignal, For, Show } from "solid-js";
 import {
 	approveAdminValidationDecision,
 	declineAdminValidationDecision,
-	getAdminEntitlementOperations,
-	triggerAdminEntitlementReconciliation,
 } from "../lib/api.js";
+import type { AdminEntitlementOperations } from "./adminEntitlementOperationsData.js";
 import {
-	formatReconciliationFailureCategory,
-	formatReconciliationRunStatus,
 	formatValidationDecisionCustomer,
 	formatValidationDecisionReason,
 	formatValidationDecisionStatus,
-	reconciliationRunBadgeClass,
 	validationDecisionBadgeClass,
 } from "./adminEntitlementReportHelpers.js";
 
-function ReconciliationRunHistoryTable(props: {
-	reconciliationRuns: AdminReconciliationRunSummary[];
-}) {
-	return (
-		<Show when={props.reconciliationRuns.length > 0}>
-			<div class="listing-table">
-				<div class="listing-table-header">
-					<span>Run</span>
-					<span>Status</span>
-					<span>Orders</span>
-					<span>Started / Finished</span>
-				</div>
-				<For each={props.reconciliationRuns}>
-					{(run) => (
-						<div class="listing-table-row">
-							<span>{run.id}</span>
-							<span>
-								<span class={reconciliationRunBadgeClass(run.status)}>
-									{formatReconciliationRunStatus(run.status)}
-								</span>
-								{run.failureCategory && (
-									<span class="entitlement-report-secondary">
-										{formatReconciliationFailureCategory(run.failureCategory)}
-									</span>
-								)}
-							</span>
-							<span>{`${run.processedCount} / ${run.discoveredCount}`}</span>
-							<span>{`${run.startedAtIso} – ${run.finishedAtIso}`}</span>
-						</div>
-					)}
-				</For>
-			</div>
-		</Show>
-	);
-}
-
-function ReconciliationRunPanel(props: {
-	isAdmin: boolean;
-	latestRun: AdminReconciliationRunSummary | null;
-	reconciliationRuns: AdminReconciliationRunSummary[];
-	reconciling: boolean;
-	reconcileMessage: string;
-	reconcileError: string;
-	onTriggerReconcile: () => void;
-}) {
-	return (
-		<div class="entitlement-ops-block">
-			<div class="shopify-card-header">
-				<div>
-					<h3>Shopify Order Reconciliation</h3>
-					<p class="muted">
-						Latest organization-wide reconciliation status and recent run
-						history.
-					</p>
-				</div>
-				<Show when={props.isAdmin}>
-					<button
-						type="button"
-						class="secondary-button"
-						disabled={props.reconciling}
-						onClick={props.onTriggerReconcile}
-					>
-						{props.reconciling ? "Reconciling…" : "Run reconciliation"}
-					</button>
-				</Show>
-			</div>
-			{props.reconcileMessage && (
-				<p class="muted" role="status">
-					{props.reconcileMessage}
-				</p>
-			)}
-			{props.reconcileError && (
-				<p class="shopify-error-text" role="alert">
-					{props.reconcileError}
-				</p>
-			)}
-			<Show
-				when={props.latestRun}
-				fallback={<p class="muted">No reconciliation runs recorded yet.</p>}
-			>
-				{(run) => (
-					<div class="entitlement-latest-run">
-						<span class={reconciliationRunBadgeClass(run().status)}>
-							{formatReconciliationRunStatus(run().status)}
-						</span>
-						<span>{`Processed ${run().processedCount} of ${run().discoveredCount} orders`}</span>
-						<span class="muted">{`Finished ${run().finishedAtIso}`}</span>
-					</div>
-				)}
-			</Show>
-			<ReconciliationRunHistoryTable
-				reconciliationRuns={props.reconciliationRuns}
-			/>
-		</div>
-	);
-}
-
-export function ActionConfirmBox(props: {
+function ActionConfirmBox(props: {
 	placeholder: string;
 	confirmLabel: string;
 	busyLabel: string;
@@ -263,201 +152,122 @@ function UnresolvedDecisionsSection(props: {
 	) => Promise<void>;
 }) {
 	return (
-		<div class="entitlement-ops-block">
-			<h3>Unresolved Validation Decisions</h3>
-			<Show
-				when={props.unresolvedDecisions.length > 0}
-				fallback={
-					<p class="muted">No unresolved order validation decisions.</p>
-				}
-			>
-				<div class="listing-table">
-					<div class="listing-table-header">
-						<span>Customer / Order</span>
-						<span>Offering / Division</span>
-						<span>Status / Reason</span>
-						<span>Updated</span>
-						<span>Actions</span>
-					</div>
-					<For each={props.unresolvedDecisions}>
-						{(d) => {
-							const c = formatValidationDecisionCustomer(d);
-							return (
-								<div class="listing-table-row">
-									<span>
-										<strong>{c.primary}</strong>
-										{c.secondary && (
-											<span class="entitlement-report-secondary">
-												{c.secondary}
-											</span>
-										)}
-										<span class="entitlement-report-secondary">
-											{d.shopifyOrderGid}
-										</span>
-									</span>
-									<span>
-										<strong>{d.offeringName || "—"}</strong>
-										{d.divisionName && (
-											<span class="entitlement-report-secondary">
-												{d.divisionName}
-											</span>
-										)}
-									</span>
-									<span>
-										<span class={validationDecisionBadgeClass(d.status)}>
-											{formatValidationDecisionStatus(d.status)}
-										</span>
-										<span class="entitlement-report-secondary">
-											{formatValidationDecisionReason(d.reasonCode)}
-										</span>
-									</span>
-									<span>{d.updatedAtIso}</span>
-									<span>
-										<DecisionRowAction
-											decision={d}
-											isAdmin={props.isAdmin}
-											onResolve={props.onResolve}
-										/>
-									</span>
-								</div>
-							);
-						}}
-					</For>
+		<Show
+			when={props.unresolvedDecisions.length > 0}
+			fallback={<p class="muted">No unresolved order validation decisions.</p>}
+		>
+			<div class="listing-table">
+				<div class="listing-table-header">
+					<span>Customer / Order</span>
+					<span>Offering / Division</span>
+					<span>Status / Reason</span>
+					<span>Updated</span>
+					<span>Actions</span>
 				</div>
-			</Show>
-		</div>
+				<For each={props.unresolvedDecisions}>
+					{(d) => {
+						const customer = () => formatValidationDecisionCustomer(d);
+						return (
+							<div class="listing-table-row">
+								<span>
+									<strong>{customer().primary}</strong>
+									{customer().secondary && (
+										<span class="entitlement-report-secondary">
+											{customer().secondary}
+										</span>
+									)}
+									<span class="entitlement-report-secondary">
+										{d.shopifyOrderGid}
+									</span>
+								</span>
+								<span>
+									<strong>{d.offeringName || "—"}</strong>
+									{d.divisionName && (
+										<span class="entitlement-report-secondary">
+											{d.divisionName}
+										</span>
+									)}
+								</span>
+								<span>
+									<span class={validationDecisionBadgeClass(d.status)}>
+										{formatValidationDecisionStatus(d.status)}
+									</span>
+									<span class="entitlement-report-secondary">
+										{formatValidationDecisionReason(d.reasonCode)}
+									</span>
+								</span>
+								<span>{d.updatedAtIso}</span>
+								<span>
+									<DecisionRowAction
+										decision={d}
+										isAdmin={props.isAdmin}
+										onResolve={props.onResolve}
+									/>
+								</span>
+							</div>
+						);
+					}}
+				</For>
+			</div>
+		</Show>
 	);
 }
 
-function useEntitlementOperationsData(props: {
-	app: FestivalAppController;
-	refreshVersion: number;
-	onMutated: () => void;
+export function AdminEntitlementOperationsSection(props: {
+	operations: AdminEntitlementOperations;
 }) {
-	const [ops, setOps] = createSignal<AdminEntitlementOperationsResponse | null>(
-		null,
-	);
-	const [reconciling, setReconciling] = createSignal(false);
-	const [reconcileMessage, setReconcileMessage] = createSignal("");
-	const [reconcileError, setReconcileError] = createSignal("");
-	let opsController: AbortController | undefined;
-
-	const getAuthSlug = async () => {
-		const route = props.app.route();
-		const user = props.app.firebaseUser();
-		if (route.kind !== "org-admin-memberships" || !user) return null;
-		return { slug: route.slug, token: await user.getIdToken() };
-	};
-
-	const loadOperations = async () => {
-		opsController?.abort();
-		const auth = await getAuthSlug();
-		if (!auth) return setOps(null);
-		const current = new AbortController();
-		opsController = current;
-		try {
-			const snapshot = await getAdminEntitlementOperations(
-				auth.token,
-				auth.slug,
-				{ signal: current.signal },
-			);
-			if (!current.signal.aborted) setOps(snapshot);
-		} catch {
-			if (!current.signal.aborted) setOps(null);
-		}
-	};
-
-	const triggerReconcile = async () => {
-		const auth = await getAuthSlug();
-		if (!auth) return;
-		setReconciling(true);
-		setReconcileMessage("");
-		setReconcileError("");
-		try {
-			const res = await triggerAdminEntitlementReconciliation(
-				auth.token,
-				auth.slug,
-			);
-			setReconcileMessage(
-				`Reconciled ${res.processedCount} of ${res.discoveredCount} orders.`,
-			);
-			await loadOperations();
-			props.onMutated();
-		} catch (err) {
-			setReconcileError(
-				err instanceof Error && err.message
-					? err.message
-					: "Reconciliation failed.",
-			);
-			await loadOperations();
-		} finally {
-			setReconciling(false);
-		}
-	};
+	const state = props.operations;
 
 	const resolveDecision = async (
 		decisionId: string,
 		action: AdminValidationDecisionAction,
 		note: string,
 	) => {
-		const auth = await getAuthSlug();
-		if (!auth) return;
-		const fn =
+		const session = state.getSession();
+		if (!session) throw new Error("Sign in as an Admin to resolve a decision.");
+		const token = await session.getToken();
+		if (!session.isCurrent())
+			throw new Error("The Admin session changed. Try again.");
+		const resolve =
 			action === "approve"
 				? approveAdminValidationDecision
 				: declineAdminValidationDecision;
-		await fn(auth.token, auth.slug, decisionId, { confirmed: true, note });
-		await loadOperations();
-		props.onMutated();
+		await resolve(token, session.slug, decisionId, { confirmed: true, note });
+		if (!session.isCurrent()) return;
+		await state.loadOperations();
 	};
-
-	createEffect(() => {
-		const route = props.app.route();
-		const user = props.app.firebaseUser();
-		const _version = props.refreshVersion;
-		if (route.kind !== "org-admin-memberships" || !user) {
-			opsController?.abort();
-			setOps(null);
-			return;
-		}
-		untrack(() => void loadOperations());
-	});
-
-	onCleanup(() => opsController?.abort());
-
-	return {
-		ops,
-		reconciling,
-		reconcileMessage,
-		reconcileError,
-		triggerReconcile,
-		resolveDecision,
-	};
-}
-
-export function AdminEntitlementOperationsSection(props: {
-	app: FestivalAppController;
-	refreshVersion: number;
-	onMutated: () => void;
-}) {
-	const state = useEntitlementOperationsData(props);
 
 	return (
-		<div class="entitlement-operations-section">
-			<ReconciliationRunPanel
-				isAdmin={props.app.isAdminMember()}
-				latestRun={state.ops()?.latestReconciliationRun ?? null}
-				reconciliationRuns={state.ops()?.reconciliationRuns ?? []}
-				reconciling={state.reconciling()}
-				reconcileMessage={state.reconcileMessage()}
-				reconcileError={state.reconcileError()}
-				onTriggerReconcile={() => void state.triggerReconcile()}
-			/>
-			<UnresolvedDecisionsSection
-				isAdmin={props.app.isAdminMember()}
-				unresolvedDecisions={state.ops()?.unresolvedDecisions ?? []}
-				onResolve={state.resolveDecision}
-			/>
-		</div>
+		<section
+			class="panel flow-panel shopify-validation-decisions-panel"
+			aria-labelledby="shopify-validation-decisions-title"
+		>
+			<h2 id="shopify-validation-decisions-title">
+				Unresolved Validation Decisions
+			</h2>
+			<Show when={state.loadError()}>
+				<p class="shopify-error-text" role="alert">
+					Validation decisions could not be loaded.
+				</p>
+			</Show>
+			<Show
+				when={state.snapshot()}
+				fallback={
+					<Show when={!state.loadError()}>
+						<p class="muted" role="status">
+							Loading validation decisions…
+						</p>
+					</Show>
+				}
+			>
+				{(snapshot) => (
+					<UnresolvedDecisionsSection
+						isAdmin={Boolean(state.scope()) && !state.loadError()}
+						unresolvedDecisions={snapshot().unresolvedDecisions}
+						onResolve={resolveDecision}
+					/>
+				)}
+			</Show>
+		</section>
 	);
 }

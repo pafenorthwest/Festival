@@ -1,9 +1,11 @@
 import {
 	type AccompanistContactSnapshot,
 	type AccompanistMembershipGrant,
+	type AccompanistProfileRecord,
 	AppError,
 	type CustomerMembershipStatusEntry,
 	type EntitlementGrantSnapshot,
+	type EntitlementReportDirectoryProfile,
 	type EntitlementReportEntry,
 	type OrganizationDivision,
 	type TeacherProfileRecord,
@@ -250,22 +252,43 @@ export function mapAccompanistStatusEntries(
 	}));
 }
 
+function toReportDirectoryProfile(
+	profile: AccompanistProfileRecord | TeacherProfileRecord,
+): EntitlementReportDirectoryProfile {
+	return {
+		id: profile.id,
+		publicDirectoryOptIn: profile.public_directory_opt_in,
+		approvalStatus: profile.approval_status,
+	};
+}
+
 export function toAccompanistReportEntries(
 	grants: AccompanistMembershipGrant[],
 	today: string,
+	profilesByCustomer?: ReadonlyMap<string, AccompanistProfileRecord>,
 ): EntitlementReportEntry[] {
-	return grants.map((grant) => ({
-		id: grant.id,
-		entitlementClass: "accompanist_membership",
-		customerName: grant.contact.name,
-		customerEmail: grant.contact.email,
-		offeringName: grant.offeringNameSnapshot,
-		divisions: grant.divisions.map((division) => ({ ...division })),
-		startsOn: grant.startsOn,
-		endsOn: grant.endsOn,
-		source: grant.source,
-		status: lifecycleForEntitlementRead(grant, today),
-	}));
+	return grants.map((grant) => {
+		const status = lifecycleForEntitlementRead(grant, today);
+		const profile =
+			status === "active"
+				? profilesByCustomer?.get(grant.customerId)
+				: undefined;
+		return {
+			id: grant.id,
+			entitlementClass: "accompanist_membership",
+			customerName: grant.contact.name,
+			customerEmail: grant.contact.email,
+			offeringName: grant.offeringNameSnapshot,
+			divisions: grant.divisions.map((division) => ({ ...division })),
+			startsOn: grant.startsOn,
+			endsOn: grant.endsOn,
+			source: grant.source,
+			status,
+			...(profile
+				? { directoryProfile: toReportDirectoryProfile(profile) }
+				: {}),
+		};
+	});
 }
 
 export async function loadTeacherReportEntries(
@@ -275,39 +298,53 @@ export async function loadTeacherReportEntries(
 	>,
 	products: Pick<MembershipProductRepository, "listMembershipProductRecords">,
 	organizationId: string,
-	today: string,
+	context: Promise<{
+		today: string;
+		directory?: {
+			teacherProfilesByCustomer: ReadonlyMap<string, TeacherProfileRecord>;
+			divisionNames: ReadonlyMap<string, string>;
+		};
+	}>,
 ): Promise<EntitlementReportEntry[]> {
 	const grants = (
 		await entitlements.listEntitlementGrantSnapshots(organizationId)
 	).filter((grant) => grant.entitlementClass === "teacher_membership");
 	if (grants.length === 0) return [];
-	const [contacts, productRecords] = await Promise.all([
+	const [contacts, productRecords, { today, directory }] = await Promise.all([
 		entitlements.findMembershipCustomerContacts(organizationId, [
 			...new Set(grants.map((grant) => grant.customerId)),
 		]),
 		products.listMembershipProductRecords(organizationId),
+		context,
 	]);
 	const productNames = new Map(
 		productRecords.map((product) => [product.id, product.productNameSnapshot]),
 	);
 	return grants.map((grant) => {
 		const contact = contacts.get(grant.customerId);
+		const status = lifecycleForEntitlementRead(grant, today);
+		const profile =
+			status === "active"
+				? directory?.teacherProfilesByCustomer.get(grant.customerId)
+				: undefined;
 		return {
 			id: grant.id,
 			entitlementClass: "teacher_membership",
 			customerName: contact?.name,
 			customerEmail: contact?.email,
 			offeringName: productNames.get(grant.offeringId) ?? "Teacher Membership",
-			divisions: [
-				{
-					divisionId: grant.divisionId,
-					divisionName: grant.divisionNameSnapshot,
-				},
-			],
+			divisions: resolveTeacherGrantDivisions(
+				grant,
+				profile,
+				directory?.divisionNames,
+			),
 			startsOn: grant.startsOn,
 			endsOn: grant.endsOn,
 			source: "teacher_checkout",
-			status: lifecycleForEntitlementRead(grant, today),
+			status,
+			...(profile
+				? { directoryProfile: toReportDirectoryProfile(profile) }
+				: {}),
 		};
 	});
 }
@@ -357,12 +394,11 @@ export interface LoadActiveTeacherRosterOptions {
 	today: string;
 }
 
-function resolveTeacherRosterDivisions(
+function resolveTeacherGrantDivisions(
 	grant: EntitlementGrantSnapshot,
-	profilesByCustomer: ReadonlyMap<string, TeacherProfileRecord> | null,
-	divisionNames: ReadonlyMap<string, string>,
+	profile: TeacherProfileRecord | undefined,
+	divisionNames: ReadonlyMap<string, string> | undefined,
 ): Array<{ divisionId: string; divisionName: string }> {
-	const profile = profilesByCustomer?.get(grant.customerId);
 	if (!profile) {
 		return [
 			{
@@ -372,7 +408,7 @@ function resolveTeacherRosterDivisions(
 		];
 	}
 	return profile.division_ids.flatMap((divisionId) => {
-		const divisionName = divisionNames.get(divisionId);
+		const divisionName = divisionNames?.get(divisionId);
 		return divisionName ? [{ divisionId, divisionName }] : [];
 	});
 }
@@ -426,9 +462,9 @@ export async function loadActiveTeacherRoster(
 			email: contact?.email,
 			phone: contact?.phone,
 			city: contact?.city,
-			divisions: resolveTeacherRosterDivisions(
+			divisions: resolveTeacherGrantDivisions(
 				grant,
-				profilesByCustomer,
+				profilesByCustomer?.get(grant.customerId),
 				divisionNames,
 			),
 		};

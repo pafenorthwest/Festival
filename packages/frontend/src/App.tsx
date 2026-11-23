@@ -1,5 +1,5 @@
 import type { RouteSectionProps } from "@solidjs/router";
-import { createEffect, ErrorBoundary, on, Suspense } from "solid-js";
+import { createEffect, ErrorBoundary, on, Show, Suspense } from "solid-js";
 import { FestivalShellProvider } from "./app/FestivalShellContext.js";
 import { preloadNavigation } from "./app/navigationPreload.js";
 import { useFestivalAppController } from "./app/useFestivalAppController.js";
@@ -13,6 +13,8 @@ import { isOrganizationPageRoute } from "./lib/routes.js";
 export default function App(props: RouteSectionProps) {
 	const app = useFestivalAppController();
 	const isAdminPage = () => app.isAdminRoute();
+	const showsSoftwareDisclaimer = () =>
+		props.location.pathname === "/" || app.route().kind === "org-admin";
 	const organizationSlug = () => {
 		const route = app.route();
 		return isOrganizationPageRoute(route)
@@ -25,7 +27,10 @@ export default function App(props: RouteSectionProps) {
 			<CustomerIdentityProvider>
 				<main
 					class="shell"
-					classList={{ "parent-shell": organizationSlug() !== null }}
+					classList={{
+						"home-shell": app.route().kind === "home",
+						"parent-shell": organizationSlug() !== null,
+					}}
 					onPointerOver={preloadNavigation}
 					onFocusIn={preloadNavigation}
 				>
@@ -78,6 +83,13 @@ export default function App(props: RouteSectionProps) {
 					</div>
 					<footer class="site-footer">
 						<a href="/privacy-policy">Privacy Policy</a>
+						<Show when={showsSoftwareDisclaimer()}>
+							<p class="site-footer-disclaimer">
+								This is unsupported, free, open-source software offered without
+								guarantees or promises. Users are responsible for doing their
+								own due diligence and understanding the risks.
+							</p>
+						</Show>
 					</footer>
 
 					<SignInModal app={app} />

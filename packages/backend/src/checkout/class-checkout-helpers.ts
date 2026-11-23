@@ -18,6 +18,7 @@ export {
 	buildEligibilityRejectionError,
 	calculateTotalAmount,
 	MAX_SNAPSHOT_VALIDITY_MS,
+	prevalidateRepertoirePieces,
 	type RepertoireValidationOptions,
 	resolveFestivalAndClassConfig,
 	resolveFestivalClassConfiguration,

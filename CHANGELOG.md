@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.4.2] - 2026-11-22
+
+### Added
+
+- Redesigned public homepage (`HomePage.tsx`) with Arts Festival Online masthead, public organization `{ slug, name }` directory tiles, feature preview, organizer Log-In modal/email-link flow, and footer disclaimer (`#447`).
+
+### Changed
+
+- Consolidated admin membership controls into a single 6-column `AdminEntitlementTable` with inline teacher division editing, directory toggle, and revocation, and moved Shopify reconciliation/validation into the Shopify Integrations page (`#446`).
+- Restructured admin membership cards (`#335`) and horizontal wrapping entitlement state badges (`#334`) (`#446`).
+- Clarified customer membership acquisition buttons (`Current Memberships` heading, role-colored teacher/accompanist buttons, and helper text) (`#447`).
+- Reconciled S14/S21/S22 project plan ledgers, Thanksgiving festival issue triage, and task specs (`#444`, `#445`, `#448`).
+- Bumped root and workspace package versions (`@festival/common`, `@festival/backend`, `@festival/frontend`, and `@festival/shopify-confirmation`) in lockstep to `0.4.2`.
+
+### Fixed
+
+- Enforced repertoire piece array shape, max piece count, and basic field pre-validation before catalog lookups in single-line and multi-line class checkouts and legacy registration metadata edits (`#329`, `#446`).
+- Kept teacher membership edits locked across entitlement report reloads while a row mutation is in flight (`#446`).
+
 ## [0.4.1] - 2026-11-19
 
 ### Changed

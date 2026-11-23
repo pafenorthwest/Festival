@@ -131,9 +131,9 @@ describe("auth routes", () => {
 		});
 	});
 
-	it("caches public organization slugs including an empty list and refreshes after creation", async () => {
+	it("caches public organization listings including an empty list and refreshes after creation", async () => {
 		const { app, repository } = await createTestApp();
-		const reads = spyOn(repository, "listOrganizationSlugs");
+		const reads = spyOn(repository, "listPublicOrganizations");
 		const url = "http://test/api/organizations";
 		async function getOrganizations() {
 			const response = await app.fetch(new Request(url));
@@ -163,7 +163,10 @@ describe("auth routes", () => {
 		expect(reads).toHaveBeenCalledTimes(1);
 
 		const expected = {
-			organizations: [{ slug: "pafe-nw" }, { slug: "zeta" }],
+			organizations: [
+				{ slug: "pafe-nw", name: "Northwest Performing Arts Festival" },
+				{ slug: "zeta", name: "Zeta Festival" },
+			],
 		};
 		expect(await getOrganizations()).toEqual(expected);
 		expect(await getOrganizations()).toEqual(expected);
@@ -176,7 +179,7 @@ describe("auth routes", () => {
 		const release = Promise.withResolvers<void>();
 		const reads = spyOn(
 			repository,
-			"listOrganizationSlugs",
+			"listPublicOrganizations",
 		).mockImplementationOnce(async () => {
 			started.resolve();
 			await release.promise;
@@ -200,10 +203,12 @@ describe("auth routes", () => {
 		const { app, repository } = await createTestApp();
 		const organizations = Array.from({ length: 12_000 }, (_, index) => ({
 			slug: `festival-${String(index).padStart(7, "0")}`,
+			name: `Festival ${index}`,
 		}));
-		const reads = spyOn(repository, "listOrganizationSlugs").mockResolvedValue(
-			organizations,
-		);
+		const reads = spyOn(
+			repository,
+			"listPublicOrganizations",
+		).mockResolvedValue(organizations);
 
 		const first = await app.request("/api/organizations");
 		const second = await app.request("/api/organizations");

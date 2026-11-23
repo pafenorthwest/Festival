@@ -62,7 +62,7 @@ bun run --cwd packages/backend perf:scenarios
   - `Continuous Deployment` (`deploy.yml`) on `refs/tags/v0.4.0`: Run `44432128555` (`target_environment=production`, all 4 jobs `success`), publishing:
     - `ghcr.io/pafenorthwest/festival-backend:v0.4.0` + `:latest` (`sha256:9d4f955d9677e4ad1de195d316eae56ad9c60ce22294a044332c1eefd05ae3a2`)
     - `ghcr.io/pafenorthwest/festival-frontend:v0.4.0` + `:latest` (`sha256:c32bbd3266e2ecbe7b234f194eecfa98746cff9dc051f33b946778294ec6ac9d`)
-- `[G4]` Ready for `S05` live bring-up: `Deploy to Target Host` and `Post-Deploy Health & Smoke Verification` on `refs/tags/v0.4.0` (Run `44432128555`) skipped cleanly with `configured=false` because `production` environment secrets (`DEPLOY_HOST`, `DEPLOY_SSH_PRIVATE_KEY`, `DEPLOY_PUBLIC_URL` / `D4`) are not yet configured.
+- `[G4]` Ready for `S05` live bring-up (latest released artifact: `v0.4.1`): `Deploy to Target Host` and `Post-Deploy Health & Smoke Verification` on `refs/tags/v0.4.0` (Run `44432128555`) and `refs/tags/v0.4.1` (Run `44467580512`) skipped cleanly with `configured=false` because `production` environment secrets (`DEPLOY_HOST`, `DEPLOY_SSH_PRIVATE_KEY`, `DEPLOY_PUBLIC_URL` / `D4`) are not yet configured.
 - Integration UI walkthrough (`https://int.artsfestival.online`, `2026-11-18`):
   - Phases 1 (Public) & 2 (Authenticated Customer) PASS at SHA `8d0c5bb` after PR `#435` (`Integration Deployment` Run `44457776486`) shipped and verified live fixes closing Issues `#431`–`#434`.
   - Phase 3 (Authenticated Admin) PASS at `main` SHA `650ccac` after PR `#440` (`Integration Deployment` Run `44465072507`) closed Issues `#437`, `#438`, and `#439` (`0` console errors, `0` HTTP `5xx` errors):
@@ -71,7 +71,13 @@ bun run --cwd packages/backend perf:scenarios
     - Admin Concerto Repertoire CSV (`#359`): PASS (template download, catalog export, dry-run diff preview). Note: Concerto typeahead (`#362`) is parent/customer-flow only (`FestivalPieceEditor`/`FestivalRepertoireModal`) with `0` works in catalog.
     - Modals (`FestivalClassModal` & `FestivalClassWaitlistModal`, `#336`): PASS (viewport-anchored Portal backdrop, zero clipping, single `Close` button after `#439` fix).
     - Direct admin subroute navigation (`/settings`, `/roster`, `/rooms`, `/volunteers`): PASS after `#438` fix.
-  - Ready to advance `release` branch and cut `v0.4.1`.
+  - `v0.4.1` Release Cutover (`2026-11-18`, latest released artifact ready for `S05` live production cutover):
+    - Prep PR `#442` merged to `origin/main` (`d2fcee1`).
+    - Promotion PR `#443` (`main -> release`) merged to `origin/release` (`b93edf96daaef6bf7cd009214205ad6111a7f4f7`).
+    - Integration CD (`deploy.yml` on `release`): Run `44467055788` (`success`).
+    - Annotated tag `v0.4.1` (`b93edf9`).
+    - GitHub Release `v0.4.1`: `https://github.com/pafenorthwest/Festival/releases/tag/v0.4.1`.
+    - Production / GHCR CD (`deploy.yml` on `refs/tags/v0.4.1`): Run `44467580512` (`success`), publishing `ghcr.io/pafenorthwest/festival-{backend,frontend}:v0.4.1` + `:latest`.
 
 ## Quality gate results
 - `bun run verify:toolchain`: exit 0 (`Bun 1.4.2`, `TypeScript 5.9.3`)
@@ -95,3 +101,5 @@ bun run --cwd packages/backend perf:scenarios
 - GitHub Actions `Continuous Deployment` (`deploy.yml`):
   - `release` branch (`364e543bb5ceac1f2a9b2205f7145921f0da62fa`): Run `44431387848` `success` (all 4 jobs `success`)
   - `refs/tags/v0.4.0` (`target_environment=production`): Run `44432128555` `success` (all 4 jobs `success`; GHCR images published; host deploy/smoke skipped cleanly with `configured=false` pending `D4` secrets)
+  - `release` branch (`b93edf96daaef6bf7cd009214205ad6111a7f4f7`, PR `#443`): Run `44467055788` `success`
+  - `refs/tags/v0.4.1` (`target_environment=production`): Run `44467580512` `success` (`ghcr.io/pafenorthwest/festival-{backend,frontend}:v0.4.1` + `:latest` published; ready for `S05` live cutover pending `D4` secrets)

@@ -111,10 +111,6 @@ function createMemoryStorage(): StorageLike {
 
 const readSource = (relativePath: string) =>
 	Bun.file(new URL(relativePath, import.meta.url)).text();
-const readOptionalSource = async (relativePath: string) => {
-	const file = Bun.file(new URL(relativePath, import.meta.url));
-	return (await file.exists()) ? file.text() : "";
-};
 const loadApi = async () => apiMod as unknown as DirectoryApiModule;
 const loadCustomerHelpers = async () =>
 	customerHelpersMod as TeacherDirectoryHelpersModule;
@@ -571,27 +567,18 @@ describe("UI wiring contracts for teacher and accompanist directory opt-in and a
 		expect(cardSource).toContain("clearPendingTeacherDirectoryOptIn");
 	});
 
-	it("mounts AdminTeacherDirectoryPanel with Teacher + Accompanist list, approval moderation, and Teacher-only division reassignment", async () => {
+	it("routes directory moderation and Teacher division reassignment through the entitlement report", async () => {
 		const adminPage = await readSource(
 			"../src/pages/AdminMembershipProductsPage.tsx",
 		);
 		const panelSource = await readSource(
-			"../src/pages/AdminTeacherDirectoryPanel.tsx",
+			"../src/pages/AdminEntitlementReportPanel.tsx",
 		);
-		const editorSource = await readOptionalSource(
-			"../src/pages/AdminTeacherDivisionEditor.tsx",
-		);
-		const combinedPanelSource = `${panelSource}\n${editorSource}`;
-		expect(adminPage).toContain("AdminTeacherDirectoryPanel");
-		expect(panelSource).toContain("listAdminTeacherProfiles");
-		expect(panelSource).toContain("listAdminAccompanistProfiles");
+		expect(adminPage).toContain("<AdminEntitlementReportPanel");
+		expect(adminPage).not.toContain("<AdminTeacherDirectoryPanel");
+		expect(panelSource).toContain("<AdminEntitlementTable");
 		expect(panelSource).toContain("updateAdminTeacherProfileApproval");
 		expect(panelSource).toContain("updateAdminAccompanistProfileApproval");
-		expect(panelSource).toContain("nextAdminTeacherApprovalStatus");
-		expect(panelSource).toContain("toAdminDirectoryModerationProfiles");
-		expect(panelSource).toContain("applyUpdatedModerationProfile");
-		expect(combinedPanelSource).toContain("updateAdminTeacherProfileDivisions");
-		expect(combinedPanelSource).toContain("<select");
-		expect(combinedPanelSource).toMatch(/role\s*===\s*"Teacher"/);
+		expect(panelSource).toContain("updateAdminTeacherProfileDivisions");
 	});
 });

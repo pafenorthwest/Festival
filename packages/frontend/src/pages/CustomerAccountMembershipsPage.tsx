@@ -331,6 +331,7 @@ function AcquireMembershipsActions(props: {
 		<div class="customer-membership-acquire-actions">
 			<Button
 				type="button"
+				class="teachers"
 				disabled={props.state.teacherDisabled}
 				data-preload-path={teacherPath()}
 				onClick={() => {
@@ -342,6 +343,7 @@ function AcquireMembershipsActions(props: {
 			</Button>
 			<Button
 				type="button"
+				class="accompanists"
 				disabled={props.state.accompanistDisabled}
 				data-preload-path={accompanistPath()}
 				onClick={() => {
@@ -351,6 +353,13 @@ function AcquireMembershipsActions(props: {
 			>
 				Annual Accompanist
 			</Button>
+			<Show
+				when={!props.state.teacherDisabled || !props.state.accompanistDisabled}
+			>
+				<p class="customer-membership-acquire-help muted">
+					Click here to add a membership
+				</p>
+			</Show>
 		</div>
 	);
 }
@@ -389,7 +398,7 @@ export function CustomerAccountMembershipsPage(props: {
 						state={acquisition()}
 						onNavigate={navigate}
 					/>
-					<h1>Memberships</h1>
+					<h1>Current Memberships</h1>
 					<FestivalMembershipsSection store={store} />
 					<Show when={hasActiveTeacherMembership(store.memberships())}>
 						<CustomerTeacherDirectoryCard

@@ -22,6 +22,7 @@ interface AppHeaderProps {
 
 export function AppHeader(props: AppHeaderProps) {
 	const customerIdentity = useCustomerIdentity();
+	const isHome = () => props.app.route().kind === "home";
 	const slug = () => {
 		const route = props.app.route();
 		return isOrganizationPageRoute(route)
@@ -102,10 +103,7 @@ export function AppHeader(props: AppHeaderProps) {
 	}
 
 	function staffAdminPath() {
-		if (
-			props.app.route().kind !== "home" ||
-			!props.app.session().authenticated
-		) {
+		if (!isHome() || !props.app.session().authenticated) {
 			return null;
 		}
 		const memberships = props.app.memberships();
@@ -140,17 +138,36 @@ export function AppHeader(props: AppHeaderProps) {
 		<Show
 			when={isOrganizationPageRoute(props.app.route())}
 			fallback={
-				<header class="masthead">
+				<header class="masthead" classList={{ "home-masthead": isHome() }}>
 					<div>
 						<p class="eyebrow">
-							{props.app.route().kind === "home"
-								? "Front Page"
+							{isHome()
+								? "Manage and Grow Your Music Festival"
 								: "Music Festival Administration"}
 						</p>
-						<Show when={props.app.isAdminRoute()} fallback={<h1>Festival</h1>}>
-							<h1>{props.app.adminBreadcrumb()}</h1>
+						<Show
+							when={isHome()}
+							fallback={
+								<Show
+									when={props.app.isAdminRoute()}
+									fallback={<h1>Festival</h1>}
+								>
+									<h1>{props.app.adminBreadcrumb()}</h1>
+								</Show>
+							}
+						>
+							<p class="home-brand">Arts Festival Online</p>
 						</Show>
 					</div>
+					<Show when={isHome() && !props.app.sessionMembership()}>
+						<Button
+							class="home-primary-action"
+							type="button"
+							onClick={() => props.app.openSignInModal("login")}
+						>
+							Log-In
+						</Button>
+					</Show>
 					<Show
 						when={props.app.sessionMembership() && !props.app.isAdminRoute()}
 					>

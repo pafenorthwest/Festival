@@ -170,22 +170,23 @@ async function seedAccompanistGrant(
 	orgId: string,
 	stringsId: string,
 	stringsName: string,
+	customer = { id: "c-charlie", email: "charlie@example.com" },
 ) {
 	await repo.createAccompanistMembershipGrant({
 		organizationId: orgId,
-		customerId: "c-charlie",
+		customerId: customer.id,
 		source: "accompanist_form",
 		offeringNameSnapshot: "Accompanist Membership",
 		startsOn: "2026-01-01",
 		endsOn: "2027-01-01",
 		contact: {
 			name: "Charlie",
-			email: "charlie@example.com",
+			email: customer.email,
 			city: "Vancouver",
 			phone: "+1 604 555 0100",
 		},
 		divisions: [{ divisionId: stringsId, divisionName: stringsName }],
-		normalizedEmail: "charlie@example.com",
+		normalizedEmail: customer.email,
 	});
 }
 
@@ -252,6 +253,7 @@ describe("staff routes", () => {
 				pageSize: 25,
 				totalPages: 1,
 				divisions: [],
+				editableDivisions: [],
 				summaryCounts: {
 					active: 0,
 					scheduled: 0,
@@ -259,6 +261,133 @@ describe("staff routes", () => {
 					expired: 0,
 					revoked: 0,
 				},
+			});
+		});
+
+		it("matches active grants to tenant and role profiles before filtering effective Teacher divisions", async () => {
+			const { app, organization, repository } = await createTestApp();
+			const { piano, strings, product } = await seedDivisionsAndProduct(
+				repository,
+				organization.id,
+			);
+			const voice = await repository.createDivision({
+				organizationId: organization.id,
+				displayName: "Voice",
+				normalizedName: "voice",
+			});
+			const archived = await repository.createDivision({
+				organizationId: organization.id,
+				displayName: "Archived",
+				normalizedName: "archived",
+			});
+			await repository.updateDivision({
+				organizationId: organization.id,
+				divisionId: archived.id,
+				isActive: false,
+			});
+			await seedTeacherGrants(
+				repository,
+				organization.id,
+				piano.id,
+				piano.displayName,
+				strings.id,
+				strings.displayName,
+				product.id,
+			);
+			await seedAccompanistGrant(
+				repository,
+				organization.id,
+				piano.id,
+				piano.displayName,
+				{ id: "c-alice", email: "c-alice@example.com" },
+			);
+			const profile = {
+				organizationId: organization.id,
+				customerId: "c-alice",
+				displayName: "Alice Adams",
+				publicDirectoryOptIn: true,
+				divisionIds: [strings.id],
+			};
+			const teacher = await repository.upsertTeacherProfile(profile);
+			const accompanist = await repository.upsertAccompanistProfile({
+				...profile,
+				publicDirectoryOptIn: false,
+			});
+			await repository.upsertTeacherProfile({
+				...profile,
+				customerId: "c-dave",
+				divisionIds: [piano.id],
+			});
+			const outsideOrganization = await repository.createOrganization({
+				name: "Another Festival",
+				slug: "another-festival",
+			});
+			await repository.upsertTeacherProfile({
+				...profile,
+				organizationId: outsideOrganization.id,
+				customerId: "c-bob",
+				divisionIds: [],
+			});
+
+			const response = await get(app, organization.slug, "admin");
+			expect(response.status).toBe(200);
+			const body = (await response.json()) as EntitlementReportResponse;
+			const teacherEntry = body.entries.find(
+				(entry) => entry.customerName === "Alice Adams",
+			);
+			expect(teacherEntry).toMatchObject({
+				directoryProfile: {
+					id: teacher.id,
+					publicDirectoryOptIn: true,
+					approvalStatus: "approved",
+				},
+				divisions: [{ divisionId: strings.id, divisionName: "Strings" }],
+			});
+			const accompanistEntry = body.entries.find(
+				(entry) => entry.entitlementClass === "accompanist_membership",
+			);
+			expect(accompanistEntry).toMatchObject({
+				directoryProfile: {
+					id: accompanist.id,
+					publicDirectoryOptIn: false,
+					approvalStatus: "pending",
+				},
+				divisions: [{ divisionId: piano.id, divisionName: "Piano" }],
+			});
+			expect(body.entries.every((entry) => !("customerId" in entry))).toBe(
+				true,
+			);
+			const expired = body.entries.find((entry) => entry.status === "expired");
+			expect(expired?.directoryProfile).toBeUndefined();
+			expect(expired?.divisions).toEqual([
+				{ divisionId: strings.id, divisionName: "Strings" },
+			]);
+			const withoutProfile = body.entries.find(
+				(entry) => entry.customerEmail === "bob@example.com",
+			);
+			expect(withoutProfile?.directoryProfile).toBeUndefined();
+			expect(withoutProfile?.divisions).toEqual([
+				{ divisionId: piano.id, divisionName: "Piano" },
+			]);
+			expect(body.divisions.map((division) => division.divisionId)).toEqual([
+				piano.id,
+				strings.id,
+			]);
+			expect(
+				body.editableDivisions?.map((division) => division.divisionId),
+			).toEqual([piano.id, strings.id, voice.id]);
+
+			const filtered = await get(
+				app,
+				organization.slug,
+				"admin",
+				`?divisionId=${strings.id}&status=active&pageSize=1`,
+			);
+			expect(filtered.status).toBe(200);
+			expect(await filtered.json()).toMatchObject({
+				total: 1,
+				entries: [{ id: teacherEntry?.id }],
+				summaryCounts: { active: 3, expired: 1 },
 			});
 		});
 

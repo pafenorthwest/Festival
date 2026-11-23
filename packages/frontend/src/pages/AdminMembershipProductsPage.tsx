@@ -14,7 +14,6 @@ import {
 	buildOrgAdminRosterPath,
 } from "../lib/routes.js";
 import { AdminEntitlementReportPanel } from "./AdminEntitlementReportPanel.js";
-import { AdminTeacherDirectoryPanel } from "./AdminTeacherDirectoryPanel.js";
 import {
 	AdminTeacherOfferingEditForm,
 	canEditTeacherOffering,
@@ -191,64 +190,80 @@ export function AdminMembershipProductsPage(
 								<div class="admin-membership-list">
 									<For each={membershipProducts()}>
 										{(membershipProduct) => (
-											<article class="admin-membership-item">
-												<div>
-													<strong>{membershipProduct.name}</strong>
+											<article class="admin-membership-item admin-membership-card">
+												<div class="admin-membership-card-details">
+													<div class="admin-membership-card-heading">
+														<strong class="admin-membership-card-title">
+															{membershipProduct.name}
+														</strong>
+														<strong class="admin-membership-card-price">
+															{membershipProduct.price.amount}{" "}
+															{membershipProduct.price.currencyCode}
+														</strong>
+													</div>
 													<Show when={membershipProduct.description}>
-														<p class="muted">{membershipProduct.description}</p>
+														<p class="muted admin-membership-card-description">
+															{membershipProduct.description}
+														</p>
 													</Show>
-													<span>
-														{formatOption(membershipProduct.entitlementClass)} ·{" "}
-														{membershipProduct.durationDays} days
-													</span>
+													<div class="admin-membership-card-meta">
+														<span>
+															{formatOption(membershipProduct.entitlementClass)}{" "}
+															· {membershipProduct.durationDays} days
+														</span>
+														<span>Plan: {membershipProduct.variantName}</span>
+														<Show when={!membershipProduct.isActive}>
+															<span class="badge badge-inactive">Retired</span>
+														</Show>
+													</div>
 												</div>
-												<div class="admin-membership-meta">
-													<span>Plan: {membershipProduct.variantName}</span>
-													<strong>
-														{membershipProduct.price.amount}{" "}
-														{membershipProduct.price.currencyCode}
-													</strong>
-													<Show when={!membershipProduct.isActive}>
-														<span>Retired</span>
-													</Show>
-													<Show
-														when={canEditTeacherOffering(membershipProduct)}
-													>
-														<Button
-															type="button"
-															variant="secondary"
-															disabled={
-																editingOfferingId() === membershipProduct.id
-															}
-															onClick={() => {
-																setUpdateStatusMessage("");
-																setEditingOfferingId(membershipProduct.id);
-															}}
+												<Show
+													when={
+														canEditTeacherOffering(membershipProduct) ||
+														membershipProduct.isActive
+													}
+												>
+													<div class="admin-membership-card-actions">
+														<Show
+															when={canEditTeacherOffering(membershipProduct)}
 														>
-															Edit
-														</Button>
-													</Show>
-													<Show when={membershipProduct.isActive}>
-														<Button
-															type="button"
-															variant="secondary"
-															disabled={
-																retiringOfferingId() === membershipProduct.id ||
-																editingOfferingId() === membershipProduct.id
-															}
-															onClick={() =>
-																void retireOffering(
-																	membershipProduct.id,
-																	membershipProduct.name,
-																)
-															}
-														>
-															{retiringOfferingId() === membershipProduct.id
-																? "Retiring…"
-																: "Retire"}
-														</Button>
-													</Show>
-												</div>
+															<Button
+																type="button"
+																variant="secondary"
+																disabled={
+																	editingOfferingId() === membershipProduct.id
+																}
+																onClick={() => {
+																	setUpdateStatusMessage("");
+																	setEditingOfferingId(membershipProduct.id);
+																}}
+															>
+																Edit
+															</Button>
+														</Show>
+														<Show when={membershipProduct.isActive}>
+															<Button
+																type="button"
+																variant="secondary"
+																disabled={
+																	retiringOfferingId() ===
+																		membershipProduct.id ||
+																	editingOfferingId() === membershipProduct.id
+																}
+																onClick={() =>
+																	void retireOffering(
+																		membershipProduct.id,
+																		membershipProduct.name,
+																	)
+																}
+															>
+																{retiringOfferingId() === membershipProduct.id
+																	? "Retiring…"
+																	: "Retire"}
+															</Button>
+														</Show>
+													</div>
+												</Show>
 												<Show
 													when={
 														canEditTeacherOffering(membershipProduct) &&
@@ -438,7 +453,6 @@ export function AdminMembershipProductsPage(
 					</For>
 				</fieldset>
 			</section>
-			<AdminTeacherDirectoryPanel app={props.app} />
 			<AdminEntitlementReportPanel app={props.app} />
 		</Show>
 	);

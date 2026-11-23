@@ -2396,6 +2396,199 @@ describe("CustomerAccountService", () => {
 		).rejects.toMatchObject({ status: 400, code: "catalog_work_invalid" });
 	});
 
+	it("rejects oversized and structurally invalid repertoire metadata edits before resolving any catalog works", async () => {
+		const f = await fixture();
+		await f.organizations.updateOrganizationTimezone(
+			f.org.id,
+			"America/Los_Angeles",
+		);
+		const festival = await f.organizations.createFestival({
+			id: "fest-prevalidate",
+			organizationId: f.org.id,
+			code: "SPF26",
+			name: "Spring Festival 2026",
+			shortName: "spring-2026",
+			startDate: "2026-05-15",
+			endDate: "2026-05-20",
+		});
+		const soloSubtype = await f.organizations.createRegistrationCatalogValue({
+			organizationId: f.org.id,
+			kind: "class_subtype",
+			displayName: "Solo",
+			normalizedName: "solo",
+		});
+		const soloClass = await f.organizations.createFestivalClassConfiguration({
+			organizationId: f.org.id,
+			festivalId: festival.id,
+			divisionId: "div_1",
+			displayName: "Junior Piano Solo",
+			classSubtypeId: soloSubtype.id,
+			minimumAge: 5,
+			maximumAge: 18,
+			price: "45.00",
+			maximumPerformancePieces: 2,
+			performanceMinutes: 15,
+			capacity: 20,
+			shopifyProductGid: "gid://shopify/Product/41",
+			shopifyVariantGid: "gid://shopify/ProductVariant/41",
+		});
+		const auth = await f.authenticate();
+		const { session } = await f.service.session("festival", auth.sessionId);
+		const storedSession = await f.repository.getSession(auth.sessionId);
+		if (!storedSession || !session.authenticated) {
+			throw new Error("Expected authenticated session");
+		}
+		const entitlement = await f.commerce.createClassEntitlement({
+			organizationId: f.org.id,
+			festivalId: festival.id,
+			festivalClassId: soloClass.id,
+			parentCustomerId: storedSession.customerId,
+			childId: "child-1",
+			checkoutIntentId: "intent-prevalidate-1",
+			shopifyOrderGid: "gid://shopify/Order/prevalidate-1",
+			shopifyOrderLineGid: "gid://shopify/LineItem/prevalidate-1",
+			paidAmountCents: 4500,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+		await f.checkout.insertRegistrationMetadata({
+			id: "reg-meta-prevalidate-1",
+			organizationId: f.org.id,
+			festivalId: festival.id,
+			checkoutIntentId: "intent-prevalidate-1",
+			teacherMembershipId: "teacher-1",
+			accompanistMembershipId: null,
+			repertoireJson: [
+				{ title: "Initial piece", composer: "Bach", durationSeconds: 120 },
+			],
+		});
+		await f.checkout.linkRegistrationMetadataToEntitlement({
+			checkoutIntentId: "intent-prevalidate-1",
+			classEntitlementId: entitlement.id,
+		});
+		const cutoff = deriveFestivalMetadataCutoff(
+			"2026-05-15",
+			"America/Los_Angeles",
+		);
+		f.setNow(new Date(cutoff.getTime() - 10_000));
+
+		const origin = "https://festival.example.com";
+		const lookupSpy = spyOn(f.repertoire, "getCatalogWorkById");
+		try {
+			await expect(
+				f.service.updateRegistrationMetadata(
+					"festival",
+					"spring-2026",
+					entitlement.id,
+					auth.sessionId,
+					session.csrfToken,
+					origin,
+					{
+						pieces: [
+							{
+								title: "Piece 1",
+								composer: "C1",
+								durationSeconds: 60,
+								catalogWorkId: "work-1",
+							},
+							{
+								title: "Piece 2",
+								composer: "C2",
+								durationSeconds: 60,
+								catalogWorkId: "work-2",
+							},
+							{
+								title: "Piece 3",
+								composer: "C3",
+								durationSeconds: 60,
+								catalogWorkId: "work-3",
+							},
+						],
+					},
+				),
+			).rejects.toMatchObject({
+				status: 400,
+				message: "Number of pieces (3) exceeds the maximum allowed (2).",
+			});
+			expect(lookupSpy).toHaveBeenCalledTimes(0);
+
+			await expect(
+				f.service.updateRegistrationMetadata(
+					"festival",
+					"spring-2026",
+					entitlement.id,
+					auth.sessionId,
+					session.csrfToken,
+					origin,
+					{ pieces: "not-an-array" },
+				),
+			).rejects.toMatchObject({
+				status: 400,
+				message: "Repertoire pieces must be a non-empty array.",
+			});
+			expect(lookupSpy).toHaveBeenCalledTimes(0);
+
+			await expect(
+				f.service.updateRegistrationMetadata(
+					"festival",
+					"spring-2026",
+					entitlement.id,
+					auth.sessionId,
+					session.csrfToken,
+					origin,
+					{
+						pieces: [
+							{
+								title: "Piece 1",
+								composer: "C1",
+								durationSeconds: 60,
+								catalogWorkId: "work-1",
+							},
+							null,
+						],
+					},
+				),
+			).rejects.toMatchObject({
+				status: 400,
+				message: "Each repertoire piece must be an object.",
+			});
+			expect(lookupSpy).toHaveBeenCalledTimes(0);
+
+			await expect(
+				f.service.updateRegistrationMetadata(
+					"festival",
+					"spring-2026",
+					entitlement.id,
+					auth.sessionId,
+					session.csrfToken,
+					origin,
+					{
+						pieces: [
+							{
+								title: "Piece 1",
+								composer: "C1",
+								durationSeconds: 60,
+								catalogWorkId: "work-1",
+							},
+							{
+								title: "Piece 2",
+								composer: "   ",
+								durationSeconds: 60,
+								catalogWorkId: "work-2",
+							},
+						],
+					},
+				),
+			).rejects.toMatchObject({
+				status: 400,
+				message: "Each repertoire piece must have a valid composer.",
+			});
+			expect(lookupSpy).toHaveBeenCalledTimes(0);
+		} finally {
+			lookupSpy.mockRestore();
+		}
+	});
+
 	it("caches organization lookup and registration age configuration in bounded caches", async () => {
 		const f = await fixture();
 		await f.organizations.updateRegistrationAgeConfiguration({

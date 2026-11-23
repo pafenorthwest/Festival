@@ -13,6 +13,7 @@ import {
 } from "@festival/common";
 import type { CheckoutRepository } from "../checkout/checkout-repository.js";
 import {
+	prevalidateRepertoirePieces,
 	resolvePieceCatalogWorks,
 	validateAndNormalizeRepertoirePieces,
 } from "../checkout/class-checkout-helpers.js";
@@ -96,6 +97,10 @@ async function applyLegacyMetadataUpdate(
 		accompanistMembershipId?: unknown;
 		accompanistId?: unknown;
 	};
+	const prevalidatedPieces = prevalidateRepertoirePieces(
+		payload.pieces,
+		classConfig,
+	);
 	const subtypes = await organizations.listRegistrationCatalogValues(
 		organizationId,
 		"class_subtype",
@@ -105,13 +110,13 @@ async function applyLegacyMetadataUpdate(
 		subtypes.find((s) => s.id === classConfig.classSubtypeId) ?? null;
 	const catalogWorksById = deps.repertoire
 		? await resolvePieceCatalogWorks(
-				payload.pieces,
+				prevalidatedPieces,
 				organizationId,
 				deps.repertoire,
 			)
 		: undefined;
 	const pieces = validateAndNormalizeRepertoirePieces(
-		payload.pieces,
+		prevalidatedPieces,
 		classConfig,
 		{
 			subtype,

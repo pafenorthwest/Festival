@@ -4,7 +4,6 @@ import {
 	addCalendarDays,
 	type CustomerMembershipStatusResponse,
 	calendarDateInTimezone,
-	type EntitlementReportEntry,
 	type EntitlementReportFilters,
 	type EntitlementReportPageRequest,
 	type EntitlementReportResponse,
@@ -74,7 +73,8 @@ export interface MembershipEntitlementServiceDeps {
 	directory?: Pick<
 		TeacherDirectoryRepository,
 		"getTeacherProfile" | "listTeacherProfiles"
-	>;
+	> &
+		Partial<Pick<TeacherDirectoryRepository, "listAccompanistProfiles">>;
 	commerce?: TeacherDirectoryCommerceDecisionsPort;
 	now?: () => Date;
 	cacheInvalidator?: DomainCacheInvalidator;
@@ -273,27 +273,64 @@ export class MembershipEntitlementService {
 		};
 	}
 
+	private async loadReportDirectory(organizationId: string) {
+		const [teachers, accompanists, divisions] = await Promise.all([
+			this.deps.directory?.listTeacherProfiles(organizationId) ?? [],
+			this.deps.directory?.listAccompanistProfiles?.(organizationId) ?? [],
+			this.deps.organizations.listDivisions(organizationId, false),
+		]);
+		return {
+			teacherProfilesByCustomer: new Map(
+				teachers.map((profile) => [profile.customer_id, profile]),
+			),
+			accompanistProfilesByCustomer: new Map(
+				accompanists.map((profile) => [profile.customer_id, profile]),
+			),
+			divisionNames: new Map(divisions.map((d) => [d.id, d.displayName])),
+			editableDivisions: divisions
+				.filter((division) => division.isActive)
+				.map((division) => ({
+					divisionId: division.id,
+					divisionName: division.displayName,
+				})),
+		};
+	}
+
 	private async loadAllReportEntries(
 		organizationId: string,
-	): Promise<EntitlementReportEntry[]> {
-		const timezone =
-			await this.deps.organizations.getOrganizationTimezone(organizationId);
-		const today = calendarDateInTimezone(this.now().toISOString(), timezone);
-		const [accompanistGrants, teachers] = await Promise.all([
-			this.deps.entitlements.listAccompanistMembershipGrants({
-				organizationId,
-			}),
-			loadTeacherReportEntries(
-				this.deps.entitlements,
-				this.deps.products,
-				organizationId,
-				today,
-			),
-		]);
-		return [
-			...toAccompanistReportEntries(accompanistGrants, today),
-			...teachers,
-		];
+		includeDirectory = false,
+	) {
+		const context = Promise.all([
+			this.deps.organizations.getOrganizationTimezone(organizationId),
+			includeDirectory ? this.loadReportDirectory(organizationId) : undefined,
+		]).then(([timezone, directory]) => ({
+			today: calendarDateInTimezone(this.now().toISOString(), timezone),
+			directory,
+		}));
+		const [accompanistGrants, teachers, { today, directory }] =
+			await Promise.all([
+				this.deps.entitlements.listAccompanistMembershipGrants({
+					organizationId,
+				}),
+				loadTeacherReportEntries(
+					this.deps.entitlements,
+					this.deps.products,
+					organizationId,
+					context,
+				),
+				context,
+			]);
+		return {
+			entries: [
+				...toAccompanistReportEntries(
+					accompanistGrants,
+					today,
+					directory?.accompanistProfilesByCustomer,
+				),
+				...teachers,
+			],
+			editableDivisions: directory?.editableDivisions,
+		};
 	}
 
 	async listEntitlementReport(
@@ -301,21 +338,24 @@ export class MembershipEntitlementService {
 		filters: EntitlementReportFilters,
 		pageRequest: EntitlementReportPageRequest,
 	): Promise<EntitlementReportResponse> {
-		const all = await this.loadAllReportEntries(organizationId);
-		const matching = filterEntitlementReportEntries(all, filters).sort(
+		const { entries, editableDivisions } = await this.loadAllReportEntries(
+			organizationId,
+			true,
+		);
+		const matching = filterEntitlementReportEntries(entries, filters).sort(
 			sortReportEntries,
 		);
 		return {
 			...paginateEntitlementReportEntries(matching, pageRequest),
-			divisions: listEntitlementReportDivisions(all),
+			divisions: listEntitlementReportDivisions(entries),
+			editableDivisions,
 		};
 	}
 
 	async getSummaryCounts(
 		organizationId: string,
 	): Promise<EntitlementSummaryCounts> {
-		return summarizeEntitlementCounts(
-			await this.loadAllReportEntries(organizationId),
-		);
+		const { entries } = await this.loadAllReportEntries(organizationId);
+		return summarizeEntitlementCounts(entries);
 	}
 }

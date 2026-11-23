@@ -581,6 +581,14 @@ button.compact-header-button {
 	font-size: 0.95rem;
 }
 
+.site-footer .site-footer-disclaimer {
+	max-width: min(60ch, calc(100% - 2rem));
+	margin: 0.5rem auto 0;
+	color: var(--bullet-soft-ink);
+	font-size: 0.825rem;
+	line-height: 1.45;
+}
+
 .invite-list {
 	list-style: none;
 	padding: 0;
@@ -761,6 +769,12 @@ button.compact-header-button {
 	margin-bottom: 1.5rem;
 }
 
+.customer-membership-acquire-help {
+	flex-basis: 100%;
+	margin: 0;
+	font-size: 0.8125rem;
+}
+
 .customer-membership-section,
 .customer-membership-list,
 .customer-membership-card,
@@ -769,7 +783,8 @@ button.compact-header-button {
 	gap: 0.85rem;
 }
 
-.customer-membership-section {
+.customer-membership-section,
+.customer-membership-acquire-actions {
 	padding-top: 0.5rem;
 	border-top: 1px solid var(--bullet-panel-border);
 }
@@ -895,36 +910,115 @@ button.compact-header-button {
 	margin: 0;
 }
 
-.home-page {
-	display: grid;
-	gap: 1.5rem;
+.shell.home-shell {
+	--home-gutter: clamp(1rem, 4.5vw, 2.75rem);
+	--home-content-width: 1100px;
+	--home-divider: #d6d3cd;
+	--home-muted: #505563;
+	max-width: none;
+	min-height: 100vh;
+	padding: 0 0 2rem;
+	background: #fbf9f5;
+}
+
+.home-shell > :is(.application-page-layout, .banner, .site-footer) {
+	width: min(calc(100% - 2 * var(--home-gutter)), var(--home-content-width));
+	margin-inline: auto;
+}
+
+.masthead.home-masthead {
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+	gap: clamp(0.625rem, 2vw, 1.25rem);
+	margin: 0;
+	padding: 1.625rem
+		max(var(--home-gutter), calc((100% - var(--home-content-width)) / 2)) 1.5rem;
+	border-bottom: 1px solid var(--home-divider);
+	background: #fffefa;
+}
+
+.home-masthead .eyebrow,
+.home-organization-tile .eyebrow {
+	margin: 0;
+	color: inherit;
+	line-height: 1.4;
+}
+
+.home-brand {
+	margin: 0.375rem 0 0;
+	font-size: clamp(1.9rem, 4.7vw, 3rem);
+	line-height: 1.03;
+}
+
+.home-masthead .identity-card {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+button.home-primary-action {
+	flex: 0 0 auto;
+	min-height: 44px;
+	padding: 0.8rem 1.2rem;
+	border: 1px solid var(--bullet-accent);
+	box-shadow: 0 5px 12px rgba(31, 36, 49, 0.12);
+	line-height: 1.1;
+	white-space: nowrap;
+}
+
+button.home-primary-action:hover {
+	background: #414453;
+}
+
+.home-organizations {
+	padding-block: 2rem;
+}
+
+.home-page :is(h1, h2) {
+	margin: 0;
+	font-weight: 500;
+	line-height: 1.08;
+}
+
+.home-page .home-organizations h2 {
+	margin-bottom: 1rem;
+	font-size: 1.65rem;
 }
 
 .home-organization-grid {
 	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(min(100%, 12rem), 1fr));
-	grid-auto-rows: 1fr;
-	gap: 1rem;
-	padding: 1rem;
-	border-radius: var(--bullet-radius);
+	grid-template-columns: repeat(auto-fill, minmax(0, 195px));
+	gap: 0.875rem;
 }
 
-.home-organization-tile.parent-brand-mark {
+.home-organization-tile {
+	position: relative;
+	display: grid;
 	min-width: 0;
-	height: auto;
-	min-height: 6.25rem;
-	padding: 0.75rem;
-	border-color: #e8dcc1;
-	background-color: #f7f0e2;
-	color: #775817;
-	overflow-wrap: anywhere;
+	min-height: 0;
+	aspect-ratio: 16 / 9;
+	padding: 1.625rem 0.75rem;
+	place-items: center;
+	border: 1px solid var(--home-divider);
+	border-radius: 5px;
+	background: #fff;
+	color: #000;
 	text-align: center;
 	text-decoration: none;
 }
 
+.home-organization-tile .eyebrow {
+	position: absolute;
+	inset: 0.625rem 0.75rem auto;
+	overflow: hidden;
+	text-align: start;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
 .home-organization-tile:hover {
-	background-image: radial-gradient(ellipse closest-side, #f7f0e2, #f1e6ce);
-	text-decoration: underline var(--bullet-gold);
+	border-color: #8a744d;
+	text-decoration: underline;
+	text-underline-offset: 0.16em;
 }
 
 .home-organization-tile:focus-visible {
@@ -932,29 +1026,104 @@ button.compact-header-button {
 	outline-offset: 2px;
 }
 
-.home-organization-divider {
-	width: 100%;
-	margin: 0;
-	border: 0;
-	border-top: 1px solid var(--bullet-panel-border);
+.home-organization-name {
+	display: -webkit-box;
+	overflow: hidden;
+	overflow-wrap: anywhere;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	font-size: 1.08rem;
+	line-height: 1.24;
 }
 
-.home-page .hero-panel h1,
-.home-page .hero-panel p {
-	margin: 0;
+.home-join {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 1.125rem;
+	padding: clamp(1.25rem, 4vw, 2.125rem);
+	border: 1px solid #e5dccb;
+	border-radius: 6px;
+	background: #f3ede2;
 }
 
-.hero-panel {
+.home-join h1 {
+	font-size: clamp(2.1rem, 5vw, 3rem);
+}
+
+.home-join p {
+	margin: 0.375rem 0 0;
+	color: var(--home-muted);
+}
+
+.home-sell {
 	display: grid;
-	gap: 1rem;
-	min-height: 260px;
-	align-content: center;
-	background:
-		linear-gradient(135deg, rgba(68, 89, 214, 0.1), rgba(182, 135, 44, 0.08)),
-		var(--bullet-panel);
+	grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.4fr);
+	align-items: start;
+	gap: clamp(1.25rem, 5vw, 2.75rem);
+	margin-top: 2rem;
+	padding-top: 2rem;
+	border-top: 1px solid var(--home-divider);
 }
 
-.hero-actions,
+.home-sell h2 {
+	max-width: 18ch;
+	font-size: clamp(1.65rem, 3.4vw, 2.35rem);
+}
+
+.home-sell ul {
+	margin: 1.1875rem 0 0;
+	padding-inline-start: 1.15em;
+	color: var(--home-muted);
+}
+
+.home-sell li + li {
+	margin-top: 0.75rem;
+}
+
+.home-sell strong {
+	color: var(--bullet-ink);
+}
+
+.home-sell figure {
+	margin: 0;
+}
+
+.home-sell img {
+	display: block;
+	width: 100%;
+	height: auto;
+	border: 1px solid #cfcac2;
+	border-radius: 5px;
+}
+
+.home-sell figcaption {
+	margin-top: 0.4375rem;
+	color: var(--home-muted);
+	font-size: 0.85rem;
+}
+
+@media (max-width: 680px) {
+	.home-sell {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
+
+@media (max-width: 520px) {
+	.home-organization-grid {
+		grid-template-columns: repeat(2, minmax(0, 195px));
+	}
+
+	.home-organization-tile {
+		padding-block-end: 0.25rem;
+	}
+
+	.home-join {
+		flex-direction: column;
+		align-items: flex-start;
+	}
+}
+
 .stack-actions,
 .modal-actions {
 	display: flex;
@@ -1221,6 +1390,64 @@ form.shopify-integration-card {
 	list-style: none;
 }
 
+.shopify-reconciliation-panel {
+	gap: 0.55rem;
+	padding: 0.95rem 1.15rem;
+}
+
+.shopify-reconciliation-header {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.4rem 0.85rem;
+}
+
+.shopify-reconciliation-header h2 {
+	margin: 0;
+	font-size: 1.25rem;
+}
+
+.shopify-reconciliation-header button {
+	min-height: 2.25rem;
+	padding: 0.35rem 0.75rem;
+}
+
+.shopify-reconciliation-history > summary {
+	width: fit-content;
+	padding: 0.25rem 0;
+	cursor: pointer;
+	font-weight: 700;
+}
+
+.shopify-reconciliation-history-content {
+	display: grid;
+	gap: 0.6rem;
+	padding-top: 0.45rem;
+}
+
+.shopify-reconciliation-panel p {
+	margin: 0;
+}
+
+.shopify-reconciliation-history-content .entitlement-latest-run {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.35rem 0.65rem;
+}
+
+.shopify-reconciliation-history-content
+	:is(.listing-table-header, .listing-table-row) {
+	grid-template-columns: minmax(0, 1fr) minmax(0, 0.9fr) minmax(0, 0.65fr) minmax(
+			0,
+			1.55fr
+		);
+	gap: 0.5rem;
+	padding-inline: 0.75rem;
+	overflow-wrap: anywhere;
+}
+
 .shopify-setup-card {
 	padding: 0;
 }
@@ -1355,8 +1582,13 @@ form.shopify-integration-card {
 }
 
 .admin-membership-list {
-	display: grid;
-	gap: 0.65rem;
+	display: flex;
+	flex-direction: column;
+	gap: 0.75rem;
+	min-width: 0;
+	height: auto;
+	max-height: none;
+	overflow: visible;
 }
 
 .admin-membership-item {
@@ -1368,6 +1600,58 @@ form.shopify-integration-card {
 	border: 1px solid rgba(31, 36, 49, 0.08);
 	border-radius: 8px;
 	background: rgba(31, 122, 87, 0.08);
+}
+
+.admin-membership-item.admin-membership-card {
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 0.75rem;
+	min-width: 0;
+}
+
+.admin-membership-card-details {
+	display: grid;
+	gap: 0.35rem;
+	min-width: 0;
+}
+
+.admin-membership-card-heading {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 0.35rem 0.75rem;
+	min-width: 0;
+}
+
+.admin-membership-card-title,
+.admin-membership-card-description {
+	margin: 0;
+	overflow-wrap: anywhere;
+}
+
+.admin-membership-card-price {
+	white-space: nowrap;
+}
+
+.admin-membership-card-meta {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.35rem 0.75rem;
+	color: var(--bullet-soft-ink);
+}
+
+.admin-membership-card-actions {
+	display: flex;
+	flex-direction: row-reverse;
+	flex-wrap: wrap;
+	justify-content: flex-start;
+	align-items: center;
+	gap: 0.5rem;
+	padding-top: 0.65rem;
+	border-top: 1px solid rgba(31, 36, 49, 0.08);
 }
 
 .admin-membership-item > div:not([class]),
@@ -1640,27 +1924,227 @@ form.shopify-integration-card {
 	color: var(--bullet-soft-ink);
 }
 
-.entitlement-report-filters {
-	display: grid;
-	grid-template-columns: repeat(3, minmax(0, 1fr));
-	gap: 0.75rem;
-	margin-bottom: 1rem;
+.entitlement-summary-counts {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.5rem 0.75rem;
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	min-width: 0;
 }
 
-.entitlement-report-filters > label:first-child {
+.entitlement-summary-card {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.45rem;
+	padding: 0.3rem 0.65rem 0.3rem 0.35rem;
+	border: 1px solid rgba(31, 36, 49, 0.1);
+	border-radius: 999px;
+	background: rgba(31, 36, 49, 0.03);
+	white-space: nowrap;
+	flex: 0 0 auto;
+	max-width: 100%;
+}
+
+.entitlement-summary-card strong {
+	font-variant-numeric: tabular-nums;
+	min-width: 1.25ch;
+	text-align: right;
+}
+
+.admin-page-content > .panel.flow-panel.entitlement-report {
+	width: 100%;
+	min-width: 0;
+	max-width: none;
+	container-type: inline-size;
+	container-name: entitlement-report;
+}
+
+.entitlement-report-filters {
+	display: grid;
+	grid-template-columns: minmax(0, 1.45fr) repeat(3, minmax(0, 1fr));
+	gap: 0.75rem;
+}
+
+.entitlement-report-scroll-hint {
+	display: none;
+	color: var(--bullet-soft-ink);
+}
+
+.entitlement-report-table {
+	min-width: 0;
+	max-width: 100%;
+	overflow-x: auto;
+	border-radius: 12px;
+}
+
+.entitlement-report-grid {
+	min-width: 52rem;
+}
+
+.entitlement-report-grid > :is(.listing-table-header, .listing-table-row) {
+	grid-template-columns:
+		minmax(0, 1.35fr) minmax(0, 1.15fr) minmax(0, 1.1fr) minmax(0, 1fr)
+		4rem 10.5rem;
+}
+
+.entitlement-report-grid :is([role="columnheader"], [role="cell"]) {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.entitlement-report-grid .listing-table-row[data-editing="true"] {
+	background: color-mix(in srgb, var(--bullet-gold) 9%, transparent);
+	box-shadow: inset 3px 0 var(--bullet-gold);
+}
+
+.entitlement-report-grid [aria-colspan="6"] {
 	grid-column: 1 / -1;
 }
 
-.entitlement-report-table .listing-table-header,
-.entitlement-report-table .listing-table-row {
-	grid-template-columns:
-		minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1.3fr)
-		6rem;
+.entitlement-report-grid [role="columnheader"]:last-child {
+	text-align: end;
 }
 
-.entitlement-report-table .listing-table-row > span {
-	min-width: 0;
-	overflow-wrap: anywhere;
+.entitlement-report-edit-column {
+	text-align: center;
+}
+
+.entitlement-report-row-actions {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 0.5rem;
+}
+
+.entitlement-report-table button {
+	min-height: 2.25rem;
+	padding: 0.35rem 0.65rem;
+	border: 1px solid var(--bullet-panel-border);
+	border-radius: 8px;
+	background: #fff;
+	color: var(--bullet-ink);
+	box-shadow: none;
+	font-size: 0.85rem;
+	white-space: nowrap;
+}
+
+.entitlement-report-table button:disabled {
+	opacity: 0.55;
+}
+
+.entitlement-report-table button:hover:not(:disabled) {
+	border-color: var(--bullet-soft-ink);
+}
+
+.entitlement-report-table button.entitlement-report-edit-toggle {
+	width: 2.25rem;
+	padding: 0;
+	line-height: 1;
+	font-size: 1.15rem;
+}
+
+.entitlement-report-table
+	button.entitlement-report-edit-toggle[aria-pressed="true"] {
+	background: var(--bullet-accent-strong);
+	color: #fff;
+}
+
+.entitlement-report-table button.entitlement-report-revoke:not(:disabled) {
+	border-color: color-mix(in srgb, var(--bullet-error) 38%, white);
+	color: var(--bullet-error);
+}
+
+.entitlement-report-division-select {
+	max-width: 100%;
+	padding: 0.4rem 0.45rem;
+	border-color: var(--bullet-gold);
+	background: #fff;
+}
+
+.entitlement-report-table button.entitlement-report-directory-switch {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.35rem;
+	padding-inline: 0.3rem;
+	border-color: transparent;
+	background: transparent;
+}
+
+.entitlement-report-switch-track {
+	display: flex;
+	align-items: center;
+	width: 1.9rem;
+	height: 1.05rem;
+	padding: 0.125rem;
+	border-radius: 999px;
+	background: var(--bullet-soft-ink);
+}
+
+.entitlement-report-switch-track::before {
+	content: "";
+	width: 0.8rem;
+	height: 0.8rem;
+	border-radius: 50%;
+	background: #fff;
+}
+
+.entitlement-report-directory-switch[aria-checked="true"]
+	.entitlement-report-switch-track {
+	justify-content: flex-end;
+	background: var(--bullet-success);
+}
+
+.entitlement-report-table:focus-visible {
+	outline: 2px solid var(--bullet-accent);
+	outline-offset: 2px;
+}
+
+.entitlement-report-table :is(button, select):focus-visible {
+	outline: 2px solid var(--bullet-accent);
+	outline-offset: 2px;
+}
+
+.entitlement-report-revoke-dialog {
+	width: min(28rem, calc(100% - 2rem));
+	padding: 1.25rem;
+	border: 1px solid var(--bullet-panel-border);
+	border-radius: var(--bullet-radius);
+	color: var(--bullet-ink);
+	box-shadow: var(--bullet-shadow);
+}
+
+.entitlement-report-revoke-dialog::backdrop {
+	background: rgba(31, 36, 49, 0.48);
+}
+
+.entitlement-report-revoke-dialog form {
+	display: grid;
+	gap: 0.75rem;
+}
+
+.entitlement-report-revoke-dialog :is(h3, p) {
+	margin: 0;
+}
+
+@container entitlement-report (width < 52rem) {
+	.entitlement-report-scroll-hint {
+		display: block;
+	}
+}
+
+@container entitlement-report (width < 38rem) {
+	.entitlement-report-filters {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+}
+
+@container entitlement-report (width < 24rem) {
+	.entitlement-report-filters {
+		grid-template-columns: minmax(0, 1fr);
+	}
 }
 
 .entitlement-report-pager {
@@ -2147,13 +2631,6 @@ form.shopify-integration-card {
 	}
 }
 
-@media (max-width: 900px) {
-	.entitlement-report-table .listing-table-header,
-	.entitlement-report-table .listing-table-row {
-		grid-template-columns: 1fr;
-	}
-}
-
 @media (max-width: 720px) {
 	.organization-page-layout {
 		gap: 0.75rem;
@@ -2182,8 +2659,7 @@ form.shopify-integration-card {
 	.festival-classes-table .listing-table-header,
 	.festival-classes-table .listing-table-row,
 	.rooms-table .listing-table-header,
-	.rooms-table .listing-table-row,
-	.entitlement-report-filters {
+	.rooms-table .listing-table-row {
 		grid-template-columns: 1fr;
 	}
 

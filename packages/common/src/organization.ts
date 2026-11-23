@@ -395,7 +395,7 @@ export interface OrganizationFestivalListResponse {
 }
 
 export interface PublicOrganizationListResponse {
-	organizations: Array<Pick<OrganizationRecord, "slug">>;
+	organizations: Array<Pick<OrganizationRecord, "slug" | "name">>;
 }
 
 export interface PublicOrganizationLandingResponse {

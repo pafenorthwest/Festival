@@ -67,7 +67,7 @@ export async function resolvePieceCatalogWorks(
 }
 
 export function validateRepertoirePiece(piece: unknown): void {
-	if (!piece || typeof piece !== "object") {
+	if (!piece || typeof piece !== "object" || Array.isArray(piece)) {
 		throw new AppError("Each repertoire piece must be an object.", 400);
 	}
 	const p = piece as Record<string, unknown>;
@@ -125,11 +125,39 @@ export function validateRepertoirePiece(piece: unknown): void {
 	}
 }
 
+export function validateRepertoirePieceCount(
+	pieceCount: number,
+	maximumPerformancePieces: number,
+): void {
+	if (pieceCount > maximumPerformancePieces) {
+		throw new AppError(
+			`Number of pieces (${pieceCount}) exceeds the maximum allowed (${maximumPerformancePieces}).`,
+			400,
+		);
+	}
+}
+
+export function prevalidateRepertoirePieces(
+	pieces: unknown,
+	festivalClass: Pick<FestivalClassConfiguration, "maximumPerformancePieces">,
+): RepertoirePiece[] {
+	if (!Array.isArray(pieces) || pieces.length === 0) {
+		throw new AppError("Repertoire pieces must be a non-empty array.", 400);
+	}
+	validateRepertoirePieceCount(
+		pieces.length,
+		festivalClass.maximumPerformancePieces,
+	);
+	for (const piece of pieces) {
+		validateRepertoirePiece(piece);
+	}
+	return pieces as RepertoirePiece[];
+}
+
 function normalizeValidatedPiece(
 	piece: RepertoirePiece,
 	options?: RepertoireValidationOptions,
 ): RepertoirePiece {
-	validateRepertoirePiece(piece);
 	const catalogWorkId =
 		typeof piece.catalogWorkId === "string" && piece.catalogWorkId.trim()
 			? piece.catalogWorkId.trim()
@@ -174,16 +202,8 @@ export function validateAndNormalizeRepertoirePieces(
 	>,
 	options?: RepertoireValidationOptions,
 ): RepertoirePiece[] {
-	if (!Array.isArray(pieces) || pieces.length === 0) {
-		throw new AppError("Repertoire pieces must be a non-empty array.", 400);
-	}
-	if (pieces.length > festivalClass.maximumPerformancePieces) {
-		throw new AppError(
-			`Number of pieces (${pieces.length}) exceeds the maximum allowed (${festivalClass.maximumPerformancePieces}).`,
-			400,
-		);
-	}
-	const normalized = pieces.map((piece) =>
+	const validatedPieces = prevalidateRepertoirePieces(pieces, festivalClass);
+	const normalized = validatedPieces.map((piece) =>
 		normalizeValidatedPiece(piece, options),
 	);
 	const totalDurationMinutes =

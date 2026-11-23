@@ -6,7 +6,18 @@ interface SignInModalProps {
 	app: FestivalAppController;
 }
 
+const signInHeadings = {
+	"create-org": "Choose a sign-in method",
+	invite: "Accept organization invite",
+	login: "Log in to your account",
+	volunteer: "Choose a sign-in method",
+};
+
 export function SignInModal(props: SignInModalProps) {
+	const homeSignUp = () =>
+		props.app.route().kind === "home" &&
+		props.app.signInModalKind() === "create-org";
+
 	return (
 		<Show when={props.app.signInModalKind()} keyed>
 			{(modalKind) => (
@@ -15,12 +26,19 @@ export function SignInModal(props: SignInModalProps) {
 						class="modal-card sign-in-card"
 						role="dialog"
 						aria-modal="true"
+						aria-labelledby="sign-in-modal-heading"
 					>
-						<h3>
-							{modalKind === "invite"
-								? "Accept organization invite"
-								: "Choose a sign-in method"}
+						<h3 id="sign-in-modal-heading">
+							{homeSignUp()
+								? "Start a new organization"
+								: signInHeadings[modalKind]}
 						</h3>
+						<Show when={modalKind === "login"}>
+							<p>Choose a sign-in method for your existing account.</p>
+						</Show>
+						<Show when={homeSignUp()}>
+							<p>Choose a sign-in method to get started.</p>
+						</Show>
 						<Show when={modalKind === "invite"}>
 							<label class="field">
 								<span>Name</span>

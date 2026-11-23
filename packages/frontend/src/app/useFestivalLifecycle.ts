@@ -5,7 +5,8 @@ import {
 	clearPendingIntent,
 	completePasswordlessEmailLinkSignIn,
 	MissingPendingEmailError,
-	readPendingIntent,
+	type PendingIntent,
+	pendingCredentialSignIn,
 	subscribeToAuthChanges,
 } from "../lib/firebase-auth.js";
 import {
@@ -42,13 +43,15 @@ const ORGANIZATION_LOAD_ROUTE_KINDS = new Set<AppRoute["kind"]>([
 async function handlePostAuthIntent(
 	state: FestivalAppState,
 	loaders: FestivalDataLoaders,
-	userOverride: User | null = state.firebaseUser(),
+	user: User,
+	intent: PendingIntent,
 ) {
-	const intent = readPendingIntent();
-	const nextSession = await loaders.refreshSession(userOverride);
+	const result = await loaders.refreshSession(user);
+	if (!result) return;
+	const nextSession = result.session;
 
 	if (intent?.kind === "invite" && state.route().kind === "invite") {
-		const token = await getIdToken(userOverride);
+		const token = await getIdToken(user);
 		if (!token) return;
 
 		const response = await acceptInvite(token, intent.inviteToken, {
@@ -73,12 +76,12 @@ async function handlePostAuthIntent(
 	}
 	if (intent?.kind === "create-org") {
 		if (nextSession.membership) {
-			await loaders.routeAfterSession(nextSession, userOverride);
+			await loaders.routeAfterSession(nextSession, user);
 		} else state.navigate("/create-organization");
 		clearPendingIntent();
 		return;
 	}
-	await loaders.routeAfterSession(nextSession, userOverride);
+	await loaders.routeAfterSession(nextSession, user);
 }
 
 async function completeEmailLinkOnMount(
@@ -86,8 +89,12 @@ async function completeEmailLinkOnMount(
 	loaders: FestivalDataLoaders,
 ) {
 	try {
-		const pendingIntent = await completePasswordlessEmailLinkSignIn();
-		if (pendingIntent)
+		const result = await completePasswordlessEmailLinkSignIn();
+		if (result?.intent?.kind === "login") {
+			await loaders.routeAfterOrganizerLogin(result.user);
+			return;
+		}
+		if (result?.intent)
 			state.setStatusMessage("Email link verified. Continuing sign-in.");
 	} catch (error) {
 		if (error instanceof MissingPendingEmailError)
@@ -106,6 +113,7 @@ function registerAuthLifecycle(
 ) {
 	onMount(() => {
 		const unsubscribe = subscribeToAuthChanges((user) => {
+			const signIn = pendingCredentialSignIn();
 			batch(() => {
 				if (state.firebaseUser()?.uid !== user?.uid)
 					state.resetOnboardingFlowState();
@@ -115,9 +123,16 @@ function registerAuthLifecycle(
 			});
 			void (async () => {
 				try {
-					if (user && readPendingIntent()) {
-						await handlePostAuthIntent(state, loaders, user);
-						return;
+					if (user && signIn) {
+						const signedInUser = await signIn.user;
+						if (state.firebaseUser()?.uid !== user.uid) return;
+						if (signedInUser?.uid === user.uid && signIn.intent) {
+							if (signIn.intent.kind !== "login" && !signIn.intentHandled) {
+								signIn.intentHandled = true;
+								await handlePostAuthIntent(state, loaders, user, signIn.intent);
+							}
+							return;
+						}
 					}
 					await loaders.refreshSession(user);
 				} catch (error) {

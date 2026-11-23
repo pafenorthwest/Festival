@@ -27,6 +27,7 @@ import {
 	validateActiveChildAgeSnapshot,
 	validateChildAgeRange,
 	validateChildOwnership,
+	validateRepertoirePieceCount,
 	validateTeacherEntitlement,
 } from "./class-checkout-validation.js";
 import type {
@@ -374,6 +375,24 @@ export async function validateAndPrepareClassLines(
 		lineInputs,
 		currencyCode,
 	);
+	if (lineInputs.length > 1) {
+		// Reject oversized lines before any line starts resolving catalog works.
+		for (const line of lineInputs) {
+			if (!Array.isArray(line.pieces)) continue;
+			const festivalClass = await resolveValidatedClassForLine(
+				deps,
+				input,
+				festivalId,
+				line.festivalClassId,
+				maps,
+			);
+			validateRepertoirePieceCount(
+				line.pieces.length,
+				festivalClass.maximumPerformancePieces,
+			);
+			maps.preResolvedClasses.set(line.festivalClassId, festivalClass);
+		}
+	}
 	const validatedLines: ValidatedClassLineData[] = [];
 	for (const line of lineInputs) {
 		validatedLines.push(

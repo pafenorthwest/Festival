@@ -465,13 +465,15 @@ describe("CustomerAccountMembershipsPage acquisition controls", () => {
 	it("renders Acquire Memberships and primary horizontal action buttons as direct section children", () =>
 		withHarness({}, async (h) => {
 			const h1s = queryAll(h.docRoot, H1_SEL).map(textOf);
-			expect(h1s).toEqual(["Acquire Memberships", "Memberships"]);
+			expect(h1s).toEqual(["Acquire Memberships", "Current Memberships"]);
 			const kids = elKids(queryAll(h.docRoot, SEC_SEL)[0] ?? mkNode("div"));
 			expect(kids.slice(0, 3).map((e) => e.tag)).toEqual(["h1", "div", "h1"]);
 			expect(kids[1] ? hasCls(kids[1], ACT_CLS) : false).toBe(true);
 			const btns = h.buttons();
 			const labels = btns.map(textOf);
 			expect(labels).toEqual(["Annual Teacher", "Annual Accompanist"]);
+			const actions = elKids(kids[1] ?? mkNode("div"));
+			expect(actions.map((el) => el.tag)).toEqual(["button", "button", "p"]);
 			const okPrimary = (b: DNode) =>
 				b.props.type === "button" &&
 				hasCls(b, "button") &&
@@ -484,7 +486,7 @@ describe("CustomerAccountMembershipsPage acquisition controls", () => {
 			expect(stylesCss).toMatch(r2);
 			expect(stylesCss).not.toMatch(r3);
 		}));
-	it("reflects all 4 ownership combinations plus loading, error, and checkoutProcessing fail-closed states", async () => {
+	it("reflects acquisition availability and shows one shared hint when either button is enabled", async () => {
 		const cases: Array<[HarnessOpts, [boolean, boolean]]> = [
 			[{ memberships: [] }, [false, false]],
 			[{ memberships: [tm("active")] }, [true, false]],
@@ -498,6 +500,10 @@ describe("CustomerAccountMembershipsPage acquisition controls", () => {
 		for (const [opts, exp] of cases)
 			await withHarness(opts, async (h) => {
 				expect(h.buttons().map(isDisabled)).toEqual(exp);
+				const hints = queryAll(h.docRoot, `.${ACT_CLS} > p`).map(textOf);
+				expect(hints).toEqual(
+					exp.every(Boolean) ? [] : ["Click here to add a membership"],
+				);
 			});
 	});
 	it("navigates via onNavigate or standalone location.assign when enabled and blocks mouse/keyboard when disabled", async () => {
@@ -563,7 +569,7 @@ describe("CustomerAccountMembershipsPage acquisition controls", () => {
 			expect(textOf(h.docRoot)).toContain("Public Accompanist Directory");
 			expect(queryAll(h.docRoot, H1_SEL).map(textOf)).toEqual([
 				"Acquire Memberships",
-				"Memberships",
+				"Current Memberships",
 			]);
 			const kids = elKids(queryAll(h.docRoot, SEC_SEL)[0] ?? mkNode("div"));
 			expect(kids.slice(0, 3).map((e) => e.tag)).toEqual(["h1", "div", "h1"]);

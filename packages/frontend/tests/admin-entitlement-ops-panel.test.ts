@@ -198,30 +198,41 @@ describe("Admin entitlement operations API client helpers (#127)", () => {
 	});
 });
 
-describe("AdminEntitlementReportPanel operations & lifecycle UI contract (#127)", () => {
-	it("renders summary status counts, reconciliation trigger, decision resolution, and entitlement revocation flows", async () => {
-		const panelSource = await Bun.file(
-			new URL("../src/pages/AdminEntitlementReportPanel.tsx", import.meta.url),
-		).text();
-		let combinedSource = panelSource;
-		for (const relPath of [
-			"../src/pages/AdminEntitlementOperationsSection.tsx",
-			"../src/pages/adminEntitlementReportHelpers.ts",
-		]) {
-			const file = Bun.file(new URL(relPath, import.meta.url));
-			if (await file.exists()) {
-				combinedSource += `\n${await file.text()}`;
-			}
-		}
+function readPageSource(file: string) {
+	return Bun.file(new URL(`../src/pages/${file}.tsx`, import.meta.url)).text();
+}
 
-		expect(combinedSource).toContain("getAdminEntitlementOperations");
-		expect(combinedSource).toContain("triggerAdminEntitlementReconciliation");
-		expect(combinedSource).toContain("declineAdminValidationDecision");
-		expect(combinedSource).toContain("approveAdminValidationDecision");
-		expect(combinedSource).toContain("revokeAdminEntitlement");
-		expect(combinedSource).toContain("summaryCounts");
-		expect(combinedSource).toContain("unresolvedDecisions");
-		expect(combinedSource).toContain("reconciliationRuns");
+describe("Admin entitlement operations UI (#127)", () => {
+	it("puts Shopify reconciliation and validation decisions first under the Integrations Admin gate", async () => {
+		const [integrations, reconciliation, decisions] = await Promise.all([
+			readPageSource("AdminIntegrationsPage"),
+			readPageSource("AdminShopifyReconciliationPanel"),
+			readPageSource("AdminEntitlementOperationsSection"),
+		]);
+		expect(integrations).toMatch(
+			/const orderOperations = useAdminEntitlementOperations\(props\.app\)/,
+		);
+		expect(integrations).toMatch(
+			/<Show\s+when=\{props\.app\.isAdminMember\(\)\}\s+fallback=\{[^}]*\}\s*>\s*<AdminShopifyReconciliationPanel\s+operations=\{orderOperations\}\s*\/>\s*<AdminEntitlementOperationsSection\s+operations=\{orderOperations\}\s*\/>/,
+		);
+		expect(reconciliation).toContain("triggerAdminEntitlementReconciliation");
+		expect(reconciliation).toContain("reconciliationRuns");
+		expect(decisions).toContain("declineAdminValidationDecision");
+		expect(decisions).toContain("approveAdminValidationDecision");
+		expect(decisions).toContain("unresolvedDecisions");
+	});
+
+	it("keeps summary counts and revocation on Memberships", async () => {
+		const [report, memberships] = await Promise.all([
+			readPageSource("AdminEntitlementReportPanel"),
+			readPageSource("AdminMembershipProductsPage"),
+		]);
+		expect(memberships).toContain("<AdminEntitlementReportPanel");
+		expect(report).toContain("revokeAdminEntitlement");
+		expect(report).toContain("summaryCounts");
+		expect(`${memberships}\n${report}`).not.toMatch(
+			/AdminShopifyReconciliationPanel|AdminEntitlementOperationsSection|useAdminEntitlementOperations/,
+		);
 	});
 
 	it("formats reconciliation, validation decision, and revocable state helpers accurately", () => {

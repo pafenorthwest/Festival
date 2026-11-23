@@ -31,12 +31,13 @@ function signInIntentFor(state: FestivalAppState, kind: SignInModalKind) {
 			festivalSlug: currentRoute.festivalSlug,
 		};
 	}
+	if (kind === "login") return { kind: "login" as const };
 	return { kind: "create-org" as const };
 }
 
 export function createFestivalActions(
 	state: FestivalAppState,
-	_loaders: FestivalDataLoaders,
+	loaders: FestivalDataLoaders,
 ) {
 	async function handleGoogleSignIn(kind: SignInModalKind) {
 		state.clearMessages();
@@ -47,9 +48,10 @@ export function createFestivalActions(
 				throw new Error("Name is required when accepting an invite.");
 			}
 
-			await signInWithGoogle(intent);
+			const user = await signInWithGoogle(intent);
 			state.setSignInModalKind(null);
 			state.setSignInStep("method");
+			if (intent.kind === "login") await loaders.routeAfterOrganizerLogin(user);
 		} catch (error) {
 			state.setErrorMessage((error as Error).message);
 		} finally {
@@ -75,7 +77,9 @@ export function createFestivalActions(
 				intent,
 			});
 			state.setStatusMessage(
-				"Sign-in email sent. Open the email link on this device to continue.",
+				intent.kind === "login"
+					? "Sign-in email sent. Open the email link to continue."
+					: "Sign-in email sent. Open the email link on this device to continue.",
 			);
 			state.setSignInModalKind(null);
 			state.setSignInStep("method");
@@ -94,10 +98,16 @@ export function createFestivalActions(
 				throw new Error("Email address is required.");
 			}
 
-			await completeEmailLinkSignInWithEmail(state.signInEmail().trim());
+			const result = await completeEmailLinkSignInWithEmail(
+				state.signInEmail().trim(),
+			);
 			state.setNeedsEmailLinkConfirmation(false);
 			state.setSignInEmail("");
-			state.setStatusMessage("Email link verified. Continuing sign-in.");
+			if (result.intent?.kind === "login") {
+				await loaders.routeAfterOrganizerLogin(result.user);
+			} else {
+				state.setStatusMessage("Email link verified. Continuing sign-in.");
+			}
 		} catch (error) {
 			state.setErrorMessage((error as Error).message);
 		} finally {

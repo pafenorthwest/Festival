@@ -11,6 +11,9 @@ import { Button } from "../components/Button.js";
 import { CustomerAccountAdminCard } from "../components/CustomerAccountAdminCard.js";
 import { useAdminCommerce } from "../domains/admin-commerce/AdminCommerceContext.js";
 import { runShopifyDiagnostics } from "../lib/api.js";
+import { AdminEntitlementOperationsSection } from "./AdminEntitlementOperationsSection.js";
+import { AdminShopifyReconciliationPanel } from "./AdminShopifyReconciliationPanel.js";
+import { useAdminEntitlementOperations } from "./adminEntitlementOperationsData.js";
 
 interface AdminIntegrationsPageProps {
 	app: FestivalAppController;
@@ -80,6 +83,7 @@ function currentShopifyAppUrl(app: FestivalAppController): string {
 
 export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 	const adminCommerce = useAdminCommerce();
+	const orderOperations = useAdminEntitlementOperations(props.app);
 	const [isRunningDiagnostics, setIsRunningDiagnostics] = createSignal(false);
 	const [diagnosticResults, setDiagnosticResults] = createSignal<
 		ShopifyIntegrationDiagnosticCheck[]
@@ -131,6 +135,8 @@ export function AdminIntegrationsPage(props: AdminIntegrationsPageProps) {
 				<AccessDeniedPanel message="Only Admin members can manage integrations." />
 			}
 		>
+			<AdminShopifyReconciliationPanel operations={orderOperations} />
+			<AdminEntitlementOperationsSection operations={orderOperations} />
 			<details class="panel flow-panel shopify-setup-card" open>
 				<summary>Shopify app setup instructions</summary>
 				<div class="shopify-setup-content">

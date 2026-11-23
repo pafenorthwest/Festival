@@ -67,8 +67,8 @@ class PostgresTenantMembershipFacade
 	) {
 		return this.tenantRepo.findOrganizationById(...args);
 	}
-	listOrganizationSlugs() {
-		return this.tenantRepo.listOrganizationSlugs();
+	listPublicOrganizations() {
+		return this.tenantRepo.listPublicOrganizations();
 	}
 	findOrganizationBySlug(
 		...args: Parameters<TenantRepository["findOrganizationBySlug"]>

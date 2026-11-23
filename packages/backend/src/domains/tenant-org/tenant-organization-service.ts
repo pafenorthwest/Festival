@@ -60,7 +60,7 @@ async function loadPublicOrganizationList(
 	cache: BoundedAsyncCache<"all", PublicOrganizationListResponse>,
 ): Promise<PublicOrganizationListResponse> {
 	const listing = await cache.getOrLoad("all", async () => {
-		const value = { organizations: await tenants.listOrganizationSlugs() };
+		const value = { organizations: await tenants.listPublicOrganizations() };
 		const bytes = Buffer.byteLength(JSON.stringify(value));
 		return {
 			value,
@@ -69,7 +69,12 @@ async function loadPublicOrganizationList(
 			cache: bytes > PUBLIC_ORGANIZATION_LIST_MAX_BYTES ? false : undefined,
 		};
 	});
-	return { organizations: listing.organizations.map(({ slug }) => ({ slug })) };
+	return {
+		organizations: listing.organizations.map(({ slug, name }) => ({
+			slug,
+			name,
+		})),
+	};
 }
 
 /** Handles tenant organizations, user sessions, timezones, and accompanist policies. */

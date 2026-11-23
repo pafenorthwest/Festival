@@ -42,13 +42,16 @@ export function mergeSessionWithOrgMembership(
 export function createFestivalDataLoaders(state: FestivalAppState) {
 	let latestSessionRequest = 0;
 	let latestOrganizationRequest = 0;
+	let activeSessionRefresh: {
+		uid: string | null;
+		request: ReturnType<typeof loadSession>;
+	} | null = null;
 
-	async function refreshSession(
-		userOverride: User | null = state.firebaseUser(),
+	async function loadSession(
+		userOverride: User | null,
+		requestId: number,
+		expectedUid: string | null,
 	) {
-		const requestId = ++latestSessionRequest;
-		const expectedUid = userOverride?.uid ?? null;
-		state.setIsSessionLoading(true);
 		try {
 			const token = await getIdToken(userOverride);
 			const response = token
@@ -58,7 +61,7 @@ export function createFestivalDataLoaders(state: FestivalAppState) {
 				requestId !== latestSessionRequest ||
 				(state.firebaseUser()?.uid ?? null) !== expectedUid
 			) {
-				return response.session;
+				return null;
 			}
 			state.setSession((current) =>
 				mergeSessionWithOrgMembership(current, response.session, state.route()),
@@ -66,7 +69,7 @@ export function createFestivalDataLoaders(state: FestivalAppState) {
 
 			if (!token) {
 				state.setMemberships([]);
-				return response.session;
+				return { session: response.session, memberships: [] };
 			}
 
 			const membershipResponse = await getMemberships(token);
@@ -74,15 +77,34 @@ export function createFestivalDataLoaders(state: FestivalAppState) {
 				requestId !== latestSessionRequest ||
 				(state.firebaseUser()?.uid ?? null) !== expectedUid
 			) {
-				return response.session;
+				return null;
 			}
 			state.setMemberships(membershipResponse.memberships);
-			return response.session;
+			return {
+				session: response.session,
+				memberships: membershipResponse.memberships,
+			};
 		} finally {
 			if (requestId === latestSessionRequest) {
 				state.setIsSessionLoading(false);
 			}
 		}
+	}
+
+	function refreshSession(userOverride: User | null = state.firebaseUser()) {
+		const uid = userOverride?.uid ?? null;
+		if (activeSessionRefresh?.uid === uid) return activeSessionRefresh.request;
+
+		const requestId = ++latestSessionRequest;
+		state.setIsSessionLoading(true);
+		const request = loadSession(userOverride, requestId, uid);
+		activeSessionRefresh = { uid, request };
+		const clearRefresh = () => {
+			if (activeSessionRefresh?.request === request)
+				activeSessionRefresh = null;
+		};
+		void request.then(clearRefresh, clearRefresh);
+		return request;
 	}
 
 	async function routeAfterSession(
@@ -103,13 +125,35 @@ export function createFestivalDataLoaders(state: FestivalAppState) {
 		}
 
 		const membership =
-			membershipResponse.memberships[0] ?? nextSession.membership ?? null;
+			membershipResponse.memberships[0] ?? nextSession.membership;
 		if (membership) {
 			state.navigate(buildOrgPath(membership.organizationSlug));
 			return;
 		}
 
 		state.navigate("/create-organization");
+	}
+
+	async function routeAfterOrganizerLogin(user: User) {
+		if (state.firebaseUser()?.uid !== user.uid) return;
+		const result = await refreshSession(user);
+		if (
+			!result ||
+			state.route().kind !== "home" ||
+			state.firebaseUser()?.uid !== user.uid
+		) {
+			return;
+		}
+		const { memberships } = result;
+		if (memberships.length > 1) {
+			state.navigate(STAFF_ORGANIZATION_CHOOSER_PATH);
+		} else if (memberships[0]) {
+			state.navigate(buildOrgPath(memberships[0].organizationSlug));
+		} else {
+			state.setErrorMessage(
+				"No organization membership was found for this account. Try logging in with a different account, or choose Sign Up to start an organization.",
+			);
+		}
 	}
 
 	async function loadOrganization(slug: string) {
@@ -152,6 +196,7 @@ export function createFestivalDataLoaders(state: FestivalAppState) {
 	return {
 		loadOrganization,
 		refreshSession,
+		routeAfterOrganizerLogin,
 		routeAfterSession,
 	};
 }

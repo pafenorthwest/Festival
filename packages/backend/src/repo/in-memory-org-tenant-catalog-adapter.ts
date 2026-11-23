@@ -91,10 +91,13 @@ class InMemoryTenantAdapterBase
 	async findOrganizationById(organizationId: string) {
 		return this.state.organizations.get(organizationId) ?? null;
 	}
-	async listOrganizationSlugs() {
-		return [...this.state.organizationsBySlug.keys()]
-			.sort()
-			.map((slug) => ({ slug }));
+	async listPublicOrganizations() {
+		return [...this.state.organizations.values()]
+			.sort((left, right) => {
+				if (left.slug === right.slug) return 0;
+				return left.slug < right.slug ? -1 : 1;
+			})
+			.map(({ slug, name }) => ({ slug, name }));
 	}
 	async findOrganizationBySlug(slug: string) {
 		const id = this.state.organizationsBySlug.get(slug);

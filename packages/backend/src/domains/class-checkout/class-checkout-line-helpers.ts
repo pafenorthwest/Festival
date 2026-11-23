@@ -11,6 +11,7 @@ import {
 } from "@festival/common";
 import type { StartClassCheckoutInput } from "./class-checkout-errors.js";
 import {
+	prevalidateRepertoirePieces,
 	resolvePieceCatalogWorks,
 	validateAndNormalizeRepertoirePieces,
 } from "./class-checkout-validation.js";
@@ -33,12 +34,16 @@ export async function resolveLinePiecesAndInstrument(params: {
 	pieces: RepertoirePiece[];
 	instrument: ClassRegistrationSnapshot["instrument"];
 }> {
-	const worksMap = await resolvePieceCatalogWorks(params.line.pieces ?? [], {
+	const prevalidatedPieces = prevalidateRepertoirePieces(
+		params.line.pieces,
+		params.festivalClass,
+	);
+	const worksMap = await resolvePieceCatalogWorks(prevalidatedPieces, {
 		catalogWorkReader: params.repertoire,
 		organizationId: params.organizationId,
 	});
 	const pieces = validateAndNormalizeRepertoirePieces(
-		params.line.pieces ?? [],
+		prevalidatedPieces,
 		params.festivalClass,
 		{
 			catalogWorkMustBeConcerto: doesClassRequireConcerto(

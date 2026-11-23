@@ -126,44 +126,45 @@ describe("domains/tenant-org services (unit)", () => {
 
 	it("caches listPublicOrganizations and invalidates on OrgUpdated and clearAll", async () => {
 		const invalidator = new DomainCacheInvalidator();
-		const slugs = [{ slug: "alpha" }];
-		const listOrganizationSlugs = mock(async () => [...slugs]);
+		const alpha = { slug: "alpha", name: "Alpha Festival" };
+		const beta = { slug: "beta", name: "Beta Festival" };
+		const gamma = { slug: "gamma", name: "Gamma Festival" };
+		const organizations = [alpha];
+		const listPublicOrganizations = mock(async () => [...organizations]);
 		const service = new TenantOrganizationService(
-			{ listOrganizationSlugs } as unknown as TenantRepository,
+			{ listPublicOrganizations } as unknown as TenantRepository,
 			{} as AppUserMembershipRepository,
 		);
 		service.bindCacheInvalidator(invalidator);
-		const getSlugs = async () =>
-			(await service.listPublicOrganizations()).organizations.map(
-				(o) => o.slug,
-			);
+		const getOrganizations = async () =>
+			(await service.listPublicOrganizations()).organizations;
 
-		expect(await getSlugs()).toEqual(["alpha"]);
-		slugs.push({ slug: "beta" });
-		expect(await getSlugs()).toEqual(["alpha"]);
-		expect(listOrganizationSlugs).toHaveBeenCalledTimes(1);
+		expect(await getOrganizations()).toEqual([alpha]);
+		organizations.push(beta);
+		expect(await getOrganizations()).toEqual([alpha]);
+		expect(listPublicOrganizations).toHaveBeenCalledTimes(1);
 
 		invalidator.emit({
 			type: "OrgUpdated",
 			organizationId: "o2",
 			slug: "beta",
 		});
-		expect(await getSlugs()).toEqual(["alpha", "beta"]);
-		expect(listOrganizationSlugs).toHaveBeenCalledTimes(2);
+		expect(await getOrganizations()).toEqual([alpha, beta]);
+		expect(listPublicOrganizations).toHaveBeenCalledTimes(2);
 
-		slugs.push({ slug: "gamma" });
+		organizations.push(gamma);
 		invalidator.clearAll();
-		expect(await getSlugs()).toEqual(["alpha", "beta", "gamma"]);
-		expect(listOrganizationSlugs).toHaveBeenCalledTimes(3);
+		expect(await getOrganizations()).toEqual([alpha, beta, gamma]);
+		expect(listPublicOrganizations).toHaveBeenCalledTimes(3);
 	});
 
 	it("unsubscribes previous cache invalidator listener when re-binding", async () => {
-		let slugCalls = 0;
-		const listOrganizationSlugs = mock(async () => [
-			{ slug: `org-${++slugCalls}` },
+		let listCalls = 0;
+		const listPublicOrganizations = mock(async () => [
+			{ slug: `org-${++listCalls}`, name: "Festival" },
 		]);
 		const service = new TenantOrganizationService(
-			{ listOrganizationSlugs } as unknown as TenantRepository,
+			{ listPublicOrganizations } as unknown as TenantRepository,
 			{} as AppUserMembershipRepository,
 		);
 		const getSlugs = async () =>
@@ -203,7 +204,7 @@ describe("domains/tenant-org services (unit)", () => {
 		second.inv.emit({ type: "OrgUpdated", organizationId: "o2", slug: "o2" });
 		expect(second.state.calls).toBe(1);
 		expect(await getSlugs()).toEqual(["org-2"]);
-		expect(listOrganizationSlugs).toHaveBeenCalledTimes(2);
+		expect(listPublicOrganizations).toHaveBeenCalledTimes(2);
 
 		service.bindCacheInvalidator({ emit: mock(() => {}) });
 		expect(second.state.unsub).toHaveBeenCalledTimes(2);
@@ -370,7 +371,7 @@ describe("domains/tenant-org services (unit)", () => {
 });
 
 describe("domains/tenant-org Postgres 17 integration", () => {
-	integrationIt("lists organization slugs in stored sort order", async () => {
+	integrationIt("lists public organizations in slug order", async () => {
 		await withApplicationRollback(async (fixture) => {
 			const tenants = fixture.repository(
 				new PostgresTenantRepository(fixture.schema),
@@ -384,10 +385,10 @@ describe("domains/tenant-org Postgres 17 integration", () => {
 				});
 				fixture.trackOrganization(organization.id);
 			}
-			const organizations = await tenants.listOrganizationSlugs();
+			const organizations = await tenants.listPublicOrganizations();
 			expect(organizations.filter((org) => org.slug.startsWith(slug))).toEqual([
-				{ slug: `${slug}-a` },
-				{ slug: `${slug}-z` },
+				{ slug: `${slug}-a`, name: `Tenant ${slug}-a` },
+				{ slug: `${slug}-z`, name: `Tenant ${slug}-z` },
 			]);
 		});
 	});

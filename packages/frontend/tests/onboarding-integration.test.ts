@@ -139,19 +139,23 @@ describe("organization onboarding integration", () => {
 		);
 	});
 
-	it("shows the new-organization signup copy and keeps its sign-in action", async () => {
+	it("shows the homepage directory, signup offer, and organizer sign-in", async () => {
 		const homePage = await Bun.file("src/pages/HomePage.tsx").text();
 		const appHeader = await Bun.file("src/components/AppHeader.tsx").text();
 
-		expect(homePage).toContain("<h1>Start a new organization</h1>");
+		expect(homePage).toContain('<h1 id="home-join">Join Now</h1>');
 		expect(homePage).toMatch(
-			/<p>\s*Sign up here with Google or Email to create a new organization\s*<\/p>/,
+			/<p>Sign up with Google or email to start your organization\.<\/p>\s*<p>Free to join and use for sign ups before March 10th 2027<\/p>/,
 		);
-		expect(homePage).not.toContain('<p class="lede">');
+		expect(homePage).toContain("buildOrgRootPath(organization.slug)");
+		expect(homePage).toContain("organization.name");
+		expect(homePage).toContain('src="/festival-registration-preview.jpg"');
 		expect(homePage).toContain('props.app.openSignInModal("create-org")');
-		expect(homePage).toContain("Sign Up or Sign In");
-		expect(appHeader).toContain("<h1>Festival</h1>");
-		expect(appHeader).not.toContain("General Informtion.");
+		expect(homePage).toMatch(/>\s*Sign Up\s*<\/Button>/);
+		expect(appHeader).toContain("Arts Festival Online");
+		expect(appHeader).toContain("Manage and Grow Your Music Festival");
+		expect(appHeader).toContain('props.app.openSignInModal("login")');
+		expect(appHeader).toMatch(/>\s*Log-In\s*<\/Button>/);
 	});
 
 	it("shows only safe Shopify identity and capability diagnostics", async () => {
