@@ -40,3 +40,59 @@ export interface ClassCheckoutRestartDto {
 	replacementKey: string;
 	registrations: ClassCheckoutRestartRegistration[];
 }
+
+export type AdminClassCheckoutRecoveryAction =
+	| "adopt_cart"
+	| "retry_pre_dispatch"
+	| "abandon_unknown";
+
+export type AdminClassCheckoutRecoveryCheckpoint =
+	| "prepared"
+	| "create_dispatched"
+	| "remote_cart_known"
+	| "attached";
+
+export interface AdminClassCheckoutRecoveryEventDto {
+	id: string;
+	generation: number;
+	eventType: string;
+	createdAtIso: string;
+	/** True when the event carries a Shopify cart id. The id itself is never returned. */
+	hasCartEvidence: boolean;
+}
+
+/** One class checkout attempt that an operator can inspect or resolve. */
+export interface AdminClassCheckoutRecoveryDto
+	extends ClassCheckoutRecoveryStatusDto {
+	/** Version of the attempt. Sent back on resolve so a stale decision is rejected. */
+	generation: number;
+	intentId: string;
+	checkpoint: AdminClassCheckoutRecoveryCheckpoint;
+	updatedAtIso: string;
+	events: AdminClassCheckoutRecoveryEventDto[];
+}
+
+export interface AdminClassCheckoutRecoveryListResponse {
+	recoveries: AdminClassCheckoutRecoveryDto[];
+}
+
+export interface AdminClassCheckoutRecoverySweepResponse {
+	recoveredCount: number;
+}
+
+export interface AdminResolveClassCheckoutRecoveryInput {
+	expectedGeneration: number;
+	reason: string;
+	action: AdminClassCheckoutRecoveryAction;
+	shopifyCartId?: string;
+	evidenceEventId?: string;
+	acknowledgeUnknown?: boolean;
+}
+
+export interface AdminResolveClassCheckoutRecoveryResponse {
+	recovery: ClassCheckoutRecoveryStatusDto & {
+		generation: number;
+		intentId: string;
+		customerId: string;
+	};
+}

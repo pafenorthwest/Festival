@@ -1,6 +1,7 @@
 import { createSignal, For, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { AccessDeniedPanel } from "../components/AccessDeniedPanel.js";
+import { AdminClassCheckoutRecoveries } from "../components/AdminClassCheckoutRecoveries.js";
 import { Button } from "../components/Button.js";
 import type {
 	AdminCheckoutIntent,
@@ -377,6 +378,11 @@ export function AdminCheckoutRecoveryPage(
 						</Show>
 					</div>
 				</Show>
+
+				<AdminClassCheckoutRecoveries
+					slug={orgSlug()}
+					customer={selectedCustomer()}
+				/>
 			</section>
 		</Show>
 	);
