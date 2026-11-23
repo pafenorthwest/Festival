@@ -20,6 +20,15 @@ import {
 	type VolunteerRole,
 	type VolunteerShift,
 } from "../../lib/api.js";
+import {
+	buildShiftInputs,
+	createShiftsForDays,
+	describeCreateResult,
+	listFestivalDays,
+	validateNewShiftDraft,
+	validateShiftDates,
+} from "./shiftDays.js";
+import { useShiftDaySelection } from "./useShiftDaySelection.js";
 
 const emptyRoleDraft: CreateVolunteerRoleInput = {
 	slug: "",
@@ -41,6 +50,8 @@ export interface VolunteerRolesStateParams {
 	slug: Accessor<string>;
 	idToken: Accessor<string | null>;
 	festivalShortName: Accessor<string | undefined>;
+	festivalStartDate: Accessor<string | undefined>;
+	festivalEndDate: Accessor<string | undefined>;
 	roles: Resource<VolunteerRole[]>;
 	refetchRoles: () => Promise<VolunteerRole[] | undefined> | unknown;
 }
@@ -204,12 +215,26 @@ function useRoleCrudState(
 	};
 }
 
+interface ShiftsState {
+	shifts: Accessor<VolunteerShift[] | undefined>;
+	onChanged: () => Promise<void>;
+}
+
 function useShiftCrudState(
 	ctx: VolunteerRolesStateParams,
 	selectedRoleId: Accessor<string | null>,
-	onShiftsChanged: () => Promise<void>,
+	shiftsState: ShiftsState,
 ) {
 	const crud = useCrudSignals(emptyShiftDraft);
+	const days = useShiftDaySelection({
+		festivalDays: createMemo(() =>
+			listFestivalDays(ctx.festivalStartDate(), ctx.festivalEndDate()),
+		),
+		existingShifts: shiftsState.shifts,
+		draft: crud.draft,
+		resetKey: () =>
+			`${ctx.festivalShortName() ?? ""}|${selectedRoleId() ?? ""}`,
+	});
 	const startEditShift = (shift: VolunteerShift) =>
 		crud.startEdit(shift.id, {
 			date: shift.date,
@@ -219,6 +244,27 @@ function useShiftCrudState(
 			adjudicator: shift.adjudicator ?? "",
 		});
 	const cancelEditShift = () => crud.cancelEdit();
+
+	/** Creates one shift per ticked day. Days that were not created stay ticked. */
+	async function createShifts(token: string, festival: string, roleId: string) {
+		const role = ctx.roles()?.find((item) => item.id === roleId);
+		const problem =
+			validateNewShiftDraft(crud.draft(), role?.isRoomProctor ?? false) ??
+			validateShiftDates(days.selectedDates());
+		if (problem) throw new Error(problem);
+		const inputs = buildShiftInputs(days.selectedDates(), crud.draft());
+		const result = await createShiftsForDays(inputs, (input) =>
+			createVolunteerShift(token, ctx.slug(), festival, roleId, input),
+		);
+		// Show what was created even when a later day failed.
+		await shiftsState.onChanged();
+		if (result.failed) {
+			days.setSelectedDates(result.remaining);
+			throw new Error(describeCreateResult(result, inputs.length));
+		}
+		days.clearDates();
+		crud.setDraft(emptyShiftDraft);
+	}
 
 	async function handleShiftFormSubmit(event: Event) {
 		event.preventDefault();
@@ -230,27 +276,21 @@ function useShiftCrudState(
 		await crud.run(
 			`Could not ${editingId ? "update" : "create"} shift.`,
 			async () => {
-				if (editingId) {
-					await updateVolunteerShift(
-						token,
-						ctx.slug(),
-						festival,
-						roleId,
-						editingId,
-						crud.draft(),
-					);
-					crud.setEditingId(null);
-				} else {
-					await createVolunteerShift(
-						token,
-						ctx.slug(),
-						festival,
-						roleId,
-						crud.draft(),
-					);
+				if (!editingId) {
+					await createShifts(token, festival, roleId);
+					return;
 				}
+				await updateVolunteerShift(
+					token,
+					ctx.slug(),
+					festival,
+					roleId,
+					editingId,
+					crud.draft(),
+				);
+				crud.setEditingId(null);
 				crud.setDraft(emptyShiftDraft);
-				await onShiftsChanged();
+				await shiftsState.onChanged();
 			},
 		);
 	}
@@ -272,7 +312,7 @@ function useShiftCrudState(
 					shift.id,
 				);
 				if (crud.editingId() === shift.id) cancelEditShift();
-				await onShiftsChanged();
+				await shiftsState.onChanged();
 			},
 			shift.id,
 		);
@@ -289,6 +329,13 @@ function useShiftCrudState(
 		cancelEditShift,
 		handleShiftFormSubmit,
 		handleDeleteShift,
+		availableShiftDays: days.availableDays,
+		selectedShiftDates: days.selectedDates,
+		matchingShiftDates: days.matchingDates,
+		toggleShiftDate: days.toggleDate,
+		selectAllShiftDates: days.selectAllDates,
+		clearShiftDates: days.clearDates,
+		addExtraShiftDate: days.addExtraDate,
 	};
 }
 
@@ -320,9 +367,12 @@ export function useVolunteerRolesState(params: VolunteerRolesStateParams) {
 			if (selectedRoleId() === roleId) setSelectedRoleId(null);
 		},
 	);
-	const shiftCrud = useShiftCrudState(params, selectedRoleId, async () => {
-		await refetchShifts();
-		await gaps.refetchCoverageGaps();
+	const shiftCrud = useShiftCrudState(params, selectedRoleId, {
+		shifts: () => shifts(),
+		onChanged: async () => {
+			await refetchShifts();
+			await gaps.refetchCoverageGaps();
+		},
 	});
 
 	return {

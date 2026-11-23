@@ -3551,3 +3551,17 @@ button.availability-hour-slot.is-unavailable {
 	font-size: 0.85rem;
 	overflow-wrap: anywhere;
 }
+
+.volunteer-shift-day-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
+	gap: 0.5rem 0.75rem;
+}
+
+.volunteer-shift-day-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-end;
+	gap: 0.5rem 0.75rem;
+	margin-top: 0.5rem;
+}

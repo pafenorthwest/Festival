@@ -112,6 +112,8 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 		slug: () => props.slug,
 		idToken,
 		festivalShortName: () => selectedFestival()?.shortName,
+		festivalStartDate: () => selectedFestival()?.startDate,
+		festivalEndDate: () => selectedFestival()?.endDate,
 		roles,
 		refetchRoles,
 	});
@@ -179,6 +181,13 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 								onCancelEditShift={state.cancelEditShift}
 								onDeleteShift={state.handleDeleteShift}
 								onSubmitShift={state.handleShiftFormSubmit}
+								availableDays={state.availableShiftDays}
+								selectedDates={state.selectedShiftDates}
+								matchingDates={state.matchingShiftDates}
+								onToggleDate={state.toggleShiftDate}
+								onSelectAllDates={state.selectAllShiftDates}
+								onClearDates={state.clearShiftDates}
+								onAddExtraDate={state.addExtraShiftDate}
 							/>
 						)}
 					</Show>

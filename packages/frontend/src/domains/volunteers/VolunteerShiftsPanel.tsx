@@ -6,8 +6,20 @@ import type {
 	VolunteerRole,
 	VolunteerShift,
 } from "../../lib/api.js";
+import { addShiftsLabel } from "./shiftDays.js";
+import { VolunteerShiftDayPicker } from "./VolunteerShiftDayPicker.js";
 
-export interface VolunteerShiftsPanelProps {
+export interface VolunteerShiftDayProps {
+	availableDays: Accessor<string[]>;
+	selectedDates: Accessor<string[]>;
+	matchingDates: Accessor<Set<string>>;
+	onToggleDate: (date: string) => void;
+	onSelectAllDates: () => void;
+	onClearDates: () => void;
+	onAddExtraDate: (date: string) => string | null;
+}
+
+export interface VolunteerShiftsPanelProps extends VolunteerShiftDayProps {
 	role: VolunteerRole;
 	shifts: Resource<VolunteerShift[]>;
 	shiftDraft: Accessor<CreateVolunteerShiftInput>;
@@ -97,16 +109,18 @@ function ShiftTextField(props: {
 	);
 }
 
-function VolunteerShiftForm(props: {
-	isRoomProctor: boolean;
-	shiftDraft: Accessor<CreateVolunteerShiftInput>;
-	setShiftDraft: Setter<CreateVolunteerShiftInput>;
-	editingShiftId: Accessor<string | null>;
-	isCreatingShift: Accessor<boolean>;
-	shiftFormError: Accessor<string | null>;
-	onCancelEditShift: () => void;
-	onSubmitShift: (event: Event) => void;
-}) {
+function VolunteerShiftForm(
+	props: VolunteerShiftDayProps & {
+		isRoomProctor: boolean;
+		shiftDraft: Accessor<CreateVolunteerShiftInput>;
+		setShiftDraft: Setter<CreateVolunteerShiftInput>;
+		editingShiftId: Accessor<string | null>;
+		isCreatingShift: Accessor<boolean>;
+		shiftFormError: Accessor<string | null>;
+		onCancelEditShift: () => void;
+		onSubmitShift: (event: Event) => void;
+	},
+) {
 	const updateDraft = (patch: Partial<CreateVolunteerShiftInput>) =>
 		props.setShiftDraft((current) => ({ ...current, ...patch }));
 
@@ -119,12 +133,28 @@ function VolunteerShiftForm(props: {
 					Adjudicator.
 				</p>
 			</Show>
-			<ShiftTextField
-				label="Date"
-				type="date"
-				value={props.shiftDraft().date}
-				onInput={(date) => updateDraft({ date })}
-			/>
+			<Show
+				when={props.editingShiftId()}
+				fallback={
+					<VolunteerShiftDayPicker
+						days={props.availableDays}
+						selected={props.selectedDates}
+						taken={props.matchingDates}
+						disabled={props.isCreatingShift}
+						onToggle={props.onToggleDate}
+						onSelectAll={props.onSelectAllDates}
+						onClear={props.onClearDates}
+						onAddDate={props.onAddExtraDate}
+					/>
+				}
+			>
+				<ShiftTextField
+					label="Date"
+					type="date"
+					value={props.shiftDraft().date}
+					onInput={(date) => updateDraft({ date })}
+				/>
+			</Show>
 			<label class="field">
 				<span>Period</span>
 				<select
@@ -158,8 +188,16 @@ function VolunteerShiftForm(props: {
 			<Show when={props.shiftFormError()}>
 				<section class="banner error-banner">{props.shiftFormError()}</section>
 			</Show>
-			<Button type="submit" disabled={props.isCreatingShift()}>
-				{props.editingShiftId() ? "Save changes" : "Add shift"}
+			<Button
+				type="submit"
+				disabled={
+					props.isCreatingShift() ||
+					(!props.editingShiftId() && props.selectedDates().length === 0)
+				}
+			>
+				{props.editingShiftId()
+					? "Save changes"
+					: addShiftsLabel(props.selectedDates().length)}
 			</Button>
 			<Show when={props.editingShiftId()}>
 				<Button
@@ -193,6 +231,13 @@ export function VolunteerShiftsPanel(props: VolunteerShiftsPanelProps) {
 				/>
 			</Show>
 			<VolunteerShiftForm
+				availableDays={props.availableDays}
+				selectedDates={props.selectedDates}
+				matchingDates={props.matchingDates}
+				onToggleDate={props.onToggleDate}
+				onSelectAllDates={props.onSelectAllDates}
+				onClearDates={props.onClearDates}
+				onAddExtraDate={props.onAddExtraDate}
 				isRoomProctor={props.role.isRoomProctor}
 				shiftDraft={props.shiftDraft}
 				setShiftDraft={props.setShiftDraft}

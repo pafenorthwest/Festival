@@ -167,8 +167,10 @@ describe("admin volunteer role and shift management", () => {
 		expect(shiftsPanel).toContain(
 			'{props.editingShiftId() ? "Edit shift" : "Add a shift"}',
 		);
+		// Editing saves one shift; creating adds one per ticked day.
+		expect(shiftsPanel).toContain('? "Save changes"');
 		expect(shiftsPanel).toContain(
-			'{props.editingShiftId() ? "Save changes" : "Add shift"}',
+			"addShiftsLabel(props.selectedDates().length)",
 		);
 		expect(state).toContain("cancelEditShift");
 		expect(state).toContain("Could not delete shift.");
