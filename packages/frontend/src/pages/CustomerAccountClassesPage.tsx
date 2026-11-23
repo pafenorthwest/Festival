@@ -9,6 +9,7 @@ import {
 } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { Button } from "../components/Button.js";
+import { CUSTOMER_HELP_TEXT, HelpTooltip } from "../components/HelpTooltip.js";
 import type { CustomerClassRegistrationItem } from "../lib/api.js";
 import {
 	getPublicDivisions,
@@ -236,11 +237,18 @@ export function CustomerAccountClassesPage(props: {
 																				"waitlisted"
 																			}
 																		>
-																			<span
-																				class="badge badge-neutral"
-																				data-testid="paid-waitlisted-badge"
-																			>
-																				Waitlisted (Paid)
+																			<span class="inline-help-row">
+																				<span
+																					class="badge badge-neutral"
+																					data-testid="paid-waitlisted-badge"
+																				>
+																					Waitlisted (Paid)
+																				</span>
+																				<HelpTooltip
+																					id={`paid-waitlisted-help-${registration.entitlement.id}`}
+																					label="About Waitlisted (Paid) status"
+																					text={CUSTOMER_HELP_TEXT.paidWaitlist}
+																				/>
 																			</span>
 																		</Show>
 																		<Show

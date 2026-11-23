@@ -1,6 +1,11 @@
 import { createEffect, createSignal, For, onMount, Show } from "solid-js";
 import { Button } from "../components/Button.js";
 import {
+	CHECKBOX_HELP_TEXT,
+	CUSTOMER_HELP_TEXT,
+	HelpTooltip,
+} from "../components/HelpTooltip.js";
+import {
 	ApiError,
 	acquireAccompanistMembership,
 	customerAccompanistMembershipSignInPath,
@@ -237,7 +242,14 @@ export function AccompanistMembershipPage(props: { slug: string }) {
 						/>
 					</label>
 					<fieldset>
-						<legend>Divisions</legend>
+						<legend class="help-legend">
+							Divisions
+							<HelpTooltip
+								id="accompanist-divisions-help"
+								label="About accompanist divisions"
+								text={CUSTOMER_HELP_TEXT.accompanistDivisions}
+							/>
+						</legend>
 						<For each={divisions()}>
 							{(division) => (
 								<label>
@@ -251,22 +263,29 @@ export function AccompanistMembershipPage(props: { slug: string }) {
 							)}
 						</For>
 					</fieldset>
-					<label class="membership-consent">
-						<input
-							type="checkbox"
-							checked={staffAccessConsent()}
-							disabled={submitting()}
-							required
-							aria-describedby="accompanist-consent-required"
-							onInput={(event) =>
-								setStaffAccessConsent(event.currentTarget.checked)
-							}
+					<div class="checkbox-help-row">
+						<label class="membership-consent">
+							<input
+								type="checkbox"
+								checked={staffAccessConsent()}
+								disabled={submitting()}
+								required
+								aria-describedby="accompanist-consent-required"
+								onInput={(event) =>
+									setStaffAccessConsent(event.currentTarget.checked)
+								}
+							/>
+							<span>
+								Agree to sharing Shopify-provided contact details to support my
+								membership
+							</span>
+						</label>
+						<HelpTooltip
+							id="accompanist-consent-help"
+							label="About data sharing consent"
+							text={CHECKBOX_HELP_TEXT.membershipDataConsent}
 						/>
-						<span>
-							Agree to sharing Shopify-provided contact details to support my
-							membership
-						</span>
-					</label>
+					</div>
 					<p class="muted" id="accompanist-consent-required">
 						Required to acquire this membership. See our{" "}
 						<a href="/privacy-policy">Privacy Policy</a> for details.

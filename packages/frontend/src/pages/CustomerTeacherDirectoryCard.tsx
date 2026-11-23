@@ -4,6 +4,7 @@ import type {
 } from "@festival/common";
 import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { Button } from "../components/Button.js";
+import { CHECKBOX_HELP_TEXT, HelpTooltip } from "../components/HelpTooltip.js";
 import {
 	ApiError,
 	getCustomerProfile,
@@ -165,17 +166,24 @@ function TeacherDirectoryForm(props: { ctrl: TeacherCardCtrl }) {
 				/>
 			</label>
 			<DivisionCheckboxes ctrl={c} />
-			<label class="membership-consent">
-				<input
-					type="checkbox"
-					checked={c.draft().publicDirectoryOptIn}
-					disabled={c.ui().saving}
-					onChange={(e) =>
-						c.patchDraft({ publicDirectoryOptIn: e.currentTarget.checked })
-					}
+			<div class="checkbox-help-row">
+				<label class="membership-consent">
+					<input
+						type="checkbox"
+						checked={c.draft().publicDirectoryOptIn}
+						disabled={c.ui().saving}
+						onChange={(e) =>
+							c.patchDraft({ publicDirectoryOptIn: e.currentTarget.checked })
+						}
+					/>
+					<span>Show my profile in the Public Teacher Directory</span>
+				</label>
+				<HelpTooltip
+					id="teacher-directory-opt-in-help"
+					label="About Public Teacher Directory publishing"
+					text={CHECKBOX_HELP_TEXT.publicDirectoryPublishing}
 				/>
-				<span>Show my profile in the Public Teacher Directory</span>
-			</label>
+			</div>
 			<div class="membership-checkout-actions">
 				<Button type="submit" disabled={c.ui().saving}>
 					{c.ui().saving ? "Saving…" : "Save directory profile"}

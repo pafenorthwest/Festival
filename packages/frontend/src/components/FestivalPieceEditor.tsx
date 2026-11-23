@@ -19,6 +19,7 @@ import {
 	validatePieceTitle,
 } from "../pages/festivalRegistrationHelpers.js";
 import { Button } from "./Button.js";
+import { CUSTOMER_HELP_TEXT, HelpTooltip } from "./HelpTooltip.js";
 
 export interface FestivalPieceEditorProps {
 	pieces: RepertoirePiece[];
@@ -214,9 +215,19 @@ export function FestivalPieceEditor(props: FestivalPieceEditorProps) {
 							<Show when={props.catalogSearch}>
 								{(search) => (
 									<>
-										<label class="field">
-											<span>Search the concerto catalog</span>
+										<div class="field">
+											<div class="field-help-header">
+												<label for="concerto-catalog-search">
+													Search the concerto catalog
+												</label>
+												<HelpTooltip
+													id="concerto-catalog-help"
+													label="About concerto catalog works"
+													text={CUSTOMER_HELP_TEXT.concertoCatalog}
+												/>
+											</div>
 											<input
+												id="concerto-catalog-search"
 												type="search"
 												value={search().query()}
 												onInput={(event) =>
@@ -226,7 +237,7 @@ export function FestivalPieceEditor(props: FestivalPieceEditorProps) {
 													if (event.key === "Enter") event.preventDefault();
 												}}
 											/>
-										</label>
+										</div>
 										<Show when={search().loading()}>
 											<p role="status">Searching the catalog…</p>
 										</Show>
