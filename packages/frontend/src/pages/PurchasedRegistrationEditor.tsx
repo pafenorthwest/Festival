@@ -15,6 +15,7 @@ import {
 } from "solid-js";
 import { Button } from "../components/Button.js";
 import { FestivalPieceEditor } from "../components/FestivalPieceEditor.js";
+import { CUSTOMER_HELP_TEXT, HelpTooltip } from "../components/HelpTooltip.js";
 import {
 	listRegistrationAccompanists,
 	updateRegistrationMetadata,
@@ -216,13 +217,20 @@ export function PurchasedRegistrationEditor(props: {
 			<div class="parent-content-grid">
 				<div class="flow-panel">
 					<Show when={canEdit() && !showCatalog()}>
-						<Button
-							type="button"
-							variant="secondary"
-							onClick={() => setCatalogRequested(true)}
-						>
-							Choose a catalog work
-						</Button>
+						<div class="inline-help-row">
+							<Button
+								type="button"
+								variant="secondary"
+								onClick={() => setCatalogRequested(true)}
+							>
+								Choose a catalog work
+							</Button>
+							<HelpTooltip
+								id="purchased-catalog-work-help"
+								label="About concerto catalog works"
+								text={CUSTOMER_HELP_TEXT.concertoCatalog}
+							/>
+						</div>
 					</Show>
 					<FestivalPieceEditor
 						pieces={pieces()}

@@ -1,6 +1,7 @@
 import { createSignal, For, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { Button } from "../components/Button.js";
+import { CUSTOMER_HELP_TEXT, HelpTooltip } from "../components/HelpTooltip.js";
 import {
 	type CustomerChildDto,
 	createCustomerChild,
@@ -81,6 +82,11 @@ export function CustomerChildrenPage(props: {
 												? "Age verification current"
 												: "Age verification needs refresh"}
 										</span>
+										<HelpTooltip
+											id={`child-age-verification-help-${child.id}`}
+											label="About age verification"
+											text={CUSTOMER_HELP_TEXT.ageVerification}
+										/>
 									</p>
 									{!child.hasCurrentValidAgeSnapshot && (
 										<form
@@ -226,15 +232,23 @@ export function CustomerChildrenPage(props: {
 									/>
 								</label>
 							</div>
-							<label class="field">
-								<span>Birthday</span>
+							<div class="field">
+								<div class="field-help-header">
+									<label for="add-performer-birthday">Birthday</label>
+									<HelpTooltip
+										id="add-performer-birthday-help"
+										label="About birthday and age verification"
+										text={CUSTOMER_HELP_TEXT.ageVerification}
+									/>
+								</div>
 								<input
+									id="add-performer-birthday"
 									required
 									type="date"
 									value={birthday()}
 									onInput={(event) => setBirthday(event.currentTarget.value)}
 								/>
-							</label>
+							</div>
 							<Button type="submit">Add Performer</Button>
 						</form>
 					</Show>

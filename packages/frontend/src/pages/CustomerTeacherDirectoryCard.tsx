@@ -6,6 +6,7 @@ import {
 } from "@festival/common";
 import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { Button } from "../components/Button.js";
+import { CHECKBOX_HELP_TEXT, HelpTooltip } from "../components/HelpTooltip.js";
 import {
 	ApiError,
 	getAccompanistMembershipForm,
@@ -382,17 +383,28 @@ function TeacherDirectoryForm(props: { ctrl: TeacherCardCtrl }) {
 			>
 				<AccompanistDivisionCheckboxes ctrl={c} />
 			</Show>
-			<label class="membership-consent">
-				<input
-					type="checkbox"
-					checked={c.draft().publicDirectoryOptIn}
-					disabled={c.ui().saving}
-					onChange={(e) =>
-						c.patchDraft({ publicDirectoryOptIn: e.currentTarget.checked })
+			<div class="checkbox-help-row">
+				<label class="membership-consent">
+					<input
+						type="checkbox"
+						checked={c.draft().publicDirectoryOptIn}
+						disabled={c.ui().saving}
+						onChange={(e) =>
+							c.patchDraft({ publicDirectoryOptIn: e.currentTarget.checked })
+						}
+					/>
+					<span>{c.cfg().optInLabel}</span>
+				</label>
+				<HelpTooltip
+					id={`${c.role()}-directory-opt-in-help`}
+					label={`About ${c.cfg().heading} publishing`}
+					text={
+						c.role() === "accompanist"
+							? CHECKBOX_HELP_TEXT.accompanistDirectoryPublishing
+							: CHECKBOX_HELP_TEXT.publicDirectoryPublishing
 					}
 				/>
-				<span>{c.cfg().optInLabel}</span>
-			</label>
+			</div>
 			<div class="membership-checkout-actions">
 				<Button type="submit" disabled={c.ui().saving}>
 					{c.ui().saving ? "Saving…" : "Save directory profile"}

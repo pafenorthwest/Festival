@@ -3,6 +3,7 @@ import { createSignal, For, Show } from "solid-js";
 import { useConcertoCatalogSearch } from "../pages/festivalRegistrationHooks.js";
 import { Button } from "./Button.js";
 import "./ConcertoTitleField.css";
+import { CUSTOMER_HELP_TEXT, HelpTooltip } from "./HelpTooltip.js";
 
 interface ConcertoTitleFieldProps {
 	id: string;
@@ -115,9 +116,14 @@ export function ConcertoTitleField(props: ConcertoTitleFieldProps) {
 				}
 			}}
 		>
-			<label class="concerto-title-label" for={props.id}>
-				Title
-			</label>
+			<div class="field-help-header concerto-title-label">
+				<label for={props.id}>Title</label>
+				<HelpTooltip
+					id={`${props.id}-concerto-catalog-help`}
+					label="About concerto catalog works"
+					text={CUSTOMER_HELP_TEXT.concertoCatalog}
+				/>
+			</div>
 			<div
 				class="concerto-title-anchor"
 				classList={{ "concerto-title-anchor-open": Boolean(query()) }}

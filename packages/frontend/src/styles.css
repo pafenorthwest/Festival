@@ -683,6 +683,120 @@ button.compact-header-button {
 	margin-top: 0.2rem;
 }
 
+.checkbox-help-row {
+	display: flex;
+	align-items: flex-start;
+	gap: 0.45rem;
+	position: relative;
+}
+
+.field-help-header {
+	display: flex;
+	align-items: center;
+	gap: 0.35rem;
+	position: relative;
+}
+
+.help-heading-row {
+	display: flex;
+	align-items: center;
+	gap: 0.45rem;
+	position: relative;
+}
+
+.inline-help-row {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.45rem;
+	position: relative;
+}
+
+.help-legend {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.35rem;
+	position: relative;
+}
+
+.checkbox-help-row .membership-consent,
+.checkbox-help-row .checkbox-label {
+	flex: 0 1 auto;
+}
+
+.help-tooltip {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	flex: 0 0 auto;
+}
+
+.help-tooltip-trigger {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	padding: 4px;
+	border: 0;
+	border-radius: 999px;
+	background: transparent;
+	color: var(--bullet-soft-ink);
+	cursor: pointer;
+	transition:
+		background-color 150ms ease,
+		color 150ms ease;
+}
+
+.help-tooltip-trigger:hover {
+	background: rgba(31, 36, 49, 0.08);
+	color: var(--bullet-ink);
+}
+
+.help-tooltip-trigger:focus-visible {
+	outline: 2px solid var(--bullet-accent);
+	outline-offset: 2px;
+	color: var(--bullet-ink);
+}
+
+.help-tooltip-bubble {
+	position: absolute;
+	bottom: calc(100% + 8px);
+	right: 0;
+	z-index: 20;
+	width: max-content;
+	max-width: min(300px, calc(100vw - 48px));
+	padding: 0.55rem 0.75rem;
+	border-radius: 6px;
+	background: #222531;
+	color: #ffffff;
+	font-size: 0.85rem;
+	line-height: 1.45;
+	box-shadow: 0 8px 24px rgba(18, 22, 33, 0.24);
+	pointer-events: none;
+	transition: opacity 150ms ease;
+}
+
+.help-tooltip-bubble[data-open="true"] {
+	pointer-events: auto;
+}
+
+@media (max-width: 640px) {
+	.checkbox-help-row .help-tooltip,
+	.field-help-header .help-tooltip,
+	.help-heading-row .help-tooltip,
+	.inline-help-row .help-tooltip,
+	.help-legend .help-tooltip,
+	.help-tooltip {
+		position: static;
+	}
+
+	.help-tooltip-bubble {
+		left: 0;
+		right: auto;
+		max-width: min(300px, calc(100vw - 32px));
+	}
+}
+
 .membership-checkout-actions {
 	display: flex;
 	justify-content: space-between;

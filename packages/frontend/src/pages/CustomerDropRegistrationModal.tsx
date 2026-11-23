@@ -1,5 +1,6 @@
 import { createSignal, Show } from "solid-js";
 import { Button } from "../components/Button.js";
+import { CUSTOMER_HELP_TEXT, HelpTooltip } from "../components/HelpTooltip.js";
 
 export interface CustomerDropRegistrationModalProps {
 	isOpen: boolean;
@@ -64,17 +65,24 @@ export function CustomerDropRegistrationModal(
 						</label>
 
 						<Show when={!props.isWaitlisted}>
-							<label
-								class="field"
-								style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;"
-							>
-								<input
-									type="checkbox"
-									checked={requestRefund()}
-									onChange={(e) => setRequestRefund(e.currentTarget.checked)}
+							<div class="checkbox-help-row">
+								<label
+									class="field"
+									style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;"
+								>
+									<input
+										type="checkbox"
+										checked={requestRefund()}
+										onChange={(e) => setRequestRefund(e.currentTarget.checked)}
+									/>
+									<span>Request a refund for registration fee</span>
+								</label>
+								<HelpTooltip
+									id="drop-refund-help"
+									label="About refund requests"
+									text={CUSTOMER_HELP_TEXT.dropRefundRequest}
 								/>
-								<span>Request a refund for registration fee</span>
-							</label>
+							</div>
 						</Show>
 
 						<Show when={props.error}>

@@ -2,6 +2,7 @@ import type { PublicMembershipProductSummary } from "@festival/common";
 import { createResource, createSignal, For, onMount, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { Button } from "../components/Button.js";
+import { CHECKBOX_HELP_TEXT, HelpTooltip } from "../components/HelpTooltip.js";
 import {
 	ApiError,
 	customerMembershipPurchaseSignInPath,
@@ -218,21 +219,30 @@ function MembershipConsentSteps(props: {
 		<>
 			<section class="membership-checkout-step">
 				<h3>2. Agree to sharing data</h3>
-				<label class="membership-consent">
-					<input
-						type="checkbox"
-						checked={s().staffAccessConsent}
-						disabled={s().submitting}
-						aria-describedby="membership-consent-required"
-						onInput={(e) =>
-							props.ctrl.patch({ staffAccessConsent: e.currentTarget.checked })
-						}
+				<div class="checkbox-help-row">
+					<label class="membership-consent">
+						<input
+							type="checkbox"
+							checked={s().staffAccessConsent}
+							disabled={s().submitting}
+							aria-describedby="membership-consent-required"
+							onInput={(e) =>
+								props.ctrl.patch({
+									staffAccessConsent: e.currentTarget.checked,
+								})
+							}
+						/>
+						<span>
+							Agree to sharing Shopify-provided contact details to support my
+							membership
+						</span>
+					</label>
+					<HelpTooltip
+						id="membership-consent-help"
+						label="About data sharing consent"
+						text={CHECKBOX_HELP_TEXT.membershipDataConsent}
 					/>
-					<span>
-						Agree to sharing Shopify-provided contact details to support my
-						membership
-					</span>
-				</label>
+				</div>
 				<p class="muted" id="membership-consent-required">
 					Required to purchase this membership. See our{" "}
 					<a href="/privacy-policy">Privacy Policy</a> for details.
@@ -241,23 +251,29 @@ function MembershipConsentSteps(props: {
 			<Show when={props.isTeacher}>
 				<section class="membership-checkout-step">
 					<h3>Public Teacher Directory</h3>
-					<label class="membership-consent">
-						<input
-							type="checkbox"
-							checked={s().directoryOptIn}
-							disabled={s().submitting}
-							onChange={(e) => {
-								const checked = e.currentTarget.checked;
-								props.ctrl.patch({ directoryOptIn: checked });
-								const slug = props.ctrl.slug();
-								if (slug) writePendingTeacherDirectoryOptIn(slug, checked);
-							}}
+					<div class="checkbox-help-row">
+						<label class="membership-consent">
+							<input
+								type="checkbox"
+								checked={s().directoryOptIn}
+								disabled={s().submitting}
+								onChange={(e) => {
+									const checked = e.currentTarget.checked;
+									props.ctrl.patch({ directoryOptIn: checked });
+									const slug = props.ctrl.slug();
+									if (slug) writePendingTeacherDirectoryOptIn(slug, checked);
+								}}
+							/>
+							<span>
+								List my name and division in the Public Teacher Directory
+							</span>
+						</label>
+						<HelpTooltip
+							id="membership-directory-help"
+							label="About Public Teacher Directory publishing"
+							text={CHECKBOX_HELP_TEXT.publicDirectoryPublishing}
 						/>
-						<span>
-							List my name and approved divisions in the Public Teacher
-							Directory
-						</span>
-					</label>
+					</div>
 				</section>
 			</Show>
 		</>
