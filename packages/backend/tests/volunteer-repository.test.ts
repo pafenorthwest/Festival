@@ -454,4 +454,109 @@ describe("volunteer repository", () => {
 		expect(afterCancel).toHaveLength(1);
 		expect(afterCancel[0].shift.id).toBe(shift1.id);
 	});
+
+	it("createShiftsBatch atomically creates all shifts when no duplicates exist", async () => {
+		const repository = new InMemoryVolunteerRepository();
+		const role = await repository.createRole({
+			organizationId: "org-a",
+			festivalId: "festival-a",
+			slug: "greeter",
+			displayName: "Greeter",
+			description: "Greet guests.",
+			detailsUrl: null,
+			isRoomProctor: false,
+		});
+
+		const outcome = await repository.createShiftsBatch({
+			organizationId: "org-a",
+			festivalId: "festival-a",
+			roleId: role.id,
+			dates: ["2027-03-01", "2027-03-02", "2027-03-03"],
+			period: "AM",
+			timeText: "9am - 12pm",
+			division: null,
+			adjudicator: null,
+		});
+
+		expect(outcome.kind).toBe("created");
+		if (outcome.kind !== "created") throw new Error("Expected created.");
+		expect(outcome.shifts).toHaveLength(3);
+		const listed = await repository.listShiftsForRole(
+			"org-a",
+			"festival-a",
+			role.id,
+		);
+		expect(listed).toHaveLength(3);
+	});
+
+	it("createShiftsBatch returns duplicateDates and inserts zero shifts on match", async () => {
+		const repository = new InMemoryVolunteerRepository();
+		const role = await repository.createRole({
+			organizationId: "org-a",
+			festivalId: "festival-a",
+			slug: "room-proctor",
+			displayName: "Room Proctor",
+			description: "Proctor a room.",
+			detailsUrl: null,
+			isRoomProctor: true,
+		});
+		await repository.createShift({
+			organizationId: "org-a",
+			festivalId: "festival-a",
+			roleId: role.id,
+			date: "2027-03-02",
+			period: "AM",
+			timeText: null,
+			division: "Piano",
+			adjudicator: "Dr Brown",
+		});
+
+		const outcome = await repository.createShiftsBatch({
+			organizationId: "org-a",
+			festivalId: "festival-a",
+			roleId: role.id,
+			dates: ["2027-03-01", "2027-03-02", "2027-03-03"],
+			period: "AM",
+			timeText: "9am - 12pm",
+			division: "  piano  ",
+			adjudicator: " dr brown ",
+		});
+
+		expect(outcome).toEqual({
+			kind: "duplicate",
+			duplicateDates: ["2027-03-02"],
+		});
+		const listed = await repository.listShiftsForRole(
+			"org-a",
+			"festival-a",
+			role.id,
+		);
+		expect(listed).toHaveLength(1);
+	});
+
+	it("createShiftsBatch rejects a role outside the selected festival", async () => {
+		const repository = new InMemoryVolunteerRepository();
+		const role = await repository.createRole({
+			organizationId: "org-a",
+			festivalId: "festival-other",
+			slug: "greeter",
+			displayName: "Greeter",
+			description: "Greet guests.",
+			detailsUrl: null,
+			isRoomProctor: false,
+		});
+
+		await expect(
+			repository.createShiftsBatch({
+				organizationId: "org-a",
+				festivalId: "festival-a",
+				roleId: role.id,
+				dates: ["2027-03-01"],
+				period: "AM",
+				timeText: null,
+				division: null,
+				adjudicator: null,
+			}),
+		).rejects.toThrow("Volunteer shift role is outside the selected festival.");
+	});
 });

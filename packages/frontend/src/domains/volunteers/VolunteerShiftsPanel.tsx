@@ -1,13 +1,30 @@
 import { type Accessor, For, type Resource, type Setter, Show } from "solid-js";
-import { formatScheduleDate } from "../../app/appFormatting.js";
 import { Button } from "../../components/Button.js";
 import type {
 	CreateVolunteerShiftInput,
 	VolunteerRole,
 	VolunteerShift,
 } from "../../lib/api.js";
+import { addShiftsLabel, formatShiftDateLabel } from "./shiftDays.js";
+import { VolunteerShiftDayPicker } from "./VolunteerShiftDayPicker.js";
 
-export interface VolunteerShiftsPanelProps {
+export interface VolunteerShiftDayProps {
+	availableDays: Accessor<string[]>;
+	selectedDates: Accessor<string[]>;
+	effectiveSelectedDates: Accessor<string[]>;
+	matchingDates: Accessor<Set<string>>;
+	pickerResetKey: Accessor<string>;
+	minDate?: Accessor<string | undefined>;
+	maxDate?: Accessor<string | undefined>;
+	festivalStartDate?: Accessor<string | undefined>;
+	festivalEndDate?: Accessor<string | undefined>;
+	onToggleDate: (date: string) => void;
+	onSelectAllDates: () => void;
+	onClearDates: () => void;
+	onAddExtraDate: (date: string) => string | null;
+}
+
+export interface VolunteerShiftsPanelProps extends VolunteerShiftDayProps {
 	role: VolunteerRole;
 	shifts: Resource<VolunteerShift[]>;
 	shiftDraft: Accessor<CreateVolunteerShiftInput>;
@@ -24,6 +41,8 @@ export interface VolunteerShiftsPanelProps {
 
 function VolunteerShiftsTable(props: {
 	shifts: VolunteerShift[];
+	festivalStartDate?: Accessor<string | undefined>;
+	festivalEndDate?: Accessor<string | undefined>;
 	deletingShiftId: Accessor<string | null>;
 	onStartEditShift: (shift: VolunteerShift) => void;
 	onDeleteShift: (shift: VolunteerShift) => void;
@@ -40,7 +59,12 @@ function VolunteerShiftsTable(props: {
 					<div class="listing-table-row">
 						<span>
 							<strong>
-								{formatScheduleDate(shift.date)} {shift.period}
+								{formatShiftDateLabel(
+									shift.date,
+									props.festivalStartDate?.(),
+									props.festivalEndDate?.(),
+								)}{" "}
+								{shift.period}
 							</strong>
 						</span>
 						<span>
@@ -81,6 +105,8 @@ function ShiftTextField(props: {
 	label: string;
 	type?: string;
 	placeholder?: string;
+	min?: string;
+	max?: string;
 	value: string;
 	onInput: (value: string) => void;
 }) {
@@ -90,6 +116,8 @@ function ShiftTextField(props: {
 			<input
 				type={props.type ?? "text"}
 				placeholder={props.placeholder}
+				min={props.min}
+				max={props.max}
 				value={props.value}
 				onInput={(event) => props.onInput(event.currentTarget.value)}
 			/>
@@ -97,16 +125,18 @@ function ShiftTextField(props: {
 	);
 }
 
-function VolunteerShiftForm(props: {
-	isRoomProctor: boolean;
-	shiftDraft: Accessor<CreateVolunteerShiftInput>;
-	setShiftDraft: Setter<CreateVolunteerShiftInput>;
-	editingShiftId: Accessor<string | null>;
-	isCreatingShift: Accessor<boolean>;
-	shiftFormError: Accessor<string | null>;
-	onCancelEditShift: () => void;
-	onSubmitShift: (event: Event) => void;
-}) {
+function VolunteerShiftForm(
+	props: VolunteerShiftDayProps & {
+		isRoomProctor: boolean;
+		shiftDraft: Accessor<CreateVolunteerShiftInput>;
+		setShiftDraft: Setter<CreateVolunteerShiftInput>;
+		editingShiftId: Accessor<string | null>;
+		isCreatingShift: Accessor<boolean>;
+		shiftFormError: Accessor<string | null>;
+		onCancelEditShift: () => void;
+		onSubmitShift: (event: Event) => void;
+	},
+) {
 	const updateDraft = (patch: Partial<CreateVolunteerShiftInput>) =>
 		props.setShiftDraft((current) => ({ ...current, ...patch }));
 
@@ -119,12 +149,35 @@ function VolunteerShiftForm(props: {
 					Adjudicator.
 				</p>
 			</Show>
-			<ShiftTextField
-				label="Date"
-				type="date"
-				value={props.shiftDraft().date}
-				onInput={(date) => updateDraft({ date })}
-			/>
+			<Show
+				when={props.editingShiftId()}
+				fallback={
+					<VolunteerShiftDayPicker
+						days={props.availableDays}
+						selected={props.effectiveSelectedDates}
+						taken={props.matchingDates}
+						disabled={props.isCreatingShift}
+						resetKey={props.pickerResetKey}
+						minDate={props.minDate}
+						maxDate={props.maxDate}
+						festivalStartDate={props.festivalStartDate}
+						festivalEndDate={props.festivalEndDate}
+						onToggle={props.onToggleDate}
+						onSelectAll={props.onSelectAllDates}
+						onClear={props.onClearDates}
+						onAddDate={props.onAddExtraDate}
+					/>
+				}
+			>
+				<ShiftTextField
+					label="Date"
+					type="date"
+					min={props.minDate?.()}
+					max={props.maxDate?.()}
+					value={props.shiftDraft().date}
+					onInput={(date) => updateDraft({ date })}
+				/>
+			</Show>
 			<label class="field">
 				<span>Period</span>
 				<select
@@ -158,8 +211,17 @@ function VolunteerShiftForm(props: {
 			<Show when={props.shiftFormError()}>
 				<section class="banner error-banner">{props.shiftFormError()}</section>
 			</Show>
-			<Button type="submit" disabled={props.isCreatingShift()}>
-				{props.editingShiftId() ? "Save changes" : "Add shift"}
+			<Button
+				type="submit"
+				disabled={
+					props.isCreatingShift() ||
+					(!props.editingShiftId() &&
+						props.effectiveSelectedDates().length === 0)
+				}
+			>
+				{props.editingShiftId()
+					? "Save changes"
+					: addShiftsLabel(props.effectiveSelectedDates().length)}
 			</Button>
 			<Show when={props.editingShiftId()}>
 				<Button
@@ -181,18 +243,48 @@ export function VolunteerShiftsPanel(props: VolunteerShiftsPanelProps) {
 			<Show when={props.shifts.loading}>
 				<p>Loading shifts…</p>
 			</Show>
-			<Show when={props.shifts() && props.shifts()?.length === 0}>
+			<Show when={props.shifts.error}>
+				<p class="form-error" role="alert">
+					Could not load shifts: {String(props.shifts.error)}
+				</p>
+			</Show>
+			<Show
+				when={
+					!props.shifts.loading &&
+					!props.shifts.error &&
+					props.shifts()?.length === 0
+				}
+			>
 				<p>No shifts have been created for this role yet.</p>
 			</Show>
-			<Show when={props.shifts()?.length}>
+			<Show
+				when={
+					!props.shifts.loading && !props.shifts.error && props.shifts()?.length
+				}
+			>
 				<VolunteerShiftsTable
 					shifts={props.shifts() ?? []}
+					festivalStartDate={props.festivalStartDate}
+					festivalEndDate={props.festivalEndDate}
 					deletingShiftId={props.deletingShiftId}
 					onStartEditShift={props.onStartEditShift}
 					onDeleteShift={props.onDeleteShift}
 				/>
 			</Show>
 			<VolunteerShiftForm
+				availableDays={props.availableDays}
+				selectedDates={props.selectedDates}
+				effectiveSelectedDates={props.effectiveSelectedDates}
+				matchingDates={props.matchingDates}
+				pickerResetKey={props.pickerResetKey}
+				minDate={props.minDate}
+				maxDate={props.maxDate}
+				festivalStartDate={props.festivalStartDate}
+				festivalEndDate={props.festivalEndDate}
+				onToggleDate={props.onToggleDate}
+				onSelectAllDates={props.onSelectAllDates}
+				onClearDates={props.onClearDates}
+				onAddExtraDate={props.onAddExtraDate}
 				isRoomProctor={props.role.isRoomProctor}
 				shiftDraft={props.shiftDraft}
 				setShiftDraft={props.setShiftDraft}

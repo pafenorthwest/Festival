@@ -1,8 +1,10 @@
 import {
 	type Accessor,
+	createEffect,
 	createMemo,
 	createResource,
 	createSignal,
+	on,
 	type Resource,
 	type Setter,
 } from "solid-js";
@@ -10,7 +12,7 @@ import {
 	type CreateVolunteerRoleInput,
 	type CreateVolunteerShiftInput,
 	createVolunteerRole,
-	createVolunteerShift,
+	createVolunteerShiftsBatch,
 	deleteVolunteerRole,
 	deleteVolunteerShift,
 	getVolunteerCoverageGaps,
@@ -20,6 +22,14 @@ import {
 	type VolunteerRole,
 	type VolunteerShift,
 } from "../../lib/api.js";
+import {
+	buildShiftBatchInput,
+	getShiftDateBounds,
+	listFestivalDays,
+	validateNewShiftDraft,
+	validateShiftDates,
+} from "./shiftDays.js";
+import { useShiftDaySelection } from "./useShiftDaySelection.js";
 
 const emptyRoleDraft: CreateVolunteerRoleInput = {
 	slug: "",
@@ -41,6 +51,8 @@ export interface VolunteerRolesStateParams {
 	slug: Accessor<string>;
 	idToken: Accessor<string | null>;
 	festivalShortName: Accessor<string | undefined>;
+	festivalStartDate: Accessor<string | undefined>;
+	festivalEndDate: Accessor<string | undefined>;
 	roles: Resource<VolunteerRole[]>;
 	refetchRoles: () => Promise<VolunteerRole[] | undefined> | unknown;
 }
@@ -204,12 +216,36 @@ function useRoleCrudState(
 	};
 }
 
+interface ShiftsState {
+	shifts: Accessor<VolunteerShift[] | undefined>;
+	onChanged: () => Promise<void>;
+}
+
 function useShiftCrudState(
 	ctx: VolunteerRolesStateParams,
 	selectedRoleId: Accessor<string | null>,
-	onShiftsChanged: () => Promise<void>,
+	shiftsState: ShiftsState,
 ) {
 	const crud = useCrudSignals(emptyShiftDraft);
+	const [submitCount, setSubmitCount] = createSignal(0);
+	const dateBounds = createMemo(() => {
+		const start = ctx.festivalStartDate();
+		const end = ctx.festivalEndDate();
+		return start && end ? getShiftDateBounds(start, end) : null;
+	});
+	const selectionResetKey = () =>
+		`${ctx.festivalShortName() ?? ""}|${selectedRoleId() ?? ""}`;
+	const pickerResetKey = () => `${selectionResetKey()}|${submitCount()}`;
+	const days = useShiftDaySelection({
+		festivalDays: createMemo(() =>
+			listFestivalDays(ctx.festivalStartDate(), ctx.festivalEndDate()),
+		),
+		existingShifts: shiftsState.shifts,
+		draft: crud.draft,
+		resetKey: selectionResetKey,
+		isEditing: () => Boolean(crud.editingId()),
+		dateBounds,
+	});
 	const startEditShift = (shift: VolunteerShift) =>
 		crud.startEdit(shift.id, {
 			date: shift.date,
@@ -219,6 +255,34 @@ function useShiftCrudState(
 			adjudicator: shift.adjudicator ?? "",
 		});
 	const cancelEditShift = () => crud.cancelEdit();
+
+	/** Creates shifts for all effectively selected days in one atomic batch. */
+	async function createShifts(token: string, festival: string, roleId: string) {
+		const role = ctx.roles.error
+			? undefined
+			: ctx.roles()?.find((item) => item.id === roleId);
+		const dates = days.effectiveSelectedDates();
+		const problem =
+			validateNewShiftDraft(crud.draft(), role?.isRoomProctor ?? false) ??
+			validateShiftDates(dates, dateBounds());
+		if (problem) throw new Error(problem);
+		const input = buildShiftBatchInput(dates, crud.draft());
+		await createVolunteerShiftsBatch(
+			token,
+			ctx.slug(),
+			festival,
+			roleId,
+			input,
+		);
+		days.clearDates();
+		crud.setDraft(emptyShiftDraft);
+		setSubmitCount((count) => count + 1);
+		try {
+			await shiftsState.onChanged();
+		} catch {
+			// Batch succeeded; resource error state surfaces any refresh failure.
+		}
+	}
 
 	async function handleShiftFormSubmit(event: Event) {
 		event.preventDefault();
@@ -230,27 +294,21 @@ function useShiftCrudState(
 		await crud.run(
 			`Could not ${editingId ? "update" : "create"} shift.`,
 			async () => {
-				if (editingId) {
-					await updateVolunteerShift(
-						token,
-						ctx.slug(),
-						festival,
-						roleId,
-						editingId,
-						crud.draft(),
-					);
-					crud.setEditingId(null);
-				} else {
-					await createVolunteerShift(
-						token,
-						ctx.slug(),
-						festival,
-						roleId,
-						crud.draft(),
-					);
+				if (!editingId) {
+					await createShifts(token, festival, roleId);
+					return;
 				}
+				await updateVolunteerShift(
+					token,
+					ctx.slug(),
+					festival,
+					roleId,
+					editingId,
+					crud.draft(),
+				);
+				crud.setEditingId(null);
 				crud.setDraft(emptyShiftDraft);
-				await onShiftsChanged();
+				await shiftsState.onChanged();
 			},
 		);
 	}
@@ -272,7 +330,7 @@ function useShiftCrudState(
 					shift.id,
 				);
 				if (crud.editingId() === shift.id) cancelEditShift();
-				await onShiftsChanged();
+				await shiftsState.onChanged();
 			},
 			shift.id,
 		);
@@ -289,13 +347,26 @@ function useShiftCrudState(
 		cancelEditShift,
 		handleShiftFormSubmit,
 		handleDeleteShift,
+		availableShiftDays: days.availableDays,
+		selectedShiftDates: days.selectedDates,
+		effectiveSelectedShiftDates: days.effectiveSelectedDates,
+		matchingShiftDates: days.matchingDates,
+		shiftPickerResetKey: pickerResetKey,
+		shiftMinDate: () => dateBounds()?.minDate,
+		shiftMaxDate: () => dateBounds()?.maxDate,
+		toggleShiftDate: days.toggleDate,
+		selectAllShiftDates: days.selectAllDates,
+		clearShiftDates: days.clearDates,
+		addExtraShiftDate: days.addExtraDate,
 	};
 }
 
 export function useVolunteerRolesState(params: VolunteerRolesStateParams) {
 	const [selectedRoleId, setSelectedRoleId] = createSignal<string | null>(null);
 	const selectedRole = () =>
-		params.roles()?.find((r) => r.id === selectedRoleId()) ?? null;
+		params.roles.error
+			? null
+			: (params.roles()?.find((r) => r.id === selectedRoleId()) ?? null);
 	const gaps = useCoverageGapsState(params);
 	const [shifts, { refetch: refetchShifts }] = createResource(
 		() => {
@@ -320,10 +391,25 @@ export function useVolunteerRolesState(params: VolunteerRolesStateParams) {
 			if (selectedRoleId() === roleId) setSelectedRoleId(null);
 		},
 	);
-	const shiftCrud = useShiftCrudState(params, selectedRoleId, async () => {
-		await refetchShifts();
-		await gaps.refetchCoverageGaps();
+	const shiftCrud = useShiftCrudState(params, selectedRoleId, {
+		shifts: () => (shifts.error ? undefined : shifts()),
+		onChanged: async () => {
+			await refetchShifts();
+			await gaps.refetchCoverageGaps();
+		},
 	});
+
+	createEffect(
+		on(
+			params.festivalShortName,
+			() => {
+				setSelectedRoleId(null);
+				roleCrud.cancelEditRole();
+				shiftCrud.cancelEditShift();
+			},
+			{ defer: true },
+		),
+	);
 
 	return {
 		...gaps,

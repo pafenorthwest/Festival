@@ -524,4 +524,124 @@ describe("volunteer role and shift routes", () => {
 		);
 		expect(response.status).toBe(404);
 	});
+
+	it("batch-creates shifts atomically and rejects duplicates, wrong-year dates, and >62 dates", async () => {
+		const { app } = await createTestApp();
+		await createOrgAndFestivalAsAdmin(app);
+
+		const roleResponse = await app.fetch(
+			new Request(
+				`${VOLUNTEERS_BASE}/roles`,
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify(createRolePayload()),
+				}),
+			),
+		);
+		const role = (await roleResponse.json()) as { id: string };
+
+		const batchResponse = await app.fetch(
+			new Request(
+				`${VOLUNTEERS_BASE}/roles/${role.id}/shifts/batch`,
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						dates: ["2027-03-01", "2027-03-02", "2027-03-03"],
+						period: "AM",
+						timeText: "9am - 12pm",
+						division: "Piano",
+						adjudicator: "Dr Brown",
+					}),
+				}),
+			),
+		);
+		expect(batchResponse.status).toBe(201);
+		const batchBody = (await batchResponse.json()) as {
+			shifts: Array<{ date: string }>;
+		};
+		expect(batchBody.shifts).toHaveLength(3);
+
+		const duplicateResponse = await app.fetch(
+			new Request(
+				`${VOLUNTEERS_BASE}/roles/${role.id}/shifts/batch`,
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						dates: ["2027-03-02", "2027-03-04"],
+						period: "AM",
+						division: " piano ",
+						adjudicator: "dr brown",
+					}),
+				}),
+			),
+		);
+		expect(duplicateResponse.status).toBe(409);
+		const duplicateBody = (await duplicateResponse.json()) as {
+			error: string;
+			duplicateDates: string[];
+		};
+		expect(duplicateBody.duplicateDates).toEqual(["2027-03-02"]);
+
+		const shiftsAfterDup = (await (
+			await app.fetch(
+				new Request(
+					`${VOLUNTEERS_BASE}/roles/${role.id}/shifts`,
+					withAuth("admin"),
+				),
+			)
+		).json()) as Array<{ date: string }>;
+		expect(shiftsAfterDup).toHaveLength(3);
+
+		const wrongYearBatch = await app.fetch(
+			new Request(
+				`${VOLUNTEERS_BASE}/roles/${role.id}/shifts/batch`,
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						dates: ["2026-03-01"],
+						period: "PM",
+						division: "Piano",
+						adjudicator: "Dr Brown",
+					}),
+				}),
+			),
+		);
+		expect(wrongYearBatch.status).toBe(400);
+
+		const tooManyDates = Array.from({ length: 63 }, (_, index) => {
+			const day = new Date(Date.UTC(2027, 1, 1 + index));
+			return day.toISOString().slice(0, 10);
+		});
+		const tooManyResponse = await app.fetch(
+			new Request(
+				`${VOLUNTEERS_BASE}/roles/${role.id}/shifts/batch`,
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						dates: tooManyDates,
+						period: "PM",
+						division: "Piano",
+						adjudicator: "Dr Brown",
+					}),
+				}),
+			),
+		);
+		expect(tooManyResponse.status).toBe(400);
+
+		const wrongYearSingle = await app.fetch(
+			new Request(
+				`${VOLUNTEERS_BASE}/roles/${role.id}/shifts`,
+				withAuth("admin", {
+					method: "POST",
+					body: JSON.stringify({
+						date: "2026-03-01",
+						period: "AM",
+						division: "Piano",
+						adjudicator: "Dr Brown",
+					}),
+				}),
+			),
+		);
+		expect(wrongYearSingle.status).toBe(400);
+	});
 });

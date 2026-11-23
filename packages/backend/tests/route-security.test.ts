@@ -36,7 +36,7 @@ async function createInventoryTestApp() {
 }
 
 describe("co-located route security inventory", () => {
-	it("places GET /health private-health at index 0 and keeps complete metadata for all 179 routes", async () => {
+	it("places GET /health private-health at index 0 and keeps complete metadata for all 180 routes", async () => {
 		expect(CURRENT_ROUTE_SECURITY[0]).toEqual({
 			method: "GET",
 			path: "/health",
@@ -44,7 +44,7 @@ describe("co-located route security inventory", () => {
 			csrfRequired: false,
 			browserAllowed: false,
 		});
-		expect(CURRENT_ROUTE_SECURITY).toHaveLength(179);
+		expect(CURRENT_ROUTE_SECURITY).toHaveLength(180);
 
 		const { app } = await createInventoryTestApp();
 		assertRouteSecurityInventory(app.routes, CURRENT_ROUTE_SECURITY);
@@ -69,8 +69,8 @@ describe("co-located route security inventory", () => {
 		expect(DIRECTORY_GROUP_ROUTE_SECURITY).toHaveLength(10);
 		expect(REGISTRATION_GROUP_ROUTE_SECURITY).toHaveLength(27);
 		expect(COMMERCE_GROUP_ROUTE_SECURITY).toHaveLength(36);
-		expect(VOLUNTEERS_GROUP_ROUTE_SECURITY).toHaveLength(19);
-		expect(API_ROUTE_SECURITY).toHaveLength(167);
+		expect(VOLUNTEERS_GROUP_ROUTE_SECURITY).toHaveLength(20);
+		expect(API_ROUTE_SECURITY).toHaveLength(168);
 		expect(AUTH_ROUTE_SECURITY).toHaveLength(3);
 		expect(PRIVATE_RUNTIME_ROUTE_SECURITY).toHaveLength(7);
 

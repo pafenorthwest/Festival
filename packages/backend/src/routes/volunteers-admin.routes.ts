@@ -1,6 +1,7 @@
 import {
 	CreateVolunteerRoleInputSchema,
 	CreateVolunteerShiftInputSchema,
+	CreateVolunteerShiftsBatchInputSchema,
 	calculateCoverageGaps,
 	UpdateVolunteerRoleInputSchema,
 	UpdateVolunteerShiftInputSchema,
@@ -29,6 +30,8 @@ import type {
 import {
 	validateCreateRoleRequest,
 	validateCreateShiftRequest,
+	validateCreateShiftsBatchRequest,
+	validateShiftDateWithinFestivalWindow,
 	validateUpdateRoleRequest,
 	validateUpdateShiftRequest,
 } from "../volunteers/volunteer-validation.js";
@@ -68,6 +71,7 @@ export const VOLUNTEERS_ADMIN_ROUTE_SECURITY = [
 	volunteerAdminRoute("DELETE", "/roles/:roleId"),
 	volunteerAdminRoute("GET", "/roles/:roleId/shifts"),
 	volunteerAdminRoute("POST", "/roles/:roleId/shifts"),
+	volunteerAdminRoute("POST", "/roles/:roleId/shifts/batch"),
 	volunteerAdminRoute("PATCH", "/roles/:roleId/shifts/:shiftId"),
 	volunteerAdminRoute("DELETE", "/roles/:roleId/shifts/:shiftId"),
 	volunteerAdminRoute("GET", "/coverage-gaps"),
@@ -237,6 +241,13 @@ async function handleCreateShift(
 		if ("errors" in validated) {
 			throw new AppError(validated.errors.join(" "), 400);
 		}
+		const windowError = validateShiftDateWithinFestivalWindow(
+			validated.request.date,
+			scope.festival,
+		);
+		if (windowError) {
+			throw new AppError(windowError, 400);
+		}
 		const created = await volunteerRepo.createShift({
 			organizationId: tenant.organization.id,
 			festivalId: scope.festival.id,
@@ -244,6 +255,45 @@ async function handleCreateShift(
 			...validated.request,
 		});
 		return c.json(created, 201);
+	} catch (error) {
+		return toJsonError(c, error);
+	}
+}
+
+async function handleCreateShiftsBatch(
+	c: Context<VolunteerEnv>,
+	options: VolunteerRoutesOptions,
+	payload: unknown,
+) {
+	try {
+		const { volunteerRepo, tenant, scope, role } =
+			resolvedRoleScopeCache.get(c.req.raw) ??
+			(await resolveAdminRoleScope(c, options));
+		const validated = validateCreateShiftsBatchRequest(
+			payload,
+			role,
+			scope.festival,
+		);
+		if ("errors" in validated) {
+			throw new AppError(validated.errors.join(" "), 400);
+		}
+		const outcome = await volunteerRepo.createShiftsBatch({
+			organizationId: tenant.organization.id,
+			festivalId: scope.festival.id,
+			roleId: role.id,
+			...validated.request,
+		});
+		if (outcome.kind === "duplicate") {
+			return c.json(
+				{
+					error:
+						"A matching shift already exists on one or more selected dates.",
+					duplicateDates: outcome.duplicateDates,
+				},
+				409,
+			);
+		}
+		return c.json({ shifts: outcome.shifts }, 201);
 	} catch (error) {
 		return toJsonError(c, error);
 	}
@@ -262,6 +312,13 @@ async function handleUpdateShift(
 		const validated = validateUpdateShiftRequest(payload, role);
 		if ("errors" in validated) {
 			throw new AppError(validated.errors.join(" "), 400);
+		}
+		const windowError = validateShiftDateWithinFestivalWindow(
+			validated.request.date,
+			scope.festival,
+		);
+		if (windowError) {
+			throw new AppError(windowError, 400);
 		}
 		const updated = await volunteerRepo.updateShift({
 			organizationId: tenant.organization.id,
@@ -377,6 +434,9 @@ const updateRoleValidator = jsonValidator(UpdateVolunteerRoleInputSchema, {
 });
 
 const createShiftValidator = jsonValidator(CreateVolunteerShiftInputSchema);
+const createShiftsBatchValidator = jsonValidator(
+	CreateVolunteerShiftsBatchInputSchema,
+);
 const updateShiftValidator = jsonValidator(UpdateVolunteerShiftInputSchema);
 
 export function buildVolunteerAdminRoutes(options: VolunteerRoutesOptions) {
@@ -424,6 +484,13 @@ export function buildVolunteerAdminRoutes(options: VolunteerRoutesOptions) {
 			resolveRoleScopeGuard,
 			createShiftValidator,
 			(c) => handleCreateShift(c, options, c.req.valid("json")),
+		)
+		.post(
+			"/roles/:roleId/shifts/batch",
+			...adminAuth,
+			resolveRoleScopeGuard,
+			createShiftsBatchValidator,
+			(c) => handleCreateShiftsBatch(c, options, c.req.valid("json")),
 		)
 		.patch(
 			"/roles/:roleId/shifts/:shiftId",

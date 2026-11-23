@@ -8,6 +8,8 @@ import { calendarDateSchema, nonEmptyText } from "./schema-utils.js";
 import {
 	type CreateVolunteerRoleInput,
 	type CreateVolunteerShiftInput,
+	type CreateVolunteerShiftsBatchInput,
+	type CreateVolunteerShiftsBatchResponse,
 	SHIFT_PERIODS,
 	type UpdateVolunteerRoleInput,
 	type UpdateVolunteerShiftInput,
@@ -15,10 +17,13 @@ import {
 	type VolunteerRole,
 	type VolunteerShift,
 } from "./volunteer.js";
+import { MAX_SHIFT_BATCH_DATES } from "./volunteer-shift-dates.js";
 
 export type {
 	CreateVolunteerRoleInput,
 	CreateVolunteerShiftInput,
+	CreateVolunteerShiftsBatchInput,
+	CreateVolunteerShiftsBatchResponse,
 	UpdateVolunteerRoleInput,
 	UpdateVolunteerShiftInput,
 	VolunteerRole,
@@ -81,6 +86,21 @@ export const CreateVolunteerShiftInputSchema = v.object({
 export const UpdateVolunteerShiftInputSchema = v.object({
 	date: calendarDateSchema,
 	period: v.picklist(SHIFT_PERIODS),
+	timeText: v.optional(v.nullable(v.string())),
+	division: v.optional(v.nullable(v.string())),
+	adjudicator: v.optional(v.nullable(v.string())),
+});
+
+export const CreateVolunteerShiftsBatchInputSchema = v.object({
+	dates: v.pipe(
+		v.array(calendarDateSchema),
+		v.minLength(1, "Select at least one date."),
+		v.maxLength(
+			MAX_SHIFT_BATCH_DATES,
+			`At most ${MAX_SHIFT_BATCH_DATES} dates may be created at once.`,
+		),
+	),
+	period: v.picklist(SHIFT_PERIODS, "Period must be AM or PM."),
 	timeText: v.optional(v.nullable(v.string())),
 	division: v.optional(v.nullable(v.string())),
 	adjudicator: v.optional(v.nullable(v.string())),
