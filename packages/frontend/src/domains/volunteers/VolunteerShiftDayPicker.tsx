@@ -1,6 +1,13 @@
-import { type Accessor, createSignal, For, Show } from "solid-js";
-import { formatScheduleDate } from "../../app/appFormatting.js";
+import {
+	type Accessor,
+	createEffect,
+	createSignal,
+	For,
+	on,
+	Show,
+} from "solid-js";
 import { Button } from "../../components/Button.js";
+import { formatShiftDateLabel } from "./shiftDays.js";
 
 export interface VolunteerShiftDayPickerProps {
 	days: Accessor<string[]>;
@@ -8,6 +15,11 @@ export interface VolunteerShiftDayPickerProps {
 	/** Days where this role already has an identical shift. */
 	taken: Accessor<Set<string>>;
 	disabled: Accessor<boolean>;
+	resetKey: Accessor<string>;
+	minDate?: Accessor<string | undefined>;
+	maxDate?: Accessor<string | undefined>;
+	festivalStartDate?: Accessor<string | undefined>;
+	festivalEndDate?: Accessor<string | undefined>;
 	onToggle: (date: string) => void;
 	onSelectAll: () => void;
 	onClear: () => void;
@@ -18,6 +30,17 @@ export interface VolunteerShiftDayPickerProps {
 export function VolunteerShiftDayPicker(props: VolunteerShiftDayPickerProps) {
 	const [extraDate, setExtraDate] = createSignal("");
 	const [extraError, setExtraError] = createSignal<string | null>(null);
+
+	createEffect(
+		on(
+			props.resetKey,
+			() => {
+				setExtraDate("");
+				setExtraError(null);
+			},
+			{ defer: true },
+		),
+	);
 
 	function addExtraDate() {
 		const error = props.onAddDate(extraDate());
@@ -41,12 +64,16 @@ export function VolunteerShiftDayPicker(props: VolunteerShiftDayPickerProps) {
 							<label class="field-checkbox">
 								<input
 									type="checkbox"
-									checked={props.selected().includes(day)}
+									checked={!isTaken() && props.selected().includes(day)}
 									disabled={isTaken()}
 									onChange={() => props.onToggle(day)}
 								/>
 								<span>
-									{formatScheduleDate(day)}
+									{formatShiftDateLabel(
+										day,
+										props.festivalStartDate?.(),
+										props.festivalEndDate?.(),
+									)}
 									<Show when={isTaken()}>
 										<span class="muted"> (already added)</span>
 									</Show>
@@ -74,6 +101,8 @@ export function VolunteerShiftDayPicker(props: VolunteerShiftDayPickerProps) {
 					<span>Add another date</span>
 					<input
 						type="date"
+						min={props.minDate?.()}
+						max={props.maxDate?.()}
 						value={extraDate()}
 						onInput={(event) => {
 							setExtraDate(event.currentTarget.value);

@@ -27,5 +27,6 @@ export * from "./schema-utils.js";
 export * from "./shopify.js";
 export * from "./tenant.js";
 export * from "./volunteer.js";
+export * from "./volunteer-shift-dates.js";
 export * from "./volunteers.js";
 export * from "./waitlist.js";

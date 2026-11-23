@@ -9,16 +9,21 @@ import type { VolunteerShift } from "../../lib/api.js";
 import {
 	datesWithMatchingShift,
 	isValidShiftDate,
+	MAX_EXTRA_SHIFT_DATES,
+	MAX_SHIFT_BATCH_DATES,
 	mergeDays,
+	type ShiftDateBounds,
 	type ShiftDraftFields,
 } from "./shiftDays.js";
 
-interface ShiftDaySelectionOptions {
+export interface ShiftDaySelectionOptions {
 	festivalDays: Accessor<string[]>;
 	existingShifts: Accessor<VolunteerShift[] | undefined>;
 	draft: Accessor<ShiftDraftFields>;
 	/** A new value clears the selection, for example a different role or festival. */
 	resetKey: Accessor<string>;
+	isEditing?: Accessor<boolean>;
+	dateBounds?: Accessor<ShiftDateBounds | null>;
 }
 
 /** Which days are ticked while building a shift, and which are already taken. */
@@ -30,8 +35,14 @@ export function useShiftDaySelection(options: ShiftDaySelectionOptions) {
 		mergeDays(options.festivalDays(), extraDates()),
 	);
 	const matchingDates = createMemo(() =>
-		datesWithMatchingShift(options.existingShifts() ?? [], options.draft()),
+		options.isEditing?.()
+			? new Set<string>()
+			: datesWithMatchingShift(options.existingShifts() ?? [], options.draft()),
 	);
+	const effectiveSelectedDates = createMemo(() => {
+		const taken = matchingDates();
+		return selectedDates().filter((date) => !taken.has(date));
+	});
 
 	createEffect(
 		on(
@@ -43,16 +54,6 @@ export function useShiftDaySelection(options: ShiftDaySelectionOptions) {
 			{ defer: true },
 		),
 	);
-
-	// Changing the period or division can make a ticked day a duplicate.
-	createEffect(() => {
-		const taken = matchingDates();
-		setSelectedDates((current) =>
-			current.some((date) => taken.has(date))
-				? current.filter((date) => !taken.has(date))
-				: current,
-		);
-	});
 
 	function toggleDate(date: string) {
 		if (matchingDates().has(date)) return;
@@ -75,12 +76,26 @@ export function useShiftDaySelection(options: ShiftDaySelectionOptions) {
 	/** Adds a day outside the festival dates and ticks it. Returns a message if it cannot. */
 	function addExtraDate(date: string): string | null {
 		if (!isValidShiftDate(date)) return "Enter a valid date.";
+		const bounds = options.dateBounds?.();
+		if (bounds && (date < bounds.minDate || date > bounds.maxDate)) {
+			return `Date must be between ${bounds.minDate} and ${bounds.maxDate}.`;
+		}
 		if (matchingDates().has(date)) {
 			return "This role already has that shift on that day.";
 		}
-		setExtraDates((current) =>
-			current.includes(date) ? current : [...current, date],
-		);
+		const alreadyAvailable = availableDays().includes(date);
+		if (
+			!alreadyAvailable &&
+			(extraDates().length >= MAX_EXTRA_SHIFT_DATES ||
+				availableDays().length >= MAX_SHIFT_BATCH_DATES)
+		) {
+			return `You can add at most ${MAX_EXTRA_SHIFT_DATES} extra dates (up to ${MAX_SHIFT_BATCH_DATES} total days).`;
+		}
+		if (!options.festivalDays().includes(date)) {
+			setExtraDates((current) =>
+				current.includes(date) ? current : [...current, date],
+			);
+		}
 		setSelectedDates((current) =>
 			current.includes(date) ? current : [...current, date].sort(),
 		);
@@ -90,6 +105,7 @@ export function useShiftDaySelection(options: ShiftDaySelectionOptions) {
 	return {
 		availableDays,
 		selectedDates,
+		effectiveSelectedDates,
 		setSelectedDates,
 		matchingDates,
 		toggleDate,

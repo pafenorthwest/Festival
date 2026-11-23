@@ -1,10 +1,10 @@
 import { describe, expect, it } from "bun:test";
+import { getShiftDateBounds, isDateWithinShiftWindow } from "@festival/common";
 import {
 	addShiftsLabel,
-	buildShiftInputs,
-	createShiftsForDays,
+	buildShiftBatchInput,
 	datesWithMatchingShift,
-	describeCreateResult,
+	formatShiftDateLabel,
 	isValidShiftDate,
 	listFestivalDays,
 	mergeDays,
@@ -84,6 +84,35 @@ describe("mergeDays", () => {
 	});
 });
 
+describe("formatShiftDateLabel", () => {
+	it("omits the year when the date matches a single-year festival", () => {
+		expect(formatShiftDateLabel("2026-11-10", "2026-11-10", "2026-11-14")).toBe(
+			"Tue 11/10",
+		);
+	});
+
+	it("includes the 4-digit year when the date year differs from the festival year", () => {
+		expect(formatShiftDateLabel("2026-12-28", "2027-01-05", "2027-01-08")).toBe(
+			"Mon 12/28/2026",
+		);
+	});
+
+	it("includes the 4-digit year when the festival spans multiple years", () => {
+		expect(formatShiftDateLabel("2026-12-31", "2026-12-30", "2027-01-02")).toBe(
+			"Thu 12/31/2026",
+		);
+		expect(formatShiftDateLabel("2027-01-01", "2026-12-30", "2027-01-02")).toBe(
+			"Fri 01/01/2027",
+		);
+	});
+
+	it("returns malformed input unchanged", () => {
+		expect(formatShiftDateLabel("not-a-date", "2026-11-10", "2026-11-14")).toBe(
+			"not-a-date",
+		);
+	});
+});
+
 describe("datesWithMatchingShift", () => {
 	const existing = [
 		shift({ id: "a", date: "2026-11-10", period: "AM" }),
@@ -148,18 +177,30 @@ describe("validateNewShiftDraft", () => {
 });
 
 describe("validateShiftDates", () => {
-	it("needs at least one valid day", () => {
+	it("needs at least one valid day and respects shared date bounds", () => {
+		const bounds = getShiftDateBounds("2027-11-10", "2027-11-12");
+		expect(bounds).not.toBeNull();
+		expect(
+			isDateWithinShiftWindow("2027-11-10", "2027-11-10", "2027-11-12"),
+		).toBe(true);
+		expect(
+			isDateWithinShiftWindow("2026-11-10", "2027-11-10", "2027-11-12"),
+		).toBe(false);
+
 		expect(validateShiftDates([])).toBe("Choose at least one day.");
-		expect(validateShiftDates(["2026-11-10", "nope"])).toBe(
+		expect(validateShiftDates(["2027-11-10", "nope"])).toBe(
 			"Every day must be a valid date.",
 		);
-		expect(validateShiftDates(["2026-11-10"])).toBeNull();
+		expect(validateShiftDates(["2026-11-10"], bounds)).toContain(
+			bounds?.minDate ?? "",
+		);
+		expect(validateShiftDates(["2027-11-10"], bounds)).toBeNull();
 	});
 });
 
-describe("buildShiftInputs", () => {
-	it("makes one input per day, in date order, with the same details on each", () => {
-		const inputs = buildShiftInputs(
+describe("buildShiftBatchInput", () => {
+	it("deduplicates and sorts dates and trims shared shift details", () => {
+		const input = buildShiftBatchInput(
 			["2026-11-12", "2026-11-10", "2026-11-12"],
 			{
 				period: "PM",
@@ -168,99 +209,13 @@ describe("buildShiftInputs", () => {
 				adjudicator: " Lee ",
 			},
 		);
-		expect(inputs).toEqual([
-			{
-				date: "2026-11-10",
-				period: "PM",
-				timeText: "1pm - 5pm",
-				division: "Piano",
-				adjudicator: "Lee",
-			},
-			{
-				date: "2026-11-12",
-				period: "PM",
-				timeText: "1pm - 5pm",
-				division: "Piano",
-				adjudicator: "Lee",
-			},
-		]);
-	});
-});
-
-describe("createShiftsForDays", () => {
-	const inputs = buildShiftInputs(["2026-11-10", "2026-11-11", "2026-11-12"], {
-		period: "AM",
-	});
-
-	it("creates every day in order", async () => {
-		const seen: string[] = [];
-		const result = await createShiftsForDays(inputs, async (input) => {
-			seen.push(input.date);
+		expect(input).toEqual({
+			dates: ["2026-11-10", "2026-11-12"],
+			period: "PM",
+			timeText: "1pm - 5pm",
+			division: "Piano",
+			adjudicator: "Lee",
 		});
-		expect(seen).toEqual(["2026-11-10", "2026-11-11", "2026-11-12"]);
-		expect(result).toEqual({ created: seen, remaining: [] });
-	});
-
-	it("waits for each request before sending the next", async () => {
-		let inFlight = 0;
-		let maxInFlight = 0;
-		await createShiftsForDays(inputs, async () => {
-			inFlight++;
-			maxInFlight = Math.max(maxInFlight, inFlight);
-			await new Promise((resolve) => setTimeout(resolve, 1));
-			inFlight--;
-		});
-		expect(maxInFlight).toBe(1);
-	});
-
-	it("stops at the first failure and keeps the failed and later days as remaining", async () => {
-		const attempted: string[] = [];
-		const result = await createShiftsForDays(inputs, async (input) => {
-			attempted.push(input.date);
-			if (input.date === "2026-11-11") throw new Error("Server said no.");
-		});
-		expect(attempted).toEqual(["2026-11-10", "2026-11-11"]);
-		expect(result.created).toEqual(["2026-11-10"]);
-		expect(result.failed).toEqual({
-			date: "2026-11-11",
-			message: "Server said no.",
-		});
-		expect(result.remaining).toEqual(["2026-11-11", "2026-11-12"]);
-	});
-
-	it("gives a plain message when the error has none", async () => {
-		const result = await createShiftsForDays(inputs, async () => {
-			throw "boom";
-		});
-		expect(result.failed?.message).toBe("The shift could not be created.");
-	});
-});
-
-describe("describeCreateResult", () => {
-	it("reports a full success", () => {
-		expect(
-			describeCreateResult({ created: ["2026-11-10"], remaining: [] }, 1),
-		).toBe("Added 1 shift.");
-		expect(
-			describeCreateResult(
-				{ created: ["2026-11-10", "2026-11-11"], remaining: [] },
-				2,
-			),
-		).toBe("Added 2 shifts.");
-	});
-
-	it("names the day that failed and says the rest are still selected", () => {
-		const message = describeCreateResult(
-			{
-				created: ["2026-11-10"],
-				failed: { date: "2026-11-11", message: "Server said no." },
-				remaining: ["2026-11-11", "2026-11-12"],
-			},
-			3,
-		);
-		expect(message).toBe(
-			"Added 1 of 3 shifts. Could not add Wed 11/11: Server said no. The days that were not added are still selected.",
-		);
 	});
 });
 

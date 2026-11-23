@@ -5,6 +5,8 @@ import type {
 	BookShiftsOutcome,
 	CreateRoleInput,
 	CreateShiftInput,
+	CreateShiftsBatchInput,
+	CreateShiftsBatchOutcome,
 	UpdateRoleInput,
 	UpdateShiftInput,
 	UpsertVolunteerInput,
@@ -155,6 +157,84 @@ export class PostgresVolunteerRepository implements VolunteerRepository {
 			throw new Error("Volunteer shift role is outside the selected festival.");
 		}
 		return this.shift(rows[0]);
+	}
+
+	async createShiftsBatch(
+		input: CreateShiftsBatchInput,
+	): Promise<CreateShiftsBatchOutcome> {
+		return (await sql.begin(async (tx) => {
+			const roleRows = (await tx.unsafe(
+				`SELECT id FROM ${this.schema}.volunteer_roles
+				 WHERE id = $1 AND organization_id = $2 AND festival_id = $3
+				 FOR UPDATE`,
+				[input.roleId, input.organizationId, input.festivalId],
+			)) as Array<Record<string, unknown>>;
+			if (!roleRows[0]) {
+				throw new Error(
+					"Volunteer shift role is outside the selected festival.",
+				);
+			}
+			if (input.dates.length === 0) {
+				return { kind: "created", shifts: [] };
+			}
+
+			const uniqueDates = [...new Set(input.dates)];
+			const datePlaceholders = uniqueDates
+				.map((_, index) => `$${index + 7}`)
+				.join(", ");
+			const duplicateCheckParams = [
+				input.organizationId,
+				input.festivalId,
+				input.roleId,
+				input.period,
+				(input.division ?? "").trim().toLowerCase(),
+				(input.adjudicator ?? "").trim().toLowerCase(),
+				...uniqueDates,
+			];
+			const existingRows = (await tx.unsafe(
+				`SELECT date::text AS date
+				 FROM ${this.schema}.volunteer_shifts
+				 WHERE organization_id = $1
+					AND festival_id = $2
+					AND role_id = $3
+					AND period = $4
+					AND LOWER(BTRIM(COALESCE(division, ''))) = $5
+					AND LOWER(BTRIM(COALESCE(adjudicator, ''))) = $6
+					AND date::text IN (${datePlaceholders})`,
+				duplicateCheckParams,
+			)) as Array<Record<string, unknown>>;
+			if (existingRows.length > 0) {
+				const existingSet = new Set(
+					existingRows.map((row) => String(row.date)),
+				);
+				const duplicateDates = uniqueDates.filter((date) =>
+					existingSet.has(date),
+				);
+				return { kind: "duplicate", duplicateDates };
+			}
+
+			const shifts: VolunteerShiftRecord[] = [];
+			for (const date of input.dates) {
+				const rows = (await tx.unsafe(
+					`INSERT INTO ${this.schema}.volunteer_shifts (id, organization_id, festival_id, role_id, date, period, time_text, division, adjudicator)
+					 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+					 RETURNING id, organization_id, festival_id, role_id, date::text, period, time_text, division, adjudicator, created_at::text`,
+					[
+						randomUUID(),
+						input.organizationId,
+						input.festivalId,
+						input.roleId,
+						date,
+						input.period,
+						input.timeText,
+						input.division,
+						input.adjudicator,
+					],
+				)) as Array<Record<string, unknown>>;
+				shifts.push(this.shift(rows[0]));
+			}
+			return { kind: "created", shifts };
+		})) as CreateShiftsBatchOutcome;
 	}
 
 	async updateShift(input: UpdateShiftInput) {

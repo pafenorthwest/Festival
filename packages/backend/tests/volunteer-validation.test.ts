@@ -4,6 +4,8 @@ import {
 	validateBookShiftsRequest,
 	validateCreateRoleRequest,
 	validateCreateShiftRequest,
+	validateCreateShiftsBatchRequest,
+	validateShiftDateWithinFestivalWindow,
 } from "../src/volunteers/volunteer-validation.js";
 
 function role(
@@ -172,5 +174,117 @@ describe("validateBookShiftsRequest", () => {
 		expect(result.errors).toContain(
 			"Each shift ID must be a non-empty string.",
 		);
+	});
+});
+
+describe("validateShiftDateWithinFestivalWindow", () => {
+	const festival = { startDate: "2027-03-01", endDate: "2027-03-05" };
+
+	it("accepts dates inside the festival range", () => {
+		expect(
+			validateShiftDateWithinFestivalWindow("2027-03-03", festival),
+		).toBeNull();
+	});
+
+	it("accepts dates at the +/- 30 day window boundaries", () => {
+		expect(
+			validateShiftDateWithinFestivalWindow("2027-01-30", festival),
+		).toBeNull();
+		expect(
+			validateShiftDateWithinFestivalWindow("2027-04-04", festival),
+		).toBeNull();
+	});
+
+	it("rejects dates outside the festival window including wrong year", () => {
+		expect(
+			validateShiftDateWithinFestivalWindow("2026-03-01", festival),
+		).not.toBeNull();
+		expect(
+			validateShiftDateWithinFestivalWindow("2027-01-29", festival),
+		).not.toBeNull();
+		expect(
+			validateShiftDateWithinFestivalWindow("2027-04-05", festival),
+		).not.toBeNull();
+	});
+});
+
+describe("validateCreateShiftsBatchRequest", () => {
+	const festival = { startDate: "2027-03-01", endDate: "2027-03-05" };
+
+	it("accepts a valid multi-day batch", () => {
+		const result = validateCreateShiftsBatchRequest(
+			{
+				dates: ["2027-03-01", "2027-03-02", "2027-03-03"],
+				period: "pm",
+				timeText: "1pm - 4:30pm",
+			},
+			role(),
+			festival,
+		);
+		expect("request" in result).toBe(true);
+		if (!("request" in result)) throw new Error("Expected a valid request.");
+		expect(result.request).toEqual({
+			dates: ["2027-03-01", "2027-03-02", "2027-03-03"],
+			period: "PM",
+			timeText: "1pm - 4:30pm",
+			division: null,
+			adjudicator: null,
+		});
+	});
+
+	it("rejects empty dates", () => {
+		const result = validateCreateShiftsBatchRequest(
+			{ dates: [], period: "AM" },
+			role(),
+			festival,
+		);
+		expect("errors" in result).toBe(true);
+	});
+
+	it("rejects batches exceeding 62 dates", () => {
+		const dates = Array.from({ length: 63 }, (_, index) => {
+			const day = new Date(Date.UTC(2027, 1, 1 + index));
+			return day.toISOString().slice(0, 10);
+		});
+		const result = validateCreateShiftsBatchRequest(
+			{ dates, period: "AM" },
+			role(),
+			festival,
+		);
+		expect("errors" in result).toBe(true);
+	});
+
+	it("rejects duplicate dates in payload", () => {
+		const result = validateCreateShiftsBatchRequest(
+			{ dates: ["2027-03-01", "2027-03-01"], period: "AM" },
+			role(),
+			festival,
+		);
+		expect("errors" in result).toBe(true);
+	});
+
+	it("rejects out-of-window wrong-year dates", () => {
+		const result = validateCreateShiftsBatchRequest(
+			{ dates: ["2027-03-01", "2026-03-01"], period: "AM" },
+			role(),
+			festival,
+		);
+		expect("errors" in result).toBe(true);
+	});
+
+	it("enforces Room Proctor division and adjudicator rules", () => {
+		const missing = validateCreateShiftsBatchRequest(
+			{ dates: ["2027-03-01"], period: "AM" },
+			role({ isRoomProctor: true }),
+			festival,
+		);
+		expect("errors" in missing).toBe(true);
+
+		const extra = validateCreateShiftsBatchRequest(
+			{ dates: ["2027-03-01"], period: "AM", division: "Piano" },
+			role({ isRoomProctor: false }),
+			festival,
+		);
+		expect("errors" in extra).toBe(true);
 	});
 });

@@ -2,6 +2,8 @@ import type {
 	CreateMessageTemplateInput,
 	CreateVolunteerRoleInput,
 	CreateVolunteerShiftInput,
+	CreateVolunteerShiftsBatchInput,
+	CreateVolunteerShiftsBatchResponse,
 	MessageChannel,
 	MessageLog,
 	MessageLogStatus,
@@ -35,6 +37,8 @@ export type {
 	CreateMessageTemplateInput,
 	CreateVolunteerRoleInput,
 	CreateVolunteerShiftInput,
+	CreateVolunteerShiftsBatchInput,
+	CreateVolunteerShiftsBatchResponse,
 	EnrollVolunteerInput,
 	MessageChannel,
 	MessageLog,
@@ -146,6 +150,21 @@ export function createVolunteerShift(
 	const endpoint = festVol(idToken).roles[":roleId"].shifts;
 	const param = { ...vp(slug, festivalShortName), roleId: enc(roleId) };
 	return rpcCall<VolunteerShift>(
+		endpoint.$post({ param, json: input }),
+		endpoint.$path({ param }),
+	);
+}
+
+export function createVolunteerShiftsBatch(
+	idToken: string,
+	slug: string,
+	festivalShortName: string,
+	roleId: string,
+	input: CreateVolunteerShiftsBatchInput,
+): Promise<CreateVolunteerShiftsBatchResponse> {
+	const endpoint = festVol(idToken).roles[":roleId"].shifts.batch;
+	const param = { ...vp(slug, festivalShortName), roleId: enc(roleId) };
+	return rpcCall<CreateVolunteerShiftsBatchResponse>(
 		endpoint.$post({ param, json: input }),
 		endpoint.$path({ param }),
 	);

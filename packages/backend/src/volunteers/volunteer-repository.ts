@@ -93,6 +93,21 @@ export interface CreateShiftInput {
 	adjudicator: string | null;
 }
 
+export interface CreateShiftsBatchInput {
+	organizationId: string;
+	festivalId: string;
+	roleId: string;
+	dates: string[];
+	period: ShiftPeriod;
+	timeText: string | null;
+	division: string | null;
+	adjudicator: string | null;
+}
+
+export type CreateShiftsBatchOutcome =
+	| { kind: "created"; shifts: VolunteerShiftRecord[] }
+	| { kind: "duplicate"; duplicateDates: string[] };
+
 export interface UpdateShiftInput {
 	organizationId: string;
 	festivalId: string;
@@ -115,6 +130,9 @@ export interface VolunteerRepository {
 
 	createRole(input: CreateRoleInput): Promise<VolunteerRoleRecord>;
 	createShift(input: CreateShiftInput): Promise<VolunteerShiftRecord>;
+	createShiftsBatch(
+		input: CreateShiftsBatchInput,
+	): Promise<CreateShiftsBatchOutcome>;
 	updateRole(input: UpdateRoleInput): Promise<VolunteerRoleRecord | null>;
 	deleteRole(
 		organizationId: string,
@@ -296,6 +314,62 @@ export class InMemoryVolunteerRepository implements VolunteerRepository {
 		};
 		this.shifts.set(record.id, record);
 		return { ...record };
+	}
+
+	async createShiftsBatch(
+		input: CreateShiftsBatchInput,
+	): Promise<CreateShiftsBatchOutcome> {
+		const role = this.roles.get(input.roleId);
+		if (
+			!role ||
+			role.organizationId !== input.organizationId ||
+			role.festivalId !== input.festivalId
+		) {
+			throw new Error("Volunteer shift role is outside the selected festival.");
+		}
+		const normalizedDivision = (input.division ?? "").trim().toLowerCase();
+		const normalizedAdjudicator = (input.adjudicator ?? "")
+			.trim()
+			.toLowerCase();
+		const targetDates = new Set(input.dates);
+		const existingDuplicateDates = new Set<string>();
+		for (const shift of this.shifts.values()) {
+			if (
+				shift.organizationId === input.organizationId &&
+				shift.festivalId === input.festivalId &&
+				shift.roleId === input.roleId &&
+				shift.period === input.period &&
+				targetDates.has(shift.date) &&
+				(shift.division ?? "").trim().toLowerCase() === normalizedDivision &&
+				(shift.adjudicator ?? "").trim().toLowerCase() === normalizedAdjudicator
+			) {
+				existingDuplicateDates.add(shift.date);
+			}
+		}
+		if (existingDuplicateDates.size > 0) {
+			const duplicateDates = [...new Set(input.dates)].filter((date) =>
+				existingDuplicateDates.has(date),
+			);
+			return { kind: "duplicate", duplicateDates };
+		}
+		const nowIso = new Date().toISOString();
+		const shifts = input.dates.map((date) => {
+			const record: VolunteerShiftRecord = {
+				id: randomUUID(),
+				organizationId: input.organizationId,
+				festivalId: input.festivalId,
+				roleId: input.roleId,
+				date,
+				period: input.period,
+				timeText: input.timeText,
+				division: input.division,
+				adjudicator: input.adjudicator,
+				createdAtIso: nowIso,
+			};
+			this.shifts.set(record.id, record);
+			return { ...record };
+		});
+		return { kind: "created", shifts };
 	}
 
 	async updateShift(input: UpdateShiftInput) {

@@ -1,19 +1,33 @@
-import type { ShiftPeriod } from "@festival/common";
-import { formatScheduleDate } from "../../app/appFormatting.js";
+import {
+	getShiftDateBounds,
+	isDateWithinShiftWindow,
+	MAX_SHIFT_BATCH_DATES,
+	type ShiftPeriod,
+} from "@festival/common";
 import type {
 	CreateVolunteerShiftInput,
+	CreateVolunteerShiftsBatchInput,
 	VolunteerShift,
 } from "../../lib/api.js";
 
+export { getShiftDateBounds, isDateWithinShiftWindow, MAX_SHIFT_BATCH_DATES };
+
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const WEEKDAY_ABBREVIATIONS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 /** A festival is days long; this only stops a bad date range from listing years. */
-const MAX_FESTIVAL_DAYS = 62;
+const MAX_FESTIVAL_DAYS = MAX_SHIFT_BATCH_DATES;
+export const MAX_EXTRA_SHIFT_DATES = 31;
 
 export type ShiftDraftFields = Pick<
 	CreateVolunteerShiftInput,
 	"period" | "timeText" | "division" | "adjudicator"
 >;
+
+export interface ShiftDateBounds {
+	minDate: string;
+	maxDate: string;
+}
 
 function toUtcMs(date: string): number | null {
 	if (!DATE_PATTERN.test(date)) return null;
@@ -25,6 +39,42 @@ function toUtcMs(date: string): number | null {
 export function isValidShiftDate(date: string): boolean {
 	const ms = toUtcMs(date);
 	return ms !== null && new Date(ms).toISOString().slice(0, 10) === date;
+}
+
+/**
+ * Formats YYYY-MM-DD as "Mon 11/10" when in the same single-year festival,
+ * or "Mon 11/10/2026" when the date's year differs or the festival spans years.
+ */
+export function formatShiftDateLabel(
+	date: string,
+	festivalStartDate?: string,
+	festivalEndDate?: string,
+): string {
+	const ms = toUtcMs(date);
+	if (ms === null || !isValidShiftDate(date)) return date;
+	const utcDate = new Date(ms);
+	const year = utcDate.getUTCFullYear();
+	const month = String(utcDate.getUTCMonth() + 1).padStart(2, "0");
+	const day = String(utcDate.getUTCDate()).padStart(2, "0");
+	const weekday = WEEKDAY_ABBREVIATIONS[utcDate.getUTCDay()];
+
+	const startYear =
+		festivalStartDate && isValidShiftDate(festivalStartDate)
+			? Number(festivalStartDate.slice(0, 4))
+			: null;
+	const endYear =
+		festivalEndDate && isValidShiftDate(festivalEndDate)
+			? Number(festivalEndDate.slice(0, 4))
+			: null;
+	const spansYears =
+		startYear !== null && endYear !== null && startYear !== endYear;
+	const differsFromFestival =
+		(startYear !== null && year !== startYear) ||
+		(endYear !== null && year !== endYear);
+
+	return spansYears || differsFromFestival
+		? `${weekday} ${month}/${day}/${year}`
+		: `${weekday} ${month}/${day}`;
 }
 
 /** Every day from start to end inclusive, as YYYY-MM-DD. Empty when either date is unusable. */
@@ -76,7 +126,7 @@ export function datesWithMatchingShift(
 	return matches;
 }
 
-/** Mirrors the server's rules so a bad form fails once, not once per day. */
+/** Mirrors the server's rules so a bad form fails once before calling the API. */
 export function validateNewShiftDraft(
 	draft: ShiftDraftFields,
 	isRoomProctor: boolean,
@@ -95,77 +145,37 @@ export function validateNewShiftDraft(
 	return null;
 }
 
-export function validateShiftDates(dates: readonly string[]): string | null {
+export function validateShiftDates(
+	dates: readonly string[],
+	dateBounds?: ShiftDateBounds | null,
+): string | null {
 	if (dates.length === 0) return "Choose at least one day.";
+	if (dates.length > MAX_SHIFT_BATCH_DATES) {
+		return `You can add at most ${MAX_SHIFT_BATCH_DATES} days at once.`;
+	}
 	if (!dates.every(isValidShiftDate)) return "Every day must be a valid date.";
+	if (
+		dateBounds &&
+		dates.some((date) => date < dateBounds.minDate || date > dateBounds.maxDate)
+	) {
+		return `Every day must be between ${dateBounds.minDate} and ${dateBounds.maxDate}.`;
+	}
 	return null;
 }
 
-/** One input per day, in date order, with the same details on each. */
-export function buildShiftInputs(
+/** Atomic batch payload with deduplicated sorted dates and trimmed fields. */
+export function buildShiftBatchInput(
 	dates: readonly string[],
 	draft: ShiftDraftFields,
-): CreateVolunteerShiftInput[] {
+): CreateVolunteerShiftsBatchInput {
 	const period: ShiftPeriod = draft.period;
-	return [...new Set(dates)].sort().map((date) => ({
-		date,
+	return {
+		dates: [...new Set(dates)].sort(),
 		period,
 		timeText: (draft.timeText ?? "").trim(),
 		division: (draft.division ?? "").trim(),
 		adjudicator: (draft.adjudicator ?? "").trim(),
-	}));
-}
-
-export interface CreateShiftsResult {
-	created: string[];
-	failed?: { date: string; message: string };
-	/** Days that were not created, starting with the one that failed. */
-	remaining: string[];
-}
-
-/**
- * Creates the shifts one after another and stops at the first failure, so a
- * problem that affects every request (such as a lost connection) is reported
- * once instead of repeated for each day.
- */
-export async function createShiftsForDays(
-	inputs: readonly CreateVolunteerShiftInput[],
-	create: (input: CreateVolunteerShiftInput) => Promise<unknown>,
-): Promise<CreateShiftsResult> {
-	const created: string[] = [];
-	for (const [index, input] of inputs.entries()) {
-		try {
-			await create(input);
-			created.push(input.date);
-		} catch (error) {
-			return {
-				created,
-				failed: {
-					date: input.date,
-					message:
-						error instanceof Error && error.message
-							? error.message
-							: "The shift could not be created.",
-				},
-				remaining: inputs.slice(index).map((item) => item.date),
-			};
-		}
-	}
-	return { created, remaining: [] };
-}
-
-export function describeCreateResult(
-	result: CreateShiftsResult,
-	total: number,
-): string {
-	if (!result.failed) {
-		return result.created.length === 1
-			? "Added 1 shift."
-			: `Added ${result.created.length} shifts.`;
-	}
-	const added = `Added ${result.created.length} of ${total} shifts.`;
-	const reason = result.failed.message.replace(/[.\s]+$/, "");
-	return `${added} Could not add ${formatScheduleDate(result.failed.date)}: ${reason}. The days that were not added are still selected.`;
+	};
 }
 
 export function addShiftsLabel(count: number): string {

@@ -183,7 +183,13 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 								onSubmitShift={state.handleShiftFormSubmit}
 								availableDays={state.availableShiftDays}
 								selectedDates={state.selectedShiftDates}
+								effectiveSelectedDates={state.effectiveSelectedShiftDates}
 								matchingDates={state.matchingShiftDates}
+								pickerResetKey={state.shiftPickerResetKey}
+								minDate={state.shiftMinDate}
+								maxDate={state.shiftMaxDate}
+								festivalStartDate={() => selectedFestival()?.startDate}
+								festivalEndDate={() => selectedFestival()?.endDate}
 								onToggleDate={state.toggleShiftDate}
 								onSelectAllDates={state.selectAllShiftDates}
 								onClearDates={state.clearShiftDates}

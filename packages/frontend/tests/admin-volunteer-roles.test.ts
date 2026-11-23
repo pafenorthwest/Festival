@@ -170,7 +170,7 @@ describe("admin volunteer role and shift management", () => {
 		// Editing saves one shift; creating adds one per ticked day.
 		expect(shiftsPanel).toContain('? "Save changes"');
 		expect(shiftsPanel).toContain(
-			"addShiftsLabel(props.selectedDates().length)",
+			"addShiftsLabel(props.effectiveSelectedDates().length)",
 		);
 		expect(state).toContain("cancelEditShift");
 		expect(state).toContain("Could not delete shift.");
@@ -224,7 +224,7 @@ describe("admin volunteer role and shift management", () => {
 		expect(coveragePanel).toContain("shifts match this filter.");
 	});
 
-	it("displays shift dates as weekday + MM/DD, per specs/VOLUNTEER-PORTAL.md", async () => {
+	it("displays shift dates as weekday + MM/DD (with year when needed), per specs/VOLUNTEER-PORTAL.md", async () => {
 		const shiftsPanel = await read(
 			"../src/domains/volunteers/VolunteerShiftsPanel.tsx",
 		);
@@ -233,12 +233,12 @@ describe("admin volunteer role and shift management", () => {
 		);
 
 		expect(shiftsPanel).toContain(
-			'import { formatScheduleDate } from "../../app/appFormatting.js"',
+			'import { addShiftsLabel, formatShiftDateLabel } from "./shiftDays.js"',
 		);
 		expect(coveragePanel).toContain(
 			'import { formatScheduleDate } from "../../app/appFormatting.js"',
 		);
-		expect(shiftsPanel).toContain("formatScheduleDate(shift.date)");
+		expect(shiftsPanel).toContain("formatShiftDateLabel(");
 		expect(coveragePanel).toContain("formatScheduleDate(slot.date)");
 	});
 });

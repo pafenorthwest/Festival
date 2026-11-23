@@ -97,6 +97,18 @@ export interface UpdateVolunteerShiftInput {
 	adjudicator?: string | null;
 }
 
+export interface CreateVolunteerShiftsBatchInput {
+	dates: string[];
+	period: ShiftPeriod;
+	timeText?: string | null;
+	division?: string | null;
+	adjudicator?: string | null;
+}
+
+export interface CreateVolunteerShiftsBatchResponse {
+	shifts: VolunteerShift[];
+}
+
 export type CreateShiftInput = CreateVolunteerShiftInput;
 
 export interface BookShiftsInput {
