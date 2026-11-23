@@ -2,7 +2,7 @@ export function PrivacyPolicyPage() {
 	return (
 		<section class="panel privacy-policy">
 			<h1>Privacy Policy</h1>
-			<p class="muted">Effective date: September 9, 2026</p>
+			<p class="muted">Effective date: November 22, 2026</p>
 			<p>
 				This Privacy Policy explains how Festival collects, uses, and shares
 				personal information when you use this website to register for, support,
@@ -27,6 +27,10 @@ export function PrivacyPolicyPage() {
 					Checkout and purchase information, such as the product selected, order
 					identifiers, payment status, and membership status.
 				</li>
+				<li>
+					Usage and performance information, such as request volumes, response
+					times, and error rates, collected to monitor how the site performs.
+				</li>
 			</ul>
 			<p>
 				Payments are completed through Shopify. We do not receive or store your
@@ -50,6 +54,14 @@ export function PrivacyPolicyPage() {
 				</li>
 			</ul>
 
+			<h2>Usage metrics</h2>
+			<p>
+				We track usage metrics, such as how many requests the site receives, how
+				quickly it responds, and how often errors occur. We use this information
+				to monitor performance and plan capacity, especially during busy
+				registration periods. We do not use it for advertising.
+			</p>
+
 			<h2>Shopify data sharing</h2>
 			<p>
 				When you choose to continue with Shopify checkout or sign in through
@@ -65,6 +77,17 @@ export function PrivacyPolicyPage() {
 				handles data in its services.
 			</p>
 
+			<h2>Public teacher and accompanist directory</h2>
+			<p>
+				If you are a teacher or accompanist member and choose to be listed, the
+				public directory shows your display name, your role (teacher or
+				accompanist), and your approved divisions while your membership is
+				active. It never shows your email address, phone number, city, or
+				mailing address. Listing is optional. The listing box is checked by
+				default when you sign up, and you can change your choice during sign-up
+				or at any time in your account.
+			</p>
+
 			<h2>How we share information</h2>
 			<p>
 				We share personal information with the festival personnel who need it to
@@ -72,6 +95,14 @@ export function PrivacyPolicyPage() {
 				with service providers such as Shopify that help provide these services.
 				We may also share information when required by law or to protect the
 				rights, safety, and security of Festival, participants, or others.
+			</p>
+			<p>
+				Festival staff who manage memberships and registrations can view and
+				search the contact details you submit on Festival forms or agree to
+				share from Shopify, such as your name, email address, city or mailing
+				address, and phone number. We keep a record of when staff view or search
+				customer profiles. The record does not include the contact details
+				themselves.
 			</p>
 
 			<h2>Retention and security</h2>
