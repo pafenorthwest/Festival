@@ -7,6 +7,8 @@ export const CHECKBOX_HELP_TEXT = {
 		"Allows festival staff to use your contact information (name, email, and phone) to notify you if a spot opens and coordinate waitlist placement.",
 	publicDirectoryPublishing:
 		"Optional. Publishes only your display name and division in the Public Teacher Directory while your teacher membership is active. Private details like email, phone, and address are never shown. You can change this anytime in your account.",
+	accompanistDirectoryPublishing:
+		"Optional. Publishes only your display name, role, and approved divisions in the Public Directory while your accompanist membership is active. Private details like email, phone, and city are never shown. You can change this anytime in your account.",
 } as const;
 
 export const CUSTOMER_HELP_TEXT = {

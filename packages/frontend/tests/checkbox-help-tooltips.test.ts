@@ -114,6 +114,27 @@ describe("HelpTooltip component and CHECKBOX_HELP_TEXT", () => {
 		expect(directoryText).toMatch(/phone/i);
 		expect(directoryText).toMatch(/never|not/i);
 		expect(directoryText).toMatch(/anytime|any time|change|account/i);
+
+		const accompanistDirectoryText =
+			CHECKBOX_HELP_TEXT.accompanistDirectoryPublishing;
+		expect(accompanistDirectoryText.trim().length).toBeGreaterThan(0);
+		expect(accompanistDirectoryText).toMatch(/optional/i);
+		expect(accompanistDirectoryText).toMatch(/display name|name/i);
+		expect(accompanistDirectoryText).toMatch(/\brole\b/i);
+		expect(accompanistDirectoryText).toMatch(/approved divisions/i);
+		expect(accompanistDirectoryText).toContain("Public Directory");
+		expect(accompanistDirectoryText).not.toContain("Public Teacher Directory");
+		expect(accompanistDirectoryText).toMatch(
+			/accompanist membership is active/i,
+		);
+		expect(accompanistDirectoryText).not.toMatch(/teacher membership/i);
+		expect(accompanistDirectoryText).toMatch(/email/i);
+		expect(accompanistDirectoryText).toMatch(/phone/i);
+		expect(accompanistDirectoryText).toMatch(/city/i);
+		expect(accompanistDirectoryText).toMatch(/never|not/i);
+		expect(accompanistDirectoryText).toMatch(
+			/anytime|any time|change|account/i,
+		);
 	});
 
 	it("exports CUSTOMER_HELP_TEXT with accurate copy for all 6 customer help tooltips", () => {
@@ -194,8 +215,9 @@ describe("customer checkbox help tooltip wiring", () => {
 		expect(accompanistPageSource).toContain("CHECKBOX_HELP_TEXT");
 		assertCheckboxHelpRowHasTooltip(
 			accompanistPageSource,
-			"publicDirectoryPublishing",
+			"accompanistDirectoryPublishing",
 		);
+		expect(accompanistPageSource).not.toContain("publicDirectoryPublishing");
 		assertCustomerHelpTooltipWired(
 			accompanistPageSource,
 			"../components/HelpTooltip.js",
@@ -210,7 +232,14 @@ describe("customer checkbox help tooltip wiring", () => {
 		expect(teacherDirectoryCardSource).toContain("CHECKBOX_HELP_TEXT");
 		assertCheckboxHelpRowHasTooltip(
 			teacherDirectoryCardSource,
+			"accompanistDirectoryPublishing",
+		);
+		assertCheckboxHelpRowHasTooltip(
+			teacherDirectoryCardSource,
 			"publicDirectoryPublishing",
+		);
+		expect(teacherDirectoryCardSource).toMatch(
+			/c\.role\(\)\s*===\s*"accompanist"\s*\?\s*CHECKBOX_HELP_TEXT\.accompanistDirectoryPublishing\s*:\s*CHECKBOX_HELP_TEXT\.publicDirectoryPublishing/,
 		);
 	});
 

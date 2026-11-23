@@ -398,7 +398,11 @@ function TeacherDirectoryForm(props: { ctrl: TeacherCardCtrl }) {
 				<HelpTooltip
 					id={`${c.role()}-directory-opt-in-help`}
 					label={`About ${c.cfg().heading} publishing`}
-					text={CHECKBOX_HELP_TEXT.publicDirectoryPublishing}
+					text={
+						c.role() === "accompanist"
+							? CHECKBOX_HELP_TEXT.accompanistDirectoryPublishing
+							: CHECKBOX_HELP_TEXT.publicDirectoryPublishing
+					}
 				/>
 			</div>
 			<div class="membership-checkout-actions">

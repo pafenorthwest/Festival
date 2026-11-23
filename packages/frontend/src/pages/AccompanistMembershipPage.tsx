@@ -303,7 +303,7 @@ export function AccompanistMembershipPage(props: { slug: string }) {
 						<HelpTooltip
 							id="accompanist-directory-opt-in-help"
 							label="About Public Directory publishing"
-							text={CHECKBOX_HELP_TEXT.publicDirectoryPublishing}
+							text={CHECKBOX_HELP_TEXT.accompanistDirectoryPublishing}
 						/>
 					</div>
 					<Button type="submit" disabled={submitting()}>
