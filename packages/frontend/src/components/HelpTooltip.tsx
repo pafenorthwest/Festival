@@ -52,8 +52,13 @@ export function HelpTooltip(props: {
 	let trigger: HTMLButtonElement | undefined;
 	let pointerDown = false;
 	onMount(() => {
+		if (typeof document === "undefined") return;
 		const closeOutside = (event: PointerEvent) => {
-			if (event.target instanceof Node && !help?.contains(event.target))
+			if (
+				typeof Node !== "undefined" &&
+				event.target instanceof Node &&
+				!help?.contains(event.target)
+			)
 				setOpen(false);
 		};
 		document.addEventListener("pointerdown", closeOutside);
@@ -67,7 +72,11 @@ export function HelpTooltip(props: {
 				if (event.pointerType !== "touch") setOpen(true);
 			}}
 			onPointerLeave={(event) => {
-				if (event.pointerType !== "touch" && document.activeElement !== trigger)
+				if (
+					event.pointerType !== "touch" &&
+					(typeof document === "undefined" ||
+						document.activeElement !== trigger)
+				)
 					setOpen(false);
 			}}
 		>
