@@ -1,881 +1,50 @@
-export const ROUTE_AUTHENTICATION_CLASSES = [
-	"public",
-	"firebase",
-	"tenant",
-	"admin",
-	"volunteer-admin",
-	"private-health",
-	"customer-auth-start",
-	"customer-oauth-callback",
-	"customer",
-	"shopify-webhook",
-	"private-service",
-	"private-runtime",
-	"private-operator",
-	"private-event-bus",
-] as const;
+import { API_ROUTE_SECURITY } from "./api-router.js";
+import { AUTH_ROUTE_SECURITY } from "./auth-router.js";
+import { PRIVATE_RUNTIME_ROUTE_SECURITY } from "./private-runtime.routes.js";
+import {
+	type CoLocatedRouteSecurity,
+	defineRouteSecurity,
+	isAllowedPrivateRoutePath,
+	isPrivateRouteAuthenticationClass,
+	isReservedPrivateSurfacePath,
+	ROUTE_AUTHENTICATION_CLASSES,
+	type RouteAuthenticationClass,
+	type RouteSecurityDeclaration,
+	withRouteSecurity,
+} from "./shared/route-security-metadata.js";
 
-export type RouteAuthenticationClass =
-	(typeof ROUTE_AUTHENTICATION_CLASSES)[number];
+export {
+	type CoLocatedRouteSecurity,
+	isPrivateRouteAuthenticationClass,
+	ROUTE_AUTHENTICATION_CLASSES,
+	type RouteAuthenticationClass,
+	type RouteSecurityDeclaration,
+};
 
-export function isPrivateRouteAuthenticationClass(
-	authenticationClass: RouteAuthenticationClass,
-): boolean {
-	return authenticationClass.startsWith("private-");
-}
-
-function isAllowedPrivateRoutePath(path: string): boolean {
-	return path === "/health" || path.startsWith("/api/internal/");
-}
-
-function isReservedPrivateSurfacePath(path: string): boolean {
-	return (
-		path === "/health" ||
-		/^\/(?:api\/)?(?:internal|metrics|ready|readiness|diagnostics|debug|jobs|workers|queues|operator)(?:\/|$)/.test(
-			path,
-		)
-	);
-}
-
-export interface RouteSecurityDeclaration {
-	method: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE";
-	path: string;
-	authenticationClass: RouteAuthenticationClass;
-}
-
-export const CURRENT_ROUTE_SECURITY = [
-	{ method: "GET", path: "/health", authenticationClass: "private-health" },
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/class-checkout-recoveries/reap",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/registration/checkout/status",
-		authenticationClass: "customer",
-	},
-	{
+const ROOT_ROUTE_SECURITY = [
+	defineRouteSecurity({
 		method: "GET",
-		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/registration/checkout/restart",
-		authenticationClass: "customer",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/registration/checkout/restart",
-		authenticationClass: "customer",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/admin/class-checkout-recoveries",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/class-checkout-recoveries/:recoveryReference/resolve",
-		authenticationClass: "admin",
-	},
-	{ method: "GET", path: "/api/bootstrap", authenticationClass: "public" },
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/billing/mismatches",
-		authenticationClass: "admin",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/billing/customers/:customerId/credit-balance",
-		authenticationClass: "admin",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/billing/customers/:customerId/ledger",
-		authenticationClass: "admin",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/billing/adjustments",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/billing/adjustments",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/entitlements/:entitlementId/revoke",
-		authenticationClass: "admin",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/admin/entitlements/operations",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/entitlements/reconcile",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/entitlements/decisions/:decisionId/decline",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/entitlements/decisions/:decisionId/approve",
-		authenticationClass: "admin",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/admin/festivals/:festivalShortName/class-subtypes",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/festivals/:festivalShortName/class-subtypes",
-		authenticationClass: "admin",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/admin/festivals/:festivalShortName/rooms",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/festivals/:festivalShortName/rooms",
-		authenticationClass: "admin",
-	},
-	{
-		method: "GET",
-		path: "/api/firebase-session",
-		authenticationClass: "firebase",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations",
-		authenticationClass: "firebase",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/admin/shopify-customer-account",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/shopify-customer-account",
-		authenticationClass: "admin",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/customer-auth/start",
-		authenticationClass: "customer-auth-start",
-	},
-	{
-		method: "GET",
-		path: "/api/customer-auth/callback",
-		authenticationClass: "customer-oauth-callback",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/customer/session",
-		authenticationClass: "customer",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/customer/membership-purchase/:offeringId",
-		authenticationClass: "customer",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/customer/checkout",
-		authenticationClass: "customer",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/customer/checkout-recovery/:token",
-		authenticationClass: "customer",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/customer/checkout-recovery/:token/checkout",
-		authenticationClass: "customer",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/customer/accompanist-membership",
-		authenticationClass: "customer",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/customer/accompanist-membership",
-		authenticationClass: "customer",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/staff/accompanists",
-		authenticationClass: "firebase",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/customer/membership-status",
-		authenticationClass: "customer",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/customer/children",
-		authenticationClass: "customer",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/customer/children",
-		authenticationClass: "customer",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/customer/children/:childId/age-snapshot",
-		authenticationClass: "customer",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/registration/teachers",
-		authenticationClass: "customer",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/registration/eligible-classes",
-		authenticationClass: "customer",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/registration/concerto-catalog",
-		authenticationClass: "customer",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/registration/accompanists",
-		authenticationClass: "customer",
-	},
-	{
+		path: "/health",
+		authenticationClass: "private-health",
+		csrfRequired: false,
+		browserAllowed: false,
+	}),
+	defineRouteSecurity({
 		method: "POST",
 		path: "/api/shopify/webhooks/orders-paid",
 		authenticationClass: "shopify-webhook",
-	},
-	{
-		method: "POST",
-		path: "/api/internal/reconcile/shopify-orders",
-		authenticationClass: "private-service",
-	},
-	{
-		method: "POST",
-		path: "/api/internal/reconcile/firebase-claims",
-		authenticationClass: "private-service",
-	},
-	{
-		method: "GET",
-		path: "/api/internal/ready",
-		authenticationClass: "private-runtime",
-	},
-	{
-		method: "GET",
-		path: "/api/internal/diagnostics",
-		authenticationClass: "private-runtime",
-	},
-	{
-		method: "GET",
-		path: "/api/internal/metrics",
-		authenticationClass: "private-runtime",
-	},
-	{
-		method: "GET",
-		path: "/api/internal/operator/status",
-		authenticationClass: "private-operator",
-	},
-	{
-		method: "POST",
-		path: "/api/internal/events/shopify-orders-paid",
-		authenticationClass: "private-event-bus",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/customer/profile",
-		authenticationClass: "customer",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/customer/profile",
-		authenticationClass: "customer",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/customer/orders",
-		authenticationClass: "customer",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/admin/customers",
-		authenticationClass: "admin",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/admin/customers/:customerId",
-		authenticationClass: "admin",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/admin/customers/:customerId/checkout-intents",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/checkout-intents/:intentId/invalidate",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/checkout-intents/:intentId/recover",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/customer/logout",
-		authenticationClass: "customer",
-	},
-	{ method: "GET", path: "/api/memberships", authenticationClass: "firebase" },
-	{ method: "POST", path: "/api/invites", authenticationClass: "admin" },
-	{ method: "GET", path: "/api/invites/:token", authenticationClass: "public" },
-	{
-		method: "POST",
-		path: "/api/invites/:token/accept",
-		authenticationClass: "firebase",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug",
-		authenticationClass: "tenant",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/welcome/dismiss",
-		authenticationClass: "tenant",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/admin/users",
-		authenticationClass: "admin",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/admin/entitlements",
-		authenticationClass: "admin",
-	},
-	{
-		method: "DELETE",
-		path: "/api/organizations/:slug/admin/memberships/:membershipId",
-		authenticationClass: "admin",
-	},
-	{
-		method: "DELETE",
-		path: "/api/organizations/:slug/admin/invites/:inviteId",
-		authenticationClass: "admin",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/admin/festivals",
-		authenticationClass: "volunteer-admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/festivals",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/festivals/:festivalShortName/primary",
-		authenticationClass: "admin",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/admin/festivals/:festivalShortName",
-		authenticationClass: "admin",
-	},
-	{
-		method: "PUT",
-		path: "/api/organizations/:slug/admin/festivals/:festivalShortName/registration-window",
-		authenticationClass: "admin",
-	},
-	{
-		method: "PATCH",
-		path: "/api/organizations/:slug/admin/festivals/:festivalShortName/registration-window",
-		authenticationClass: "admin",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/primary",
-		authenticationClass: "public",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/festivals/:festivalShortName",
-		authenticationClass: "public",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/divisions",
-		authenticationClass: "public",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/landing",
-		authenticationClass: "public",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/admin/divisions",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/divisions",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/divisions/reorder",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/divisions/:divisionId",
-		authenticationClass: "admin",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/admin/timezone",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/timezone",
-		authenticationClass: "admin",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/admin/shopify",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/shopify",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/shopify/diagnostics",
-		authenticationClass: "admin",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/admin/membership-products",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/membership-products",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/membership-products/:offeringId",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/membership-products/:offeringId/retire",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/accompanist-offering",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/accompanist-offering/:offeringId",
-		authenticationClass: "admin",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/admin/accompanist-policy",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/accompanist-policy",
-		authenticationClass: "admin",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/admin/registration-configuration",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/registration-age-date",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/class-subtypes",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/instruments",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/class-subtypes/reorder",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/instruments/reorder",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/class-subtypes/:id",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/instruments/:id",
-		authenticationClass: "admin",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/membership-products",
-		authenticationClass: "public",
-	},
-	{
-		method: "HEAD",
-		path: "/api/organizations/:slug/membership-products",
-		authenticationClass: "public",
-	},
-	{
-		method: "POST",
-		path: "/api/v1/auth/sync",
-		authenticationClass: "firebase",
-	},
-	{
-		method: "POST",
-		path: "/api/v1/auth/login-event",
-		authenticationClass: "firebase",
-	},
-	{ method: "GET", path: "/api/v1/auth/me", authenticationClass: "firebase" },
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/roles",
-		authenticationClass: "firebase",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/roles",
-		authenticationClass: "volunteer-admin",
-	},
-	{
-		method: "PATCH",
-		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/roles/:roleId",
-		authenticationClass: "volunteer-admin",
-	},
-	{
-		method: "DELETE",
-		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/roles/:roleId",
-		authenticationClass: "volunteer-admin",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/roles/:roleId/shifts",
-		authenticationClass: "volunteer-admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/roles/:roleId/shifts",
-		authenticationClass: "volunteer-admin",
-	},
-	{
-		method: "PATCH",
-		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/roles/:roleId/shifts/:shiftId",
-		authenticationClass: "volunteer-admin",
-	},
-	{
-		method: "DELETE",
-		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/roles/:roleId/shifts/:shiftId",
-		authenticationClass: "volunteer-admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/enroll",
-		authenticationClass: "firebase",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/shifts",
-		authenticationClass: "firebase",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/book",
-		authenticationClass: "firebase",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/my-schedule",
-		authenticationClass: "firebase",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/assignments/:assignmentId/cancel",
-		authenticationClass: "firebase",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/festivals/:festivalShortName/volunteers/coverage-gaps",
-		authenticationClass: "volunteer-admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/customer/class-checkout",
-		authenticationClass: "customer",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/registration/checkout",
-		authenticationClass: "customer",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/registration/eligibility",
-		authenticationClass: "customer",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/customer/class-registrations",
-		authenticationClass: "customer",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/registration/class-registrations",
-		authenticationClass: "customer",
-	},
-	{
-		method: "PATCH",
-		path: "/api/organizations/:slug/customer/class-registrations/:registrationId/metadata",
-		authenticationClass: "customer",
-	},
-	{
-		method: "PATCH",
-		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/registration/class-registrations/:registrationId/metadata",
-		authenticationClass: "customer",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/admin/festivals/:festivalShortName/classes",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/festivals/:festivalShortName/classes",
-		authenticationClass: "admin",
-	},
-	{
-		method: "PATCH",
-		path: "/api/organizations/:slug/admin/festivals/:festivalShortName/classes/:classId",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/admin/festivals/:festivalShortName/classes/:classId",
-		authenticationClass: "admin",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/repertoire/queue",
-		authenticationClass: "tenant",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/repertoire/queue/:id/claim",
-		authenticationClass: "tenant",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/repertoire/queue/:id/unclaim",
-		authenticationClass: "tenant",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/repertoire/queue/:id/normalize",
-		authenticationClass: "tenant",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/repertoire/queue/:id/flag",
-		authenticationClass: "tenant",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/repertoire/queue/:id/resolve-flag",
-		authenticationClass: "tenant",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/repertoire/catalog",
-		authenticationClass: "tenant",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/repertoire/catalog",
-		authenticationClass: "tenant",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/customer/class-registrations/:registrationId/drop",
-		authenticationClass: "customer",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/customer/class-registrations/:registrationId/transfer",
-		authenticationClass: "customer",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/festivals/:festivalShortName/registrations/:id/drop",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/festivals/:festivalShortName/registrations/:id/transfer",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/festivals/:festivalShortName/registrations/:id/promote",
-		authenticationClass: "admin",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/festivals/:festivalShortName/registrations/:id/change-log",
-		authenticationClass: "admin",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/classes/:classId/waitlist",
-		authenticationClass: "customer",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/classes/:classId/waitlist/withdraw",
-		authenticationClass: "customer",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/classes/:classId/waitlist",
-		authenticationClass: "customer",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/customer/festivals/:festivalShortName/waitlist",
-		authenticationClass: "customer",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/festivals/:festivalShortName/classes/:classId/waitlist",
-		authenticationClass: "admin",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/communication/templates",
-		authenticationClass: "tenant",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/communication/templates",
-		authenticationClass: "tenant",
-	},
-	{
-		method: "PATCH",
-		path: "/api/organizations/:slug/communication/templates/:templateId",
-		authenticationClass: "tenant",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/communication/logs",
-		authenticationClass: "tenant",
-	},
-	{
-		method: "POST",
-		path: "/api/organizations/:slug/communication/events",
-		authenticationClass: "tenant",
-	},
-	{
-		method: "GET",
-		path: "/api/organizations/:slug/customer-account/availability",
-		authenticationClass: "customer",
-	},
-	{
-		method: "PUT",
-		path: "/api/organizations/:slug/customer-account/availability",
-		authenticationClass: "customer",
-	},
-	{
-		method: "GET",
-		path: "/api/customer/orgs/:orgSlug/profiles/teacher",
-		authenticationClass: "customer",
-	},
-	{
-		method: "PUT",
-		path: "/api/customer/orgs/:orgSlug/profiles/teacher",
-		authenticationClass: "customer",
-	},
-	{
-		method: "GET",
-		path: "/api/customer/orgs/:orgSlug/profiles/accompanist",
-		authenticationClass: "customer",
-	},
-	{
-		method: "PUT",
-		path: "/api/customer/orgs/:orgSlug/profiles/accompanist",
-		authenticationClass: "customer",
-	},
-	{
-		method: "GET",
-		path: "/api/admin/orgs/:orgSlug/profiles/teachers",
-		authenticationClass: "admin",
-	},
-	{
-		method: "PATCH",
-		path: "/api/admin/orgs/:orgSlug/profiles/teachers/:profileId/approval",
-		authenticationClass: "admin",
-	},
-	{
-		method: "GET",
-		path: "/api/admin/orgs/:orgSlug/profiles/accompanists",
-		authenticationClass: "admin",
-	},
-	{
-		method: "PATCH",
-		path: "/api/admin/orgs/:orgSlug/profiles/accompanists/:profileId/approval",
-		authenticationClass: "admin",
-	},
-	{
-		method: "GET",
-		path: "/api/org-info/:orgSlug/directory/profiles",
-		authenticationClass: "public",
-	},
-] as const satisfies readonly RouteSecurityDeclaration[];
+		csrfRequired: false,
+		browserAllowed: false,
+	}),
+] as const satisfies readonly CoLocatedRouteSecurity[];
+
+export const CURRENT_ROUTE_SECURITY = [
+	ROOT_ROUTE_SECURITY[0],
+	ROOT_ROUTE_SECURITY[1],
+	...withRouteSecurity("/api/internal", PRIVATE_RUNTIME_ROUTE_SECURITY),
+	...withRouteSecurity("/api/v1/auth", AUTH_ROUTE_SECURITY),
+	...API_ROUTE_SECURITY,
+] as const satisfies readonly CoLocatedRouteSecurity[];
 
 interface RegisteredRoute {
 	method: string;
@@ -886,33 +55,53 @@ function routeKey(route: RegisteredRoute): string {
 	return `${route.method.toUpperCase()} ${route.path}`;
 }
 
-export function assertRouteSecurityInventory(
-	routes: readonly RegisteredRoute[],
-	declarations: readonly RouteSecurityDeclaration[] = CURRENT_ROUTE_SECURITY,
-): void {
-	const declaredKeys = new Set<string>();
-	for (const declaration of declarations) {
-		const key = routeKey(declaration);
-		if (declaredKeys.has(key)) {
-			throw new Error(`Duplicate route security declaration: ${key}`);
-		}
-		const isPrivateClass = isPrivateRouteAuthenticationClass(
-			declaration.authenticationClass,
+function validateDeclaration(
+	declaration: RouteSecurityDeclaration,
+	requireFullMetadata: boolean,
+): string {
+	const key = routeKey(declaration);
+	const isPrivateClass = isPrivateRouteAuthenticationClass(
+		declaration.authenticationClass,
+	);
+	if (isPrivateClass && !isAllowedPrivateRoutePath(declaration.path)) {
+		throw new Error(
+			`Private route boundary violation for ${key}: private authentication classes must use /health or /api/internal/*.`,
 		);
-		if (isPrivateClass && !isAllowedPrivateRoutePath(declaration.path)) {
-			throw new Error(
-				`Private route boundary violation for ${key}: private authentication classes must use /health or /api/internal/*.`,
-			);
-		}
-		if (!isPrivateClass && isReservedPrivateSurfacePath(declaration.path)) {
-			throw new Error(
-				`Private route boundary violation for ${key}: reserved private runtime paths cannot use public or browser authentication classes.`,
-			);
-		}
-		declaredKeys.add(key);
 	}
+	if (!isPrivateClass && isReservedPrivateSurfacePath(declaration.path)) {
+		throw new Error(
+			`Private route boundary violation for ${key}: reserved private runtime paths cannot use public or browser authentication classes.`,
+		);
+	}
+	const hasAnyMetadataField =
+		declaration.csrfRequired !== undefined ||
+		declaration.browserAllowed !== undefined;
+	if (requireFullMetadata || hasAnyMetadataField) {
+		if (
+			typeof declaration.csrfRequired !== "boolean" ||
+			typeof declaration.browserAllowed !== "boolean"
+		) {
+			throw new Error(
+				`Incomplete route security metadata for ${key}: csrfRequired and browserAllowed booleans are required.`,
+			);
+		}
+		if (
+			(isPrivateClass ||
+				declaration.authenticationClass === "shopify-webhook") &&
+			declaration.browserAllowed
+		) {
+			throw new Error(
+				`Browser exposure violation for ${key}: private and webhook routes must set browserAllowed=false.`,
+			);
+		}
+	}
+	return key;
+}
 
-	const registeredKeys = new Set(
+function collectRegisteredKeys(
+	routes: readonly RegisteredRoute[],
+): Set<string> {
+	return new Set(
 		routes
 			.filter(
 				(route) =>
@@ -923,13 +112,29 @@ export function assertRouteSecurityInventory(
 			)
 			.map(routeKey),
 	);
+}
+
+export function assertRouteSecurityInventory(
+	routes: readonly RegisteredRoute[],
+	declarations: readonly RouteSecurityDeclaration[] = CURRENT_ROUTE_SECURITY,
+): void {
+	const requireFullMetadata = declarations === CURRENT_ROUTE_SECURITY;
+	const declaredKeys = new Set<string>();
+	for (const declaration of declarations) {
+		const key = validateDeclaration(declaration, requireFullMetadata);
+		if (declaredKeys.has(key)) {
+			throw new Error(`Duplicate route security declaration: ${key}`);
+		}
+		declaredKeys.add(key);
+	}
+
+	const registeredKeys = collectRegisteredKeys(routes);
 	const undeclared = [...registeredKeys].filter(
 		(key) => !declaredKeys.has(key),
 	);
 	const unregistered = [...declaredKeys].filter(
 		(key) => !registeredKeys.has(key),
 	);
-
 	if (undeclared.length > 0 || unregistered.length > 0) {
 		throw new Error(
 			[

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import {
 	CUSTOMER_SESSION_COOKIE,
@@ -13,6 +14,11 @@ import {
 } from "../src/routes/customer-auth/customer-auth.routes.js";
 import type { PublicMembershipProductService } from "../src/shopify/public-membership-product-service.js";
 
+function browserCookie(state: string): string {
+	const hash = createHash("sha256").update(state).digest("hex");
+	return `__Host-festival_customer_oauth_${hash}=${state}`;
+}
+
 function fakeCustomerAccountService(
 	overrides: Partial<Record<keyof CustomerAccountService, unknown>> = {},
 ): CustomerAccountService {
@@ -20,7 +26,7 @@ function fakeCustomerAccountService(
 		getSettings: async () => ({ settings: null }),
 		saveAndVerify: async () => ({ settings: {} }),
 		start: async (slug: string, returnTo?: string, offeringId?: string) =>
-			`https://accounts.shopify.com/auth?slug=${slug}${
+			`https://accounts.shopify.com/auth?state=state&slug=${slug}${
 				returnTo ? `&returnTo=${encodeURIComponent(returnTo)}` : ""
 			}${offeringId ? `&offering=${offeringId}` : ""}`,
 		callback: async () => ({
@@ -225,7 +231,7 @@ describe("customer auth routes", () => {
 				customerAccountService: fakeCustomerAccountService({
 					start: async (...args: unknown[]) => {
 						startArgs = args;
-						return "https://accounts.shopify.com/authorize?client_id=123";
+						return "https://accounts.shopify.com/authorize?state=state&client_id=123";
 					},
 				}),
 			});
@@ -235,7 +241,7 @@ describe("customer auth routes", () => {
 			);
 			expect(response.status).toBe(302);
 			expect(response.headers.get("location")).toBe(
-				"https://accounts.shopify.com/authorize?client_id=123",
+				"https://accounts.shopify.com/authorize?state=state&client_id=123",
 			);
 			expect(startArgs).toEqual([
 				"festival",
@@ -250,7 +256,7 @@ describe("customer auth routes", () => {
 				customerAccountService: fakeCustomerAccountService({
 					start: async (...args: unknown[]) => {
 						startArgs = args;
-						return "https://accounts.shopify.com/authorize?client_id=123&offering=off_123";
+						return "https://accounts.shopify.com/authorize?state=state&client_id=123&offering=off_123";
 					},
 				}),
 				publicMembershipProductService: fakePublicMembershipProductService(),
@@ -261,7 +267,7 @@ describe("customer auth routes", () => {
 			);
 			expect(response.status).toBe(302);
 			expect(response.headers.get("location")).toBe(
-				"https://accounts.shopify.com/authorize?client_id=123&offering=off_123",
+				"https://accounts.shopify.com/authorize?state=state&client_id=123&offering=off_123",
 			);
 			expect(startArgs).toEqual([
 				"festival",
@@ -293,6 +299,7 @@ describe("customer auth routes", () => {
 			const app = createTestApp({ customerAccountService: undefined });
 			const response = await app.request(
 				"/customer-auth/callback?state=state&code=code",
+				{ headers: { Cookie: browserCookie("state") } },
 			);
 			expect(response.status).toBe(503);
 			const body = await response.json();
@@ -314,12 +321,15 @@ describe("customer auth routes", () => {
 
 			const response = await app.request(
 				"/customer-auth/callback?error=access_denied&state=my-state",
+				{ headers: { Cookie: browserCookie("my-state") } },
 			);
 			expect(response.status).toBe(302);
 			expect(response.headers.get("location")).toBe(
 				"/org/festival/membership?purchaseError=authentication",
 			);
-			expect(response.headers.get("set-cookie")).toBeNull();
+			expect(response.headers.get("set-cookie")).not.toContain(
+				`${CUSTOMER_SESSION_COOKIE}=`,
+			);
 			expect(failureState).toBe("my-state");
 		});
 
@@ -338,6 +348,7 @@ describe("customer auth routes", () => {
 
 			const response = await app.request(
 				"/customer-auth/callback?state=valid-state&code=valid-code",
+				{ headers: { Cookie: browserCookie("valid-state") } },
 			);
 			expect(response.status).toBe(302);
 			expect(response.headers.get("location")).toBe(
@@ -392,6 +403,7 @@ describe("customer auth routes", () => {
 
 			const response = await app.request(
 				"/customer-auth/callback?state=state&code=code",
+				{ headers: { Cookie: browserCookie("state") } },
 			);
 			expect(response.status).toBe(302);
 			expect(resolutions).toEqual([["festival", "offering_999"]]);
@@ -422,9 +434,12 @@ describe("customer auth routes", () => {
 
 			const response = await app.request(
 				"/customer-auth/callback?state=state&code=code",
+				{ headers: { Cookie: browserCookie("state") } },
 			);
 			expect(response.status).toBe(503);
-			expect(response.headers.get("set-cookie")).toBeNull();
+			expect(response.headers.get("set-cookie")).not.toContain(
+				`${CUSTOMER_SESSION_COOKIE}=`,
+			);
 		});
 
 		it("fails and sets no cookie when revalidation throws AppError", async () => {
@@ -458,9 +473,12 @@ describe("customer auth routes", () => {
 
 			const response = await app.request(
 				"/customer-auth/callback?state=state&code=code",
+				{ headers: { Cookie: browserCookie("state") } },
 			);
 			expect(response.status).toBe(409);
-			expect(response.headers.get("set-cookie")).toBeNull();
+			expect(response.headers.get("set-cookie")).not.toContain(
+				`${CUSTOMER_SESSION_COOKIE}=`,
+			);
 		});
 	});
 });

@@ -1,1389 +1,248 @@
-import { randomUUID } from "node:crypto";
 import type {
 	ClassEntitlement,
 	ClassEntitlementStatus,
 	CreateClassEntitlementInput,
-	CreateEntitlementGrantSnapshotInput,
 	EntitlementClass,
-	EntitlementGrantSnapshot,
 } from "@festival/common";
 import {
-	addCalendarDays,
-	assertValidClassEntitlementInput,
-	assertValidEntitlementGrantSnapshotInput,
-	isClassEntitlementStatus,
-} from "@festival/common";
-import { sql } from "bun";
-import { AppError } from "../errors/app-error.js";
-import { initializePostgresSchema } from "../repo/postgres-schema.js";
-import type { ClassEntitlementFilter } from "./class-entitlement-repository.js";
-import type {
-	MembershipCommerceRepository,
-	MembershipDecisionAuditRecord,
-	MembershipDecisionStatus,
-	MembershipReasonCode,
-	MembershipReconciliationRun,
-	MembershipValidationDecision,
-	ResolveDecisionManuallyInput,
-	ShopifyOrderProjection,
-	ShopifyOrderProjectionInput,
-	ShopifyWebhookDelivery,
-} from "./membership-commerce-repository.js";
-import { PaidLineConflictError } from "./membership-commerce-repository.js";
+	type ClassEntitlementFilter,
+	type FinalizeDecisionInput,
+	type FinalizeDecisionResult,
+	type MembershipReconciliationRun,
+	PostgresClassEntitlementRepository,
+	PostgresOrderProjectionRepository,
+	PostgresWebhookDeliveryRepository,
+	type RecordWebhookDeliveryInput,
+	type ResolveDecisionManuallyInput,
+	type ShopifyOrderProjectionInput,
+	type WebhookDeliveryFailureInput,
+} from "../domains/commerce-projection/index.js";
 import {
-	countConfirmedClassEntitlements,
-	countConfirmedClassEntitlementsByClassIds,
-} from "./postgres-class-entitlement-count.js";
-
-function schemaName(value: string) {
-	if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(value))
-		throw new Error("Database schema is invalid.");
-	return value;
-}
-
-function decision(row: Record<string, unknown>): MembershipValidationDecision {
-	return {
-		id: String(row.id),
-		organizationId: String(row.organization_id),
-		customerId: row.customer_id === null ? undefined : String(row.customer_id),
-		checkoutIntentId:
-			row.checkout_intent_id === null
-				? undefined
-				: String(row.checkout_intent_id),
-		shopifyOrderGid: String(row.shopify_order_gid),
-		shopifyOrderLineGid:
-			row.shopify_order_line_gid === null
-				? undefined
-				: String(row.shopify_order_line_gid),
-		status: row.status as MembershipDecisionStatus,
-		reasonCode:
-			row.reason_code === null
-				? undefined
-				: (row.reason_code as MembershipReasonCode),
-		createdAtIso: String(row.created_at),
-		updatedAtIso: String(row.updated_at),
-	};
-}
-
-function delivery(row: Record<string, unknown>): ShopifyWebhookDelivery {
-	return {
-		id: String(row.id),
-		organizationId: String(row.organization_id),
-		shopDomain: String(row.shop_domain),
-		webhookId: String(row.webhook_id),
-		topic: "orders/paid",
-		apiVersion: "2026-07",
-		shopifyOrderGid: String(row.shopify_order_gid),
-		payloadSha256: String(row.payload_sha256),
-		status: row.status as ShopifyWebhookDelivery["status"],
-		attemptCount: Number(row.attempt_count),
-		failureCategory:
-			row.failure_category === null
-				? undefined
-				: (row.failure_category as ShopifyWebhookDelivery["failureCategory"]),
-		failureStage:
-			row.failure_stage == null
-				? undefined
-				: (row.failure_stage as ShopifyWebhookDelivery["failureStage"]),
-		failureCode:
-			row.failure_code == null
-				? undefined
-				: (row.failure_code as ShopifyWebhookDelivery["failureCode"]),
-		shopifyRequestId:
-			row.shopify_request_id == null
-				? undefined
-				: String(row.shopify_request_id),
-		failedAtIso: row.failed_at == null ? undefined : String(row.failed_at),
-		receivedAtIso: String(row.received_at),
-		processedAtIso:
-			row.processed_at === null ? undefined : String(row.processed_at),
-		processingStartedAtIso:
-			row.processing_started_at === null ||
-			row.processing_started_at === undefined
-				? undefined
-				: String(row.processing_started_at),
-	};
-}
-
-function reconciliationRun(
-	row: Record<string, unknown>,
-): MembershipReconciliationRun {
-	return {
-		id: String(row.id),
-		organizationId: String(row.organization_id),
-		status: row.status as MembershipReconciliationRun["status"],
-		discoveredCount: Number(row.discovered_count),
-		processedCount: Number(row.processed_count),
-		startedAtIso: String(row.started_at),
-		finishedAtIso: String(row.finished_at),
-		failureCategory:
-			row.failure_category === null
-				? undefined
-				: (row.failure_category as MembershipReconciliationRun["failureCategory"]),
-	};
-}
-
-function classEntitlementFromRow(
-	row: Record<string, unknown>,
-): ClassEntitlement {
-	return {
-		id: String(row.id),
-		organizationId: String(row.organization_id),
-		festivalId: String(row.festival_id),
-		festivalClassId: String(row.festival_class_id),
-		parentCustomerId: String(row.parent_customer_id),
-		childId: String(row.child_id),
-		checkoutIntentId: String(row.checkout_intent_id),
-		checkoutIntentLineId:
-			row.checkout_intent_line_id !== null &&
-			row.checkout_intent_line_id !== undefined
-				? String(row.checkout_intent_line_id)
-				: null,
-		shopifyOrderGid: String(row.shopify_order_gid),
-		shopifyOrderLineGid: String(row.shopify_order_line_gid),
-		paidAmountCents: Number(row.paid_amount_cents),
-		paidCurrencyCode: String(row.paid_currency_code),
-		status: row.status as ClassEntitlementStatus,
-		admittedCartReference:
-			row.admitted_cart_reference !== null &&
-			row.admitted_cart_reference !== undefined
-				? String(row.admitted_cart_reference)
-				: null,
-		capacityAtAllocation:
-			row.capacity_at_allocation !== null &&
-			row.capacity_at_allocation !== undefined
-				? Number(row.capacity_at_allocation)
-				: null,
-		placedCountBeforeAllocation:
-			row.placed_count_before_allocation !== null &&
-			row.placed_count_before_allocation !== undefined
-				? Number(row.placed_count_before_allocation)
-				: null,
-		createdAt: String(row.created_at),
-		updatedAt: String(row.updated_at),
-	};
-}
-
-function classEntitlementMatchesInput(
-	existing: ClassEntitlement,
-	input: CreateClassEntitlementInput,
-) {
-	return (
-		existing.organizationId === input.organizationId &&
-		existing.festivalId === input.festivalId &&
-		existing.festivalClassId === input.festivalClassId &&
-		existing.parentCustomerId === input.parentCustomerId &&
-		existing.childId === input.childId &&
-		existing.checkoutIntentId === input.checkoutIntentId &&
-		existing.checkoutIntentLineId === (input.checkoutIntentLineId ?? null) &&
-		existing.shopifyOrderGid === input.shopifyOrderGid &&
-		existing.shopifyOrderLineGid === input.shopifyOrderLineGid &&
-		existing.paidAmountCents === input.paidAmountCents &&
-		existing.paidCurrencyCode === input.paidCurrencyCode &&
-		existing.status === (input.status ?? "confirmed")
-	);
-}
-
-function assertMatchingClassEntitlementReplay(
-	existing: ClassEntitlement,
-	input: CreateClassEntitlementInput,
-) {
-	if (!classEntitlementMatchesInput(existing, input)) {
-		throw new PaidLineConflictError();
-	}
-}
+	initializePostgresSchema,
+	postgresSchemaName,
+} from "../repo/postgres-schema.js";
+import type { MembershipCommerceRepository } from "./membership-commerce-repository.js";
 
 export class PostgresMembershipCommerceRepository
 	implements MembershipCommerceRepository
 {
 	private readonly schema: string;
+	private readonly deliveries: PostgresWebhookDeliveryRepository;
+	private readonly projections: PostgresOrderProjectionRepository;
+	private readonly classEntitlements: PostgresClassEntitlementRepository;
+
 	constructor(schema: string) {
-		this.schema = schemaName(schema);
+		this.schema = postgresSchemaName(schema);
+		const ensureReadyFn = () => this.ensureReady();
+		this.deliveries = new PostgresWebhookDeliveryRepository(
+			this.schema,
+			ensureReadyFn,
+		);
+		this.classEntitlements = new PostgresClassEntitlementRepository(
+			this.schema,
+			ensureReadyFn,
+		);
+		this.projections = new PostgresOrderProjectionRepository(
+			this.schema,
+			ensureReadyFn,
+			(orgId, lineGid) =>
+				this.classEntitlements.findClassEntitlementByOrderLine(orgId, lineGid),
+		);
 	}
 
-	async ensureReady() {
+	async ensureReady(): Promise<void> {
 		await initializePostgresSchema(this.schema);
 	}
 
-	async recordDelivery(input: {
-		organizationId: string;
-		shopDomain: string;
-		webhookId: string;
-		topic: "orders/paid";
-		apiVersion: "2026-07";
-		shopifyOrderGid: string;
-		payloadSha256: string;
-		receivedAtIso: string;
-	}) {
-		await this.ensureReady();
-		return sql.begin(async (tx) => {
-			const inserted = (await tx.unsafe(
-				`INSERT INTO ${this.schema}.shopify_webhook_deliveries (id, organization_id, shop_domain, webhook_id, topic, api_version, shopify_order_gid, payload_sha256, status, received_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'received',$9) ON CONFLICT (organization_id, webhook_id) DO NOTHING RETURNING id, organization_id, shop_domain, webhook_id, topic, api_version, shopify_order_gid, payload_sha256, status, attempt_count, failure_category, failure_stage, failure_code, shopify_request_id, failed_at::text, received_at::text, processed_at::text`,
-				[
-					randomUUID(),
-					input.organizationId,
-					input.shopDomain,
-					input.webhookId,
-					input.topic,
-					input.apiVersion,
-					input.shopifyOrderGid,
-					input.payloadSha256,
-					input.receivedAtIso,
-				],
-			)) as Array<Record<string, unknown>>;
-			if (inserted[0])
-				return { kind: "accepted" as const, delivery: delivery(inserted[0]) };
-
-			const rows = (await tx.unsafe(
-				`SELECT id, organization_id, shop_domain, webhook_id, topic, api_version, shopify_order_gid, payload_sha256, status, attempt_count, failure_category, failure_stage, failure_code, shopify_request_id, failed_at::text, received_at::text, processed_at::text FROM ${this.schema}.shopify_webhook_deliveries WHERE organization_id = $1 AND webhook_id = $2 FOR UPDATE`,
-				[input.organizationId, input.webhookId],
-			)) as Array<Record<string, unknown>>;
-			if (!rows[0])
-				throw new Error("Webhook delivery conflict did not resolve to a row.");
-			const existing = delivery(rows[0]);
-			if (existing.payloadSha256 !== input.payloadSha256)
-				return { kind: "conflict" as const };
-			return { kind: "duplicate" as const, delivery: existing };
-		});
+	recordDelivery(input: RecordWebhookDeliveryInput) {
+		return this.deliveries.recordDelivery(input);
 	}
 
-	async claimDelivery(deliveryId: string) {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`UPDATE ${this.schema}.shopify_webhook_deliveries SET status = 'processing', attempt_count = attempt_count + 1, failure_category = NULL, failure_stage = NULL, failure_code = NULL, shopify_request_id = NULL, failed_at = NULL, processing_started_at = NOW() WHERE id = $1 AND status IN ('received', 'failed') RETURNING id, organization_id, shop_domain, webhook_id, topic, api_version, shopify_order_gid, payload_sha256, status, attempt_count, failure_category, failure_stage, failure_code, shopify_request_id, failed_at::text, received_at::text, processing_started_at::text, processed_at::text`,
-			[deliveryId],
-		)) as Array<Record<string, unknown>>;
-		return rows[0] ? delivery(rows[0]) : null;
+	claimDelivery(deliveryId: string) {
+		return this.deliveries.claimDelivery(deliveryId);
 	}
 
-	async markDeliveryFailed(
-		deliveryId: string,
-		failure: {
-			category: "upstream" | "persistence" | "invalid";
-			stage: "order_read" | "projection";
-			code:
-				| "shopify_upstream"
-				| "shopify_transport"
-				| "invalid_data"
-				| "paid_line_conflict"
-				| "persistence"
-				| "unexpected";
-			requestId?: string;
-			failedAtIso: string;
-		},
-	) {
-		await sql.unsafe(
-			`UPDATE ${this.schema}.shopify_webhook_deliveries SET status = 'failed', failure_category = $1, failure_stage = $2, failure_code = $3, shopify_request_id = $4, failed_at = $5::timestamptz, processing_started_at = NULL WHERE id = $6 AND status = 'processing'`,
-			[
-				failure.category,
-				failure.stage,
-				failure.code,
-				failure.requestId ?? null,
-				failure.failedAtIso,
-				deliveryId,
-			],
-		);
+	markDeliveryFailed(deliveryId: string, failure: WebhookDeliveryFailureInput) {
+		return this.deliveries.markDeliveryFailed(deliveryId, failure);
 	}
 
-	async markDeliveryProcessed(deliveryId: string) {
-		await sql.unsafe(
-			`UPDATE ${this.schema}.shopify_webhook_deliveries SET status = 'processed', failure_category = NULL, failure_stage = NULL, failure_code = NULL, shopify_request_id = NULL, failed_at = NULL, processing_started_at = NULL, processed_at = NOW() WHERE id = $1`,
-			[deliveryId],
-		);
+	markDeliveryProcessed(deliveryId: string) {
+		return this.deliveries.markDeliveryProcessed(deliveryId);
 	}
 
-	async listReclaimableDeliveries(
+	listReclaimableDeliveries(
 		organizationId: string,
 		limit: number,
 		staleBeforeIso: string,
 	) {
-		return sql.begin(async (tx) => {
-			await tx.unsafe(
-				`UPDATE ${this.schema}.shopify_webhook_deliveries SET status = 'failed', failure_category = 'upstream', failure_stage = 'projection', failure_code = 'unexpected', shopify_request_id = NULL, failed_at = NOW(), processing_started_at = NULL WHERE organization_id = $1 AND status = 'processing' AND (processing_started_at IS NULL OR processing_started_at <= $2::timestamptz)`,
-				[organizationId, staleBeforeIso],
-			);
-			const rows = (await tx.unsafe(
-				`SELECT id, organization_id, shop_domain, webhook_id, topic, api_version, shopify_order_gid, payload_sha256, status, attempt_count, failure_category, failure_stage, failure_code, shopify_request_id, failed_at::text, received_at::text, processing_started_at::text, processed_at::text FROM ${this.schema}.shopify_webhook_deliveries WHERE organization_id = $1 AND status IN ('received', 'failed') ORDER BY received_at ASC LIMIT $2`,
-				[organizationId, limit],
-			)) as Array<Record<string, unknown>>;
-			return rows.map(delivery);
-		});
+		return this.deliveries.listReclaimableDeliveries(
+			organizationId,
+			limit,
+			staleBeforeIso,
+		);
 	}
 
-	async upsertOrderProjection(
-		input: Omit<ShopifyOrderProjection, "createdAtIso" | "updatedAtIso"> & {
-			updatedAtIso: string;
-		},
-	) {
-		const rows = (await sql.unsafe(
-			`INSERT INTO ${this.schema}.shopify_order_projections (organization_id, shopify_order_gid, shopify_customer_gid, correlation_id, fully_paid_at, currency_code, created_at, updated_at) VALUES ($1,$2,$3,$4,$5::timestamptz,$6,$7::timestamptz,$7::timestamptz) ON CONFLICT (organization_id, shopify_order_gid) DO UPDATE SET shopify_customer_gid = EXCLUDED.shopify_customer_gid, correlation_id = EXCLUDED.correlation_id, fully_paid_at = EXCLUDED.fully_paid_at, currency_code = EXCLUDED.currency_code, updated_at = EXCLUDED.updated_at RETURNING organization_id, shopify_order_gid, shopify_customer_gid, correlation_id, fully_paid_at::text, currency_code, created_at::text, updated_at::text`,
-			[
-				input.organizationId,
-				input.shopifyOrderGid,
-				input.shopifyCustomerGid ?? null,
-				input.correlationId ?? null,
-				input.fullyPaidAtIso ?? null,
-				input.currencyCode ?? null,
-				input.updatedAtIso,
-			],
-		)) as Array<Record<string, unknown>>;
-		const row = rows[0];
-		return {
-			organizationId: String(row.organization_id),
-			shopifyOrderGid: String(row.shopify_order_gid),
-			shopifyCustomerGid:
-				row.shopify_customer_gid === null
-					? undefined
-					: String(row.shopify_customer_gid),
-			correlationId:
-				row.correlation_id === null ? undefined : String(row.correlation_id),
-			fullyPaidAtIso:
-				row.fully_paid_at === null ? undefined : String(row.fully_paid_at),
-			currencyCode:
-				row.currency_code === null ? undefined : String(row.currency_code),
-			createdAtIso: String(row.created_at),
-			updatedAtIso: String(row.updated_at),
-		};
+	upsertOrderProjection(input: ShopifyOrderProjectionInput) {
+		return this.projections.upsertOrderProjection(input);
 	}
 
-	async listOrderProjectionsByGids(
+	listOrderProjectionsByGids(
 		organizationId: string,
 		shopifyOrderGids: readonly string[],
-	): Promise<ShopifyOrderProjection[]> {
-		if (shopifyOrderGids.length === 0) return [];
-		const rows = (await sql.unsafe(
-			`SELECT organization_id, shopify_order_gid, shopify_customer_gid, correlation_id, fully_paid_at::text, currency_code, created_at::text, updated_at::text FROM ${this.schema}.shopify_order_projections WHERE organization_id = $1 AND shopify_order_gid = ANY($2)`,
-			[organizationId, sql.array([...shopifyOrderGids], "text")],
-		)) as Array<Record<string, unknown>>;
-		return rows.map((row) => ({
-			organizationId: String(row.organization_id),
-			shopifyOrderGid: String(row.shopify_order_gid),
-			shopifyCustomerGid:
-				row.shopify_customer_gid === null
-					? undefined
-					: String(row.shopify_customer_gid),
-			correlationId:
-				row.correlation_id === null ? undefined : String(row.correlation_id),
-			fullyPaidAtIso:
-				row.fully_paid_at === null ? undefined : String(row.fully_paid_at),
-			currencyCode:
-				row.currency_code === null ? undefined : String(row.currency_code),
-			createdAtIso: String(row.created_at),
-			updatedAtIso: String(row.updated_at),
-		}));
+	) {
+		return this.projections.listOrderProjectionsByGids(
+			organizationId,
+			shopifyOrderGids,
+		);
 	}
 
-	async recordPendingDecision(input: {
+	recordPendingDecision(input: {
 		organizationId: string;
 		shopifyOrderGid: string;
 		updatedAtIso: string;
 	}) {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`INSERT INTO ${this.schema}.membership_validation_decisions (id, organization_id, shopify_order_gid, status, created_at, updated_at) VALUES ($1,$2,$3,'pending_validation',$4::timestamptz,$4::timestamptz) ON CONFLICT (organization_id, shopify_order_gid) DO UPDATE SET updated_at = CASE WHEN ${this.schema}.membership_validation_decisions.status = 'pending_validation' THEN EXCLUDED.updated_at ELSE ${this.schema}.membership_validation_decisions.updated_at END RETURNING id, organization_id, customer_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, status, reason_code, created_at::text, updated_at::text`,
-			[
-				randomUUID(),
-				input.organizationId,
-				input.shopifyOrderGid,
-				input.updatedAtIso,
-			],
-		)) as Array<Record<string, unknown>>;
-		if (!rows[0])
-			throw new Error("Pending validation decision was not recorded.");
-		return decision(rows[0]);
+		return this.projections.recordPendingDecision(input);
 	}
 
-	async finalizeDecision(input: {
-		deliveryId: string;
-		decision: Omit<
-			MembershipValidationDecision,
-			"id" | "createdAtIso" | "updatedAtIso"
-		> & {
-			updatedAtIso: string;
-		};
-		projection?: ShopifyOrderProjectionInput;
-		grant?: CreateEntitlementGrantSnapshotInput;
-		classEntitlement?: CreateClassEntitlementInput;
-		classEntitlements?: CreateClassEntitlementInput[];
-	}) {
-		await this.ensureReady();
-		if (input.classEntitlement && input.classEntitlements !== undefined) {
-			throw new Error(
-				"Approved decision cannot specify both a class entitlement and class entitlements.",
-			);
-		}
-		let classEntitlementInputs =
-			input.classEntitlements ??
-			(input.classEntitlement ? [input.classEntitlement] : []);
-		if (input.decision.status === "approved") {
-			if (input.grant && classEntitlementInputs.length > 0) {
-				throw new Error(
-					"Approved decision cannot specify both a membership grant and class entitlement.",
-				);
-			}
-			if (!input.grant && classEntitlementInputs.length === 0) {
-				throw new Error(
-					"Approved decision requires a grant or class entitlement.",
-				);
-			}
-			if (input.grant) {
-				assertValidEntitlementGrantSnapshotInput(input.grant);
-				if (
-					input.grant.organizationId !== input.decision.organizationId ||
-					input.grant.customerId !== input.decision.customerId ||
-					input.grant.checkoutIntentId !== input.decision.checkoutIntentId ||
-					input.grant.shopifyOrderGid !== input.decision.shopifyOrderGid ||
-					input.grant.shopifyOrderLineGid !== input.decision.shopifyOrderLineGid
-				)
-					throw new Error("Approved decision and grant do not match.");
-			}
-			for (const classEntitlementInput of classEntitlementInputs) {
-				assertValidClassEntitlementInput(classEntitlementInput);
-				if (
-					classEntitlementInput.organizationId !==
-						input.decision.organizationId ||
-					classEntitlementInput.parentCustomerId !==
-						input.decision.customerId ||
-					classEntitlementInput.checkoutIntentId !==
-						input.decision.checkoutIntentId ||
-					classEntitlementInput.shopifyOrderGid !==
-						input.decision.shopifyOrderGid ||
-					(input.classEntitlement &&
-						classEntitlementInput.shopifyOrderLineGid !==
-							input.decision.shopifyOrderLineGid)
-				) {
-					throw new Error(
-						"Approved decision and class entitlement do not match.",
-					);
-				}
-			}
-		} else if (input.grant || classEntitlementInputs.length > 0) {
-			throw new Error(
-				"Non-approved decision cannot create a grant or class entitlement.",
-			);
-		}
-		if (
-			input.projection &&
-			(input.projection.organizationId !== input.decision.organizationId ||
-				input.projection.shopifyOrderGid !== input.decision.shopifyOrderGid)
-		) {
-			throw new Error(
-				"Order projection does not match its validation decision.",
-			);
-		}
-		return sql.begin(async (tx) => {
-			// Acquire admission serialization before any fulfillment row locks.
-			if (classEntitlementInputs.length > 0) {
-				await tx.unsafe(
-					"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-					[`${this.schema}:class-capacity-cutoff`],
-				);
-			}
-			// Customer admission precedes checkout execution everywhere, including
-			// workers reclaiming a lease. Keep this order after the capacity lock.
-			if (input.decision.customerId) {
-				await tx.unsafe(
-					"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-					[`${input.decision.organizationId}:${input.decision.customerId}`],
-				);
-			}
-			if (input.decision.checkoutIntentId) {
-				await tx.unsafe(
-					"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-					[
-						`${input.decision.organizationId}:checkout:${input.decision.checkoutIntentId}`,
-					],
-				);
-			}
-			await tx.unsafe("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
-				`${input.decision.organizationId}:${input.decision.shopifyOrderGid}`,
-			]);
-			const existingRows = (await tx.unsafe(
-				`SELECT id, organization_id, customer_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, status, reason_code, created_at::text, updated_at::text FROM ${this.schema}.membership_validation_decisions WHERE organization_id = $1 AND shopify_order_gid = $2 FOR UPDATE`,
-				[input.decision.organizationId, input.decision.shopifyOrderGid],
-			)) as Array<Record<string, unknown>>;
-			if (existingRows[0] && existingRows[0].status !== "pending_validation") {
-				const existingClasses = await Promise.all(
-					classEntitlementInputs.map(async (classEntitlement) => {
-						const rows = (await tx.unsafe(
-							`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text
-							FROM ${this.schema}.class_entitlements
-							WHERE organization_id = $1 AND shopify_order_line_gid = $2
-							FOR UPDATE`,
-							[
-								input.decision.organizationId,
-								classEntitlement.shopifyOrderLineGid,
-							],
-						)) as Array<Record<string, unknown>>;
-						if (!rows[0]) return null;
-						const existingClass = classEntitlementFromRow(rows[0]);
-						assertMatchingClassEntitlementReplay(
-							existingClass,
-							classEntitlement,
-						);
-						return existingClass;
-					}),
-				);
-				if (
-					classEntitlementInputs.length === 0 ||
-					existingClasses.every(Boolean)
-				) {
-					await tx.unsafe(
-						`UPDATE ${this.schema}.shopify_webhook_deliveries SET status = 'processed', failure_category = NULL, failure_stage = NULL, failure_code = NULL, shopify_request_id = NULL, failed_at = NULL, processed_at = NOW() WHERE id = $1`,
-						[input.deliveryId],
-					);
-					return {
-						decision: decision(existingRows[0]),
-						classEntitlement: existingClasses[0] ?? undefined,
-						classEntitlements: existingClasses.filter(
-							(classEntitlement): classEntitlement is ClassEntitlement =>
-								Boolean(classEntitlement),
-						),
-						existing: true,
-					};
-				}
-			}
-			if (input.decision.checkoutIntentId) {
-				const correlatedRows = (await tx.unsafe(
-					`SELECT id, organization_id, customer_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, status, reason_code, created_at::text, updated_at::text FROM ${this.schema}.membership_validation_decisions WHERE organization_id = $1 AND checkout_intent_id = $2 FOR UPDATE`,
-					[input.decision.organizationId, input.decision.checkoutIntentId],
-				)) as Array<Record<string, unknown>>;
-				if (
-					correlatedRows[0] &&
-					correlatedRows[0].shopify_order_gid !== input.decision.shopifyOrderGid
-				) {
-					await tx.unsafe(
-						`UPDATE ${this.schema}.shopify_webhook_deliveries SET status = 'processed', failure_category = NULL, failure_stage = NULL, failure_code = NULL, shopify_request_id = NULL, failed_at = NULL, processing_started_at = NULL, processed_at = NOW() WHERE id = $1`,
-						[input.deliveryId],
-					);
-					const existingClass = input.decision.shopifyOrderLineGid
-						? await this.findClassEntitlementByOrderLine(
-								input.decision.organizationId,
-								input.decision.shopifyOrderLineGid,
-							)
-						: null;
-					return {
-						decision: decision(correlatedRows[0]),
-						classEntitlement: existingClass ?? undefined,
-						existing: true,
-					};
-				}
-			}
-			let finalDecision = input.decision;
-			let grantInput = input.grant;
-			// The checkout advisory lock above also serializes recovery decisions.
-			// Check admission inside this transaction, rather than trusting the
-			// projection service's earlier snapshot while an operator can abandon.
-			const executionRows =
-				input.decision.checkoutIntentId && !input.grant
-					? ((await tx.unsafe(
-							`SELECT intent_id, state, checkpoint, generation, result_code FROM ${this.schema}.class_checkout_executions WHERE organization_id=$1 AND intent_id=$2 FOR UPDATE`,
-							[input.decision.organizationId, input.decision.checkoutIntentId],
-						)) as Array<{
-							intent_id: string;
-							state: string;
-							checkpoint: string;
-							generation: number;
-							result_code: string | null;
-						}>)
-					: [];
-			const execution = executionRows[0];
-			if (
-				execution &&
-				(execution.checkpoint !== "attached" || execution.state === "rejected")
-			) {
-				finalDecision = {
-					...finalDecision,
-					status: "needs_review",
-					reasonCode: "upstream_invalid",
-				};
-				classEntitlementInputs = [];
-				grantInput = undefined;
-			}
-			let nextEntitlementId: string | undefined;
-			if (grantInput && finalDecision.customerId) {
-				if (!grantInput.verifiedIdentityEmail) {
-					finalDecision = {
-						...finalDecision,
-						status: "needs_review",
-						reasonCode: "upstream_invalid",
-					};
-					grantInput = undefined;
-				} else {
-					const identityRows = (await tx.unsafe(
-						`INSERT INTO ${this.schema}.membership_identity_emails (organization_id, normalized_email, customer_id) VALUES ($1,$2,$3) ON CONFLICT (organization_id, normalized_email) DO UPDATE SET customer_id = EXCLUDED.customer_id WHERE ${this.schema}.membership_identity_emails.customer_id = EXCLUDED.customer_id RETURNING customer_id`,
-						[
-							finalDecision.organizationId,
-							grantInput.verifiedIdentityEmail ?? "",
-							finalDecision.customerId,
-						],
-					)) as Array<Record<string, unknown>>;
-					if (!identityRows[0]) {
-						finalDecision = {
-							...finalDecision,
-							status: "needs_review",
-							reasonCode: "upstream_invalid",
-						};
-						grantInput = undefined;
-					} else {
-						let supersededEntitlementId: string | undefined;
-						const entitlementRows = (await tx.unsafe(
-							`SELECT e.id, e.starts_on::text, e.ends_on::text, (e.starts_on > $4::date) AS scheduled, (e.ends_on > ($4::date + INTERVAL '30 days')::date) AS outside_renewal_window FROM ${this.schema}.membership_entitlements e WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class=$3 AND e.revoked_at IS NULL AND e.superseded_on IS NULL AND e.ends_on > $4::date ORDER BY e.starts_on FOR UPDATE`,
-							[
-								finalDecision.organizationId,
-								finalDecision.customerId,
-								grantInput.entitlementClass,
-								grantInput.startsOn,
-							],
-						)) as Array<{
-							id: string;
-							starts_on: string;
-							ends_on: string;
-							scheduled: boolean;
-							outside_renewal_window: boolean;
-						}>;
-						if (
-							entitlementRows.some(
-								(row) => row.scheduled || row.outside_renewal_window,
-							)
-						) {
-							finalDecision = {
-								...finalDecision,
-								status: "needs_review",
-								reasonCode: "duplicate_purchase",
-							};
-							grantInput = undefined;
-						} else if (entitlementRows[0]) {
-							supersededEntitlementId = entitlementRows[0].id;
-							const effectiveStartDate =
-								entitlementRows[0].ends_on > grantInput.startsOn
-									? entitlementRows[0].ends_on
-									: grantInput.startsOn;
-							grantInput = {
-								...grantInput,
-								endsOn: addCalendarDays(
-									effectiveStartDate,
-									grantInput.durationDays,
-								),
-							};
-						}
-						if (grantInput) {
-							await tx.unsafe(
-								`INSERT INTO ${this.schema}.membership_entitlement_cohorts (organization_id,customer_id,entitlement_class) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
-								[
-									finalDecision.organizationId,
-									finalDecision.customerId,
-									grantInput.entitlementClass,
-								],
-							);
-							const cohort = (await tx.unsafe(
-								`SELECT version FROM ${this.schema}.membership_entitlement_cohorts WHERE organization_id=$1 AND customer_id=$2 AND entitlement_class=$3 FOR UPDATE`,
-								[
-									finalDecision.organizationId,
-									finalDecision.customerId,
-									grantInput.entitlementClass,
-								],
-							)) as Array<{ version: number }>;
-							const advanced =
-								cohort[0] &&
-								(await tx.unsafe(
-									`UPDATE ${this.schema}.membership_entitlement_cohorts SET version=version+1 WHERE organization_id=$1 AND customer_id=$2 AND entitlement_class=$3 AND version=$4 RETURNING version`,
-									[
-										finalDecision.organizationId,
-										finalDecision.customerId,
-										grantInput.entitlementClass,
-										cohort[0].version,
-									],
-								));
-							if (!advanced || advanced.count !== 1) {
-								const refreshedCohort = (await tx.unsafe(
-									`SELECT version FROM ${this.schema}.membership_entitlement_cohorts WHERE organization_id=$1 AND customer_id=$2 AND entitlement_class=$3 FOR UPDATE`,
-									[
-										finalDecision.organizationId,
-										finalDecision.customerId,
-										grantInput.entitlementClass,
-									],
-								)) as Array<{ version: number }>;
-								const retried =
-									refreshedCohort[0] &&
-									(await tx.unsafe(
-										`UPDATE ${this.schema}.membership_entitlement_cohorts SET version=version+1 WHERE organization_id=$1 AND customer_id=$2 AND entitlement_class=$3 AND version=$4 RETURNING version`,
-										[
-											finalDecision.organizationId,
-											finalDecision.customerId,
-											grantInput.entitlementClass,
-											refreshedCohort[0].version,
-										],
-									));
-								if (!retried || retried.count !== 1) {
-									const refreshedEntitlements = (await tx.unsafe(
-										`SELECT 1 FROM ${this.schema}.membership_entitlements e WHERE e.organization_id=$1 AND e.customer_id=$2 AND e.entitlement_class=$3 AND e.revoked_at IS NULL AND e.superseded_on IS NULL AND (e.starts_on > $4::date OR e.ends_on > ($4::date + INTERVAL '30 days')::date) LIMIT 1 FOR UPDATE`,
-										[
-											finalDecision.organizationId,
-											finalDecision.customerId,
-											grantInput.entitlementClass,
-											grantInput.startsOn,
-										],
-									)) as Array<Record<string, unknown>>;
-									if (!refreshedEntitlements[0]) {
-										throw new Error(
-											"Entitlement cohort compare-and-swap retry failed.",
-										);
-									}
-									finalDecision = {
-										...finalDecision,
-										status: "needs_review",
-										reasonCode: "duplicate_purchase",
-									};
-									grantInput = undefined;
-								}
-							}
-						}
-						nextEntitlementId = grantInput ? randomUUID() : undefined;
-						if (grantInput && supersededEntitlementId && nextEntitlementId) {
-							await tx.unsafe(
-								`UPDATE ${this.schema}.membership_entitlements SET superseded_on = $3::date, superseded_at = NOW(), superseded_by_grant_id = $4 WHERE id = $1 AND organization_id = $2 AND revoked_at IS NULL AND superseded_on IS NULL`,
-								[
-									supersededEntitlementId,
-									grantInput.organizationId,
-									grantInput.startsOn,
-									nextEntitlementId,
-								],
-							);
-						}
-					}
-				}
-			}
-			if (input.projection) {
-				await tx.unsafe(
-					`INSERT INTO ${this.schema}.shopify_order_projections (organization_id, shopify_order_gid, shopify_customer_gid, correlation_id, fully_paid_at, currency_code, created_at, updated_at) VALUES ($1,$2,$3,$4,$5::timestamptz,$6,$7::timestamptz,$7::timestamptz) ON CONFLICT (organization_id, shopify_order_gid) DO UPDATE SET shopify_customer_gid = EXCLUDED.shopify_customer_gid, correlation_id = EXCLUDED.correlation_id, fully_paid_at = EXCLUDED.fully_paid_at, currency_code = EXCLUDED.currency_code, updated_at = EXCLUDED.updated_at`,
-					[
-						input.projection.organizationId,
-						input.projection.shopifyOrderGid,
-						input.projection.shopifyCustomerGid ?? null,
-						input.projection.correlationId ?? null,
-						input.projection.fullyPaidAtIso ?? null,
-						input.projection.currencyCode ?? null,
-						input.projection.updatedAtIso,
-					],
-				);
-			}
-			let createdGrant: EntitlementGrantSnapshot | undefined;
-			if (grantInput) {
-				const entitlementId = nextEntitlementId ?? randomUUID();
-				const entitlementRows = (await tx.unsafe(
-					`INSERT INTO ${this.schema}.membership_entitlements (id,organization_id,customer_id,entitlement_class,source,offering_id,starts_on,ends_on) SELECT $1,$2,$3,$4,'teacher_checkout',$5,$6::date,$7::date FROM ${this.schema}.products WHERE id=$5 AND organization_id=$2 AND entitlement_class=$4 RETURNING id`,
-					[
-						entitlementId,
-						grantInput.organizationId,
-						grantInput.customerId,
-						grantInput.entitlementClass,
-						grantInput.offeringId,
-						grantInput.startsOn,
-						grantInput.endsOn,
-					],
-				)) as Array<Record<string, unknown>>;
-				if (!entitlementRows[0])
-					throw new Error("Entitlement offering was not found.");
-				await tx.unsafe(
-					`INSERT INTO ${this.schema}.membership_entitlement_divisions (entitlement_id,organization_id,division_id,division_name_snapshot) VALUES ($1,$2,$3,$4)`,
-					[
-						entitlementId,
-						grantInput.organizationId,
-						grantInput.divisionId,
-						grantInput.divisionNameSnapshot,
-					],
-				);
-				await tx.unsafe(
-					`INSERT INTO ${this.schema}.teacher_membership_entitlement_details (entitlement_id,checkout_intent_id,shopify_order_gid,shopify_order_line_gid,paid_amount,paid_currency_code,duration_days) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-					[
-						entitlementId,
-						grantInput.checkoutIntentId,
-						grantInput.shopifyOrderGid,
-						grantInput.shopifyOrderLineGid,
-						grantInput.paidAmount,
-						grantInput.paidCurrencyCode,
-						grantInput.durationDays,
-					],
-				);
-				createdGrant = {
-					...grantInput,
-					id: entitlementId,
-					createdAtIso: new Date().toISOString(),
-				};
-			}
-			const createdClassEntitlements: ClassEntitlement[] = [];
-			for (const classEntitlementInput of classEntitlementInputs) {
-				const entitlementId = classEntitlementInput.id ?? randomUUID();
-				const insertedEntitlementRows = (await tx.unsafe(
-					`INSERT INTO ${this.schema}.class_entitlements (
-						id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at, updated_at
-					) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW(),NOW())
-					ON CONFLICT (organization_id, shopify_order_line_gid) DO NOTHING
-					RETURNING id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text`,
-					[
-						entitlementId,
-						classEntitlementInput.organizationId,
-						classEntitlementInput.festivalId,
-						classEntitlementInput.festivalClassId,
-						classEntitlementInput.parentCustomerId,
-						classEntitlementInput.childId,
-						classEntitlementInput.checkoutIntentId,
-						classEntitlementInput.checkoutIntentLineId ?? null,
-						classEntitlementInput.shopifyOrderGid,
-						classEntitlementInput.shopifyOrderLineGid,
-						classEntitlementInput.paidAmountCents,
-						classEntitlementInput.paidCurrencyCode,
-						classEntitlementInput.status ?? "confirmed",
-						classEntitlementInput.admittedCartReference ?? null,
-						classEntitlementInput.capacityAtAllocation ?? null,
-						classEntitlementInput.placedCountBeforeAllocation ?? null,
-					],
-				)) as Array<Record<string, unknown>>;
-				let createdClassEntitlement = insertedEntitlementRows[0]
-					? classEntitlementFromRow(insertedEntitlementRows[0])
-					: undefined;
-				if (!createdClassEntitlement) {
-					const existingEntitlementRows = (await tx.unsafe(
-						`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text
-						FROM ${this.schema}.class_entitlements
-						WHERE organization_id = $1 AND shopify_order_line_gid = $2
-						FOR UPDATE`,
-						[
-							classEntitlementInput.organizationId,
-							classEntitlementInput.shopifyOrderLineGid,
-						],
-					)) as Array<Record<string, unknown>>;
-					if (!existingEntitlementRows[0]) {
-						throw new Error(
-							"Class entitlement paid-line conflict could not be read.",
-						);
-					}
-					createdClassEntitlement = classEntitlementFromRow(
-						existingEntitlementRows[0],
-					);
-					assertMatchingClassEntitlementReplay(
-						createdClassEntitlement,
-						classEntitlementInput,
-					);
-				}
-				createdClassEntitlements.push(createdClassEntitlement);
-				if (classEntitlementInput.checkoutIntentLineId) {
-					await tx.unsafe(
-						`UPDATE ${this.schema}.registration_metadata SET class_entitlement_id = $1 WHERE checkout_intent_line_id = $2`,
-						[
-							createdClassEntitlement.id,
-							classEntitlementInput.checkoutIntentLineId,
-						],
-					);
-				} else {
-					await tx.unsafe(
-						`UPDATE ${this.schema}.registration_metadata SET class_entitlement_id = $1 WHERE checkout_intent_id = $2`,
-						[
-							createdClassEntitlement.id,
-							classEntitlementInput.checkoutIntentId,
-						],
-					);
-				}
-			}
-			const now = finalDecision.updatedAtIso;
-			const decisionRows = existingRows[0]
-				? ((await tx.unsafe(
-						`UPDATE ${this.schema}.membership_validation_decisions SET customer_id = $2, checkout_intent_id = $3, shopify_order_line_gid = $4, status = $5, reason_code = $6, updated_at = $7::timestamptz WHERE id = $1 RETURNING id, organization_id, customer_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, status, reason_code, created_at::text, updated_at::text`,
-						[
-							existingRows[0].id,
-							finalDecision.customerId ?? null,
-							finalDecision.checkoutIntentId ?? null,
-							finalDecision.shopifyOrderLineGid ?? null,
-							finalDecision.status,
-							finalDecision.reasonCode ?? null,
-							now,
-						],
-					)) as Array<Record<string, unknown>>)
-				: ((await tx.unsafe(
-						`INSERT INTO ${this.schema}.membership_validation_decisions (id, organization_id, customer_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, status, reason_code, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::timestamptz,$9::timestamptz) RETURNING id, organization_id, customer_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, status, reason_code, created_at::text, updated_at::text`,
-						[
-							randomUUID(),
-							finalDecision.organizationId,
-							finalDecision.customerId ?? null,
-							finalDecision.checkoutIntentId ?? null,
-							finalDecision.shopifyOrderGid,
-							finalDecision.shopifyOrderLineGid ?? null,
-							finalDecision.status,
-							finalDecision.reasonCode ?? null,
-							now,
-						],
-					)) as Array<Record<string, unknown>>);
-			if (finalDecision.checkoutIntentId) {
-				if (execution) {
-					const nextState =
-						execution.state === "rejected"
-							? "rejected"
-							: finalDecision.status === "approved"
-								? "completed"
-								: "recovery_required";
-					await tx.unsafe(
-						`UPDATE ${this.schema}.class_checkout_executions SET state=$3, generation=generation+1, lease_owner=NULL, lease_expires_at=NULL, result_code=CASE WHEN state='rejected' THEN result_code ELSE $4 END, recovery_recorded_at=CASE WHEN $3='recovery_required' THEN COALESCE(recovery_recorded_at,clock_timestamp()) ELSE recovery_recorded_at END, updated_at=clock_timestamp() WHERE organization_id=$1 AND intent_id=$2`,
-						[
-							finalDecision.organizationId,
-							finalDecision.checkoutIntentId,
-							nextState,
-							finalDecision.status === "approved"
-								? "checkout_completed"
-								: "paid_order_requires_review",
-						],
-					);
-					await tx.unsafe(
-						`INSERT INTO ${this.schema}.class_checkout_execution_events (id,organization_id,intent_id,generation,event_type,evidence) VALUES ($1,$2,$3,$4,'paid_order_observed',$5::jsonb)`,
-						[
-							randomUUID(),
-							finalDecision.organizationId,
-							finalDecision.checkoutIntentId,
-							Number(execution.generation) + 1,
-							JSON.stringify({
-								code: finalDecision.status,
-								shopifyOrderGid: finalDecision.shopifyOrderGid,
-							}),
-						],
-					);
-				}
-				const resolved = (await tx.unsafe(
-					`UPDATE ${this.schema}.checkout_intents SET status = $1 WHERE id = $2 AND organization_id = $3 RETURNING id`,
-					[
-						finalDecision.status,
-						finalDecision.checkoutIntentId,
-						finalDecision.organizationId,
-					],
-				)) as Array<Record<string, unknown>>;
-				if (!resolved[0]) throw new Error("Checkout intent was not found.");
-			}
-			await tx.unsafe(
-				`UPDATE ${this.schema}.shopify_webhook_deliveries SET status = 'processed', failure_category = NULL, failure_stage = NULL, failure_code = NULL, shopify_request_id = NULL, failed_at = NULL, processing_started_at = NULL, processed_at = NOW() WHERE id = $1`,
-				[input.deliveryId],
-			);
-			return {
-				decision: decision(decisionRows[0]),
-				grant: createdGrant,
-				classEntitlement: createdClassEntitlements[0],
-				classEntitlements:
-					createdClassEntitlements.length > 0
-						? createdClassEntitlements
-						: undefined,
-				existing: false,
-			};
-		});
+	finalizeDecision(
+		input: FinalizeDecisionInput,
+	): Promise<FinalizeDecisionResult> {
+		return this.projections.finalizeDecision(input);
 	}
 
-	async hasScheduledEntitlement(
+	hasScheduledEntitlement(
 		organizationId: string,
 		customerId: string,
 		entitlementClass: EntitlementClass,
 		today: string,
 	) {
-		const rows = (await sql.unsafe(
-			`SELECT 1 FROM ${this.schema}.membership_entitlements WHERE organization_id = $1 AND customer_id = $2 AND entitlement_class = $3 AND revoked_at IS NULL AND superseded_on IS NULL AND starts_on > $4::date LIMIT 1`,
-			[organizationId, customerId, entitlementClass, today],
-		)) as Array<Record<string, unknown>>;
-		return Boolean(rows[0]);
-	}
-
-	async listCustomerDecisions(organizationId: string, customerId: string) {
-		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, customer_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, status, reason_code, created_at::text, updated_at::text FROM ${this.schema}.membership_validation_decisions WHERE organization_id = $1 AND customer_id = $2 ORDER BY created_at DESC`,
-			[organizationId, customerId],
-		)) as Array<Record<string, unknown>>;
-		return rows.map(decision);
-	}
-
-	async recordReconciliationRun(
-		input: Omit<MembershipReconciliationRun, "id">,
-	) {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`INSERT INTO ${this.schema}.membership_reconciliation_runs (id, organization_id, status, discovered_count, processed_count, started_at, finished_at, failure_category) VALUES ($1,$2,$3,$4,$5,$6::timestamptz,$7::timestamptz,$8) RETURNING id, organization_id, status, discovered_count, processed_count, started_at::text, finished_at::text, failure_category`,
-			[
-				randomUUID(),
-				input.organizationId,
-				input.status,
-				input.discoveredCount,
-				input.processedCount,
-				input.startedAtIso,
-				input.finishedAtIso,
-				input.failureCategory ?? null,
-			],
-		)) as Array<Record<string, unknown>>;
-		if (!rows[0]) throw new Error("Reconciliation run was not recorded.");
-		return reconciliationRun(rows[0]);
-	}
-
-	async listReconciliationRuns(organizationId: string, limit = 10) {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, status, discovered_count, processed_count, started_at::text, finished_at::text, failure_category FROM ${this.schema}.membership_reconciliation_runs WHERE organization_id = $1 ORDER BY finished_at DESC, id DESC LIMIT $2`,
-			[organizationId, limit],
-		)) as Array<Record<string, unknown>>;
-		return rows.map(reconciliationRun);
-	}
-
-	async listUnresolvedDecisions(organizationId: string) {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, customer_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, status, reason_code, created_at::text, updated_at::text FROM ${this.schema}.membership_validation_decisions WHERE organization_id = $1 AND status IN ('pending_validation', 'needs_review') ORDER BY updated_at DESC, id DESC`,
-			[organizationId],
-		)) as Array<Record<string, unknown>>;
-		return rows.map(decision);
-	}
-
-	async getDecisionById(organizationId: string, decisionId: string) {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, customer_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, status, reason_code, created_at::text, updated_at::text FROM ${this.schema}.membership_validation_decisions WHERE organization_id = $1 AND id = $2 LIMIT 1`,
-			[organizationId, decisionId],
-		)) as Array<Record<string, unknown>>;
-		return rows[0] ? decision(rows[0]) : null;
-	}
-
-	async getDecisionAudit(organizationId: string, decisionId: string) {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, decision_id, prior_status, final_status, actor_user_id, note, resolved_at::text FROM ${this.schema}.membership_validation_decision_audits WHERE organization_id = $1 AND decision_id = $2 LIMIT 1`,
-			[organizationId, decisionId],
-		)) as Array<Record<string, unknown>>;
-		if (!rows[0]) return null;
-		const row = rows[0];
-		return {
-			id: String(row.id),
-			organizationId: String(row.organization_id),
-			decisionId: String(row.decision_id),
-			priorStatus: row.prior_status as "pending_validation" | "needs_review",
-			finalStatus: row.final_status as "approved" | "rejected",
-			actorUserId: String(row.actor_user_id),
-			note: String(row.note),
-			resolvedAtIso: String(row.resolved_at),
-		};
-	}
-
-	async resolveDecisionManually(input: ResolveDecisionManuallyInput) {
-		await this.ensureReady();
-		return sql.begin(async (tx) => {
-			const rows = (await tx.unsafe(
-				`SELECT id, organization_id, customer_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, status, reason_code, created_at::text, updated_at::text FROM ${this.schema}.membership_validation_decisions WHERE organization_id = $1 AND id = $2 FOR UPDATE`,
-				[input.organizationId, input.decisionId],
-			)) as Array<Record<string, unknown>>;
-			if (!rows[0]) {
-				throw new AppError("Validation decision was not found.", 404);
-			}
-			const existing = decision(rows[0]);
-			if (
-				existing.status !== "pending_validation" &&
-				existing.status !== "needs_review"
-			) {
-				throw new AppError("Validation decision is already resolved.", 409);
-			}
-			const priorStatus = existing.status;
-			let createdGrant: EntitlementGrantSnapshot | undefined;
-			if (input.finalStatus === "approved") {
-				if (!input.grant) {
-					throw new AppError("Approved decision requires a grant.", 422);
-				}
-				assertValidEntitlementGrantSnapshotInput(input.grant);
-				const grantInput = input.grant;
-				const entitlementId = randomUUID();
-				await tx.unsafe(
-					`INSERT INTO ${this.schema}.membership_identity_emails (organization_id, normalized_email, customer_id) VALUES ($1,$2,$3) ON CONFLICT (organization_id, normalized_email) DO UPDATE SET customer_id = EXCLUDED.customer_id WHERE ${this.schema}.membership_identity_emails.customer_id = EXCLUDED.customer_id`,
-					[
-						grantInput.organizationId,
-						grantInput.verifiedIdentityEmail ?? "",
-						grantInput.customerId,
-					],
-				);
-				await tx.unsafe(
-					`INSERT INTO ${this.schema}.membership_entitlements (id,organization_id,customer_id,entitlement_class,source,offering_id,starts_on,ends_on) SELECT $1,$2,$3,$4,'teacher_checkout',$5,$6::date,$7::date FROM ${this.schema}.products WHERE id=$5 AND organization_id=$2 AND entitlement_class=$4`,
-					[
-						entitlementId,
-						grantInput.organizationId,
-						grantInput.customerId,
-						grantInput.entitlementClass,
-						grantInput.offeringId,
-						grantInput.startsOn,
-						grantInput.endsOn,
-					],
-				);
-				await tx.unsafe(
-					`INSERT INTO ${this.schema}.membership_entitlement_divisions (entitlement_id,organization_id,division_id,division_name_snapshot) VALUES ($1,$2,$3,$4)`,
-					[
-						entitlementId,
-						grantInput.organizationId,
-						grantInput.divisionId,
-						grantInput.divisionNameSnapshot,
-					],
-				);
-				await tx.unsafe(
-					`INSERT INTO ${this.schema}.teacher_membership_entitlement_details (entitlement_id,checkout_intent_id,shopify_order_gid,shopify_order_line_gid,paid_amount,paid_currency_code,duration_days) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-					[
-						entitlementId,
-						grantInput.checkoutIntentId,
-						grantInput.shopifyOrderGid,
-						grantInput.shopifyOrderLineGid,
-						grantInput.paidAmount,
-						grantInput.paidCurrencyCode,
-						grantInput.durationDays,
-					],
-				);
-				createdGrant = {
-					...grantInput,
-					id: entitlementId,
-					createdAtIso: input.resolvedAtIso,
-				};
-			}
-			if (input.projection) {
-				await tx.unsafe(
-					`INSERT INTO ${this.schema}.shopify_order_projections (organization_id, shopify_order_gid, shopify_customer_gid, correlation_id, fully_paid_at, currency_code, created_at, updated_at) VALUES ($1,$2,$3,$4,$5::timestamptz,$6,$7::timestamptz,$7::timestamptz) ON CONFLICT (organization_id, shopify_order_gid) DO UPDATE SET shopify_customer_gid = EXCLUDED.shopify_customer_gid, correlation_id = EXCLUDED.correlation_id, fully_paid_at = EXCLUDED.fully_paid_at, currency_code = EXCLUDED.currency_code, updated_at = EXCLUDED.updated_at`,
-					[
-						input.projection.organizationId,
-						input.projection.shopifyOrderGid,
-						input.projection.shopifyCustomerGid ?? null,
-						input.projection.correlationId ?? null,
-						input.projection.fullyPaidAtIso ?? null,
-						input.projection.currencyCode ?? null,
-						input.projection.updatedAtIso,
-					],
-				);
-			}
-			const customerId = input.customerId ?? existing.customerId ?? null;
-			const checkoutIntentId =
-				input.checkoutIntentId ?? existing.checkoutIntentId ?? null;
-			const shopifyOrderLineGid =
-				input.shopifyOrderLineGid ?? existing.shopifyOrderLineGid ?? null;
-			const reasonCode =
-				input.finalStatus === "approved" ? null : (existing.reasonCode ?? null);
-			const updatedRows = (await tx.unsafe(
-				`UPDATE ${this.schema}.membership_validation_decisions SET customer_id = $2, checkout_intent_id = $3, shopify_order_line_gid = $4, status = $5, reason_code = $6, updated_at = $7::timestamptz WHERE id = $1 RETURNING id, organization_id, customer_id, checkout_intent_id, shopify_order_gid, shopify_order_line_gid, status, reason_code, created_at::text, updated_at::text`,
-				[
-					existing.id,
-					customerId,
-					checkoutIntentId,
-					shopifyOrderLineGid,
-					input.finalStatus,
-					reasonCode,
-					input.resolvedAtIso,
-				],
-			)) as Array<Record<string, unknown>>;
-			if (checkoutIntentId) {
-				await tx.unsafe(
-					`UPDATE ${this.schema}.checkout_intents SET status = $1 WHERE id = $2 AND organization_id = $3`,
-					[input.finalStatus, checkoutIntentId, input.organizationId],
-				);
-			}
-			const auditId = randomUUID();
-			await tx.unsafe(
-				`INSERT INTO ${this.schema}.membership_validation_decision_audits (id, organization_id, decision_id, prior_status, final_status, actor_user_id, note, resolved_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::timestamptz)`,
-				[
-					auditId,
-					input.organizationId,
-					existing.id,
-					priorStatus,
-					input.finalStatus,
-					input.actorUserId,
-					input.note,
-					input.resolvedAtIso,
-				],
-			);
-			const audit: MembershipDecisionAuditRecord = {
-				id: auditId,
-				organizationId: input.organizationId,
-				decisionId: existing.id,
-				priorStatus,
-				finalStatus: input.finalStatus,
-				actorUserId: input.actorUserId,
-				note: input.note,
-				resolvedAtIso: input.resolvedAtIso,
-			};
-			return {
-				decision: decision(updatedRows[0]),
-				grant: createdGrant,
-				audit,
-			};
-		});
-	}
-
-	async createClassEntitlement(
-		input: CreateClassEntitlementInput,
-	): Promise<ClassEntitlement> {
-		await this.ensureReady();
-		assertValidClassEntitlementInput(input);
-		const id = input.id ?? randomUUID();
-		const rows = (await sql.unsafe(
-			`INSERT INTO ${this.schema}.class_entitlements (
-				id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at, updated_at
-			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW(),NOW())
-			ON CONFLICT (organization_id, shopify_order_line_gid) DO NOTHING
-			RETURNING id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text`,
-			[
-				id,
-				input.organizationId,
-				input.festivalId,
-				input.festivalClassId,
-				input.parentCustomerId,
-				input.childId,
-				input.checkoutIntentId,
-				input.checkoutIntentLineId ?? null,
-				input.shopifyOrderGid,
-				input.shopifyOrderLineGid,
-				input.paidAmountCents,
-				input.paidCurrencyCode,
-				input.status ?? "confirmed",
-				input.admittedCartReference ?? null,
-				input.capacityAtAllocation ?? null,
-				input.placedCountBeforeAllocation ?? null,
-			],
-		)) as Array<Record<string, unknown>>;
-		if (rows[0]) return classEntitlementFromRow(rows[0]);
-		const existing = await this.findClassEntitlementByOrderLine(
-			input.organizationId,
-			input.shopifyOrderLineGid,
+		return this.projections.hasScheduledEntitlement(
+			organizationId,
+			customerId,
+			entitlementClass,
+			today,
 		);
-		if (!existing) {
-			throw new Error("Class entitlement could not be created.");
-		}
-		return existing;
 	}
 
-	async getClassEntitlement(
-		organizationId: string,
-		id: string,
-	): Promise<ClassEntitlement | null> {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text
-			FROM ${this.schema}.class_entitlements
-			WHERE organization_id = $1 AND id = $2`,
-			[organizationId, id],
-		)) as Array<Record<string, unknown>>;
-		return rows[0] ? classEntitlementFromRow(rows[0]) : null;
+	listCustomerDecisions(organizationId: string, customerId: string) {
+		return this.projections.listCustomerDecisions(organizationId, customerId);
 	}
 
-	async listClassEntitlements(
-		filter: ClassEntitlementFilter,
-	): Promise<ClassEntitlement[]> {
-		await this.ensureReady();
-		const conditions: string[] = [];
-		const params: unknown[] = [];
-		if (filter.organizationId) {
-			params.push(filter.organizationId);
-			conditions.push(`organization_id = $${params.length}`);
-		}
-		if (filter.festivalId) {
-			params.push(filter.festivalId);
-			conditions.push(`festival_id = $${params.length}`);
-		}
-		if (filter.festivalClassId) {
-			params.push(filter.festivalClassId);
-			conditions.push(`festival_class_id = $${params.length}`);
-		}
-		if (filter.festivalClassIds) {
-			params.push(sql.array(filter.festivalClassIds, "text"));
-			conditions.push(`festival_class_id = ANY($${params.length}::text[])`);
-		}
-		if (filter.parentCustomerId) {
-			params.push(filter.parentCustomerId);
-			conditions.push(`parent_customer_id = $${params.length}`);
-		}
-		if (filter.childId) {
-			params.push(filter.childId);
-			conditions.push(`child_id = $${params.length}`);
-		}
-		if (filter.childIds) {
-			params.push(sql.array(filter.childIds, "text"));
-			conditions.push(`child_id = ANY($${params.length}::text[])`);
-		}
-		if (filter.status) {
-			params.push(filter.status);
-			conditions.push(`status = $${params.length}`);
-		}
-		const whereClause =
-			conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text
-			FROM ${this.schema}.class_entitlements
-			${whereClause}
-			ORDER BY created_at DESC`,
-			params,
-		)) as Array<Record<string, unknown>>;
-		return rows.map(classEntitlementFromRow);
+	recordReconciliationRun(input: Omit<MembershipReconciliationRun, "id">) {
+		return this.projections.recordReconciliationRun(input);
 	}
 
-	async findClassEntitlementByOrderLine(
+	listReconciliationRuns(organizationId: string, limit?: number) {
+		return this.projections.listReconciliationRuns(organizationId, limit);
+	}
+
+	listUnresolvedDecisions(organizationId: string) {
+		return this.projections.listUnresolvedDecisions(organizationId);
+	}
+
+	getDecisionById(organizationId: string, decisionId: string) {
+		return this.projections.getDecisionById(organizationId, decisionId);
+	}
+
+	getDecisionAudit(organizationId: string, decisionId: string) {
+		return this.projections.getDecisionAudit(organizationId, decisionId);
+	}
+
+	resolveDecisionManually(input: ResolveDecisionManuallyInput) {
+		return this.projections.resolveDecisionManually(input);
+	}
+
+	createClassEntitlement(input: CreateClassEntitlementInput) {
+		return this.classEntitlements.createClassEntitlement(input);
+	}
+
+	getClassEntitlement(organizationId: string, id: string) {
+		return this.classEntitlements.getClassEntitlement(organizationId, id);
+	}
+
+	listClassEntitlements(filter: ClassEntitlementFilter) {
+		return this.classEntitlements.listClassEntitlements(filter);
+	}
+
+	findClassEntitlementByOrderLine(
 		organizationId: string,
 		shopifyOrderLineGid: string,
-	): Promise<ClassEntitlement | null> {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text
-			FROM ${this.schema}.class_entitlements
-			WHERE organization_id = $1 AND shopify_order_line_gid = $2`,
-			[organizationId, shopifyOrderLineGid],
-		)) as Array<Record<string, unknown>>;
-		return rows[0] ? classEntitlementFromRow(rows[0]) : null;
+	) {
+		return this.classEntitlements.findClassEntitlementByOrderLine(
+			organizationId,
+			shopifyOrderLineGid,
+		);
 	}
 
-	async findClassEntitlementByIntentId(
+	findClassEntitlementByIntentId(
 		organizationId: string,
 		checkoutIntentId: string,
-	): Promise<ClassEntitlement | null> {
-		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`SELECT id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text
-			FROM ${this.schema}.class_entitlements
-			WHERE organization_id = $1 AND checkout_intent_id = $2`,
-			[organizationId, checkoutIntentId],
-		)) as Array<Record<string, unknown>>;
-		return rows[0] ? classEntitlementFromRow(rows[0]) : null;
+	) {
+		return this.classEntitlements.findClassEntitlementByIntentId(
+			organizationId,
+			checkoutIntentId,
+		);
 	}
 
-	async countConfirmedClassEntitlements(
+	findClassEntitlementByIntentLineId(
+		organizationId: string,
+		checkoutIntentLineId: string,
+	) {
+		return this.classEntitlements.findClassEntitlementByIntentLineId(
+			organizationId,
+			checkoutIntentLineId,
+		);
+	}
+
+	countConfirmedClassEntitlements(
 		organizationId: string,
 		festivalClassId: string,
-	): Promise<number> {
-		await this.ensureReady();
-		return countConfirmedClassEntitlements(
-			sql,
-			this.schema,
+	) {
+		return this.classEntitlements.countConfirmedClassEntitlements(
 			organizationId,
 			festivalClassId,
 		);
 	}
 
-	async countConfirmedClassEntitlementsByClassIds(
+	countConfirmedClassEntitlementsByClassIds(
 		organizationId: string,
 		festivalClassIds: readonly string[],
-	): Promise<Map<string, number>> {
-		if (festivalClassIds.length === 0) return new Map();
-		await this.ensureReady();
-		return countConfirmedClassEntitlementsByClassIds({
-			database: sql,
-			schema: this.schema,
+	) {
+		return this.classEntitlements.countConfirmedClassEntitlementsByClassIds(
 			organizationId,
 			festivalClassIds,
-		});
+		);
 	}
 
-	async updateClassEntitlementStatus(
+	updateClassEntitlementStatus(
 		organizationId: string,
 		id: string,
 		status: ClassEntitlementStatus,
+		expectedStatus?: ClassEntitlementStatus | ClassEntitlementStatus[],
 	): Promise<ClassEntitlement | null> {
-		await this.ensureReady();
-		if (!isClassEntitlementStatus(status)) {
-			throw new Error("Class entitlement status is invalid.");
-		}
-		const rows = (await sql.unsafe(
-			`UPDATE ${this.schema}.class_entitlements
-			SET status = $3, updated_at = NOW()
-			WHERE organization_id = $1 AND id = $2
-			RETURNING id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text`,
-			[organizationId, id, status],
-		)) as Array<Record<string, unknown>>;
-		return rows[0] ? classEntitlementFromRow(rows[0]) : null;
+		return this.classEntitlements.updateClassEntitlementStatus(
+			organizationId,
+			id,
+			status,
+			expectedStatus,
+		);
+	}
+
+	updateClassEntitlement(
+		organizationId: string,
+		id: string,
+		updates: {
+			festivalClassId?: string;
+			status?: ClassEntitlementStatus;
+			expectedStatus?: ClassEntitlementStatus | ClassEntitlementStatus[];
+		},
+		expectedStatus?: ClassEntitlementStatus | ClassEntitlementStatus[],
+	): Promise<ClassEntitlement | null> {
+		return this.classEntitlements.updateClassEntitlement(
+			organizationId,
+			id,
+			updates,
+			expectedStatus,
+		);
 	}
 }

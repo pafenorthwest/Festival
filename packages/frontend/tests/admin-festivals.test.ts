@@ -26,6 +26,12 @@ const classesPage = await Bun.file(
 const api = await Bun.file(
 	new URL("../src/lib/api.ts", import.meta.url),
 ).text();
+const catalogApi = await Bun.file(
+	new URL("../src/lib/api/catalog.ts", import.meta.url),
+).text();
+const orgAdminApi = await Bun.file(
+	new URL("../src/lib/api/org-admin.ts", import.meta.url),
+).text();
 
 let fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
 const originalFetch = globalThis.fetch;
@@ -194,9 +200,10 @@ describe("Festival Admin class subtype setup", () => {
 	});
 
 	it("uses the festival-scoped subtype API in the builder", () => {
-		expect(api).toContain("export function listFestivalClassSubtypes");
-		expect(api).toContain("export function createFestivalClassSubtype");
-		expect(api).toContain("/class-subtypes");
+		expect(catalogApi).toContain("export function listFestivalClassSubtypes");
+		expect(catalogApi).toContain("export function createFestivalClassSubtype");
+		expect(catalogApi).toContain('"class-subtypes"');
+		expect(api).toContain("./api/catalog.js");
 		expect(classesPage).toContain("listFestivalClassSubtypes");
 	});
 
@@ -206,8 +213,8 @@ describe("Festival Admin class subtype setup", () => {
 		expect(page).toContain("updateAdminClassSubtype");
 		expect(page).toContain("option.id !== subtype.id");
 		expect(page).toContain("(requires: ");
-		expect(api).toContain("export function updateAdminClassSubtype");
-		expect(api).toContain("requiredSubtypeId?: string | null");
+		expect(catalogApi).toContain("export function updateAdminClassSubtype");
+		expect(catalogApi).toContain("requiredSubtypeId?: string | null");
 
 		mockFetch();
 		await createFestivalClassSubtype(
@@ -248,8 +255,11 @@ describe("Festival Admin class subtype setup", () => {
 		expect(windowEditor).toContain("Clear window");
 		expect(windowEditor).toContain("Registration opens at (optional)");
 		expect(windowEditor).toContain("Registration closes at (optional)");
-		expect(api).toContain("export function updateFestivalRegistrationWindow");
-		expect(api).toContain("/registration-window");
+		expect(orgAdminApi).toContain(
+			"export function updateFestivalRegistrationWindow",
+		);
+		expect(orgAdminApi).toContain('"registration-window"');
+		expect(api).toContain("./api/org-admin.js");
 
 		expect(
 			formatFestivalRegistrationWindow(

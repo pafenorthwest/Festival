@@ -20,10 +20,10 @@ import {
 	listRegistrationAccompanists,
 	updateRegistrationMetadata,
 } from "../lib/api.js";
-import { useConcertoCatalogSearch } from "./festivalRegistrationHooks.js";
 import {
 	canEditPurchasedRegistration,
 	formatPurchasedCutoff,
+	getEditableRegistrationPieces,
 	KEEP_CURRENT_ACCOMPANIST,
 	purchasedRegistrationReadOnlyReason,
 	purchasedRegistrationUpdate,
@@ -40,7 +40,7 @@ export function PurchasedRegistrationEditor(props: {
 	onSaved: () => Promise<void>;
 	onRefresh: () => Promise<void>;
 }) {
-	const initialPieces = props.registration.metadata?.repertoireJson ?? [];
+	const initialPieces = getEditableRegistrationPieces(props.registration);
 	const [pieces, setPieces] = createSignal<RepertoirePiece[]>(
 		initialPieces.map((piece) => ({ ...piece })),
 	);
@@ -70,11 +70,6 @@ export function PurchasedRegistrationEditor(props: {
 		requiresConcerto() ||
 		initialPieces.some((piece) => Boolean(piece.catalogWorkId)) ||
 		catalogRequested();
-	const catalog = useConcertoCatalogSearch(
-		() => props.slug,
-		() => props.festival?.shortName ?? "",
-		() => canEdit() && showCatalog(),
-	);
 	const [accompanistOptions] = createResource(
 		() => (canEdit() ? props.festival?.shortName : undefined),
 		async (festivalSlug) => {
@@ -246,10 +241,14 @@ export function PurchasedRegistrationEditor(props: {
 						performanceMinutes={
 							props.registration.festivalClass?.performanceMinutes ?? 0
 						}
-						requiresConcerto={requiresConcerto()}
-						showCatalog={showCatalog()}
-						catalogSearch={catalog}
-						catalogWorks={catalog.catalogWorks()}
+						catalogScope={
+							showCatalog() && props.festival
+								? {
+										organizationSlug: props.slug,
+										festivalSlug: props.festival.shortName,
+									}
+								: undefined
+						}
 						onDirtyChange={(value) =>
 							setUnsavedPiece((current) => value || (!canEdit() && current))
 						}

@@ -27,11 +27,17 @@ import {
 	ClassCheckoutStorefrontChangedBeforeRequestError,
 	type StartClassCheckoutInput,
 } from "../src/checkout/class-checkout-service.js";
+import { ShopifyMembershipCheckoutClient } from "../src/checkout/shopify-membership-checkout-client.js";
 import { InMemoryMembershipCommerceRepository } from "../src/commerce/membership-commerce-repository.js";
+import { CustomerAccountTransport } from "../src/customer/customer-account-transport.js";
 import { InMemoryCustomerAccountRepository } from "../src/customer/in-memory-customer-account-repository.js";
 import { AppError } from "../src/errors/app-error.js";
 import { InMemoryRepertoireRepository } from "../src/repertoire/index.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
+import {
+	SHOPIFY_STOREFRONT_PRIVATE_TOKEN_PURPOSE,
+	ShopifySecretKeyring,
+} from "../src/shopify/encryption.js";
 
 interface FixtureOptions {
 	legacyCheckout?: boolean;
@@ -362,7 +368,513 @@ function cartEvidence(intent: CheckoutIntentRecord, customerGid: string) {
 	};
 }
 
+function wireStorefrontClient(f: Awaited<ReturnType<typeof createFixture>>) {
+	const keyring = ShopifySecretKeyring.fromEnvironment(
+		JSON.stringify({ test: Buffer.alloc(32, 7).toString("base64") }),
+		"test",
+	);
+	if (!keyring) throw new Error("keyring");
+	let requests = 0;
+	let carts = 0;
+	let unavailable = false;
+	const transport = new CustomerAccountTransport({
+		resolver: async () => [{ address: "8.8.8.8", family: 4, ttlSeconds: 60 }],
+		requester: async (_url, _answer, _agent, init) => {
+			requests++;
+			if (unavailable) return { status: 503, body: (async function* () {})() };
+			const creating = JSON.parse(String(init?.body)).query.includes(
+				"FestivalCreateCart",
+			);
+			if (creating) carts++;
+			const payload = creating
+				? {
+						data: {
+							cartCreate: {
+								cart: { id: "gid://shopify/Cart/repaired" },
+								userErrors: [],
+								warnings: [],
+							},
+						},
+					}
+				: {
+						data: {
+							cart: {
+								id: "gid://shopify/Cart/repaired",
+								checkoutUrl: `https://${f.storeDomain}/checkouts/repaired`,
+							},
+						},
+					};
+			return {
+				status: 200,
+				body: (async function* () {
+					yield Buffer.from(JSON.stringify(payload));
+				})(),
+			};
+		},
+	});
+	const client = new ShopifyMembershipCheckoutClient(
+		f.organizations,
+		keyring,
+		transport,
+	);
+	f.storefront.createCart = client.createCart.bind(client);
+	f.storefront.checkout = client.checkout.bind(client);
+	return {
+		requests: () => requests,
+		carts: () => carts,
+		failUpstream: () => {
+			unavailable = true;
+		},
+		privateToken: () =>
+			keyring.encrypt("private-token", {
+				organizationId: f.organization.id,
+				purpose: SHOPIFY_STOREFRONT_PRIVATE_TOKEN_PURPOSE,
+			}),
+	};
+}
+
+async function twoLineSubmission() {
+	const f = await createFixture();
+	const subtype = await f.organizations.createRegistrationCatalogValue({
+		organizationId: f.organization.id,
+		kind: "class_subtype",
+		displayName: "Second solo",
+		normalizedName: "second solo",
+	});
+	const { id: _classId, ...configuration } = required(
+		await f.organizations.findFestivalClassConfigurationById(
+			f.organization.id,
+			required(f.festival).id,
+			f.classConfig.id,
+		),
+	);
+	const second = await f.organizations.createFestivalClassConfiguration({
+		...configuration,
+		displayName: "Second class",
+		classSubtypeId: subtype.id,
+		shopifyProductGid: "gid://shopify/Product/101",
+		shopifyVariantGid: "gid://shopify/ProductVariant/201",
+	});
+	const submission = {
+		...f.defaultInput,
+		festivalShortName: required(f.festival).shortName,
+		lineItems: [f.classConfig.id, second.id].map((festivalClassId) => ({
+			festivalClassId,
+			childId: f.child.id,
+			teacherId: f.teacherId,
+			pieces: f.defaultPieces,
+		})),
+	};
+	return { ...f, submission };
+}
+
+async function expiredTwoLineCheckout() {
+	const f = await twoLineSubmission();
+	const first = await f.service.start(f.submission);
+	const source = required(
+		await f.checkout.classExecutions.get(f.organization.id, first.intentId),
+	);
+	const history = await f.checkout.classExecutions.events(
+		f.organization.id,
+		first.intentId,
+	);
+	f.now.setTime(f.now.getTime() + 31 * 60_000);
+	const recovery = {
+		organizationId: f.organization.id,
+		customerId: f.customer.id,
+		festivalShortName: f.submission.festivalShortName,
+		recoveryReference: source.recoveryReference,
+	};
+	return { ...f, first, source, history, recovery };
+}
+
+async function strandUnissuedAttempt(
+	f: Awaited<ReturnType<typeof createFixture>>,
+	submission: StartClassCheckoutInput,
+) {
+	const create = spyOn(f.storefront, "createCart").mockRejectedValueOnce(
+		new ClassCheckoutCartObservationError("gid://shopify/Cart/legacy-invalid"),
+	);
+	const executions = f.checkout.classExecutions;
+	const transition = executions.transition.bind(executions);
+	const legacyWrite = spyOn(executions, "transition").mockImplementation(
+		async (input) => {
+			if (input.eventType === "create_dispatched")
+				return transition({ ...input, storefrontBinding: undefined });
+			if (input.eventType === "invalid_remote_cart_observed") {
+				await transition({
+					claim: input.claim,
+					checkpoint: input.checkpoint,
+					shopifyCartId: input.shopifyCartId,
+					eventType: input.eventType,
+				});
+				throw new Error(
+					"Legacy worker interrupted before separate recovery write",
+				);
+			}
+			return transition(input);
+		},
+	);
+	await expect(f.service.start(submission)).rejects.toMatchObject({
+		code: "checkout_persistence_unavailable",
+	});
+	legacyWrite.mockRestore();
+	create.mockRestore();
+	f.now.setTime(f.now.getTime() + 31_000);
+	const intent = required(await f.checkout.findIntentByKey(submission));
+	return { intentId: intent.id, intent };
+}
+
+async function unissuedTwoLineCheckout() {
+	const f = await twoLineSubmission();
+	const first = await strandUnissuedAttempt(f, f.submission);
+	const source = required(
+		await f.checkout.classExecutions.get(f.organization.id, first.intentId),
+	);
+	const history = await f.checkout.classExecutions.events(
+		f.organization.id,
+		first.intentId,
+	);
+	const recovery = {
+		organizationId: f.organization.id,
+		customerId: f.customer.id,
+		festivalShortName: f.submission.festivalShortName,
+		recoveryReference: source.recoveryReference,
+	};
+	return { ...f, first, source, history, recovery };
+}
+
 describe("ClassCheckoutService", () => {
+	it("preserves an expired issued two-line checkout and refuses concurrent replacement", async () => {
+		const f = await expiredTwoLineCheckout();
+		expect(await f.service.findUnissuedCartRestart(f.recovery)).toEqual({
+			recoveryReference: null,
+		});
+		const results = await Promise.allSettled([
+			f.service.restartUnissuedCart(f.recovery),
+			f.service.restartUnissuedCart(f.recovery),
+		]);
+		for (const result of results) {
+			expect(result.status).toBe("rejected");
+			if (result.status === "rejected")
+				expect(result.reason).toMatchObject({
+					code: "checkout_restart_unavailable",
+				});
+		}
+		expect(
+			await f.checkout.classExecutions.get(f.organization.id, f.first.intentId),
+		).toEqual(f.source);
+		expect(
+			await f.checkout.classExecutions.events(
+				f.organization.id,
+				f.first.intentId,
+			),
+		).toEqual(f.history);
+		expect(await f.checkout.findIntentByKey(f.submission)).toMatchObject({
+			status: "checkout_started",
+		});
+	});
+
+	it("keeps expiry as unresolved recovery without advertising restart before or after status refresh", async () => {
+		const f = await expiredTwoLineCheckout();
+		const status = await f.service.recoveryStatus({
+			...f.recovery,
+			sessionId: f.submission.sessionId,
+			idempotencyKey: f.submission.idempotencyKey,
+		});
+		expect(status).toMatchObject({
+			status: "recovery_required",
+			reasonCode: "checkout_expired",
+			retryAllowed: false,
+		});
+		expect(status.restartAllowed).not.toBe(true);
+		expect(await f.service.findUnissuedCartRestart(f.recovery)).toEqual({
+			recoveryReference: null,
+		});
+		await expect(
+			f.service.restartUnissuedCart(f.recovery),
+		).rejects.toMatchObject({ code: "checkout_restart_unavailable" });
+		expect(
+			(
+				await f.checkout.classExecutions.events(
+					f.organization.id,
+					f.first.intentId,
+				)
+			).filter((event) => event.eventType === "customer_restarted_unissued"),
+		).toHaveLength(0);
+	});
+
+	it("rejects expired issued-cart restart for every owner/festival and preserves observed payment", async () => {
+		const f = await expiredTwoLineCheckout();
+		for (const input of [
+			{ ...f.recovery, customerId: "other" },
+			{ ...f.recovery, organizationId: "other" },
+			{ ...f.recovery, festivalShortName: "other" },
+		]) {
+			await expect(f.service.restartUnissuedCart(input)).rejects.toMatchObject({
+				status: 404,
+			});
+		}
+		await expect(
+			f.service.preflightRecovery(f.submission),
+		).rejects.toMatchObject({ recovery: { reasonCode: "checkout_expired" } });
+		await f.checkout.classExecutions.observePayment({
+			...f.recovery,
+			intentId: f.first.intentId,
+			shopifyOrderGid: "paid",
+			approved: false,
+		});
+		await expect(
+			f.service.restartUnissuedCart(f.recovery),
+		).rejects.toMatchObject({ code: "checkout_restart_unavailable" });
+	});
+
+	it("restores canonical edited replacement snapshots after reload and resumes one intent across renewed owner sessions", async () => {
+		const f = await unissuedTwoLineCheckout();
+		const { replacementKey } = await f.service.restartUnissuedCart(f.recovery);
+		const edited = {
+			...f.submission,
+			idempotencyKey: replacementKey,
+			lineItems: f.submission.lineItems.map((line) => ({
+				...line,
+				pieces: [{ ...f.defaultPieces[0], title: "Edited piece" }],
+			})),
+		};
+		const created = await f.service.start(edited);
+		const restored = await f.service.restartUnissuedCart(f.recovery);
+		expect(restored.replacementKey).toBe(replacementKey);
+		expect(restored.registrations.map((line) => line.pieces[0].title)).toEqual([
+			"Edited piece",
+			"Edited piece",
+		]);
+		const renewed = await f.customers.createCustomerSession({
+			sessionId: "renewed",
+			organizationId: f.organization.id,
+			shopifyCustomerGid: f.customer.shopifyCustomerGid,
+			encryptedTokens: "token",
+			csrfToken: "csrf",
+			integrationVersion: 1,
+			createdAtIso: f.now.toISOString(),
+			lastSeenAtIso: f.now.toISOString(),
+			expiresAtIso: new Date(f.now.getTime() + 3600_000).toISOString(),
+		});
+		const create = spyOn(f.storefront, "createCart");
+		await expect(
+			f.service.start({ ...edited, sessionId: renewed.session.sessionId }),
+		).resolves.toMatchObject({ intentId: created.intentId });
+		expect(create).not.toHaveBeenCalled();
+		await expect(
+			f.service.start({
+				...edited,
+				sessionId: renewed.session.sessionId,
+				lineItems: f.submission.lineItems,
+			}),
+		).rejects.toMatchObject({ code: "checkout_payload_conflict" });
+	});
+
+	it("restores all frozen replacement selections in order even after partial metadata persistence", async () => {
+		const f = await unissuedTwoLineCheckout();
+		const { replacementKey } = await f.service.restartUnissuedCart(f.recovery);
+		const edited = {
+			...f.submission,
+			idempotencyKey: replacementKey,
+			lineItems: [...f.submission.lineItems].reverse().map((line, index) => ({
+				...line,
+				pieces: [{ ...f.defaultPieces[0], title: `Edited ${index}` }],
+			})),
+		};
+		const replacement = await f.service.start(edited);
+		const load = f.checkout.listCheckoutRegistrationSnapshots.bind(f.checkout);
+		spyOn(f.checkout, "listCheckoutRegistrationSnapshots").mockImplementation(
+			async (org, id) => {
+				const values = await load(org, id);
+				return id === replacement.intentId
+					? values.slice(0, 1).reverse()
+					: values;
+			},
+		);
+		const restored = await f.service.restartUnissuedCart(f.recovery);
+		expect(restored.registrations.map((line) => line.classId)).toEqual(
+			edited.lineItems.map((line) => line.festivalClassId),
+		);
+		expect(restored.registrations.map((line) => line.pieces[0].title)).toEqual([
+			"Edited 0",
+			"Edited 1",
+		]);
+	});
+
+	it("withholds status and replay links when late source payment arrives during Shopify lookup", async () => {
+		for (const entry of ["status", "replay"] as const) {
+			const f = await unissuedTwoLineCheckout();
+			const { replacementKey } = await f.service.restartUnissuedCart(
+				f.recovery,
+			);
+			const input = { ...f.submission, idempotencyKey: replacementKey };
+			const replacement = await f.service.start(input);
+			const record = required(
+				await f.checkout.classExecutions.get(
+					f.organization.id,
+					replacement.intentId,
+				),
+			);
+			spyOn(f.storefront, "checkout").mockImplementationOnce(async () => {
+				await f.checkout.classExecutions.observePayment({
+					...f.recovery,
+					intentId: f.first.intentId,
+					shopifyOrderGid: "late-during-replay",
+					approved: false,
+				});
+				return { checkoutUrl: replacement.checkoutUrl };
+			});
+			const attempt =
+				entry === "replay"
+					? f.service.start(input)
+					: f.service.recoveryStatus({
+							...f.recovery,
+							recoveryReference: record.recoveryReference,
+							sessionId: input.sessionId,
+							idempotencyKey: replacementKey,
+						});
+			await expect(attempt).rejects.toMatchObject({
+				code: "checkout_restart_payment_uncertain",
+			});
+		}
+	});
+
+	for (const lateDuringHandoff of [false, true]) {
+		it(`fences late ancestor payment across repeated never-issued legacy replacements (${lateDuringHandoff ? "during" : "before"} handoff)`, async () => {
+			const f = await unissuedTwoLineCheckout();
+			const firstRestart = await f.service.restartUnissuedCart(f.recovery);
+			const firstReplacement = await strandUnissuedAttempt(f, {
+				...f.submission,
+				idempotencyKey: firstRestart.replacementKey,
+			});
+			const nextSource = required(
+				await f.checkout.classExecutions.get(
+					f.organization.id,
+					firstReplacement.intentId,
+				),
+			);
+			const nextRecovery = {
+				...f.recovery,
+				recoveryReference: nextSource.recoveryReference,
+			};
+			const nextRestart = await f.service.restartUnissuedCart(nextRecovery);
+			const payAncestor = () =>
+				f.checkout.classExecutions.observePayment({
+					...f.recovery,
+					intentId: f.first.intentId,
+					shopifyOrderGid: "late-ancestor",
+					approved: false,
+				});
+			if (lateDuringHandoff)
+				spyOn(f.storefront, "checkout").mockImplementationOnce(async () => {
+					await payAncestor();
+					return { checkoutUrl: `https://${f.storeDomain}/checkouts/next` };
+				});
+			else await payAncestor();
+			await expect(
+				f.service.start({
+					...f.submission,
+					idempotencyKey: nextRestart.replacementKey,
+				}),
+			).rejects.toMatchObject({ code: "checkout_restart_payment_uncertain" });
+		});
+	}
+
+	for (const failure of ["missing", "undecryptable"] as const) {
+		it(`retries the same intent after ${failure} Storefront credentials are repaired without duplicate carts`, async () => {
+			const f = await createFixture();
+			const adapter = wireStorefrontClient(f);
+			await f.organizations.upsertShopifyIntegration({
+				...f.storefrontIntegration,
+				encryptedStorefrontPrivateToken:
+					failure === "missing" ? undefined : "corrupt-secret-ciphertext",
+			});
+			await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+				status: 503,
+				code: "checkout_retryable_upstream",
+			});
+			expect(adapter.requests()).toBe(0);
+			const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+			expect(
+				await f.checkout.classExecutions.get(f.organization.id, intent.id),
+			).toMatchObject({
+				checkpoint: "prepared",
+				state: "retryable",
+				storefrontBinding: null,
+				leaseOwner: null,
+				shopifyCartId: null,
+			});
+			expect(
+				(
+					await f.checkout.classExecutions.events(f.organization.id, intent.id)
+				).some(
+					(event) =>
+						event.eventType ===
+						"pre_dispatch_storefront_credentials_unavailable",
+				),
+			).toBe(true);
+			await f.organizations.upsertShopifyIntegration({
+				...f.storefrontIntegration,
+				encryptedStorefrontPrivateToken: adapter.privateToken(),
+			});
+			const repaired = await f.service.start(f.defaultInput);
+			expect(repaired).toMatchObject({
+				intentId: intent.id,
+				checkoutUrl: `https://${f.storeDomain}/checkouts/repaired`,
+			});
+			await expect(f.service.start(f.defaultInput)).resolves.toMatchObject({
+				intentId: intent.id,
+			});
+			expect(adapter.carts()).toBe(1);
+			expect(
+				await f.checkout.classExecutions.get(f.organization.id, intent.id),
+			).toMatchObject({ checkpoint: "attached", state: "completed" });
+		});
+	}
+
+	it("requires persistence of a confirmed credential failure before claiming that checkout is retryable", async () => {
+		const f = await createFixture();
+		const adapter = wireStorefrontClient(f);
+		const executions = f.checkout.classExecutions;
+		const transition = executions.transition.bind(executions);
+		spyOn(executions, "transition").mockImplementation(async (input) =>
+			input.eventType === "pre_dispatch_storefront_credentials_unavailable"
+				? false
+				: transition(input),
+		);
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			code: "checkout_persistence_unavailable",
+		});
+		const intent = required(await f.checkout.findIntentByKey(f.defaultInput));
+		expect(await executions.get(f.organization.id, intent.id)).toMatchObject({
+			checkpoint: "create_dispatched",
+		});
+		expect(adapter.requests()).toBe(0);
+	});
+
+	it("keeps a failed Shopify request uncertain even though local credentials are valid", async () => {
+		const f = await createFixture();
+		const adapter = wireStorefrontClient(f);
+		await f.organizations.upsertShopifyIntegration({
+			...f.storefrontIntegration,
+			encryptedStorefrontPrivateToken: adapter.privateToken(),
+		});
+		adapter.failUpstream();
+		await expect(f.service.start(f.defaultInput)).rejects.toMatchObject({
+			code: "checkout_recovery_required",
+			recovery: {
+				reasonCode: "checkout_creation_unknown",
+				retryAllowed: false,
+			},
+		});
+		await expect(
+			f.service.start({ ...f.defaultInput, idempotencyKey: "another-attempt" }),
+		).rejects.toMatchObject({ code: "checkout_recovery_required" });
+		expect(adapter.requests()).toBe(1);
+	});
+
 	for (const [accountVersion, storefrontVersion] of [
 		[1, 2],
 		[2, 1],
@@ -1497,6 +2009,110 @@ describe("ClassCheckoutService", () => {
 			(
 				await f.checkout.classExecutions.events(f.organization.id, intent.id)
 			).filter((event) => event.eventType === "application_checkout_expired"),
+		).toHaveLength(1);
+	});
+
+	it("keeps new registration blocked when an office closure only supersedes an issued cart locally", async () => {
+		const f = await createFixture();
+		const festival = required(f.festival);
+		const concertoSubtype =
+			await f.organizations.createRegistrationCatalogValue({
+				organizationId: f.organization.id,
+				kind: "class_subtype",
+				displayName: "Concerto",
+				normalizedName: "concerto",
+			});
+		const concerto = await f.organizations.createFestivalClassConfiguration({
+			organizationId: f.organization.id,
+			festivalId: festival.id,
+			displayName: "Junior Piano Concerto",
+			classSubtypeId: concertoSubtype.id,
+			divisionId: f.division.id,
+			minimumAge: 8,
+			maximumAge: 12,
+			price: "55.00",
+			maximumPerformancePieces: 2,
+			performanceMinutes: 10,
+			capacity: 20,
+			shopifyProductGid: "gid://shopify/Product/101",
+			shopifyVariantGid: "gid://shopify/ProductVariant/201",
+		});
+		const input = {
+			...f.defaultInput,
+			festivalShortName: festival.shortName,
+			lineItems: [f.classConfig.id, concerto.id].map((festivalClassId) => ({
+				festivalClassId,
+				childId: f.child.id,
+				teacherId: f.teacherId,
+				pieces: f.defaultPieces,
+			})),
+		};
+		const original = await f.service.start(input);
+		const execution = required(
+			await f.checkout.classExecutions.get(
+				f.organization.id,
+				original.intentId,
+			),
+		);
+		const recoveryInput = {
+			organizationId: input.organizationId,
+			customerId: input.customerId,
+			sessionId: input.sessionId,
+			idempotencyKey: input.idempotencyKey,
+			festivalShortName: input.festivalShortName,
+			recoveryReference: execution.recoveryReference,
+		};
+		f.now.setTime(f.now.getTime() + 31 * 60_000);
+		await expect(
+			f.service.recoveryStatus(recoveryInput),
+		).resolves.toMatchObject({
+			status: "recovery_required",
+			reasonCode: "checkout_expired",
+			retryAllowed: false,
+		});
+		const expired = required(
+			await f.checkout.classExecutions.get(
+				f.organization.id,
+				original.intentId,
+			),
+		);
+		await f.service.resolveRecovery({
+			organizationId: f.organization.id,
+			recoveryReference: execution.recoveryReference,
+			expectedGeneration: expired.generation,
+			actorId: "admin",
+			reason: "Verified expired checkout is safe to close",
+			action: "abandon_unknown",
+			acknowledgeUnknown: true,
+		});
+		const closed = {
+			status: "resolved",
+			reasonCode: "checkout_abandoned",
+			retryAllowed: false,
+		};
+		await expect(
+			f.service.recoveryStatus(recoveryInput),
+		).resolves.toMatchObject(closed);
+		await expect(f.service.start(input)).rejects.toMatchObject({
+			code: "checkout_abandoned",
+			recovery: closed,
+		});
+		await expect(
+			f.service.start({
+				...input,
+				idempotencyKey: "replacement-after-office-closure",
+			}),
+		).rejects.toMatchObject({
+			status: 409,
+			code: "checkout_previous_operation_pending",
+		});
+		expect(
+			(
+				await f.checkout.listPendingClassCheckouts(
+					f.organization.id,
+					f.customer.id,
+				)
+			).candidates,
 		).toHaveLength(1);
 	});
 
@@ -2786,7 +3402,7 @@ describe("ClassCheckoutService", () => {
 			}),
 		).rejects.toMatchObject({
 			status: 409,
-			code: "checkout_in_progress",
+			code: "checkout_previous_operation_pending",
 		});
 	});
 
@@ -5539,8 +6155,8 @@ describe("ClassCheckoutService", () => {
 		});
 	});
 
-	describe("Concerto catalog work requirement (#197)", () => {
-		it("rejects free-text repertoire when class requires a concerto", async () => {
+	describe("Concerto class repertoire", () => {
+		it("persists a manually entered concerto without a catalog link", async () => {
 			const f = await createFixture();
 			const concertoSubtype =
 				await f.organizations.createRegistrationCatalogValue({
@@ -5567,22 +6183,26 @@ describe("ClassCheckoutService", () => {
 					shopifyVariantGid: "gid://shopify/ProductVariant/201",
 				});
 
-			await expect(
-				f.service.start({
-					...f.defaultInput,
-					festivalClassId: concertoClass.id,
-					pieces: [
-						{
-							title: "Piano Concerto in A minor, Op. 16",
-							composer: "Edvard Grieg",
-							durationSeconds: 300,
-						},
-					],
-				}),
-			).rejects.toMatchObject({
-				status: 400,
-				code: "concerto_catalog_work_required",
+			const captured: ClassRegistrationMetadata[] = [];
+			const insert = f.checkout.insertRegistrationMetadata.bind(f.checkout);
+			f.checkout.insertRegistrationMetadata = async (params) => {
+				const metadata = await insert(params);
+				captured.push(metadata);
+				return metadata;
+			};
+			const manualPiece = {
+				title: "Piano Concerto in A minor, Op. 16",
+				composer: "Edvard Grieg",
+				durationSeconds: 300,
+			};
+			const result = await f.service.start({
+				...f.defaultInput,
+				festivalClassId: concertoClass.id,
+				pieces: [manualPiece],
 			});
+			expect(result.intentId).toBeDefined();
+			expect(captured[0]?.repertoireJson).toEqual([manualPiece]);
+			expect(captured[0]?.repertoireItems[0]?.catalogWorkId).toBeNull();
 		});
 
 		it("rejects catalog work not classified as concerto or unknown catalogWorkId", async () => {
@@ -5630,9 +6250,18 @@ describe("ClassCheckoutService", () => {
 				isActive: true,
 			});
 
+			f.repertoire.seedCanonicalWork({
+				id: "work-inactive-concerto",
+				organizationId: f.organization.id,
+				title: "Inactive Concerto",
+				classifications: ["concerto"],
+				isActive: false,
+			});
+
 			for (const catalogWorkId of [
 				"work-sonata",
 				"work-unclassified",
+				"work-inactive-concerto",
 				"unknown-work-id",
 			]) {
 				await expect(
@@ -5656,7 +6285,7 @@ describe("ClassCheckoutService", () => {
 			}
 		});
 
-		it("accepts a catalog work classified as concerto and persists catalogWorkId", async () => {
+		it("preserves a 300-character concerto title only when linked to valid catalog work", async () => {
 			const f = await createFixture();
 			const concertoSubtype =
 				await f.organizations.createRegistrationCatalogValue({
@@ -5683,10 +6312,11 @@ describe("ClassCheckoutService", () => {
 					shopifyVariantGid: "gid://shopify/ProductVariant/201",
 				});
 
+			const linkedTitle = "Piano Concerto in A minor, Op. 16".padEnd(300, "x");
 			f.repertoire.seedCanonicalWork({
 				id: "work-concerto-1",
 				organizationId: f.organization.id,
-				title: "Piano Concerto in A minor, Op. 16",
+				title: linkedTitle,
 				composerName: "Edvard Grieg",
 				classifications: ["concerto"],
 				isActive: true,
@@ -5700,18 +6330,33 @@ describe("ClassCheckoutService", () => {
 				return metadata;
 			};
 
+			const piece: RepertoirePiece = {
+				title: linkedTitle,
+				composer: "Edvard Grieg",
+				movement: "I. Allegro molto moderato",
+				durationSeconds: 300,
+				catalogWorkId: "work-concerto-1",
+			};
+			for (const [invalidPiece, limit] of [
+				[{ ...piece, catalogWorkId: null }, 200],
+				[{ ...piece, title: `${linkedTitle}x` }, 300],
+			] as const) {
+				await expect(
+					f.service.start({
+						...f.defaultInput,
+						idempotencyKey: `long-title-${limit}`,
+						festivalClassId: concertoClass.id,
+						pieces: [invalidPiece],
+					}),
+				).rejects.toMatchObject({
+					status: 400,
+					message: `Repertoire piece title cannot exceed ${limit} characters.`,
+				});
+			}
 			const result = await f.service.start({
 				...f.defaultInput,
 				festivalClassId: concertoClass.id,
-				pieces: [
-					{
-						title: "Piano Concerto in A minor, Op. 16",
-						composer: "Edvard Grieg",
-						movement: "I. Allegro molto moderato",
-						durationSeconds: 300,
-						catalogWorkId: "work-concerto-1",
-					} as RepertoirePiece,
-				],
+				pieces: [piece],
 			});
 
 			expect(result.intentId).toBeDefined();
@@ -5719,13 +6364,7 @@ describe("ClassCheckoutService", () => {
 			expect(captured[0].repertoireItems[0]?.catalogWorkId).toBe(
 				"work-concerto-1",
 			);
-			expect(
-				(
-					captured[0].repertoireJson[0] as RepertoirePiece & {
-						catalogWorkId?: string | null;
-					}
-				)?.catalogWorkId,
-			).toBe("work-concerto-1");
+			expect(captured[0].repertoireJson).toEqual([piece]);
 		});
 
 		it("continues to allow free-text repertoire without catalogWorkId on non-concerto classes", async () => {
@@ -5842,6 +6481,188 @@ describe("ClassCheckoutService", () => {
 				status: 400,
 				code: "concerto_catalog_work_required",
 			});
+		});
+
+		it("rejects an oversized later checkout line before resolving any catalog works", async () => {
+			const f = await createFixture({ maximumPerformancePieces: 2 });
+			const secondClass =
+				await f.organizations.createFestivalClassConfiguration({
+					organizationId: f.organization.id,
+					festivalId: required(f.festival).id,
+					divisionId: f.division.id,
+					displayName: "Junior Solo Piano Level 2",
+					classSubtypeId: f.classConfig.classSubtypeId,
+					minimumAge: 8,
+					maximumAge: 12,
+					price: "45.00",
+					maximumPerformancePieces: 1,
+					performanceMinutes: 10,
+					capacity: 25,
+					isActive: true,
+					shopifyProductGid: "gid://shopify/Product/101",
+					shopifyVariantGid: "gid://shopify/ProductVariant/201",
+				});
+			const piece = required(f.defaultPieces[0]);
+			const catalogWorkId = "work-multi-line";
+			f.repertoire.seedCanonicalWork({
+				id: catalogWorkId,
+				organizationId: f.organization.id,
+				title: piece.title,
+				composerName: piece.composer,
+				isActive: true,
+			});
+			const pieces = [
+				{ ...piece, catalogWorkId },
+				{ ...piece, title: "Second work" },
+			];
+			const lookupSpy = spyOn(f.repertoire, "getCatalogWorkById");
+			try {
+				await expect(
+					f.service.start({
+						...f.defaultInput,
+						lineItems: [f.classConfig.id, secondClass.id].map(
+							(festivalClassId) => ({
+								festivalClassId,
+								childId: f.child.id,
+								teacherId: f.teacherId,
+								pieces,
+							}),
+						),
+					}),
+				).rejects.toMatchObject({
+					status: 400,
+					message: "Number of pieces (2) exceeds the maximum allowed (1).",
+				});
+				expect(lookupSpy).not.toHaveBeenCalled();
+			} finally {
+				lookupSpy.mockRestore();
+			}
+		});
+
+		it("rejects oversized and structurally invalid repertoire submissions before resolving any catalog works", async () => {
+			const f = await createFixture({ maximumPerformancePieces: 2 });
+			const lookupSpy = spyOn(f.repertoire, "getCatalogWorkById");
+			try {
+				await expect(
+					f.service.start({
+						...f.defaultInput,
+						idempotencyKey: "idem-oversized-pieces",
+						pieces: [
+							{
+								title: "Piece 1",
+								composer: "Composer 1",
+								durationSeconds: 60,
+								catalogWorkId: "work-1",
+							},
+							{
+								title: "Piece 2",
+								composer: "Composer 2",
+								durationSeconds: 60,
+								catalogWorkId: "work-2",
+							},
+							{
+								title: "Piece 3",
+								composer: "Composer 3",
+								durationSeconds: 60,
+								catalogWorkId: "work-3",
+							},
+						],
+					}),
+				).rejects.toMatchObject({
+					status: 400,
+					message: "Number of pieces (3) exceeds the maximum allowed (2).",
+				});
+				expect(lookupSpy).toHaveBeenCalledTimes(0);
+
+				await expect(
+					f.service.start({
+						...f.defaultInput,
+						idempotencyKey: "idem-empty-pieces",
+						pieces: [],
+					}),
+				).rejects.toMatchObject({
+					status: 400,
+					message: "Repertoire pieces must be a non-empty array.",
+				});
+				expect(lookupSpy).toHaveBeenCalledTimes(0);
+
+				const { resolveLinePiecesAndInstrument } = await import(
+					"../src/domains/class-checkout/class-checkout-line-helpers.js"
+				);
+				const fullClassConfig = required(
+					await f.organizations.findFestivalClassConfigurationById(
+						f.organization.id,
+						required(f.festival).id,
+						f.classConfig.id,
+					),
+				);
+				await expect(
+					resolveLinePiecesAndInstrument({
+						repertoire: f.repertoire,
+						organizationId: f.organization.id,
+						line: {
+							festivalClassId: f.classConfig.id,
+							childId: f.child.id,
+							teacherId: f.teacherId,
+							pieces: "not-an-array" as unknown as RepertoirePiece[],
+						},
+						festivalClass: fullClassConfig,
+						subtype: null,
+						instrumentMap: new Map(),
+					}),
+				).rejects.toMatchObject({
+					status: 400,
+					message: "Repertoire pieces must be a non-empty array.",
+				});
+				expect(lookupSpy).toHaveBeenCalledTimes(0);
+
+				await expect(
+					f.service.start({
+						...f.defaultInput,
+						idempotencyKey: "idem-invalid-piece-shape",
+						pieces: [
+							{
+								title: "Piece 1",
+								composer: "Composer 1",
+								durationSeconds: 60,
+								catalogWorkId: "work-1",
+							},
+							null as unknown as RepertoirePiece,
+						],
+					}),
+				).rejects.toMatchObject({
+					status: 400,
+					message: "Each repertoire piece must be an object.",
+				});
+				expect(lookupSpy).toHaveBeenCalledTimes(0);
+
+				await expect(
+					f.service.start({
+						...f.defaultInput,
+						idempotencyKey: "idem-invalid-piece-fields",
+						pieces: [
+							{
+								title: "Piece 1",
+								composer: "Composer 1",
+								durationSeconds: 60,
+								catalogWorkId: "work-1",
+							},
+							{
+								title: "Piece 2",
+								composer: "   ",
+								durationSeconds: 60,
+								catalogWorkId: "work-2",
+							},
+						],
+					}),
+				).rejects.toMatchObject({
+					status: 400,
+					message: "Each repertoire piece must have a valid composer.",
+				});
+				expect(lookupSpy).toHaveBeenCalledTimes(0);
+			} finally {
+				lookupSpy.mockRestore();
+			}
 		});
 	});
 });

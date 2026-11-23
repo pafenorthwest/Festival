@@ -1,56 +1,110 @@
 import type { SessionResponse } from "@festival/common";
 import type { User } from "firebase/auth";
 import {
-	getAdminDivisions,
-	getAdminMembershipProducts,
-	getAdminUsers,
 	getBootstrap,
-	getFestivals,
 	getFirebaseSession,
-	getInvite,
 	getMemberships,
 	getOrganization,
-	getShopifySettings,
 } from "../lib/api.js";
-import { buildOrgPath } from "../lib/routes.js";
+import {
+	type AppRoute,
+	buildOrgPath,
+	STAFF_ORGANIZATION_CHOOSER_PATH,
+} from "../lib/routes.js";
 import type { FestivalAppState } from "./createFestivalAppState.js";
 
 export async function getIdToken(user: User | null): Promise<string | null> {
 	return user ? user.getIdToken() : null;
 }
 
-export function createFestivalDataLoaders(state: FestivalAppState) {
-	let divisionConfigurationLoadVersion = 0;
+export function mergeSessionWithOrgMembership(
+	current: SessionResponse["session"],
+	incoming: SessionResponse["session"],
+	route: AppRoute,
+): SessionResponse["session"] {
+	const routeSlug =
+		"slug" in route && typeof route.slug === "string"
+			? route.slug.toLowerCase()
+			: null;
+	const currentSlug = current.membership?.organizationSlug.toLowerCase();
+	const incomingSlug = incoming.membership?.organizationSlug.toLowerCase();
+	if (
+		incoming.authenticated &&
+		routeSlug !== null &&
+		currentSlug === routeSlug &&
+		incomingSlug !== routeSlug
+	) {
+		return { ...incoming, membership: current.membership };
+	}
+	return incoming;
+}
 
-	function isCurrentDivisionConfigurationLoad(
-		loadVersion: number,
-		slug: string,
-	): boolean {
-		const currentRoute = state.route();
-		return (
-			loadVersion === divisionConfigurationLoadVersion &&
-			currentRoute.kind === "org-admin-divisions" &&
-			currentRoute.slug === slug
-		);
+export function createFestivalDataLoaders(state: FestivalAppState) {
+	let latestSessionRequest = 0;
+	let latestOrganizationRequest = 0;
+	let activeSessionRefresh: {
+		uid: string | null;
+		request: ReturnType<typeof loadSession>;
+	} | null = null;
+
+	async function loadSession(
+		userOverride: User | null,
+		requestId: number,
+		expectedUid: string | null,
+	) {
+		try {
+			const token = await getIdToken(userOverride);
+			const response = token
+				? await getFirebaseSession(token)
+				: await getBootstrap();
+			if (
+				requestId !== latestSessionRequest ||
+				(state.firebaseUser()?.uid ?? null) !== expectedUid
+			) {
+				return null;
+			}
+			state.setSession((current) =>
+				mergeSessionWithOrgMembership(current, response.session, state.route()),
+			);
+
+			if (!token) {
+				state.setMemberships([]);
+				return { session: response.session, memberships: [] };
+			}
+
+			const membershipResponse = await getMemberships(token);
+			if (
+				requestId !== latestSessionRequest ||
+				(state.firebaseUser()?.uid ?? null) !== expectedUid
+			) {
+				return null;
+			}
+			state.setMemberships(membershipResponse.memberships);
+			return {
+				session: response.session,
+				memberships: membershipResponse.memberships,
+			};
+		} finally {
+			if (requestId === latestSessionRequest) {
+				state.setIsSessionLoading(false);
+			}
+		}
 	}
 
-	async function refreshSession(
-		userOverride: User | null = state.firebaseUser(),
-	) {
-		const token = await getIdToken(userOverride);
-		const response = token
-			? await getFirebaseSession(token)
-			: await getBootstrap();
-		state.setSession(response.session);
+	function refreshSession(userOverride: User | null = state.firebaseUser()) {
+		const uid = userOverride?.uid ?? null;
+		if (activeSessionRefresh?.uid === uid) return activeSessionRefresh.request;
 
-		if (!token) {
-			state.setMemberships([]);
-			return response.session;
-		}
-
-		const membershipResponse = await getMemberships(token);
-		state.setMemberships(membershipResponse.memberships);
-		return response.session;
+		const requestId = ++latestSessionRequest;
+		state.setIsSessionLoading(true);
+		const request = loadSession(userOverride, requestId, uid);
+		activeSessionRefresh = { uid, request };
+		const clearRefresh = () => {
+			if (activeSessionRefresh?.request === request)
+				activeSessionRefresh = null;
+		};
+		void request.then(clearRefresh, clearRefresh);
+		return request;
 	}
 
 	async function routeAfterSession(
@@ -66,12 +120,12 @@ export function createFestivalDataLoaders(state: FestivalAppState) {
 		state.setMemberships(membershipResponse.memberships);
 
 		if (membershipResponse.memberships.length > 1) {
-			state.navigate("/");
+			state.navigate(STAFF_ORGANIZATION_CHOOSER_PATH);
 			return;
 		}
 
 		const membership =
-			membershipResponse.memberships[0] ?? nextSession.membership ?? null;
+			membershipResponse.memberships[0] ?? nextSession.membership;
 		if (membership) {
 			state.navigate(buildOrgPath(membership.organizationSlug));
 			return;
@@ -80,138 +134,69 @@ export function createFestivalDataLoaders(state: FestivalAppState) {
 		state.navigate("/create-organization");
 	}
 
+	async function routeAfterOrganizerLogin(user: User) {
+		if (state.firebaseUser()?.uid !== user.uid) return;
+		const result = await refreshSession(user);
+		if (
+			!result ||
+			state.route().kind !== "home" ||
+			state.firebaseUser()?.uid !== user.uid
+		) {
+			return;
+		}
+		const { memberships } = result;
+		if (memberships.length > 1) {
+			state.navigate(STAFF_ORGANIZATION_CHOOSER_PATH);
+		} else if (memberships[0]) {
+			state.navigate(buildOrgPath(memberships[0].organizationSlug));
+		} else {
+			state.setErrorMessage(
+				"No organization membership was found for this account. Try logging in with a different account, or choose Sign Up to start an organization.",
+			);
+		}
+	}
+
 	async function loadOrganization(slug: string) {
-		const token = await getIdToken(state.firebaseUser());
-		if (!token) {
+		const user = state.firebaseUser();
+		if (!user) {
 			return;
 		}
-
-		const response = await getOrganization(token, slug);
-		state.setOrganization(response.organization);
-		state.setSession((current) => ({
-			...current,
-			membership: response.membership,
-		}));
-	}
-
-	async function loadAdminUsers(slug: string) {
-		const token = await getIdToken(state.firebaseUser());
-		if (!token) {
-			return;
-		}
-
-		const response = await getAdminUsers(token, slug);
-		state.setAdminUsers(response.users);
-	}
-
-	async function loadFestivals(slug: string) {
-		const token = await getIdToken(state.firebaseUser());
-		if (!token) {
-			return;
-		}
-
-		const response = await getFestivals(token, slug);
-		state.setFestivals(response.festivals);
-	}
-
-	async function loadDivisionConfiguration(slug: string) {
-		const loadVersion = ++divisionConfigurationLoadVersion;
-		const token = await getIdToken(state.firebaseUser());
-		if (!token) {
-			if (isCurrentDivisionConfigurationLoad(loadVersion, slug)) {
-				state.setIsLoadingDivisionConfiguration(false);
+		const requestId = ++latestOrganizationRequest;
+		const expectedUid = user.uid;
+		state.setIsOrganizationLoading(true);
+		try {
+			const token = await getIdToken(user);
+			if (
+				!token ||
+				requestId !== latestOrganizationRequest ||
+				(state.firebaseUser()?.uid ?? null) !== expectedUid
+			) {
+				return;
 			}
-			return;
-		}
-		if (!isCurrentDivisionConfigurationLoad(loadVersion, slug)) {
-			return;
-		}
 
-		state.setIsLoadingDivisionConfiguration(true);
-		state.setDivisionConfigurationLoadError("");
-		state.setDivisions([]);
-		state.setDivisionRenameDrafts({});
-
-		try {
-			const divisionResponse = await getAdminDivisions(token, slug);
-			if (!isCurrentDivisionConfigurationLoad(loadVersion, slug)) return;
-			state.setDivisions(divisionResponse.divisions);
-			state.setDivisionRenameDrafts(
-				Object.fromEntries(
-					divisionResponse.divisions.map((division) => [
-						division.id,
-						division.displayName,
-					]),
-				),
-			);
-		} catch {
-			if (!isCurrentDivisionConfigurationLoad(loadVersion, slug)) return;
-			state.setDivisionConfigurationLoadError(
-				"Division configuration is temporarily unavailable. Please try again.",
-			);
-		} finally {
-			if (isCurrentDivisionConfigurationLoad(loadVersion, slug)) {
-				state.setIsLoadingDivisionConfiguration(false);
+			const response = await getOrganization(token, slug);
+			if (
+				requestId !== latestOrganizationRequest ||
+				(state.firebaseUser()?.uid ?? null) !== expectedUid
+			) {
+				return;
 			}
-		}
-	}
-
-	async function loadMembershipProducts(slug: string) {
-		const token = await getIdToken(state.firebaseUser());
-		if (!token) {
-			return;
-		}
-
-		state.setIsLoadingMembershipProducts(true);
-		state.setMembershipProducts([]);
-		state.setMembershipProductsLoadError("");
-
-		try {
-			const response = await getAdminMembershipProducts(token, slug);
-			state.setMembershipProducts(response.membershipProducts);
-		} catch {
-			state.setMembershipProductsLoadError(
-				"Membership products are temporarily unavailable. Please try again.",
-			);
+			state.setOrganization(response.organization);
+			state.setSession((current) => ({
+				...current,
+				membership: response.membership,
+			}));
 		} finally {
-			state.setIsLoadingMembershipProducts(false);
-		}
-	}
-
-	async function loadShopifySettings(slug: string) {
-		const token = await getIdToken(state.firebaseUser());
-		if (!token) {
-			return;
-		}
-
-		const response = await getShopifySettings(token, slug);
-		state.setShopifySettings(response.settings);
-		state.setShopifyDraft({
-			storeUrl: response.settings?.storeDomain ?? "",
-			clientId: response.settings?.clientId ?? "",
-			clientSecret: "",
-			storefrontPrivateToken: "",
-		});
-	}
-
-	async function loadInvite(token: string) {
-		try {
-			const response = await getInvite(token);
-			state.setInvite(response.invite);
-		} catch (error) {
-			state.setErrorMessage((error as Error).message);
+			if (requestId === latestOrganizationRequest) {
+				state.setIsOrganizationLoading(false);
+			}
 		}
 	}
 
 	return {
-		loadAdminUsers,
-		loadDivisionConfiguration,
-		loadFestivals,
-		loadInvite,
-		loadMembershipProducts,
 		loadOrganization,
-		loadShopifySettings,
 		refreshSession,
+		routeAfterOrganizerLogin,
 		routeAfterSession,
 	};
 }

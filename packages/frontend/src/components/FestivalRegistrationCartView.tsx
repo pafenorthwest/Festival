@@ -1,4 +1,5 @@
 import { For, Show } from "solid-js";
+import { checkoutRecoveryMessage } from "../pages/checkoutRecoveryPresentation.js";
 import { formatTotalDuration } from "../pages/festivalRegistrationHelpers.js";
 import {
 	formatPriceCents,
@@ -51,10 +52,12 @@ export function FestivalRegistrationCartView(
 				{(recovery) => (
 					<div class="parent-note parent-warning" role="status">
 						<p>
-							Your registrations are saved while we check the existing checkout.
-							Please keep this reference when contacting the festival office:{" "}
-							{recovery().recoveryReference}.
+							{checkoutRecoveryMessage(
+								recovery(),
+								Boolean(props.canRestoreCheckout),
+							)}
 						</p>
+						<p>Checkout reference: {recovery().recoveryReference}.</p>
 						<Button
 							type="button"
 							variant="secondary"
@@ -72,10 +75,6 @@ export function FestivalRegistrationCartView(
 								)
 							}
 						>
-							<p>
-								The festival office has closed the previous attempt. Your
-								registrations remain here so you can start a new checkout.
-							</p>
 							<Button
 								type="button"
 								variant="secondary"
@@ -90,7 +89,16 @@ export function FestivalRegistrationCartView(
 			</Show>
 			<Show when={props.canRestoreCheckout}>
 				<div class="parent-note parent-warning">
-					<p>Restore your saved registrations to review before checking out.</p>
+					<p>
+						Your previous checkout is no longer available. Restore saved
+						registrations to review and start a new checkout. Your current cart
+						changes will be kept.
+					</p>
+					<p>
+						If you already paid, contact the festival office before starting
+						again. After restarting, use the new checkout instead of the old
+						Shopify link.
+					</p>
 					<Button
 						type="button"
 						variant="secondary"
@@ -177,9 +185,18 @@ export function FestivalRegistrationCartView(
 														"This registration is no longer eligible."}
 												</p>
 											</Show>
-											<Show when={result()?.isEligible}>
-												<span class="parent-badge parent-status-available">
-													Ready for checkout
+											<Show
+												when={props.cart.checkoutSubmission()}
+												fallback={
+													<Show when={result()?.isEligible}>
+														<span class="parent-badge parent-status-available">
+															Ready for checkout
+														</span>
+													</Show>
+												}
+											>
+												<span class="parent-badge parent-status-neutral">
+													Selection saved
 												</span>
 											</Show>
 										</div>

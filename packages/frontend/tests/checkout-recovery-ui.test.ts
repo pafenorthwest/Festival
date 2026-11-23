@@ -168,7 +168,7 @@ describe("checkout recovery API client", () => {
 			"/api/organizations/pafe/admin/checkout-intents/intent-1/invalidate",
 		);
 		expect(calls[0].method).toBe("POST");
-		expect(calls[0].csrf).toBe("id-tok-3");
+		expect(calls[0].csrf).toBe("admin-csrf");
 		expect(calls[0].body).toEqual({ reason: "Customer requested cancel" });
 	});
 
@@ -207,7 +207,7 @@ describe("checkout recovery API client", () => {
 			"/api/organizations/pafe/admin/checkout-intents/intent-1/recover",
 		);
 		expect(calls[0].method).toBe("POST");
-		expect(calls[0].csrf).toBe("id-tok-4");
+		expect(calls[0].csrf).toBe("admin-csrf");
 		expect(result.rawToken).toBe("raw-token");
 	});
 
@@ -325,7 +325,8 @@ describe("checkout recovery UI components wiring", () => {
 		const customerPage = await read(
 			"../src/pages/CustomerCheckoutRecoveryPage.tsx",
 		);
-		expect(customerPage).toContain("props.app.customerSession()");
+		expect(customerPage).toContain("useCustomerIdentity");
+		expect(customerPage).toContain("customerIdentity.customerSession()");
 		expect(customerPage).toContain("customerCheckoutRecoverySignInPath");
 		expect(customerPage).toContain("getCustomerCheckoutRecoveryReview");
 		expect(customerPage).toContain("resumeCustomerCheckoutRecovery");
@@ -339,12 +340,13 @@ describe("checkout recovery UI components wiring", () => {
 		expect(lineCount).toBeLessThan(350);
 	});
 
-	it("mounts recovery pages in App.tsx", async () => {
-		const app = await read("../src/App.tsx");
-		expect(app).toContain("<AdminCheckoutRecoveryPage");
-		expect(app).toContain('app.route().kind === "org-admin-checkout-recovery"');
-		expect(app).toContain("<CustomerCheckoutRecoveryPage");
-		expect(app).toContain('app.route().kind === "org-checkout-recovery"');
+	it("mounts recovery pages in AppRoutes.tsx", async () => {
+		const appRoutes = await read("../src/app/AppRoutes.tsx");
+		const adminRoutes = await read("../src/app/AdminRoutes.tsx");
+		expect(adminRoutes).toContain("Pages.AdminCheckoutRecoveryPage");
+		expect(adminRoutes).toContain('path="/admin/checkout-recovery"');
+		expect(appRoutes).toContain("Pages.CustomerCheckoutRecoveryPage");
+		expect(appRoutes).toContain('path="/checkout-recovery/:token"');
 	});
 });
 

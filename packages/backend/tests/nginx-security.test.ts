@@ -220,11 +220,41 @@ describe("repository nginx security policy", () => {
 					registered.filter((route) => !isPrivate(route)),
 				),
 			).toEqual([]);
+			const organizationsPath = "/api/organizations";
+			expect(proxiesRoute(locations, "GET", organizationsPath)).toBe(true);
+			expect(proxiesRoute(locations, "POST", organizationsPath)).toBe(true);
+			expect(proxiesRoute(locations, "OPTIONS", organizationsPath)).toBe(true);
+			expect(proxiesRoute(locations, "PATCH", organizationsPath)).toBe(false);
+			expect(proxiesRoute(locations, "DELETE", organizationsPath)).toBe(false);
 			const restartPath =
 				"/api/organizations/festival/customer/festivals/spring/registration/checkout/restart";
 			expect(proxiesRoute(locations, "GET", restartPath)).toBe(true);
 			expect(proxiesRoute(locations, "POST", restartPath)).toBe(true);
 			expect(proxiesRoute(locations, "PATCH", restartPath)).toBe(false);
+			const pendingPath =
+				"/api/organizations/festival/customer/pending-checkout";
+			expect(proxiesRoute(locations, "GET", pendingPath)).toBe(true);
+			expect(proxiesRoute(locations, "HEAD", pendingPath)).toBe(true);
+			expect(proxiesRoute(locations, "POST", pendingPath)).toBe(false);
+			const resumePath = `${pendingPath}/CCR-8564900F445F/resume`;
+			expect(proxiesRoute(locations, "POST", resumePath)).toBe(true);
+			expect(proxiesRoute(locations, "GET", resumePath)).toBe(false);
+			expect(proxiesRoute(locations, "PATCH", resumePath)).toBe(false);
+			const concertoBase =
+				"/api/organizations/festival/admin/concerto-repertoire";
+			for (const action of ["template", "export"]) {
+				const getPath = `${concertoBase}/${action}`;
+				expect(proxiesRoute(locations, "GET", getPath)).toBe(true);
+				expect(proxiesRoute(locations, "HEAD", getPath)).toBe(true);
+				expect(proxiesRoute(locations, "OPTIONS", getPath)).toBe(true);
+				expect(proxiesRoute(locations, "POST", getPath)).toBe(false);
+			}
+			for (const action of ["preview", "import"]) {
+				const postPath = `${concertoBase}/${action}`;
+				expect(proxiesRoute(locations, "POST", postPath)).toBe(true);
+				expect(proxiesRoute(locations, "OPTIONS", postPath)).toBe(true);
+				expect(proxiesRoute(locations, "GET", postPath)).toBe(false);
+			}
 			for (const route of privateRoutes) {
 				const block = selectLocation(locations, route.path);
 				expect(
@@ -267,6 +297,47 @@ describe("repository nginx security policy", () => {
 			);
 			expect(
 				selectLocation(locations, "/api/not-an-existing-route")?.children?.some(
+					(node) => node.name === "return" && node.args[0] === "404",
+				),
+			).toBe(true);
+		}
+	});
+
+	it("allows PATCH and OPTIONS on admin teacher profile divisions without matching accompanist divisions", async () => {
+		const teacherDivisionsPath =
+			"/api/admin/orgs/pafe/profiles/teachers/prof-1/divisions";
+		const accompanistDivisionsPath =
+			"/api/admin/orgs/pafe/profiles/accompanists/prof-1/divisions";
+
+		for (const configPath of [
+			"nginx/festival.conf",
+			"docker/nginx.festival.conf",
+		]) {
+			const locations = readLocations(await readConfig(configPath));
+			expect(proxiesRoute(locations, "PATCH", teacherDivisionsPath)).toBe(true);
+			expect(proxiesRoute(locations, "OPTIONS", teacherDivisionsPath)).toBe(
+				true,
+			);
+			for (const deniedMethod of ["GET", "PUT", "POST", "DELETE"]) {
+				expect(
+					proxiesRoute(locations, deniedMethod, teacherDivisionsPath),
+				).toBe(false);
+			}
+
+			for (const method of [
+				"PATCH",
+				"OPTIONS",
+				"GET",
+				"PUT",
+				"POST",
+				"DELETE",
+			]) {
+				expect(proxiesRoute(locations, method, accompanistDivisionsPath)).toBe(
+					false,
+				);
+			}
+			expect(
+				selectLocation(locations, accompanistDivisionsPath)?.children?.some(
 					(node) => node.name === "return" && node.args[0] === "404",
 				),
 			).toBe(true);
@@ -369,6 +440,7 @@ describe("repository nginx security policy", () => {
 				"admin/customers",
 				"admin/customers/[^/]+/checkout-intents",
 				"admin/checkout-intents/[^/]+/(?:invalidate|recover)",
+				"admin/concerto-repertoire/",
 				"customer-auth/callback",
 				"customer-auth/start|customer/session|customer/orders|customer/membership-status",
 				"customer/membership-purchase/[^/]+",

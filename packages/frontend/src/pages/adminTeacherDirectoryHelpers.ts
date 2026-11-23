@@ -1,8 +1,13 @@
 import type {
+	AccompanistProfileRecord,
 	OrganizationDivision,
 	ProfileApprovalStatus,
 	TeacherProfileRecord,
 } from "@festival/common";
+
+export type AdminDirectoryModerationProfile =
+	| (TeacherProfileRecord & { readonly role: "Teacher" })
+	| (AccompanistProfileRecord & { readonly role: "Accompanist" });
 
 export function sortTeacherProfilesByName(
 	profiles: readonly TeacherProfileRecord[],
@@ -15,6 +20,49 @@ export function sortTeacherProfilesByName(
 			a.display_name.localeCompare(b.display_name) ||
 			a.id.localeCompare(b.id),
 	);
+}
+
+function sortModerationProfiles(
+	profiles: readonly AdminDirectoryModerationProfile[],
+): AdminDirectoryModerationProfile[] {
+	return [...profiles].sort(
+		(a, b) =>
+			a.display_name
+				.toLowerCase()
+				.localeCompare(b.display_name.toLowerCase()) ||
+			a.display_name.localeCompare(b.display_name) ||
+			a.role.localeCompare(b.role) ||
+			a.id.localeCompare(b.id),
+	);
+}
+
+export function toAdminDirectoryModerationProfiles(
+	teachers: readonly TeacherProfileRecord[],
+	accompanists: readonly AccompanistProfileRecord[],
+): AdminDirectoryModerationProfile[] {
+	return sortModerationProfiles([
+		...teachers.map((entry) => ({ ...entry, role: "Teacher" as const })),
+		...accompanists.map((entry) => ({
+			...entry,
+			role: "Accompanist" as const,
+		})),
+	]);
+}
+
+export function applyUpdatedModerationProfile(
+	profiles: readonly AdminDirectoryModerationProfile[],
+	updated: AdminDirectoryModerationProfile,
+): AdminDirectoryModerationProfile[] {
+	let matched = false;
+	const replaced = profiles.map((entry) => {
+		if (entry.role === updated.role && entry.id === updated.id) {
+			matched = true;
+			return updated;
+		}
+		return entry;
+	});
+	if (!matched) replaced.push(updated);
+	return sortModerationProfiles(replaced);
 }
 
 export function nextAdminTeacherApprovalStatus(

@@ -10,6 +10,7 @@ import {
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { Button } from "../components/Button.js";
 import { CUSTOMER_HELP_TEXT, HelpTooltip } from "../components/HelpTooltip.js";
+import { useOptionalCustomerIdentity } from "../domains/customer/CustomerIdentityContext.js";
 import type { CustomerClassRegistrationItem } from "../lib/api.js";
 import {
 	getPublicDivisions,
@@ -45,6 +46,7 @@ export function CustomerAccountClassesPage(props: {
 	slug: string;
 	app?: FestivalAppController;
 }) {
+	const customerIdentity = useOptionalCustomerIdentity();
 	const [registrations, setRegistrations] = createSignal<
 		CustomerClassRegistrationItem[]
 	>([]);
@@ -87,6 +89,9 @@ export function CustomerAccountClassesPage(props: {
 	async function reloadRegistrations() {
 		const response = await listCustomerClassRegistrations(props.slug);
 		setRegistrations(response.registrations);
+		if (customerIdentity?.pendingCheckout.ownerSlug() === props.slug) {
+			void customerIdentity.pendingCheckout.refresh();
+		}
 	}
 	async function loadClasses() {
 		setLoading(true);

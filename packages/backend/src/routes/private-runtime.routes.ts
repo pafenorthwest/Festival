@@ -8,6 +8,62 @@ import type { ShopifyWebhookService } from "../commerce/shopify-webhook-service.
 import type { WebhookWorkerQueueStats } from "../commerce/webhook-worker-queue.js";
 import type { AppEnv } from "../config/env.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
+import {
+	type CoLocatedRouteSecurity,
+	defineRouteSecurity,
+} from "./shared/route-security-metadata.js";
+
+export const PRIVATE_RUNTIME_ROUTE_SECURITY = [
+	defineRouteSecurity({
+		method: "GET",
+		path: "/ready",
+		authenticationClass: "private-runtime",
+		csrfRequired: false,
+		browserAllowed: false,
+	}),
+	defineRouteSecurity({
+		method: "GET",
+		path: "/diagnostics",
+		authenticationClass: "private-runtime",
+		csrfRequired: false,
+		browserAllowed: false,
+	}),
+	defineRouteSecurity({
+		method: "GET",
+		path: "/metrics",
+		authenticationClass: "private-runtime",
+		csrfRequired: false,
+		browserAllowed: false,
+	}),
+	defineRouteSecurity({
+		method: "GET",
+		path: "/operator/status",
+		authenticationClass: "private-operator",
+		csrfRequired: false,
+		browserAllowed: false,
+	}),
+	defineRouteSecurity({
+		method: "POST",
+		path: "/reconcile/shopify-orders",
+		authenticationClass: "private-service",
+		csrfRequired: false,
+		browserAllowed: false,
+	}),
+	defineRouteSecurity({
+		method: "POST",
+		path: "/reconcile/firebase-claims",
+		authenticationClass: "private-service",
+		csrfRequired: false,
+		browserAllowed: false,
+	}),
+	defineRouteSecurity({
+		method: "POST",
+		path: "/events/shopify-orders-paid",
+		authenticationClass: "private-event-bus",
+		csrfRequired: false,
+		browserAllowed: false,
+	}),
+] as const satisfies readonly CoLocatedRouteSecurity[];
 
 export interface PrivateRuntimeRoutesOptions {
 	env: AppEnv;
@@ -283,98 +339,109 @@ async function handlePaidOrderEvent(
 	);
 }
 
+async function handleReadyCheck(
+	c: Context,
+	options: PrivateRuntimeRoutesOptions,
+) {
+	if (
+		!requireHeaderToken(c, "X-Festival-Runtime-Token", options.env.runtimeToken)
+	) {
+		return jsonNoStore(c, { error: "Not found." }, 404);
+	}
+	try {
+		await options.repository.ensureReady();
+		return jsonNoStore(c, {
+			status: "ready",
+			checks: {
+				repository: "ok",
+				shopifyKeyring: options.hasShopifyKeyring ? "configured" : "disabled",
+			},
+		});
+	} catch {
+		return jsonNoStore(c, { status: "not_ready" }, 503);
+	}
+}
+
+function handleDiagnostics(c: Context, options: PrivateRuntimeRoutesOptions) {
+	if (
+		!requireHeaderToken(c, "X-Festival-Runtime-Token", options.env.runtimeToken)
+	) {
+		return jsonNoStore(c, { error: "Not found." }, 404);
+	}
+	return jsonNoStore(c, {
+		status: "ok",
+		diagnostics: {
+			trustProxyHeaders: Boolean(options.env.trustProxyHeaders),
+			dropTransferEnabled: Boolean(options.env.enableDropTransfer),
+			shopifyKeyringConfigured: options.hasShopifyKeyring,
+			shopifyWebhookQueue: readWebhookQueueStats(options.shopifyWebhookService),
+		},
+	});
+}
+
+function handleMetrics(c: Context, options: PrivateRuntimeRoutesOptions) {
+	if (
+		!requireHeaderToken(c, "X-Festival-Runtime-Token", options.env.runtimeToken)
+	) {
+		return jsonNoStore(c, { error: "Not found." }, 404);
+	}
+	return jsonNoStore(c, {
+		status: "ok",
+		subsystems: {
+			reconciliationConfigured: Boolean(
+				options.env.reconciliationToken ||
+					Object.keys(options.env.tenantReconciliationTokens ?? {}).length > 0,
+			),
+			eventBusConfigured: Boolean(options.env.eventBusToken),
+			firebaseClaimsReconciliationConfigured: Boolean(
+				options.firebaseClaimsReconciliationService,
+			),
+		},
+		shopifyWebhookQueue: readWebhookQueueStats(options.shopifyWebhookService),
+	});
+}
+
+function handleOperatorStatus(
+	c: Context,
+	options: PrivateRuntimeRoutesOptions,
+) {
+	if (
+		!requireHeaderToken(
+			c,
+			"X-Festival-Operator-Token",
+			options.env.operatorToken,
+		)
+	) {
+		return jsonNoStore(c, { error: "Not found." }, 404);
+	}
+	return jsonNoStore(c, {
+		status: "ok",
+		boundaries: {
+			publicHealthz: "minimal",
+			privateRuntimeAuthenticated: true,
+			tenantScopedReconciliationCount: Object.keys(
+				options.env.tenantReconciliationTokens ?? {},
+			).length,
+		},
+		shopifyWebhookQueue: readWebhookQueueStats(options.shopifyWebhookService),
+	});
+}
+
 export function buildPrivateRuntimeRouter(
 	options: PrivateRuntimeRoutesOptions,
-): Hono {
-	const router = new Hono();
-	const {
-		env,
-		repository,
-		firebaseClaimsReconciliationService,
-		hasShopifyKeyring,
-	} = options;
-
-	router.get("/ready", async (c) => {
-		if (!requireHeaderToken(c, "X-Festival-Runtime-Token", env.runtimeToken)) {
-			return jsonNoStore(c, { error: "Not found." }, 404);
-		}
-		try {
-			await repository.ensureReady();
-			return jsonNoStore(c, {
-				status: "ready",
-				checks: {
-					repository: "ok",
-					shopifyKeyring: hasShopifyKeyring ? "configured" : "disabled",
-				},
-			});
-		} catch {
-			return jsonNoStore(c, { status: "not_ready" }, 503);
-		}
-	});
-
-	router.get("/diagnostics", (c) =>
-		requireHeaderToken(c, "X-Festival-Runtime-Token", env.runtimeToken)
-			? jsonNoStore(c, {
-					status: "ok",
-					diagnostics: {
-						trustProxyHeaders: Boolean(env.trustProxyHeaders),
-						dropTransferEnabled: Boolean(env.enableDropTransfer),
-						shopifyKeyringConfigured: hasShopifyKeyring,
-						shopifyWebhookQueue: readWebhookQueueStats(
-							options.shopifyWebhookService,
-						),
-					},
-				})
-			: jsonNoStore(c, { error: "Not found." }, 404),
-	);
-
-	router.get("/metrics", (c) =>
-		requireHeaderToken(c, "X-Festival-Runtime-Token", env.runtimeToken)
-			? jsonNoStore(c, {
-					status: "ok",
-					subsystems: {
-						reconciliationConfigured: Boolean(
-							env.reconciliationToken ||
-								Object.keys(env.tenantReconciliationTokens ?? {}).length > 0,
-						),
-						eventBusConfigured: Boolean(env.eventBusToken),
-						firebaseClaimsReconciliationConfigured: Boolean(
-							firebaseClaimsReconciliationService,
-						),
-					},
-					shopifyWebhookQueue: readWebhookQueueStats(
-						options.shopifyWebhookService,
-					),
-				})
-			: jsonNoStore(c, { error: "Not found." }, 404),
-	);
-
-	router.get("/operator/status", (c) =>
-		requireHeaderToken(c, "X-Festival-Operator-Token", env.operatorToken)
-			? jsonNoStore(c, {
-					status: "ok",
-					boundaries: {
-						publicHealthz: "minimal",
-						privateRuntimeAuthenticated: true,
-						tenantScopedReconciliationCount: Object.keys(
-							env.tenantReconciliationTokens ?? {},
-						).length,
-					},
-					shopifyWebhookQueue: readWebhookQueueStats(
-						options.shopifyWebhookService,
-					),
-				})
-			: jsonNoStore(c, { error: "Not found." }, 404),
-	);
-
-	router.post("/reconcile/shopify-orders", (c) =>
-		handleShopifyReconcile(c, options),
-	);
-	router.post("/reconcile/firebase-claims", (c) =>
-		handleFirebaseClaimsReconcile(c, options),
-	);
-	router.post("/events/shopify-orders-paid", (c) =>
-		handlePaidOrderEvent(c, options),
-	);
-	return router;
+) {
+	return new Hono()
+		.get("/ready", (c) => handleReadyCheck(c, options))
+		.get("/diagnostics", (c) => handleDiagnostics(c, options))
+		.get("/metrics", (c) => handleMetrics(c, options))
+		.get("/operator/status", (c) => handleOperatorStatus(c, options))
+		.post("/reconcile/shopify-orders", (c) =>
+			handleShopifyReconcile(c, options),
+		)
+		.post("/reconcile/firebase-claims", (c) =>
+			handleFirebaseClaimsReconcile(c, options),
+		)
+		.post("/events/shopify-orders-paid", (c) =>
+			handlePaidOrderEvent(c, options),
+		);
 }

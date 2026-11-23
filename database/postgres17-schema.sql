@@ -31,6 +31,13 @@ CREATE EXTENSION IF NOT EXISTS btree_gist WITH SCHEMA public;
 
 
 --
+-- Name: pg_trgm; Type: EXTENSION; Schema: -; Owner: -
+--
+
+CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;
+
+
+--
 -- Name: pgcrypto; Type: EXTENSION; Schema: -; Owner: -
 --
 
@@ -3024,6 +3031,13 @@ CREATE INDEX idx_registration_change_logs_org_festival ON orgs.registration_chan
 
 
 --
+-- Name: idx_repertoire_contributors_name_trgm; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_repertoire_contributors_name_trgm ON orgs.repertoire_contributors USING gin (normalized_name public.gin_trgm_ops);
+
+
+--
 -- Name: idx_repertoire_review_items_org_claimed; Type: INDEX; Schema: orgs; Owner: -
 --
 
@@ -3035,6 +3049,13 @@ CREATE INDEX idx_repertoire_review_items_org_claimed ON orgs.repertoire_review_i
 --
 
 CREATE INDEX idx_repertoire_review_items_org_status ON orgs.repertoire_review_items USING btree (organization_id, status);
+
+
+--
+-- Name: idx_repertoire_works_active_title_trgm; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE INDEX idx_repertoire_works_active_title_trgm ON orgs.repertoire_works USING gin (normalized_title public.gin_trgm_ops) WHERE is_active;
 
 
 --

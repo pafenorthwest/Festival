@@ -1,0 +1,324 @@
+import {
+	type AccompanistDivisionSelectionPolicy,
+	AppError,
+	type AuthenticatedUser,
+	type CreateOrganizationInput,
+	type CreateOrganizationResponse,
+	type DismissWelcomeResponse,
+	deriveDisplayName,
+	isValidIanaTimezone,
+	type OrganizationLandingResponse,
+	type OrganizationMembershipListResponse,
+	type OrganizationSession,
+	type PublicOrganizationListResponse,
+	type SessionResponse,
+	type UpdateOrganizationTimezoneInput,
+	validateOrganizationName,
+	validateOrganizationShortName,
+} from "@festival/common";
+import {
+	BoundedAsyncCache,
+	type DomainCacheInvalidator,
+	emitDomainInvalidation,
+	type S09InvalidationSink,
+	type TenantContext,
+} from "../../infra/s09-infra.js";
+import type { AppUserMembershipRepository } from "./app-user-membership-repository.js";
+import { toSessionMembership } from "./tenant-mappers.js";
+import type { TenantRepository } from "./tenant-repository.js";
+
+const PUBLIC_ORGANIZATION_LIST_TTL_MS = 4 * 60 * 60_000;
+const PUBLIC_ORGANIZATION_LIST_MAX_BYTES = 256 * 1024;
+
+function normalizeUserIdentity(identity: AuthenticatedUser): AuthenticatedUser {
+	return {
+		...identity,
+		displayName: deriveDisplayName(identity),
+		email: identity.email.toLowerCase(),
+	};
+}
+
+function subscribePublicOrganizationListInvalidator(
+	invalidator: S09InvalidationSink | DomainCacheInvalidator,
+	cache: BoundedAsyncCache<"all", PublicOrganizationListResponse>,
+): (() => void) | undefined {
+	if (
+		"subscribe" in invalidator &&
+		typeof invalidator.subscribe === "function"
+	) {
+		return invalidator.subscribe((event) => {
+			if (event.type === "OrgUpdated" || event.type === "CachesCleared") {
+				cache.deleteWhere(() => true);
+			}
+		});
+	}
+	return undefined;
+}
+
+async function loadPublicOrganizationList(
+	tenants: TenantRepository,
+	cache: BoundedAsyncCache<"all", PublicOrganizationListResponse>,
+): Promise<PublicOrganizationListResponse> {
+	const listing = await cache.getOrLoad("all", async () => {
+		const value = { organizations: await tenants.listPublicOrganizations() };
+		const bytes = Buffer.byteLength(JSON.stringify(value));
+		return {
+			value,
+			ttlMs: PUBLIC_ORGANIZATION_LIST_TTL_MS,
+			bytes,
+			cache: bytes > PUBLIC_ORGANIZATION_LIST_MAX_BYTES ? false : undefined,
+		};
+	});
+	return {
+		organizations: listing.organizations.map(({ slug, name }) => ({
+			slug,
+			name,
+		})),
+	};
+}
+
+/** Handles tenant organizations, user sessions, timezones, and accompanist policies. */
+export class TenantOrganizationService {
+	private cacheInvalidator?: S09InvalidationSink | DomainCacheInvalidator;
+	private unsubscribeInvalidator?: () => void;
+	private readonly publicOrganizationListCache = new BoundedAsyncCache<
+		"all",
+		PublicOrganizationListResponse
+	>({
+		maxEntries: 1,
+		maxEntryBytes: PUBLIC_ORGANIZATION_LIST_MAX_BYTES,
+		maxTotalBytes: PUBLIC_ORGANIZATION_LIST_MAX_BYTES,
+	});
+
+	constructor(
+		private readonly tenants: TenantRepository,
+		private readonly memberships: AppUserMembershipRepository,
+		private readonly options?: { enableDropTransfer?: boolean },
+	) {}
+
+	bindCacheInvalidator(
+		invalidator: S09InvalidationSink | DomainCacheInvalidator,
+	): void {
+		this.unsubscribeInvalidator?.();
+		this.unsubscribeInvalidator = undefined;
+		this.cacheInvalidator = invalidator;
+		this.unsubscribeInvalidator = subscribePublicOrganizationListInvalidator(
+			invalidator,
+			this.publicOrganizationListCache,
+		);
+	}
+
+	async getSession(identity?: AuthenticatedUser): Promise<SessionResponse> {
+		if (!identity) {
+			return { session: { authenticated: false } };
+		}
+		const user = await this.memberships.upsertUser(
+			normalizeUserIdentity(identity),
+		);
+		const membership = await this.memberships.findMembershipByUserId(user.id);
+		const session: OrganizationSession = {
+			authenticated: true,
+			user: {
+				uid: user.firebaseUid,
+				email: user.email,
+				displayName: user.displayName,
+			},
+			membership: membership ? toSessionMembership(membership) : undefined,
+		};
+		return { session };
+	}
+
+	listPublicOrganizations(): Promise<PublicOrganizationListResponse> {
+		return loadPublicOrganizationList(
+			this.tenants,
+			this.publicOrganizationListCache,
+		);
+	}
+
+	async listMemberships(
+		identity: AuthenticatedUser,
+	): Promise<OrganizationMembershipListResponse> {
+		const user = await this.memberships.upsertUser(
+			normalizeUserIdentity(identity),
+		);
+		const memberships = await this.memberships.listMembershipsByUserId(user.id);
+		return { memberships: memberships.map(toSessionMembership) };
+	}
+
+	async createOrganization(
+		identity: AuthenticatedUser,
+		input: CreateOrganizationInput,
+	): Promise<CreateOrganizationResponse> {
+		const nameCheck = validateOrganizationName(input.name);
+		const slugCheck = validateOrganizationShortName(input.shortName);
+		const errors = [...nameCheck.errors, ...slugCheck.errors];
+		if (errors.length > 0) throw new AppError(errors.join(" "), 400);
+
+		const user = await this.memberships.upsertUser(
+			normalizeUserIdentity(identity),
+		);
+		if (await this.tenants.findOrganizationBySlug(slugCheck.normalized)) {
+			throw new AppError("Organization short name is already registered.", 409);
+		}
+		if (await this.tenants.findOrganizationByName(nameCheck.normalized)) {
+			throw new AppError("Organization name is already registered.", 409);
+		}
+
+		const organization = await this.tenants.createOrganization({
+			name: nameCheck.normalized,
+			slug: slugCheck.normalized,
+			defaultCurrencyCode: input.defaultCurrencyCode,
+		});
+		// The organization is already public even if creating its membership fails.
+		this.publicOrganizationListCache.deleteWhere(() => true);
+		emitDomainInvalidation(this.cacheInvalidator, {
+			type: "OrgUpdated",
+			organizationId: organization.id,
+			slug: organization.slug,
+		});
+		const membership = await this.memberships.createMembership({
+			organizationId: organization.id,
+			userId: user.id,
+			role: "Admin",
+			origin: "creator",
+		});
+
+		return {
+			organization,
+			membership: toSessionMembership({ membership, organization }),
+		};
+	}
+
+	async getTimezoneForTenant(tenant: TenantContext) {
+		return {
+			timezone: await this.tenants.getOrganizationTimezone(
+				tenant.organization.id,
+			),
+		};
+	}
+
+	async updateTimezoneForTenant(
+		tenant: TenantContext,
+		input: UpdateOrganizationTimezoneInput,
+	) {
+		const trimmed = input.timezone?.trim() ?? "";
+		if (!isValidIanaTimezone(trimmed)) {
+			throw new AppError(
+				"Organization timezone must be a valid IANA timezone.",
+				400,
+			);
+		}
+		const timezone = await this.tenants.updateOrganizationTimezone(
+			tenant.organization.id,
+			trimmed,
+		);
+		emitDomainInvalidation(this.cacheInvalidator, {
+			type: "OrgUpdated",
+			organizationId: tenant.organization.id,
+			slug: tenant.organization.slug,
+		});
+		return { timezone };
+	}
+
+	async getAccompanistDivisionPolicy(organizationId: string) {
+		return this.tenants.getAccompanistDivisionPolicy(organizationId);
+	}
+
+	async updateAccompanistDivisionPolicy(options: {
+		organizationId: string;
+		policy: AccompanistDivisionSelectionPolicy;
+	}) {
+		const updated = await this.tenants.updateAccompanistDivisionPolicy(options);
+		emitDomainInvalidation(this.cacheInvalidator, {
+			type: "FestivalCatalogUpdated",
+			organizationId: options.organizationId,
+		});
+		return updated;
+	}
+
+	async getOrganizationLanding(
+		identity: AuthenticatedUser,
+		slug: string,
+	): Promise<OrganizationLandingResponse> {
+		const user = await this.memberships.upsertUser(
+			normalizeUserIdentity(identity),
+		);
+		const membership = await this.memberships.findMembershipByUserAndSlug(
+			user.id,
+			slug,
+		);
+		if (!membership) {
+			throw new AppError("Organization membership not found.", 404);
+		}
+		return {
+			organization: membership.organization,
+			membership: toSessionMembership(membership),
+			features: { dropTransfer: Boolean(this.options?.enableDropTransfer) },
+		};
+	}
+
+	getOrganizationLandingForTenant(
+		tenant: TenantContext,
+	): OrganizationLandingResponse {
+		return {
+			organization: tenant.organization,
+			membership: toSessionMembership({
+				membership: tenant.membership,
+				organization: tenant.organization,
+			}),
+			features: { dropTransfer: Boolean(this.options?.enableDropTransfer) },
+		};
+	}
+
+	async dismissWelcome(
+		identity: AuthenticatedUser,
+		slug: string,
+	): Promise<DismissWelcomeResponse> {
+		const user = await this.memberships.upsertUser(
+			normalizeUserIdentity(identity),
+		);
+		const membership = await this.memberships.findMembershipByUserAndSlug(
+			user.id,
+			slug,
+		);
+		if (!membership) {
+			throw new AppError("Organization membership not found.", 404);
+		}
+		if (membership.membership.origin !== "invite") {
+			return { membership: toSessionMembership(membership) };
+		}
+		const updated = await this.memberships.dismissWelcome(
+			user.id,
+			membership.organization.id,
+		);
+		return {
+			membership: toSessionMembership({
+				membership: updated,
+				organization: membership.organization,
+			}),
+		};
+	}
+
+	async dismissWelcomeForTenant(
+		tenant: TenantContext,
+	): Promise<DismissWelcomeResponse> {
+		if (tenant.membership.origin !== "invite") {
+			return {
+				membership: toSessionMembership({
+					membership: tenant.membership,
+					organization: tenant.organization,
+				}),
+			};
+		}
+		const updated = await this.memberships.dismissWelcome(
+			tenant.user.id,
+			tenant.organization.id,
+		);
+		return {
+			membership: toSessionMembership({
+				membership: updated,
+				organization: tenant.organization,
+			}),
+		};
+	}
+}

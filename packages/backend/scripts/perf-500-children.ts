@@ -1,5 +1,7 @@
 import { appendFileSync } from "node:fs";
 
+export const MAX_CONCURRENCY = 1000;
+
 interface BenchmarkConfig {
 	baseUrl: string;
 	concurrency: number;
@@ -33,11 +35,16 @@ function parseConfig(): BenchmarkConfig {
 		process.env.BASE_URL?.trim() || "https://int.artsfestival.online";
 	const baseUrl = rawBaseUrl.replace(/\/+$/, "");
 	const concurrencyRaw = process.env.CONCURRENCY?.trim() || "500";
-	const concurrency = Number.parseInt(concurrencyRaw, 10);
-	if (Number.isNaN(concurrency) || concurrency <= 0) {
-		throw new Error(
-			`Invalid CONCURRENCY: "${concurrencyRaw}". Must be a positive integer.`,
+	const concurrency = Number(concurrencyRaw);
+	if (
+		!Number.isInteger(concurrency) ||
+		concurrency < 1 ||
+		concurrency > MAX_CONCURRENCY
+	) {
+		console.error(
+			`Invalid CONCURRENCY: "${concurrencyRaw}". Must be an integer between 1 and ${MAX_CONCURRENCY}.`,
 		);
+		process.exit(1);
 	}
 	const slug = process.env.SLUG?.trim() || "perf-test";
 	const origin = new URL(baseUrl).origin;
@@ -195,7 +202,7 @@ function formatMarkdownSummary(
 	const errorSection = renderErrorDetails(stats.non201Errors);
 
 	const sections = [
-		"# 500 Simultaneous Child Creations Benchmark",
+		`# ${config.concurrency} Simultaneous Child Creations Benchmark`,
 		"",
 		`- **Target URL**: \`${config.baseUrl}/api/organizations/${config.slug}/customer/children\``,
 		`- **Concurrency**: ${config.concurrency}`,

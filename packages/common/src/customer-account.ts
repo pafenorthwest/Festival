@@ -172,7 +172,7 @@ export interface CustomerMoney {
 export interface CustomerOrderLineItem {
 	title: string;
 	quantity: number;
-	total: CustomerMoney;
+	total: CustomerMoney | null;
 }
 
 export interface CustomerOrderSummary {

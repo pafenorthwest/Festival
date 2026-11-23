@@ -1,0 +1,361 @@
+import {
+	type AccompanistMembershipGrant,
+	AppError,
+	addCalendarDays,
+	type CustomerMembershipStatusResponse,
+	calendarDateInTimezone,
+	type EntitlementReportFilters,
+	type EntitlementReportPageRequest,
+	type EntitlementReportResponse,
+	type EntitlementSummaryCounts,
+	filterEntitlementReportEntries,
+	INITIAL_ACCOMPANIST_MEMBERSHIP_DURATION_DAYS,
+	listEntitlementReportDivisions,
+	paginateEntitlementReportEntries,
+	summarizeEntitlementCounts,
+} from "@festival/common";
+import {
+	AccompanistMembershipConflictError,
+	type DomainCacheInvalidator,
+	emitS10DomainEvent,
+	lifecycleForEntitlementRead,
+	type S10DomainEventListener,
+} from "../../infra/s10-infra.js";
+import {
+	loadActiveAccompanistRoster,
+	loadActiveTeacherRoster,
+	loadTeacherReportEntries,
+	mapAccompanistStatusEntries,
+	mapTeacherStatusEntries,
+	mapValidationDecisions,
+	parseAccompanistAcquirePayload,
+	resolveAccompanistStartsOn,
+	sortReportEntries,
+	sortRosterEntries,
+	toAccompanistReportEntries,
+	validateAndMapAccompanistDivisions,
+	verifiedShopifyIdentityEmail,
+} from "./membership-entitlement-helpers.js";
+import type {
+	CreateAccompanistMembershipGrantInput,
+	MembershipEntitlementRepository,
+	MembershipProductRepository,
+	StaffMembershipRosterResult,
+	TeacherDirectoryCommerceDecisionsPort,
+	TeacherDirectoryOrganizationPort,
+	TeacherDirectoryRepository,
+} from "./types.js";
+
+const ACCOMPANIST_MEMBERSHIP_DISPLAY_NAME = "Accompanist Membership";
+
+export type MembershipEntitlementPort = Pick<
+	MembershipEntitlementRepository,
+	| "listEntitlementGrantSnapshots"
+	| "findMembershipCustomerContacts"
+	| "createAccompanistMembershipGrant"
+	| "listAccompanistMembershipGrants"
+>;
+
+export type MembershipProductLookupPort = Pick<
+	MembershipProductRepository,
+	| "findMembershipProductRecordByClass"
+	| "listMembershipProductRecords"
+	| "getAccompanistDivisionPolicy"
+>;
+
+export interface MembershipEntitlementServiceDeps {
+	entitlements: MembershipEntitlementPort;
+	products: MembershipProductLookupPort;
+	organizations: Pick<
+		TeacherDirectoryOrganizationPort,
+		"getOrganizationTimezone" | "listDivisions"
+	>;
+	directory?: Pick<
+		TeacherDirectoryRepository,
+		"getTeacherProfile" | "listTeacherProfiles"
+	> &
+		Partial<Pick<TeacherDirectoryRepository, "listAccompanistProfiles">>;
+	commerce?: TeacherDirectoryCommerceDecisionsPort;
+	now?: () => Date;
+	cacheInvalidator?: DomainCacheInvalidator;
+}
+
+export interface AcquireAccompanistMembershipInput {
+	organizationId: string;
+	organizationTimezone: string;
+	customerId: string;
+	verifiedShopifyCustomerEmail?: string | null;
+	payload: unknown;
+}
+
+async function persistAccompanistGrant(
+	entitlements: Pick<
+		MembershipEntitlementRepository,
+		"createAccompanistMembershipGrant"
+	>,
+	input: CreateAccompanistMembershipGrantInput,
+): Promise<AccompanistMembershipGrant> {
+	try {
+		return await entitlements.createAccompanistMembershipGrant(input);
+	} catch (error) {
+		if (error instanceof AccompanistMembershipConflictError) {
+			throw new AppError(
+				"An active accompanist membership already exists.",
+				409,
+			);
+		}
+		throw error;
+	}
+}
+
+/**
+ * Domain service owning teacher & accompanist membership status reads,
+ * accompanist membership acquisition/renewal, staff rosters, and reporting.
+ */
+export class MembershipEntitlementService {
+	private readonly now: () => Date;
+	private cacheInvalidator?: DomainCacheInvalidator;
+	private readonly eventListeners = new Set<S10DomainEventListener>();
+
+	constructor(private readonly deps: MembershipEntitlementServiceDeps) {
+		this.now = deps.now ?? (() => new Date());
+		this.cacheInvalidator = deps.cacheInvalidator;
+	}
+
+	bindCacheInvalidator(invalidator: DomainCacheInvalidator): void {
+		this.cacheInvalidator = invalidator;
+	}
+
+	onDomainEvent(listener: S10DomainEventListener): () => void {
+		this.eventListeners.add(listener);
+		return () => {
+			this.eventListeners.delete(listener);
+		};
+	}
+
+	private emitMembershipChanged(organizationId: string): void {
+		emitS10DomainEvent(
+			this.cacheInvalidator,
+			{ type: "MembershipChanged", organizationId },
+			this.eventListeners,
+		);
+	}
+
+	async listCustomerMembershipStatus(
+		organizationId: string,
+		customerId: string,
+	): Promise<CustomerMembershipStatusResponse> {
+		if (!this.deps.commerce) {
+			throw new AppError("Membership commerce port is not configured.", 503);
+		}
+		const [
+			timezone,
+			grants,
+			accompanistGrants,
+			decisions,
+			offering,
+			teacherProfile,
+		] = await Promise.all([
+			this.deps.organizations.getOrganizationTimezone(organizationId),
+			this.deps.entitlements.listEntitlementGrantSnapshots(
+				organizationId,
+				customerId,
+			),
+			this.deps.entitlements.listAccompanistMembershipGrants({
+				organizationId,
+				customerId,
+			}),
+			this.deps.commerce.listCustomerDecisions(organizationId, customerId),
+			this.deps.products.findMembershipProductRecordByClass(
+				organizationId,
+				"teacher_membership",
+			),
+			this.deps.directory
+				? this.deps.directory.getTeacherProfile(organizationId, customerId)
+				: Promise.resolve(null),
+		]);
+		const orgDivisions =
+			teacherProfile !== null
+				? await this.deps.organizations.listDivisions(organizationId, false)
+				: undefined;
+		const today = calendarDateInTimezone(this.now().toISOString(), timezone);
+		const displayName = offering?.productNameSnapshot ?? "Teacher Membership";
+		return {
+			memberships: [
+				...mapValidationDecisions(decisions, displayName),
+				...mapTeacherStatusEntries(grants, {
+					displayName,
+					today,
+					teacherProfile,
+					orgDivisions,
+				}),
+				...mapAccompanistStatusEntries(accompanistGrants, today),
+			],
+		};
+	}
+
+	async acquireAccompanistMembership(input: AcquireAccompanistMembershipInput) {
+		const { contact, selectedDivisionIds } = parseAccompanistAcquirePayload(
+			input.payload,
+		);
+		const activeDivisions = await this.deps.organizations.listDivisions(
+			input.organizationId,
+			true,
+		);
+		const divisions = await validateAndMapAccompanistDivisions(
+			input.organizationId,
+			selectedDivisionIds,
+			activeDivisions,
+			this.deps.products,
+		);
+		const normalizedEmail = verifiedShopifyIdentityEmail(
+			input.verifiedShopifyCustomerEmail,
+		);
+		const today = calendarDateInTimezone(
+			this.now().toISOString(),
+			input.organizationTimezone,
+		);
+		const startsOn = await resolveAccompanistStartsOn(
+			this.deps.entitlements,
+			input.organizationId,
+			input.customerId,
+			today,
+		);
+		const grant = await persistAccompanistGrant(this.deps.entitlements, {
+			organizationId: input.organizationId,
+			customerId: input.customerId,
+			normalizedEmail,
+			offeringNameSnapshot: ACCOMPANIST_MEMBERSHIP_DISPLAY_NAME,
+			source: "accompanist_form",
+			contact,
+			divisions,
+			startsOn,
+			endsOn: addCalendarDays(
+				startsOn,
+				INITIAL_ACCOMPANIST_MEMBERSHIP_DURATION_DAYS,
+			),
+		});
+		this.emitMembershipChanged(input.organizationId);
+		return {
+			membership: {
+				id: grant.id,
+				startsOn: grant.startsOn,
+				endsOn: grant.endsOn,
+				status: lifecycleForEntitlementRead(grant, today),
+			},
+		};
+	}
+
+	async listCurrentRoster(
+		organizationId: string,
+	): Promise<StaffMembershipRosterResult> {
+		const timezone =
+			await this.deps.organizations.getOrganizationTimezone(organizationId);
+		const today = calendarDateInTimezone(this.now().toISOString(), timezone);
+		const [accompanists, teachers] = await Promise.all([
+			loadActiveAccompanistRoster(
+				this.deps.entitlements,
+				organizationId,
+				today,
+			),
+			loadActiveTeacherRoster({
+				entitlements: this.deps.entitlements,
+				products: this.deps.products,
+				organizations: this.deps.organizations,
+				directory: this.deps.directory,
+				organizationId,
+				today,
+			}),
+		]);
+		return {
+			roster: [...accompanists, ...teachers].sort(sortRosterEntries),
+			accompanists,
+		};
+	}
+
+	private async loadReportDirectory(organizationId: string) {
+		const [teachers, accompanists, divisions] = await Promise.all([
+			this.deps.directory?.listTeacherProfiles(organizationId) ?? [],
+			this.deps.directory?.listAccompanistProfiles?.(organizationId) ?? [],
+			this.deps.organizations.listDivisions(organizationId, false),
+		]);
+		return {
+			teacherProfilesByCustomer: new Map(
+				teachers.map((profile) => [profile.customer_id, profile]),
+			),
+			accompanistProfilesByCustomer: new Map(
+				accompanists.map((profile) => [profile.customer_id, profile]),
+			),
+			divisionNames: new Map(divisions.map((d) => [d.id, d.displayName])),
+			editableDivisions: divisions
+				.filter((division) => division.isActive)
+				.map((division) => ({
+					divisionId: division.id,
+					divisionName: division.displayName,
+				})),
+		};
+	}
+
+	private async loadAllReportEntries(
+		organizationId: string,
+		includeDirectory = false,
+	) {
+		const context = Promise.all([
+			this.deps.organizations.getOrganizationTimezone(organizationId),
+			includeDirectory ? this.loadReportDirectory(organizationId) : undefined,
+		]).then(([timezone, directory]) => ({
+			today: calendarDateInTimezone(this.now().toISOString(), timezone),
+			directory,
+		}));
+		const [accompanistGrants, teachers, { today, directory }] =
+			await Promise.all([
+				this.deps.entitlements.listAccompanistMembershipGrants({
+					organizationId,
+				}),
+				loadTeacherReportEntries(
+					this.deps.entitlements,
+					this.deps.products,
+					organizationId,
+					context,
+				),
+				context,
+			]);
+		return {
+			entries: [
+				...toAccompanistReportEntries(
+					accompanistGrants,
+					today,
+					directory?.accompanistProfilesByCustomer,
+				),
+				...teachers,
+			],
+			editableDivisions: directory?.editableDivisions,
+		};
+	}
+
+	async listEntitlementReport(
+		organizationId: string,
+		filters: EntitlementReportFilters,
+		pageRequest: EntitlementReportPageRequest,
+	): Promise<EntitlementReportResponse> {
+		const { entries, editableDivisions } = await this.loadAllReportEntries(
+			organizationId,
+			true,
+		);
+		const matching = filterEntitlementReportEntries(entries, filters).sort(
+			sortReportEntries,
+		);
+		return {
+			...paginateEntitlementReportEntries(matching, pageRequest),
+			divisions: listEntitlementReportDivisions(entries),
+			editableDivisions,
+		};
+	}
+
+	async getSummaryCounts(
+		organizationId: string,
+	): Promise<EntitlementSummaryCounts> {
+		const { entries } = await this.loadAllReportEntries(organizationId);
+		return summarizeEntitlementCounts(entries);
+	}
+}

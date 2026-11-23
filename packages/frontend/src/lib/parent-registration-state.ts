@@ -54,9 +54,13 @@ export function createParentRegistrationState() {
 
 	function clear(slug?: string) {
 		for (const [key, current] of workspaces) {
-			const [organizationSlug] = JSON.parse(key) as [string, string];
+			const [organizationSlug, festivalSlug] = JSON.parse(key) as [
+				string,
+				string,
+			];
 			if (slug && slug !== organizationSlug) continue;
 			current.cart.clearCart();
+			clearCartCheckoutIdempotencyKey(organizationSlug, festivalSlug);
 			current.setChildId("");
 			current.setDivisionId("");
 			current.setTeacherId("");

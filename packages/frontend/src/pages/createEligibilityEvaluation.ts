@@ -52,7 +52,12 @@ export function createEligibilityEvaluation(
 		// Empty inputs must also invalidate an in-flight evaluation.
 		const requestId = ++currentRequestId;
 
-		if (!slug || !festivalSlug || !ready) {
+		if (
+			!slug ||
+			!festivalSlug ||
+			!ready ||
+			(options.csrfToken !== undefined && !csrfToken)
+		) {
 			setResults(new Map());
 			setError(null);
 			setIsEvaluating(false);

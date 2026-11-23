@@ -1,8 +1,4 @@
-import type {
-	CanonicalWork,
-	RepertoireCatalogWork,
-	RepertoirePiece,
-} from "@festival/common";
+import type { CanonicalWork, RepertoirePiece } from "@festival/common";
 import { createEffect, createSignal, For, Show } from "solid-js";
 import {
 	applyCatalogWorkSelection,
@@ -13,30 +9,19 @@ import {
 	pieceDraftToRepertoirePiece,
 	type RepertoirePieceDraft,
 	repertoirePieceToDraft,
-	validatePieceCatalogWork,
 	validatePieceComposer,
 	validatePieceDuration,
 	validatePieceTitle,
 } from "../pages/festivalRegistrationHelpers.js";
 import { Button } from "./Button.js";
-import { CUSTOMER_HELP_TEXT, HelpTooltip } from "./HelpTooltip.js";
+import { ConcertoTitleField } from "./ConcertoTitleField.js";
 
 export interface FestivalPieceEditorProps {
 	pieces: RepertoirePiece[];
 	onChange: (pieces: RepertoirePiece[]) => void;
 	maxPieces: 1 | 2 | 3;
 	performanceMinutes: number;
-	requiresConcerto?: boolean;
-	showCatalog?: boolean;
-	catalogWorks?: readonly (CanonicalWork | RepertoireCatalogWork)[];
-	catalogSearch?: {
-		query: () => string;
-		setQuery: (value: string) => void;
-		results: () => readonly CanonicalWork[];
-		loading: () => boolean;
-		error: () => string | undefined;
-		retry: () => void;
-	};
+	catalogScope?: { organizationSlug: string; festivalSlug: string };
 	onDirtyChange?: (dirty: boolean) => void;
 	readOnly?: boolean;
 	idPrefix?: string;
@@ -60,6 +45,7 @@ export function FestivalPieceEditor(props: FestivalPieceEditorProps) {
 			: emptyDraft(),
 	);
 	const [error, setError] = createSignal("");
+	const [draftRevision, setDraftRevision] = createSignal(1);
 	const prefix = () => props.idPrefix ?? "registration-piece";
 	const existing = () =>
 		activeIndex() === null ? undefined : props.pieces[activeIndex() as number];
@@ -71,15 +57,15 @@ export function FestivalPieceEditor(props: FestivalPieceEditorProps) {
 			: hasPieceDraftContent(draft());
 	};
 	createEffect(() => props.onDirtyChange?.(isDirty()));
+	function resetDraft(piece?: RepertoirePiece) {
+		setDraft(piece ? repertoirePieceToDraft(piece) : emptyDraft());
+		setDraftRevision((revision) => revision + 1);
+		setError("");
+	}
 	function openPiece(index: number) {
 		if (isDirty() && !window.confirm("Discard changes to this piece?")) return;
 		setActiveIndex(index);
-		setDraft(
-			props.pieces[index]
-				? repertoirePieceToDraft(props.pieces[index])
-				: emptyDraft(),
-		);
-		setError("");
+		resetDraft(props.pieces[index]);
 	}
 	function update<K extends keyof RepertoirePieceDraft>(
 		field: K,
@@ -88,21 +74,17 @@ export function FestivalPieceEditor(props: FestivalPieceEditorProps) {
 		setDraft((current) => ({ ...current, [field]: value }));
 		setError("");
 	}
+	function chooseCatalogWork(work: CanonicalWork) {
+		setDraft((current) => applyCatalogWorkSelection(current, work.id, [work]));
+		setError("");
+	}
 	function savePiece(event: Event) {
 		event.preventDefault();
 		const current = draft();
-		const unchangedCatalog = Boolean(
-			existing()?.catalogWorkId &&
-				existing()?.catalogWorkId === current.catalogWorkId,
-		);
 		const validationError =
-			validatePieceTitle(current.title) ||
+			validatePieceTitle(current.title, current.catalogWorkId) ||
 			validatePieceComposer(current.composer) ||
-			validatePieceDuration(current.durationMinutes, current.durationSeconds) ||
-			validatePieceCatalogWork(current, {
-				requiresConcerto: props.requiresConcerto,
-				catalogWorks: unchangedCatalog ? undefined : props.catalogWorks,
-			});
+			validatePieceDuration(current.durationMinutes, current.durationSeconds);
 		if (validationError) {
 			setError(validationError);
 			return;
@@ -122,17 +104,11 @@ export function FestivalPieceEditor(props: FestivalPieceEditorProps) {
 		}
 		props.onChange(next);
 		setActiveIndex(next.length < props.maxPieces ? next.length : null);
-		setDraft(emptyDraft());
-		setError("");
+		resetDraft();
 		props.onDirtyChange?.(false);
 	}
 	function discardPiece() {
-		setDraft(
-			existing()
-				? repertoirePieceToDraft(existing() as RepertoirePiece)
-				: emptyDraft(),
-		);
-		setError("");
+		resetDraft(existing());
 	}
 	return (
 		<section class="parent-piece-editor">
@@ -175,7 +151,7 @@ export function FestivalPieceEditor(props: FestivalPieceEditorProps) {
 													props.pieces.filter((_, i) => i !== index()),
 												);
 												setActiveIndex(null);
-												setDraft(emptyDraft());
+												resetDraft();
 											}}
 										>
 											Remove piece {index() + 1}
@@ -210,114 +186,38 @@ export function FestivalPieceEditor(props: FestivalPieceEditorProps) {
 							finish without another piece.
 						</p>
 					</Show>
-					<Show when={props.showCatalog ?? props.requiresConcerto}>
-						<div class="parent-fields">
-							<Show when={props.catalogSearch}>
-								{(search) => (
-									<>
-										<div class="field">
-											<div class="field-help-header">
-												<label for="concerto-catalog-search">
-													Search the concerto catalog
-												</label>
-												<HelpTooltip
-													id="concerto-catalog-help"
-													label="About concerto catalog works"
-													text={CUSTOMER_HELP_TEXT.concertoCatalog}
-												/>
-											</div>
-											<input
-												id="concerto-catalog-search"
-												type="search"
-												value={search().query()}
-												onInput={(event) =>
-													search().setQuery(event.currentTarget.value)
-												}
-												onKeyDown={(event) => {
-													if (event.key === "Enter") event.preventDefault();
-												}}
-											/>
-										</div>
-										<Show when={search().loading()}>
-											<p role="status">Searching the catalog…</p>
-										</Show>
-										<Show when={search().error()}>
-											<p class="field-error" role="alert">
-												{search().error()}
-											</p>
-											<Button
-												type="button"
-												variant="secondary"
-												onClick={search().retry}
-											>
-												Retry search
-											</Button>
-										</Show>
-									</>
-								)}
-							</Show>
-							<label class="field" for={`${prefix()}-catalog`}>
-								<span>Concerto catalog work</span>
-								<select
-									id={`${prefix()}-catalog`}
-									value={draft().catalogWorkId ?? ""}
-									onChange={(event) => {
-										setDraft((current) =>
-											applyCatalogWorkSelection(
-												current,
-												event.currentTarget.value,
-												props.catalogWorks,
-											),
-										);
-										setError("");
-									}}
-								>
-									<option value="" selected={!draft().catalogWorkId}>
-										Select a concerto work…
-									</option>
-									<Show
-										when={
-											draft().catalogWorkId &&
-											!(props.catalogWorks ?? []).some(
-												(work) => work.id === draft().catalogWorkId,
-											)
-										}
-									>
-										<option value={draft().catalogWorkId ?? ""} selected>
-											{draft().title || "Previously selected work"}
-										</option>
-									</Show>
-									<For
-										each={(props.catalogWorks ?? []).filter(
-											(work) =>
-												work.isActive &&
-												work.classifications?.includes("concerto"),
-										)}
-									>
-										{(work) => (
-											<option
-												value={work.id}
-												selected={draft().catalogWorkId === work.id}
-											>
-												{work.title}
-												{work.composerName ? ` — ${work.composerName}` : ""}
-											</option>
-										)}
-									</For>
-								</select>
-							</label>
-						</div>
-					</Show>
 					<div class="parent-fields">
-						<label class="field" for={`${prefix()}-title`}>
-							<span>Title</span>
-							<input
-								id={`${prefix()}-title`}
-								value={draft().title}
-								onInput={(event) => update("title", event.currentTarget.value)}
-								required
-							/>
-						</label>
+						<Show
+							when={props.catalogScope}
+							fallback={
+								<label class="field" for={`${prefix()}-title`}>
+									<span>Title</span>
+									<input
+										id={`${prefix()}-title`}
+										value={draft().title}
+										onInput={(event) =>
+											update("title", event.currentTarget.value)
+										}
+										required
+									/>
+								</label>
+							}
+						>
+							{(scope) => (
+								<Show when={draftRevision()} keyed>
+									<ConcertoTitleField
+										id={`${prefix()}-title`}
+										organizationSlug={scope().organizationSlug}
+										festivalSlug={scope().festivalSlug}
+										title={draft().title}
+										catalogWorkId={draft().catalogWorkId}
+										onTitleInput={(title) => update("title", title)}
+										onSelect={chooseCatalogWork}
+										onManual={() => update("catalogWorkId", undefined)}
+									/>
+								</Show>
+							)}
+						</Show>
 						<label class="field" for={`${prefix()}-composer`}>
 							<span>Composer</span>
 							<input

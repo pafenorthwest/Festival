@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import type { AuthenticatedUser, ClassEntitlement } from "@festival/common";
 import { Hono } from "hono";
 import { createApp } from "../src/app.js";
@@ -6,8 +6,9 @@ import type { AuthVerifier } from "../src/auth/types.js";
 import { InMemoryClassEntitlementRepository } from "../src/commerce/class-entitlement-repository.js";
 import {
 	CUSTOMER_SESSION_COOKIE,
-	type CustomerAccountService,
+	CustomerAccountService,
 } from "../src/customer/customer-account-service.js";
+import { InMemoryCustomerAccountRepository } from "../src/customer/in-memory-customer-account-repository.js";
 import { AppError } from "../src/errors/app-error.js";
 import { DropTransferService } from "../src/registration/drop-transfer-service.js";
 import { InMemoryRegistrationChangeRepository } from "../src/registration/registration-change-repository.js";
@@ -15,6 +16,10 @@ import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organizati
 import { buildAdminRegistrationRoutes } from "../src/routes/admin-registration/admin-registration.routes.js";
 import { buildCustomerRegistrationRoutes } from "../src/routes/customer/customer-registration.routes.js";
 import { OrganizationService } from "../src/services/organization-service.js";
+import { ShopifySecretKeyring } from "../src/shopify/encryption.js";
+
+const PUBLIC_ORIGIN = "https://festival.example.com";
+const CUSTOMER_CSRF = "customer-csrf";
 
 class FakeAuth implements AuthVerifier {
 	constructor(private readonly users: Record<string, AuthenticatedUser>) {}
@@ -32,6 +37,7 @@ interface TestContext {
 	changesRepo: InMemoryRegistrationChangeRepository;
 	dropTransferService: DropTransferService;
 	customerAccountService: CustomerAccountService;
+	customerId: string;
 	authVerifier: AuthVerifier;
 	customerApp: Hono;
 	adminApp: Hono;
@@ -96,17 +102,36 @@ async function setupTestContext(): Promise<TestContext> {
 		classQuery: (classId: string) => capacities[classId] ?? 10,
 	});
 
-	const customerAccountService = {
-		validateSession: async (_slug: string, sessionToken: string) => {
-			if (!sessionToken || sessionToken === "invalid-token") {
-				throw new AppError("Customer session is invalid.", 401);
-			}
-			if (sessionToken === "other-cust-session") {
-				return { organizationId: organization.id, customerId: "cust-other" };
-			}
-			return { organizationId: organization.id, customerId: "cust-1" };
-		},
-	} as unknown as CustomerAccountService;
+	const customerRepository = new InMemoryCustomerAccountRepository();
+	const integration = await customerRepository.upsertIntegration({
+		organizationId: organization.id,
+		storefrontDomain: "shop.myshopify.com",
+		clientId: "client",
+		encryptedClientSecret: "unused",
+	});
+	const now = new Date();
+	const { customer } = await customerRepository.createCustomerSession({
+		sessionId: "valid-token",
+		organizationId: organization.id,
+		shopifyCustomerGid: "gid://shopify/Customer/1",
+		encryptedTokens: "unused",
+		csrfToken: CUSTOMER_CSRF,
+		integrationVersion: integration.integrationVersion,
+		createdAtIso: now.toISOString(),
+		lastSeenAtIso: now.toISOString(),
+		expiresAtIso: new Date(now.getTime() + 86_400_000).toISOString(),
+	});
+	const keyring = ShopifySecretKeyring.fromEnvironment(
+		JSON.stringify({ test: Buffer.alloc(32, 1).toString("base64") }),
+		"test",
+	);
+	if (!keyring) throw new Error("Missing test keyring.");
+	const customerAccountService = new CustomerAccountService(
+		customerRepository,
+		orgRepo,
+		keyring,
+		{ publicOrigin: PUBLIC_ORIGIN, now: () => now },
+	);
 
 	const authVerifier = new FakeAuth({
 		admin: {
@@ -157,6 +182,7 @@ async function setupTestContext(): Promise<TestContext> {
 		changesRepo,
 		dropTransferService,
 		customerAccountService,
+		customerId: customer.id,
 		authVerifier,
 		customerApp,
 		adminApp,
@@ -190,6 +216,76 @@ async function createEntitlement(
 
 describe("Drop and Transfer HTTP Endpoints", () => {
 	describe("Customer Endpoints", () => {
+		for (const action of ["drop", "transfer"] as const) {
+			it.each([
+				["a missing token", undefined, PUBLIC_ORIGIN],
+				["an empty token", "", PUBLIC_ORIGIN],
+				["an incorrect token", "wrong-csrf", PUBLIC_ORIGIN],
+				["a missing origin", CUSTOMER_CSRF, undefined],
+				[
+					"a different same-site origin",
+					CUSTOMER_CSRF,
+					"https://other.example.com",
+				],
+				["an opaque origin", CUSTOMER_CSRF, "null"],
+				["a malformed origin", CUSTOMER_CSRF, "invalid-origin"],
+			])(`POST ${action} rejects %s before any registration effects`, async (_label, csrf, origin) => {
+				const ctx = await setupTestContext();
+				const original = await createEntitlement(ctx.entitlementsRepo, {
+					organizationId: ctx.organization.id,
+					parentCustomerId: ctx.customerId,
+					festivalClassId: "class-small",
+				});
+				const waitlisted = await createEntitlement(ctx.entitlementsRepo, {
+					organizationId: ctx.organization.id,
+					parentCustomerId: "cust-other",
+					festivalClassId: "class-small",
+					status: "waitlisted",
+				});
+				const drop = spyOn(ctx.dropTransferService, "dropRegistration");
+				const transfer = spyOn(ctx.dropTransferService, "transferRegistration");
+				const refund = spyOn(ctx.changesRepo, "createRefundEvent");
+				const headers = new Headers({
+					Cookie: `${CUSTOMER_SESSION_COOKIE}=valid-token`,
+					"Content-Type": "application/json",
+				});
+				if (csrf !== undefined) headers.set("X-CSRF-Token", csrf);
+				if (origin !== undefined) headers.set("Origin", origin);
+				const response = await ctx.fullApp.request(
+					`/api/organizations/${ctx.organization.slug}/customer/class-registrations/${original.id}/${action}`,
+					{
+						method: "POST",
+						headers,
+						body: JSON.stringify({
+							targetFestivalClassId: "class-open",
+							requestRefund: true,
+						}),
+					},
+				);
+				expect(response.status).toBe(403);
+				expect(await response.json()).toEqual({
+					error: "CSRF validation failed.",
+				});
+				expect(drop).not.toHaveBeenCalled();
+				expect(transfer).not.toHaveBeenCalled();
+				expect(refund).not.toHaveBeenCalled();
+				for (const entitlement of [original, waitlisted]) {
+					expect(
+						await ctx.entitlementsRepo.getClassEntitlement(
+							ctx.organization.id,
+							entitlement.id,
+						),
+					).toEqual(entitlement);
+					expect(
+						await ctx.changesRepo.listChangeLogsForEntitlement(
+							ctx.organization.id,
+							entitlement.id,
+						),
+					).toEqual([]);
+				}
+			});
+		}
+
 		it("POST drop rejects request when customer session is missing (401)", async () => {
 			const ctx = await setupTestContext();
 			const res = await ctx.customerApp.request(
@@ -239,7 +335,11 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 				`/organizations/${ctx.organization.slug}/customer/class-registrations/reg-1/drop`,
 				{
 					method: "POST",
-					headers: { Cookie: `${CUSTOMER_SESSION_COOKIE}=valid-token` },
+					headers: {
+						Cookie: `${CUSTOMER_SESSION_COOKIE}=valid-token`,
+						"X-CSRF-Token": CUSTOMER_CSRF,
+						Origin: PUBLIC_ORIGIN,
+					},
 				},
 			);
 			expect(res.status).toBe(404);
@@ -253,7 +353,11 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 				`/organizations/${ctx.organization.slug}/customer/class-registrations/non-existent/drop`,
 				{
 					method: "POST",
-					headers: { Cookie: `${CUSTOMER_SESSION_COOKIE}=valid-token` },
+					headers: {
+						Cookie: `${CUSTOMER_SESSION_COOKIE}=valid-token`,
+						"X-CSRF-Token": CUSTOMER_CSRF,
+						Origin: PUBLIC_ORIGIN,
+					},
 				},
 			);
 			expect(res.status).toBe(404);
@@ -269,7 +373,11 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 				`/organizations/${ctx.organization.slug}/customer/class-registrations/${ent.id}/drop`,
 				{
 					method: "POST",
-					headers: { Cookie: `${CUSTOMER_SESSION_COOKIE}=valid-token` },
+					headers: {
+						Cookie: `${CUSTOMER_SESSION_COOKIE}=valid-token`,
+						"X-CSRF-Token": CUSTOMER_CSRF,
+						Origin: PUBLIC_ORIGIN,
+					},
 				},
 			);
 			expect(res.status).toBe(404);
@@ -279,13 +387,18 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 			const ctx = await setupTestContext();
 			const ent = await createEntitlement(ctx.entitlementsRepo, {
 				organizationId: ctx.organization.id,
+				parentCustomerId: ctx.customerId,
 				status: "cancelled",
 			});
 			const res = await ctx.customerApp.request(
 				`/organizations/${ctx.organization.slug}/customer/class-registrations/${ent.id}/drop`,
 				{
 					method: "POST",
-					headers: { Cookie: `${CUSTOMER_SESSION_COOKIE}=valid-token` },
+					headers: {
+						Cookie: `${CUSTOMER_SESSION_COOKIE}=valid-token`,
+						"X-CSRF-Token": CUSTOMER_CSRF,
+						Origin: PUBLIC_ORIGIN,
+					},
 				},
 			);
 			expect(res.status).toBe(409);
@@ -295,12 +408,17 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 			const ctx = await setupTestContext();
 			const ent = await createEntitlement(ctx.entitlementsRepo, {
 				organizationId: ctx.organization.id,
+				parentCustomerId: ctx.customerId,
 			});
 			const res = await ctx.customerApp.request(
 				`/organizations/${ctx.organization.slug}/customer/class-registrations/${ent.id}/drop`,
 				{
 					method: "POST",
-					headers: { Cookie: `${CUSTOMER_SESSION_COOKIE}=valid-token` },
+					headers: {
+						Cookie: `${CUSTOMER_SESSION_COOKIE}=valid-token`,
+						"X-CSRF-Token": CUSTOMER_CSRF,
+						Origin: PUBLIC_ORIGIN,
+					},
 				},
 			);
 			expect(res.status).toBe(200);
@@ -321,7 +439,7 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 			expect(logs).toHaveLength(1);
 			expect(logs[0].action).toBe("drop");
 			expect(logs[0].actorRole).toBe("customer");
-			expect(logs[0].actorUid).toBe("cust-1");
+			expect(logs[0].actorUid).toBe(ctx.customerId);
 		});
 
 		it("POST drop auto-promotes top waitlisted candidate on confirmed drop", async () => {
@@ -329,6 +447,7 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 			const confirmedEnt = await createEntitlement(ctx.entitlementsRepo, {
 				id: "ent-conf",
 				organizationId: ctx.organization.id,
+				parentCustomerId: ctx.customerId,
 				festivalClassId: "class-small",
 				status: "confirmed",
 			});
@@ -346,6 +465,8 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 					method: "POST",
 					headers: {
 						Cookie: `${CUSTOMER_SESSION_COOKIE}=valid-token`,
+						"X-CSRF-Token": CUSTOMER_CSRF,
+						Origin: PUBLIC_ORIGIN,
 						"Content-Type": "application/json",
 					},
 					body: JSON.stringify({ reason: "Scheduling conflict" }),
@@ -383,6 +504,8 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 					method: "POST",
 					headers: {
 						Cookie: `${CUSTOMER_SESSION_COOKIE}=valid-token`,
+						"X-CSRF-Token": CUSTOMER_CSRF,
+						Origin: PUBLIC_ORIGIN,
 						"Content-Type": "application/json",
 					},
 					body: JSON.stringify({ targetFestivalClassId: "class-open" }),
@@ -395,6 +518,7 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 			const ctx = await setupTestContext();
 			const ent = await createEntitlement(ctx.entitlementsRepo, {
 				organizationId: ctx.organization.id,
+				parentCustomerId: ctx.customerId,
 			});
 			const res = await ctx.customerApp.request(
 				`/organizations/${ctx.organization.slug}/customer/class-registrations/${ent.id}/transfer`,
@@ -402,6 +526,8 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 					method: "POST",
 					headers: {
 						Cookie: `${CUSTOMER_SESSION_COOKIE}=valid-token`,
+						"X-CSRF-Token": CUSTOMER_CSRF,
+						Origin: PUBLIC_ORIGIN,
 						"Content-Type": "application/json",
 					},
 					body: JSON.stringify({ reason: "Switch class" }),
@@ -414,6 +540,7 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 			const ctx = await setupTestContext();
 			const ent = await createEntitlement(ctx.entitlementsRepo, {
 				organizationId: ctx.organization.id,
+				parentCustomerId: ctx.customerId,
 				festivalClassId: "class-open",
 			});
 			const res = await ctx.customerApp.request(
@@ -422,6 +549,8 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 					method: "POST",
 					headers: {
 						Cookie: `${CUSTOMER_SESSION_COOKIE}=valid-token`,
+						"X-CSRF-Token": CUSTOMER_CSRF,
+						Origin: PUBLIC_ORIGIN,
 						"Content-Type": "application/json",
 					},
 					body: JSON.stringify({ targetFestivalClassId: "class-open" }),
@@ -434,6 +563,7 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 			const ctx = await setupTestContext();
 			const ent = await createEntitlement(ctx.entitlementsRepo, {
 				organizationId: ctx.organization.id,
+				parentCustomerId: ctx.customerId,
 				festivalClassId: "class-small",
 			});
 			const res = await ctx.customerApp.request(
@@ -442,6 +572,8 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 					method: "POST",
 					headers: {
 						Cookie: `${CUSTOMER_SESSION_COOKIE}=valid-token`,
+						"X-CSRF-Token": CUSTOMER_CSRF,
+						Origin: PUBLIC_ORIGIN,
 						"Content-Type": "application/json",
 					},
 					body: JSON.stringify({
@@ -477,12 +609,14 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 			await createEntitlement(ctx.entitlementsRepo, {
 				id: "existing-in-full",
 				organizationId: ctx.organization.id,
+				parentCustomerId: ctx.customerId,
 				festivalClassId: "class-full",
 				status: "confirmed",
 			});
 			const entToTransfer = await createEntitlement(ctx.entitlementsRepo, {
 				id: "ent-to-transfer",
 				organizationId: ctx.organization.id,
+				parentCustomerId: ctx.customerId,
 				festivalClassId: "class-open",
 				status: "confirmed",
 			});
@@ -493,6 +627,8 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 					method: "POST",
 					headers: {
 						Cookie: `${CUSTOMER_SESSION_COOKIE}=valid-token`,
+						"X-CSRF-Token": CUSTOMER_CSRF,
+						Origin: PUBLIC_ORIGIN,
 						"Content-Type": "application/json",
 					},
 					body: JSON.stringify({ targetFestivalClassId: "class-full" }),
@@ -562,6 +698,7 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 			const ctx = await setupTestContext();
 			const ent = await createEntitlement(ctx.entitlementsRepo, {
 				organizationId: ctx.organization.id,
+				parentCustomerId: ctx.customerId,
 				festivalId: ctx.festival.id,
 				paidAmountCents: 5000,
 			});
@@ -607,6 +744,7 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 			const ctx = await setupTestContext();
 			const ent = await createEntitlement(ctx.entitlementsRepo, {
 				organizationId: ctx.organization.id,
+				parentCustomerId: ctx.customerId,
 				festivalId: ctx.festival.id,
 				paidAmountCents: 5000,
 			});
@@ -642,6 +780,7 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 			const ctx = await setupTestContext();
 			const ent = await createEntitlement(ctx.entitlementsRepo, {
 				organizationId: ctx.organization.id,
+				parentCustomerId: ctx.customerId,
 				festivalId: ctx.festival.id,
 				festivalClassId: "class-small",
 			});
@@ -683,6 +822,7 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 			const ctx = await setupTestContext();
 			const ent = await createEntitlement(ctx.entitlementsRepo, {
 				organizationId: ctx.organization.id,
+				parentCustomerId: ctx.customerId,
 				festivalId: ctx.festival.id,
 				status: "confirmed",
 			});
@@ -701,6 +841,7 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 			const ctx = await setupTestContext();
 			const ent = await createEntitlement(ctx.entitlementsRepo, {
 				organizationId: ctx.organization.id,
+				parentCustomerId: ctx.customerId,
 				festivalId: ctx.festival.id,
 				status: "waitlisted",
 			});
@@ -753,6 +894,7 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 			const ctx = await setupTestContext();
 			const ent = await createEntitlement(ctx.entitlementsRepo, {
 				organizationId: ctx.organization.id,
+				parentCustomerId: ctx.customerId,
 				festivalId: ctx.festival.id,
 			});
 
@@ -772,6 +914,7 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 			const ctx = await setupTestContext();
 			const ent = await createEntitlement(ctx.entitlementsRepo, {
 				organizationId: ctx.organization.id,
+				parentCustomerId: ctx.customerId,
 				festivalId: ctx.festival.id,
 				festivalClassId: "class-small",
 				status: "waitlisted",
@@ -837,6 +980,7 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 			const ctx = await setupTestContext();
 			const ent = await createEntitlement(ctx.entitlementsRepo, {
 				organizationId: ctx.organization.id,
+				parentCustomerId: ctx.customerId,
 				festivalId: ctx.festival.id,
 				festivalClassId: "class-small",
 				status: "confirmed",
@@ -846,7 +990,11 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 				`/api/organizations/${ctx.organization.slug}/customer/class-registrations/${ent.id}/drop`,
 				{
 					method: "POST",
-					headers: { Cookie: `${CUSTOMER_SESSION_COOKIE}=valid-token` },
+					headers: {
+						Cookie: `${CUSTOMER_SESSION_COOKIE}=valid-token`,
+						"X-CSRF-Token": CUSTOMER_CSRF,
+						Origin: PUBLIC_ORIGIN,
+					},
 				},
 			);
 			expect(custRes.status).toBe(200);
@@ -868,6 +1016,7 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 			const ctx = await setupTestContext();
 			const ent = await createEntitlement(ctx.entitlementsRepo, {
 				organizationId: ctx.organization.id,
+				parentCustomerId: ctx.customerId,
 				festivalId: ctx.festival.id,
 				festivalClassId: "class-small",
 				status: "confirmed",
@@ -886,7 +1035,11 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 				`/api/organizations/${ctx.organization.slug}/customer/class-registrations/${ent.id}/drop`,
 				{
 					method: "POST",
-					headers: { Cookie: `${CUSTOMER_SESSION_COOKIE}=valid-token` },
+					headers: {
+						Cookie: `${CUSTOMER_SESSION_COOKIE}=valid-token`,
+						"X-CSRF-Token": CUSTOMER_CSRF,
+						Origin: PUBLIC_ORIGIN,
+					},
 				},
 			);
 			expect(custRes.status).toBe(200);
@@ -908,6 +1061,7 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 			const ctx = await setupTestContext();
 			const ent = await createEntitlement(ctx.entitlementsRepo, {
 				organizationId: ctx.organization.id,
+				parentCustomerId: ctx.customerId,
 				festivalId: ctx.festival.id,
 				festivalClassId: "class-small",
 				status: "confirmed",
@@ -926,7 +1080,11 @@ describe("Drop and Transfer HTTP Endpoints", () => {
 				`/api/organizations/${ctx.organization.slug}/customer/class-registrations/${ent.id}/drop`,
 				{
 					method: "POST",
-					headers: { Cookie: `${CUSTOMER_SESSION_COOKIE}=valid-token` },
+					headers: {
+						Cookie: `${CUSTOMER_SESSION_COOKIE}=valid-token`,
+						"X-CSRF-Token": CUSTOMER_CSRF,
+						Origin: PUBLIC_ORIGIN,
+					},
 				},
 			);
 			expect(custRes.status).toBe(404);

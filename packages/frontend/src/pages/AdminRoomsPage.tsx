@@ -3,6 +3,7 @@ import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { AccessDeniedPanel } from "../components/AccessDeniedPanel.js";
 import { Button } from "../components/Button.js";
 import { FestivalSelector } from "../components/FestivalSelector.js";
+import { useCatalogRepertoire } from "../domains/catalog/CatalogRepertoireContext.js";
 import { createRoom, listRooms } from "../lib/api.js";
 import { useAdminFestivalSelection } from "./useAdminFestivalSelection.js";
 
@@ -33,8 +34,9 @@ function describePianos(
 }
 
 export function AdminRoomsPage(props: AdminRoomsPageProps) {
+	const catalog = useCatalogRepertoire();
 	const { idToken, selectedFestival, setSelectedFestivalShortName } =
-		useAdminFestivalSelection(() => props.app.festivals());
+		useAdminFestivalSelection(() => catalog.festivals());
 
 	const [rooms, { refetch: refetchRooms }] = createResource(
 		() => {
@@ -114,7 +116,7 @@ export function AdminRoomsPage(props: AdminRoomsPageProps) {
 					fallback={<p>No festivals have been created yet.</p>}
 				>
 					<FestivalSelector
-						festivals={props.app.festivals()}
+						festivals={catalog.festivals()}
 						value={selectedFestival()?.shortName ?? ""}
 						onChange={setSelectedFestivalShortName}
 					/>

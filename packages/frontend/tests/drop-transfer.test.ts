@@ -127,16 +127,22 @@ describe("customer drop and transfer API methods", () => {
 			);
 		}) as typeof fetch;
 
-		const result = await dropCustomerRegistration("music-org", "ent-100", {
-			reason: "Family emergency",
-			requestRefund: true,
-		});
+		const result = await dropCustomerRegistration(
+			"music-org",
+			"ent-100",
+			{ reason: "Family emergency", requestRefund: true },
+			"customer-csrf",
+		);
 
 		expect(capturedUrl).toContain(
 			"/api/organizations/music-org/customer/class-registrations/ent-100/drop",
 		);
 		expect(capturedInit?.method).toBe("POST");
 		expect(capturedInit?.credentials).toBe("include");
+		expect(new Headers(capturedInit?.headers).get("X-CSRF-Token")).toBe(
+			"customer-csrf",
+		);
+		expect(new Headers(capturedInit?.headers).has("Authorization")).toBe(false);
 		expect(JSON.parse(String(capturedInit?.body))).toEqual({
 			reason: "Family emergency",
 			requestRefund: true,
@@ -166,16 +172,22 @@ describe("customer drop and transfer API methods", () => {
 			);
 		}) as typeof fetch;
 
-		const result = await transferCustomerRegistration("music-org", "ent-100", {
-			targetFestivalClassId: "class-200",
-			reason: "Teacher request",
-		});
+		const result = await transferCustomerRegistration(
+			"music-org",
+			"ent-100",
+			{ targetFestivalClassId: "class-200", reason: "Teacher request" },
+			"customer-csrf",
+		);
 
 		expect(capturedUrl).toContain(
 			"/api/organizations/music-org/customer/class-registrations/ent-100/transfer",
 		);
 		expect(capturedInit?.method).toBe("POST");
 		expect(capturedInit?.credentials).toBe("include");
+		expect(new Headers(capturedInit?.headers).get("X-CSRF-Token")).toBe(
+			"customer-csrf",
+		);
+		expect(new Headers(capturedInit?.headers).has("Authorization")).toBe(false);
 		expect(JSON.parse(String(capturedInit?.body))).toEqual({
 			targetFestivalClassId: "class-200",
 			reason: "Teacher request",

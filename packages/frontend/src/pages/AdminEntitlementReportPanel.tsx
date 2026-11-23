@@ -5,6 +5,7 @@ import {
 	type EntitlementReportDivisionOption,
 	type EntitlementReportEntry,
 	type EntitlementSummaryCounts,
+	type ProfileApprovalStatus,
 } from "@festival/common";
 import {
 	createEffect,
@@ -14,110 +15,79 @@ import {
 	Show,
 	untrack,
 } from "solid-js";
+import { createStore, reconcile } from "solid-js/store";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import {
 	getAdminEntitlementReport,
 	revokeAdminEntitlement,
+	updateAdminAccompanistProfileApproval,
+	updateAdminTeacherProfileApproval,
+	updateAdminTeacherProfileDivisions,
 } from "../lib/api.js";
+import { AdminEntitlementTable } from "./AdminEntitlementTable.js";
 import {
-	ActionConfirmBox,
-	AdminEntitlementOperationsSection,
-} from "./AdminEntitlementOperationsSection.js";
-import {
-	canRevokeEntitlement,
 	EMPTY_ENTITLEMENT_SUMMARY_COUNTS,
 	ENTITLEMENT_CLASS_FILTER_OPTIONS,
 	ENTITLEMENT_STATUS_FILTER_OPTIONS,
 	entitlementPageNumbers,
 	entitlementStatusBadgeClass,
-	formatEntitlementClass,
-	formatEntitlementCustomer,
-	formatEntitlementDivisions,
 	formatEntitlementPageRange,
-	formatEntitlementSource,
-	formatEntitlementStatus,
 } from "./adminEntitlementReportHelpers.js";
 
 const SEARCH_DEBOUNCE_MS = 300;
 
-function EntitlementRevokeCell(props: {
-	app: FestivalAppController;
-	entry: EntitlementReportEntry;
-	onRevoked: () => void;
-}) {
-	const [open, setOpen] = createSignal(false);
-
-	const submitRevoke = async (reason: string) => {
-		const user = props.app.firebaseUser();
-		const route = props.app.route();
-		if (!user || route.kind !== "org-admin-memberships") return;
-		await revokeAdminEntitlement(
-			await user.getIdToken(),
-			route.slug,
-			props.entry.id,
-			{ confirmed: true, reason },
+async function getEntitlementAdminAuth(app: FestivalAppController) {
+	const route = app.route();
+	const user = app.firebaseUser();
+	if (!user || route.kind !== "org-admin-memberships" || !app.isAdminMember()) {
+		throw new Error("Sign in as an Admin to update memberships.");
+	}
+	const isCurrent = () => {
+		const currentRoute = app.route();
+		return (
+			currentRoute.kind === "org-admin-memberships" &&
+			currentRoute.slug === route.slug &&
+			app.firebaseUser() === user &&
+			app.isAdminMember()
 		);
-		setOpen(false);
-		props.onRevoked();
 	};
-
-	return (
-		<Show
-			when={
-				props.app.isAdminMember() && canRevokeEntitlement(props.entry.status)
-			}
-		>
-			<Show
-				when={open()}
-				fallback={
-					<button
-						type="button"
-						class="secondary-button"
-						onClick={() => setOpen(true)}
-					>
-						Revoke
-					</button>
-				}
-			>
-				<ActionConfirmBox
-					placeholder="Revocation reason"
-					confirmLabel="Confirm revoke"
-					busyLabel="Revoking…"
-					onSubmit={submitRevoke}
-					onCancel={() => setOpen(false)}
-				/>
-			</Show>
-		</Show>
-	);
+	const token = await user.getIdToken();
+	if (!isCurrent()) throw new Error("The Admin session changed. Try again.");
+	return { token, slug: route.slug, isCurrent };
 }
 
 function SummaryCountsSection(props: {
 	summaryCounts: EntitlementSummaryCounts;
 }) {
 	return (
-		<section
+		<ul
 			class="entitlement-summary-counts"
 			aria-label="Entitlement status summary"
 		>
 			<For each={ENTITLEMENT_STATUS_FILTER_OPTIONS}>
 				{(item) => (
-					<div class="entitlement-summary-card">
+					<li class="entitlement-summary-card">
 						<span class={entitlementStatusBadgeClass(item.value)}>
 							{item.label}
 						</span>
 						<strong>{props.summaryCounts[item.value]}</strong>
-					</div>
+					</li>
 				)}
 			</For>
-		</section>
+		</ul>
 	);
 }
 
 export function AdminEntitlementReportPanel(props: {
 	app: FestivalAppController;
 }) {
-	const [entries, setEntries] = createSignal<EntitlementReportEntry[]>([]);
+	const [report, setReport] = createStore({
+		entries: [] as EntitlementReportEntry[],
+		editableDivisions: [] as EntitlementReportDivisionOption[],
+	});
 	const [loading, setLoading] = createSignal(false);
+	// Filter and page loads remount the table before a row mutation may finish.
+	const [mutationPending, setMutationPending] = createSignal(false);
 	const [error, setError] = createSignal("");
 	const [search, setSearch] = createSignal("");
 	const [entitlementClass, setEntitlementClass] = createSignal<
@@ -133,14 +103,15 @@ export function AdminEntitlementReportPanel(props: {
 	const [totalPages, setTotalPages] = createSignal(1);
 	const [summaryCounts, setSummaryCounts] =
 		createSignal<EntitlementSummaryCounts>(EMPTY_ENTITLEMENT_SUMMARY_COUNTS);
-	const [opsRefreshVersion, setOpsRefreshVersion] = createSignal(0);
 	const hasFilters = () =>
 		Boolean(search().trim() || entitlementClass() || status() || divisionId());
 
 	let controller: AbortController | undefined;
 	let debounce: ReturnType<typeof setTimeout> | undefined;
+	let disposed = false;
 
-	const load = async () => {
+	const load = async (background = false) => {
+		if (disposed) return;
 		const route = props.app.route();
 		const user = props.app.firebaseUser();
 		if (route.kind !== "org-admin-memberships") {
@@ -149,7 +120,7 @@ export function AdminEntitlementReportPanel(props: {
 		}
 		if (!user) {
 			controller?.abort();
-			setEntries([]);
+			setReport({ entries: [], editableDivisions: [] });
 			setTotal(0);
 			setTotalPages(1);
 			setLoading(false);
@@ -158,7 +129,7 @@ export function AdminEntitlementReportPanel(props: {
 		controller?.abort();
 		const current = new AbortController();
 		controller = current;
-		setLoading(true);
+		if (!background) setLoading(true);
 		setError("");
 		try {
 			const response = await getAdminEntitlementReport(
@@ -177,16 +148,35 @@ export function AdminEntitlementReportPanel(props: {
 				{ signal: current.signal },
 			);
 			if (current.signal.aborted) return;
-			setEntries(response.entries);
+			setReport(
+				reconcile({
+					entries: response.entries,
+					editableDivisions: response.editableDivisions ?? [],
+				}),
+			);
 			setTotal(response.total);
 			setTotalPages(response.totalPages);
-			setDivisions(response.divisions);
+			setDivisions((previous) => {
+				const selected = previous.find(
+					(option) => option.divisionId === divisionId(),
+				);
+				// A division edit can move the last row out of this filter.
+				if (
+					selected &&
+					!response.divisions.some(
+						(option) => option.divisionId === selected.divisionId,
+					)
+				) {
+					return [...response.divisions, selected];
+				}
+				return response.divisions;
+			});
 			if (response.summaryCounts) setSummaryCounts(response.summaryCounts);
 			// The server clamps a page past the end (e.g. rows were removed elsewhere).
 			setPage(response.page);
 		} catch (reason) {
 			if (current.signal.aborted) return;
-			setEntries([]);
+			setReport({ entries: [], editableDivisions: [] });
 			setTotal(0);
 			setTotalPages(1);
 			setError(
@@ -197,6 +187,43 @@ export function AdminEntitlementReportPanel(props: {
 		} finally {
 			if (!current.signal.aborted) setLoading(false);
 		}
+	};
+
+	const saveDivision = async (profileId: string, divisionId: string) => {
+		const auth = await getEntitlementAdminAuth(props.app);
+		await updateAdminTeacherProfileDivisions(auth.token, auth.slug, {
+			profileId,
+			divisionIds: [divisionId],
+		});
+		if (auth.isCurrent()) await load(true);
+	};
+
+	const revoke = async (entry: EntitlementReportEntry, reason: string) => {
+		const auth = await getEntitlementAdminAuth(props.app);
+		await revokeAdminEntitlement(auth.token, auth.slug, entry.id, {
+			confirmed: true,
+			reason,
+		});
+		if (auth.isCurrent()) await load(true);
+	};
+
+	const saveDirectory = async (
+		entry: EntitlementReportEntry,
+		approvalStatus: ProfileApprovalStatus,
+	) => {
+		const profile = entry.directoryProfile;
+		if (!profile?.publicDirectoryOptIn)
+			throw new Error("This profile has opted out of the public directory.");
+		const auth = await getEntitlementAdminAuth(props.app);
+		const update =
+			entry.entitlementClass === "teacher_membership"
+				? updateAdminTeacherProfileApproval
+				: updateAdminAccompanistProfileApproval;
+		await update(auth.token, auth.slug, {
+			profileId: profile.id,
+			approvalStatus,
+		});
+		if (auth.isCurrent()) await load(true);
 	};
 
 	const scheduleLoad = () => {
@@ -223,16 +250,19 @@ export function AdminEntitlementReportPanel(props: {
 		const user = props.app.firebaseUser();
 		if (route.kind !== "org-admin-memberships" || !user) {
 			controller?.abort();
-			setEntries([]);
+			setReport({ entries: [], editableDivisions: [] });
 			setTotal(0);
 			setTotalPages(1);
 			setLoading(false);
 			return;
 		}
+		setDivisionId("");
+		setDivisions([]);
 		untrack(() => void load());
 	});
 
 	onCleanup(() => {
+		disposed = true;
 		clearTimeout(debounce);
 		controller?.abort();
 	});
@@ -256,12 +286,6 @@ export function AdminEntitlementReportPanel(props: {
 			</div>
 
 			<SummaryCountsSection summaryCounts={summaryCounts()} />
-
-			<AdminEntitlementOperationsSection
-				app={props.app}
-				refreshVersion={opsRefreshVersion()}
-				onMutated={() => void load()}
-			/>
 
 			<form
 				class="entitlement-report-filters"
@@ -358,69 +382,17 @@ export function AdminEntitlementReportPanel(props: {
 			</Show>
 
 			<Show when={!loading() && !error()}>
-				<div class="listing-table entitlement-report-table">
-					<div class="listing-table-header">
-						<span>Customer</span>
-						<span>Type / source</span>
-						<span>Divisions</span>
-						<span>Period</span>
-						<span>Status</span>
-					</div>
-					<Show when={entries().length === 0}>
-						<div class="listing-table-empty">
-							{hasFilters()
-								? "No entitlements match these filters."
-								: "No entitlements yet."}
-						</div>
-					</Show>
-					<For each={entries()}>
-						{(entry) => {
-							const customer = formatEntitlementCustomer(entry);
-							return (
-								<div class="listing-table-row">
-									<span>
-										<strong>{customer.primary}</strong>
-										<Show when={customer.secondary}>
-											<span class="entitlement-report-secondary">
-												{customer.secondary}
-											</span>
-										</Show>
-									</span>
-									<span>
-										<strong>
-											{formatEntitlementClass(entry.entitlementClass)}
-										</strong>
-										<span class="entitlement-report-secondary">
-											{formatEntitlementSource(entry.source)}
-										</span>
-									</span>
-									<span>{formatEntitlementDivisions(entry.divisions)}</span>
-									<span>
-										{entry.startsOn} – {entry.endsOn}
-									</span>
-									<span class="listing-table-badges">
-										<span class={entitlementStatusBadgeClass(entry.status)}>
-											{formatEntitlementStatus(entry.status)}
-										</span>
-										<Show when={entry.revokedReason}>
-											<span class="entitlement-report-secondary">
-												{entry.revokedReason}
-											</span>
-										</Show>
-										<EntitlementRevokeCell
-											app={props.app}
-											entry={entry}
-											onRevoked={() => {
-												setOpsRefreshVersion((v) => v + 1);
-												void load();
-											}}
-										/>
-									</span>
-								</div>
-							);
-						}}
-					</For>
-				</div>
+				<AdminEntitlementTable
+					entries={report.entries}
+					editableDivisions={report.editableDivisions}
+					hasFilters={hasFilters()}
+					canEdit={props.app.isAdminMember()}
+					mutationPending={mutationPending()}
+					onMutationPendingChange={setMutationPending}
+					onDivisionChange={saveDivision}
+					onDirectoryChange={saveDirectory}
+					onRevoke={revoke}
+				/>
 				<Show when={total() > 0}>
 					<nav class="entitlement-report-pager" aria-label="Entitlement pages">
 						<span class="muted entitlement-report-range">
@@ -428,7 +400,7 @@ export function AdminEntitlementReportPanel(props: {
 								total: total(),
 								page: page(),
 								pageSize: ENTITLEMENT_REPORT_DEFAULT_PAGE_SIZE,
-								entries: entries(),
+								entries: report.entries,
 							})}
 						</span>
 						<Show when={totalPages() > 1}>

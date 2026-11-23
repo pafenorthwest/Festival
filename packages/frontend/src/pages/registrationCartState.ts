@@ -171,7 +171,7 @@ export function createRegistrationCart(
 	const [items, setItems] = createSignal<RegistrationCartItem[]>(initialItems);
 	let checkoutPayload = "";
 	let checkoutKey = "";
-	let replacementCheckout: { payload: string; key: string } | null = null;
+	let replacementCheckoutKey: string | null = null;
 	const [lastRestoredRecoveryReference, setLastRestoredRecoveryReference] =
 		createSignal<string | null>(null);
 	const [checkoutSubmission, setCheckoutSubmission] =
@@ -192,7 +192,7 @@ export function createRegistrationCart(
 	function clearCheckoutKey() {
 		checkoutPayload = "";
 		checkoutKey = "";
-		replacementCheckout = null;
+		replacementCheckoutKey = null;
 		if (options?.slug && options?.festivalSlug) {
 			clearCartCheckoutIdempotencyKey(options.slug, options.festivalSlug);
 		}
@@ -218,20 +218,17 @@ export function createRegistrationCart(
 	) {
 		const registrationKey = (item: RegistrationCartItem) =>
 			JSON.stringify([item.childId, item.classId]);
-		const restoredKeys = new Set(registrations.map(registrationKey));
-		const unrelated = items().filter(
-			(item) => !restoredKeys.has(registrationKey(item)),
+		const currentKeys = new Set(items().map(registrationKey));
+		const missing = registrations.filter(
+			(item) => !currentKeys.has(registrationKey(item)),
 		);
 		batch(() => {
 			releaseCheckout({ retireKey: true });
-			if (unrelated.length === 0) {
-				replacementCheckout = {
-					payload: JSON.stringify(cartItemsToLineItemInputs(registrations)),
-					key: replacementKey,
-				};
-			}
+			// Keep the source checkout's replacement identity through review and edits.
+			// The server freezes its request payload when checkout is first submitted.
+			replacementCheckoutKey = replacementKey;
 			setLastRestoredRecoveryReference(recoveryReference);
-			setItems([...registrations, ...unrelated]);
+			setItems((current) => [...current, ...missing]);
 		});
 	}
 	function completeCheckout(submission: RegistrationCheckoutSubmission) {
@@ -253,11 +250,7 @@ export function createRegistrationCart(
 		const submission = checkoutSubmission();
 		if (submission) return submission.idempotencyKey;
 		const lineItems = cartItemsToLineItemInputs(items());
-		if (replacementCheckout) {
-			if (replacementCheckout.payload === JSON.stringify(lineItems))
-				return replacementCheckout.key;
-			replacementCheckout = null;
-		}
+		if (replacementCheckoutKey) return replacementCheckoutKey;
 		if (options?.slug && options?.festivalSlug) {
 			checkoutKey = getOrCreateCartCheckoutIdempotencyKey(
 				options.slug,
@@ -274,12 +267,6 @@ export function createRegistrationCart(
 		return checkoutKey;
 	}
 	function updateItems(next: RegistrationCartItem[]) {
-		if (
-			replacementCheckout &&
-			replacementCheckout.payload !==
-				JSON.stringify(cartItemsToLineItemInputs(next))
-		)
-			replacementCheckout = null;
 		setItems(next);
 	}
 
@@ -335,7 +322,7 @@ export function createRegistrationCart(
 		releaseCheckout();
 		checkoutPayload = "";
 		checkoutKey = "";
-		replacementCheckout = null;
+		replacementCheckoutKey = null;
 		setLastRestoredRecoveryReference(null);
 	}
 

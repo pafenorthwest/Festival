@@ -8,10 +8,16 @@ const page = await Bun.file(
 const appHeader = await Bun.file(
 	new URL("../src/components/AppHeader.tsx", import.meta.url),
 ).text();
-const lifecycle = await Bun.file(
-	new URL("../src/app/useFestivalLifecycle.ts", import.meta.url),
+const customerIdentityContext = await Bun.file(
+	new URL(
+		"../src/domains/customer/CustomerIdentityContext.tsx",
+		import.meta.url,
+	),
 ).text();
 const app = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
+const appRoutes = await Bun.file(
+	new URL("../src/app/AppRoutes.tsx", import.meta.url),
+).text();
 const sideNavigation = await Bun.file(
 	new URL("../src/components/OrganizationSideNavigation.tsx", import.meta.url),
 ).text();
@@ -67,14 +73,22 @@ describe("public organization landing page", () => {
 		);
 		expect(appHeader).toContain("isOrganizationPageRoute");
 		expect(appHeader).not.toContain("getCustomerSession");
-		expect(appHeader).toContain("props.app.customerSession()");
-		expect(lifecycle).toContain("getCustomerSession");
+		expect(appHeader).toContain("useCustomerIdentity()");
+		expect(appHeader).toContain("customerIdentity.customerSession()");
+		expect(customerIdentityContext).toContain("getCustomerSession");
 		expect(appHeader).toContain("logoutCustomer");
 		expect(appHeader).toContain("const route = props.app.route();");
 		expect(appHeader).toContain("? (route as { slug: string }).slug");
 		expect(appHeader).toContain('class="org-landing-header parent-header"');
 		expect(page).not.toContain('class="org-landing-header parent-header"');
 		expect(page).not.toContain("handleLogout");
+	});
+
+	it("shares the customer identity provider across the header and routed pages", () => {
+		expect(app).toMatch(
+			/<FestivalShellProvider value=\{app\}>\s*<CustomerIdentityProvider>[\s\S]*<AppHeader app=\{app\} \/>[\s\S]*\{props\.children\}[\s\S]*<\/CustomerIdentityProvider>\s*<\/FestivalShellProvider>/,
+		);
+		expect(appRoutes).not.toContain("CustomerIdentityProvider");
 	});
 
 	it("keeps the children route in its Organization context for customer authentication", () => {
@@ -112,10 +126,18 @@ describe("public organization landing page", () => {
 		expect(styles).toContain("opacity: 1;");
 	});
 
-	it("renders the primary Festival link or no-Festival state", () => {
-		expect(page).toContain("Our Next Festival");
-		expect(page).toContain("Welcome currently no festivals scheduled");
-		expect(page).toContain("getPrimaryFestivalPath");
+	it("renders upcoming festival titles as banner links or shows an empty state", () => {
+		expect(page).toContain('route.kind === "org-root"');
+		expect(page).toContain("getPublicOrganizationLanding");
+		expect(page).toContain('aria-label="Upcoming festivals"');
+		expect(page).toContain("each={result.festivals}");
+		expect(page).toContain("{festival.name}");
+		expect(page).toContain("festival.shortName");
+		expect(page).toContain("festival.startDate.slice(5, 7)");
+		expect(page).toContain("No festivals are currently scheduled.");
+	});
+
+	it("uses the header to sign in from the organization landing page", () => {
 		expect(appHeader).toContain('variant="compact-header"');
 		expect(appHeader).toContain("onClick={login}");
 		expect(appHeader).toContain("isOrganizationPageRoute(route)");

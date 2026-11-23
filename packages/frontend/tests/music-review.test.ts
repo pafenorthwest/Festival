@@ -304,9 +304,15 @@ describe("music review routing and navigation", () => {
 		expect(dashboard).toContain("Review and normalize submitted repertoire.");
 	});
 
-	it("mounts MusicReviewPage in App.tsx", async () => {
-		const app = await read("../src/App.tsx");
-		expect(app).toContain("<MusicReviewPage");
-		expect(app).toContain('app.route().kind === "org-music-review"');
+	it("mounts MusicReviewPage in AppRoutes.tsx", async () => {
+		const appRoutes = await read("../src/app/AdminRoutes.tsx");
+		const lazyPages = await read("../src/app/lazyPages.ts");
+		const routes = await read("../src/lib/routes.ts");
+		expect(routes).toContain('"org-music-review"');
+		expect(lazyPages).toContain('"org-music-review": MusicReviewPage');
+		expect(appRoutes).toContain(
+			'path={["/music-review", "/admin/music-review"]}',
+		);
+		expect(appRoutes).toContain("<Pages.MusicReviewPage");
 	});
 });

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
 import { TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS } from "@festival/common";
 import { Hono } from "hono";
@@ -11,12 +11,19 @@ import { InMemoryCheckoutRepository } from "../src/checkout/checkout-repository.
 import type { MembershipCheckoutStorefront } from "../src/checkout/membership-checkout-service.js";
 import {
 	CUSTOMER_SESSION_COOKIE,
-	type CustomerAccountService,
+	CustomerAccountService,
 } from "../src/customer/customer-account-service.js";
-import { AppError } from "../src/errors/app-error.js";
+import { InMemoryCustomerAccountRepository } from "../src/customer/in-memory-customer-account-repository.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
 import { buildCustomerCheckoutRecoveryRoutes } from "../src/routes/customer-checkout-recovery.routes.js";
+import {
+	SHOPIFY_CUSTOMER_TOKENS_PURPOSE,
+	ShopifySecretKeyring,
+} from "../src/shopify/encryption.js";
 import type { PublicMembershipProductService } from "../src/shopify/public-membership-product-service.js";
+
+const PUBLIC_ORIGIN = "https://festival.test";
+const CUSTOMER_CSRF = "good-csrf";
 
 async function createTestContext(
 	nowDate = new Date("2026-09-27T12:00:00.000Z"),
@@ -94,44 +101,53 @@ async function createTestContext(
 		},
 	} as unknown as PublicMembershipProductService;
 
-	const customerAccountService = {
-		async customerReadAccess(_slug: string, sessionId?: string) {
-			if (sessionId === "sess-cust-1") {
-				return { organizationId: org.id, customerId: "cust-1" };
-			}
-			if (sessionId === "sess-cust-2") {
-				return { organizationId: org.id, customerId: "cust-2" };
-			}
-			throw new AppError("Customer session is invalid.", 401);
+	const customerRepository = new InMemoryCustomerAccountRepository();
+	const customerIntegration = await customerRepository.upsertIntegration({
+		organizationId: org.id,
+		storefrontDomain: "store.myshopify.com",
+		clientId: "customer-client",
+		encryptedClientSecret: "unused",
+	});
+	const keyring = ShopifySecretKeyring.fromEnvironment(
+		JSON.stringify({ test: Buffer.alloc(32, 1).toString("base64") }),
+		"test",
+	);
+	if (!keyring) throw new Error("Missing test keyring.");
+	const customerIds: string[] = [];
+	for (const number of [1, 2]) {
+		const { customer } = await customerRepository.createCustomerSession({
+			sessionId: `sess-cust-${number}`,
+			organizationId: org.id,
+			shopifyCustomerGid: `gid://shopify/Customer/${number}`,
+			encryptedTokens: keyring.encrypt(
+				JSON.stringify({
+					accessToken: "buyer-token-123",
+					refreshToken: "refresh-token",
+					idToken: "id-token",
+					accessExpiresAtIso: new Date(
+						nowDate.getTime() + 3_600_000,
+					).toISOString(),
+					issuer: "https://shopify.com/authentication/shop",
+				}),
+				{ organizationId: org.id, purpose: SHOPIFY_CUSTOMER_TOKENS_PURPOSE },
+			),
+			csrfToken: number === 1 ? CUSTOMER_CSRF : "other-csrf",
+			integrationVersion: customerIntegration.integrationVersion,
+			createdAtIso: nowDate.toISOString(),
+			lastSeenAtIso: nowDate.toISOString(),
+			expiresAtIso: new Date(nowDate.getTime() + 86_400_000).toISOString(),
+		});
+		customerIds.push(customer.id);
+	}
+	const customerAccountService = new CustomerAccountService(
+		customerRepository,
+		orgRepo,
+		keyring,
+		{
+			publicOrigin: PUBLIC_ORIGIN,
+			now: () => nowDate,
 		},
-		async customerCheckoutSession(_slug: string, sessionId: string) {
-			return {
-				sessionId,
-				integrationVersion: 1,
-				buyerAccessToken: "buyer-token-123",
-			};
-		},
-		async checkoutAccess(
-			_slug: string,
-			cookie?: string,
-			csrf?: string,
-			_origin?: string,
-		) {
-			if (!cookie || cookie === "sess-invalid") {
-				throw new AppError("Customer session is invalid.", 401);
-			}
-			if (csrf === "bad-csrf") {
-				throw new AppError("Invalid CSRF token.", 403);
-			}
-			return {
-				organizationId: org.id,
-				customerId: cookie === "sess-cust-2" ? "cust-2" : "cust-1",
-				shopifyCustomerAccessToken: "buyer-token-123",
-				sessionId: cookie,
-				integrationVersion: 1,
-			};
-		},
-	} as unknown as CustomerAccountService;
+	);
 
 	const recoveryService = new CheckoutRecoveryService({
 		recoveryRepository: recoveryRepo,
@@ -163,6 +179,8 @@ async function createTestContext(
 		checkoutRepo,
 		recoveryService,
 		storefrontCalls,
+		auditLogger,
+		customerId: customerIds[0],
 	};
 }
 
@@ -230,6 +248,62 @@ async function seedRecovery(ctx: {
 }
 
 describe("Customer Checkout Recovery Routes", () => {
+	it.each([
+		["missing token", undefined, PUBLIC_ORIGIN, "sess-cust-1"],
+		["empty token", "", PUBLIC_ORIGIN, "sess-cust-1"],
+		["incorrect token", "bad-csrf", PUBLIC_ORIGIN, "sess-cust-1"],
+		["another session's token", "other-csrf", PUBLIC_ORIGIN, "sess-cust-1"],
+		["missing origin", CUSTOMER_CSRF, undefined, "sess-cust-1"],
+		[
+			"same-site foreign origin",
+			CUSTOMER_CSRF,
+			"https://other.festival.test",
+			"sess-cust-1",
+		],
+		["opaque origin", CUSTOMER_CSRF, "null", "sess-cust-1"],
+		["malformed origin", CUSTOMER_CSRF, "invalid-origin", "sess-cust-1"],
+		[
+			"a different recovery customer",
+			"other-csrf",
+			PUBLIC_ORIGIN,
+			"sess-cust-2",
+		],
+	])("rejects %s without changing the recovery or checkout", async (_name, csrf, origin, cookie) => {
+		const ctx = await createTestContext();
+		const { rawToken, tokenHash, intent, request } = await seedRecovery(ctx);
+		const createIntent = spyOn(ctx.checkoutRepo, "createIntent");
+		const markFailed = spyOn(ctx.checkoutRepo, "markFailed");
+		const headers = new Headers({
+			Cookie: `${CUSTOMER_SESSION_COOKIE}=${cookie}`,
+		});
+		if (csrf !== undefined) headers.set("X-CSRF-Token", csrf);
+		if (origin !== undefined) headers.set("Origin", origin);
+		const response = await ctx.app.request(
+			`/organizations/${ctx.org.slug}/customer/checkout-recovery/${rawToken}/checkout`,
+			{ method: "POST", headers },
+		);
+		expect(response.status).toBe(403);
+		expect(
+			await ctx.recoveryRepo.findRecoveryRequestByTokenHash(
+				tokenHash,
+				ctx.org.id,
+			),
+		).toEqual(request);
+		expect(
+			await ctx.recoveryRepo.findIntentById(ctx.org.id, intent.id),
+		).toEqual(intent);
+		expect(
+			await ctx.checkoutRepo.findIntentByCorrelation(
+				ctx.org.id,
+				intent.correlationId,
+			),
+		).toEqual(intent);
+		expect(createIntent).not.toHaveBeenCalled();
+		expect(markFailed).not.toHaveBeenCalled();
+		expect(ctx.storefrontCalls).toEqual([]);
+		expect(ctx.auditLogger.events).toEqual([]);
+	});
+
 	it("returns 401 when customer session cookie is missing or invalid", async () => {
 		const ctx = await createTestContext();
 		const { rawToken } = await seedRecovery(ctx);
@@ -277,7 +351,11 @@ describe("Customer Checkout Recovery Routes", () => {
 		const resGet = await ctx.app.request(
 			`/organizations/${ctx.org.slug}/customer/checkout-recovery/${rawToken}`,
 			{
-				headers: { Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-2` },
+				headers: {
+					Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-2`,
+					"X-CSRF-Token": "other-csrf",
+					Origin: PUBLIC_ORIGIN,
+				},
 			},
 		);
 		expect(resGet.status).toBe(403);
@@ -286,7 +364,11 @@ describe("Customer Checkout Recovery Routes", () => {
 			`/organizations/${ctx.org.slug}/customer/checkout-recovery/${rawToken}/checkout`,
 			{
 				method: "POST",
-				headers: { Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-2` },
+				headers: {
+					Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-2`,
+					"X-CSRF-Token": "other-csrf",
+					Origin: PUBLIC_ORIGIN,
+				},
 			},
 		);
 		expect(resPost.status).toBe(403);
@@ -299,7 +381,11 @@ describe("Customer Checkout Recovery Routes", () => {
 		const res = await ctx.app.request(
 			`/organizations/${ctx.org.slug}/customer/checkout-recovery/${rawToken}`,
 			{
-				headers: { Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1` },
+				headers: {
+					Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1`,
+					"X-CSRF-Token": CUSTOMER_CSRF,
+					Origin: PUBLIC_ORIGIN,
+				},
 			},
 		);
 
@@ -332,7 +418,11 @@ describe("Customer Checkout Recovery Routes", () => {
 			`/organizations/${ctx.org.slug}/customer/checkout-recovery/${rawToken}/checkout`,
 			{
 				method: "POST",
-				headers: { Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1` },
+				headers: {
+					Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1`,
+					"X-CSRF-Token": CUSTOMER_CSRF,
+					Origin: PUBLIC_ORIGIN,
+				},
 			},
 		);
 
@@ -353,6 +443,20 @@ describe("Customer Checkout Recovery Routes", () => {
 		expect(ctx.storefrontCalls).toHaveLength(2);
 		expect(ctx.storefrontCalls[0].action).toBe("createCart");
 		expect(ctx.storefrontCalls[1].action).toBe("checkout");
+		expect(ctx.storefrontCalls[0].buyerAccessToken).toBe("buyer-token-123");
+		const replay = await ctx.app.request(
+			`/organizations/${ctx.org.slug}/customer/checkout-recovery/${rawToken}/checkout`,
+			{
+				method: "POST",
+				headers: {
+					Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1`,
+					"X-CSRF-Token": CUSTOMER_CSRF,
+					Origin: PUBLIC_ORIGIN,
+				},
+			},
+		);
+		expect(replay.status).toBe(409);
+		expect(ctx.storefrontCalls).toHaveLength(2);
 	});
 
 	it("POST checkout succeeds with valid CSRF header and rejects invalid CSRF header", async () => {
@@ -400,7 +504,11 @@ describe("Customer Checkout Recovery Routes", () => {
 		const res = await ctx.app.request(
 			`/organizations/${ctx.org.slug}/customer/checkout-recovery/${rawToken}`,
 			{
-				headers: { Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1` },
+				headers: {
+					Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1`,
+					"X-CSRF-Token": CUSTOMER_CSRF,
+					Origin: PUBLIC_ORIGIN,
+				},
 			},
 		);
 		expect(res.status).toBe(410);
@@ -409,7 +517,11 @@ describe("Customer Checkout Recovery Routes", () => {
 			`/organizations/${ctx.org.slug}/customer/checkout-recovery/${rawToken}/checkout`,
 			{
 				method: "POST",
-				headers: { Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1` },
+				headers: {
+					Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1`,
+					"X-CSRF-Token": CUSTOMER_CSRF,
+					Origin: PUBLIC_ORIGIN,
+				},
 			},
 		);
 		expect(resPost.status).toBe(410);
@@ -425,7 +537,11 @@ describe("Customer Checkout Recovery Routes", () => {
 		const res = await ctx.app.request(
 			`/organizations/${ctx.org.slug}/customer/checkout-recovery/${rawToken}`,
 			{
-				headers: { Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1` },
+				headers: {
+					Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1`,
+					"X-CSRF-Token": CUSTOMER_CSRF,
+					Origin: PUBLIC_ORIGIN,
+				},
 			},
 		);
 		expect(res.status).toBe(409);
@@ -434,7 +550,11 @@ describe("Customer Checkout Recovery Routes", () => {
 			`/organizations/${ctx.org.slug}/customer/checkout-recovery/${rawToken}/checkout`,
 			{
 				method: "POST",
-				headers: { Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1` },
+				headers: {
+					Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1`,
+					"X-CSRF-Token": CUSTOMER_CSRF,
+					Origin: PUBLIC_ORIGIN,
+				},
 			},
 		);
 		expect(resPost.status).toBe(409);
@@ -446,7 +566,11 @@ describe("Customer Checkout Recovery Routes", () => {
 		const resUnknownToken = await ctx.app.request(
 			`/organizations/${ctx.org.slug}/customer/checkout-recovery/non-existent-token`,
 			{
-				headers: { Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1` },
+				headers: {
+					Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1`,
+					"X-CSRF-Token": CUSTOMER_CSRF,
+					Origin: PUBLIC_ORIGIN,
+				},
 			},
 		);
 		expect(resUnknownToken.status).toBe(404);
@@ -454,7 +578,11 @@ describe("Customer Checkout Recovery Routes", () => {
 		const resUnknownOrg = await ctx.app.request(
 			"/organizations/unknown-slug/customer/checkout-recovery/some-token",
 			{
-				headers: { Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1` },
+				headers: {
+					Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1`,
+					"X-CSRF-Token": CUSTOMER_CSRF,
+					Origin: PUBLIC_ORIGIN,
+				},
 			},
 		);
 		expect(resUnknownOrg.status).toBe(404);
@@ -472,7 +600,11 @@ describe("Customer Checkout Recovery Routes", () => {
 		const res = await ctx.app.request(
 			`/organizations/${ctx.org.slug}/customer/checkout-recovery/${rawToken}`,
 			{
-				headers: { Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1` },
+				headers: {
+					Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1`,
+					"X-CSRF-Token": CUSTOMER_CSRF,
+					Origin: PUBLIC_ORIGIN,
+				},
 			},
 		);
 		expect(res.status).toBe(409);
@@ -488,7 +620,11 @@ describe("Customer Checkout Recovery Routes", () => {
 		const res = await ctx.app.request(
 			`/organizations/${ctx.org.slug}/customer/checkout-recovery/${rawToken}`,
 			{
-				headers: { Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1` },
+				headers: {
+					Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1`,
+					"X-CSRF-Token": CUSTOMER_CSRF,
+					Origin: PUBLIC_ORIGIN,
+				},
 			},
 		);
 		expect(res.status).toBe(409);
@@ -510,7 +646,11 @@ describe("Customer Checkout Recovery Routes", () => {
 			`/organizations/${ctx.org.slug}/customer/checkout-recovery/${rawToken}/checkout`,
 			{
 				method: "POST",
-				headers: { Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1` },
+				headers: {
+					Cookie: `${CUSTOMER_SESSION_COOKIE}=sess-cust-1`,
+					"X-CSRF-Token": CUSTOMER_CSRF,
+					Origin: PUBLIC_ORIGIN,
+				},
 			},
 		);
 		expect(res.status).toBe(409);

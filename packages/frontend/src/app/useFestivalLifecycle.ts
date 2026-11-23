@@ -1,17 +1,18 @@
 import type { User } from "firebase/auth";
-import { createEffect, onCleanup, onMount } from "solid-js";
-import { acceptInvite, getCustomerSession } from "../lib/api.js";
+import { batch, createEffect, onCleanup, onMount } from "solid-js";
+import { acceptInvite } from "../lib/api.js";
 import {
 	clearPendingIntent,
 	completePasswordlessEmailLinkSignIn,
 	MissingPendingEmailError,
-	readPendingIntent,
+	type PendingIntent,
+	pendingCredentialSignIn,
 	subscribeToAuthChanges,
 } from "../lib/firebase-auth.js";
 import {
+	type AppRoute,
 	buildFestivalVolunteersPath,
 	buildOrgPath,
-	isOrganizationPageRoute,
 } from "../lib/routes.js";
 import type { FestivalAppState } from "./createFestivalAppState.js";
 import {
@@ -19,99 +20,137 @@ import {
 	getIdToken,
 } from "./createFestivalDataLoaders.js";
 
-export function useFestivalLifecycle(
+const ORGANIZATION_LOAD_ROUTE_KINDS = new Set<AppRoute["kind"]>([
+	"org-root",
+	"org-admin",
+	"org-admin-users",
+	"org-admin-integrations",
+	"org-admin-memberships",
+	"org-admin-festivals",
+	"org-admin-divisions",
+	"org-admin-settings",
+	"org-admin-volunteers",
+	"org-admin-rooms",
+	"org-admin-concerto-repertoire",
+	"org-admin-accompanists",
+	"org-admin-roster",
+	"org-music-review",
+	"org-billing",
+	"org-communications",
+	"org-admin-checkout-recovery",
+]);
+
+async function handlePostAuthIntent(
+	state: FestivalAppState,
+	loaders: FestivalDataLoaders,
+	user: User,
+	intent: PendingIntent,
+) {
+	const result = await loaders.refreshSession(user);
+	if (!result) return;
+	const nextSession = result.session;
+
+	if (intent?.kind === "invite" && state.route().kind === "invite") {
+		const token = await getIdToken(user);
+		if (!token) return;
+
+		const response = await acceptInvite(token, intent.inviteToken, {
+			name: intent.name,
+		});
+		state.setSession((current) => ({
+			...current,
+			membership: response.membership,
+		}));
+		state.setMemberships((current) => [...current, response.membership]);
+		state.navigate(buildOrgPath(response.membership.organizationSlug));
+		clearPendingIntent();
+		return;
+	}
+
+	if (intent?.kind === "volunteer") {
+		state.navigate(
+			buildFestivalVolunteersPath(intent.slug, intent.festivalSlug),
+		);
+		clearPendingIntent();
+		return;
+	}
+	if (intent?.kind === "create-org") {
+		if (nextSession.membership) {
+			await loaders.routeAfterSession(nextSession, user);
+		} else state.navigate("/create-organization");
+		clearPendingIntent();
+		return;
+	}
+	await loaders.routeAfterSession(nextSession, user);
+}
+
+async function completeEmailLinkOnMount(
 	state: FestivalAppState,
 	loaders: FestivalDataLoaders,
 ) {
-	async function handlePostAuthIntent(
-		userOverride: User | null = state.firebaseUser(),
-	) {
-		const intent = readPendingIntent();
-		const nextSession = await loaders.refreshSession(userOverride);
-
-		if (intent?.kind === "invite" && state.currentInviteToken()) {
-			const token = await getIdToken(userOverride);
-			if (!token) {
-				return;
-			}
-
-			const response = await acceptInvite(token, intent.inviteToken, {
-				name: intent.name,
-			});
-			state.setSession((current) => ({
-				...current,
-				membership: response.membership,
-			}));
-			state.setMemberships((current) => [...current, response.membership]);
-			state.navigate(buildOrgPath(response.membership.organizationSlug));
-			clearPendingIntent();
+	try {
+		const result = await completePasswordlessEmailLinkSignIn();
+		if (result?.intent?.kind === "login") {
+			await loaders.routeAfterOrganizerLogin(result.user);
 			return;
 		}
-
-		if (intent?.kind === "volunteer") {
-			state.navigate(
-				buildFestivalVolunteersPath(intent.slug, intent.festivalSlug),
-			);
-			clearPendingIntent();
-			return;
-		}
-
-		if (intent?.kind === "create-org") {
-			if (nextSession.membership) {
-				await loaders.routeAfterSession(nextSession, userOverride);
-			} else {
-				state.navigate("/create-organization");
-			}
-			clearPendingIntent();
-			return;
-		}
-
-		await loaders.routeAfterSession(nextSession, userOverride);
+		if (result?.intent)
+			state.setStatusMessage("Email link verified. Continuing sign-in.");
+	} catch (error) {
+		if (error instanceof MissingPendingEmailError)
+			state.setNeedsEmailLinkConfirmation(true);
+		else state.setErrorMessage((error as Error).message);
 	}
 
+	void loaders.refreshSession().catch((error) => {
+		state.setErrorMessage((error as Error).message);
+	});
+}
+
+function registerAuthLifecycle(
+	state: FestivalAppState,
+	loaders: FestivalDataLoaders,
+) {
 	onMount(() => {
 		const unsubscribe = subscribeToAuthChanges((user) => {
-			const previousUser = state.firebaseUser();
-			if (previousUser?.uid !== user?.uid) {
-				state.resetOnboardingFlowState();
-			}
-
-			state.setFirebaseUser(user);
+			const signIn = pendingCredentialSignIn();
+			batch(() => {
+				if (state.firebaseUser()?.uid !== user?.uid)
+					state.resetOnboardingFlowState();
+				state.setFirebaseUser(user);
+				if (user) state.setIsSessionLoading(true);
+				state.setIsAuthResolved(true);
+			});
 			void (async () => {
 				try {
-					if (user && readPendingIntent()) {
-						await handlePostAuthIntent(user);
-						return;
+					if (user && signIn) {
+						const signedInUser = await signIn.user;
+						if (state.firebaseUser()?.uid !== user.uid) return;
+						if (signedInUser?.uid === user.uid && signIn.intent) {
+							if (signIn.intent.kind !== "login" && !signIn.intentHandled) {
+								signIn.intentHandled = true;
+								await handlePostAuthIntent(state, loaders, user, signIn.intent);
+							}
+							return;
+						}
 					}
-
 					await loaders.refreshSession(user);
 				} catch (error) {
 					state.setErrorMessage((error as Error).message);
 				}
 			})();
 		});
-		onCleanup(() => unsubscribe());
+		onCleanup(unsubscribe);
 		onCleanup(state.clearTimers);
-
-		void (async () => {
-			try {
-				const pendingIntent = await completePasswordlessEmailLinkSignIn();
-				if (pendingIntent) {
-					state.setStatusMessage("Email link verified. Continuing sign-in.");
-				}
-			} catch (error) {
-				if (error instanceof MissingPendingEmailError) {
-					state.setNeedsEmailLinkConfirmation(true);
-				} else {
-					state.setErrorMessage((error as Error).message);
-				}
-			}
-
-			void loaders.refreshSession().catch((error) => {
-				state.setErrorMessage((error as Error).message);
-			});
-		})();
+		void completeEmailLinkOnMount(state, loaders);
 	});
+}
+
+export function useFestivalLifecycle(
+	state: FestivalAppState,
+	loaders: FestivalDataLoaders,
+) {
+	registerAuthLifecycle(state, loaders);
 
 	createEffect(() => {
 		const currentRoute = state.route();
@@ -122,143 +161,25 @@ export function useFestivalLifecycle(
 				currentRoute.festivalSlug,
 			);
 		}
-		if (!isOrganizationPageRoute(currentRoute)) {
-			state.setCustomerSession({ authenticated: false });
-			state.setIsCustomerSessionLoading(false);
-			return;
-		}
-
-		let active = true;
-		state.setCustomerSession({ authenticated: false });
-		state.setIsCustomerSessionLoading(true);
-		void getCustomerSession((currentRoute as { slug: string }).slug)
-			.then((response) => {
-				if (!active) return;
-				const slug = (currentRoute as { slug: string }).slug;
-				if (response.session.authenticated) {
-					state.parentRegistration.bindSession(
-						slug,
-						response.session.csrfToken,
-					);
-				} else {
-					state.parentRegistration.clear(slug);
-				}
-				state.setCustomerSession(response.session);
-			})
-			.catch(() => {
-				if (active) state.setCustomerSession({ authenticated: false });
-			})
-			.finally(() => {
-				if (active) state.setIsCustomerSessionLoading(false);
-			});
-		onCleanup(() => {
-			active = false;
-		});
-	});
-
-	createEffect(() => {
-		const token = state.currentInviteToken();
-		if (token) {
-			void loaders.loadInvite(token);
-			return;
-		}
-
-		state.setInvite(null);
-	});
-
-	createEffect(() => {
-		const currentRoute = state.route();
-
 		if (
-			(currentRoute.kind === "org-root" ||
-				currentRoute.kind === "org-admin" ||
-				currentRoute.kind === "org-admin-users" ||
-				currentRoute.kind === "org-admin-integrations" ||
-				currentRoute.kind === "org-admin-memberships" ||
-				currentRoute.kind === "org-admin-festivals" ||
-				currentRoute.kind === "org-admin-divisions" ||
-				currentRoute.kind === "org-admin-volunteers" ||
-				currentRoute.kind === "org-admin-rooms" ||
-				currentRoute.kind === "org-admin-accompanists" ||
-				currentRoute.kind === "org-admin-roster" ||
-				currentRoute.kind === "org-music-review" ||
-				currentRoute.kind === "org-billing" ||
-				currentRoute.kind === "org-communications" ||
-				currentRoute.kind === "org-admin-checkout-recovery") &&
+			ORGANIZATION_LOAD_ROUTE_KINDS.has(currentRoute.kind) &&
+			"slug" in currentRoute &&
 			currentRoute.slug &&
 			state.firebaseUser()
 		) {
-			void loaders.loadOrganization(currentRoute.slug);
+			void loaders.loadOrganization(currentRoute.slug).catch(() => {});
 		}
 	});
 
 	createEffect(() => {
 		const currentRoute = state.route();
 		const membership = state.sessionMembership();
-
-		if (
-			currentRoute.kind === "home" &&
-			state.memberships().length === 1 &&
-			state.memberships()[0]
-		) {
-			state.navigate(buildOrgPath(state.memberships()[0].organizationSlug));
-			return;
-		}
-
 		if (
 			currentRoute.kind === "create-org" &&
 			membership &&
 			state.createdOrganizationSlug() !== membership.organizationSlug
 		) {
 			state.navigate(buildOrgPath(membership.organizationSlug));
-		}
-	});
-
-	createEffect(() => {
-		const currentRoute = state.route();
-		if (
-			currentRoute.kind === "org-admin-volunteers" &&
-			state.hasVolunteerAdminIntent()
-		) {
-			void loaders.loadFestivals(currentRoute.slug);
-			return;
-		}
-
-		if (!state.isAdminMember()) {
-			return;
-		}
-
-		if (currentRoute.kind === "org-admin-users") {
-			void loaders.loadAdminUsers(currentRoute.slug);
-			return;
-		}
-
-		if (
-			currentRoute.kind === "org-admin-festivals" ||
-			currentRoute.kind === "org-admin-volunteers" ||
-			currentRoute.kind === "org-admin-rooms"
-		) {
-			void loaders.loadFestivals(currentRoute.slug);
-			return;
-		}
-
-		if (currentRoute.kind === "org-admin-divisions") {
-			void loaders.loadDivisionConfiguration(currentRoute.slug);
-			return;
-		}
-
-		if (currentRoute.kind === "org-admin-integrations") {
-			void loaders.loadShopifySettings(currentRoute.slug).catch((error) => {
-				state.setErrorMessage((error as Error).message);
-			});
-			return;
-		}
-
-		if (currentRoute.kind === "org-admin-memberships") {
-			void loaders.loadShopifySettings(currentRoute.slug).catch((error) => {
-				state.setErrorMessage((error as Error).message);
-			});
-			void loaders.loadMembershipProducts(currentRoute.slug);
 		}
 	});
 }

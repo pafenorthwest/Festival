@@ -1,8 +1,18 @@
 import { describe, expect, it } from "bun:test";
-import type { AuthenticatedUser, OrganizationRole } from "@festival/common";
+import {
+	type AuthenticatedUser,
+	CONCERTO_REPERTOIRE_CSV_TEMPLATE,
+	type ConcertoRepertoireCsvImportResultDto,
+	type ConcertoRepertoireCsvPreviewDto,
+	type OrganizationRole,
+	parseConcertoRepertoireCsv,
+	serializeConcertoRepertoireCsv,
+} from "@festival/common";
 import { Hono } from "hono";
+import { createApp } from "../src/app.js";
 import type { AuthVerifier } from "../src/auth/types.js";
 import { InMemoryRepertoireRepository } from "../src/repertoire/index.js";
+import { InMemoryAppUserRepository } from "../src/repo/in-memory-app-user-repository.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
 import { buildRepertoireRoutes } from "../src/routes/repertoire.routes.js";
 
@@ -12,6 +22,16 @@ class FakeAuth implements AuthVerifier {
 			uid: "uid-admin",
 			email: "admin@example.com",
 			displayName: "Admin Reviewer",
+		},
+		coordinator: {
+			uid: "uid-coordinator",
+			email: "coord@example.com",
+			displayName: "Coordinator Member",
+		},
+		board: {
+			uid: "uid-board",
+			email: "board@example.com",
+			displayName: "Board Member",
 		},
 		reviewer1: {
 			uid: "uid-rev-1",
@@ -503,6 +523,203 @@ describe("Repertoire Review Routes", () => {
 				},
 			);
 			expect(badAdd.status).toBe(400);
+		});
+	});
+});
+
+async function createAdminConcertoTestApp() {
+	const repository = new InMemoryOrganizationRepository();
+	const repertoireRepository = new InMemoryRepertoireRepository();
+	const authVerifier = new FakeAuth();
+	const pafe = await repository.createOrganization({
+		name: "Pacific Festival",
+		slug: "pafe",
+	});
+	const otherOrg = await repository.createOrganization({
+		name: "Other Festival",
+		slug: "other-fest",
+	});
+	const enroll = async (
+		orgId: string,
+		token: string,
+		role: OrganizationRole,
+	) => {
+		const u = await authVerifier.verify(token);
+		const user = await repository.upsertUser(u);
+		await repository.createMembership({
+			organizationId: orgId,
+			userId: user.id,
+			role,
+			origin: "creator",
+		});
+	};
+	await enroll(pafe.id, "admin", "Admin");
+	await enroll(pafe.id, "coordinator", "Division Chair");
+	await enroll(pafe.id, "board", "Music Reviewer");
+	await enroll(otherOrg.id, "outsider", "Admin");
+	const { app } = await createApp({
+		env: { port: 3000, trustProxyHeaders: false },
+		repository,
+		appUserRepository: new InMemoryAppUserRepository(),
+		repertoireRepository,
+		authVerifier,
+	});
+	return { app, pafe, otherOrg, repertoireRepository };
+}
+
+describe("Admin Concerto Repertoire CSV Routes", () => {
+	const base = "/api/organizations/pafe/admin/concerto-repertoire";
+	const postJson = (
+		app: Hono,
+		subpath: string,
+		body: unknown,
+		token = "admin",
+	) =>
+		app.request(`${base}${subpath}`, {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${token}`,
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify(body),
+		});
+
+	it("enforces 401 unauthenticated, 403 non-Admin/cross-org, template headers, and org-isolated export", async () => {
+		const { app, pafe, otherOrg, repertoireRepository } =
+			await createAdminConcertoTestApp();
+		expect((await app.request(`${base}/template`)).status).toBe(401);
+		for (const token of ["coordinator", "board", "outsider"]) {
+			const res = await app.request(`${base}/export`, {
+				headers: { Authorization: `Bearer ${token}` },
+			});
+			expect(res.status).toBe(403);
+		}
+		await repertoireRepository.addCatalogWork({
+			organizationId: pafe.id,
+			title: "Piano Concerto No. 2, Op. 18",
+			composerName: "Sergei Rachmaninoff",
+			classifications: ["concerto"],
+		});
+		await repertoireRepository.addCatalogWork({
+			organizationId: pafe.id,
+			title: "Sonata in B minor",
+			composerName: "Franz Liszt",
+			classifications: ["sonata"],
+		});
+		await repertoireRepository.addCatalogWork({
+			organizationId: otherOrg.id,
+			title: "Other Org Concerto",
+			composerName: "Other Composer",
+			classifications: ["concerto"],
+		});
+
+		const tpl = await app.request(`${base}/template`, {
+			headers: { Authorization: "Bearer admin" },
+		});
+		expect(tpl.status).toBe(200);
+		expect(tpl.headers.get("content-type")).toContain("text/csv");
+		expect(tpl.headers.get("cache-control")).toBe("no-store");
+		expect(await tpl.text()).toBe(CONCERTO_REPERTOIRE_CSV_TEMPLATE);
+
+		const exp = await app.request(`${base}/export`, {
+			headers: { Authorization: "Bearer admin" },
+		});
+		expect(exp.status).toBe(200);
+		expect(exp.headers.get("content-type")).toContain("text/csv");
+		const rows = parseConcertoRepertoireCsv(await exp.text()).rows;
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.title).toBe("Piano Concerto No. 2, Op. 18");
+	});
+
+	it("handles preview (0 writes, 400 bad schema) and import (409 stale, 400 clear-all/syntax, 422 row errors, 200 atomic)", async () => {
+		const { app, pafe, repertoireRepository } =
+			await createAdminConcertoTestApp();
+		const existing = await repertoireRepository.addCatalogWork({
+			organizationId: pafe.id,
+			title: "Violin Concerto in D major, Op. 35",
+			composerName: "Pyotr Ilyich Tchaikovsky",
+			classifications: ["concerto"],
+		});
+		expect((await postJson(app, "/preview", { extra: true })).status).toBe(400);
+
+		const invalidPreviewRes = await postJson(app, "/preview", {
+			csvText: `${CONCERTO_REPERTOIRE_CSV_TEMPLATE}unknown-id,Concerto,Mozart,\n`,
+		});
+		expect(invalidPreviewRes.status).toBe(200);
+		const invalidPreview =
+			(await invalidPreviewRes.json()) as ConcertoRepertoireCsvPreviewDto;
+		expect(invalidPreview.valid).toBe(false);
+		expect(invalidPreview.errors[0]?.field).toBe("work_id");
+
+		const staleRes = await postJson(app, "/import", {
+			csvText: CONCERTO_REPERTOIRE_CSV_TEMPLATE,
+			expectedCatalogDigest: "stale-digest",
+			confirmClearAll: true,
+		});
+		expect(staleRes.status).toBe(409);
+		expect(await staleRes.json()).toMatchObject({
+			code: "stale_catalog_preview",
+			catalogDigest: invalidPreview.catalogDigest,
+			details: { catalogDigest: invalidPreview.catalogDigest },
+		});
+
+		const clearGateRes = await postJson(app, "/import", {
+			csvText: CONCERTO_REPERTOIRE_CSV_TEMPLATE,
+			expectedCatalogDigest: invalidPreview.catalogDigest,
+		});
+		expect(clearGateRes.status).toBe(400);
+		expect(((await clearGateRes.json()) as { code: string }).code).toBe(
+			"clear_all_confirmation_required",
+		);
+
+		const syntaxRes = await postJson(app, "/import", {
+			csvText: "wrong_header\n",
+			expectedCatalogDigest: invalidPreview.catalogDigest,
+		});
+		expect(syntaxRes.status).toBe(400);
+		expect(((await syntaxRes.json()) as { code: string }).code).toBe(
+			"invalid_concerto_csv",
+		);
+
+		const rowErrRes = await postJson(app, "/import", {
+			csvText: `${CONCERTO_REPERTOIRE_CSV_TEMPLATE}unknown-id,Concerto,Mozart,\n`,
+			expectedCatalogDigest: invalidPreview.catalogDigest,
+		});
+		expect(rowErrRes.status).toBe(422);
+		const rowErrBody = (await rowErrRes.json()) as {
+			code: string;
+			errors: unknown[];
+		};
+		expect(rowErrBody.code).toBe("concerto_csv_validation_failed");
+		expect(rowErrBody.errors.length).toBeGreaterThan(0);
+
+		const validCsv = serializeConcertoRepertoireCsv([
+			{
+				workId: existing.id,
+				title: "Violin Concerto in D major, Op. 35",
+				composer: "Pyotr Ilyich Tchaikovsky",
+				imslpUrl: "https://imslp.org/wiki/Violin_Concerto,_Op.35",
+			},
+			{
+				workId: "",
+				title: "Cello Concerto in B minor, Op. 104",
+				composer: "Antonín Dvořák",
+				imslpUrl: null,
+			},
+		]);
+		const importRes = await postJson(app, "/import", {
+			csvText: validCsv,
+			expectedCatalogDigest: invalidPreview.catalogDigest,
+		});
+		expect(importRes.status).toBe(200);
+		const imported =
+			(await importRes.json()) as ConcertoRepertoireCsvImportResultDto;
+		expect(imported.applied).toBe(true);
+		expect(imported.summary).toMatchObject({
+			totalRows: 2,
+			addedCount: 1,
+			updatedCount: 1,
+			removedCount: 0,
 		});
 	});
 });

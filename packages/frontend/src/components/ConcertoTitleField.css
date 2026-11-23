@@ -1,0 +1,81 @@
+.concerto-title-field {
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+	min-width: 0;
+}
+
+.concerto-title-label {
+	grid-area: 1 / 1;
+}
+
+button.concerto-title-mode {
+	grid-area: 1 / 2;
+	justify-self: end;
+	min-block-size: 1.75rem;
+	text-decoration: underline;
+}
+
+.concerto-title-anchor,
+.concerto-title-help {
+	grid-column: 1 / -1;
+}
+
+.concerto-title-anchor {
+	grid-row: 2;
+	position: relative;
+	min-width: 0;
+}
+
+.concerto-title-anchor > input {
+	display: block;
+}
+
+.concerto-title-anchor-open > input {
+	border-end-start-radius: 0;
+	border-end-end-radius: 0;
+}
+
+.concerto-title-popup {
+	position: absolute;
+	z-index: 2;
+	inset-block-start: 100%;
+	inset-inline: 0;
+	max-block-size: min(14rem, 40dvh);
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	border: 1px solid var(--bullet-panel-border, #c9cad0);
+	border-block-start: 0;
+	border-radius: 0 0 6px 6px;
+	background: #fff;
+	box-shadow: var(--bullet-shadow, 0 10px 24px rgba(31, 36, 49, 0.16));
+}
+
+.concerto-title-suggestions > button {
+	display: block;
+	width: 100%;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+	box-shadow: none;
+	color: inherit;
+	cursor: pointer;
+	font: inherit;
+	text-align: start;
+	overflow-wrap: anywhere;
+	padding: 0.4rem 0.55rem;
+}
+
+.concerto-title-suggestions > button:hover,
+.concerto-title-suggestions > button[aria-selected="true"] {
+	background: var(--bullet-paper, #f3f3f3);
+	outline: 2px solid currentColor;
+	outline-offset: -2px;
+}
+
+.concerto-title-feedback {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.4rem 0.75rem;
+	padding: 0.55rem;
+}

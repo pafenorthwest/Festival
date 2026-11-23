@@ -593,6 +593,34 @@ describe("repertoire review domain types and validation", () => {
 			expect(result.data?.classifications).toEqual(["concerto", "romantic"]);
 		});
 
+		it.each([
+			[200, undefined, true],
+			[201, undefined, false],
+			[201, "work-1", true],
+			[300, "work-1", true],
+			[301, "work-1", false],
+		])("validates a %i-character registration title with link %s", (length, catalogWorkId, valid) => {
+			const title = "A".repeat(length);
+			const errors: string[] = [];
+			const piece = validateRepertoirePiece(
+				{
+					title: `  ${title}  `,
+					composer: "Composer",
+					durationSeconds: 60,
+					catalogWorkId,
+				},
+				0,
+				errors,
+			);
+			if (valid) {
+				expect(piece?.title).toBe(title);
+				expect(errors).toEqual([]);
+			} else {
+				expect(piece).toBeNull();
+				expect(errors[0]).toContain(catalogWorkId ? "300" : "200");
+			}
+		});
+
 		it("validateRepertoirePiece preserves a valid catalogWorkId and rejects blank or non-string catalogWorkId", () => {
 			const errorsValid: string[] = [];
 			const validPiece = validateRepertoirePiece(

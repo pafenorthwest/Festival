@@ -1,9 +1,10 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import { generateKeyPairSync, sign } from "node:crypto";
 import {
 	CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION,
 	deriveFestivalMetadataCutoff,
 } from "@festival/common";
+import { Hono } from "hono";
 import { InMemoryCheckoutRepository } from "../src/checkout/checkout-repository.js";
 import { InMemoryMembershipCommerceRepository } from "../src/commerce/membership-commerce-repository.js";
 import type {
@@ -16,6 +17,7 @@ import { CustomerAccountTransport } from "../src/customer/customer-account-trans
 import { InMemoryCustomerAccountRepository } from "../src/customer/in-memory-customer-account-repository.js";
 import { InMemoryRepertoireRepository } from "../src/repertoire/index.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
+import { buildCustomerAuthRoutes } from "../src/routes/customer-auth/customer-auth.routes.js";
 import {
 	SHOPIFY_CUSTOMER_TOKENS_PURPOSE,
 	ShopifySecretKeyring,
@@ -124,11 +126,14 @@ async function fixture(
 	let nonce = "";
 	let tokenCalls = 0;
 	let denyOrders = false;
+	let orderErrorCode: string | undefined;
+	let invalidOrders = false;
 	let tokenClaims: Record<string, unknown> = {};
 	let tokenKid = "test";
 	let jwksKid = "test";
 	let jwksCalls = 0;
 	let discoveryCalls = 0;
+	let discoveryUnavailable = false;
 	let discoveryIssuer = issuer;
 	let authorizationEndpoint = "https://accounts.shopify.com/auth";
 	let graphqlApi = "https://accounts.shopify.com/customer/api/2026-07/graphql";
@@ -138,6 +143,7 @@ async function fixture(
 		const url = new URL(input.toString());
 		if (url.pathname === "/.well-known/openid-configuration") {
 			discoveryCalls++;
+			if (discoveryUnavailable) return response({}, 503);
 			return response({
 				issuer: discoveryIssuer,
 				authorization_endpoint: authorizationEndpoint,
@@ -179,9 +185,14 @@ async function fixture(
 				return response({
 					data: { customer: null },
 					errors: [
-						{ message: "protected data denied", token: "must-not-leak" },
+						{
+							message: "protected data denied",
+							token: "must-not-leak",
+							extensions: { code: orderErrorCode },
+						},
 					],
 				});
+			if (invalidOrders) return response({ data: { customer: null } });
 			return response({
 				data: {
 					customer: {
@@ -203,6 +214,11 @@ async function fixture(
 												quantity: 1,
 												totalPrice: { amount: "25.00", currencyCode: "USD" },
 											},
+											{
+												title: "Additional entry",
+												quantity: 1,
+												totalPrice: null,
+											},
 										],
 									},
 								},
@@ -220,23 +236,21 @@ async function fixture(
 		"test",
 	);
 	if (!keyring) throw new Error("keyring");
-	const service = new (
-		CustomerAccountService as unknown as new (
-			...args: unknown[]
-		) => CustomerAccountService
-	)(
-		repository,
-		organizations,
-		keyring,
-		{
-			publicOrigin: "https://festival.example.com",
-			transport: transportFor(fetcher, () => now),
-			now: () => now,
-		},
-		commerceRepo,
-		checkoutRepo,
-		repertoire,
-	);
+	const createService = (catalog?: InMemoryRepertoireRepository) =>
+		new CustomerAccountService(
+			repository,
+			organizations,
+			keyring,
+			{
+				publicOrigin: "https://festival.example.com",
+				transport: transportFor(fetcher, () => now),
+				now: () => now,
+			},
+			commerceRepo,
+			checkoutRepo,
+			catalog,
+		);
+	const service = createService(repertoire);
 	await service.saveAndVerify(org.id, org.slug, {
 		storefrontDomain: "store.example.com",
 		clientId: "customer-client",
@@ -254,6 +268,7 @@ async function fixture(
 	}
 	return {
 		service,
+		createService,
 		repository,
 		organizations,
 		commerce: commerceRepo,
@@ -270,6 +285,12 @@ async function fixture(
 		setDeny: (value: boolean) => {
 			denyOrders = value;
 		},
+		setOrderErrorCode: (value: string) => {
+			orderErrorCode = value;
+		},
+		setInvalidOrders: (value: boolean) => {
+			invalidOrders = value;
+		},
 		setTokenClaims: (value: Record<string, unknown>) => {
 			tokenClaims = value;
 		},
@@ -279,6 +300,9 @@ async function fixture(
 		},
 		setDiscoveryIssuer: (value: string) => {
 			discoveryIssuer = value;
+		},
+		setDiscoveryUnavailable: (value: boolean) => {
+			discoveryUnavailable = value;
 		},
 		setAuthorizationEndpoint: (value: string) => {
 			authorizationEndpoint = value;
@@ -292,6 +316,163 @@ async function fixture(
 		graphqlRequests: () => [...graphqlRequests],
 	};
 }
+
+function customerOAuthApp(service: CustomerAccountService) {
+	return new Hono().route(
+		"/api",
+		buildCustomerAuthRoutes({ customerAccountService: service }),
+	);
+}
+
+async function startBrowserOAuth(app: ReturnType<typeof customerOAuthApp>) {
+	const response = await app.request(
+		"/api/organizations/festival/customer-auth/start",
+	);
+	expect(response.status).toBe(302);
+	const authorization = new URL(response.headers.get("location") ?? "");
+	const state = authorization.searchParams.get("state") ?? "";
+	const nonce = authorization.searchParams.get("nonce") ?? "";
+	const rawCookie = response.headers.getSetCookie()[0] ?? "";
+	expect(state).not.toBe("");
+	expect(nonce).not.toBe("");
+	return { state, nonce, rawCookie, cookie: rawCookie.split(";")[0] };
+}
+
+describe("customer OAuth browser binding", () => {
+	it("rejects another browser before consuming state, then authenticates the initiating browser once", async () => {
+		const f = await fixture();
+		const app = customerOAuthApp(f.service);
+		const flow = await startBrowserOAuth(app);
+		const anotherBrowser = await startBrowserOAuth(app);
+		const callback = `/api/customer-auth/callback?state=${flow.state}&code=code`;
+		for (const cookie of [
+			"",
+			anotherBrowser.cookie,
+			flow.cookie.replace(/=.*/, "=wrong"),
+		]) {
+			const rejected = await app.request(callback, {
+				headers: { Cookie: cookie },
+			});
+			expect(rejected.status).toBe(400);
+			expect(rejected.headers.get("set-cookie")).toBeNull();
+		}
+		expect(f.tokenCalls()).toBe(0);
+		f.setTokenClaims({ nonce: flow.nonce });
+		const accepted = await app.request(callback, {
+			headers: { Cookie: flow.cookie },
+		});
+		expect(accepted.status).toBe(302);
+		const cookies = accepted.headers.getSetCookie();
+		const sessionCookie = cookies.find((cookie) =>
+			cookie.startsWith("festival_customer_session="),
+		);
+		const sessionId = sessionCookie?.split(";")[0].split("=")[1];
+		expect(
+			(await f.service.session("festival", sessionId)).session.authenticated,
+		).toBe(true);
+		expect(
+			cookies.some(
+				(cookie) =>
+					cookie.startsWith(flow.cookie.split("=")[0]) &&
+					cookie.includes("Max-Age=0"),
+			),
+		).toBe(true);
+		const replay = await app.request(callback, {
+			headers: { Cookie: flow.cookie },
+		});
+		expect(replay.status).toBe(400);
+		expect(replay.headers.get("set-cookie")).not.toContain(
+			"festival_customer_session=",
+		);
+		expect(f.tokenCalls()).toBe(1);
+	});
+
+	it("binds OAuth denial to the initiating browser and consumes its state", async () => {
+		const f = await fixture();
+		const app = customerOAuthApp(f.service);
+		const flow = await startBrowserOAuth(app);
+		const anotherBrowser = await startBrowserOAuth(app);
+		const callback = `/api/customer-auth/callback?state=${flow.state}&error=access_denied`;
+		for (const cookie of ["", anotherBrowser.cookie]) {
+			const rejected = await app.request(callback, {
+				headers: { Cookie: cookie },
+			});
+			expect(rejected.status).toBe(400);
+			expect(rejected.headers.get("set-cookie")).toBeNull();
+		}
+		const denied = await app.request(callback, {
+			headers: { Cookie: flow.cookie },
+		});
+		expect(denied.status).toBe(302);
+		expect(denied.headers.get("location")).toBe(
+			"/org/festival/account?authError=authentication",
+		);
+		expect(denied.headers.get("set-cookie")).toContain("Max-Age=0");
+		expect(denied.headers.get("set-cookie")).not.toContain(
+			"festival_customer_session=",
+		);
+		const replay = await app.request(callback, {
+			headers: { Cookie: flow.cookie },
+		});
+		expect(replay.status).toBe(400);
+		expect(f.tokenCalls()).toBe(0);
+	});
+
+	it("preserves concurrent sign-ins completed in reverse order and clears only the completed flow", async () => {
+		const f = await fixture();
+		const app = customerOAuthApp(f.service);
+		const first = await startBrowserOAuth(app);
+		const second = await startBrowserOAuth(app);
+		expect(first.cookie.split("=")[0]).not.toBe(second.cookie.split("=")[0]);
+		const jar = `${first.cookie}; ${second.cookie}`;
+		for (const flow of [second, first]) {
+			f.setTokenClaims({ nonce: flow.nonce });
+			const response = await app.request(
+				`/api/customer-auth/callback?state=${flow.state}&code=code`,
+				{
+					headers: { Cookie: jar },
+				},
+			);
+			expect(response.status).toBe(302);
+			const cleared = response.headers
+				.getSetCookie()
+				.filter((cookie) => cookie.startsWith("__Host-"));
+			expect(cleared).toHaveLength(1);
+			expect(cleared[0]).toStartWith(`${flow.cookie.split("=")[0]}=`);
+			expect(cleared[0]).toContain("Max-Age=0");
+		}
+		expect(f.tokenCalls()).toBe(2);
+	});
+
+	it("sets a short-lived host-only secure cookie and rejects expired state even if the cookie is retained", async () => {
+		const f = await fixture();
+		const app = customerOAuthApp(f.service);
+		const flow = await startBrowserOAuth(app);
+		expect(flow.rawCookie).toStartWith("__Host-festival_customer_oauth_");
+		for (const flag of [
+			"HttpOnly",
+			"Secure",
+			"SameSite=Lax",
+			"Path=/",
+			"Max-Age=600",
+		]) {
+			expect(flow.rawCookie).toContain(flag);
+		}
+		expect(flow.rawCookie).not.toContain("Domain=");
+		f.setNow(new Date(Date.now() + 11 * 60_000));
+		const response = await app.request(
+			`/api/customer-auth/callback?state=${flow.state}&code=code`,
+			{
+				headers: { Cookie: flow.cookie },
+			},
+		);
+		expect(response.status).toBe(400);
+		expect(response.headers.get("set-cookie")).not.toContain(
+			"festival_customer_session=",
+		);
+		expect(f.tokenCalls()).toBe(0);
+	});
+});
 
 describe("CustomerAccountService", () => {
 	it("creates and refreshes age snapshots without retaining birthdays", async () => {
@@ -551,6 +732,7 @@ describe("CustomerAccountService", () => {
 					quantity: 1,
 					total: { amount: "25.00", currencyCode: "USD" },
 				},
+				{ title: "Additional entry", quantity: 1, total: null },
 			],
 		});
 		expect(JSON.stringify(orders)).not.toContain("gid://shopify/Customer");
@@ -1066,6 +1248,46 @@ describe("CustomerAccountService", () => {
 		const stored = await f.repository.getSession(auth.sessionId);
 		expect(stored?.encryptedTokens).not.toContain("refresh-2");
 	});
+	it("preserves a customer session during a discovery outage and refreshes its tokens on retry", async () => {
+		const f = await fixture();
+		const auth = await f.authenticate();
+		const original = await f.repository.getSession(auth.sessionId);
+		if (!original) throw new Error("session");
+		f.setNow(new Date(Date.now() + 6 * 60_000));
+		f.setDiscoveryUnavailable(true);
+
+		await expect(
+			f.service.orders("festival", auth.sessionId),
+		).rejects.toMatchObject({
+			status: 503,
+		});
+		expect(f.tokenCalls()).toBe(1);
+		const duringOutage = await f.repository.getSession(auth.sessionId);
+		expect(duringOutage?.revokedAtIso).toBeUndefined();
+		expect(duringOutage?.encryptedTokens).toBe(original.encryptedTokens);
+		expect(await f.service.session("festival", auth.sessionId)).toMatchObject({
+			session: { authenticated: true, csrfToken: original.csrfToken },
+		});
+
+		f.setDiscoveryUnavailable(false);
+		const orders = await f.service.orders("festival", auth.sessionId);
+		expect(orders.orders[0]?.orderNumber).toBe("1001");
+		expect(f.tokenCalls()).toBe(2);
+		const refreshed = await f.repository.getSession(auth.sessionId);
+		if (!refreshed) throw new Error("session");
+		expect(refreshed.revokedAtIso).toBeUndefined();
+		expect(refreshed.csrfToken).toBe(original.csrfToken);
+		const tokens = JSON.parse(
+			f.keyring.decrypt(refreshed.encryptedTokens, {
+				organizationId: f.org.id,
+				purpose: SHOPIFY_CUSTOMER_TOKENS_PURPOSE,
+			}),
+		);
+		expect(tokens).toMatchObject({
+			accessToken: "access-2",
+			refreshToken: "refresh-2",
+		});
+	});
 	it("cannot resurrect a session revoked while its activity touch is pending", async () => {
 		const repository = new PausedTouchRepository();
 		const f = await fixture(repository);
@@ -1114,6 +1336,164 @@ describe("CustomerAccountService", () => {
 				.authenticated,
 		).toBe(false);
 	});
+	for (const [providerCode, status, code] of [
+		["ACCESS_DENIED", 403, "customer_account_access_denied"],
+		["THROTTLED", 503, "customer_account_throttled"],
+	] as const) {
+		it(`reports the ${providerCode} order failure without changing authentication or retrying`, async () => {
+			const f = await fixture();
+			const auth = await f.authenticate();
+			f.setDeny(true);
+			f.setOrderErrorCode(providerCode);
+			const warning = spyOn(console, "warn").mockImplementation(() => {});
+			try {
+				await expect(
+					f.service.orders("festival", auth.sessionId),
+				).rejects.toMatchObject({ status, code });
+				expect(JSON.parse(String(warning.mock.calls[0]?.[0]))).toMatchObject({
+					operation: "customer_orders",
+					codes: [providerCode],
+				});
+				expect(await f.repository.getIntegration(f.org.id)).toMatchObject({
+					readiness: "ready",
+					canReadOrders: false,
+				});
+				expect(
+					(await f.repository.getSession(auth.sessionId))?.revokedAtIso,
+				).toBeUndefined();
+				expect(f.graphqlRequests()).toHaveLength(2);
+			} finally {
+				warning.mockRestore();
+			}
+		});
+	}
+
+	it("keeps sign-in and existing sessions available after customer order denial", async () => {
+		const f = await fixture();
+		const auth = await f.authenticate();
+		await f.service.orders("festival", auth.sessionId);
+		const before = await f.repository.getIntegration(f.org.id);
+		f.setDeny(true);
+		await expect(
+			f.service.orders("festival", auth.sessionId),
+		).rejects.toMatchObject({ status: 403 });
+		const after = await f.repository.getIntegration(f.org.id);
+		expect(after).toMatchObject({
+			readiness: "ready",
+			canReadOrders: false,
+			integrationVersion: before?.integrationVersion,
+			encryptedClientSecret: before?.encryptedClientSecret,
+			verifiedAtIso: before?.verifiedAtIso,
+		});
+		const fresh = await f.authenticate();
+		expect(
+			(await f.service.session("festival", fresh.sessionId)).session
+				.authenticated,
+		).toBe(true);
+		expect(
+			(await f.service.session("festival", auth.sessionId)).session
+				.authenticated,
+		).toBe(true);
+		f.setDeny(false);
+		await f.service.orders("festival", fresh.sessionId);
+		expect((await f.repository.getIntegration(f.org.id))?.canReadOrders).toBe(
+			true,
+		);
+	});
+
+	for (const readiness of ["failed", "unknown"] as const) {
+		it(`recovers configured ${readiness} sign-in only after fresh validated discovery`, async () => {
+			const f = await fixture();
+			const original = await f.repository.getIntegration(f.org.id);
+			if (!original) throw new Error("integration");
+			if (readiness === "failed")
+				await f.repository.setIntegrationReadiness(f.org.id, {
+					readiness,
+					canReadOrders: false,
+					lastError: "Customer order access is unavailable.",
+				});
+			else await f.repository.upsertIntegration(original);
+			const before = await f.repository.getIntegration(f.org.id);
+			const discoveries = f.discoveryCalls();
+			const auth = await f.begin("/org/festival");
+			expect(auth.hostname).toBe("accounts.shopify.com");
+			expect(f.discoveryCalls()).toBe(discoveries + 2);
+			expect(await f.repository.getIntegration(f.org.id)).toMatchObject({
+				readiness: "ready",
+				canReadOrders: false,
+				integrationVersion: before?.integrationVersion,
+				encryptedClientSecret: before?.encryptedClientSecret,
+				lastError: undefined,
+			});
+		});
+	}
+
+	for (const failure of ["outage", "issuer", "endpoint"] as const) {
+		it(`does not create OAuth state when recovery discovery fails: ${failure}`, async () => {
+			const f = await fixture();
+			await f.repository.setIntegrationReadiness(f.org.id, {
+				readiness: "failed",
+				canReadOrders: false,
+			});
+			if (failure === "outage") f.setDiscoveryUnavailable(true);
+			if (failure === "issuer")
+				f.setDiscoveryIssuer("https://untrusted.example/authentication/shop");
+			if (failure === "endpoint")
+				f.setAuthorizationEndpoint("http://accounts.shopify.com/auth");
+			const states = spyOn(f.repository, "putOAuthState");
+			await expect(f.begin()).rejects.toMatchObject({ status: 503 });
+			expect(states).not.toHaveBeenCalled();
+			expect((await f.repository.getIntegration(f.org.id))?.readiness).toBe(
+				"failed",
+			);
+		});
+	}
+
+	it("cannot repair or create OAuth state for an integration rotated during discovery recovery", async () => {
+		const f = await fixture();
+		await f.repository.setIntegrationReadiness(f.org.id, {
+			readiness: "failed",
+			canReadOrders: false,
+		});
+		const record = f.repository.recordIntegrationHealth.bind(f.repository);
+		spyOn(f.repository, "recordIntegrationHealth").mockImplementation(
+			async (...args) => {
+				if (args[2].kind === "discovery_verified") {
+					const old = await f.repository.getIntegration(f.org.id);
+					if (!old) throw new Error("integration");
+					await f.repository.upsertIntegration({
+						...old,
+						clientId: "rotated-client",
+					});
+				}
+				return record(...args);
+			},
+		);
+		const states = spyOn(f.repository, "putOAuthState");
+		await expect(f.begin()).rejects.toMatchObject({ status: 503 });
+		expect(states).not.toHaveBeenCalled();
+		expect(await f.repository.getIntegration(f.org.id)).toMatchObject({
+			readiness: "unknown",
+			clientId: "rotated-client",
+			integrationVersion: 2,
+		});
+	});
+
+	it("marks order capability unavailable for an invalid success payload without disabling sign-in", async () => {
+		const f = await fixture();
+		const auth = await f.authenticate();
+		await f.service.orders("festival", auth.sessionId);
+		f.setInvalidOrders(true);
+		await expect(
+			f.service.orders("festival", auth.sessionId),
+		).rejects.toMatchObject({ status: 503 });
+		expect(await f.repository.getIntegration(f.org.id)).toMatchObject({
+			readiness: "ready",
+			canReadOrders: false,
+		});
+		expect((await f.begin()).hostname).toBe("accounts.shopify.com");
+	});
+
 	it("fails closed on protected-data denial and enforces CSRF and exact origin for logout", async () => {
 		const f = await fixture();
 		const auth = await f.authenticate();
@@ -1737,7 +2117,7 @@ describe("CustomerAccountService", () => {
 		}
 	});
 
-	it("enforces concerto catalog work requirement when updating registration metadata (#197)", async () => {
+	it("updates manual and linked concerto registration repertoire", async () => {
 		const f = await fixture();
 		await f.organizations.updateOrganizationTimezone(
 			f.org.id,
@@ -1762,19 +2142,22 @@ describe("CustomerAccountService", () => {
 				normalizedName: "concerto",
 			});
 
+		const classInput = {
+			organizationId: f.org.id,
+			festivalId: festival.id,
+			divisionId: "div_1",
+			minimumAge: 5,
+			maximumAge: 18,
+			price: "45.00",
+			maximumPerformancePieces: 1 as const,
+			performanceMinutes: 15,
+			capacity: 20,
+		};
 		const concertoClass =
 			await f.organizations.createFestivalClassConfiguration({
-				organizationId: f.org.id,
-				festivalId: festival.id,
+				...classInput,
 				displayName: "Junior Piano Concerto",
 				classSubtypeId: concertoSubtype.id,
-				divisionId: "div_1",
-				minimumAge: 5,
-				maximumAge: 18,
-				price: "45.00",
-				maximumPerformancePieces: 1,
-				performanceMinutes: 15,
-				capacity: 20,
 				shopifyProductGid: "gid://shopify/Product/4",
 				shopifyVariantGid: "gid://shopify/ProductVariant/4",
 			});
@@ -1788,39 +2171,49 @@ describe("CustomerAccountService", () => {
 		const csrfToken = session.csrfToken;
 		const origin = "https://festival.example.com";
 
-		const entitlement = await f.commerce.createClassEntitlement({
-			organizationId: f.org.id,
-			festivalId: festival.id,
-			festivalClassId: concertoClass.id,
-			parentCustomerId: customerId,
-			childId: "child-1",
-			checkoutIntentId: "intent-concerto-1",
-			shopifyOrderGid: "gid://shopify/Order/concerto-1",
-			shopifyOrderLineGid: "gid://shopify/LineItem/concerto-1",
-			paidAmountCents: 4500,
-			paidCurrencyCode: "USD",
-			status: "confirmed",
-		});
-
-		await f.checkout.insertRegistrationMetadata({
-			id: "reg-meta-concerto-1",
-			organizationId: f.org.id,
-			festivalId: festival.id,
-			checkoutIntentId: "intent-concerto-1",
-			teacherMembershipId: "teacher-1",
-			accompanistMembershipId: null,
-			repertoireJson: [
-				{
-					title: "Initial Concerto",
-					composer: "Grieg",
-					durationSeconds: 300,
-				},
-			],
-		});
-		await f.checkout.linkRegistrationMetadataToEntitlement({
-			checkoutIntentId: "intent-concerto-1",
-			classEntitlementId: entitlement.id,
-		});
+		async function createRegistration(
+			festivalClassId: string,
+			reference: string,
+		) {
+			const checkoutIntentId = `intent-${reference}`;
+			const entitlement = await f.commerce.createClassEntitlement({
+				organizationId: f.org.id,
+				festivalId: festival.id,
+				festivalClassId,
+				parentCustomerId: customerId,
+				childId: "child-1",
+				checkoutIntentId,
+				shopifyOrderGid: `gid://shopify/Order/${reference}`,
+				shopifyOrderLineGid: `gid://shopify/LineItem/${reference}`,
+				paidAmountCents: 4500,
+				paidCurrencyCode: "USD",
+				status: "confirmed",
+			});
+			await f.checkout.insertRegistrationMetadata({
+				id: `reg-meta-${reference}`,
+				organizationId: f.org.id,
+				festivalId: festival.id,
+				checkoutIntentId,
+				teacherMembershipId: "teacher-1",
+				accompanistMembershipId: null,
+				repertoireJson: [
+					{
+						title: "Initial piece",
+						composer: "Grieg",
+						durationSeconds: 300,
+					},
+				],
+			});
+			await f.checkout.linkRegistrationMetadataToEntitlement({
+				checkoutIntentId,
+				classEntitlementId: entitlement.id,
+			});
+			return entitlement;
+		}
+		const entitlement = await createRegistration(
+			concertoClass.id,
+			"concerto-1",
+		);
 
 		const cutoff = deriveFestivalMetadataCutoff(
 			"2026-05-15",
@@ -1828,26 +2221,30 @@ describe("CustomerAccountService", () => {
 		);
 		f.setNow(new Date(cutoff.getTime() - 10_000));
 
-		// 1. Free-text repertoire without catalogWorkId is rejected with 400
-		await expect(
-			f.service.updateRegistrationMetadata(
-				"festival",
-				"spring-2026",
-				entitlement.id,
-				auth.sessionId,
-				csrfToken,
-				origin,
-				{
-					pieces: [
-						{
-							title: "Piano Concerto in A minor",
-							composer: "Edvard Grieg",
-							durationSeconds: 300,
-						},
-					],
-				},
-			),
-		).rejects.toMatchObject({ status: 400 });
+		const manualPiece = {
+			title: "Piano Concerto in A minor".padEnd(200, "x"),
+			composer: "Edvard Grieg",
+			durationSeconds: 305,
+		};
+		const manualUpdate = await f.service.updateRegistrationMetadata(
+			"festival",
+			"spring-2026",
+			entitlement.id,
+			auth.sessionId,
+			csrfToken,
+			origin,
+			{ pieces: [manualPiece] },
+		);
+		expect(manualUpdate.metadata.repertoireJson).toEqual([manualPiece]);
+		expect(manualUpdate.metadata.repertoireItems[0]?.catalogWorkId).toBeNull();
+		const registrations = await f.service.listClassRegistrations(
+			"festival",
+			auth.sessionId,
+			"spring-2026",
+		);
+		expect(registrations.registrations[0]?.metadata?.repertoireJson).toEqual([
+			manualPiece,
+		]);
 
 		// 2. Catalog work not classified as concerto is rejected with 400
 		f.repertoire.seedCanonicalWork({
@@ -1885,11 +2282,18 @@ describe("CustomerAccountService", () => {
 		).rejects.toMatchObject({ status: 400 });
 
 		// 3. Catalog work classified as concerto is accepted and persists catalogWorkId
+		const linkedPiece = {
+			title: "Piano Concerto No. 2, Op. 18".padEnd(300, "x"),
+			composer: "Sergei Rachmaninoff",
+			movement: "I. Moderato",
+			durationSeconds: 420,
+			catalogWorkId: "work-concerto-valid",
+		};
 		f.repertoire.seedCanonicalWork({
-			id: "work-concerto-valid",
+			id: linkedPiece.catalogWorkId,
 			organizationId: f.org.id,
-			title: "Piano Concerto No. 2, Op. 18",
-			composerName: "Sergei Rachmaninoff",
+			title: linkedPiece.title,
+			composerName: linkedPiece.composer,
 			classifications: ["concerto"],
 			isActive: true,
 		});
@@ -1901,33 +2305,35 @@ describe("CustomerAccountService", () => {
 			auth.sessionId,
 			csrfToken,
 			origin,
-			{
-				pieces: [
-					{
-						title: "Piano Concerto No. 2, Op. 18",
-						composer: "Sergei Rachmaninoff",
-						movement: "I. Moderato",
-						durationSeconds: 420,
-						catalogWorkId: "work-concerto-valid",
-					} as unknown as {
-						title: string;
-						composer: string;
-						durationSeconds: number;
-					},
-				],
-			},
+			{ pieces: [linkedPiece] },
 		);
 
-		expect(
-			(
-				updated.metadata.repertoireJson[0] as {
-					catalogWorkId?: string | null;
-				}
-			)?.catalogWorkId,
-		).toBe("work-concerto-valid");
+		expect(updated.metadata.repertoireJson).toEqual([linkedPiece]);
 		expect(updated.metadata.repertoireItems[0]?.catalogWorkId).toBe(
-			"work-concerto-valid",
+			linkedPiece.catalogWorkId,
 		);
+		await expect(
+			f.service.updateRegistrationMetadata(
+				"festival",
+				"spring-2026",
+				entitlement.id,
+				auth.sessionId,
+				csrfToken,
+				origin,
+				{ pieces: [{ ...linkedPiece, catalogWorkId: null }] },
+			),
+		).rejects.toMatchObject({
+			status: 400,
+			message: "Repertoire piece title cannot exceed 200 characters.",
+		});
+		const linkedRegistrations = await f.service.listClassRegistrations(
+			"festival",
+			auth.sessionId,
+			"spring-2026",
+		);
+		expect(
+			linkedRegistrations.registrations[0]?.metadata?.repertoireJson,
+		).toEqual([linkedPiece]);
 
 		// 4. Cross-tenant catalogWorkId is rejected with 400
 		f.repertoire.seedCanonicalWork({
@@ -1962,6 +2368,225 @@ describe("CustomerAccountService", () => {
 				},
 			),
 		).rejects.toMatchObject({ status: 400 });
+
+		// A different class subtype still requires a verifiable link for the longer title.
+		const soloSubtype = await f.organizations.createRegistrationCatalogValue({
+			organizationId: f.org.id,
+			kind: "class_subtype",
+			displayName: "Solo",
+			normalizedName: "solo",
+		});
+		const soloClass = await f.organizations.createFestivalClassConfiguration({
+			...classInput,
+			displayName: "Junior Piano Solo",
+			classSubtypeId: soloSubtype.id,
+		});
+		const soloEntitlement = await createRegistration(soloClass.id, "solo-1");
+		const serviceWithoutRepertoire = f.createService();
+		await expect(
+			serviceWithoutRepertoire.updateRegistrationMetadata(
+				"festival",
+				"spring-2026",
+				soloEntitlement.id,
+				auth.sessionId,
+				csrfToken,
+				origin,
+				{ pieces: [linkedPiece] },
+			),
+		).rejects.toMatchObject({ status: 400, code: "catalog_work_invalid" });
+	});
+
+	it("rejects oversized and structurally invalid repertoire metadata edits before resolving any catalog works", async () => {
+		const f = await fixture();
+		await f.organizations.updateOrganizationTimezone(
+			f.org.id,
+			"America/Los_Angeles",
+		);
+		const festival = await f.organizations.createFestival({
+			id: "fest-prevalidate",
+			organizationId: f.org.id,
+			code: "SPF26",
+			name: "Spring Festival 2026",
+			shortName: "spring-2026",
+			startDate: "2026-05-15",
+			endDate: "2026-05-20",
+		});
+		const soloSubtype = await f.organizations.createRegistrationCatalogValue({
+			organizationId: f.org.id,
+			kind: "class_subtype",
+			displayName: "Solo",
+			normalizedName: "solo",
+		});
+		const soloClass = await f.organizations.createFestivalClassConfiguration({
+			organizationId: f.org.id,
+			festivalId: festival.id,
+			divisionId: "div_1",
+			displayName: "Junior Piano Solo",
+			classSubtypeId: soloSubtype.id,
+			minimumAge: 5,
+			maximumAge: 18,
+			price: "45.00",
+			maximumPerformancePieces: 2,
+			performanceMinutes: 15,
+			capacity: 20,
+			shopifyProductGid: "gid://shopify/Product/41",
+			shopifyVariantGid: "gid://shopify/ProductVariant/41",
+		});
+		const auth = await f.authenticate();
+		const { session } = await f.service.session("festival", auth.sessionId);
+		const storedSession = await f.repository.getSession(auth.sessionId);
+		if (!storedSession || !session.authenticated) {
+			throw new Error("Expected authenticated session");
+		}
+		const entitlement = await f.commerce.createClassEntitlement({
+			organizationId: f.org.id,
+			festivalId: festival.id,
+			festivalClassId: soloClass.id,
+			parentCustomerId: storedSession.customerId,
+			childId: "child-1",
+			checkoutIntentId: "intent-prevalidate-1",
+			shopifyOrderGid: "gid://shopify/Order/prevalidate-1",
+			shopifyOrderLineGid: "gid://shopify/LineItem/prevalidate-1",
+			paidAmountCents: 4500,
+			paidCurrencyCode: "USD",
+			status: "confirmed",
+		});
+		await f.checkout.insertRegistrationMetadata({
+			id: "reg-meta-prevalidate-1",
+			organizationId: f.org.id,
+			festivalId: festival.id,
+			checkoutIntentId: "intent-prevalidate-1",
+			teacherMembershipId: "teacher-1",
+			accompanistMembershipId: null,
+			repertoireJson: [
+				{ title: "Initial piece", composer: "Bach", durationSeconds: 120 },
+			],
+		});
+		await f.checkout.linkRegistrationMetadataToEntitlement({
+			checkoutIntentId: "intent-prevalidate-1",
+			classEntitlementId: entitlement.id,
+		});
+		const cutoff = deriveFestivalMetadataCutoff(
+			"2026-05-15",
+			"America/Los_Angeles",
+		);
+		f.setNow(new Date(cutoff.getTime() - 10_000));
+
+		const origin = "https://festival.example.com";
+		const lookupSpy = spyOn(f.repertoire, "getCatalogWorkById");
+		try {
+			await expect(
+				f.service.updateRegistrationMetadata(
+					"festival",
+					"spring-2026",
+					entitlement.id,
+					auth.sessionId,
+					session.csrfToken,
+					origin,
+					{
+						pieces: [
+							{
+								title: "Piece 1",
+								composer: "C1",
+								durationSeconds: 60,
+								catalogWorkId: "work-1",
+							},
+							{
+								title: "Piece 2",
+								composer: "C2",
+								durationSeconds: 60,
+								catalogWorkId: "work-2",
+							},
+							{
+								title: "Piece 3",
+								composer: "C3",
+								durationSeconds: 60,
+								catalogWorkId: "work-3",
+							},
+						],
+					},
+				),
+			).rejects.toMatchObject({
+				status: 400,
+				message: "Number of pieces (3) exceeds the maximum allowed (2).",
+			});
+			expect(lookupSpy).toHaveBeenCalledTimes(0);
+
+			await expect(
+				f.service.updateRegistrationMetadata(
+					"festival",
+					"spring-2026",
+					entitlement.id,
+					auth.sessionId,
+					session.csrfToken,
+					origin,
+					{ pieces: "not-an-array" },
+				),
+			).rejects.toMatchObject({
+				status: 400,
+				message: "Repertoire pieces must be a non-empty array.",
+			});
+			expect(lookupSpy).toHaveBeenCalledTimes(0);
+
+			await expect(
+				f.service.updateRegistrationMetadata(
+					"festival",
+					"spring-2026",
+					entitlement.id,
+					auth.sessionId,
+					session.csrfToken,
+					origin,
+					{
+						pieces: [
+							{
+								title: "Piece 1",
+								composer: "C1",
+								durationSeconds: 60,
+								catalogWorkId: "work-1",
+							},
+							null,
+						],
+					},
+				),
+			).rejects.toMatchObject({
+				status: 400,
+				message: "Each repertoire piece must be an object.",
+			});
+			expect(lookupSpy).toHaveBeenCalledTimes(0);
+
+			await expect(
+				f.service.updateRegistrationMetadata(
+					"festival",
+					"spring-2026",
+					entitlement.id,
+					auth.sessionId,
+					session.csrfToken,
+					origin,
+					{
+						pieces: [
+							{
+								title: "Piece 1",
+								composer: "C1",
+								durationSeconds: 60,
+								catalogWorkId: "work-1",
+							},
+							{
+								title: "Piece 2",
+								composer: "   ",
+								durationSeconds: 60,
+								catalogWorkId: "work-2",
+							},
+						],
+					},
+				),
+			).rejects.toMatchObject({
+				status: 400,
+				message: "Each repertoire piece must have a valid composer.",
+			});
+			expect(lookupSpy).toHaveBeenCalledTimes(0);
+		} finally {
+			lookupSpy.mockRestore();
+		}
 	});
 
 	it("caches organization lookup and registration age configuration in bounded caches", async () => {

@@ -37,6 +37,11 @@ export const AdminCheckoutRecoveryPage = lazyPage(() =>
 		default: module.AdminCheckoutRecoveryPage,
 	})),
 );
+export const AdminConcertoRepertoirePage = lazyPage(() =>
+	import("../pages/AdminConcertoRepertoirePage.js").then((module) => ({
+		default: module.AdminConcertoRepertoirePage,
+	})),
+);
 export const AdminDivisionsPage = lazyPage(() =>
 	import("../pages/AdminDivisionsPage.js").then((module) => ({
 		default: module.AdminDivisionsPage,
@@ -204,6 +209,7 @@ interface PreloadablePage {
 
 export const routePages = {
 	home: null,
+	"staff-organization-chooser": null,
 	"privacy-policy": PrivacyPolicyPage,
 	"create-org": CreateOrganizationPage,
 	invite: InviteLandingPage,
@@ -236,6 +242,7 @@ export const routePages = {
 	"org-admin-roster": AdminRosterPage,
 	"org-admin-volunteers": VolunteerRolesPage,
 	"org-admin-rooms": AdminRoomsPage,
+	"org-admin-concerto-repertoire": AdminConcertoRepertoirePage,
 	"org-music-review": MusicReviewPage,
 	"org-billing": BillingReconciliationPage,
 	"org-communications": CommunicationTemplatesPage,

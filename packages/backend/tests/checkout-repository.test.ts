@@ -1,544 +1,419 @@
-import { describe, expect, it } from "bun:test";
-import { InMemoryCheckoutRepository } from "../src/checkout/checkout-repository.js";
+import { afterEach, describe, expect, it } from "bun:test";
+import { sql } from "bun";
+import { PostgresCheckoutRepository } from "../src/domains/class-checkout/checkout-intent-repository.js";
+import {
+	currentPostgresFixture,
+	resetPostgresFixture,
+} from "./postgres-test-fixture.js";
 
-describe("checkout repository", () => {
-	it("keeps Shopify cart IDs behind opaque tenant and customer-bound references", async () => {
-		const repository = new InMemoryCheckoutRepository();
-		const intent = await repository.createIntent({
-			organizationId: "org-a",
-			customerId: "customer-a",
-			sessionId: "session-a",
-			idempotencyKey: "key-a",
-			offeringId: "offering-a",
-			entitlementClass: "teacher_membership",
-			durationDays: 365,
-			shopifyProductGid: "gid://shopify/Product/1",
-			shopifyVariantGid: "gid://shopify/ProductVariant/1",
-			policyVersion: "v1",
-			amount: "75.00",
-			currencyCode: "USD",
-			expiresAtIso: "2030-01-01T00:00:00.000Z",
-		});
-		expect(intent.kind).toBe("created");
-		if (intent.kind !== "created")
-			throw new Error("Expected a created intent.");
-		await expect(
-			repository.attachCart({
-				intentId: intent.intent.id,
-				shopifyCartId: "gid://shopify/Cart/foreign",
-				organizationId: "org-b",
-				customerId: "customer-a",
+const currentSchema = currentPostgresFixture("checkout_repo");
+const postgresTest = process.env.POSTGRES_INTEGRATION_URL ? it : it.skip;
+
+async function setupFixture() {
+	const schema = await currentSchema();
+	await sql.unsafe(`
+		INSERT INTO ${schema}.organizations (id, name, slug)
+		VALUES ('org-a', 'Org A', 'org-a'), ('org-b', 'Org B', 'org-b');
+		INSERT INTO ${schema}.products (
+			id, organization_id, product_category, entitlement_class,
+			duration_days, shopify_product_gid, shopify_variant_gid, product_name_snapshot
+		) VALUES (
+			'offering-a', 'org-a', 'membership', 'teacher_membership',
+			365, 'gid://shopify/Product/1', 'gid://shopify/ProductVariant/1', 'Teacher Membership'
+		);
+		INSERT INTO ${schema}.organization_divisions (
+			id, organization_id, display_name, normalized_name, display_order
+		) VALUES ('div-1', 'org-a', 'Piano', 'piano', 0);
+		INSERT INTO ${schema}.registration_catalog_values (
+			id, organization_id, kind, display_name, normalized_name, display_order
+		) VALUES ('subtype-1', 'org-a', 'class_subtype', 'Solo', 'solo', 0);
+		INSERT INTO ${schema}.festivals (
+			id, organization_id, code, short_name, is_primary, name, start_date, end_date
+		) VALUES ('fest-1', 'org-a', 'FEST', 'fest', TRUE, 'Festival', '2027-01-01', '2027-01-02');
+		INSERT INTO ${schema}.festival_customers (
+			id, organization_id, shopify_customer_gid, created_at, updated_at
+		) VALUES
+			('customer-a', 'org-a', 'gid://shopify/Customer/1', NOW(), NOW()),
+			('customer-b', 'org-a', 'gid://shopify/Customer/2', NOW(), NOW());
+		INSERT INTO ${schema}.festival_children (
+			id, organization_id, parent_customer_id, display_name, created_at
+		) VALUES ('child-a', 'org-a', 'customer-a', 'Child A', NOW());
+		INSERT INTO ${schema}.festival_class_configurations (
+			id, organization_id, festival_id, display_name, class_subtype_id,
+			division_id, minimum_age, maximum_age, price, maximum_performance_pieces,
+			performance_minutes, capacity, shopify_product_gid, shopify_variant_gid
+		) VALUES
+			('class-a', 'org-a', 'fest-1', 'Class A', 'subtype-1', 'div-1', 5, 18, '50.00', 2, 10, 2, 'gid://shopify/Product/10', 'gid://shopify/ProductVariant/10'),
+			('class-b', 'org-a', 'fest-1', 'Class B', 'subtype-1', 'div-1', 5, 18, '60.00', 2, 10, 2, 'gid://shopify/Product/11', 'gid://shopify/ProductVariant/11');
+		INSERT INTO ${schema}.membership_entitlements (
+			id, organization_id, customer_id, entitlement_class, source,
+			offering_id, starts_on, ends_on
+		) VALUES
+			('teacher-grant-1', 'org-a', 'customer-a', 'teacher_membership', 'teacher_checkout', 'offering-a', '2026-01-01', '2030-01-01'),
+			('acc-grant-1', 'org-a', 'customer-a', 'accompanist_membership', 'accompanist_form', NULL, '2026-01-01', '2030-01-01');
+	`);
+	return schema;
+}
+
+function makeMembershipInput(
+	overrides: Partial<
+		Parameters<PostgresCheckoutRepository["createIntent"]>[0]
+	> = {},
+) {
+	return {
+		organizationId: "org-a",
+		customerId: "customer-b",
+		sessionId: "session-a",
+		idempotencyKey: "key-a",
+		offeringId: "offering-a",
+		entitlementClass: "teacher_membership" as const,
+		durationDays: 365,
+		shopifyProductGid: "gid://shopify/Product/1",
+		shopifyVariantGid: "gid://shopify/ProductVariant/1",
+		policyVersion: "v1" as const,
+		amount: "75.00",
+		currencyCode: "USD",
+		expiresAtIso: "2030-01-01T00:00:00.000Z",
+		...overrides,
+	};
+}
+
+describe("PostgresCheckoutRepository integration", () => {
+	afterEach(async () => {
+		if (!process.env.POSTGRES_INTEGRATION_URL) return;
+		const schema = await currentSchema();
+		await resetPostgresFixture(schema);
+	});
+
+	postgresTest(
+		"keeps Shopify cart identifiers private and enforces tenant, customer, and expiry boundaries",
+		async () => {
+			const schema = await setupFixture();
+			const repo = new PostgresCheckoutRepository(schema);
+			const created = await repo.createIntent(makeMembershipInput());
+			if (created.kind !== "created") {
+				throw new Error("Expected created intent.");
+			}
+			const cart = await repo.attachCart({
+				intentId: created.intent.id,
+				shopifyCartId: "gid://shopify/Cart/private",
+				organizationId: "org-a",
+				customerId: "customer-b",
 				sessionId: "session-a",
 				integrationVersion: 1,
 				expiresAtIso: "2030-01-01T00:00:00.000Z",
-			}),
-		).rejects.toThrow("Checkout intent cannot accept a cart.");
-		expect(
-			(
-				await repository.findIntentByCorrelation(
-					"org-a",
-					intent.intent.correlationId,
-				)
-			)?.status,
-		).toBe("creating");
-		const cart = await repository.attachCart({
-			intentId: intent.intent.id,
-			shopifyCartId: "gid://shopify/Cart/private",
-			organizationId: "org-a",
-			customerId: "customer-a",
-			sessionId: "session-a",
-			integrationVersion: 1,
-			expiresAtIso: "2030-01-01T00:00:00.000Z",
-		});
-		expect(cart.reference).not.toContain("shopify");
-		expect(
-			await repository.getCart(
-				cart.reference,
-				"org-a",
-				"customer-a",
-				"2029-01-01T00:00:00.000Z",
-			),
-		).toEqual(cart);
-		expect(
-			await repository.getCart(
-				cart.reference,
-				"org-b",
-				"customer-a",
-				"2029-01-01T00:00:00.000Z",
-			),
-		).toBeNull();
-		expect(
-			await repository.getCart(
-				cart.reference,
-				"org-a",
-				"customer-b",
-				"2029-01-01T00:00:00.000Z",
-			),
-		).toBeNull();
-		expect(
-			await repository.getCart(
-				cart.reference,
-				"org-a",
-				"customer-a",
-				"2031-01-01T00:00:00.000Z",
-			),
-		).toBeNull();
-	});
-
-	it("creates a non-secret correlation ID for an intent", async () => {
-		const repository = new InMemoryCheckoutRepository();
-		const intent = await repository.createIntent({
-			organizationId: "org-a",
-			customerId: "customer-a",
-			sessionId: "session-a",
-			idempotencyKey: "key-a",
-			offeringId: "offering-a",
-			entitlementClass: "teacher_membership",
-			durationDays: 365,
-			shopifyProductGid: "gid://shopify/Product/1",
-			shopifyVariantGid: "gid://shopify/ProductVariant/1",
-			policyVersion: "v1",
-			amount: "75.00",
-			currencyCode: "USD",
-			expiresAtIso: "2030-01-01T00:00:00.000Z",
-		});
-		expect(intent.kind).toBe("created");
-		if (intent.kind !== "created")
-			throw new Error("Expected a created intent.");
-		expect(intent.intent.correlationId).toBeTruthy();
-		expect(intent.intent.correlationId).not.toContain("cart-a");
-	});
-
-	it("returns the same cart for the same scoped idempotency key", async () => {
-		const repository = new InMemoryCheckoutRepository();
-		const record = {
-			organizationId: "org-a",
-			customerId: "customer-a",
-			sessionId: "session-a",
-			idempotencyKey: "key-a",
-			offeringId: "offering-a",
-			entitlementClass: "teacher_membership" as const,
-			durationDays: 365,
-			shopifyProductGid: "gid://shopify/Product/1",
-			shopifyVariantGid: "gid://shopify/ProductVariant/1",
-			policyVersion: "v1" as const,
-			amount: "75.00",
-			currencyCode: "USD",
-			expiresAtIso: "2030-01-01T00:00:00.000Z",
-		};
-		const created = await repository.createIntent(record);
-		if (created.kind !== "created")
-			throw new Error("Expected a created intent.");
-		await repository.attachCart({
-			intentId: created.intent.id,
-			shopifyCartId: "gid://shopify/Cart/private",
-			organizationId: "org-a",
-			customerId: "customer-a",
-			sessionId: "session-a",
-			integrationVersion: 1,
-			expiresAtIso: record.expiresAtIso,
-		});
-		const retry = await repository.createIntent(record);
-		expect(retry.kind).toBe("ready");
-		if (retry.kind === "ready") expect(retry.intent.id).toBe(created.intent.id);
-	});
-
-	it("does not replace a checkout that is still being created", async () => {
-		const repository = new InMemoryCheckoutRepository();
-		const base = {
-			organizationId: "org-a",
-			customerId: "customer-a",
-			sessionId: "session-a",
-			offeringId: "offering-a",
-			entitlementClass: "teacher_membership" as const,
-			durationDays: 365,
-			shopifyProductGid: "gid://shopify/Product/1",
-			shopifyVariantGid: "gid://shopify/ProductVariant/1",
-			policyVersion: "v1" as const,
-			amount: "75.00",
-			currencyCode: "USD",
-			expiresAtIso: "2030-01-01T00:00:00.000Z",
-		};
-		await repository.createIntent({ ...base, idempotencyKey: "key-a" });
-		expect(
-			(await repository.createIntent({ ...base, idempotencyKey: "key-b" }))
-				.kind,
-		).toBe("in_progress");
-	});
-
-	it("replays a recorded terminal failure for the same key", async () => {
-		const repository = new InMemoryCheckoutRepository();
-		const record = {
-			organizationId: "org-a",
-			customerId: "customer-a",
-			sessionId: "session-a",
-			idempotencyKey: "key-a",
-			offeringId: "offering-a",
-			entitlementClass: "teacher_membership" as const,
-			durationDays: 365,
-			shopifyProductGid: "gid://shopify/Product/1",
-			shopifyVariantGid: "gid://shopify/ProductVariant/1",
-			policyVersion: "v1" as const,
-			amount: "75.00",
-			currencyCode: "USD",
-			expiresAtIso: "2030-01-01T00:00:00.000Z",
-		};
-		const created = await repository.createIntent(record);
-		if (created.kind !== "created")
-			throw new Error("Expected a created intent.");
-		await repository.markFailed(created.intent.id);
-		expect((await repository.getOutcome(record))?.kind).toBe("failed");
-	});
-
-	it("keeps a ready cart as a processing purchase across customer sessions", async () => {
-		const repository = new InMemoryCheckoutRepository();
-		const base = {
-			organizationId: "org-a",
-			customerId: "customer-a",
-			offeringId: "offering-a",
-			entitlementClass: "teacher_membership" as const,
-			durationDays: 365,
-			shopifyProductGid: "gid://shopify/Product/1",
-			shopifyVariantGid: "gid://shopify/ProductVariant/1",
-			policyVersion: "v1" as const,
-			amount: "75.00",
-			currencyCode: "USD",
-			expiresAtIso: "2030-01-01T00:00:00.000Z",
-		};
-		const first = await repository.createIntent({
-			...base,
-			sessionId: "session-a",
-			idempotencyKey: "key-a",
-		});
-		if (first.kind !== "created") throw new Error("Expected a created intent.");
-		await repository.attachCart({
-			intentId: first.intent.id,
-			shopifyCartId: "gid://shopify/Cart/private",
-			organizationId: "org-a",
-			customerId: "customer-a",
-			sessionId: "session-a",
-			integrationVersion: 1,
-			expiresAtIso: base.expiresAtIso,
-		});
-		const replacement = await repository.createIntent({
-			...base,
-			sessionId: "session-b",
-			idempotencyKey: "key-a",
-		});
-		expect(replacement.kind).toBe("in_progress");
-		expect(
-			await repository.hasProcessingIntent(
-				"org-a",
-				"customer-a",
-				"2029-01-01T00:00:00.000Z",
-			),
-		).toBeTrue();
-	});
-
-	it("reports expired and checkout-started outcomes without exposing the cart ID", async () => {
-		const repository = new InMemoryCheckoutRepository();
-		const record = {
-			organizationId: "org-a",
-			customerId: "customer-a",
-			sessionId: "session-a",
-			idempotencyKey: "key-a",
-			offeringId: "offering-a",
-			entitlementClass: "teacher_membership" as const,
-			durationDays: 365,
-			shopifyProductGid: "gid://shopify/Product/1",
-			shopifyVariantGid: "gid://shopify/ProductVariant/1",
-			policyVersion: "v1" as const,
-			amount: "75.00",
-			currencyCode: "USD",
-			expiresAtIso: "2030-01-01T00:00:00.000Z",
-		};
-		const created = await repository.createIntent(record);
-		if (created.kind !== "created")
-			throw new Error("Expected a created intent.");
-		const cart = await repository.attachCart({
-			intentId: created.intent.id,
-			shopifyCartId: "gid://shopify/Cart/private",
-			organizationId: "org-a",
-			customerId: "customer-a",
-			sessionId: "session-a",
-			integrationVersion: 1,
-			expiresAtIso: record.expiresAtIso,
-		});
-		await repository.markCheckoutStarted(created.intent.id);
-		expect((await repository.getOutcome(record))?.kind).toBe("ready");
-		expect(
-			(
-				await repository.getCart(
+			});
+			expect(cart.reference).not.toContain("shopify");
+			expect(
+				(
+					await repo.getCart(
+						cart.reference,
+						"org-a",
+						"customer-b",
+						"2029-01-01T00:00:00.000Z",
+					)
+				)?.reference,
+			).toBe(cart.reference);
+			expect(
+				await repo.getCart(
+					cart.reference,
+					"org-b",
+					"customer-b",
+					"2029-01-01T00:00:00.000Z",
+				),
+			).toBeNull();
+			expect(
+				await repo.getCart(
 					cart.reference,
 					"org-a",
 					"customer-a",
 					"2029-01-01T00:00:00.000Z",
-				)
-			)?.status,
-		).toBe("checkout_started");
-		await repository.markFailed(created.intent.id);
-		expect((await repository.getOutcome(record))?.kind).toBe("failed");
-		const expired = await repository.createIntent({
-			...record,
-			idempotencyKey: "key-expired",
-			expiresAtIso: "2000-01-01T00:00:00.000Z",
-		});
-		if (expired.kind !== "created")
-			throw new Error("Expected a created intent.");
-		expect(
-			(
-				await repository.getOutcome({
-					...record,
-					idempotencyKey: "key-expired",
-				})
-			)?.kind,
-		).toBe("expired");
-	});
+				),
+			).toBeNull();
+			expect(
+				await repo.getCart(
+					cart.reference,
+					"org-a",
+					"customer-b",
+					"2031-01-01T00:00:00.000Z",
+				),
+			).toBeNull();
+		},
+	);
 
-	it("rejects duplicate metadata IDs and checkout lines without replacing the original registration", async () => {
-		const repository = new InMemoryCheckoutRepository();
-		const input = {
-			id: "metadata-1",
-			organizationId: "org",
-			festivalId: "festival",
-			checkoutIntentId: "intent",
-			checkoutIntentLineId: "line-1",
-			teacherMembershipId: "teacher",
-			accompanistMembershipId: null,
-			repertoireJson: [
-				{ title: "Original piece", composer: "Composer", durationSeconds: 120 },
-			],
-		};
-		await repository.insertRegistrationMetadata(input);
-		await expect(
-			repository.insertRegistrationMetadata({
-				...input,
-				checkoutIntentId: "other-intent",
-				checkoutIntentLineId: "other-line",
-			}),
-		).rejects.toThrow("Registration metadata ID already exists.");
-		await expect(
-			repository.insertRegistrationMetadata({ ...input, id: "metadata-2" }),
-		).rejects.toThrow(
-			"Registration metadata checkout intent line already exists.",
-		);
-		await repository.linkRegistrationMetadataToEntitlement({
-			checkoutIntentLineId: "line-1",
-			classEntitlementId: "entitlement",
-		});
-		expect(
-			await repository.getRegistrationMetadataByEntitlementId(
-				"org",
-				"entitlement",
-			),
-		).toMatchObject({
-			id: "metadata-1",
-			checkoutIntentLineId: "line-1",
-			repertoireJson: input.repertoireJson,
-		});
-		// The same cart may still have a separate record for every purchased line.
-		expect(
-			await repository.insertRegistrationMetadata({
-				...input,
-				id: "metadata-2",
-				checkoutIntentLineId: "line-2",
-			}),
-		).toMatchObject({
-			id: "metadata-2",
-			checkoutIntentId: "intent",
-			checkoutIntentLineId: "line-2",
-		});
-		// PostgreSQL's partial uniqueness excludes NULL, but includes empty text.
-		await repository.insertRegistrationMetadata({
-			...input,
-			id: "metadata-empty",
-			checkoutIntentLineId: "",
-		});
-		await expect(
-			repository.insertRegistrationMetadata({
-				...input,
-				id: "metadata-empty-duplicate",
-				checkoutIntentLineId: "",
-			}),
-		).rejects.toThrow(
-			"Registration metadata checkout intent line already exists.",
-		);
-	});
-
-	it("creates durable relational snapshots from the legacy repertoire payload", async () => {
-		const repository = new InMemoryCheckoutRepository();
-		const metadata = await repository.insertRegistrationMetadata({
-			id: "registration-metadata-1",
-			organizationId: "org-a",
-			festivalId: "festival-a",
-			checkoutIntentId: "intent-a",
-			teacherMembershipId: "teacher-membership-a",
-			accompanistMembershipId: null,
-			repertoireJson: [
-				{
-					title: "Sonata in C",
-					composer: "Wolfgang Amadeus Mozart",
-					movement: "I. Allegro (excerpt)",
-					durationSeconds: 240,
-				},
-			],
-		});
-		expect(metadata.repertoireItems).toEqual([
-			expect.objectContaining({
-				registrationMetadataId: "registration-metadata-1",
+	postgresTest(
+		"creates non-secret correlation IDs and replays ready carts for identical idempotency scope",
+		async () => {
+			const schema = await setupFixture();
+			const repo = new PostgresCheckoutRepository(schema);
+			const input = makeMembershipInput();
+			const created = await repo.createIntent(input);
+			if (created.kind !== "created") {
+				throw new Error("Expected created intent.");
+			}
+			expect(created.intent.correlationId).toBeTruthy();
+			expect(created.intent.correlationId).not.toContain("cart");
+			await repo.attachCart({
+				intentId: created.intent.id,
+				shopifyCartId: "gid://shopify/Cart/private",
 				organizationId: "org-a",
-				displayOrder: 1,
-				catalogWorkId: null,
-				titleSnapshot: "Sonata in C",
-				performedMovementText: "I. Allegro (excerpt)",
-				durationSeconds: 240,
-				contributors: [
-					expect.objectContaining({
-						displayOrder: 1,
-						role: "Composer",
-						displayNameSnapshot: "Wolfgang Amadeus Mozart",
-						catalogContributorId: null,
-					}),
-				],
-			}),
-		]);
-	});
+				customerId: "customer-b",
+				sessionId: "session-a",
+				integrationVersion: 1,
+				expiresAtIso: input.expiresAtIso,
+			});
+			const retry = await repo.createIntent(input);
+			expect(retry.kind).toBe("ready");
+			if (retry.kind === "ready") {
+				expect(retry.intent.id).toBe(created.intent.id);
+			}
+		},
+	);
 
-	it("ignores a malformed legacy movement value", async () => {
-		const repository = new InMemoryCheckoutRepository();
-		const metadata = await repository.insertRegistrationMetadata({
-			id: "registration-metadata-malformed-movement",
-			organizationId: "org-a",
-			festivalId: "festival-a",
-			checkoutIntentId: "intent-malformed-movement",
-			teacherMembershipId: "teacher-membership-a",
-			accompanistMembershipId: null,
-			repertoireJson: [
-				{
-					title: "Sonata in C",
-					composer: "Wolfgang Amadeus Mozart",
-					movement: 42 as never,
-					durationSeconds: 240,
-				},
-			],
-		});
+	postgresTest(
+		"blocks concurrent replacement while creating or across sessions and transitions started/failed/expired",
+		async () => {
+			const schema = await setupFixture();
+			let currentNow = "2029-01-01T00:00:00.000Z";
+			const repo = new PostgresCheckoutRepository(
+				schema,
+				() => new Date(currentNow),
+			);
+			const base = makeMembershipInput();
+			const created = await repo.createIntent(base);
+			if (created.kind !== "created")
+				throw new Error("Expected created intent.");
 
-		expect(metadata.repertoireItems[0]?.performedMovementText).toBeNull();
-	});
+			const concurrent = await repo.createIntent({
+				...base,
+				idempotencyKey: "key-b",
+			});
+			expect(concurrent.kind).toBe("in_progress");
 
-	it("updates registration metadata repertoire pieces and accompanist", async () => {
-		const repository = new InMemoryCheckoutRepository();
-		await repository.insertRegistrationMetadata({
-			id: "reg-meta-1",
-			organizationId: "org-a",
-			festivalId: "festival-a",
-			checkoutIntentId: "intent-a",
-			teacherMembershipId: "teacher-1",
-			accompanistMembershipId: "accompanist-1",
-			repertoireJson: [
-				{
-					title: "Sonata in C",
-					composer: "Mozart",
-					durationSeconds: 180,
-				},
-			],
-		});
+			const cart = await repo.attachCart({
+				intentId: created.intent.id,
+				shopifyCartId: "gid://shopify/Cart/private",
+				organizationId: "org-a",
+				customerId: "customer-b",
+				sessionId: "session-a",
+				integrationVersion: 1,
+				expiresAtIso: base.expiresAtIso,
+			});
+			const crossSession = await repo.createIntent({
+				...base,
+				sessionId: "session-b",
+			});
+			expect(crossSession.kind).toBe("in_progress");
+			expect(
+				await repo.hasProcessingIntent(
+					"org-a",
+					"customer-b",
+					"2029-01-01T00:00:00.000Z",
+				),
+			).toBeTrue();
 
-		const updated = await repository.updateRegistrationMetadata(
-			"reg-meta-1",
-			"org-a",
-			{
-				accompanistMembershipId: "accompanist-2",
-				pieces: [
+			await repo.markCheckoutStarted(created.intent.id);
+			expect((await repo.getOutcome(base))?.kind).toBe("active");
+			expect(
+				(
+					await repo.getCart(
+						cart.reference,
+						"org-a",
+						"customer-b",
+						"2029-01-01T00:00:00.000Z",
+					)
+				)?.status,
+			).toBe("checkout_started");
+
+			const failInput = makeMembershipInput({
+				customerId: "customer-b",
+				idempotencyKey: "key-fail",
+			});
+			await sql.unsafe(
+				`UPDATE ${schema}.checkout_intents SET status = 'superseded' WHERE id = $1`,
+				[created.intent.id],
+			);
+			const failing = await repo.createIntent(failInput);
+			if (failing.kind !== "created")
+				throw new Error("Expected created intent.");
+			await repo.markFailed(failing.intent.id);
+			expect((await repo.getOutcome(failInput))?.kind).toBe("failed");
+
+			currentNow = "2031-01-01T00:00:00.000Z";
+			const expired = await repo.createIntent({
+				...base,
+				idempotencyKey: "key-expired",
+				expiresAtIso: "2030-06-01T00:00:00.000Z",
+			});
+			if (expired.kind !== "created")
+				throw new Error("Expected created intent.");
+			expect(
+				(
+					await repo.getOutcome({
+						...base,
+						idempotencyKey: "key-expired",
+					})
+				)?.kind,
+			).toBe("expired");
+		},
+	);
+
+	postgresTest(
+		"rejects duplicate active membership grant and hydrates multi-line class intents with metadata",
+		async () => {
+			const schema = await setupFixture();
+			const repo = new PostgresCheckoutRepository(
+				schema,
+				() => new Date("2026-06-01T00:00:00.000Z"),
+			);
+			const blocked = await repo.createIntent(
+				makeMembershipInput({
+					customerId: "customer-a",
+					idempotencyKey: "dup",
+				}),
+			);
+			expect(blocked.kind).toBe("active");
+
+			const classOutcome = await repo.createIntent({
+				organizationId: "org-a",
+				customerId: "customer-a",
+				sessionId: "sess-class",
+				idempotencyKey: "class-multi-1",
+				intentType: "class_entry",
+				festivalClassId: "class-a",
+				childId: "child-a",
+				shopifyProductGid: "gid://shopify/Product/10",
+				shopifyVariantGid: "gid://shopify/ProductVariant/10",
+				divisionId: "div-1",
+				divisionNameSnapshot: "Piano",
+				amount: "110.00",
+				currencyCode: "USD",
+				expiresAtIso: "2030-01-01T00:00:00.000Z",
+				lines: [
 					{
-						title: "Clair de Lune",
-						composer: "Debussy",
-						movement: "Suite bergamasque",
+						lineType: "class_entry",
+						festivalClassId: "class-a",
+						childId: "child-a",
+						shopifyProductGid: "gid://shopify/Product/10",
+						shopifyVariantGid: "gid://shopify/ProductVariant/10",
+						amount: "50.00",
+						currencyCode: "USD",
+						divisionId: "div-1",
+						divisionNameSnapshot: "Piano",
+					},
+					{
+						lineType: "class_entry",
+						festivalClassId: "class-b",
+						childId: "child-a",
+						shopifyProductGid: "gid://shopify/Product/11",
+						shopifyVariantGid: "gid://shopify/ProductVariant/11",
+						amount: "60.00",
+						currencyCode: "USD",
+						divisionId: "div-1",
+						divisionNameSnapshot: "Piano",
+					},
+				],
+			});
+			if (classOutcome.kind !== "created") {
+				throw new Error("Expected class intent created.");
+			}
+			expect(classOutcome.intent.lines).toHaveLength(2);
+			expect(classOutcome.intent.lineIdentityProtocol).toBeTruthy();
+
+			const lineId = classOutcome.intent.lines?.[0]?.id ?? "";
+			const meta = await repo.insertRegistrationMetadata({
+				id: "meta-1",
+				organizationId: "org-a",
+				festivalId: "fest-1",
+				checkoutIntentId: classOutcome.intent.id,
+				checkoutIntentLineId: lineId,
+				teacherMembershipId: "teacher-grant-1",
+				accompanistMembershipId: "acc-grant-1",
+				repertoireJson: [
+					{
+						title: "Sonata Op. 13",
+						composer: "Ludwig van Beethoven",
 						durationSeconds: 300,
 					},
 				],
-			},
-		);
-
-		expect(updated.accompanistMembershipId).toBe("accompanist-2");
-		expect(updated.repertoireJson).toEqual([
-			{
-				title: "Clair de Lune",
-				composer: "Debussy",
-				movement: "Suite bergamasque",
-				durationSeconds: 300,
-			},
-		]);
-		expect(updated.repertoireItems).toHaveLength(1);
-		expect(updated.repertoireItems[0]?.titleSnapshot).toBe("Clair de Lune");
-		expect(updated.repertoireItems[0]?.performedMovementText).toBe(
-			"Suite bergamasque",
-		);
-		expect(
-			updated.repertoireItems[0]?.contributors[0]?.displayNameSnapshot,
-		).toBe("Debussy");
-	});
-
-	it("unsets accompanist with null and preserves accompanist when undefined", async () => {
-		const repository = new InMemoryCheckoutRepository();
-		await repository.insertRegistrationMetadata({
-			id: "reg-meta-2",
-			organizationId: "org-a",
-			festivalId: "festival-a",
-			checkoutIntentId: "intent-b",
-			teacherMembershipId: "teacher-1",
-			accompanistMembershipId: "accompanist-1",
-			repertoireJson: [],
-		});
-
-		const kept = await repository.updateRegistrationMetadata(
-			"reg-meta-2",
-			"org-a",
-			{
-				pieces: [
-					{
-						title: "Nocturne Op. 9 No. 2",
-						composer: "Chopin",
-						durationSeconds: 270,
+				registrationSnapshot: {
+					version: 1,
+					capturedAtIso: "2026-01-01T00:00:00.000Z",
+					class: {
+						id: "class-a",
+						festivalId: "fest-1",
+						displayName: "Class A",
+						classSubtypeId: "sub-1",
+						classSubtypeName: "Solo",
+						minimumAge: 6,
+						maximumAge: 18,
+						price: "50.00",
+						currencyCode: "USD",
+						maximumPerformancePieces: 2,
+						performanceMinutes: 10,
+						capacity: 5,
 					},
-				],
-			},
-		);
-		expect(kept.accompanistMembershipId).toBe("accompanist-1");
-
-		const unset = await repository.updateRegistrationMetadata(
-			"reg-meta-2",
-			"org-a",
-			{
-				accompanistMembershipId: null,
-				pieces: [],
-			},
-		);
-		expect(unset.accompanistMembershipId).toBeNull();
-	});
-
-	it("throws when registration metadata is not found", async () => {
-		const repository = new InMemoryCheckoutRepository();
-		await repository.insertRegistrationMetadata({
-			id: "reg-meta-3",
-			organizationId: "org-a",
-			festivalId: "festival-a",
-			checkoutIntentId: "intent-c",
-			teacherMembershipId: "teacher-1",
-			accompanistMembershipId: null,
-			repertoireJson: [],
-		});
-
-		await expect(
-			repository.updateRegistrationMetadata("non-existent", "org-a", {
-				pieces: [],
-			}),
-		).rejects.toThrow("Registration metadata not found.");
-
-		await expect(
-			repository.updateRegistrationMetadata("reg-meta-3", "wrong-org", {
-				pieces: [],
-			}),
-		).rejects.toThrow("Registration metadata not found.");
-	});
+					division: { id: "div-1", name: "Piano" },
+					instrument: { id: "inst-1", name: "Piano" },
+					teacher: {
+						customerId: "teacher-1",
+						membershipId: "teacher-grant-1",
+						name: "Teacher A",
+					},
+					accompanist: {
+						customerId: "acc-1",
+						membershipId: "acc-grant-1",
+						name: "Acc A",
+					},
+					repertoire: [
+						{
+							title: "Sonata Op. 13",
+							composer: "Ludwig van Beethoven",
+							durationSeconds: 300,
+						},
+					],
+				},
+			});
+			expect(meta.repertoireItems).toHaveLength(1);
+			await sql.unsafe(
+				`INSERT INTO ${schema}.class_entitlements (
+					id, organization_id, festival_id, festival_class_id, parent_customer_id,
+					child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid,
+					shopify_order_line_gid, paid_amount_cents, paid_currency_code, status
+				) VALUES (
+					'ent-1', 'org-a', 'fest-1', 'class-a', 'customer-a',
+					'child-a', $1, $2, 'gid://shopify/Order/1',
+					'gid://shopify/LineItem/1', 5000, 'USD', 'confirmed'
+				)`,
+				[classOutcome.intent.id, lineId],
+			);
+			await repo.linkRegistrationMetadataToEntitlement({
+				checkoutIntentLineId: lineId,
+				classEntitlementId: "ent-1",
+			});
+			const updatedMeta = await repo.updateRegistrationMetadata(
+				"meta-1",
+				"org-a",
+				{
+					accompanistMembershipId: null,
+					pieces: [
+						{
+							title: "Prelude in C",
+							composer: "J. S. Bach",
+							durationSeconds: 180,
+						},
+					],
+				},
+			);
+			expect(updatedMeta.accompanistMembershipId).toBeNull();
+			expect(updatedMeta.repertoireJson[0]?.title).toBe("Prelude in C");
+			const byEnt = await repo.listRegistrationMetadataByEntitlementIds(
+				"org-a",
+				["ent-1"],
+			);
+			expect(byEnt.get("ent-1")?.repertoireItems[0]?.titleSnapshot).toBe(
+				"Prelude in C",
+			);
+		},
+	);
 });

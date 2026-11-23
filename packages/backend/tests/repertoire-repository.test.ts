@@ -518,6 +518,61 @@ describe("Repertoire Repository Layer", () => {
 
 	describe("PostgresRepertoireRepository integration", () => {
 		integrationIt(
+			"ranks active concerto suggestions before limiting and treats wildcard characters literally",
+			async () => {
+				const { sql } = await import("bun");
+				await withApplicationRollback(async ({ schema, id, repository }) => {
+					const repo = repository(new PostgresRepertoireRepository(schema));
+					const organizationId = id("concertos");
+					await sql.unsafe(
+						`INSERT INTO ${schema}.organizations (id, name, slug) VALUES ($1, $1, $1)`,
+						[organizationId],
+					);
+					const add = (
+						title: string,
+						composerName: string,
+						classification = "concerto",
+					) =>
+						repo.addCatalogWork({
+							organizationId,
+							title,
+							composerName,
+							classifications: [classification],
+						});
+					const exact = await add("Moon", "Composer");
+					const prefix = await add("Moon Concerto 100%", "Composer");
+					const fragment = await add("A Moon Concerto", "Composer");
+					const composer = await add("Afternoon Concerto", "Moon Composer");
+					await add("Moon Solo", "Composer", "sonata");
+					const inactive = await add("Moon A", "Composer");
+					await sql.unsafe(
+						`UPDATE ${schema}.repertoire_works SET is_active = FALSE WHERE organization_id = $1 AND id = $2`,
+						[organizationId, inactive.id],
+					);
+					const search = (query: string, limit = 100) =>
+						repo.searchCatalogWorks({
+							organizationId,
+							query,
+							limit,
+							concertoOnly: true,
+							typeahead: true,
+						});
+					expect((await search("MoOn", 3)).map((work) => work.id)).toEqual([
+						exact.id,
+						prefix.id,
+						fragment.id,
+					]);
+					expect(
+						(await search("Moon Composer")).map((work) => work.id),
+					).toEqual([composer.id]);
+					expect((await search("%")).map((work) => work.id)).toEqual([
+						prefix.id,
+					]);
+				});
+			},
+		);
+
+		integrationIt(
 			"executes sync, list, claim, normalizeAndApprove, and search against PostgreSQL",
 			async () => {
 				const { sql } = await import("bun");

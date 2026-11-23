@@ -4,13 +4,18 @@ import type { StaffMembershipRosterEntry } from "../src/lib/api.js";
 const read = (path: string) => Bun.file(new URL(path, import.meta.url)).text();
 
 describe("AdminRosterPage contract and rendering", () => {
-	it("defines StaffMembershipRosterEntry and listStaffRoster in api.ts", async () => {
-		const api = await read("../src/lib/api.ts");
+	it("defines StaffMembershipRosterEntry and listStaffRoster in api/org-admin.ts and common directory", async () => {
+		const api = await read("../src/lib/api/org-admin.ts");
+		const directorySchema = await read("../../common/src/directory.ts");
 
-		expect(api).toContain("export interface StaffMembershipRosterEntry");
-		expect(api).toContain('membershipType: "Teacher" | "Accompanist"');
+		expect(directorySchema).toContain(
+			"export interface StaffMembershipRosterEntry",
+		);
+		expect(directorySchema).toContain(
+			'membershipType: v.picklist(["Teacher", "Accompanist"])',
+		);
 		expect(api).toContain("export function listStaffRoster");
-		expect(api).toContain("/staff/accompanists");
+		expect(api).toContain(".staff.accompanists.$path");
 		expect(api).toContain("encodeURIComponent(slug)");
 	});
 
@@ -83,11 +88,17 @@ describe("AdminRosterPage contract and rendering", () => {
 		expect(page).toContain("Staff Roster");
 	});
 
-	it("wires route in App.tsx", async () => {
-		const app = await read("../src/App.tsx");
+	it("wires route in AppRoutes.tsx", async () => {
+		const appRoutes = await read("../src/app/AdminRoutes.tsx");
+		const lazyPages = await read("../src/app/lazyPages.ts");
+		const routes = await read("../src/lib/routes.ts");
 
-		expect(app).toContain('app.route().kind === "org-admin-roster"');
-		expect(app).toContain("<AdminRosterPage app={app} />");
+		expect(routes).toContain('"org-admin-roster"');
+		expect(lazyPages).toContain('"org-admin-roster": AdminRosterPage');
+		expect(appRoutes).toContain(
+			'path={["/admin/roster", "/admin/accompanists"]}',
+		);
+		expect(appRoutes).toContain("<Pages.AdminRosterPage app={app} />");
 	});
 
 	it("correctly filters sample roster entries by membership type", () => {

@@ -1,12 +1,65 @@
 import { resolve4, resolve6 } from "node:dns/promises";
 import { Agent, request as httpsRequest } from "node:https";
 import { BlockList, isIP } from "node:net";
+import { AppError } from "@festival/common";
 import { BoundedAsyncCache } from "../lib/bounded-async-cache.js";
 
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_RESPONSE_BYTES = 512 * 1024;
 const DEFAULT_ENTRY_BYTES = 256 * 1024;
 const DEFAULT_TOTAL_BYTES = 4 * 1024 * 1024;
+
+export class CustomerAccountUpstreamError extends AppError {
+	constructor(
+		readonly upstreamStatus: number,
+		readonly oauthError?: "invalid_grant" | "invalid_client",
+	) {
+		super("Customer Account upstream request failed.", 503);
+	}
+}
+
+export class CustomerAccountInvalidResponseError extends AppError {
+	constructor() {
+		super("Customer Account response is invalid.", 503);
+	}
+}
+
+async function upstreamError(response: CustomerAccountRawResponse) {
+	let oauthError: "invalid_grant" | "invalid_client" | undefined;
+	try {
+		if (response.status === 400 || response.status === 401) {
+			const chunks: Uint8Array[] = [];
+			let bytes = 0;
+			for await (const chunk of response.body) {
+				bytes += chunk.byteLength;
+				if (bytes > 4096) break;
+				chunks.push(chunk);
+			}
+			const payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+			if (
+				payload?.error === "invalid_grant" ||
+				payload?.error === "invalid_client"
+			)
+				oauthError = payload.error;
+		}
+	} catch {
+		// Untrusted error bodies never become browser errors or diagnostics.
+	} finally {
+		response.cancel?.();
+	}
+	return new CustomerAccountUpstreamError(response.status, oauthError);
+}
+
+function parseResponse(chunks: Uint8Array[]): Record<string, unknown> {
+	try {
+		const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+			throw new CustomerAccountInvalidResponseError();
+		return parsed as Record<string, unknown>;
+	} catch {
+		throw new CustomerAccountInvalidResponseError();
+	}
+}
 
 export interface DnsAnswer {
 	address: string;
@@ -328,8 +381,7 @@ export class CustomerAccountTransport {
 				signal.throwIfAborted();
 			}
 			if (response.status < 200 || response.status >= 300) {
-				response.cancel?.();
-				throw new Error("Customer Account upstream request failed.");
+				throw await upstreamError(response);
 			}
 			if (
 				response.contentLength !== undefined &&
@@ -349,14 +401,7 @@ export class CustomerAccountTransport {
 				chunks.push(chunk);
 			}
 			signal?.throwIfAborted();
-			const parsed: unknown = JSON.parse(
-				Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString(
-					"utf8",
-				),
-			);
-			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-				throw new Error("Customer Account response is invalid.");
-			return parsed as Record<string, unknown>;
+			return parseResponse(chunks);
 		} finally {
 			/* Every requester, stream, size, and parse failure releases exactly once. */
 			this.releaseLease(lease);

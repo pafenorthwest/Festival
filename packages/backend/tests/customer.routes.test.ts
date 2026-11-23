@@ -122,6 +122,17 @@ describe("buildCustomerRoutes", () => {
 		]);
 	});
 
+	it("returns Cache-Control: no-store on GET /session", async () => {
+		const { service } = createFakeCustomerAccountService();
+		const app = createTestApp({ customerAccountService: service });
+		const authRes = await req(app, "GET", "/session", AUTH);
+		expect(authRes.status).toBe(200);
+		expect(authRes.headers.get("Cache-Control")).toBe("no-store");
+		const anonRes = await req(app, "GET", "/session");
+		expect(anonRes.status).toBe(200);
+		expect(anonRes.headers.get("Cache-Control")).toBe("no-store");
+	});
+
 	it("handles GET /profile with and without session cookie", async () => {
 		const { service, calls } = createFakeCustomerAccountService();
 		const app = createTestApp({ customerAccountService: service });

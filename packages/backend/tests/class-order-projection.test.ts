@@ -1042,7 +1042,7 @@ describe("Class Order Projection and Entitlements", () => {
 		]);
 	});
 
-	it("rejects unpaid orders (fullyPaid: false)", async () => {
+	it("keeps incomplete payment retryable and confirms a later full payment once", async () => {
 		const f = await fixture();
 		const unpaid = paidClassOrder(f.intent.correlationId, {
 			fullyPaid: false,
@@ -1055,20 +1055,97 @@ describe("Class Order Projection and Entitlements", () => {
 			"webhook-class-unpaid",
 		);
 
-		expect(await f.service.processDelivery(received.id)).toBe("processed");
+		expect(await f.service.processDelivery(received.id)).toBe("failed");
 
 		const entitlements = await f.commerce.listClassEntitlements({
 			organizationId: f.organization.id,
 		});
 		expect(entitlements).toHaveLength(0);
 
-		const decisions = await f.commerce.listCustomerDecisions(
+		const decisions = await f.commerce.listUnresolvedDecisions(
 			f.organization.id,
-			f.customer.id,
 		);
-		expect(decisions).toMatchObject([
-			{ status: "rejected", reasonCode: "order_not_paid" },
-		]);
+		expect(decisions).toMatchObject([{ status: "pending_validation" }]);
+		expect(decisions[0]?.reasonCode).toBeUndefined();
+		const unpaidProjection = await f.commerce.listOrderProjectionsByGids(
+			f.organization.id,
+			[unpaid.id],
+		);
+		expect(unpaidProjection[0]?.fullyPaidAtIso).toBeUndefined();
+
+		f.orders.values.set(unpaid.id, paidClassOrder(f.intent.correlationId));
+		expect(await f.service.processDelivery(received.id)).toBe("processed");
+		expect(await f.service.processDelivery(received.id)).toBe("skipped");
+		expect(
+			await f.commerce.listClassEntitlements({
+				organizationId: f.organization.id,
+			}),
+		).toHaveLength(1);
+		expect(
+			await f.commerce.listCustomerDecisions(f.organization.id, f.customer.id),
+		).toMatchObject([{ status: "approved" }]);
+
+		// An older notification re-reads Shopify; even an incomplete read cannot
+		// regress an already approved registration or erase its receipt timestamp.
+		const paidProjection = await f.commerce.listOrderProjectionsByGids(
+			f.organization.id,
+			[unpaid.id],
+		);
+		f.orders.values.set(unpaid.id, unpaid);
+		const late = await delivery(
+			f.commerce,
+			f.organization.id,
+			"webhook-class-late-unpaid",
+		);
+		expect(await f.service.processDelivery(late.id)).toBe("skipped");
+		expect(
+			await f.commerce.listOrderProjectionsByGids(f.organization.id, [
+				unpaid.id,
+			]),
+		).toEqual(paidProjection);
+		expect(
+			await f.commerce.listClassEntitlements({
+				organizationId: f.organization.id,
+			}),
+		).toHaveLength(1);
+	});
+
+	it("retains observed payment history when finalization fails before an incomplete retry", async () => {
+		const f = await fixture();
+		const paid = paidClassOrder(f.intent.correlationId);
+		f.orders.values.set(paid.id, paid);
+		const received = await delivery(
+			f.commerce,
+			f.organization.id,
+			"webhook-class-receipt-retry",
+		);
+		const finalize = f.commerce.finalizeDecision.bind(f.commerce);
+		f.commerce.finalizeDecision = async () => {
+			throw new Error("Temporary finalization failure");
+		};
+		expect(await f.service.processDelivery(received.id)).toBe("failed");
+		f.commerce.finalizeDecision = finalize;
+		const before = await f.commerce.listOrderProjectionsByGids(
+			f.organization.id,
+			[paid.id],
+		);
+		expect(before[0]?.fullyPaidAtIso).toBe(paid.fullyPaidAtIso);
+		f.orders.values.set(paid.id, {
+			...paid,
+			fullyPaid: false,
+			fullyPaidAtIso: undefined,
+		});
+		expect(await f.service.processDelivery(received.id)).toBe("failed");
+		const after = await f.commerce.listOrderProjectionsByGids(
+			f.organization.id,
+			[paid.id],
+		);
+		expect(after[0]?.fullyPaidAtIso).toBe(paid.fullyPaidAtIso);
+		expect(
+			await f.commerce.listClassEntitlements({
+				organizationId: f.organization.id,
+			}),
+		).toHaveLength(0);
 	});
 
 	it("marks incomplete payment as needs_review when fullyPaidAtIso is missing", async () => {

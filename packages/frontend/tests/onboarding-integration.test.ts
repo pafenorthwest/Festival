@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import type { FestivalAppState } from "../src/app/createFestivalAppState.js";
-import { createFestivalDataLoaders } from "../src/app/createFestivalDataLoaders.js";
+import type { User } from "firebase/auth";
+import { createMembershipProductsLoader } from "../src/domains/directory/TeacherDirectoryContext.js";
 import {
 	acceptInvite,
 	createInvite,
@@ -55,13 +55,19 @@ afterEach(() => {
 });
 
 async function readFrontendSource(): Promise<string> {
+	const domainPaths = Array.from(
+		new Bun.Glob("src/domains/**/*.{ts,tsx}").scanSync("."),
+	);
 	const paths = [
 		"src/App.tsx",
+		"src/app/AppRoutes.tsx",
+		"src/app/FestivalShellContext.tsx",
 		"src/app/appFormatting.ts",
 		"src/app/appTypes.ts",
 		"src/app/createFestivalActions.ts",
 		"src/app/createFestivalAppState.ts",
 		"src/app/createFestivalDataLoaders.ts",
+		"src/app/lazyPages.ts",
 		"src/app/useFestivalAppController.ts",
 		"src/app/useFestivalLifecycle.ts",
 		"src/components/AccessDeniedPanel.tsx",
@@ -72,6 +78,17 @@ async function readFrontendSource(): Promise<string> {
 		"src/components/AppHeader.tsx",
 		"src/components/SignInModal.tsx",
 		"src/lib/api.ts",
+		"src/lib/api/auth.ts",
+		"src/lib/api/catalog.ts",
+		"src/lib/api/client.ts",
+		"src/lib/api/commerce.ts",
+		"src/lib/api/customer.ts",
+		"src/lib/api/directory.ts",
+		"src/lib/api/org-admin.ts",
+		"src/lib/api/registration.ts",
+		"src/lib/api/volunteers.ts",
+		"src/lib/routePaths.ts",
+		"src/lib/routes.ts",
 		"src/lib/sanitize-html.ts",
 		"src/pages/AdminFestivalsPage.tsx",
 		"src/pages/AdminHomePage.tsx",
@@ -84,6 +101,7 @@ async function readFrontendSource(): Promise<string> {
 		"src/pages/MembershipPage.tsx",
 		"src/pages/OrganizationChooser.tsx",
 		"src/pages/OrganizationRootPage.tsx",
+		...domainPaths,
 	];
 	const sources = await Promise.all(paths.map((path) => Bun.file(path).text()));
 	return sources.join("\n");
@@ -121,14 +139,23 @@ describe("organization onboarding integration", () => {
 		);
 	});
 
-	it("renders the cold-start header on the home page", async () => {
+	it("shows the homepage directory, signup offer, and organizer sign-in", async () => {
 		const homePage = await Bun.file("src/pages/HomePage.tsx").text();
 		const appHeader = await Bun.file("src/components/AppHeader.tsx").text();
 
-		expect(homePage).toContain("<h1>Getting Started</h1>");
-		expect(homePage).toContain('<p class="lede">Sign up to get started.</p>');
-		expect(appHeader).toContain("<h1>Festival</h1>");
-		expect(appHeader).toContain('<p class="lede">General Informtion.</p>');
+		expect(homePage).toContain('<h1 id="home-join">Join Now</h1>');
+		expect(homePage).toMatch(
+			/<p>Sign up with Google or email to start your organization\.<\/p>\s*<p>Free to join and use for sign ups before March 10th 2027<\/p>/,
+		);
+		expect(homePage).toContain("buildOrgRootPath(organization.slug)");
+		expect(homePage).toContain("organization.name");
+		expect(homePage).toContain('src="/festival-registration-preview.jpg"');
+		expect(homePage).toContain('props.app.openSignInModal("create-org")');
+		expect(homePage).toMatch(/>\s*Sign Up\s*<\/Button>/);
+		expect(appHeader).toContain("Arts Festival Online");
+		expect(appHeader).toContain("Manage and Grow Your Music Festival");
+		expect(appHeader).toContain('props.app.openSignInModal("login")');
+		expect(appHeader).toMatch(/>\s*Log-In\s*<\/Button>/);
 	});
 
 	it("shows only safe Shopify identity and capability diagnostics", async () => {
@@ -234,14 +261,19 @@ describe("organization onboarding integration", () => {
 		expect(source).toContain("getOrganization");
 	});
 
-	it("uses the canonical organization route and an org chooser for multiple memberships", async () => {
-		const source = await readFrontendSource();
+	it("routes staff with multiple memberships to the Admin organization chooser", async () => {
+		const loaders = await Bun.file(
+			"src/app/createFestivalDataLoaders.ts",
+		).text();
+		const routes = await Bun.file("src/app/AppRoutes.tsx").text();
+		const chooser = await Bun.file("src/pages/OrganizationChooser.tsx").text();
 
-		expect(source).toContain("buildOrgPath(membership.organizationSlug)");
-		expect(source).toContain("Choose an organization");
-		expect(source).toContain("memberships().length > 1");
-		expect(source).toContain("organization-choice");
-		expect(source).not.toContain("/o/");
+		expect(loaders).toMatch(
+			/if \(membershipResponse\.memberships\.length > 1\) \{\s*state\.navigate\(STAFF_ORGANIZATION_CHOOSER_PATH\);/,
+		);
+		expect(routes).toContain("path={STAFF_ORGANIZATION_CHOOSER_PATH}");
+		expect(chooser).toContain("Choose an organization");
+		expect(chooser).toContain("buildOrgPath(membership.organizationSlug)");
 	});
 
 	it("keeps logout implemented as Firebase sign-out instead of a no-op", async () => {
@@ -414,12 +446,12 @@ describe("organization onboarding integration", () => {
 	it("wires the public membership page through the backend API only", async () => {
 		const source = await readFrontendSource();
 
-		expect(source).toContain('route().kind === "org-membership"');
+		expect(source).toContain('route.kind === "org-membership"');
 		expect(source).toContain("getMembershipProducts(slug)");
 		expect(source).toContain(
 			"Membership information is temporarily unavailable. Please try again",
 		);
-		expect(source).toContain(`/api/organizations/\${slug}/membership-products`);
+		expect(source).toContain('catalogOrg()["membership-products"].$path');
 		expect(source).not.toContain("myshopify.com/admin");
 		expect(source).not.toContain("admin/api/2026-07");
 		expect(source).toContain("DOMPurify.sanitize");
@@ -430,7 +462,7 @@ describe("organization onboarding integration", () => {
 
 	it("starts customer authentication then calls the server-only checkout endpoint", async () => {
 		const page = await Bun.file("src/pages/MembershipPage.tsx").text();
-		const api = await Bun.file("src/lib/api.ts").text();
+		const commerceApi = await Bun.file("src/lib/api/commerce.ts").text();
 		expect(page).toContain('"Purchase"');
 		expect(page).toContain("getCustomerSession(route.slug)");
 		expect(page).toContain("customerMembershipPurchaseSignInPath(");
@@ -448,9 +480,9 @@ describe("organization onboarding integration", () => {
 		expect(page).toContain("checkout_terminal_failure");
 		expect(page).toContain("Start a new checkout.");
 		expect(page).not.toMatch(/cartCreate|shopifyVariantGid/);
-		expect(api).toContain("customer/membership-purchase/");
-		expect(api).toContain("/customer/checkout");
-		expect(api).toContain("Idempotency-Key");
+		expect(commerceApi).toContain('"membership-purchase"');
+		expect(commerceApi).toContain("orgCust.checkout.$path");
+		expect(commerceApi).toContain('"Idempotency-Key"');
 		expect(customerMembershipPurchaseSignInPath("pafe", "offering_123")).toBe(
 			"/api/organizations/pafe/customer-auth/start?offering=offering_123",
 		);
@@ -474,16 +506,21 @@ describe("organization onboarding integration", () => {
 	});
 
 	it("surfaces Shopify settings load failures on both admin pages", async () => {
-		const lifecycleSource = await Bun.file(
-			"src/app/useFestivalLifecycle.ts",
+		const commerceSource = await Bun.file(
+			"src/domains/admin-commerce/AdminCommerceContext.tsx",
 		).text();
 
-		const settingsLoadFailureHandlers = lifecycleSource.match(
-			/loadShopifySettings\(currentRoute\.slug\)\.catch/g,
+		expect(commerceSource).toContain(
+			'currentRoute?.kind === "org-admin-integrations"',
 		);
-		expect(settingsLoadFailureHandlers).toHaveLength(2);
-		expect(lifecycleSource).toContain(
-			"state.setErrorMessage((error as Error).message)",
+		expect(commerceSource).toContain(
+			'currentRoute?.kind === "org-admin-memberships"',
+		);
+		expect(commerceSource).toContain(
+			"loadShopifySettings(currentRoute.slug).catch",
+		);
+		expect(commerceSource).toContain(
+			"shell?.setErrorMessage((error as Error).message)",
 		);
 	});
 
@@ -498,11 +535,14 @@ describe("organization onboarding integration", () => {
 	});
 
 	it("resets every required festival draft field when onboarding state is cleared", async () => {
-		const appState = await Bun.file("src/app/createFestivalAppState.ts").text();
+		const catalogSource = await Bun.file(
+			"src/domains/catalog/CatalogRepertoireContext.tsx",
+		).text();
 
-		expect(appState).toContain(
-			'setFestivalDraft({\n\t\t\tshortName: "",\n\t\t\tname: "",',
+		expect(catalogSource).toContain(
+			'const INITIAL_FESTIVAL_DRAFT: FestivalDraft = {\n\tshortName: "",\n\tname: "",',
 		);
+		expect(catalogSource).toContain("...INITIAL_FESTIVAL_DRAFT");
 	});
 
 	it("keeps issue 63 onboarding validation and invite UX wired in the frontend", async () => {
@@ -515,12 +555,12 @@ describe("organization onboarding integration", () => {
 		expect(source).toContain("Short name is required.");
 		expect(source).toContain("hasOrganizationNameError()");
 		expect(source).toContain("hasOrganizationShortNameError()");
-		expect(source).toContain("readOnly={props.app.organizationCreated()}");
+		expect(source).toContain("readOnly={adminOrg.organizationCreated()}");
 		expect(source).toContain("INVITE_CARD_SCROLL_DELAY_MS = 600");
 		expect(source).toContain("scrollIntoView");
 		expect(source).toContain("Send another invite");
 		expect(source).toContain("That email has already been invited.");
-		expect(source).toContain("entry.email.toLowerCase() === normalizedEmail");
+		expect(source).toContain("e.email.toLowerCase() === normalizedEmail");
 		expect(source).toContain("class={`invite-feedback invite-feedback-");
 		expect(styles).toContain("invite-feedback-success");
 		expect(styles).toContain("invite-feedback-error");
@@ -537,12 +577,10 @@ describe("organization onboarding integration", () => {
 
 		expect(source).toContain("function resetOnboardingFlowState()");
 		expect(source).toContain("setCreatedOrganizationSlug(null)");
-		expect(source).toContain("setCreatedInvites([])");
-		expect(source).toContain('setOrganizationName("")');
-		expect(source).toContain('setOrganizationShortName("")');
+		expect(source).toContain("createSignal<InviteSummary[]>([])");
 		expect(source).toContain('email: "",');
-		expect(source).toContain("const previousUser = state.firebaseUser()");
-		expect(source).toContain("previousUser?.uid !== user?.uid");
+		expect(source).toContain("state.firebaseUser()?.uid !== user?.uid");
+		expect(source).toContain("state.resetOnboardingFlowState();");
 	});
 
 	it("keeps admin headers compact with breadcrumbs and header-level back navigation", async () => {
@@ -591,10 +629,10 @@ describe("organization onboarding integration", () => {
 		expect(source).toContain("admin/memberships");
 		expect(source).toContain("Only Admin members can manage memberships.");
 		expect(source).toContain("props.app.isAdminMember()");
-		expect(source).toContain("getAdminMembershipProducts(token, slug)");
-		expect(source).toContain("getIdToken(state.firebaseUser())");
+		expect(source).toContain("getAdminMembershipProducts(token, targetSlug)");
+		expect(source).toContain("getIdToken(deps.getFirebaseUser())");
 		expect(source).toContain("createMembershipProduct(token");
-		expect(source).toContain("admin/membership-products");
+		expect(source).toContain('["membership-products"]');
 		expect(source).not.toContain("SHOPIFY_ADMIN_ACCESS_TOKEN");
 		expect(source).not.toContain("admin/api/2026-07");
 	});
@@ -608,14 +646,14 @@ describe("organization onboarding integration", () => {
 		expect(source).toContain("Verified Shopify integration is required");
 		expect(source).toContain("shopifyPrerequisiteMet");
 		expect(pageSource).toContain(
-			'props.app.shopifySettings()?.verificationStatus === "ok"',
+			'adminCommerce.shopifySettings()?.verificationStatus === "ok"',
 		);
 		expect(pageSource).toContain(
-			'props.app.shopifyPrerequisiteMet() ? "Ready" : "Not Ready"',
+			'adminCommerce.shopifyPrerequisiteMet() ? "Ready" : "Not Ready"',
 		);
 		expect(pageSource).toContain("shopify-status-not-ready");
 		expect(pageSource).toContain("<Show when={!shopifyIntegrationVerified()}>");
-		expect(pageSource).toContain("!props.app.shopifyPrerequisiteMet() ||");
+		expect(pageSource).toContain("!adminCommerce.shopifyPrerequisiteMet() ||");
 		expect(source).toContain("Membership product created.");
 		expect(source).toContain("Plan: Standard");
 		expect(source).toContain("isCreatingMembershipProduct()");
@@ -623,24 +661,23 @@ describe("organization onboarding integration", () => {
 		expect(source).toContain("setCreateMembershipProductAttempted(true)");
 		expect(source).toContain("membershipProductValidationMessage()");
 		expect(source).toContain("setMembershipProductDraft((current) =>");
-		expect(source).toContain("await loaders.loadMembershipProducts");
+		expect(source).toContain("await loadMembershipProducts");
 		expect(source).toContain('name: "",');
 		expect(source).toContain('description: "",');
 		expect(source).toContain('price: "",');
 	});
 
 	it("keeps membership offering retirement explicit and Admin-scoped", async () => {
-		const apiSource = await Bun.file("src/lib/api.ts").text();
+		const commerceSource = await Bun.file("src/lib/api/commerce.ts").text();
 		const pageSource = await Bun.file(
 			"src/pages/AdminMembershipProductsPage.tsx",
 		).text();
 
-		expect(apiSource).toContain("retireAdminMembershipProduct");
-		expect(apiSource).toContain(
-			// biome-ignore lint/suspicious/noTemplateCurlyInString: assert the literal source fragment, including its interpolation syntax.
-			"membership-products/${encodeURIComponent(offeringId)}/retire",
+		expect(commerceSource).toContain("retireAdminMembershipProduct");
+		expect(commerceSource).toContain(
+			'orgAdmin["membership-products"][":offeringId"].retire.$path',
 		);
-		expect(apiSource).toContain("JSON.stringify({ confirmed: true })");
+		expect(commerceSource).toContain("{ confirmed: true }");
 		expect(pageSource).toContain("window.confirm(");
 		expect(pageSource).toContain("prevents future purchases");
 		expect(pageSource).toContain("Retired");
@@ -652,12 +689,17 @@ describe("organization onboarding integration", () => {
 		let products: unknown[] = [{ id: "stale-product" }];
 		let loading = false;
 		let loadError = "";
-		const state = {
-			firebaseUser() {
-				return {
+		globalThis.fetch = (() =>
+			Promise.resolve(
+				mockJsonResponse({ error: "Shopify unavailable" }, 503),
+			)) as typeof fetch;
+
+		const loadMembershipProducts = createMembershipProductsLoader({
+			getFirebaseUser: () =>
+				({
 					getIdToken: () => Promise.resolve("firebase-token"),
-				};
-			},
+				}) as unknown as User,
+			getSlug: () => "pafe",
 			setIsLoadingMembershipProducts(value: boolean) {
 				loading = value;
 			},
@@ -667,19 +709,37 @@ describe("organization onboarding integration", () => {
 			setMembershipProductsLoadError(value: string) {
 				loadError = value;
 			},
-		} as unknown as FestivalAppState;
-		globalThis.fetch = (() =>
-			Promise.resolve(
-				mockJsonResponse({ error: "Shopify unavailable" }, 503),
-			)) as typeof fetch;
-
-		const loaders = createFestivalDataLoaders(state);
-		await loaders.loadMembershipProducts("pafe");
+		});
+		await loadMembershipProducts("pafe");
 
 		expect(products).toEqual([]);
 		expect(loading).toBe(false);
 		expect(loadError).toBe(
 			"Membership products are temporarily unavailable. Please try again.",
 		);
+	});
+
+	it("wires Concerto Repertoire workflow card on AdminHomePage and route in AdminRoutes", async () => {
+		const homeSource = await Bun.file(
+			new URL("../src/pages/AdminHomePage.tsx", import.meta.url),
+		).text();
+		const adminRoutesSource = await Bun.file(
+			new URL("../src/app/AdminRoutes.tsx", import.meta.url),
+		).text();
+
+		expect(homeSource).toContain("buildOrgAdminConcertoRepertoirePath");
+		expect(homeSource).toContain("<strong>Concerto Repertoire</strong>");
+		const cardSection = homeSource.slice(
+			Math.max(
+				0,
+				homeSource.indexOf("buildOrgAdminConcertoRepertoirePath") - 220,
+			),
+			homeSource.indexOf("<strong>Concerto Repertoire</strong>") + 120,
+		);
+		expect(cardSection).toContain("disabled={!props.app.isAdminMember()}");
+		expect(cardSection).toContain("!props.app.isAdminMember()");
+
+		expect(adminRoutesSource).toContain('path="/admin/concerto-repertoire"');
+		expect(adminRoutesSource).toContain("<Pages.AdminConcertoRepertoirePage");
 	});
 });

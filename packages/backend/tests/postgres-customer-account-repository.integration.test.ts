@@ -18,6 +18,83 @@ function assertIsoTimestampString(value: unknown): asserts value is string {
 }
 
 integrationTest(
+	"separates version-guarded authentication readiness and order capability",
+	async () => {
+		const schema = await currentSchema();
+		try {
+			const organizations = new PostgresOrganizationRepository(schema);
+			const repo = new PostgresCustomerAccountRepository(schema);
+			const org = await organizations.createOrganization({
+				name: "Health Org",
+				slug: "health-org",
+			});
+			const saved = await repo.upsertIntegration({
+				organizationId: org.id,
+				storefrontDomain: "health.myshopify.com",
+				clientId: "client",
+				encryptedClientSecret: "encrypted-secret",
+			});
+			const verifiedAtIso = "2026-11-16T00:00:00.000Z";
+			await repo.setIntegrationReadiness(org.id, {
+				readiness: "failed",
+				canReadOrders: true,
+				lastError: "Customer Account discovery verification failed.",
+				verifiedAtIso,
+			});
+			expect(
+				await repo.recordIntegrationHealth(org.id, saved.integrationVersion, {
+					kind: "order_access",
+					canReadOrders: false,
+				}),
+			).toBe(true);
+			expect(await repo.getIntegration(org.id)).toMatchObject({
+				readiness: "failed",
+				canReadOrders: false,
+				lastError: "Customer Account discovery verification failed.",
+				verifiedAtIso,
+			});
+			expect(
+				await repo.recordIntegrationHealth(org.id, saved.integrationVersion, {
+					kind: "discovery_verified",
+					verifiedAtIso,
+				}),
+			).toBe(true);
+			expect(await repo.getIntegration(org.id)).toMatchObject({
+				readiness: "ready",
+				canReadOrders: false,
+				lastError: undefined,
+				integrationVersion: saved.integrationVersion,
+				encryptedClientSecret: saved.encryptedClientSecret,
+			});
+			expect(
+				await repo.recordIntegrationHealth(org.id, saved.integrationVersion, {
+					kind: "order_access",
+					canReadOrders: true,
+				}),
+			).toBe(true);
+			expect((await repo.getIntegration(org.id))?.canReadOrders).toBe(true);
+			await repo.upsertIntegration({ ...saved, clientId: "rotated-client" });
+			const rotated = await repo.getIntegration(org.id);
+			expect(
+				await repo.recordIntegrationHealth(org.id, saved.integrationVersion, {
+					kind: "discovery_verified",
+					verifiedAtIso,
+				}),
+			).toBe(false);
+			expect(
+				await repo.recordIntegrationHealth(org.id, saved.integrationVersion, {
+					kind: "order_access",
+					canReadOrders: true,
+				}),
+			).toBe(false);
+			expect(await repo.getIntegration(org.id)).toEqual(rotated);
+		} finally {
+			await resetPostgresFixture(schema);
+		}
+	},
+);
+
+integrationTest(
 	"createChildWithAgeSnapshot returns canonical ISO-8601 strings from Postgres 17 CTE RETURNING",
 	async () => {
 		const schema = await currentSchema();

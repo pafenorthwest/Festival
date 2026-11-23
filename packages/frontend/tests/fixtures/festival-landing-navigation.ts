@@ -4,6 +4,15 @@ import { parseRoute } from "../../src/lib/routes.js";
 
 const solid = await import("solid-js/dist/solid.js");
 mock.module("solid-js", () => solid);
+let currentAuthenticated = true;
+mock.module("../../src/domains/customer/CustomerIdentityContext.js", () => ({
+	useOptionalCustomerIdentity: () => ({
+		customerSession: () => ({ authenticated: currentAuthenticated }),
+		isCustomerSessionLoading: () => false,
+		refreshCustomerSession: async () => {},
+		setCustomerSession: () => {},
+	}),
+}));
 
 // Expose the real component's JSX event handlers without a browser DOM.
 interface TestElement {
@@ -62,6 +71,7 @@ globalThis.fetch = (async (input: string | URL | Request) => {
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 function mountLanding(authenticated = true) {
+	currentAuthenticated = authenticated;
 	return solid.createRoot((dispose) => {
 		const [path, setPath] = solid.createSignal("/org/pafe/festival/spring");
 		const route = solid.createMemo(() => parseRoute(path()));

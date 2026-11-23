@@ -6,6 +6,9 @@ on:
       - main
       - release
       - 'release/v*'
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read

@@ -5,6 +5,7 @@ import type {
 } from "@festival/common";
 import {
 	canEditPurchasedRegistration,
+	getEditableRegistrationPieces,
 	groupPurchasedRegistrations,
 	KEEP_CURRENT_ACCOMPANIST,
 	purchasedRegistrationReadOnlyReason,
@@ -125,12 +126,66 @@ describe("purchased registration policy and data", () => {
 		expect(update.pieces?.[0]).toEqual(piece);
 		expect(update.pieces?.[0]).not.toBe(piece);
 	});
+	it("keeps family selections and manual pieces while dropping deleted links", () => {
+		const item = registration();
+		if (!item.metadata) throw new Error("fixture");
+		const { catalogWorkId: _catalogWorkId, ...legacyPiece } = piece;
+		const normalizedItem = {
+			id: "piece-1",
+			organizationId: "organization-1",
+			registrationMetadataId: item.metadata.id,
+			titleSnapshot: "Concerto",
+			performedMovementText: null,
+			durationSeconds: 180,
+			contributors: [],
+		};
+		const [reviewedManual, deleted, linked] = getEditableRegistrationPieces({
+			...item,
+			metadata: {
+				...item.metadata,
+				repertoireJson: [legacyPiece, piece, piece],
+				repertoireItems: [
+					{ ...normalizedItem, displayOrder: 2, catalogWorkId: null },
+					{ ...normalizedItem, displayOrder: 1, catalogWorkId: "from-catalog" },
+				],
+			},
+		});
+		expect(reviewedManual).toEqual(legacyPiece);
+		expect(deleted).toEqual(legacyPiece);
+		expect(linked).toEqual(piece);
+	});
 	it("sends only explicit accompanist changes through the existing API contract", () => {
 		expect(
 			purchasedRegistrationUpdate([piece], "active-customer").accompanistId,
 		).toBe("active-customer");
 		expect(purchasedRegistrationUpdate([piece], "").accompanistId).toBeNull();
 	});
+	it("validates the title limit for purchased pieces before and after unlinking", () => {
+		const configuration = registration().festivalClass;
+		if (!configuration) throw new Error("fixture");
+		const linked = { ...piece, title: `  ${"A".repeat(300)}  ` };
+		const { catalogWorkId: _catalogWorkId, ...unlinked } = linked;
+
+		expect(
+			validatePurchasedRegistrationPieces([linked], configuration),
+		).toBeNull();
+		expect(
+			validatePurchasedRegistrationPieces(
+				[{ ...linked, title: "A".repeat(301) }],
+				configuration,
+			),
+		).toContain("300");
+		expect(
+			validatePurchasedRegistrationPieces([unlinked], configuration),
+		).toContain("200");
+		expect(
+			validatePurchasedRegistrationPieces(
+				[{ ...unlinked, title: `  ${"A".repeat(200)}  ` }],
+				configuration,
+			),
+		).toBeNull();
+	});
+
 	it("rejects invalid whole-second durations and class policy violations rather than normalizing them away", () => {
 		const configuration = registration().festivalClass;
 		if (!configuration) throw new Error("fixture");

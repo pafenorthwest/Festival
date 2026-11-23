@@ -32,8 +32,8 @@ const registrationContextSource = await readSource(
 const accountClassesPageSource = await readSource(
 	"../src/pages/CustomerAccountClassesPage.tsx",
 );
-const pieceEditorSource = await readSource(
-	"../src/components/FestivalPieceEditor.tsx",
+const concertoTitleFieldSource = await readSource(
+	"../src/components/ConcertoTitleField.tsx",
 );
 const purchasedEditorSource = await readSource(
 	"../src/pages/PurchasedRegistrationEditor.tsx",
@@ -187,14 +187,14 @@ describe("customer checkbox help tooltip wiring", () => {
 		expect(membershipPageSource).not.toMatch(/approved divisions/i);
 	});
 
-	it("wires HelpTooltip into AccompanistMembershipPage for consent checkbox and divisions", () => {
+	it("wires HelpTooltip into AccompanistMembershipPage for public directory checkbox and divisions", () => {
 		expect(accompanistPageSource).toMatch(
 			/import\s*\{[\s\S]*\bHelpTooltip\b[\s\S]*\}\s*from\s*"\.\.\/components\/HelpTooltip\.js"/,
 		);
 		expect(accompanistPageSource).toContain("CHECKBOX_HELP_TEXT");
 		assertCheckboxHelpRowHasTooltip(
 			accompanistPageSource,
-			"membershipDataConsent",
+			"publicDirectoryPublishing",
 		);
 		assertCustomerHelpTooltipWired(
 			accompanistPageSource,
@@ -253,9 +253,9 @@ describe("customer help tooltip wiring", () => {
 		);
 	});
 
-	it("wires concertoCatalog tooltip in FestivalPieceEditor and PurchasedRegistrationEditor", () => {
+	it("wires concertoCatalog tooltip in ConcertoTitleField and PurchasedRegistrationEditor", () => {
 		assertCustomerHelpTooltipWired(
-			pieceEditorSource,
+			concertoTitleFieldSource,
 			"./HelpTooltip.js",
 			"concertoCatalog",
 		);

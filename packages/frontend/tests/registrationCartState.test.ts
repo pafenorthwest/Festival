@@ -9,7 +9,7 @@ import {
 } from "../src/pages/registrationCartState.js";
 
 describe("registrationCartState", () => {
-	it("uses the replacement key only for the exact unedited restored cart", () => {
+	it("keeps the replacement identity through edits and merges while preserving current selections", () => {
 		const saved = {
 			lineId: "saved-line",
 			childId: "child",
@@ -24,17 +24,27 @@ describe("registrationCartState", () => {
 			pieces: [{ title: "Piece", composer: "Composer", durationSeconds: 60 }],
 		};
 		const restored = { registrations: [saved], replacementKey: "replacement" };
-		const cart = createRegistrationCart([{ ...saved, lineId: "local-copy" }]);
+		const current = {
+			...saved,
+			lineId: "local-copy",
+			teacherId: "new-teacher",
+		};
+		const cart = createRegistrationCart([current]);
 		const anotherTab = createRegistrationCart();
 		cart.restoreCheckout("reference", restored);
 		anotherTab.restoreCheckout("reference", restored);
-		expect(cart.items()).toEqual([saved]);
+		expect(cart.items()).toEqual([current]);
 		expect(cart.getCheckoutIdempotencyKey()).toBe(restored.replacementKey);
 		expect(anotherTab.getCheckoutIdempotencyKey()).toBe(
 			restored.replacementKey,
 		);
-		cart.removeItem(saved.lineId);
-		cart.addItem(saved);
+		cart.removeItem(current.lineId);
+		cart.addItem({ ...saved, pieces: [] });
+		expect(cart.getCheckoutIdempotencyKey()).toBe(restored.replacementKey);
+		const frozen = cart.beginCheckout();
+		expect(frozen.idempotencyKey).toBe(restored.replacementKey);
+		expect(frozen.lineItems[0].pieces).toEqual([]);
+		cart.completeCheckout(frozen);
 		expect(cart.getCheckoutIdempotencyKey()).not.toBe(restored.replacementKey);
 
 		const unrelated = {
@@ -45,8 +55,17 @@ describe("registrationCartState", () => {
 		const mergedCart = createRegistrationCart([unrelated, saved]);
 		mergedCart.beginCheckout();
 		mergedCart.restoreCheckout("reference", restored);
-		expect(mergedCart.items()).toEqual([saved, unrelated]);
+		expect(mergedCart.items()).toEqual([unrelated, saved]);
 		expect(mergedCart.checkoutSubmission()).toBeNull();
+		expect(mergedCart.getCheckoutIdempotencyKey()).toBe(
+			restored.replacementKey,
+		);
+		mergedCart.restoreCheckout("reference", restored);
+		expect(mergedCart.items()).toEqual([unrelated, saved]);
+		expect(mergedCart.getCheckoutIdempotencyKey()).toBe(
+			restored.replacementKey,
+		);
+		mergedCart.clearCart();
 		expect(mergedCart.getCheckoutIdempotencyKey()).not.toBe(
 			restored.replacementKey,
 		);

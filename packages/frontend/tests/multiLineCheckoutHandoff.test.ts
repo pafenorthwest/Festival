@@ -6,8 +6,11 @@ import {
 	type RegistrationCartItem,
 } from "../src/pages/registrationCartState.js";
 
-const regPageSource = await Bun.file(
-	new URL("../src/pages/FestivalClassRegistrationPage.tsx", import.meta.url),
+const regFormSource = await Bun.file(
+	new URL(
+		"../src/domains/registration/FestivalRegistrationForm.tsx",
+		import.meta.url,
+	),
 ).text();
 
 const originalFetch = globalThis.fetch;
@@ -390,11 +393,15 @@ describe("3. Checkout handoff execution & API contract", () => {
 
 describe("4. FestivalClassRegistrationPage source wiring", () => {
 	it("passes cart, eligibility, submitting, error, and submit callback to FestivalRegistrationCartView", () => {
-		expect(regPageSource).toContain("<FestivalRegistrationCartView");
-		expect(regPageSource).toContain("cart={cart}");
-		expect(regPageSource).toContain("eligibility={eligibility}");
-		expect(regPageSource).toContain("isSubmitting={isSubmittingCheckout()}");
-		expect(regPageSource).toContain("error={checkoutError()}");
-		expect(regPageSource).toContain("onSubmitCheckout={handleCartCheckout}");
+		expect(regFormSource).toContain("<FestivalRegistrationCartView");
+		expect(regFormSource).toContain("cart={state.cart}");
+		expect(regFormSource).toContain("eligibility={state.eligibility}");
+		expect(regFormSource).toContain(
+			"isSubmitting={state.isSubmittingCheckout()}",
+		);
+		expect(regFormSource).toContain("error={state.checkoutError()}");
+		expect(regFormSource).toContain(
+			"onSubmitCheckout={state.handleCartCheckout}",
+		);
 	});
 });

@@ -480,6 +480,7 @@ export interface RegistrationEligibleClass {
 export interface CustomerClassEntitlementSummary {
 	readonly id: string;
 	readonly festivalId: string;
+	readonly festivalShortName?: string;
 	readonly festivalClassId: string;
 	readonly childId: string;
 	readonly status: ClassEntitlementStatus;
@@ -492,6 +493,7 @@ export interface CustomerFestivalClassSummary {
 	readonly festivalId: string;
 	readonly displayName: string;
 	readonly classSubtypeId: string;
+	readonly requiresConcerto?: boolean;
 	readonly divisionId: string;
 	readonly minimumAge: number;
 	readonly maximumAge: number;

@@ -24,6 +24,13 @@ interface Entry<V> {
 	bytes: number;
 }
 
+interface LoadedEntry<V> {
+	value: V;
+	ttlMs: number;
+	bytes: number;
+	cache?: false;
+}
+
 interface PendingEntry<K, V> {
 	key: K;
 	promise: Promise<V>;
@@ -153,10 +160,7 @@ export class BoundedAsyncCache<K, V> {
 		);
 	}
 
-	private startLoad(
-		key: K,
-		loader: () => Promise<{ value: V; ttlMs: number; bytes: number }>,
-	): Promise<V> {
+	private startLoad(key: K, loader: () => Promise<LoadedEntry<V>>): Promise<V> {
 		this.pending.delete(key);
 		for (const active of this.inFlight) {
 			if (active.key === key) active.superseded = true;
@@ -170,7 +174,10 @@ export class BoundedAsyncCache<K, V> {
 		this.inFlight.add(entry);
 		entry.promise = loader()
 			.then((loaded) => {
-				if (this.shouldStoreLoaded(entry, loaded.value)) {
+				if (
+					loaded.cache !== false &&
+					this.shouldStoreLoaded(entry, loaded.value)
+				) {
 					this.set(key, loaded.value, loaded.ttlMs, loaded.bytes);
 				}
 				return loaded.value;
@@ -191,7 +198,7 @@ export class BoundedAsyncCache<K, V> {
 
 	async getOrLoad(
 		key: K,
-		loader: () => Promise<{ value: V; ttlMs: number; bytes: number }>,
+		loader: () => Promise<LoadedEntry<V>>,
 		force = false,
 	): Promise<V> {
 		if (!force) {

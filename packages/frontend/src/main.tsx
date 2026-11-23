@@ -1,6 +1,7 @@
-import { Route, Router } from "@solidjs/router";
+import { Router } from "@solidjs/router";
 import { render } from "solid-js/web";
 import App from "./App.js";
+import { AppRoutes } from "./app/AppRoutes.js";
 import "./styles.css";
 import "./parent-registration.css";
 
@@ -13,7 +14,7 @@ if (!root) {
 render(
 	() => (
 		<Router root={App}>
-			<Route path="/*" component={() => null} />
+			<AppRoutes />
 		</Router>
 	),
 	root,

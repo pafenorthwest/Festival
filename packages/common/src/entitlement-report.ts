@@ -5,6 +5,7 @@ import {
 	type EntitlementGrantSnapshot,
 	type EntitlementLifecycleState,
 } from "./entitlements.js";
+import type { ProfileApprovalStatus } from "./profile.js";
 
 export type EntitlementReportSource = "teacher_checkout" | "accompanist_form";
 
@@ -14,6 +15,12 @@ export interface EntitlementSummaryCounts {
 	superseded: number;
 	expired: number;
 	revoked: number;
+}
+
+export interface EntitlementReportDirectoryProfile {
+	id: string;
+	publicDirectoryOptIn: boolean;
+	approvalStatus: ProfileApprovalStatus;
 }
 
 export interface EntitlementReportEntry {
@@ -27,6 +34,7 @@ export interface EntitlementReportEntry {
 	endsOn: string;
 	source: EntitlementReportSource;
 	status: EntitlementLifecycleState;
+	directoryProfile?: EntitlementReportDirectoryProfile;
 	revokedAtIso?: string;
 	revokedReason?: string;
 }
@@ -58,6 +66,8 @@ export interface EntitlementReportResponse {
 	totalPages: number;
 	/** Every division held by any entitlement, ignoring the active filters. */
 	divisions: EntitlementReportDivisionOption[];
+	/** Active organization divisions available for editing Teacher profiles. */
+	editableDivisions?: EntitlementReportDivisionOption[];
 	/** Unfiltered organization-wide counts by lifecycle state. */
 	summaryCounts?: EntitlementSummaryCounts;
 }

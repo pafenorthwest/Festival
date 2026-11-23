@@ -1,32 +1,17 @@
-import {
-	calendarDateInTimezone,
-	calendarDaysUntil,
-	TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
-	TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS,
-} from "@festival/common";
-import { lifecycleForEntitlementRead } from "../commerce/entitlement-lifecycle.js";
 import type { MembershipCommerceRepository } from "../commerce/membership-commerce-repository.js";
 import { AppError } from "../errors/app-error.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
 import type { PublicMembershipProductService } from "../shopify/public-membership-product-service.js";
+import type { CheckoutRepository } from "./checkout-repository.js";
 import {
-	assertCheckoutIntentType,
-	type CheckoutIntentOutcome,
-	type CheckoutRepository,
-} from "./checkout-repository.js";
+	type MembershipCheckoutStartInput,
+	type MembershipCheckoutStorefront,
+	resolveMembershipSelection,
+	resumeMembershipCheckoutOutcome,
+	startNewMembershipCartAndCheckout,
+} from "./membership-checkout-helpers.js";
 
-export interface MembershipCheckoutStorefront {
-	createCart(input: {
-		organizationId: string;
-		shopifyVariantGid: string;
-		buyerAccessToken: string;
-		correlationId: string;
-	}): Promise<{ shopifyCartId: string }>;
-	checkout(input: {
-		organizationId: string;
-		shopifyCartId: string;
-	}): Promise<{ checkoutUrl: string }>;
-}
+export type { MembershipCheckoutStorefront } from "./membership-checkout-helpers.js";
 
 export class MembershipCheckoutService {
 	constructor(
@@ -37,65 +22,33 @@ export class MembershipCheckoutService {
 		private readonly commerce?: MembershipCommerceRepository,
 		private readonly now = () => new Date(),
 	) {}
-	async start(input: {
-		organizationId: string;
-		organizationSlug: string;
-		customerId: string;
-		sessionId: string;
-		integrationVersion: number;
-		buyerAccessToken: string;
-		idempotencyKey: string;
-		offeringId: string;
-		divisionId: string;
-		staffAccessConsent: boolean;
-	}) {
+
+	async start(input: MembershipCheckoutStartInput) {
 		if (!input.divisionId.trim() || input.staffAccessConsent !== true) {
 			throw new AppError(
 				"Select a division and agree to sharing data before purchasing.",
 				400,
 			);
 		}
+		const deps = {
+			organizations: this.organizations,
+			listings: this.listings,
+			checkout: this.checkout,
+			storefront: this.storefront,
+			commerce: this.commerce,
+			now: this.now,
+		};
 		const existing = await this.checkout.getOutcome({
 			organizationId: input.organizationId,
 			customerId: input.customerId,
 			sessionId: input.sessionId,
 			idempotencyKey: input.idempotencyKey,
 		});
-		if (existing) return this.resume(existing, input);
-		const division = (
-			await this.organizations.listDivisions(input.organizationId, true)
-		).find((value) => value.id === input.divisionId);
-		if (!division) {
-			throw new AppError("Membership division is unavailable.", 409);
-		}
-		await this.verifyRenewalEligibility(input.organizationId, input.customerId);
-		if (
-			await this.checkout.hasProcessingIntent(
-				input.organizationId,
-				input.customerId,
-				this.now().toISOString(),
-				"membership",
-			)
-		) {
-			throw new AppError(
-				"Checkout is already in progress.",
-				409,
-				"checkout_in_progress",
-			);
-		}
-		const listing = await this.listings.list(input.organizationSlug);
-		const displayed = listing.membershipProducts.find(
-			(value) => value.id === input.offeringId,
+		if (existing) return resumeMembershipCheckoutOutcome(deps, existing, input);
+		const { division, displayed, offering } = await resolveMembershipSelection(
+			deps,
+			input,
 		);
-		if (!displayed?.available)
-			throw new AppError("Membership selection is unavailable.", 409);
-		const offering =
-			await this.organizations.findMembershipProductRecordByClass(
-				input.organizationId,
-				"teacher_membership",
-			);
-		if (!offering || offering.id !== input.offeringId)
-			throw new AppError("Membership selection is unavailable.", 409);
 		const expiresAtIso = new Date(
 			this.now().getTime() + 30 * 60_000,
 		).toISOString();
@@ -118,186 +71,14 @@ export class MembershipCheckoutService {
 			currencyCode: displayed.price.currencyCode,
 			expiresAtIso,
 		});
-		if (outcome.kind !== "created") return this.resume(outcome, input);
-		const intent = outcome.intent;
-		try {
-			// This is the Storefront configuration version. input.integrationVersion
-			// belongs to Customer Accounts and has an independent counter.
-			const storefrontIntegration =
-				await this.organizations.getShopifyIntegration(input.organizationId);
-			if (!storefrontIntegration)
-				throw new AppError("Shopify checkout is unavailable.", 503);
-			const cart = await this.createCart(intent, input, expiresAtIso);
-			if (cart.integrationVersion !== input.integrationVersion)
-				throw new AppError("Customer checkout context has changed.", 503);
-			await this.checkout.markCheckoutStarted(intent.id);
-			const checkout = await this.storefront.checkout({
-				organizationId: input.organizationId,
-				shopifyCartId: cart.shopifyCartId,
-			});
-			const integration = await this.organizations.getShopifyIntegration(
-				input.organizationId,
-			);
-			if (
-				!integration ||
-				integration.integrationVersion !==
-					storefrontIntegration.integrationVersion ||
-				!isAllowedCheckoutUrl(checkout.checkoutUrl, integration.storeDomain)
-			)
-				throw new AppError("Shopify checkout is unavailable.", 503);
-			return { checkoutUrl: checkout.checkoutUrl };
-		} catch (_error) {
-			await this.checkout.markFailed(intent.id);
-			throw retryableCheckoutError();
+		if (outcome.kind !== "created") {
+			return resumeMembershipCheckoutOutcome(deps, outcome, input);
 		}
-	}
-
-	private async verifyRenewalEligibility(
-		organizationId: string,
-		customerId: string,
-	): Promise<void> {
-		const timezone =
-			await this.organizations.getOrganizationTimezone(organizationId);
-		const today = calendarDateInTimezone(this.now().toISOString(), timezone);
-		const grants = await this.organizations.listEntitlementGrantSnapshots(
-			organizationId,
-			customerId,
-		);
-		const hasIneligibleActive = grants.some(
-			(grant) =>
-				grant.entitlementClass === TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS &&
-				lifecycleForEntitlementRead(grant, today) === "active" &&
-				calendarDaysUntil(today, grant.endsOn) >
-					TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS,
-		);
-		if (hasIneligibleActive) {
-			throw new AppError(
-				"Teacher Membership already exists.",
-				409,
-				"membership_active",
-			);
-		}
-		if (
-			this.commerce &&
-			(await this.commerce.hasScheduledEntitlement(
-				organizationId,
-				customerId,
-				TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
-				today,
-			))
-		) {
-			throw new AppError(
-				"A Teacher Membership renewal is already scheduled.",
-				409,
-				"membership_active",
-			);
-		}
-	}
-
-	private async resume(
-		outcome: Exclude<CheckoutIntentOutcome, { kind: "created" }>,
-		input: {
-			organizationId: string;
-			integrationVersion: number;
-		},
-	) {
-		if (outcome.kind === "in_progress")
-			throw new AppError(
-				"Checkout is already in progress.",
-				409,
-				"checkout_in_progress",
-			);
-		if (outcome.kind === "active")
-			throw new AppError(
-				"Teacher Membership already exists.",
-				409,
-				"membership_active",
-			);
-		if (outcome.kind === "expired")
-			throw new AppError("Checkout has expired.", 409, "checkout_expired");
-		if (outcome.kind === "failed")
-			throw new AppError(
-				"This checkout attempt cannot continue.",
-				409,
-				"checkout_terminal_failure",
-			);
-		assertCheckoutIntentType(outcome.intent, "membership");
-		try {
-			const storefrontIntegration =
-				await this.organizations.getShopifyIntegration(input.organizationId);
-			if (
-				!storefrontIntegration ||
-				outcome.cart.integrationVersion !== input.integrationVersion
-			)
-				throw new AppError("Customer checkout context has changed.", 503);
-			await this.checkout.markCheckoutStarted(outcome.intent.id);
-			const checkout = await this.storefront.checkout({
-				organizationId: input.organizationId,
-				shopifyCartId: outcome.cart.shopifyCartId,
-			});
-			const integration = await this.organizations.getShopifyIntegration(
-				input.organizationId,
-			);
-			if (
-				!integration ||
-				integration.integrationVersion !==
-					storefrontIntegration.integrationVersion ||
-				!isAllowedCheckoutUrl(checkout.checkoutUrl, integration.storeDomain)
-			)
-				throw new AppError("Shopify checkout is unavailable.", 503);
-			return { checkoutUrl: checkout.checkoutUrl };
-		} catch (_error) {
-			await this.checkout.markFailed(outcome.intent.id);
-			throw retryableCheckoutError();
-		}
-	}
-
-	private async createCart(
-		intent: { id: string; correlationId: string; shopifyVariantGid: string },
-		input: {
-			organizationId: string;
-			customerId: string;
-			sessionId: string;
-			integrationVersion: number;
-			buyerAccessToken: string;
-		},
-		expiresAtIso: string,
-	) {
-		const upstream = await this.storefront.createCart({
-			organizationId: input.organizationId,
-			shopifyVariantGid: intent.shopifyVariantGid,
-			buyerAccessToken: input.buyerAccessToken,
-			correlationId: intent.correlationId,
-		});
-		return this.checkout.attachCart({
-			intentId: intent.id,
-			shopifyCartId: upstream.shopifyCartId,
-			organizationId: input.organizationId,
-			customerId: input.customerId,
-			sessionId: input.sessionId,
-			integrationVersion: input.integrationVersion,
+		return startNewMembershipCartAndCheckout(
+			deps,
+			outcome.intent,
+			input,
 			expiresAtIso,
-		});
-	}
-}
-
-function retryableCheckoutError(): AppError {
-	return new AppError(
-		"Shopify checkout is temporarily unavailable. Please try again.",
-		503,
-		"checkout_retryable_upstream",
-	);
-}
-
-function isAllowedCheckoutUrl(value: string, storeDomain: string): boolean {
-	try {
-		const url = new URL(value);
-		return (
-			url.protocol === "https:" &&
-			url.hostname === storeDomain.toLowerCase() &&
-			url.port === ""
 		);
-	} catch {
-		return false;
 	}
 }

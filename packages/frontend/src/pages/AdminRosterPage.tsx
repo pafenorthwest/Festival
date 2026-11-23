@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { AccessDeniedPanel } from "../components/AccessDeniedPanel.js";
 import {
@@ -71,45 +71,66 @@ function RosterEntryCard(props: { entry: StaffMembershipRosterEntry }) {
 	);
 }
 
-function useStaffRoster(app: FestivalAppController) {
+type StaffRosterApp = Pick<
+	FestivalAppController,
+	"firebaseUser" | "route" | "sessionMembership"
+>;
+
+const ROSTER_ALLOWED_ROLES = ["Admin", "Division Chair", "Concert Chair"];
+
+export function useStaffRoster(
+	app: StaffRosterApp,
+	fetchRoster = listStaffRoster,
+) {
 	const [entries, setEntries] = createSignal<StaffMembershipRosterEntry[]>([]);
 	const [loading, setLoading] = createSignal(true);
 	const [error, setError] = createSignal("");
+	let latestRequest = 0;
 
-	onMount(async () => {
+	const allowed = createMemo(() =>
+		ROSTER_ALLOWED_ROLES.includes(app.sessionMembership()?.role ?? ""),
+	);
+
+	createEffect(() => {
 		const route = app.route();
 		const user = app.firebaseUser();
+		const isAllowed = allowed();
+		const requestId = ++latestRequest;
 		if (
 			(route.kind !== "org-admin-roster" &&
 				route.kind !== "org-admin-accompanists") ||
-			!user
-		)
-			return;
-		try {
-			const roster = await listStaffRoster(await user.getIdToken(), route.slug);
-			setEntries(roster);
-		} catch (reason) {
-			setError(
-				reason instanceof Error
-					? reason.message
-					: "Staff roster could not be loaded.",
-			);
-		} finally {
+			!user ||
+			!isAllowed
+		) {
 			setLoading(false);
+			return;
 		}
+		setLoading(true);
+		setError("");
+		void (async () => {
+			try {
+				const roster = await fetchRoster(await user.getIdToken(), route.slug);
+				if (requestId !== latestRequest) return;
+				setEntries(roster);
+			} catch (reason) {
+				if (requestId !== latestRequest) return;
+				setError(
+					reason instanceof Error
+						? reason.message
+						: "Staff roster could not be loaded.",
+				);
+			} finally {
+				if (requestId === latestRequest) setLoading(false);
+			}
+		})();
 	});
 
-	return { entries, loading, error };
+	return { allowed, entries, loading, error };
 }
 
 export function AdminRosterPage(props: { app: FestivalAppController }) {
-	const { entries, loading, error } = useStaffRoster(props.app);
+	const { allowed, entries, loading, error } = useStaffRoster(props.app);
 	const [filter, setFilter] = createSignal<RosterFilter>("All");
-
-	const allowed = () =>
-		["Admin", "Division Chair", "Concert Chair"].includes(
-			props.app.sessionMembership()?.role ?? "",
-		);
 
 	const filteredEntries = createMemo(() => {
 		const currentFilter = filter();

@@ -305,7 +305,7 @@ function req(
 
 describe("deterministic class checkout recovery routes", () => {
 	const path = "/festivals/spring-2026/registration/checkout/status";
-	const reference = "12345678-1234-4234-8234-123456789abc";
+	const reference = "CCR-8564900F445F";
 	const headers = {
 		...AUTH,
 		...JSON_HDR,
@@ -475,7 +475,7 @@ describe("deterministic class checkout recovery routes", () => {
 
 describe("unissued class checkout restart routes", () => {
 	const path = "/festivals/spring-2026/registration/checkout/restart";
-	const reference = "12345678-1234-4234-8234-123456789abc";
+	const reference = "CCR-8564900F445F";
 	const headers = {
 		...AUTH,
 		...JSON_HDR,
@@ -487,6 +487,64 @@ describe("unissued class checkout restart routes", () => {
 		customerId: "cust_1",
 		festivalShortName: "spring-2026",
 	};
+
+	it("accepts deployed CCR and legacy UUID references and the returned replacement UUID at checkout", async () => {
+		for (const recoveryReference of [reference, VALID_UUID]) {
+			const { customerAccountService, classCheckoutService } =
+				createFakeServices();
+			Object.assign(classCheckoutService, {
+				recoveryStatus: async () => ({
+					status: "recovery_required",
+					recoveryReference,
+					reasonCode: "checkout_expired",
+					retryAllowed: false,
+					restartAllowed: true,
+				}),
+				restartUnissuedCart: async () => ({
+					replacementKey: VALID_UUID,
+					registrations: [],
+				}),
+			});
+			const app = createTestApp({
+				customerAccountService,
+				classCheckoutService,
+			});
+			const status = await req(
+				app,
+				"POST",
+				path.replace("/restart", "/status"),
+				{ ...headers, "Idempotency-Key": VALID_UUID },
+				JSON.stringify({ recoveryReference }),
+			);
+			expect(status.status).toBe(200);
+			const restart = await req(
+				app,
+				"POST",
+				path,
+				headers,
+				JSON.stringify({ recoveryReference }),
+			);
+			expect(restart.status).toBe(200);
+			const { replacementKey } = await restart.json();
+			const checkout = await req(
+				app,
+				"POST",
+				path.replace("/restart", ""),
+				{ ...headers, "Idempotency-Key": replacementKey },
+				JSON.stringify({
+					lineItems: [
+						{
+							childId: "child",
+							festivalClassId: "class",
+							teacherId: "teacher",
+							pieces: [],
+						},
+					],
+				}),
+			);
+			expect(checkout.status).toBe(200);
+		}
+	});
 
 	it("discovers a restart reference using only the tenant customer session", async () => {
 		const { customerAccountService, classCheckoutService, calls } =
@@ -2050,6 +2108,7 @@ describe("Customer Registration Routes", () => {
 					entitlement: {
 						id: entitlement.id,
 						festivalId: festival.id,
+						festivalShortName: "spring-2026",
 						festivalClassId: classConfig.id,
 						childId: child.id,
 						status: "confirmed",
@@ -2061,6 +2120,7 @@ describe("Customer Registration Routes", () => {
 						festivalId: festival.id,
 						displayName: "Piano Solo Level 1",
 						classSubtypeId: "subtype-piano",
+						requiresConcerto: false,
 						divisionId: "div-1",
 						minimumAge: 5,
 						maximumAge: 18,

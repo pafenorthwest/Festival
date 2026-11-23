@@ -20,6 +20,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 		CREATE SCHEMA IF NOT EXISTS ${safeSchema};
 		CREATE EXTENSION IF NOT EXISTS pgcrypto;
 		CREATE EXTENSION IF NOT EXISTS btree_gist;
+		CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;
 
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.schema_migrations (
 			version TEXT PRIMARY KEY,
@@ -1024,6 +1025,11 @@ CREATE INDEX IF NOT EXISTS class_checkout_execution_events_intent_idx ON ${safeS
 		CREATE INDEX IF NOT EXISTS registration_metadata_organization_class_entitlement_idx
 			ON ${safeSchema}.registration_metadata(organization_id, class_entitlement_id)
 			WHERE class_entitlement_id IS NOT NULL;
+		CREATE INDEX IF NOT EXISTS idx_repertoire_contributors_name_trgm
+			ON ${safeSchema}.repertoire_contributors USING gin (normalized_name public.gin_trgm_ops);
+		CREATE INDEX IF NOT EXISTS idx_repertoire_works_active_title_trgm
+			ON ${safeSchema}.repertoire_works USING gin (normalized_title public.gin_trgm_ops)
+			WHERE is_active;
 		CREATE INDEX IF NOT EXISTS repertoire_works_organization_title_idx
 			ON ${safeSchema}.repertoire_works(organization_id, normalized_title);
 		CREATE INDEX IF NOT EXISTS repertoire_work_contributors_contributor_idx

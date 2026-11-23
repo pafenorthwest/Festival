@@ -4,7 +4,7 @@ import type { ClassEligibilityResult } from "@festival/common";
 const clientSolid = await import("solid-js/dist/solid.js");
 mock.module("solid-js", () => clientSolid);
 
-const { createRoot } = clientSolid;
+const { createRoot, createSignal } = clientSolid;
 const { createRegistrationCart } = await import(
 	"../src/pages/registrationCartState.js"
 );
@@ -54,7 +54,7 @@ describe("useCartEligibility hook", () => {
 		});
 	});
 
-	it("evaluates added items reactively and populates results map", async () => {
+	it("waits for the customer CSRF token before evaluating cart items", async () => {
 		await new Promise<void>((resolve) => {
 			createRoot(async (dispose) => {
 				const cart = createRegistrationCart();
@@ -68,10 +68,11 @@ describe("useCartEligibility hook", () => {
 				};
 
 				let receivedItems: unknown = null;
+				const [csrfToken, setCsrfToken] = createSignal("");
 				const eligibility = useCartEligibility({
 					slug: "test-org",
 					festivalSlug: "spring-2026",
-					csrfToken: "csrf-123",
+					csrfToken,
 					cart,
 					evaluator: async (_slug, _fest, items, csrf) => {
 						receivedItems = items;
@@ -93,7 +94,11 @@ describe("useCartEligibility hook", () => {
 					pieces: [],
 				});
 
-				// Wait for reactive microtask
+				await flushTicks();
+				expect(receivedItems).toBeNull();
+				expect(eligibility.isCartEligible()).toBe(false);
+
+				setCsrfToken("csrf-123");
 				await flushTicks();
 
 				expect(receivedItems).toEqual([

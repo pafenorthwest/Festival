@@ -5,9 +5,15 @@ import * as perfScenarios from "../scripts/perf-advanced-scenarios.js";
 import {
 	calculatePercentile,
 	computeMetricStats,
+	computePeakConcurrency,
+	computeScenarioIndexRanges,
+	DEFAULT_CONCURRENCY,
+	MAX_CONCURRENCY,
+	PEAK_CONCURRENCY,
 	parseConfig,
 	renderStatusBreakdown,
 	type ScenarioConfig,
+	type ScenarioResult,
 } from "../scripts/perf-advanced-scenarios.js";
 
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
@@ -83,6 +89,9 @@ describe("perf-advanced-scenarios helpers", () => {
 				expect(config.scenario).toBe("all");
 				expect(config.festival).toBe("perf-2026");
 				expect(config.classId).toBe("perf-class-01");
+				expect(config.divisionId).toBe("11111111-1111-4111-8111-111111111111");
+				expect(config.openClassId).toBe("perf-class-open-01");
+				expect(config.concurrency).toBe(DEFAULT_CONCURRENCY);
 			} finally {
 				if (prevSlug === undefined) delete process.env.SLUG;
 				else process.env.SLUG = prevSlug;
@@ -93,13 +102,72 @@ describe("perf-advanced-scenarios helpers", () => {
 
 		it("parses custom env and CLI argv options hermetically", () => {
 			const config = parseScenarioConfig({
-				env: { SLUG: "custom-org", SCENARIO: "s4" },
+				env: {
+					SLUG: "custom-org",
+					SCENARIO: "s5",
+					DIVISION_ID: "div-strings",
+					OPEN_CLASS_ID: "class-open-99",
+					CONCURRENCY: "250",
+				},
 				argv: ["--base-url", "http://example.test"],
 			});
 			expect(config.slug).toBe("custom-org");
-			expect(config.scenario).toBe("4");
+			expect(config.scenario).toBe("5");
+			expect(config.divisionId).toBe("div-strings");
+			expect(config.openClassId).toBe("class-open-99");
+			expect(config.concurrency).toBe(250);
 			expect(config.baseUrl).toBe("http://example.test");
 			expect(config.origin).toBe("http://example.test");
+		});
+
+		it("throws when CONCURRENCY exceeds MAX_CONCURRENCY or is invalid", () => {
+			expect(MAX_CONCURRENCY).toBe(1000);
+			expect(PEAK_CONCURRENCY).toBe(1000);
+			expect(() =>
+				parseScenarioConfig({ env: { CONCURRENCY: "1001" }, argv: [] }),
+			).toThrow();
+			expect(() =>
+				parseScenarioConfig({ env: { CONCURRENCY: "0" }, argv: [] }),
+			).toThrow();
+			expect(() =>
+				parseScenarioConfig({ env: {}, argv: ["--concurrency=1001"] }),
+			).toThrow();
+			expect(() =>
+				parseScenarioConfig({ env: { CONCURRENCY: "12.5" }, argv: [] }),
+			).toThrow();
+		});
+	});
+
+	describe("computePeakConcurrency & computeScenarioIndexRanges", () => {
+		it("caps peak concurrency at 1000 for 500 and 1000 baseline and doubles small smoke values", () => {
+			expect(computePeakConcurrency(500)).toBe(1000);
+			expect(computePeakConcurrency(1000)).toBe(1000);
+			expect(computePeakConcurrency(20)).toBe(40);
+		});
+
+		it("produces strictly disjoint scenario ranges <= 5500 for baseline and max concurrency", () => {
+			for (const concurrency of [20, 500, 1000]) {
+				const ranges = computeScenarioIndexRanges(concurrency);
+				const ordered = [ranges.s1, ranges.s2, ranges.s3, ranges.s4, ranges.s5];
+				for (let i = 0; i < ordered.length; i++) {
+					const current = ordered[i];
+					expect(current).toBeDefined();
+					if (!current) continue;
+					expect(current.start).toBeLessThanOrEqual(current.end);
+					expect(current.end).toBeLessThanOrEqual(5500);
+					if (i > 0) {
+						const prev = ordered[i - 1];
+						expect(prev && current.start > prev.end).toBe(true);
+					}
+				}
+			}
+
+			const maxRanges = computeScenarioIndexRanges(1000);
+			expect(maxRanges.s1).toEqual({ start: 1, end: 1000 });
+			expect(maxRanges.s2).toEqual({ start: 1001, end: 2000 });
+			expect(maxRanges.s3).toEqual({ start: 2001, end: 3000 });
+			expect(maxRanges.s4).toEqual({ start: 3001, end: 4500 });
+			expect(maxRanges.s5).toEqual({ start: 4501, end: 5500 });
 		});
 	});
 
@@ -107,7 +175,7 @@ describe("perf-advanced-scenarios helpers", () => {
 		it("partitions Phase 1 (3001..3500), Phase 2a withdraw (3001..3250), and Phase 2b join (3501..3750) with preseeded children", async () => {
 			const runScenario4 = (
 				perfScenarios as {
-					runScenario4?: (cfg: ScenarioConfig) => Promise<string>;
+					runScenario4?: (cfg: ScenarioConfig) => Promise<ScenarioResult>;
 				}
 			).runScenario4;
 			expect(typeof runScenario4).toBe("function");
@@ -139,12 +207,16 @@ describe("perf-advanced-scenarios helpers", () => {
 				return new Response("{}", { status: 201 });
 			}) as typeof fetch;
 
+			let result: ScenarioResult | undefined;
 			try {
-				await runScenario4?.({
+				result = await runScenario4?.({
 					baseUrl: "http://perf.local",
 					slug: "perf-test",
 					festival: "perf-2026",
 					classId: "perf-class-01",
+					divisionId: "11111111-1111-4111-8111-111111111111",
+					openClassId: "perf-class-open-01",
+					concurrency: 500,
 					origin: "http://perf.local",
 					scenario: "4",
 				});
@@ -152,6 +224,7 @@ describe("perf-advanced-scenarios helpers", () => {
 				globalThis.fetch = originalFetch;
 			}
 
+			expect(result?.errorCount).toBe(0);
 			expect([...preseeded].sort((a, b) => a - b)).toEqual(range(3001, 750));
 			const phase1 = joins.slice(0, 500).map((entry) => entry.idx);
 			const phase2b = joins.slice(500);
@@ -167,9 +240,12 @@ describe("perf-advanced-scenarios helpers", () => {
 	});
 
 	describe("G2 file size and Postgres connection budget", () => {
-		it("keeps perf-advanced-scenarios.ts and postgres-customer-account-repository.ts within 500 lines", () => {
+		it("keeps perf scripts and postgres-customer-account-repository.ts within 500 lines", () => {
 			expect(
 				countLines("packages/backend/scripts/perf-advanced-scenarios.ts"),
+			).toBeLessThanOrEqual(500);
+			expect(
+				countLines("packages/backend/scripts/perf-venue-e2e-scenario.ts"),
 			).toBeLessThanOrEqual(500);
 			expect(
 				countLines(

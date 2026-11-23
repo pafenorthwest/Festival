@@ -402,7 +402,8 @@
 	text-decoration: none;
 	box-shadow: none;
 }
-.parent-shell .festival-home-banner.teachers {
+.parent-shell .festival-home-banner.teachers,
+.parent-shell .customer-membership-acquire-actions .teachers {
 	--role-accent: #4459d6;
 	--role-fill: #eef0fb;
 	--role-hover: #e5e8f8;
@@ -423,16 +424,24 @@
 	--role-text: #1b6548;
 	--role-border: #d0e2d6;
 }
-.parent-shell .festival-home-banner.accompanists {
+.parent-shell .festival-home-banner.accompanists,
+.parent-shell .customer-membership-acquire-actions .accompanists {
 	--role-accent: #b6872c;
 	--role-fill: #f7f0e2;
 	--role-hover: #f1e6ce;
 	--role-text: #775817;
 	--role-border: #e8dcc1;
 }
+.parent-shell .customer-membership-acquire-actions .button:enabled {
+	color: var(--role-text);
+	background: var(--role-fill);
+}
 .parent-shell
 	.parent-festival-home
-	.festival-home-banner:is(:hover, :focus-visible) {
+	.festival-home-banner:is(:hover, :focus-visible),
+.parent-shell
+	.customer-membership-acquire-actions
+	.button:enabled:is(:hover, :focus-visible) {
 	color: var(--role-text);
 	background: var(--role-hover);
 }
