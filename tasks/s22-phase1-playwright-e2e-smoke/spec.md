@@ -60,7 +60,24 @@ pwsh -NoProfile -File .agents/skills/festival-session/scripts/validate-packet.ps
 ```
 
 ## Delivery
-Pending execution.
+- Delivered files:
+  - `playwright.config.ts` — headless Chromium Playwright configuration with trace/screenshot capture on failure and single-worker deterministic execution.
+  - `e2e/phase1/**` — Phase 1 Public, Phase 2 Authenticated Customer, and Phase 3 Authenticated Admin smoke specs, plus E2E-only seed/auth helpers, global console-error and HTTP `5xx` guards, and server bootstrap harness.
+  - `package.json` & `bun.lock` — `@playwright/test` devDependency and root `test:e2e` / `test:e2e:phase1` scripts.
+  - `.github/workflows/e2e-phase1.yml` — GitHub Actions workflow running Phase 1 Playwright E2E against a Postgres 17 service container with Chromium installation.
+  - `tasks/s22-phase1-playwright-e2e-smoke/code-review.md` — independent subagent review record (`Findings status: none`, `Verdict: patch is correct`).
+- Dual-mode E2E bootstrap:
+  - `PLAYWRIGHT_BASE_URL` live read-safe mode for optional remote verification (e.g., `https://int.artsfestival.online`) without mutating remote state.
+  - Postgres 17 `DATABASE_URL` CI/local mode launching an ephemeral local Festival stack backed by real Postgres 17 migrations and seed data.
+  - Dockerless in-memory fallback when no `DATABASE_URL` is provided in local developer environments.
 
 ## Quality gate results
-Pending execution.
+- Local Windows verification:
+  - `biome check` / `biome lint` across packages: passed (`0` errors, `0` warnings).
+  - TypeScript checks (`tsc --noEmit`) for `@festival/common`, `@festival/backend`, and `@festival/frontend`: passed.
+  - Frontend production build (`vite build`): passed.
+  - `bun run check:sql`: passed.
+  - `playwright test e2e/phase1`: `10/10` passed (`0` console errors, `0` HTTP `5xx`).
+  - `validate-packet.ps1 -TaskName s22-phase1-playwright-e2e-smoke -RequireCodeReview`: exit `0`.
+- CI verification:
+  - `Pull Request Checks / verify` and `e2e-phase1` (Postgres 17 + Chromium) gated on PR prior to merge.
