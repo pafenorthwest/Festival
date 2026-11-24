@@ -172,6 +172,11 @@ class PostgresTenantMembershipFacade
 	) {
 		return this.membershipRepo.markInviteAccepted(...args);
 	}
+	acceptInvite(
+		...args: Parameters<AppUserMembershipRepository["acceptInvite"]>
+	) {
+		return this.membershipRepo.acceptInvite(...args);
+	}
 	listAdminUsers(
 		...args: Parameters<AppUserMembershipRepository["listAdminUsers"]>
 	) {

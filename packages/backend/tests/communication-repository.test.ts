@@ -325,13 +325,18 @@ describe("PostgresCommunicationRepository", () => {
 	describe("SQL query behavior with mocks", () => {
 		let repo: PostgresCommunicationRepository;
 		let unsafeSpy: ReturnType<typeof spyOn>;
+		let beginSpy: ReturnType<typeof spyOn>;
 
 		beforeEach(() => {
 			repo = new PostgresCommunicationRepository("orgs");
 			unsafeSpy = spyOn(sql, "unsafe");
+			beginSpy = spyOn(sql, "begin").mockImplementation(((
+				callback: (tx: typeof sql) => unknown,
+			) => callback(sql)) as unknown as typeof sql.begin);
 		});
 
 		afterEach(() => {
+			beginSpy.mockRestore();
 			unsafeSpy.mockRestore();
 		});
 
@@ -394,6 +399,7 @@ describe("PostgresCommunicationRepository", () => {
 		});
 
 		it("createTemplate queries max version and inserts template", async () => {
+			unsafeSpy.mockResolvedValueOnce([]);
 			unsafeSpy.mockResolvedValueOnce([{ next_version: 1 }]);
 			unsafeSpy.mockResolvedValueOnce([
 				{
@@ -421,7 +427,8 @@ describe("PostgresCommunicationRepository", () => {
 
 			expect(template.id).toBe("tmpl-1");
 			expect(template.version).toBe(1);
-			expect(unsafeSpy).toHaveBeenCalledTimes(2);
+			expect(beginSpy).toHaveBeenCalledTimes(1);
+			expect(unsafeSpy).toHaveBeenCalledTimes(3);
 		});
 
 		it("createLog inserts log entry", async () => {

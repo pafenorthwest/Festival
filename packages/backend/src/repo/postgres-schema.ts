@@ -166,6 +166,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			FOREIGN KEY (required_subtype_id, organization_id) REFERENCES ${safeSchema}.registration_catalog_values (id, organization_id) ON DELETE SET NULL (required_subtype_id),
 			CHECK (required_subtype_id IS NULL OR required_subtype_id <> id)
 		);
+		CREATE UNIQUE INDEX IF NOT EXISTS registration_catalog_values_id_organization_key ON ${safeSchema}.registration_catalog_values (id, organization_id);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.festival_class_configurations (
 			id TEXT PRIMARY KEY,
 			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
@@ -185,6 +186,8 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			FOREIGN KEY (class_subtype_id, organization_id) REFERENCES ${safeSchema}.registration_catalog_values (id, organization_id) ON DELETE RESTRICT,
 			FOREIGN KEY (division_id, organization_id) REFERENCES ${safeSchema}.organization_divisions (id, organization_id) ON DELETE RESTRICT
 		);
+		CREATE UNIQUE INDEX IF NOT EXISTS festival_class_configurations_id_organization_key ON ${safeSchema}.festival_class_configurations (id, organization_id);
+		CREATE UNIQUE INDEX IF NOT EXISTS festival_class_configurations_id_organization_festival_key ON ${safeSchema}.festival_class_configurations (id, organization_id, festival_id);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.festival_class_capacity_audit_logs (
 			id TEXT PRIMARY KEY,
 			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
@@ -254,6 +257,8 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			FOREIGN KEY (organization_id) REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
 			FOREIGN KEY (parent_customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers (id, organization_id) ON DELETE CASCADE
 		);
+		CREATE UNIQUE INDEX IF NOT EXISTS festival_children_id_organization_key ON ${safeSchema}.festival_children (id, organization_id);
+		CREATE UNIQUE INDEX IF NOT EXISTS festival_children_id_organization_parent_key ON ${safeSchema}.festival_children (id, organization_id, parent_customer_id);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.festival_child_age_snapshots (
 			id TEXT PRIMARY KEY, child_id TEXT NOT NULL, organization_id TEXT NOT NULL,
 			age INTEGER NOT NULL, created_at TIMESTAMPTZ NOT NULL, valid_until TIMESTAMPTZ NOT NULL, superseded_at TIMESTAMPTZ NULL,
@@ -276,6 +281,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			FOREIGN KEY (parent_customer_id, organization_id) REFERENCES ${safeSchema}.festival_customers (id, organization_id) ON DELETE CASCADE,
 			FOREIGN KEY (child_id, organization_id, parent_customer_id) REFERENCES ${safeSchema}.festival_children (id, organization_id, parent_customer_id) ON DELETE CASCADE
 		);
+		CREATE UNIQUE INDEX IF NOT EXISTS festival_class_waitlist_entries_reference_key ON ${safeSchema}.festival_class_waitlist_entries (id, organization_id, festival_class_id, parent_customer_id, child_id);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.festival_class_waitlist_events (
 			id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
 			organization_id TEXT NOT NULL REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
@@ -329,6 +335,7 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			FOREIGN KEY (festival_class_id, organization_id) REFERENCES ${safeSchema}.festival_class_configurations (id, organization_id) ON DELETE RESTRICT,
 			FOREIGN KEY (child_id, organization_id) REFERENCES ${safeSchema}.festival_children (id, organization_id) ON DELETE RESTRICT
 		);
+		CREATE UNIQUE INDEX IF NOT EXISTS checkout_intents_id_organization_key ON ${safeSchema}.checkout_intents (id, organization_id);
 CREATE TABLE IF NOT EXISTS ${safeSchema}.class_checkout_executions (
     intent_id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, customer_id TEXT NOT NULL,
     fingerprint TEXT NOT NULL, request_snapshot JSONB NOT NULL,
@@ -352,6 +359,7 @@ CREATE TABLE IF NOT EXISTS ${safeSchema}.class_checkout_execution_events (
     FOREIGN KEY (intent_id, organization_id) REFERENCES ${safeSchema}.class_checkout_executions(intent_id, organization_id) ON DELETE RESTRICT
 );
 CREATE INDEX IF NOT EXISTS class_checkout_executions_recovery_idx ON ${safeSchema}.class_checkout_executions (organization_id,customer_id,state);
+CREATE INDEX IF NOT EXISTS idx_class_checkout_executions_running_lease ON ${safeSchema}.class_checkout_executions (organization_id, lease_expires_at) WHERE (state = 'running');
 CREATE INDEX IF NOT EXISTS class_checkout_execution_events_intent_idx ON ${safeSchema}.class_checkout_execution_events (organization_id,intent_id,created_at);
 
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.checkout_intent_lines (
@@ -956,6 +964,7 @@ CREATE INDEX IF NOT EXISTS class_checkout_execution_events_intent_idx ON ${safeS
 
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_organization_divisions_name ON ${safeSchema}.organization_divisions (organization_id, normalized_name);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_organization_divisions_order ON ${safeSchema}.organization_divisions (organization_id, display_order);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_invites_pending_org_email_lower ON ${safeSchema}.invites (organization_id, LOWER(email)) WHERE accepted_at IS NULL;
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_memberships_user_org ON ${safeSchema}.memberships (user_id, organization_id);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_festivals_org_code ON ${safeSchema}.festivals (organization_id, code);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_festivals_org_short_name ON ${safeSchema}.festivals (organization_id, short_name);

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
+	AppError,
 	type AuthenticatedUser,
-	deriveDisplayName,
 	type OrganizationAdminUserEntry,
 	type OrganizationInviteRecord,
 	type OrganizationMembershipRecord,
@@ -14,6 +14,12 @@ import {
 	postgresSchemaName,
 } from "../../infra/s09-infra.js";
 import {
+	acceptInviteTx,
+	deleteMembershipTx,
+	isPendingInviteDuplicateError,
+	upsertOrgUserSql,
+} from "./app-user-membership-queries.js";
+import {
 	type AdminUserRow,
 	type CreateInviteRecordInput,
 	type CreateMembershipInput,
@@ -25,9 +31,8 @@ import {
 	mapInviteWithOrganization,
 	mapMembership,
 	mapMembershipWithOrganization,
-	mapOrganizationUser,
+	toIso,
 	toOptionalIso,
-	type UserRow,
 } from "./tenant-mappers.js";
 
 export interface AppUserMembershipRepository {
@@ -55,6 +60,10 @@ export interface AppUserMembershipRepository {
 	): Promise<OrganizationInviteRecord>;
 	findInviteByToken(token: string): Promise<InviteWithOrganization | null>;
 	markInviteAccepted(token: string): Promise<void>;
+	acceptInvite(input: {
+		token: string;
+		user: AuthenticatedUser;
+	}): Promise<MembershipWithOrganization>;
 	listAdminUsers(
 		organizationId: string,
 		currentUserId: string,
@@ -68,74 +77,6 @@ export interface AppUserMembershipRepository {
 		organizationId: string;
 		inviteId: string;
 	}): Promise<void>;
-}
-
-async function upsertOrgUserSql(
-	schema: string,
-	user: AuthenticatedUser,
-): Promise<OrganizationUserRecord> {
-	const explicitDisplayName = user.displayName ?? null;
-	const insertDisplayName = explicitDisplayName ?? deriveDisplayName(user);
-	const normalizedEmail = user.email.toLowerCase();
-	const rows = (await sql.unsafe(
-		`WITH _lock AS (
-			SELECT pg_advisory_xact_lock(hashtext($2))
-		 )
-		 INSERT INTO ${schema}.users (id, firebase_uid, email, display_name, disassociated)
-		 SELECT $1, $2, $3, $4, FALSE
-		 FROM _lock
-		 ON CONFLICT (firebase_uid) DO UPDATE SET
-		   email = EXCLUDED.email,
-		   display_name = COALESCE($5, ${schema}.users.display_name),
-		   disassociated = FALSE
-		 RETURNING id, firebase_uid, email, display_name, disassociated, created_at`,
-		[
-			randomUUID(),
-			user.uid,
-			normalizedEmail,
-			insertDisplayName,
-			explicitDisplayName,
-		],
-	)) as UserRow[];
-	if (!rows[0]) throw new Error("Failed to upsert user.");
-	return mapOrganizationUser(rows[0]);
-}
-
-async function deleteMembershipTx(
-	schema: string,
-	input: {
-		organizationId: string;
-		membershipId: string;
-		currentUserId: string;
-	},
-): Promise<void> {
-	await sql.begin(async (tx) => {
-		const rows = (await tx.unsafe(
-			`SELECT id, user_id FROM ${schema}.memberships
-			 WHERE id = $1 AND organization_id = $2
-			 LIMIT 1`,
-			[input.membershipId, input.organizationId],
-		)) as Array<{ id: string; user_id: string }>;
-		const target = rows[0];
-		if (!target) throw new Error("Membership not found.");
-		if (target.user_id === input.currentUserId) {
-			throw new Error("Admins cannot delete their own membership.");
-		}
-		await tx.unsafe(
-			`DELETE FROM ${schema}.memberships WHERE id = $1 AND organization_id = $2`,
-			[target.id, input.organizationId],
-		);
-		const remaining = (await tx.unsafe(
-			`SELECT COUNT(*)::int AS count FROM ${schema}.memberships WHERE user_id = $1`,
-			[target.user_id],
-		)) as Array<{ count: number }>;
-		if (Number(remaining[0]?.count ?? 0) === 0) {
-			await tx.unsafe(
-				`UPDATE ${schema}.users SET disassociated = TRUE WHERE id = $1`,
-				[target.user_id],
-			);
-		}
-	});
 }
 
 /** PostgreSQL implementation of organization users, memberships, and staff invites. */
@@ -248,20 +189,8 @@ export class PostgresAppUserMembershipRepository
 		input: CreateInviteRecordInput,
 	): Promise<OrganizationInviteRecord> {
 		await this.ensureReady();
-		const rows = (await sql.unsafe(
-			`INSERT INTO ${this.schema}.invites
-			   (id, token, organization_id, email, role, invited_by_user_id)
-			 VALUES ($1, $2, $3, $4, $5, $6)
-			 RETURNING id, token, organization_id, email, role, invited_by_user_id, created_at, accepted_at`,
-			[
-				randomUUID(),
-				randomUUID(),
-				input.organizationId,
-				input.email.toLowerCase(),
-				input.role,
-				input.invitedByUserId,
-			],
-		)) as Array<{
+		const normalizedEmail = input.email.trim().toLowerCase();
+		let rows: Array<{
 			id: string;
 			token: string;
 			organization_id: string;
@@ -271,6 +200,27 @@ export class PostgresAppUserMembershipRepository
 			created_at: Date | string;
 			accepted_at: Date | string | null;
 		}>;
+		try {
+			rows = (await sql.unsafe(
+				`INSERT INTO ${this.schema}.invites
+				   (id, token, organization_id, email, role, invited_by_user_id)
+				 VALUES ($1, $2, $3, $4, $5, $6)
+				 RETURNING id, token, organization_id, email, role, invited_by_user_id, created_at, accepted_at`,
+				[
+					randomUUID(),
+					randomUUID(),
+					input.organizationId,
+					normalizedEmail,
+					input.role,
+					input.invitedByUserId,
+				],
+			)) as typeof rows;
+		} catch (error) {
+			if (isPendingInviteDuplicateError(error)) {
+				throw new AppError("That email has already been added.", 409);
+			}
+			throw error;
+		}
 		const row = rows[0];
 		if (!row) throw new Error("Failed to create invite.");
 		return {
@@ -280,10 +230,7 @@ export class PostgresAppUserMembershipRepository
 			email: row.email,
 			role: row.role,
 			invitedByUserId: row.invited_by_user_id,
-			createdAtIso:
-				row.created_at instanceof Date
-					? row.created_at.toISOString()
-					: row.created_at,
+			createdAtIso: toIso(row.created_at),
 			acceptedAtIso: toOptionalIso(row.accepted_at),
 		};
 	}
@@ -316,6 +263,14 @@ export class PostgresAppUserMembershipRepository
 			 WHERE token = $1`,
 			[token],
 		);
+	}
+
+	async acceptInvite(input: {
+		token: string;
+		user: AuthenticatedUser;
+	}): Promise<MembershipWithOrganization> {
+		await this.ensureReady();
+		return acceptInviteTx(this.schema, input);
 	}
 
 	async listAdminUsers(

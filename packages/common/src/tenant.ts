@@ -1,7 +1,7 @@
 import * as v from "valibot";
 import { MEMBERSHIP_DIVISION_SELECTION_POLICIES } from "./entitlements.js";
 import { ORGANIZATION_ROLES } from "./organization.js";
-import { nonEmptyText } from "./schema-utils.js";
+import { calendarDatePipe, nonEmptyText } from "./schema-utils.js";
 
 export const PIANO_TYPES = ["upright", "grand"] as const;
 
@@ -105,13 +105,10 @@ export const UpdateAccompanistPolicyInputSchema = v.strictObject({
 });
 
 export const UpdateRegistrationAgeDateInputSchema = v.strictObject({
-	registrationAgeDate: v.pipe(
-		v.string("Registration age date must use YYYY-MM-DD."),
-		v.trim(),
-		v.regex(
-			/^\d{4}-\d{2}-\d{2}$/,
-			"Registration age date must use YYYY-MM-DD.",
-		),
+	registrationAgeDate: calendarDatePipe(
+		"Registration age date must use YYYY-MM-DD.",
+		"Registration age date must use YYYY-MM-DD.",
+		"Registration age date is invalid.",
 	),
 });
 

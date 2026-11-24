@@ -1,4 +1,4 @@
-import { createSignal, For, Show } from "solid-js";
+import { createEffect, For, on, onCleanup, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { AccessDeniedPanel } from "../components/AccessDeniedPanel.js";
 import { AdminClassCheckoutRecoveries } from "../components/AdminClassCheckoutRecoveries.js";
@@ -13,163 +13,231 @@ import {
 	recoverAdminCheckoutIntent,
 	searchAdminCustomers,
 } from "../lib/api.js";
+import {
+	createCheckoutRecoveryPageSignals,
+	formatIntentDate,
+	formatIntentDiagnostic,
+	formatIntentType,
+	resolveRecoveryError,
+} from "./checkoutRecoveryPresentation.js";
 
 interface AdminCheckoutRecoveryPageProps {
 	app: FestivalAppController;
+	slug?: string;
 }
 
-function formatDate(iso: string): string {
-	try {
-		return new Date(iso).toLocaleString();
-	} catch {
-		return iso;
-	}
-}
-
-function formatIntentType(intent: AdminCheckoutIntent): string {
-	if (intent.intentType === "membership") return "Membership";
-	if (intent.intentType === "festival_class") return "Festival Class";
-	return intent.intentType;
-}
-
-function formatDiagnostic(intent: AdminCheckoutIntent): string {
-	const expiresMs = Date.parse(intent.expiresAtIso);
-	if (Number.isNaN(expiresMs)) return intent.expiresAtIso;
-	const isExpired = expiresMs <= Date.now();
-	const dateStr = new Date(expiresMs).toLocaleDateString();
-	return isExpired ? `Expired (${dateStr})` : `Expires ${dateStr}`;
+function IntentRow(props: {
+	intent: AdminCheckoutIntent;
+	actionLoadingId: string | null;
+	confirming: boolean;
+	onPromptInvalidate: (id: string) => void;
+	onCancelInvalidate: () => void;
+	onConfirmInvalidate: (id: string) => void;
+	onAttemptRecovery: (id: string) => void;
+}) {
+	const busy = () => props.actionLoadingId === props.intent.id;
+	return (
+		<tr>
+			<td>{formatIntentDate(props.intent.createdAtIso)}</td>
+			<td>
+				<strong>{formatIntentType(props.intent)}</strong>
+				<Show when={props.intent.offeringId}>
+					<small> ({props.intent.offeringId})</small>
+				</Show>
+			</td>
+			<td>
+				{props.intent.divisionNameSnapshot ?? props.intent.divisionId ?? "—"}
+			</td>
+			<td>
+				{props.intent.amount} {props.intent.currencyCode}
+			</td>
+			<td>
+				<span class={`status-badge status-${props.intent.status}`}>
+					{props.intent.status}
+				</span>
+			</td>
+			<td>{formatIntentDiagnostic(props.intent)}</td>
+			<td class="action-cell">
+				<Show
+					when={props.confirming}
+					fallback={
+						<div class="action-buttons">
+							<Button
+								type="button"
+								class="button-secondary"
+								disabled={busy()}
+								onClick={() => props.onPromptInvalidate(props.intent.id)}
+							>
+								Invalidate
+							</Button>
+							<Button
+								type="button"
+								class="button-primary"
+								disabled={busy()}
+								onClick={() => props.onAttemptRecovery(props.intent.id)}
+							>
+								{busy() ? "Creating…" : "Attempt Recovery"}
+							</Button>
+						</div>
+					}
+				>
+					<div class="confirm-box">
+						<span>Confirm invalidate?</span>
+						<Button
+							type="button"
+							class="button-danger"
+							disabled={busy()}
+							onClick={() => props.onConfirmInvalidate(props.intent.id)}
+						>
+							Yes, Invalidate
+						</Button>
+						<Button
+							type="button"
+							class="button-secondary"
+							onClick={props.onCancelInvalidate}
+						>
+							Cancel
+						</Button>
+					</div>
+				</Show>
+			</td>
+		</tr>
+	);
 }
 
 export function AdminCheckoutRecoveryPage(
 	props: AdminCheckoutRecoveryPageProps,
 ) {
-	const [searchQuery, setSearchQuery] = createSignal("");
-	const [isSearching, setIsSearching] = createSignal(false);
-	const [searchResults, setSearchResults] = createSignal<
-		AdminCustomerSearchResult[]
-	>([]);
-	const [selectedCustomer, setSelectedCustomer] =
-		createSignal<AdminCustomerSearchResult | null>(null);
-	const [intents, setIntents] = createSignal<AdminCheckoutIntent[]>([]);
-	const [isLoadingIntents, setIsLoadingIntents] = createSignal(false);
-	const [actionLoading, setActionLoading] = createSignal<string | null>(null);
-	const [confirmInvalidateId, setConfirmInvalidateId] = createSignal<
-		string | null
-	>(null);
-	const [recoveryUrl, setRecoveryUrl] = createSignal<string | null>(null);
-	const [copyFeedback, setCopyFeedback] = createSignal<string | null>(null);
-	const [feedbackMessage, setFeedbackMessage] = createSignal<string | null>(
-		null,
-	);
-	const [errorMessage, setErrorMessage] = createSignal<string | null>(null);
+	const s = createCheckoutRecoveryPageSignals();
+	const { selectedCustomer } = s;
+
+	let latestSearchRequest = 0;
+	let latestIntentsRequest = 0;
+	onCleanup(() => {
+		latestSearchRequest += 1;
+		latestIntentsRequest += 1;
+	});
 
 	const orgSlug = () => {
+		if (props.slug) return props.slug;
 		const r = props.app.route();
 		if ("slug" in r && r.slug) return r.slug;
 		return props.app.sessionMembership()?.organizationSlug ?? "";
 	};
 
+	createEffect(
+		on(
+			orgSlug,
+			() => {
+				latestSearchRequest += 1;
+				latestIntentsRequest += 1;
+				s.resetForOrgChange();
+			},
+			{ defer: true },
+		),
+	);
+
 	async function handleSearch(e: Event) {
 		e.preventDefault();
-		const query = searchQuery().trim();
+		const query = s.searchQuery().trim();
 		if (query.length < 2) {
-			setErrorMessage("Please enter at least 2 characters to search.");
+			s.setErrorMessage("Please enter at least 2 characters to search.");
 			return;
 		}
-		setErrorMessage(null);
-		setFeedbackMessage(null);
-		setIsSearching(true);
+		const slug = orgSlug();
+		const requestId = ++latestSearchRequest;
+		s.setErrorMessage(null);
+		s.setFeedbackMessage(null);
+		s.setIsSearching(true);
 		try {
-			const res = await searchAdminCustomers(orgSlug(), query);
-			setSearchResults(res.customers);
+			const res = await searchAdminCustomers(slug, query);
+			if (requestId !== latestSearchRequest) return;
+			s.setSearchResults(res.customers);
 			if (res.customers.length === 0) {
-				setFeedbackMessage("No customers found matching that query.");
+				s.setFeedbackMessage("No customers found matching that query.");
 			}
 		} catch (err) {
-			setErrorMessage(
-				err instanceof Error ? err.message : "Customer search failed.",
-			);
+			if (requestId !== latestSearchRequest) return;
+			s.setErrorMessage(resolveRecoveryError(err, "Customer search failed."));
 		} finally {
-			setIsSearching(false);
+			if (requestId === latestSearchRequest) s.setIsSearching(false);
 		}
 	}
 
 	async function loadCustomerIntents(customerId: string) {
-		setIsLoadingIntents(true);
-		setErrorMessage(null);
+		const slug = orgSlug();
+		const requestId = ++latestIntentsRequest;
+		s.setIsLoadingIntents(true);
+		s.setErrorMessage(null);
 		try {
-			const res = await getAdminCustomerCheckoutIntents(orgSlug(), customerId);
-			setIntents(res.intents);
+			const res = await getAdminCustomerCheckoutIntents(slug, customerId);
+			if (requestId !== latestIntentsRequest) return;
+			s.setIntents(res.intents);
 		} catch (err) {
-			setErrorMessage(
-				err instanceof Error
-					? err.message
-					: "Failed to load customer checkout intents.",
+			if (requestId !== latestIntentsRequest) return;
+			s.setIntents([]);
+			s.setErrorMessage(
+				resolveRecoveryError(err, "Failed to load customer checkout intents."),
 			);
 		} finally {
-			setIsLoadingIntents(false);
+			if (requestId === latestIntentsRequest) s.setIsLoadingIntents(false);
 		}
 	}
 
 	function handleSelectCustomer(customer: AdminCustomerSearchResult) {
-		setSelectedCustomer(customer);
-		setRecoveryUrl(null);
-		setConfirmInvalidateId(null);
+		s.setSelectedCustomer(customer);
+		s.setIntents([]);
+		s.setRecoveryUrl(null);
+		s.setConfirmInvalidateId(null);
 		void loadCustomerIntents(customer.customerId);
 	}
 
 	async function handleInvalidate(intentId: string) {
-		setActionLoading(intentId);
-		setErrorMessage(null);
+		s.setActionLoading(intentId);
+		s.setErrorMessage(null);
 		try {
 			await invalidateAdminCheckoutIntent(orgSlug(), intentId);
-			setConfirmInvalidateId(null);
-			setFeedbackMessage("Checkout intent invalidated successfully.");
+			s.setConfirmInvalidateId(null);
+			s.setFeedbackMessage("Checkout intent invalidated successfully.");
 			const currentCust = selectedCustomer();
-			if (currentCust) {
-				await loadCustomerIntents(currentCust.customerId);
-			}
+			if (currentCust) await loadCustomerIntents(currentCust.customerId);
 		} catch (err) {
-			setErrorMessage(
-				err instanceof Error
-					? err.message
-					: "Failed to invalidate checkout intent.",
+			s.setErrorMessage(
+				resolveRecoveryError(err, "Failed to invalidate checkout intent."),
 			);
 		} finally {
-			setActionLoading(null);
+			s.setActionLoading(null);
 		}
 	}
 
 	async function handleAttemptRecovery(intentId: string) {
-		setActionLoading(intentId);
-		setErrorMessage(null);
+		s.setActionLoading(intentId);
+		s.setErrorMessage(null);
 		try {
 			const result = await recoverAdminCheckoutIntent(orgSlug(), intentId);
 			const fullUrl = result.recoveryUrl.startsWith("http")
 				? result.recoveryUrl
 				: `${window.location.origin}${result.recoveryUrl}`;
-			setRecoveryUrl(fullUrl);
-			setFeedbackMessage("Recovery link generated.");
+			s.setRecoveryUrl(fullUrl);
+			s.setFeedbackMessage("Recovery link generated.");
 		} catch (err) {
-			setErrorMessage(
-				err instanceof Error
-					? err.message
-					: "Failed to create recovery request.",
+			s.setErrorMessage(
+				resolveRecoveryError(err, "Failed to create recovery request."),
 			);
 		} finally {
-			setActionLoading(null);
+			s.setActionLoading(null);
 		}
 	}
 
 	async function handleCopyLink() {
-		const link = recoveryUrl();
+		const link = s.recoveryUrl();
 		if (!link) return;
 		try {
 			await navigator.clipboard.writeText(link);
-			setCopyFeedback("Copied to clipboard!");
-			setTimeout(() => setCopyFeedback(null), 2500);
+			s.setCopyFeedback("Copied to clipboard!");
+			setTimeout(() => s.setCopyFeedback(null), 2500);
 		} catch {
-			setCopyFeedback("Copy failed");
+			s.setCopyFeedback("Copy failed");
 		}
 	}
 
@@ -191,14 +259,14 @@ export function AdminCheckoutRecoveryPage(
 					</div>
 				</header>
 
-				<Show when={errorMessage()}>
+				<Show when={s.errorMessage()}>
 					<div class="alert alert-error" role="alert">
-						<p>{errorMessage()}</p>
+						<p>{s.errorMessage()}</p>
 					</div>
 				</Show>
-				<Show when={feedbackMessage()}>
+				<Show when={s.feedbackMessage()}>
 					<div class="alert alert-success" role="status">
-						<p>{feedbackMessage()}</p>
+						<p>{s.feedbackMessage()}</p>
 					</div>
 				</Show>
 
@@ -208,19 +276,19 @@ export function AdminCheckoutRecoveryPage(
 						<input
 							type="search"
 							placeholder="e.g. customer@example.com"
-							value={searchQuery()}
-							onInput={(e) => setSearchQuery(e.currentTarget.value)}
+							value={s.searchQuery()}
+							onInput={(e) => s.setSearchQuery(e.currentTarget.value)}
 						/>
 					</label>
-					<Button type="submit" disabled={isSearching()}>
-						{isSearching() ? "Searching…" : "Search"}
+					<Button type="submit" disabled={s.isSearching()}>
+						{s.isSearching() ? "Searching…" : "Search"}
 					</Button>
 				</form>
 
-				<Show when={searchResults().length > 0}>
+				<Show when={s.searchResults().length > 0}>
 					<div class="search-results-list">
 						<h3>Matching Customers</h3>
-						<For each={searchResults()}>
+						<For each={s.searchResults()}>
 							{(cust) => (
 								<button
 									type="button"
@@ -240,7 +308,7 @@ export function AdminCheckoutRecoveryPage(
 					</div>
 				</Show>
 
-				<Show when={recoveryUrl()}>
+				<Show when={s.recoveryUrl()}>
 					<div class="recovery-result-box panel">
 						<h3>Recovery Link Ready</h3>
 						<p>
@@ -251,11 +319,11 @@ export function AdminCheckoutRecoveryPage(
 							<input
 								type="text"
 								readonly
-								value={recoveryUrl() ?? ""}
+								value={s.recoveryUrl() ?? ""}
 								aria-label="Recovery Link"
 							/>
 							<Button type="button" onClick={handleCopyLink}>
-								{copyFeedback() ?? "Copy Link"}
+								{s.copyFeedback() ?? "Copy Link"}
 							</Button>
 						</div>
 					</div>
@@ -268,17 +336,17 @@ export function AdminCheckoutRecoveryPage(
 							{selectedCustomer()?.name ?? selectedCustomer()?.email}
 						</h3>
 
-						<Show when={isLoadingIntents()}>
+						<Show when={s.isLoadingIntents()}>
 							<p>Loading checkout intents…</p>
 						</Show>
 
-						<Show when={!isLoadingIntents() && intents().length === 0}>
+						<Show when={!s.isLoadingIntents() && s.intents().length === 0}>
 							<p class="muted">
 								No recoverable checkout intents found for this customer.
 							</p>
 						</Show>
 
-						<Show when={!isLoadingIntents() && intents().length > 0}>
+						<Show when={!s.isLoadingIntents() && s.intents().length > 0}>
 							<div class="table-container">
 								<table class="admin-table">
 									<thead>
@@ -293,83 +361,23 @@ export function AdminCheckoutRecoveryPage(
 										</tr>
 									</thead>
 									<tbody>
-										<For each={intents()}>
+										<For each={s.intents()}>
 											{(intent) => (
-												<tr>
-													<td>{formatDate(intent.createdAtIso)}</td>
-													<td>
-														<strong>{formatIntentType(intent)}</strong>
-														<Show when={intent.offeringId}>
-															<small> ({intent.offeringId})</small>
-														</Show>
-													</td>
-													<td>
-														{intent.divisionNameSnapshot ??
-															intent.divisionId ??
-															"—"}
-													</td>
-													<td>
-														{intent.amount} {intent.currencyCode}
-													</td>
-													<td>
-														<span
-															class={`status-badge status-${intent.status}`}
-														>
-															{intent.status}
-														</span>
-													</td>
-													<td>{formatDiagnostic(intent)}</td>
-													<td class="action-cell">
-														<Show
-															when={confirmInvalidateId() === intent.id}
-															fallback={
-																<div class="action-buttons">
-																	<Button
-																		type="button"
-																		class="button-secondary"
-																		disabled={actionLoading() === intent.id}
-																		onClick={() =>
-																			setConfirmInvalidateId(intent.id)
-																		}
-																	>
-																		Invalidate
-																	</Button>
-																	<Button
-																		type="button"
-																		class="button-primary"
-																		disabled={actionLoading() === intent.id}
-																		onClick={() =>
-																			handleAttemptRecovery(intent.id)
-																		}
-																	>
-																		{actionLoading() === intent.id
-																			? "Creating…"
-																			: "Attempt Recovery"}
-																	</Button>
-																</div>
-															}
-														>
-															<div class="confirm-box">
-																<span>Confirm invalidate?</span>
-																<Button
-																	type="button"
-																	class="button-danger"
-																	disabled={actionLoading() === intent.id}
-																	onClick={() => handleInvalidate(intent.id)}
-																>
-																	Yes, Invalidate
-																</Button>
-																<Button
-																	type="button"
-																	class="button-secondary"
-																	onClick={() => setConfirmInvalidateId(null)}
-																>
-																	Cancel
-																</Button>
-															</div>
-														</Show>
-													</td>
-												</tr>
+												<IntentRow
+													intent={intent}
+													actionLoadingId={s.actionLoading()}
+													confirming={s.confirmInvalidateId() === intent.id}
+													onPromptInvalidate={s.setConfirmInvalidateId}
+													onCancelInvalidate={() =>
+														s.setConfirmInvalidateId(null)
+													}
+													onConfirmInvalidate={(id) =>
+														void handleInvalidate(id)
+													}
+													onAttemptRecovery={(id) =>
+														void handleAttemptRecovery(id)
+													}
+												/>
 											)}
 										</For>
 									</tbody>

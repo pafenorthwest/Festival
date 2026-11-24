@@ -42,13 +42,14 @@ export class OrganizationStaffInviteService {
 		identity: AuthenticatedUser,
 		input: CreateInviteInput,
 	): Promise<CreateInviteResponse> {
+		const normalizedEmail = input.email.trim().toLowerCase();
 		if (!isOrganizationRole(input.role)) {
 			throw new AppError(`Unsupported role: ${input.role}`, 400);
 		}
 		const user = await this.memberships.upsertUser({
 			...identity,
 			displayName: deriveDisplayName(identity),
-			email: identity.email.toLowerCase(),
+			email: identity.email.trim().toLowerCase(),
 		});
 		const membership = await this.memberships.findMembershipByUserAndSlug(
 			user.id,
@@ -63,11 +64,11 @@ export class OrganizationStaffInviteService {
 
 		await this.assertUniqueAdminUserEmail(
 			membership.organization.id,
-			input.email,
+			normalizedEmail,
 		);
 		const invite = await this.memberships.createInvite({
 			organizationId: membership.organization.id,
-			email: input.email.trim().toLowerCase(),
+			email: normalizedEmail,
 			role: input.role,
 			invitedByUserId: user.id,
 		});
@@ -78,16 +79,20 @@ export class OrganizationStaffInviteService {
 		tenant: TenantContext,
 		input: Omit<CreateInviteInput, "organizationSlug">,
 	): Promise<CreateInviteResponse> {
+		const normalizedEmail = input.email.trim().toLowerCase();
 		if (!isOrganizationRole(input.role)) {
 			throw new AppError(`Unsupported role: ${input.role}`, 400);
 		}
 		if (tenant.membership.role !== "Admin") {
 			throw new AppError("Organization access denied.", 403);
 		}
-		await this.assertUniqueAdminUserEmail(tenant.organization.id, input.email);
+		await this.assertUniqueAdminUserEmail(
+			tenant.organization.id,
+			normalizedEmail,
+		);
 		const invite = await this.memberships.createInvite({
 			organizationId: tenant.organization.id,
-			email: input.email.trim().toLowerCase(),
+			email: normalizedEmail,
 			role: input.role,
 			invitedByUserId: tenant.user.id,
 		});
@@ -151,48 +156,26 @@ export class OrganizationStaffInviteService {
 		token: string,
 		input: AcceptInviteInput,
 	): Promise<AcceptInviteResponse> {
-		const record = await this.memberships.findInviteByToken(token);
-		if (!record) throw new AppError("Invite not found.", 404);
-		const normalizedEmail = identity.email.toLowerCase();
-		if (record.invite.email.toLowerCase() !== normalizedEmail) {
-			throw new AppError(
-				"Invite email does not match the authenticated user.",
-				403,
-			);
-		}
-		if (record.invite.acceptedAtIso) {
-			throw new AppError("Invite has already been accepted.", 409);
-		}
-
-		const user = await this.memberships.upsertUser({
-			...identity,
-			displayName: deriveDisplayName({
-				email: normalizedEmail,
-				displayName: identity.displayName,
-				name: input.name,
-			}),
+		const normalizedEmail = identity.email.trim().toLowerCase();
+		const displayName = deriveDisplayName({
 			email: normalizedEmail,
+			displayName: identity.displayName,
+			name: input.name,
 		});
-		const existingMembership =
-			await this.memberships.findMembershipByUserAndSlug(
-				user.id,
-				record.organization.slug,
-			);
-		const membership =
-			existingMembership?.membership ??
-			(await this.memberships.createMembership({
-				organizationId: record.organization.id,
-				userId: user.id,
-				role: record.invite.role,
-				origin: "invite",
-			}));
-		await this.memberships.markInviteAccepted(token);
+		const accepted = await this.memberships.acceptInvite({
+			token,
+			user: {
+				...identity,
+				displayName,
+				email: normalizedEmail,
+			},
+		});
 
 		return {
-			organization: record.organization,
+			organization: accepted.organization,
 			membership: toSessionMembership({
-				membership,
-				organization: record.organization,
+				membership: accepted.membership,
+				organization: accepted.organization,
 			}),
 		};
 	}
@@ -201,9 +184,10 @@ export class OrganizationStaffInviteService {
 		organizationId: string,
 		email: string,
 	): Promise<void> {
+		const normalizedEmail = email.trim().toLowerCase();
 		const users = await this.memberships.listAdminUsers(organizationId, "");
 		const exists = users.some(
-			(user) => user.email.toLowerCase() === email.toLowerCase(),
+			(user) => user.email.trim().toLowerCase() === normalizedEmail,
 		);
 		if (exists) {
 			throw new AppError("That email has already been added.", 409);

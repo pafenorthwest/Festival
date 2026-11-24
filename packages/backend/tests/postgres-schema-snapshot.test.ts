@@ -24,3 +24,17 @@ test("includes the same tables as the runtime schema", async () => {
 		tableNames(buildCanonicalPostgresSchemaSql("orgs")),
 	);
 });
+
+test("includes the exact same index names as the runtime schema", async () => {
+	const indexNames = (sql: string) =>
+		Array.from(
+			sql.matchAll(
+				/^\s*CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s+ON\b/gm,
+			),
+			([, name]) => name,
+		).sort();
+
+	expect(indexNames(buildCanonicalPostgresSchemaSql("orgs"))).toEqual(
+		indexNames(await schemaDump.text()),
+	);
+});
