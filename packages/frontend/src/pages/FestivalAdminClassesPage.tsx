@@ -24,6 +24,7 @@ import {
 	listFestivalClassSubtypes,
 	updateFestivalClass,
 } from "../lib/api.js";
+import { readSafeResource } from "../lib/readSafeResource.js";
 import { buildFestivalAdminPath } from "../lib/routes.js";
 import {
 	draftToCreateInput,
@@ -95,7 +96,7 @@ export function FestivalAdminClassesPage(props: {
 	}
 
 	createEffect(() => {
-		if (festival()) void loadData();
+		if (readSafeResource(festival)) void loadData();
 	});
 
 	const activeDivisions = createMemo(() =>
@@ -204,11 +205,11 @@ export function FestivalAdminClassesPage(props: {
 					<p role="alert">Festival not found.</p>
 				</section>
 			</Show>
-			<Show when={festival()}>
+			<Show when={readSafeResource(festival)}>
 				<section class="panel flow-panel">
 					<header class="admin-page-header">
 						<div>
-							<h2>{festival()?.festival.name} classes</h2>
+							<h2>{readSafeResource(festival)?.festival.name} classes</h2>
 							<p>Class catalog management is scoped to this Festival.</p>
 						</div>
 						<Button
@@ -221,11 +222,9 @@ export function FestivalAdminClassesPage(props: {
 							Create class
 						</Button>
 					</header>
-
 					<Show when={isLoadingData()}>
 						<p class="muted">Loading class catalog...</p>
 					</Show>
-
 					<Show when={dataError()}>
 						<section class="banner error-banner" role="alert">
 							<p>{dataError()}</p>
@@ -234,7 +233,6 @@ export function FestivalAdminClassesPage(props: {
 							</Button>
 						</section>
 					</Show>
-
 					<Show when={actionError()}>
 						<p class="field-error" role="alert">
 							{actionError()}
@@ -266,7 +264,7 @@ export function FestivalAdminClassesPage(props: {
 					<FestivalClassModal
 						isOpen={isCreateModalOpen() || Boolean(editingClass())}
 						mode={editingClass() ? "edit" : "create"}
-						festivalName={festival()?.festival.name ?? ""}
+						festivalName={readSafeResource(festival)?.festival.name ?? ""}
 						activeDivisions={activeDivisions()}
 						activeSubtypes={activeSubtypes()}
 						divisionName={getModalDivisionName(editingClass(), divisions())}

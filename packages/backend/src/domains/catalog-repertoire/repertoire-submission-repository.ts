@@ -1,4 +1,8 @@
-import type { RepertoireReviewItem } from "@festival/common";
+import {
+	AppError,
+	isRepertoireResolveFlagTargetStatus,
+	type RepertoireReviewItem,
+} from "@festival/common";
 import { sql } from "bun";
 import {
 	defaultPostgresSchemaName,
@@ -87,7 +91,7 @@ export class PostgresRepertoireSubmissionRepository
 				 updated_at = clock_timestamp()
 			 WHERE organization_id = $1
 			   AND id = $2
-			   AND (status = 'pending' OR claimed_by_uid = $3)
+			   AND (status = 'pending' OR (status = 'claimed' AND claimed_by_uid = $3))
 			 RETURNING id`,
 			[
 				input.organizationId,
@@ -123,7 +127,9 @@ export class PostgresRepertoireSubmissionRepository
 			message:
 				current.status === "approved"
 					? "Review item has already been approved."
-					: `Already claimed by ${current.claimedByName ?? current.claimedByUid ?? "another reviewer"}.`,
+					: current.status === "flagged"
+						? "Review item has been flagged."
+						: `Already claimed by ${current.claimedByName ?? current.claimedByUid ?? "another reviewer"}.`,
 			currentStatus: current.status,
 			currentClaimantUid: current.claimedByUid ?? null,
 			currentClaimantName: current.claimedByName ?? null,
@@ -144,6 +150,7 @@ export class PostgresRepertoireSubmissionRepository
 				 updated_at = clock_timestamp()
 			 WHERE organization_id = $1
 			   AND id = $2
+			   AND status = 'claimed'
 			   AND ($3::text IS NULL OR claimed_by_uid = $3)
 			 RETURNING id`,
 			[input.organizationId, input.reviewItemId, input.claimedByUid ?? null],
@@ -203,6 +210,13 @@ export class PostgresRepertoireSubmissionRepository
 	}
 
 	async resolveFlag(input: ResolveFlagInput): Promise<RepertoireReviewItem> {
+		const targetStatus = input.status ?? "pending";
+		if (!isRepertoireResolveFlagTargetStatus(targetStatus)) {
+			throw new AppError(
+				`Invalid review status: "${String(targetStatus)}".`,
+				400,
+			);
+		}
 		await this.ensureReady();
 		const updated = (await sql.unsafe(
 			`UPDATE ${this.schema}.repertoire_review_items
@@ -210,14 +224,33 @@ export class PostgresRepertoireSubmissionRepository
 				 flag_reason = NULL,
 				 flag_notes = NULL,
 				 reviewer_notes = COALESCE($4, reviewer_notes),
+				 claimed_by_uid = CASE
+					 WHEN $3 = 'pending' THEN NULL
+					 WHEN $3 = 'claimed' THEN COALESCE(claimed_by_uid, $5)
+					 ELSE claimed_by_uid
+				 END,
+				 claimed_by_name = CASE
+					 WHEN $3 = 'pending' THEN NULL
+					 ELSE claimed_by_name
+				 END,
+				 claimed_at = CASE
+					 WHEN $3 = 'pending' THEN NULL
+					 WHEN $3 = 'claimed' THEN COALESCE(claimed_at, clock_timestamp())
+					 ELSE claimed_at
+				 END,
+				 reviewed_at = CASE
+					 WHEN $3 = 'approved' THEN COALESCE(reviewed_at, clock_timestamp())
+					 ELSE reviewed_at
+				 END,
 				 updated_at = clock_timestamp()
 			 WHERE organization_id = $1 AND id = $2
 			 RETURNING id`,
 			[
 				input.organizationId,
 				input.reviewItemId,
-				input.status ?? "pending",
+				targetStatus,
 				input.resolutionNotes ?? null,
+				input.resolvedByUid ?? null,
 			],
 		)) as Array<{ id: string }>;
 		if (updated.length === 0) throw new Error("Review item not found.");

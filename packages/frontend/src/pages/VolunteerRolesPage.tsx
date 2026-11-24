@@ -15,6 +15,7 @@ import { VolunteerRoleForm } from "../domains/volunteers/VolunteerRoleForm.js";
 import { VolunteerShiftsPanel } from "../domains/volunteers/VolunteerShiftsPanel.js";
 import { useVolunteers } from "../domains/volunteers/VolunteersContext.js";
 import { getVolunteerRoles, type VolunteerRole } from "../lib/api.js";
+import { readSafeResource } from "../lib/readSafeResource.js";
 import { useAdminFestivalSelection } from "./useAdminFestivalSelection.js";
 
 interface VolunteerRolesPageProps {
@@ -99,9 +100,10 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 	const [roles, { refetch: refetchRoles }] = createResource(
 		() => {
 			const token = idToken();
+			const slug = props.slug;
 			const festivalShortName = selectedFestival()?.shortName;
-			return token && festivalShortName
-				? ([token, festivalShortName] as const)
+			return token && slug && festivalShortName
+				? ([token, festivalShortName, slug] as const)
 				: undefined;
 		},
 		([token, festivalShortName]) =>
@@ -149,12 +151,12 @@ export function VolunteerRolesPage(props: VolunteerRolesPageProps) {
 							Could not load volunteer roles: {String(roles.error)}
 						</section>
 					</Show>
-					<Show when={roles() && roles()?.length === 0}>
+					<Show when={readSafeResource(roles)?.length === 0}>
 						<p>No volunteer roles have been created yet.</p>
 					</Show>
-					<Show when={roles()?.length}>
+					<Show when={readSafeResource(roles)?.length}>
 						<VolunteerRolesTable
-							roles={roles() ?? []}
+							roles={readSafeResource(roles) ?? []}
 							hasVolunteerAdminIntent={volunteers.hasVolunteerAdminIntent()}
 							selectedRoleId={state.selectedRoleId}
 							deletingRoleId={state.deletingRoleId}

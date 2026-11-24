@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import {
+	AppError,
 	type CanonicalContributor,
 	type CanonicalWork,
 	calculateRepertoireReviewQueueSummary,
 	isCatalogWorkClassifiedAsConcerto,
+	isRepertoireResolveFlagTargetStatus,
 	type RepertoireReviewItem,
 } from "@festival/common";
 import type {
@@ -162,37 +164,32 @@ export function inMemClaimReviewItem(
 	if (!item || item.organizationId !== input.organizationId) {
 		return { kind: "not_found", message: "Review item not found." };
 	}
-	if (item.status === "approved") {
+	const canClaim =
+		item.status === "pending" ||
+		(item.status === "claimed" && item.claimedByUid === input.claimedByUid);
+	if (!canClaim) {
 		return {
 			kind: "conflict",
-			message: "Review item has already been approved.",
+			message:
+				item.status === "approved"
+					? "Review item has already been approved."
+					: item.status === "flagged"
+						? "Review item has been flagged."
+						: `Already claimed by ${item.claimedByName ?? item.claimedByUid ?? "another reviewer"}.`,
 			currentStatus: item.status,
 			currentClaimantUid: item.claimedByUid ?? null,
 			currentClaimantName: item.claimedByName ?? null,
 			item: { ...item },
 		};
 	}
-	if (
-		item.status === "claimed" &&
-		item.claimedByUid &&
-		item.claimedByUid !== input.claimedByUid
-	) {
-		return {
-			kind: "conflict",
-			message: `Already claimed by ${item.claimedByName ?? item.claimedByUid}.`,
-			currentStatus: item.status,
-			currentClaimantUid: item.claimedByUid,
-			currentClaimantName: item.claimedByName ?? null,
-			item: { ...item },
-		};
-	}
 	const now = new Date().toISOString();
+	const claimedByName = input.claimedByName ?? item.claimedByName ?? null;
 	item.status = "claimed";
 	item.claimedByUid = input.claimedByUid;
-	item.claimedByName = input.claimedByName ?? null;
+	item.claimedByName = claimedByName;
 	item.claimedAtIso = now;
 	item.assignedReviewerId = input.claimedByUid;
-	item.assignedReviewerName = input.claimedByName ?? null;
+	item.assignedReviewerName = claimedByName;
 	item.updatedAtIso = now;
 	return { kind: "claimed", item: { ...item } };
 }
@@ -203,11 +200,8 @@ export function inMemUnclaimReviewItem(
 ): RepertoireReviewItem | null {
 	const item = state.reviewItems.get(input.reviewItemId);
 	if (!item || item.organizationId !== input.organizationId) return null;
-	if (
-		input.claimedByUid &&
-		item.claimedByUid &&
-		item.claimedByUid !== input.claimedByUid
-	) {
+	if (item.status !== "claimed") return null;
+	if (input.claimedByUid && item.claimedByUid !== input.claimedByUid) {
 		return null;
 	}
 	item.status = "pending";
@@ -332,6 +326,11 @@ export function inMemNormalizeAndApprove(
 	}
 	const now = new Date().toISOString();
 	item.status = "approved";
+	item.isFlagged = false;
+	item.flagReason = null;
+	item.flagNotes = null;
+	item.flaggedBy = null;
+	item.flaggedAtIso = null;
 	item.resolvedWorkId = work.id;
 	item.canonicalWorkId = work.id;
 	item.canonicalContributorId = composer.id;
@@ -368,16 +367,41 @@ export function inMemResolveFlag(
 	state: InMemoryRepertoireState,
 	input: ResolveFlagInput,
 ): RepertoireReviewItem {
+	const targetStatus = input.status ?? "pending";
+	if (!isRepertoireResolveFlagTargetStatus(targetStatus)) {
+		throw new AppError(
+			`Invalid review status: "${String(targetStatus)}".`,
+			400,
+		);
+	}
 	const item = state.reviewItems.get(input.reviewItemId);
 	if (!item || item.organizationId !== input.organizationId) {
 		throw new Error("Review item not found.");
 	}
-	item.status = input.status ?? "pending";
+	const now = new Date().toISOString();
+	item.status = targetStatus;
 	item.isFlagged = false;
 	item.flagReason = null;
 	item.flagNotes = null;
+	item.flaggedBy = null;
+	item.flaggedAtIso = null;
+	if (targetStatus === "pending") {
+		item.claimedByUid = null;
+		item.claimedByName = null;
+		item.claimedAtIso = null;
+		item.assignedReviewerId = null;
+		item.assignedReviewerName = null;
+	} else if (targetStatus === "claimed") {
+		item.claimedByUid = item.claimedByUid ?? input.resolvedByUid ?? null;
+		item.assignedReviewerId = item.claimedByUid;
+		item.claimedAtIso = item.claimedAtIso ?? now;
+	} else if (targetStatus === "approved") {
+		item.reviewedBy =
+			item.reviewedBy ?? input.resolvedByUid ?? item.claimedByUid ?? null;
+		item.reviewedAtIso = item.reviewedAtIso ?? now;
+	}
 	if (input.resolutionNotes) item.reviewerNotes = input.resolutionNotes;
-	item.updatedAtIso = new Date().toISOString();
+	item.updatedAtIso = now;
 	return { ...item };
 }
 

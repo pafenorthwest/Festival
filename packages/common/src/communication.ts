@@ -128,23 +128,44 @@ export function extractTemplateVariables(text: string): string[] {
 	return matches;
 }
 
+const FORBIDDEN_TEMPLATE_SEGMENTS = new Set([
+	"__proto__",
+	"prototype",
+	"constructor",
+]);
+
+function isRenderablePrimitive(
+	value: unknown,
+): value is string | number | boolean | bigint {
+	return (
+		typeof value === "string" ||
+		typeof value === "number" ||
+		typeof value === "boolean" ||
+		typeof value === "bigint"
+	);
+}
+
 function resolveVariable(
 	variables: Record<string, unknown>,
 	path: string,
 ): unknown {
+	const parts = path.split(".");
+	if (parts.some((part) => FORBIDDEN_TEMPLATE_SEGMENTS.has(part))) {
+		return undefined;
+	}
 	if (Object.hasOwn(variables, path)) {
 		return variables[path];
 	}
-	if (!path.includes(".")) {
+	if (parts.length < 2) {
 		return undefined;
 	}
-	const parts = path.split(".");
 	let current: unknown = variables;
 	for (const part of parts) {
 		if (
 			current !== null &&
 			typeof current === "object" &&
-			part in (current as Record<string, unknown>)
+			!Array.isArray(current) &&
+			Object.hasOwn(current, part)
 		) {
 			current = (current as Record<string, unknown>)[part];
 		} else {
@@ -158,19 +179,12 @@ export function renderTemplate(
 	text: string,
 	variables: Record<string, unknown>,
 ): string {
-	if (typeof text !== "string") {
-		return "";
-	}
-	if (!variables || typeof variables !== "object") {
-		return text;
-	}
+	if (typeof text !== "string") return "";
+	if (!variables || typeof variables !== "object") return text;
 	const pattern = new RegExp(TEMPLATE_VARIABLE_PATTERN.source, "g");
 	return text.replace(pattern, (_match, key: string) => {
 		const value = resolveVariable(variables, key);
-		if (value === undefined || value === null) {
-			return "";
-		}
-		return String(value);
+		return isRenderablePrimitive(value) ? String(value) : "";
 	});
 }
 

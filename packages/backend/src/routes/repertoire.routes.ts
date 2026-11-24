@@ -81,6 +81,7 @@ function parseStatusFilter(
 		.split(",")
 		.map((s) => s.trim())
 		.filter(Boolean);
+	if (parts.length === 0) return undefined;
 	for (const s of parts) {
 		if (!isRepertoireReviewStatus(s)) {
 			throw new AppError(`Invalid review status: "${s}".`, 400);

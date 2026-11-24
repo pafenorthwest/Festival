@@ -39,7 +39,16 @@ describe("domains/catalog-repertoire RepertoireService (unit)", () => {
 			syncReviewQueue: mock(async () => ({ syncedCount: 0 })),
 			listReviewQueue: mock(async () => ({
 				items: [],
-				summary: { total: 0, pending: 0, claimed: 0, approved: 0, flagged: 0 },
+				summary: {
+					total: 0,
+					pending: 0,
+					inReview: 0,
+					reviewed: 0,
+					flagged: 0,
+					needsFollowUp: 0,
+					approved: 0,
+					completed: 0,
+				},
 			})),
 			claimReviewItem: mock(async () => ({
 				kind: "not_found",
@@ -199,8 +208,10 @@ describe("domains/catalog-repertoire Repertoire Postgres 17 integration", () => 
 					organizationId: orgId,
 					reviewItemId: reviewId,
 					resolutionNotes: "Verified",
+					status: "claimed",
 				});
 				expect(resolved?.isFlagged).toBe(false);
+				expect(resolved?.status).toBe("claimed");
 
 				const unclaimed = await submissionRepo.unclaimReviewItem({
 					organizationId: orgId,

@@ -1,4 +1,5 @@
 import { For, Show } from "solid-js";
+import { readSafeResource } from "../lib/readSafeResource.js";
 import type {
 	FestivalClassRegistrationPageProps,
 	useFestivalRegistrationPage,
@@ -76,7 +77,7 @@ export function FestivalRegistrationContext(input: {
 						<option value="" selected={!selectedDivisionId()}>
 							Select division…
 						</option>
-						<For each={divisions()?.divisions ?? []}>
+						<For each={readSafeResource(divisions)?.divisions ?? []}>
 							{(division) => (
 								<option
 									value={division.id}

@@ -5,6 +5,7 @@ import { Button } from "../components/Button.js";
 import { FestivalSelector } from "../components/FestivalSelector.js";
 import { useCatalogRepertoire } from "../domains/catalog/CatalogRepertoireContext.js";
 import { createRoom, listRooms } from "../lib/api.js";
+import { readSafeResource } from "../lib/readSafeResource.js";
 import { useAdminFestivalSelection } from "./useAdminFestivalSelection.js";
 
 interface AdminRoomsPageProps {
@@ -128,16 +129,16 @@ export function AdminRoomsPage(props: AdminRoomsPageProps) {
 							Could not load rooms: {String(rooms.error)}
 						</section>
 					</Show>
-					<Show when={rooms() && rooms()?.length === 0}>
+					<Show when={readSafeResource(rooms)?.length === 0}>
 						<p>No rooms have been created yet.</p>
 					</Show>
-					<Show when={rooms()?.length}>
+					<Show when={readSafeResource(rooms)?.length}>
 						<div class="listing-table rooms-table">
 							<div class="listing-table-header">
 								<span>Room</span>
 								<span>Pianos</span>
 							</div>
-							<For each={rooms()}>
+							<For each={readSafeResource(rooms) ?? []}>
 								{(room) => (
 									<div class="listing-table-row">
 										<span>
