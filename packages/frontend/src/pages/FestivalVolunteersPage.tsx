@@ -3,6 +3,7 @@ import {
 	createMemo,
 	createResource,
 	createSignal,
+	on,
 	onCleanup,
 	Show,
 } from "solid-js";
@@ -23,11 +24,40 @@ import {
 	type VolunteerShiftListing,
 } from "../lib/api.js";
 import { subscribeToAuthChanges } from "../lib/firebase-auth.js";
+import { readSafeResource } from "../lib/readSafeResource.js";
 
 interface FestivalVolunteersPageProps {
 	app: FestivalAppController;
 	slug: string;
 	festivalSlug: string;
+}
+
+function useScopedAuthToken(firebaseUser: () => { uid: string } | null) {
+	const [authToken, setAuthToken] = createSignal<{
+		uid: string;
+		token: string;
+	} | null>(null);
+	let authSeq = 0;
+	const unsubscribe = subscribeToAuthChanges(async (user) => {
+		const seq = ++authSeq;
+		if (!user) {
+			setAuthToken(null);
+			return;
+		}
+		const token = await user.getIdToken();
+		if (seq === authSeq) {
+			setAuthToken({ uid: user.uid, token });
+		}
+	});
+	onCleanup(() => {
+		authSeq++;
+		unsubscribe();
+	});
+	return () => {
+		const uid = firebaseUser()?.uid;
+		const current = authToken();
+		return uid && current?.uid === uid ? current.token : null;
+	};
 }
 
 export function FestivalVolunteersPage(props: FestivalVolunteersPageProps) {
@@ -36,11 +66,7 @@ export function FestivalVolunteersPage(props: FestivalVolunteersPageProps) {
 		([slug, festivalSlug]) => getPublicFestival(slug, festivalSlug),
 	);
 
-	const [idToken, setIdToken] = createSignal<string | null>(null);
-	const unsubscribe = subscribeToAuthChanges(async (user) => {
-		setIdToken(user ? await user.getIdToken() : null);
-	});
-	onCleanup(unsubscribe);
+	const idToken = useScopedAuthToken(() => props.app.firebaseUser());
 
 	const [isEnrolled, setIsEnrolled] = createSignal(false);
 	const [enrollmentError, setEnrollmentError] = createSignal<string | null>(
@@ -59,19 +85,25 @@ export function FestivalVolunteersPage(props: FestivalVolunteersPageProps) {
 			? `volunteer_enrolled_${props.slug}_${props.festivalSlug}_${u.uid}`
 			: null;
 	};
+	const portalScopeKey = () =>
+		`${props.slug}|${props.festivalSlug}|${props.app.firebaseUser()?.uid ?? ""}`;
 
-	const [schedule, { refetch: refetchSchedule }] = createResource(
-		() => {
-			const token = idToken();
-			return token
-				? ([props.slug, props.festivalSlug, token] as const)
-				: undefined;
-		},
-		([slug, festivalSlug, token]) =>
-			getMyVolunteerSchedule(slug, festivalSlug, token),
-	);
+	const [schedule, { mutate: mutateSchedule, refetch: refetchSchedule }] =
+		createResource(
+			() => {
+				const token = idToken();
+				return token
+					? ([props.slug, props.festivalSlug, token] as const)
+					: undefined;
+			},
+			([slug, festivalSlug, token]) =>
+				getMyVolunteerSchedule(slug, festivalSlug, token),
+		);
 
-	const [availableShifts, { refetch: refetchAvailableShifts }] = createResource(
+	const [
+		availableShifts,
+		{ mutate: mutateAvailableShifts, refetch: refetchAvailableShifts },
+	] = createResource(
 		() => {
 			const token = idToken();
 			return token
@@ -85,21 +117,46 @@ export function FestivalVolunteersPage(props: FestivalVolunteersPageProps) {
 			}),
 	);
 
+	createEffect(
+		on(
+			portalScopeKey,
+			() => {
+				mutateSchedule(undefined);
+				mutateAvailableShifts(undefined);
+				setIsEnrolled(false);
+				setSelectedShiftIds([]);
+				setEnrollmentError(null);
+				setSuccessMessage(null);
+				setErrorMessage(null);
+				setCancelingId(null);
+			},
+			{ defer: true },
+		),
+	);
+
 	createEffect(() => {
 		const key = enrollmentStorageKey();
-		if (key && localStorage.getItem(key) === "true") {
+		const token = idToken();
+		if (!key) {
+			setIsEnrolled(false);
+			return;
+		}
+		if (localStorage.getItem(key) === "true") {
 			setIsEnrolled(true);
 			return;
 		}
-		const sched = schedule();
+		const sched =
+			token && schedule.state === "ready"
+				? readSafeResource(schedule)
+				: undefined;
 		if (sched && sched.length > 0) {
 			setIsEnrolled(true);
-			if (key) localStorage.setItem(key, "true");
+			localStorage.setItem(key, "true");
 		}
 	});
 
 	const shiftsByRole = createMemo(() => {
-		const list = availableShifts() ?? [];
+		const list = readSafeResource(availableShifts) ?? [];
 		const map = new Map<
 			string,
 			{ role: VolunteerRole; shifts: VolunteerShiftListing[] }
@@ -201,7 +258,10 @@ export function FestivalVolunteersPage(props: FestivalVolunteersPageProps) {
 					"Shift booking conflict: One or more selected shifts conflict with your schedule or are already filled.",
 				);
 			} else if (error instanceof ApiError && error.status === 404) {
+				const key = enrollmentStorageKey();
+				if (key) localStorage.removeItem(key);
 				setIsEnrolled(false);
+				setSelectedShiftIds([]);
 				setErrorMessage(
 					"Volunteer enrollment not found. Please complete enrollment first.",
 				);
@@ -229,9 +289,9 @@ export function FestivalVolunteersPage(props: FestivalVolunteersPageProps) {
 					<p role="alert">Festival not found.</p>
 				</section>
 			</Show>
-			<Show when={festival.state === "ready" && festival()}>
+			<Show when={readSafeResource(festival)}>
 				<section class="org-landing">
-					<h2>Volunteer for {festival()?.festival.name}</h2>
+					<h2>Volunteer for {readSafeResource(festival)?.festival.name}</h2>
 					<Show
 						when={props.app.firebaseUser()}
 						fallback={
@@ -270,6 +330,37 @@ export function FestivalVolunteersPage(props: FestivalVolunteersPageProps) {
 										{errorMessage()}
 									</section>
 								</Show>
+								<Show when={schedule.error}>
+									<section class="banner error-banner" role="alert">
+										<p>
+											Could not load your volunteer schedule. Please try again.
+										</p>
+										<Button
+											type="button"
+											variant="secondary"
+											disabled={schedule.loading}
+											onClick={() => void refetchSchedule()}
+										>
+											Retry schedule
+										</Button>
+									</section>
+								</Show>
+								<Show when={availableShifts.error}>
+									<section class="banner error-banner" role="alert">
+										<p>
+											Could not load available volunteer shifts. Please try
+											again.
+										</p>
+										<Button
+											type="button"
+											variant="secondary"
+											disabled={availableShifts.loading}
+											onClick={() => void refetchAvailableShifts()}
+										>
+											Retry shifts
+										</Button>
+									</section>
+								</Show>
 
 								<Show
 									when={isEnrolled()}
@@ -282,20 +373,24 @@ export function FestivalVolunteersPage(props: FestivalVolunteersPageProps) {
 										/>
 									}
 								>
-									<VolunteerMyShiftsSection
-										schedule={schedule()}
-										loading={schedule.loading}
-										onCancelShift={handleCancelShift}
-										cancelingId={cancelingId()}
-									/>
-									<VolunteerAvailableShiftsSection
-										shiftsByRole={shiftsByRole()}
-										loading={availableShifts.loading}
-										selectedShiftIds={selectedShiftIds()}
-										onToggleShift={toggleShiftSelection}
-										onBookShifts={handleBookShifts}
-										isBooking={isBooking()}
-									/>
+									<Show when={!schedule.error}>
+										<VolunteerMyShiftsSection
+											schedule={readSafeResource(schedule)}
+											loading={schedule.loading}
+											onCancelShift={handleCancelShift}
+											cancelingId={cancelingId()}
+										/>
+									</Show>
+									<Show when={!availableShifts.error}>
+										<VolunteerAvailableShiftsSection
+											shiftsByRole={shiftsByRole()}
+											loading={availableShifts.loading}
+											selectedShiftIds={selectedShiftIds()}
+											onToggleShift={toggleShiftSelection}
+											onBookShifts={handleBookShifts}
+											isBooking={isBooking()}
+										/>
+									</Show>
 								</Show>
 							</div>
 						)}

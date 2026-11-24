@@ -1,5 +1,6 @@
 import {
 	type Accessor,
+	createComputed,
 	createEffect,
 	createMemo,
 	createResource,
@@ -22,6 +23,7 @@ import {
 	type VolunteerRole,
 	type VolunteerShift,
 } from "../../lib/api.js";
+import { readSafeResource } from "../../lib/readSafeResource.js";
 import {
 	buildShiftBatchInput,
 	getShiftDateBounds,
@@ -112,11 +114,14 @@ function useCoverageGapsState(params: VolunteerRolesStateParams) {
 	const [coverageGaps, { refetch: refetchCoverageGaps }] = createResource(
 		() => {
 			const token = params.idToken();
+			const slug = params.slug();
 			const festival = params.festivalShortName();
-			return token && festival ? ([token, festival] as const) : undefined;
+			return token && slug && festival
+				? ([token, slug, festival] as const)
+				: undefined;
 		},
-		([token, festival]) =>
-			getVolunteerCoverageGaps(params.slug(), festival, token),
+		([token, slug, festival]) =>
+			getVolunteerCoverageGaps(slug, festival, token),
 	);
 	// "all" | "Filled" | "Open": which of the three summary counts is the
 	// active filter for the slot list below them. See #232.
@@ -124,7 +129,7 @@ function useCoverageGapsState(params: VolunteerRolesStateParams) {
 		"all" | "Filled" | "Open"
 	>("all");
 	const filteredSlots = createMemo(() => {
-		const slots = coverageGaps()?.slots ?? [];
+		const slots = readSafeResource(coverageGaps)?.slots ?? [];
 		const filter = slotStatusFilter();
 		return filter === "all" ? slots : slots.filter((s) => s.status === filter);
 	});
@@ -234,7 +239,7 @@ function useShiftCrudState(
 		return start && end ? getShiftDateBounds(start, end) : null;
 	});
 	const selectionResetKey = () =>
-		`${ctx.festivalShortName() ?? ""}|${selectedRoleId() ?? ""}`;
+		`${ctx.slug()}|${ctx.festivalShortName() ?? ""}|${selectedRoleId() ?? ""}`;
 	const pickerResetKey = () => `${selectionResetKey()}|${submitCount()}`;
 	const days = useShiftDaySelection({
 		festivalDays: createMemo(() =>
@@ -258,9 +263,9 @@ function useShiftCrudState(
 
 	/** Creates shifts for all effectively selected days in one atomic batch. */
 	async function createShifts(token: string, festival: string, roleId: string) {
-		const role = ctx.roles.error
-			? undefined
-			: ctx.roles()?.find((item) => item.id === roleId);
+		const role = readSafeResource(ctx.roles)?.find(
+			(item) => item.id === roleId,
+		);
 		const dates = days.effectiveSelectedDates();
 		const problem =
 			validateNewShiftDraft(crud.draft(), role?.isRoomProctor ?? false) ??
@@ -361,24 +366,38 @@ function useShiftCrudState(
 	};
 }
 
+function useVolunteerScopeReset(
+	params: VolunteerRolesStateParams,
+	onReset: () => void,
+) {
+	createEffect(
+		on([params.slug, params.festivalShortName], onReset, { defer: true }),
+	);
+}
+
 export function useVolunteerRolesState(params: VolunteerRolesStateParams) {
 	const [selectedRoleId, setSelectedRoleId] = createSignal<string | null>(null);
+	createComputed(
+		on([params.slug, params.festivalShortName], () => setSelectedRoleId(null), {
+			defer: true,
+		}),
+	);
 	const selectedRole = () =>
-		params.roles.error
-			? null
-			: (params.roles()?.find((r) => r.id === selectedRoleId()) ?? null);
+		readSafeResource(params.roles)?.find((r) => r.id === selectedRoleId()) ??
+		null;
 	const gaps = useCoverageGapsState(params);
 	const [shifts, { refetch: refetchShifts }] = createResource(
 		() => {
 			const token = params.idToken();
+			const slug = params.slug();
 			const festival = params.festivalShortName();
 			const roleId = selectedRoleId();
-			return token && festival && roleId
-				? ([token, festival, roleId] as const)
+			return token && slug && festival && roleId
+				? ([token, slug, festival, roleId] as const)
 				: undefined;
 		},
-		([token, festival, roleId]) =>
-			getVolunteerShiftsForRole(token, params.slug(), festival, roleId),
+		([token, slug, festival, roleId]) =>
+			getVolunteerShiftsForRole(token, slug, festival, roleId),
 	);
 
 	const roleCrud = useRoleCrudState(
@@ -399,17 +418,12 @@ export function useVolunteerRolesState(params: VolunteerRolesStateParams) {
 		},
 	});
 
-	createEffect(
-		on(
-			params.festivalShortName,
-			() => {
-				setSelectedRoleId(null);
-				roleCrud.cancelEditRole();
-				shiftCrud.cancelEditShift();
-			},
-			{ defer: true },
-		),
-	);
+	useVolunteerScopeReset(params, () => {
+		setSelectedRoleId(null);
+		gaps.setSlotStatusFilter("all");
+		roleCrud.cancelEditRole();
+		shiftCrud.cancelEditShift();
+	});
 
 	return {
 		...gaps,

@@ -16,22 +16,20 @@ import {
 } from "../lib/api.js";
 import { MusicReviewModal } from "./MusicReviewModal.js";
 import {
+	filterReviewQueueItems,
 	formatDuration,
 	formatStatus,
+	type QueueStatusFilter,
 	statusBadgeClass,
+	summarizeReviewQueueItems,
 } from "./musicReviewHelpers.js";
+
+export type { QueueStatusFilter } from "./musicReviewHelpers.js";
 
 interface MusicReviewPageProps {
 	app: FestivalAppController;
 	slug?: string;
 }
-
-export type QueueStatusFilter =
-	| "all"
-	| "pending"
-	| "claimed"
-	| "approved"
-	| "flagged";
 
 export function MusicReviewPage(props: MusicReviewPageProps) {
 	const orgSlug = () =>
@@ -103,89 +101,18 @@ export function MusicReviewPage(props: MusicReviewPageProps) {
 			prev.map((item) => (item.id === updated.id ? updated : item)),
 		);
 		setSelectedItem(updated);
-
-		// Recalculate local summary metrics
-		const currentItems = items();
-		let pending = 0;
-		let inReview = 0;
-		let reviewed = 0;
-		let flagged = 0;
-		let approved = 0;
-
-		for (const item of currentItems) {
-			if (item.isFlagged || item.status === "flagged") {
-				flagged++;
-			}
-			if (item.status === "pending") pending++;
-			else if (item.status === "claimed" || item.status === "in_review")
-				inReview++;
-			else if (item.status === "reviewed") reviewed++;
-			else if (
-				item.status === "approved" ||
-				item.status === "approved_for_publication"
-			)
-				approved++;
-		}
-
-		setSummary({
-			total: currentItems.length,
-			pending,
-			inReview,
-			reviewed,
-			flagged,
-			approved,
-		});
+		setSummary(summarizeReviewQueueItems(items()));
 	}
 
-	const filteredItems = createMemo(() => {
-		let list = items();
-		const currentStatus = statusFilter();
-		if (currentStatus !== "all") {
-			if (currentStatus === "claimed") {
-				list = list.filter(
-					(i) => i.status === "claimed" || i.status === "in_review",
-				);
-			} else if (currentStatus === "approved") {
-				list = list.filter(
-					(i) =>
-						i.status === "approved" ||
-						i.status === "approved_for_publication" ||
-						i.status === "reviewed",
-				);
-			} else {
-				list = list.filter((i) => i.status === currentStatus);
-			}
-		}
-
-		if (myClaimsOnly()) {
-			const uid = currentUserId();
-			list = list.filter((i) => i.claimedByUid === uid);
-		}
-
-		if (flaggedOnly()) {
-			list = list.filter((i) => i.isFlagged || i.status === "flagged");
-		}
-
-		const query = searchQuery().trim().toLowerCase();
-		if (query) {
-			list = list.filter((i) => {
-				const title = (i.rawTitle || i.submittedTitle || "").toLowerCase();
-				const composer = (
-					i.rawComposer ||
-					i.submittedComposer ||
-					""
-				).toLowerCase();
-				const movement = (i.rawMovement || "").toLowerCase();
-				return (
-					title.includes(query) ||
-					composer.includes(query) ||
-					movement.includes(query)
-				);
-			});
-		}
-
-		return list;
-	});
+	const filteredItems = createMemo(() =>
+		filterReviewQueueItems(items(), {
+			statusFilter: statusFilter(),
+			myClaimsOnly: myClaimsOnly(),
+			currentUserId: currentUserId(),
+			flaggedOnly: flaggedOnly(),
+			searchQuery: searchQuery(),
+		}),
+	);
 
 	return (
 		<Show

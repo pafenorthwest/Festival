@@ -12,6 +12,10 @@ import {
 	resumeCustomerMembershipPurchase,
 	startCustomerCheckout,
 } from "../lib/api.js";
+import {
+	readSafeResource,
+	type SafeResource,
+} from "../lib/readSafeResource.js";
 import { buildOrgMembershipPath } from "../lib/routes.js";
 import { sanitizeShopifyDescriptionHtml } from "../lib/sanitize-html.js";
 import {
@@ -104,7 +108,6 @@ async function preparePurchase(
 		status: "",
 	});
 }
-
 function cancelMembershipPurchase(ctrl: CheckoutController) {
 	const slug = ctrl.slug();
 	if (ctrl.state().submitting || !slug) return;
@@ -209,7 +212,6 @@ function resumePurchaseFromLocation(ctrl: CheckoutController) {
 		.catch((error) => ctrl.patch({ error: purchaseErrorMessage(error) }))
 		.finally(() => ctrl.patch({ pendingOfferingId: null }));
 }
-
 function MembershipConsentSteps(props: {
 	isTeacher: boolean;
 	ctrl: CheckoutController;
@@ -279,7 +281,6 @@ function MembershipConsentSteps(props: {
 		</>
 	);
 }
-
 function MembershipSubmitStep(props: {
 	isTeacher: boolean;
 	blocked: boolean;
@@ -326,12 +327,9 @@ function MembershipSubmitStep(props: {
 		</section>
 	);
 }
-
-type DivisionsResource = {
-	(): Awaited<ReturnType<typeof getPublicDivisions>> | undefined;
-	loading: boolean;
-	error: unknown;
-};
+type DivisionsResource = SafeResource<
+	Awaited<ReturnType<typeof getPublicDivisions>>
+> & { loading: boolean };
 function MembershipDivisionStep(props: {
 	divisions: DivisionsResource;
 	ctrl: CheckoutController;
@@ -349,7 +347,7 @@ function MembershipDivisionStep(props: {
 				onInput={(e) => props.ctrl.patch({ divisionId: e.currentTarget.value })}
 			>
 				<option value="">Select a division</option>
-				<For each={props.divisions()?.divisions ?? []}>
+				<For each={readSafeResource(props.divisions)?.divisions ?? []}>
 					{(d) => <option value={d.id}>{d.displayName}</option>}
 				</For>
 			</select>
@@ -457,10 +455,9 @@ export function MembershipPage(props: { app: FestivalAppController }) {
 	const [divisions] = createResource(ctrl.slug, getPublicDivisions);
 	onMount(() => resumePurchaseFromLocation(ctrl));
 	const s = () => ctrl.state();
+	const products = () => readSafeResource(response)?.membershipProducts;
 	const isEmpty = () =>
-		!response.loading &&
-		!response.error &&
-		response()?.membershipProducts.length === 0;
+		!response.loading && !response.error && products()?.length === 0;
 	return (
 		<section class="panel membership-page">
 			<Show when={response.loading}>
@@ -484,9 +481,7 @@ export function MembershipPage(props: { app: FestivalAppController }) {
 			</Show>
 			<Show when={s().selectedOfferingId}>
 				<MembershipCheckoutDetails
-					product={response()?.membershipProducts.find(
-						(p) => p.id === s().selectedOfferingId,
-					)}
+					product={products()?.find((p) => p.id === s().selectedOfferingId)}
 					divisions={divisions}
 					ctrl={ctrl}
 				/>
@@ -495,10 +490,7 @@ export function MembershipPage(props: { app: FestivalAppController }) {
 				<p class="muted">No memberships are available right now.</p>
 			</Show>
 			<Show when={!s().selectedOfferingId && !s().pendingOfferingId}>
-				<MembershipProductGrid
-					products={response()?.membershipProducts ?? []}
-					ctrl={ctrl}
-				/>
+				<MembershipProductGrid products={products() ?? []} ctrl={ctrl} />
 			</Show>
 		</section>
 	);

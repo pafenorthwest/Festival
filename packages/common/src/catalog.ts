@@ -1,6 +1,6 @@
 import * as v from "valibot";
 import type { FestivalClass } from "./domain.js";
-import { REPERTOIRE_REVIEW_STATUSES } from "./repertoire.js";
+import { REPERTOIRE_RESOLVE_FLAG_TARGET_STATUSES } from "./repertoire.js";
 import { nonEmptyText } from "./schema-utils.js";
 
 export const FESTIVAL_CLASS_CATALOG: FestivalClass[] = [
@@ -153,7 +153,7 @@ export const NormalizeRepertoireReviewInputSchema = v.object({
 	normalizedComposer: nonEmptyText("Normalized composer", 300),
 	imslpUrl: v.optional(v.nullable(v.string())),
 	notes: v.optional(v.nullable(v.string())),
-	status: v.optional(v.picklist(REPERTOIRE_REVIEW_STATUSES)),
+	status: v.optional(v.literal("approved")),
 	canonicalWorkId: v.optional(v.nullable(v.string())),
 	canonicalContributorId: v.optional(v.nullable(v.string())),
 	reviewItemId: v.optional(v.string()),
@@ -175,10 +175,13 @@ export const ResolveRepertoireFlagInputSchema = v.object({
 	flagId: v.optional(v.string()),
 	resolutionNotes: v.optional(v.nullable(v.string())),
 	notes: v.optional(v.nullable(v.string())),
-	status: v.optional(v.picklist(REPERTOIRE_REVIEW_STATUSES)),
+	status: v.optional(
+		v.picklist(REPERTOIRE_RESOLVE_FLAG_TARGET_STATUSES),
+		"pending",
+	),
 	reviewItemId: v.optional(v.string()),
 });
-export type ResolveRepertoireFlagInput = v.InferOutput<
+export type ResolveRepertoireFlagInput = v.InferInput<
 	typeof ResolveRepertoireFlagInputSchema
 >;
 

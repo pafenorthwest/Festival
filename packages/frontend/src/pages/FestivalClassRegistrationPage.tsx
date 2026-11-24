@@ -14,6 +14,7 @@ import {
 	useFestivalRegistrationPage,
 } from "../domains/registration/useFestivalRegistrationPage.js";
 import { customerFestivalRegistrationSignInPath } from "../lib/api.js";
+import { readSafeResource } from "../lib/readSafeResource.js";
 
 function RegistrationPageHeading(props: {
 	state: FestivalRegistrationPageState;
@@ -23,7 +24,7 @@ function RegistrationPageHeading(props: {
 	return (
 		<header class="parent-page-heading">
 			<p class="parent-eyebrow">
-				{state.festival()?.festival.name ?? "Festival"}
+				{readSafeResource(state.festival)?.festival.name ?? "Festival"}
 			</p>
 			<h1>
 				{view() === "cart"

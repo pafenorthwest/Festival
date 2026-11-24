@@ -74,34 +74,31 @@ async function upsertOrgUserSql(
 	schema: string,
 	user: AuthenticatedUser,
 ): Promise<OrganizationUserRecord> {
-	const displayName = user.displayName ?? deriveDisplayName(user);
+	const explicitDisplayName = user.displayName ?? null;
+	const insertDisplayName = explicitDisplayName ?? deriveDisplayName(user);
 	const normalizedEmail = user.email.toLowerCase();
-	const existing = (await sql.unsafe(
-		`SELECT id, firebase_uid, email, display_name, disassociated, created_at
-		 FROM ${schema}.users
-		 WHERE firebase_uid = $1
-		 LIMIT 1`,
-		[user.uid],
-	)) as UserRow[];
-	if (existing[0]) {
-		const updated = (await sql.unsafe(
-			`UPDATE ${schema}.users
-			 SET email = $2, display_name = $3, disassociated = FALSE
-			 WHERE id = $1
-			 RETURNING id, firebase_uid, email, display_name, disassociated, created_at`,
-			[existing[0].id, normalizedEmail, displayName],
-		)) as UserRow[];
-		if (!updated[0]) throw new Error("Failed to update user.");
-		return mapOrganizationUser(updated[0]);
-	}
-	const inserted = (await sql.unsafe(
-		`INSERT INTO ${schema}.users (id, firebase_uid, email, display_name)
-		 VALUES ($1, $2, $3, $4)
+	const rows = (await sql.unsafe(
+		`WITH _lock AS (
+			SELECT pg_advisory_xact_lock(hashtext($2))
+		 )
+		 INSERT INTO ${schema}.users (id, firebase_uid, email, display_name, disassociated)
+		 SELECT $1, $2, $3, $4, FALSE
+		 FROM _lock
+		 ON CONFLICT (firebase_uid) DO UPDATE SET
+		   email = EXCLUDED.email,
+		   display_name = COALESCE($5, ${schema}.users.display_name),
+		   disassociated = FALSE
 		 RETURNING id, firebase_uid, email, display_name, disassociated, created_at`,
-		[randomUUID(), user.uid, normalizedEmail, displayName],
+		[
+			randomUUID(),
+			user.uid,
+			normalizedEmail,
+			insertDisplayName,
+			explicitDisplayName,
+		],
 	)) as UserRow[];
-	if (!inserted[0]) throw new Error("Failed to insert user.");
-	return mapOrganizationUser(inserted[0]);
+	if (!rows[0]) throw new Error("Failed to upsert user.");
+	return mapOrganizationUser(rows[0]);
 }
 
 async function deleteMembershipTx(

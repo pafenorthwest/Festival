@@ -7,16 +7,21 @@ export function getRepertoireTitleLimit(catalogWorkId?: string | null): number {
 export const REPERTOIRE_REVIEW_STATUSES = [
 	"pending",
 	"claimed",
-	"in_review",
-	"reviewed",
 	"flagged",
-	"needs_follow_up",
 	"approved",
-	"approved_for_publication",
 ] as const;
 
 export type RepertoireReviewStatus =
 	(typeof REPERTOIRE_REVIEW_STATUSES)[number];
+
+export const REPERTOIRE_RESOLVE_FLAG_TARGET_STATUSES = [
+	"pending",
+	"claimed",
+	"approved",
+] as const;
+
+export type RepertoireResolveFlagTargetStatus =
+	(typeof REPERTOIRE_RESOLVE_FLAG_TARGET_STATUSES)[number];
 
 export function isRepertoireReviewStatus(
 	value: unknown,
@@ -24,6 +29,17 @@ export function isRepertoireReviewStatus(
 	return (
 		typeof value === "string" &&
 		REPERTOIRE_REVIEW_STATUSES.includes(value as RepertoireReviewStatus)
+	);
+}
+
+export function isRepertoireResolveFlagTargetStatus(
+	value: unknown,
+): value is RepertoireResolveFlagTargetStatus {
+	return (
+		typeof value === "string" &&
+		REPERTOIRE_RESOLVE_FLAG_TARGET_STATUSES.includes(
+			value as RepertoireResolveFlagTargetStatus,
+		)
 	);
 }
 
@@ -152,7 +168,7 @@ export interface NormalizeReviewInput {
 	normalizedTitle: string;
 	normalizedComposer: string;
 	imslpUrl?: string | null;
-	status?: RepertoireReviewStatus;
+	status?: "approved";
 	canonicalWorkId?: string | null;
 	canonicalContributorId?: string | null;
 	notes?: string | null;
@@ -172,7 +188,7 @@ export interface ResolveFlagInput {
 	reviewItemId: string;
 	flagId?: string;
 	resolutionNotes?: string | null;
-	status?: RepertoireReviewStatus;
+	status?: RepertoireResolveFlagTargetStatus;
 	resolvedBy?: string;
 	organizationId?: string;
 }
@@ -227,32 +243,23 @@ export function doesClassRequireConcerto(
 			resolvedSubtype?.displayName?.trim().toLowerCase() === "concerto"
 		);
 	}
-	if (
-		classInfo.classSubtypeName !== undefined &&
-		classInfo.classSubtypeName !== null
-	) {
+	if (classInfo.classSubtypeName != null) {
 		return classInfo.classSubtypeName.trim().toLowerCase() === "concerto";
 	}
 	return /\bconcerto\b/i.test(classInfo.displayName ?? "");
 }
 
 const HTTP_URL_PATTERN = /^https?:\/\/.+/i;
-
-function asTrimmed(value: unknown): string {
-	return typeof value === "string" ? value.trim() : "";
-}
-
-function asObject(payload: unknown): Record<string, unknown> | null {
-	if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-		return null;
-	}
-	return payload as Record<string, unknown>;
-}
+const asTrimmed = (v: unknown): string =>
+	typeof v === "string" ? v.trim() : "";
+const asObject = (p: unknown): Record<string, unknown> | null =>
+	p && typeof p === "object" && !Array.isArray(p)
+		? (p as Record<string, unknown>)
+		: null;
 
 function parseImslpUrl(value: unknown, errors: string[]): string | null {
-	if (typeof value !== "string") return null;
-	const trimmed = value.trim();
-	if (trimmed.length === 0) return null;
+	const trimmed = asTrimmed(value);
+	if (!trimmed) return null;
 	if (!HTTP_URL_PATTERN.test(trimmed)) {
 		errors.push("IMSLP URL must be a valid HTTP or HTTPS URL.");
 		return null;
@@ -260,270 +267,188 @@ function parseImslpUrl(value: unknown, errors: string[]): string | null {
 	return trimmed;
 }
 
-function parseOptionalStatus(
-	value: unknown,
+function checkBounded(
+	v: string,
+	spec: [string, number],
 	errors: string[],
-): RepertoireReviewStatus | undefined {
-	if (value === undefined || value === null) return undefined;
-	if (isRepertoireReviewStatus(value)) return value;
-	errors.push(`Invalid review status: "${String(value)}".`);
-	return undefined;
+): string {
+	if (!v) errors.push(`${spec[0]} is required.`);
+	else if (v.length > spec[1]) {
+		errors.push(`${spec[0]} must be ${spec[1]} characters or less.`);
+	}
+	return v;
 }
+
+const okResult = <T>(data: T): RepertoireValidationResult<T> => ({
+	valid: true,
+	errors: [],
+	data,
+	request: data,
+});
+const errResult = <T>(message: string): RepertoireValidationResult<T> => ({
+	valid: false,
+	errors: [message],
+});
+const orgField = (b: Record<string, unknown>) => {
+	const organizationId = asTrimmed(b.organizationId);
+	return organizationId ? { organizationId } : {};
+};
+const optNotes = (raw: string, label: string, errors: string[]) => {
+	if (raw.length > 2000)
+		errors.push(`${label} must be 2000 characters or less.`);
+	return raw || null;
+};
+const reqId = (b: Record<string, unknown>, errors: string[]) => {
+	const id = asTrimmed(b.reviewItemId) || asTrimmed(b.id);
+	if (!id) errors.push("Review item ID is required.");
+	return id;
+};
 
 export function validateClaimReviewInput(
 	payload: unknown,
 ): RepertoireValidationResult<ClaimReviewInput> {
 	const body = asObject(payload);
-	if (!body) {
-		return { valid: false, errors: ["Claim review input must be an object."] };
-	}
+	if (!body) return errResult("Claim review input must be an object.");
 	const errors: string[] = [];
-
-	const reviewItemId = asTrimmed(body.reviewItemId) || asTrimmed(body.id);
-	if (reviewItemId.length === 0) {
-		errors.push("Review item ID is required.");
-	}
-
+	const reviewItemId = reqId(body, errors);
 	const reviewerId =
 		asTrimmed(body.reviewerId) ||
 		asTrimmed(body.assignedReviewerId) ||
 		asTrimmed(body.claimedByUid);
-	if (reviewerId.length === 0) {
-		errors.push("Reviewer ID is required.");
-	}
-
+	if (!reviewerId) errors.push("Reviewer ID is required.");
+	if (errors.length > 0) return { valid: false, errors };
 	const reviewerName =
-		asTrimmed(body.reviewerName) || asTrimmed(body.claimedByName) || undefined;
-	const organizationId = asTrimmed(body.organizationId) || undefined;
-
-	if (errors.length > 0) {
-		return { valid: false, errors };
-	}
-
-	const data: ClaimReviewInput = {
+		asTrimmed(body.reviewerName) || asTrimmed(body.claimedByName);
+	return okResult({
 		reviewItemId,
 		reviewerId,
 		...(reviewerName ? { reviewerName } : {}),
-		...(organizationId ? { organizationId } : {}),
-	};
-	return { valid: true, errors: [], data, request: data };
+		...orgField(body),
+	});
 }
 
 export function validateNormalizeReviewInput(
 	payload: unknown,
 ): RepertoireValidationResult<NormalizeReviewInput> {
 	const body = asObject(payload);
-	if (!body) {
-		return {
-			valid: false,
-			errors: ["Normalize review input must be an object."],
-		};
-	}
+	if (!body) return errResult("Normalize review input must be an object.");
 	const errors: string[] = [];
-
-	const reviewItemId = asTrimmed(body.reviewItemId) || asTrimmed(body.id);
-	if (reviewItemId.length === 0) {
-		errors.push("Review item ID is required.");
-	}
-
-	const normalizedTitle =
-		asTrimmed(body.normalizedTitle) || asTrimmed(body.title);
-	if (normalizedTitle.length === 0) {
-		errors.push("Normalized title is required.");
-	} else if (normalizedTitle.length > 300) {
-		errors.push("Normalized title must be 300 characters or less.");
-	}
-
-	const normalizedComposer =
-		asTrimmed(body.normalizedComposer) || asTrimmed(body.composer);
-	if (normalizedComposer.length === 0) {
-		errors.push("Normalized composer is required.");
-	} else if (normalizedComposer.length > 200) {
-		errors.push("Normalized composer must be 200 characters or less.");
-	}
-
+	const reviewItemId = reqId(body, errors);
+	const t = asTrimmed(body.normalizedTitle) || asTrimmed(body.title);
+	const c = asTrimmed(body.normalizedComposer) || asTrimmed(body.composer);
+	const normalizedTitle = checkBounded(t, ["Normalized title", 300], errors);
+	const normalizedComposer = checkBounded(
+		c,
+		["Normalized composer", 200],
+		errors,
+	);
 	const imslpUrl = parseImslpUrl(body.imslpUrl, errors);
-	const status = parseOptionalStatus(body.status, errors);
-
-	const canonicalWorkId =
-		asTrimmed(body.canonicalWorkId) || asTrimmed(body.resolvedWorkId) || null;
-	const canonicalContributorId = asTrimmed(body.canonicalContributorId) || null;
-	const notes = asTrimmed(body.notes) || asTrimmed(body.reviewerNotes) || null;
-	const reviewerId = asTrimmed(body.reviewerId) || undefined;
-	const organizationId = asTrimmed(body.organizationId) || undefined;
-
-	if (errors.length > 0) {
-		return { valid: false, errors };
+	if (body.status != null && body.status !== "approved") {
+		errors.push(`Invalid review status: "${String(body.status)}".`);
 	}
-
-	const data: NormalizeReviewInput = {
+	if (errors.length > 0) return { valid: false, errors };
+	const reviewerId = asTrimmed(body.reviewerId);
+	return okResult({
 		reviewItemId,
 		normalizedTitle,
 		normalizedComposer,
 		imslpUrl,
-		...(status ? { status } : {}),
-		canonicalWorkId,
-		canonicalContributorId,
-		notes,
+		...(body.status === "approved" ? { status: "approved" } : {}),
+		canonicalWorkId:
+			asTrimmed(body.canonicalWorkId) || asTrimmed(body.resolvedWorkId) || null,
+		canonicalContributorId: asTrimmed(body.canonicalContributorId) || null,
+		notes: asTrimmed(body.notes) || asTrimmed(body.reviewerNotes) || null,
 		...(reviewerId ? { reviewerId } : {}),
-		...(organizationId ? { organizationId } : {}),
-	};
-	return { valid: true, errors: [], data, request: data };
+		...orgField(body),
+	});
 }
 
 export function validateFlagReviewInput(
 	payload: unknown,
 ): RepertoireValidationResult<FlagReviewInput> {
 	const body = asObject(payload);
-	if (!body) {
-		return { valid: false, errors: ["Flag review input must be an object."] };
-	}
+	if (!body) return errResult("Flag review input must be an object.");
 	const errors: string[] = [];
-
-	const reviewItemId = asTrimmed(body.reviewItemId) || asTrimmed(body.id);
-	if (reviewItemId.length === 0) {
-		errors.push("Review item ID is required.");
-	}
-
-	const reason = asTrimmed(body.reason) || asTrimmed(body.flagReason);
-	if (reason.length === 0) {
-		errors.push("Flag reason is required.");
-	} else if (reason.length > 200) {
-		errors.push("Flag reason must be 200 characters or less.");
-	}
-
-	const notesRaw = asTrimmed(body.notes) || asTrimmed(body.flagNotes);
-	if (notesRaw.length > 2000) {
-		errors.push("Notes must be 2000 characters or less.");
-	}
-	const notes = notesRaw.length > 0 ? notesRaw : null;
-
-	const flaggedBy = asTrimmed(body.flaggedBy) || undefined;
-	const organizationId = asTrimmed(body.organizationId) || undefined;
-
-	if (errors.length > 0) {
-		return { valid: false, errors };
-	}
-
-	const data: FlagReviewInput = {
+	const reviewItemId = reqId(body, errors);
+	const rawReason = asTrimmed(body.reason) || asTrimmed(body.flagReason);
+	const reason = checkBounded(rawReason, ["Flag reason", 200], errors);
+	const rawNotes = asTrimmed(body.notes) || asTrimmed(body.flagNotes);
+	const notes = optNotes(rawNotes, "Notes", errors);
+	if (errors.length > 0) return { valid: false, errors };
+	const flaggedBy = asTrimmed(body.flaggedBy);
+	return okResult({
 		reviewItemId,
 		reason,
 		notes,
 		...(flaggedBy ? { flaggedBy } : {}),
-		...(organizationId ? { organizationId } : {}),
-	};
-	return { valid: true, errors: [], data, request: data };
+		...orgField(body),
+	});
 }
 
 export function validateResolveFlagInput(
 	payload: unknown,
 ): RepertoireValidationResult<ResolveFlagInput> {
 	const body = asObject(payload);
-	if (!body) {
-		return {
-			valid: false,
-			errors: ["Resolve flag input must be an object."],
-		};
-	}
+	if (!body) return errResult("Resolve flag input must be an object.");
 	const errors: string[] = [];
-
 	const reviewItemId = asTrimmed(body.reviewItemId) || asTrimmed(body.id);
-	const flagId = asTrimmed(body.flagId) || undefined;
-
-	if (reviewItemId.length === 0 && !flagId) {
-		errors.push("Review item ID is required.");
-	}
-
-	const notesRaw =
+	const flagId = asTrimmed(body.flagId);
+	if (!reviewItemId && !flagId) errors.push("Review item ID is required.");
+	const rawNotes =
 		asTrimmed(body.resolutionNotes) ||
 		asTrimmed(body.notes) ||
 		asTrimmed(body.reviewerNotes);
-	if (notesRaw.length > 2000) {
-		errors.push("Resolution notes must be 2000 characters or less.");
+	const resolutionNotes = optNotes(rawNotes, "Resolution notes", errors);
+	let status: RepertoireResolveFlagTargetStatus = "pending";
+	if (body.status != null) {
+		if (isRepertoireResolveFlagTargetStatus(body.status)) status = body.status;
+		else errors.push(`Invalid review status: "${String(body.status)}".`);
 	}
-	const resolutionNotes = notesRaw.length > 0 ? notesRaw : null;
-	const status = parseOptionalStatus(body.status, errors);
-
-	const resolvedBy = asTrimmed(body.resolvedBy) || undefined;
-	const organizationId = asTrimmed(body.organizationId) || undefined;
-
-	if (errors.length > 0) {
-		return { valid: false, errors };
-	}
-
-	const data: ResolveFlagInput = {
-		reviewItemId: reviewItemId.length > 0 ? reviewItemId : (flagId as string),
+	if (errors.length > 0) return { valid: false, errors };
+	const resolvedBy = asTrimmed(body.resolvedBy);
+	return okResult({
+		reviewItemId: reviewItemId || flagId,
 		...(flagId ? { flagId } : {}),
 		resolutionNotes,
-		...(status ? { status } : {}),
+		status,
 		...(resolvedBy ? { resolvedBy } : {}),
-		...(organizationId ? { organizationId } : {}),
-	};
-	return { valid: true, errors: [], data, request: data };
+		...orgField(body),
+	});
 }
 
 export function validateAddCatalogWorkInput(
 	payload: unknown,
 ): RepertoireValidationResult<AddCatalogWorkInput> {
 	const body = asObject(payload);
-	if (!body) {
-		return {
-			valid: false,
-			errors: ["Add catalog work input must be an object."],
-		};
-	}
+	if (!body) return errResult("Add catalog work input must be an object.");
 	const errors: string[] = [];
-
-	const title = asTrimmed(body.title);
-	if (title.length === 0) {
-		errors.push("Title is required.");
-	} else if (title.length > MAX_CATALOG_WORK_TITLE_LENGTH) {
-		errors.push(
-			`Title must be ${MAX_CATALOG_WORK_TITLE_LENGTH} characters or less.`,
-		);
-	}
-
-	const composer = asTrimmed(body.composer) || asTrimmed(body.composerName);
-	if (composer.length === 0) {
-		errors.push("Composer is required.");
-	} else if (composer.length > 200) {
-		errors.push("Composer must be 200 characters or less.");
-	}
-
+	const titleSpec: [string, number] = ["Title", MAX_CATALOG_WORK_TITLE_LENGTH];
+	const title = checkBounded(asTrimmed(body.title), titleSpec, errors);
+	const rawComp = asTrimmed(body.composer) || asTrimmed(body.composerName);
+	const composer = checkBounded(rawComp, ["Composer", 200], errors);
 	const imslpUrl = parseImslpUrl(body.imslpUrl, errors);
-	const organizationId = asTrimmed(body.organizationId) || undefined;
 	let classifications: string[] | undefined;
-	if (body.classifications !== undefined && body.classifications !== null) {
+	if (body.classifications != null) {
+		const list = body.classifications;
 		if (
-			!Array.isArray(body.classifications) ||
-			!body.classifications.every(
-				(c) => typeof c === "string" && c.trim().length > 0,
-			)
+			!Array.isArray(list) ||
+			!list.every((c) => typeof c === "string" && c.trim().length > 0)
 		) {
 			errors.push("Classifications must be an array of non-empty strings.");
 		} else {
 			classifications = [
-				...new Set(
-					body.classifications
-						.map((c) => c.trim().toLowerCase())
-						.filter(Boolean),
-				),
+				...new Set(list.map((c) => c.trim().toLowerCase()).filter(Boolean)),
 			];
 		}
 	}
-
-	if (errors.length > 0) {
-		return { valid: false, errors };
-	}
-
-	const data: AddCatalogWorkInput = {
+	if (errors.length > 0) return { valid: false, errors };
+	return okResult({
 		title,
 		composer,
 		imslpUrl,
 		...(classifications !== undefined ? { classifications } : {}),
-		...(organizationId ? { organizationId } : {}),
-	};
-	return { valid: true, errors: [], data, request: data };
+		...orgField(body),
+	});
 }
 
 export function calculateRepertoireReviewQueueSummary(
@@ -531,44 +456,22 @@ export function calculateRepertoireReviewQueueSummary(
 ): RepertoireReviewQueueSummary {
 	let pending = 0;
 	let inReview = 0;
-	let reviewed = 0;
 	let flagged = 0;
-	let needsFollowUp = 0;
 	let approved = 0;
-
 	for (const item of items) {
-		if (item.isFlagged || item.status === "flagged") {
-			flagged++;
-		}
-		switch (item.status) {
-			case "pending":
-				pending++;
-				break;
-			case "claimed":
-			case "in_review":
-				inReview++;
-				break;
-			case "reviewed":
-				reviewed++;
-				break;
-			case "needs_follow_up":
-				needsFollowUp++;
-				break;
-			case "approved":
-			case "approved_for_publication":
-				approved++;
-				break;
-		}
+		if (item.isFlagged || item.status === "flagged") flagged++;
+		if (item.status === "pending") pending++;
+		else if (item.status === "claimed") inReview++;
+		else if (item.status === "approved") approved++;
 	}
-
 	return {
 		total: items.length,
 		pending,
 		inReview,
-		reviewed,
+		reviewed: 0,
 		flagged,
-		needsFollowUp,
+		needsFollowUp: 0,
 		approved,
-		completed: reviewed + approved,
+		completed: approved,
 	};
 }

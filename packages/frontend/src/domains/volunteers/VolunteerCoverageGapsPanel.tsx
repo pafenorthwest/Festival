@@ -1,6 +1,7 @@
 import { type Accessor, For, type Resource, type Setter, Show } from "solid-js";
 import { formatScheduleDate } from "../../app/appFormatting.js";
 import type { VolunteerCoverageGapsResponse } from "../../lib/api.js";
+import { readSafeResource } from "../../lib/readSafeResource.js";
 
 type CoverageSlot = VolunteerCoverageGapsResponse["slots"][number];
 
@@ -105,7 +106,7 @@ export function VolunteerCoverageGapsPanel(
 					Could not load shift coverage: {String(props.coverageGaps.error)}
 				</section>
 			</Show>
-			<Show when={props.coverageGaps()}>
+			<Show when={readSafeResource(props.coverageGaps)}>
 				{(gaps) => (
 					<>
 						<CoverageMetricsBar

@@ -1,6 +1,7 @@
 import type { RepertoirePiece } from "@festival/common";
 import { createSignal, onCleanup } from "solid-js";
 import type { FestivalAppController } from "../../app/useFestivalAppController.js";
+import { readSafeResource } from "../../lib/readSafeResource.js";
 import { buildFestivalRegistrationPath } from "../../lib/routes.js";
 import {
 	createRegistrationSelectHandlers,
@@ -175,12 +176,12 @@ export function useFestivalRegistrationPage(
 	const selectedTeacher = () => findById(teachers(), selectedTeacherId());
 	const selectedAccompanist = () =>
 		findById(accompanists(), signals.selectedAccompanistId());
-	const instruments = () => divisions()?.instruments ?? [];
+	const instruments = () => readSafeResource(divisions)?.instruments ?? [];
 	const selectedInstrument = () =>
 		findById(instruments(), signals.selectedInstrumentId());
 	const selectedDivisionName = () =>
-		findById(divisions()?.divisions, selectedDivisionId())?.displayName ??
-		"Division";
+		findById(readSafeResource(divisions)?.divisions, selectedDivisionId())
+			?.displayName ?? "Division";
 
 	const classOptionEligibility = useClassOptionEligibility({
 		slug: () => props.slug,
@@ -255,7 +256,7 @@ export function useFestivalRegistrationPage(
 
 	const isPurchased = (classId: string) =>
 		purchased.state === "ready" &&
-		(purchased()?.registrations ?? []).some(
+		(readSafeResource(purchased)?.registrations ?? []).some(
 			(item) =>
 				item.entitlement.childId === selectedChildId() &&
 				item.entitlement.festivalClassId === classId &&

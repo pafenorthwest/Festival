@@ -167,9 +167,9 @@ export function buildMembershipGrantInput(input: {
 		customerId: input.intent.customerId,
 		offeringId: input.intent.offeringId ?? "",
 		durationDays,
-		verifiedIdentityEmail: input.order.customerEmail
-			? normalizeVerifiedShopifyIdentityEmail(input.order.customerEmail)
-			: "",
+		verifiedIdentityEmail: normalizeVerifiedShopifyIdentityEmail(
+			input.order.customerEmail ?? "",
+		),
 		paidAmount: line?.paidAmount ?? input.intent.amount,
 		paidCurrencyCode: line?.paidCurrencyCode ?? input.intent.currencyCode,
 		checkoutIntentId: input.intent.id,

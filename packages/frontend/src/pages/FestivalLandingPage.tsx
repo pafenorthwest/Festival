@@ -9,6 +9,7 @@ import {
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { useOptionalCustomerIdentity } from "../domains/customer/CustomerIdentityContext.js";
 import { getCustomerChildren, getPublicFestival } from "../lib/api.js";
+import { readSafeResource } from "../lib/readSafeResource.js";
 import {
 	buildFestivalRegistrationPath,
 	buildFestivalVolunteersPath,
@@ -23,7 +24,7 @@ interface FestivalLandingPageProps {
 
 export function FestivalLandingPage(props: FestivalLandingPageProps) {
 	const customerIdentity = useOptionalCustomerIdentity();
-	const membershipPath = `/org/${props.slug}/membership`;
+	const membershipPath = () => `/org/${props.slug}/membership`;
 	const [entryError, setEntryError] = createSignal("");
 	const [entering, setEntering] = createSignal(false);
 	let entryRequest = 0;
@@ -105,12 +106,13 @@ export function FestivalLandingPage(props: FestivalLandingPageProps) {
 			<Show when={festival.error}>
 				<p role="alert">Festival not found.</p>
 			</Show>
-			<Show when={festival()}>
+			<Show when={readSafeResource(festival)}>
 				<div class="parent-page-heading festival-home-heading">
 					<p class="eyebrow">
-						{festival()?.festival.startDate} – {festival()?.festival.endDate}
+						{readSafeResource(festival)?.festival.startDate} –{" "}
+						{readSafeResource(festival)?.festival.endDate}
 					</p>
-					<h1>{festival()?.festival.name}</h1>
+					<h1>{readSafeResource(festival)?.festival.name}</h1>
 					<p class="muted">
 						A place for young musicians to perform, learn, and grow.
 					</p>
@@ -126,8 +128,8 @@ export function FestivalLandingPage(props: FestivalLandingPageProps) {
 					>
 						<a
 							class="role-banner teachers festival-home-banner"
-							href={membershipPath}
-							onClick={(event) => follow(event, membershipPath)}
+							href={membershipPath()}
+							onClick={(event) => follow(event, membershipPath())}
 						>
 							<span>Teachers</span>
 							<span

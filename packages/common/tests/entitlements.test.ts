@@ -11,6 +11,7 @@ import {
 	isClassEntitlementStatus,
 	isEntitlementClass,
 	MAX_ENTITLEMENT_DURATION_DAYS,
+	normalizeVerifiedShopifyIdentityEmail,
 	TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS,
 } from "../src/entitlements.js";
 
@@ -156,5 +157,36 @@ describe("Teacher Membership entitlement contracts", () => {
 		expect(isClassEntitlementStatus("revoked")).toBe(true);
 		expect(isClassEntitlementStatus("active")).toBe(false);
 		expect(isClassEntitlementStatus("unknown")).toBe(false);
+	});
+
+	it("normalizes valid short and trimmed Shopify identity emails and rejects malformed or overlong inputs", () => {
+		expect(normalizeVerifiedShopifyIdentityEmail("a@b.com")).toBe("a@b.com");
+		expect(normalizeVerifiedShopifyIdentityEmail("jo@x.co")).toBe("jo@x.co");
+		expect(normalizeVerifiedShopifyIdentityEmail("li@uw.edu")).toBe(
+			"li@uw.edu",
+		);
+		expect(normalizeVerifiedShopifyIdentityEmail("  Jo@X.CO  ")).toBe(
+			"jo@x.co",
+		);
+		const maxLenEmail = `${"a".repeat(242)}@example.com`;
+		expect(maxLenEmail).toHaveLength(254);
+		expect(normalizeVerifiedShopifyIdentityEmail(maxLenEmail)).toBe(
+			maxLenEmail,
+		);
+
+		for (const invalidEmail of [
+			"12345678",
+			"not-an-email",
+			"a@b",
+			"@b.com",
+			"a@.com",
+			"a b@c.com",
+			`${"a".repeat(246)}@example.com`,
+			"   ",
+		]) {
+			expect(() => normalizeVerifiedShopifyIdentityEmail(invalidEmail)).toThrow(
+				"Verified Shopify identity email is required.",
+			);
+		}
 	});
 });
