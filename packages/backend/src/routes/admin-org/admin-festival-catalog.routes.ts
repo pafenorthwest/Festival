@@ -25,6 +25,10 @@ import {
 	defineRouteSecurity,
 } from "../shared/route-security-metadata.js";
 import { jsonValidator } from "../shared/schema-validator.js";
+import {
+	ADMIN_FESTIVAL_SCHEDULING_ROUTE_SECURITY,
+	buildAdminFestivalSchedulingRoutes,
+} from "./admin-festival-scheduling.routes.js";
 
 const adminRoute = (method: CoLocatedRouteSecurity["method"], path: string) =>
 	defineRouteSecurity({
@@ -36,6 +40,7 @@ const adminRoute = (method: CoLocatedRouteSecurity["method"], path: string) =>
 	});
 
 export const ADMIN_FESTIVAL_CATALOG_ROUTE_SECURITY = [
+	...ADMIN_FESTIVAL_SCHEDULING_ROUTE_SECURITY,
 	adminRoute(
 		"GET",
 		"/organizations/:slug/admin/festivals/:festivalShortName/class-subtypes",
@@ -318,5 +323,6 @@ export function buildAdminFestivalCatalogRoutes(
 ) {
 	return new Hono<{ Variables: Partial<ApiVariables> }>()
 		.route("/", buildSubtypeAndRoomRoutes(options))
-		.route("/", buildFestivalClassRoutes(options));
+		.route("/", buildFestivalClassRoutes(options))
+		.route("/", buildAdminFestivalSchedulingRoutes(options));
 }

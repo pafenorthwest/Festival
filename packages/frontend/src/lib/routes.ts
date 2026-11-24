@@ -83,6 +83,7 @@ const ROUTE_PATTERNS: readonly RoutePattern[] = [
 	slugRoute(["org", ":slug", "directory"], "org-public-directory", true),
 	festivalRoute(["admin"], "festival-admin"),
 	festivalRoute(["admin", "classes"], "festival-admin-classes"),
+	festivalRoute(["admin", "scheduling"], "festival-admin-scheduling"),
 	festivalRoute(["volunteers"], "festival-volunteers"),
 	{
 		segments: [

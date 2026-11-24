@@ -196,6 +196,20 @@ function festivalRoutes() {
 				))}
 			/>
 			<Route
+				path="/festival/:festivalSlug/admin/scheduling"
+				component={() => {
+					const params = useParams();
+					const app = useFestivalShell();
+					return (
+						<Pages.FestivalSchedulingPage
+							app={app}
+							slug={params.slug ?? ""}
+							festivalSlug={params.festivalSlug ?? ""}
+						/>
+					);
+				}}
+			/>
+			<Route
 				path="/festival/:festivalSlug/admin/classes"
 				component={withCat((slug, festivalSlug, app) => (
 					<Pages.FestivalAdminClassesPage

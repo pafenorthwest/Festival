@@ -88,6 +88,16 @@ export function buildCanonicalPostgresSchemaSql(schema: string): string {
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			UNIQUE (id, organization_id)
 		);
+		CREATE TABLE IF NOT EXISTS ${safeSchema}.scheduling_config_revisions (
+			organization_id TEXT NOT NULL,
+			festival_id TEXT NOT NULL,
+			revision INTEGER NOT NULL CHECK (revision > 0),
+			config JSONB NOT NULL CHECK (jsonb_typeof(config) = 'object'),
+			actor_uid TEXT NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (organization_id, festival_id, revision),
+			FOREIGN KEY (festival_id, organization_id) REFERENCES ${safeSchema}.festivals (id, organization_id) ON DELETE CASCADE
+		);
 		CREATE TABLE IF NOT EXISTS ${safeSchema}.shopify_integrations (
 			organization_id TEXT PRIMARY KEY REFERENCES ${safeSchema}.organizations (id) ON DELETE CASCADE,
 			store_domain TEXT NOT NULL,

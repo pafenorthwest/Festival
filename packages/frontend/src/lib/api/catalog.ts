@@ -17,6 +17,11 @@ import type {
 	RepertoireReviewQueueSummary,
 	ResolveRepertoireFlagInput,
 	Room,
+	SchedulingClassRule,
+	SchedulingClassRulesRevision,
+	SchedulingConfiguration,
+	SchedulingConfigurationPreview,
+	SchedulingConfigurationRevision,
 	UpdateFestivalClassInput,
 } from "@festival/common";
 import { hc } from "hono/client";
@@ -270,6 +275,73 @@ export function listFestivalClasses(
 		.classes;
 	const param = festivalParam(slug, festivalSlug);
 	return rpcCall(endpoint.$get({ param }), endpoint.$path({ param }));
+}
+
+export function getSchedulingClassRules(
+	idToken: string,
+	slug: string,
+	festivalSlug: string,
+): Promise<SchedulingClassRulesRevision> {
+	const endpoint = catalogOrg({ idToken }).admin.festivals[":festivalShortName"]
+		.scheduling["class-rules"];
+	const param = festivalParam(slug, festivalSlug);
+	return rpcCall(endpoint.$get({ param }), endpoint.$path({ param }));
+}
+
+export function saveSchedulingClassRules(
+	idToken: string,
+	slug: string,
+	festivalSlug: string,
+	input: { expectedRevision: number; rules: SchedulingClassRule[] },
+): Promise<SchedulingClassRulesRevision> {
+	const endpoint = catalogOrg({ idToken }).admin.festivals[":festivalShortName"]
+		.scheduling["class-rules"];
+	const param = festivalParam(slug, festivalSlug);
+	return rpcCall(
+		endpoint.$put({ param, json: input }),
+		endpoint.$path({ param }),
+	);
+}
+
+export function getSchedulingConfiguration(
+	idToken: string,
+	slug: string,
+	festivalSlug: string,
+): Promise<SchedulingConfigurationRevision> {
+	const endpoint = catalogOrg({ idToken }).admin.festivals[":festivalShortName"]
+		.scheduling.config;
+	const param = festivalParam(slug, festivalSlug);
+	return rpcCall(endpoint.$get({ param }), endpoint.$path({ param }));
+}
+
+export function saveSchedulingConfiguration(
+	idToken: string,
+	slug: string,
+	festivalSlug: string,
+	input: { expectedRevision: number; config: SchedulingConfiguration },
+): Promise<SchedulingConfigurationRevision> {
+	const endpoint = catalogOrg({ idToken }).admin.festivals[":festivalShortName"]
+		.scheduling.config;
+	const param = festivalParam(slug, festivalSlug);
+	return rpcCall(
+		endpoint.$put({ param, json: input }),
+		endpoint.$path({ param }),
+	);
+}
+
+export function previewSchedulingConfiguration(
+	idToken: string,
+	slug: string,
+	festivalSlug: string,
+	config: SchedulingConfiguration,
+): Promise<SchedulingConfigurationPreview> {
+	const endpoint = catalogOrg({ idToken }).admin.festivals[":festivalShortName"]
+		.scheduling.config.preview;
+	const param = festivalParam(slug, festivalSlug);
+	return rpcCall(
+		endpoint.$post({ param, json: config }),
+		endpoint.$path({ param }),
+	);
 }
 
 export function createFestivalClass(

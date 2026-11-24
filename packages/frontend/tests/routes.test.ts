@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
 	buildFestivalAdminClassesPath,
 	buildFestivalAdminPath,
+	buildFestivalAdminSchedulingPath,
 	buildFestivalCartPath,
 	buildFestivalRegistrationClassPath,
 	buildFestivalRegistrationPath,
@@ -193,6 +194,13 @@ describe("route helpers", () => {
 			slug: "festival-admins",
 			festivalSlug: "jun-27",
 		});
+		expect(
+			parseRoute("/org/festival-admins/festival/jun-27/admin/scheduling"),
+		).toEqual({
+			kind: "festival-admin-scheduling",
+			slug: "festival-admins",
+			festivalSlug: "jun-27",
+		});
 		expect(parseRoute("/org/festival-admins/festival/jun-27/register")).toEqual(
 			{
 				kind: "festival-register",
@@ -307,6 +315,11 @@ describe("route helpers", () => {
 		).toBe(false);
 		expect(
 			isOrganizationPageRoute(
+				parseRoute("/org/festival-admins/festival/jun-27/admin/scheduling"),
+			),
+		).toBe(false);
+		expect(
+			isOrganizationPageRoute(
 				parseRoute("/org/festival-admins/festival/jun-27/admin"),
 			),
 		).toBe(false);
@@ -331,6 +344,9 @@ describe("route helpers", () => {
 		expect(buildOrgPath("festival-admins")).toBe("/org/festival-admins/admin");
 		expect(buildFestivalAdminClassesPath("festival-admins", "jun-27")).toBe(
 			"/org/festival-admins/festival/jun-27/admin/classes",
+		);
+		expect(buildFestivalAdminSchedulingPath("festival-admins", "jun-27")).toBe(
+			"/org/festival-admins/festival/jun-27/admin/scheduling",
 		);
 		expect(buildFestivalAdminPath("festival-admins", "jun-27")).toBe(
 			"/org/festival-admins/festival/jun-27/admin",

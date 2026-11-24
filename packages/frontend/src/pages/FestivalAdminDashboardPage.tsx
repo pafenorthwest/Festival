@@ -5,6 +5,7 @@ import { Button } from "../components/Button.js";
 import { getAdminFestival } from "../lib/api.js";
 import {
 	buildFestivalAdminClassesPath,
+	buildFestivalAdminSchedulingPath,
 	buildOrgBillingPath,
 	buildOrgCommunicationsPath,
 	buildOrgMusicReviewPath,
@@ -85,6 +86,25 @@ export function FestivalAdminDashboardPage(props: {
 						>
 							<strong>Classes</strong>
 							<span>Manage this Festival’s class catalog.</span>
+						</button>
+						<button
+							type="button"
+							class="admin-workflow-card"
+							data-preload-path={buildFestivalAdminSchedulingPath(
+								props.slug,
+								props.festivalSlug,
+							)}
+							onClick={() =>
+								props.app.navigate(
+									buildFestivalAdminSchedulingPath(
+										props.slug,
+										props.festivalSlug,
+									),
+								)
+							}
+						>
+							<strong>Scheduling</strong>
+							<span>Set class timing and preview section sizes.</span>
 						</button>
 						<button
 							type="button"

@@ -1,3 +1,4 @@
+import { InMemorySchedulingConfigRepository } from "../domains/catalog-repertoire/index.js";
 import {
 	inMemCreateMembershipProductRecord,
 	inMemUpdateMembershipProductRecord,
@@ -125,6 +126,8 @@ export class InMemoryOrganizationRepository
 	extends InMemoryOrgProfilesAdapter
 	implements OrganizationRepository
 {
+	readonly schedulingConfig = new InMemorySchedulingConfigRepository();
+	readonly schedulingClassRules = this.schedulingConfig;
 	async getShopifyIntegration(organizationId: string) {
 		return this.state.shopifyIntegrations.get(organizationId) ?? null;
 	}

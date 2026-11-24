@@ -10,6 +10,7 @@ export type AppRoute =
 	| { kind: "festival-public"; slug: string; festivalSlug: string }
 	| { kind: "festival-admin"; slug: string; festivalSlug: string }
 	| { kind: "festival-admin-classes"; slug: string; festivalSlug: string }
+	| { kind: "festival-admin-scheduling"; slug: string; festivalSlug: string }
 	| { kind: "festival-volunteers"; slug: string; festivalSlug: string }
 	| { kind: "festival-register"; slug: string; festivalSlug: string }
 	| {
@@ -87,6 +88,13 @@ export function buildFestivalAdminClassesPath(
 	festivalSlug: string,
 ): string {
 	return `${buildFestivalAdminPath(slug, festivalSlug)}/classes`;
+}
+
+export function buildFestivalAdminSchedulingPath(
+	slug: string,
+	festivalSlug: string,
+): string {
+	return `${buildFestivalAdminPath(slug, festivalSlug)}/scheduling`;
 }
 
 export function buildFestivalVolunteersPath(

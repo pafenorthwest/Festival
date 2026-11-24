@@ -1,3 +1,4 @@
+import { PostgresSchedulingConfigRepository } from "../domains/catalog-repertoire/index.js";
 import { defaultPostgresSchemaName } from "../infra/s09-infra.js";
 import type { OrganizationRepository } from "./organization-repository.js";
 import { PostgresMembershipGrantDelegate } from "./postgres-membership-grant-delegate.js";
@@ -11,11 +12,18 @@ export class PostgresOrganizationRepository
 	implements OrganizationRepository
 {
 	private readonly shopifyDelegate: PostgresShopifyIntegrationDelegate;
+	readonly schedulingConfig: PostgresSchedulingConfigRepository;
+	readonly schedulingClassRules: PostgresSchedulingConfigRepository;
 	private readonly grantDelegate: PostgresMembershipGrantDelegate;
 	private readonly profileDelegate: PostgresProfileDirectoryDelegate;
 
 	constructor(schema = defaultPostgresSchemaName()) {
 		super(schema);
+		this.schedulingConfig = new PostgresSchedulingConfigRepository(
+			this.schema,
+			this.ensureReadyCallback,
+		);
+		this.schedulingClassRules = this.schedulingConfig;
 		this.shopifyDelegate = new PostgresShopifyIntegrationDelegate(
 			this.schema,
 			this.ensureReadyCallback,
