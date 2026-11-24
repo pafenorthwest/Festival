@@ -24,6 +24,7 @@ export * from "./customer-registration-query-helpers.js";
 export * from "./customer-registration-query-service.js";
 export * from "./drop-transfer-fees.js";
 export * from "./drop-transfer-service.js";
+export * from "./drop-transfer-transaction.js";
 export * from "./drop-transfer-validation.js";
 export * from "./events.js";
 export * from "./membership-checkout-service.js";

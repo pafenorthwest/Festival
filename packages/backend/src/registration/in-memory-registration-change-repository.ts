@@ -27,6 +27,36 @@ export class InMemoryRegistrationChangeRepository
 
 	async ensureReady(): Promise<void> {}
 
+	createTransactionSnapshot(): () => void {
+		const logsCopy = new Map<string, RegistrationChangeLog>(
+			[...this.changeLogs.entries()].map(([k, v]) => [
+				k,
+				{
+					...v,
+					previousState: { ...v.previousState },
+					newState: { ...v.newState },
+				},
+			]),
+		);
+		const refundsCopy = new Map<string, RefundEvent>(
+			[...this.refundEvents.entries()].map(([k, v]) => [k, { ...v }]),
+		);
+		return () => {
+			this.changeLogs.clear();
+			for (const [k, v] of logsCopy) {
+				this.changeLogs.set(k, {
+					...v,
+					previousState: { ...v.previousState },
+					newState: { ...v.newState },
+				});
+			}
+			this.refundEvents.clear();
+			for (const [k, v] of refundsCopy) {
+				this.refundEvents.set(k, { ...v });
+			}
+		};
+	}
+
 	async createChangeLog(
 		input: CreateRegistrationChangeLogInput,
 	): Promise<RegistrationChangeLog> {

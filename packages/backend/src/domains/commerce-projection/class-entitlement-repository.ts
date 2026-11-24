@@ -92,6 +92,9 @@ export interface ClassEntitlementRepository {
 		},
 		expectedStatus?: ClassEntitlementStatus | ClassEntitlementStatus[],
 	): Promise<ClassEntitlement | null>;
+	prepareTransaction?(): Promise<void>;
+	withTransaction?(tx: Pick<typeof sql, "unsafe">): ClassEntitlementRepository;
+	createTransactionSnapshot?(): () => void;
 }
 
 export const CLASS_ENTITLEMENT_COLUMNS = `id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at::text, updated_at::text`;
@@ -221,6 +224,7 @@ export class PostgresClassEntitlementRepository
 	constructor(
 		schema: string,
 		private readonly ensureReadyFn?: () => Promise<void>,
+		private readonly db: Pick<typeof sql, "unsafe"> = sql,
 	) {
 		this.schema = postgresSchemaName(schema);
 	}
@@ -233,13 +237,27 @@ export class PostgresClassEntitlementRepository
 		await initializePostgresSchema(this.schema);
 	}
 
+	async prepareTransaction(): Promise<void> {
+		await this.ensureReady();
+	}
+
+	withTransaction(
+		tx: Pick<typeof sql, "unsafe">,
+	): PostgresClassEntitlementRepository {
+		return new PostgresClassEntitlementRepository(
+			this.schema,
+			async () => {},
+			tx,
+		);
+	}
+
 	async createClassEntitlement(
 		input: CreateClassEntitlementInput,
 	): Promise<ClassEntitlement> {
 		await this.ensureReady();
 		assertValidClassEntitlementInput(input);
 		const id = input.id ?? randomUUID();
-		const rows = (await sql.unsafe(
+		const rows = (await this.db.unsafe(
 			`INSERT INTO ${this.schema}.class_entitlements (
 				id, organization_id, festival_id, festival_class_id, parent_customer_id, child_id, checkout_intent_id, checkout_intent_line_id, shopify_order_gid, shopify_order_line_gid, paid_amount_cents, paid_currency_code, status, admitted_cart_reference, capacity_at_allocation, placed_count_before_allocation, created_at, updated_at
 			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW(),NOW())
@@ -298,7 +316,7 @@ export class PostgresClassEntitlementRepository
 		id: string,
 	): Promise<ClassEntitlement | null> {
 		await this.ensureReady();
-		const rows = (await sql.unsafe(
+		const rows = (await this.db.unsafe(
 			`SELECT ${CLASS_ENTITLEMENT_COLUMNS} FROM ${this.schema}.class_entitlements WHERE organization_id = $1 AND id = $2`,
 			[organizationId, id],
 		)) as Array<Record<string, unknown>>;
@@ -310,7 +328,7 @@ export class PostgresClassEntitlementRepository
 	): Promise<ClassEntitlement[]> {
 		await this.ensureReady();
 		const { whereClause, params } = buildClassEntitlementFilterSql(filter);
-		const rows = (await sql.unsafe(
+		const rows = (await this.db.unsafe(
 			`SELECT ${CLASS_ENTITLEMENT_COLUMNS}
 			FROM ${this.schema}.class_entitlements
 			${whereClause}
@@ -325,7 +343,7 @@ export class PostgresClassEntitlementRepository
 		shopifyOrderLineGid: string,
 	): Promise<ClassEntitlement | null> {
 		await this.ensureReady();
-		const rows = (await sql.unsafe(
+		const rows = (await this.db.unsafe(
 			`SELECT ${CLASS_ENTITLEMENT_COLUMNS} FROM ${this.schema}.class_entitlements WHERE organization_id = $1 AND shopify_order_line_gid = $2`,
 			[organizationId, shopifyOrderLineGid],
 		)) as Array<Record<string, unknown>>;
@@ -337,7 +355,7 @@ export class PostgresClassEntitlementRepository
 		checkoutIntentId: string,
 	): Promise<ClassEntitlement | null> {
 		await this.ensureReady();
-		const rows = (await sql.unsafe(
+		const rows = (await this.db.unsafe(
 			`SELECT ${CLASS_ENTITLEMENT_COLUMNS} FROM ${this.schema}.class_entitlements WHERE organization_id = $1 AND checkout_intent_id = $2`,
 			[organizationId, checkoutIntentId],
 		)) as Array<Record<string, unknown>>;
@@ -349,7 +367,7 @@ export class PostgresClassEntitlementRepository
 		checkoutIntentLineId: string,
 	): Promise<ClassEntitlement | null> {
 		await this.ensureReady();
-		const rows = (await sql.unsafe(
+		const rows = (await this.db.unsafe(
 			`SELECT ${CLASS_ENTITLEMENT_COLUMNS} FROM ${this.schema}.class_entitlements WHERE organization_id = $1 AND checkout_intent_line_id = $2`,
 			[organizationId, checkoutIntentLineId],
 		)) as Array<Record<string, unknown>>;
@@ -362,7 +380,7 @@ export class PostgresClassEntitlementRepository
 	): Promise<number> {
 		await this.ensureReady();
 		return countConfirmedClassEntitlements(
-			sql,
+			this.db,
 			this.schema,
 			organizationId,
 			festivalClassId,
@@ -376,7 +394,7 @@ export class PostgresClassEntitlementRepository
 		if (festivalClassIds.length === 0) return new Map();
 		await this.ensureReady();
 		return countConfirmedClassEntitlementsByClassIds({
-			database: sql,
+			database: this.db,
 			schema: this.schema,
 			organizationId,
 			festivalClassIds,
@@ -427,10 +445,10 @@ export class PostgresClassEntitlementRepository
 			const expected = Array.isArray(expectedCondition)
 				? expectedCondition
 				: [expectedCondition];
-			params.push(expected);
-			whereClauses.push(`status = ANY($${params.length})`);
+			params.push(sql.array(expected, "text"));
+			whereClauses.push(`status = ANY($${params.length}::text[])`);
 		}
-		const rows = (await sql.unsafe(
+		const rows = (await this.db.unsafe(
 			`UPDATE ${this.schema}.class_entitlements
 			SET ${setClauses.join(", ")}
 			WHERE ${whereClauses.join(" AND ")}
