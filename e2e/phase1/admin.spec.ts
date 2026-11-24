@@ -27,7 +27,11 @@ test.describe("Phase 1 admin journeys", () => {
 		await page.getByRole("button", { name: /^Scheduling/ }).click();
 		await expect(page).toHaveURL(new RegExp(`${festivalAdmin}/scheduling$`));
 
-		const row = page.getByRole("row").filter({ hasText: className });
+		// The capacity preview table also lists the class name, so anchor on the
+		// class-rules row's own code selector.
+		const row = page.getByRole("row").filter({
+			has: page.getByLabel(`Scheduling code for ${className}`),
+		});
 		const code = row.getByLabel(`Scheduling code for ${className}`);
 		const playing = row.getByLabel(`Playing minutes for ${className}`);
 		const nextPlaying =
