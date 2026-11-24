@@ -1,4 +1,5 @@
-import { createEffect, createResource, Show } from "solid-js";
+import type { PublicOrganizationLandingResponse } from "@festival/common";
+import { createEffect, createResource, type Resource, Show } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { useCustomerIdentity } from "../domains/customer/CustomerIdentityContext.js";
 import {
@@ -20,6 +21,21 @@ interface AppHeaderProps {
 	app: FestivalAppController;
 }
 
+/**
+ * Solid 1.9 resources throw when read in the errored state, so only read
+ * the value once the resource is ready for the active organization slug.
+ */
+export function readReadyOrganizationLanding(
+	resource: Resource<PublicOrganizationLandingResponse>,
+	expectedSlug: string | null,
+): PublicOrganizationLandingResponse | undefined {
+	if (expectedSlug !== null && resource.state === "ready" && !resource.error) {
+		const value = resource();
+		return value?.organization.slug === expectedSlug ? value : undefined;
+	}
+	return undefined;
+}
+
 export function AppHeader(props: AppHeaderProps) {
 	const customerIdentity = useCustomerIdentity();
 	const isHome = () => props.app.route().kind === "home";
@@ -30,8 +46,7 @@ export function AppHeader(props: AppHeaderProps) {
 			: null;
 	};
 	const [landing] = createResource(slug, getPublicOrganizationLanding);
-	const currentLanding = () =>
-		landing()?.organization.slug === slug() ? landing() : undefined;
+	const currentLanding = () => readReadyOrganizationLanding(landing, slug());
 	const festivalSlug = () => {
 		const route = props.app.route();
 		return "festivalSlug" in route

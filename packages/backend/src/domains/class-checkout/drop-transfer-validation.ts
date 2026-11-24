@@ -7,7 +7,7 @@ export class AsyncLock {
 		keyOrKeys: string | readonly string[],
 		fn: () => Promise<T>,
 	): Promise<T> {
-		const keys = Array.from(
+		const sortedKeys = Array.from(
 			new Set(Array.isArray(keyOrKeys) ? keyOrKeys : [keyOrKeys]),
 		).sort();
 
@@ -16,10 +16,10 @@ export class AsyncLock {
 			release = resolve;
 		});
 
-		const currentTails = keys.map((key) =>
+		const currentTails = sortedKeys.map((key) =>
 			(this.queues.get(key) ?? Promise.resolve()).catch(() => {}),
 		);
-		for (const key of keys) {
+		for (const key of sortedKeys) {
 			this.queues.set(key, lockPromise);
 		}
 
@@ -28,7 +28,7 @@ export class AsyncLock {
 		try {
 			return await fn();
 		} finally {
-			for (const key of keys) {
+			for (const key of sortedKeys) {
 				if (this.queues.get(key) === lockPromise) {
 					this.queues.delete(key);
 				}
@@ -190,6 +190,27 @@ export function assertDroppableEntitlement(
 	) {
 		throw new AppError(
 			`Cannot drop registration with status "${entitlement.status}".`,
+			400,
+		);
+	}
+}
+
+export function assertPromotableEntitlement(
+	entitlement: ClassEntitlement | null,
+	festivalId?: string,
+): asserts entitlement is ClassEntitlement {
+	if (!entitlement) {
+		throw new AppError("Class entitlement not found.", 404);
+	}
+	if (festivalId && entitlement.festivalId !== festivalId) {
+		throw new AppError(
+			"Class entitlement does not belong to this festival.",
+			400,
+		);
+	}
+	if (entitlement.status !== "waitlisted") {
+		throw new AppError(
+			`Cannot promote registration with status "${entitlement.status}".`,
 			400,
 		);
 	}

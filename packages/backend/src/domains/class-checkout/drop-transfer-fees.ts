@@ -33,6 +33,18 @@ export interface ShopifyRefundProvider {
 	): Promise<ShopifyLineTargetedRefundResult>;
 }
 
+export interface PendingDropRefundDispatch {
+	provider: ShopifyRefundProvider;
+	entitlement: ClassEntitlement;
+	refundEvent: RefundEvent;
+	refundRequest: ShopifyLineTargetedRefundRequest;
+}
+
+export interface PreparedDropRefundRecord {
+	refundEvent: RefundEvent;
+	pendingDispatch: PendingDropRefundDispatch | null;
+}
+
 export function isLineTargetedRefundProvider(
 	provider: unknown,
 ): provider is ShopifyRefundProvider {
@@ -96,14 +108,14 @@ export function validateLineTargetedRefundResponse(
 	}
 }
 
-export async function processDropRefundWorkflow(params: {
+export async function recordInitialDropRefundEvent(params: {
 	changeRepo: RegistrationChangeRepository;
 	refundProvider?: ShopifyRefundProvider | null;
 	entitlement: ClassEntitlement;
 	changeLogId: string;
 	refundAmountCents?: number | null;
 	refundReason?: string | null;
-}): Promise<RefundEvent> {
+}): Promise<PreparedDropRefundRecord> {
 	const { entitlement, changeLogId } = params;
 	const amountCents = resolveDropRefundAmountCents(
 		entitlement,
@@ -121,7 +133,7 @@ export async function processDropRefundWorkflow(params: {
 			: !entitlement.shopifyOrderGid
 				? "Missing Shopify order ID for refund."
 				: "Missing Shopify order line ID for refund.";
-		return params.changeRepo.createRefundEvent({
+		const refundEvent = await params.changeRepo.createRefundEvent({
 			organizationId: entitlement.organizationId,
 			registrationChangeLogId: changeLogId,
 			classEntitlementId: entitlement.id,
@@ -132,17 +144,74 @@ export async function processDropRefundWorkflow(params: {
 			status: "failed",
 			failureReason,
 		});
+		return { refundEvent, pendingDispatch: null };
 	}
-	return executeVerifiedRefund(params, amountCents, currency, refundReason);
+	return preparePendingRefundRecord(params, amountCents, {
+		currency,
+		refundReason,
+	});
 }
 
-async function dispatchProviderRefund(
+async function preparePendingRefundRecord(
+	params: {
+		changeRepo: RegistrationChangeRepository;
+		refundProvider?: ShopifyRefundProvider | null;
+		entitlement: ClassEntitlement;
+		changeLogId: string;
+	},
+	amountCents: number,
+	meta: { currency: string; refundReason: string },
+): Promise<PreparedDropRefundRecord> {
+	const { entitlement, changeLogId } = params;
+	const isPartial = amountCents !== entitlement.paidAmountCents;
+	const provider = isLineTargetedRefundProvider(params.refundProvider)
+		? params.refundProvider
+		: null;
+	const manualReason = isPartial
+		? "Manual refund required: partial class-registration refunds are not supported."
+		: !provider
+			? "Manual refund required: no deterministic Shopify order-line refund provider is configured."
+			: null;
+
+	const refundEvent = await params.changeRepo.createRefundEvent({
+		organizationId: entitlement.organizationId,
+		registrationChangeLogId: changeLogId,
+		classEntitlementId: entitlement.id,
+		shopifyOrderId: entitlement.shopifyOrderGid,
+		shopifyOrderLineId: entitlement.shopifyOrderLineGid,
+		amountCents,
+		currency: meta.currency,
+		status: "pending",
+		failureReason: manualReason,
+	});
+	if (!provider || isPartial) {
+		return { refundEvent, pendingDispatch: null };
+	}
+	return {
+		refundEvent,
+		pendingDispatch: {
+			provider,
+			entitlement,
+			refundEvent,
+			refundRequest: {
+				orderId: entitlement.shopifyOrderGid,
+				paymentIntentId: entitlement.checkoutIntentId,
+				refundEventId: refundEvent.id,
+				idempotencyKey: `refund-event:${refundEvent.id}`,
+				shopifyOrderLineId: entitlement.shopifyOrderLineGid,
+				amountCents,
+				currency: meta.currency,
+				reason: meta.refundReason,
+			},
+		},
+	};
+}
+
+export async function finalizePendingDropRefund(
 	changeRepo: RegistrationChangeRepository,
-	provider: ShopifyRefundProvider,
-	refundEvent: RefundEvent,
-	entitlement: ClassEntitlement,
-	refundRequest: ShopifyLineTargetedRefundRequest,
+	pending: PendingDropRefundDispatch,
 ): Promise<RefundEvent> {
+	const { provider, refundEvent, entitlement, refundRequest } = pending;
 	try {
 		const result = await provider.createRefund(refundRequest);
 		validateLineTargetedRefundResponse(refundRequest, result);
@@ -168,55 +237,15 @@ async function dispatchProviderRefund(
 	}
 }
 
-async function executeVerifiedRefund(
-	params: {
-		changeRepo: RegistrationChangeRepository;
-		refundProvider?: ShopifyRefundProvider | null;
-		entitlement: ClassEntitlement;
-		changeLogId: string;
-	},
-	amountCents: number,
-	currency: string,
-	refundReason: string,
-): Promise<RefundEvent> {
-	const { entitlement, changeLogId } = params;
-	const isPartial = amountCents !== entitlement.paidAmountCents;
-	const provider = isLineTargetedRefundProvider(params.refundProvider)
-		? params.refundProvider
-		: null;
-	const manualReason = isPartial
-		? "Manual refund required: partial class-registration refunds are not supported."
-		: !provider
-			? "Manual refund required: no deterministic Shopify order-line refund provider is configured."
-			: null;
-
-	const refundEvent = await params.changeRepo.createRefundEvent({
-		organizationId: entitlement.organizationId,
-		registrationChangeLogId: changeLogId,
-		classEntitlementId: entitlement.id,
-		shopifyOrderId: entitlement.shopifyOrderGid,
-		shopifyOrderLineId: entitlement.shopifyOrderLineGid,
-		amountCents,
-		currency,
-		status: "pending",
-		failureReason: manualReason,
-	});
-	if (!provider || isPartial) return refundEvent;
-
-	return dispatchProviderRefund(
-		params.changeRepo,
-		provider,
-		refundEvent,
-		entitlement,
-		{
-			orderId: entitlement.shopifyOrderGid,
-			paymentIntentId: entitlement.checkoutIntentId,
-			refundEventId: refundEvent.id,
-			idempotencyKey: `refund-event:${refundEvent.id}`,
-			shopifyOrderLineId: entitlement.shopifyOrderLineGid,
-			amountCents,
-			currency,
-			reason: refundReason,
-		},
-	);
+export async function processDropRefundWorkflow(params: {
+	changeRepo: RegistrationChangeRepository;
+	refundProvider?: ShopifyRefundProvider | null;
+	entitlement: ClassEntitlement;
+	changeLogId: string;
+	refundAmountCents?: number | null;
+	refundReason?: string | null;
+}): Promise<RefundEvent> {
+	const prepared = await recordInitialDropRefundEvent(params);
+	if (!prepared.pendingDispatch) return prepared.refundEvent;
+	return finalizePendingDropRefund(params.changeRepo, prepared.pendingDispatch);
 }

@@ -13,6 +13,7 @@ import type {
 	RegistrationCatalogValue,
 } from "@festival/common";
 import type { ClassCheckoutStorefrontBinding } from "./checkout-execution-types.js";
+import type { SqlRunner } from "./registration-metadata-queries.js";
 
 export interface CheckoutShopifyIntegrationRecord {
 	storeDomain?: string;
@@ -297,6 +298,9 @@ export interface CheckoutCommerceReadPort {
 		},
 		expectedStatus?: ClassEntitlementStatus | ClassEntitlementStatus[],
 	): Promise<ClassEntitlement | null>;
+	prepareTransaction?(): Promise<void>;
+	withTransaction?(tx: SqlRunner): CheckoutCommerceReadPort;
+	createTransactionSnapshot?(): () => void;
 }
 
 export interface MembershipListingsPort {

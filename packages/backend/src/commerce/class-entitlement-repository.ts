@@ -78,6 +78,32 @@ function findExistingInMemoryEntitlement(
 	return null;
 }
 
+function snapshotInMemoryEntitlementState(state: {
+	entitlements: Map<string, ClassEntitlement>;
+	entitlementsByLine: Map<string, string>;
+	entitlementsByIntent: Map<string, string>;
+	entitlementsByIntentLine: Map<string, string>;
+}): () => void {
+	const entitlementsCopy = new Map<string, ClassEntitlement>(
+		[...state.entitlements.entries()].map(([k, v]) => [k, { ...v }]),
+	);
+	const byLineCopy = new Map(state.entitlementsByLine);
+	const byIntentCopy = new Map(state.entitlementsByIntent);
+	const byIntentLineCopy = new Map(state.entitlementsByIntentLine);
+	return () => {
+		state.entitlements.clear();
+		for (const [k, v] of entitlementsCopy) state.entitlements.set(k, { ...v });
+		state.entitlementsByLine.clear();
+		for (const [k, v] of byLineCopy) state.entitlementsByLine.set(k, v);
+		state.entitlementsByIntent.clear();
+		for (const [k, v] of byIntentCopy) state.entitlementsByIntent.set(k, v);
+		state.entitlementsByIntentLine.clear();
+		for (const [k, v] of byIntentLineCopy) {
+			state.entitlementsByIntentLine.set(k, v);
+		}
+	};
+}
+
 export class InMemoryClassEntitlementRepository
 	implements ClassEntitlementRepository
 {
@@ -89,6 +115,15 @@ export class InMemoryClassEntitlementRepository
 	constructor(private readonly now: () => Date = () => new Date()) {}
 
 	async ensureReady(): Promise<void> {}
+
+	createTransactionSnapshot(): () => void {
+		return snapshotInMemoryEntitlementState({
+			entitlements: this.entitlements,
+			entitlementsByLine: this.entitlementsByLine,
+			entitlementsByIntent: this.entitlementsByIntent,
+			entitlementsByIntentLine: this.entitlementsByIntentLine,
+		});
+	}
 
 	async createClassEntitlement(
 		input: CreateClassEntitlementInput,
