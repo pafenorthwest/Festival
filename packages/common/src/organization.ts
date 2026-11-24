@@ -559,6 +559,24 @@ export function todayDateOnly(now = new Date()): string {
 	return now.toISOString().slice(0, 10);
 }
 
+function validateFestivalCalendarBoundary(
+	value: string,
+	label: "start" | "end",
+	errors: string[],
+): boolean {
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+		errors.push(`Festival ${label} date is required.`);
+		return false;
+	}
+	try {
+		parseCalendarDate(value);
+		return true;
+	} catch {
+		errors.push(`Festival ${label} date is invalid.`);
+		return false;
+	}
+}
+
 export function validateFestivalDates(input: {
 	startDate: string;
 	endDate: string;
@@ -568,25 +586,18 @@ export function validateFestivalDates(input: {
 	const endDate = input.endDate.trim();
 	const today = input.today ?? todayDateOnly();
 	const errors: string[] = [];
-	const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+	const startValid = validateFestivalCalendarBoundary(
+		startDate,
+		"start",
+		errors,
+	);
+	const endValid = validateFestivalCalendarBoundary(endDate, "end", errors);
 
-	if (!datePattern.test(startDate)) {
-		errors.push("Festival start date is required.");
-	}
-
-	if (!datePattern.test(endDate)) {
-		errors.push("Festival end date is required.");
-	}
-
-	if (datePattern.test(startDate) && startDate < today) {
+	if (startValid && startDate < today) {
 		errors.push("Festival start date cannot be in the past.");
 	}
 
-	if (
-		datePattern.test(startDate) &&
-		datePattern.test(endDate) &&
-		endDate < startDate
-	) {
+	if (startValid && endValid && endDate < startDate) {
 		errors.push("Festival end date must be the same as or after start date.");
 	}
 

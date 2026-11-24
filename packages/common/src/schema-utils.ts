@@ -17,10 +17,45 @@ export const nonEmptyText = (label: string, max = 500) =>
 		v.maxLength(max, `${label} must be ${max} characters or less.`),
 	);
 
-export const calendarDateSchema = v.pipe(
-	v.string("Date must be a string."),
-	v.trim(),
-	v.regex(/^\d{4}-\d{2}-\d{2}$/, "Date must use YYYY-MM-DD."),
+const CALENDAR_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+export function isValidCalendarDate(value: string): boolean {
+	const match = CALENDAR_DATE_PATTERN.exec(value);
+	if (!match) {
+		return false;
+	}
+	const year = Number(match[1]);
+	const month = Number(match[2]);
+	const day = Number(match[3]);
+	const parsed = new Date(0);
+	parsed.setUTCFullYear(year, month - 1, day);
+	return (
+		parsed.getUTCFullYear() === year &&
+		parsed.getUTCMonth() === month - 1 &&
+		parsed.getUTCDate() === day
+	);
+}
+
+export function calendarDatePipe(
+	stringMessage: string,
+	formatMessage: string,
+	invalidMessage = "Calendar date is invalid.",
+) {
+	return v.pipe(
+		v.string(stringMessage),
+		v.trim(),
+		v.regex(CALENDAR_DATE_PATTERN, formatMessage),
+		v.check(
+			(value) =>
+				!CALENDAR_DATE_PATTERN.test(value) || isValidCalendarDate(value),
+			invalidMessage,
+		),
+	);
+}
+
+export const calendarDateSchema = calendarDatePipe(
+	"Date must be a string.",
+	"Date must use YYYY-MM-DD.",
 );
 
 export type AnyValibotSchema = v.BaseSchema<

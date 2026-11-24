@@ -246,8 +246,8 @@ export function assertValidEntitlementGrantSnapshotInput(
 	parseCalendarDate(input.endsOn);
 	const minEndsOn = addCalendarDays(input.startsOn, input.durationDays);
 	const maxEndsOn = addCalendarDays(
-		input.startsOn,
-		input.durationDays + TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS,
+		minEndsOn,
+		TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS,
 	);
 	if (input.endsOn < minEndsOn || input.endsOn > maxEndsOn) {
 		throw new Error(

@@ -3,8 +3,13 @@ import type { AuthenticatedUser } from "@festival/common";
 import { Hono } from "hono";
 import type { AuthVerifier } from "../src/auth/types.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
+import { PostgresOrganizationRepository } from "../src/repo/postgres-organization-repository.js";
 import { buildAdminOrgRoutes } from "../src/routes/admin-org/admin-org.routes.js";
 import { OrganizationService } from "../src/services/organization-service.js";
+import { currentPostgresFixture } from "./postgres-test-fixture.js";
+
+const currentSchema = currentPostgresFixture("admin_org_festivals");
+const integrationIt = process.env.POSTGRES_INTEGRATION_URL ? it : it.skip;
 
 class FakeAuth implements AuthVerifier {
 	async verify(token: string): Promise<AuthenticatedUser> {
@@ -171,5 +176,89 @@ describe("admin org routes", () => {
 
 			expect(response.status).toBe(403);
 		});
+	});
+
+	describe("POST /api/organizations/:slug/admin/festivals", () => {
+		it("returns 400 when startDate or endDate is an impossible calendar date", async () => {
+			const { organization, repository } = await createTestApp();
+			const apiApp = new Hono();
+			apiApp.route(
+				"/api",
+				buildAdminOrgRoutes({
+					organizationService: new OrganizationService(repository),
+					authVerifier: new FakeAuth(),
+				}),
+			);
+
+			const response = await apiApp.request(
+				`/api/organizations/${organization.slug}/admin/festivals`,
+				{
+					method: "POST",
+					headers: {
+						Authorization: "Bearer admin",
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify({
+						name: "Impossible Date Festival",
+						shortName: "impossible-date",
+						startDate: "2099-02-31",
+						endDate: "2099-03-05",
+					}),
+				},
+			);
+
+			expect(response.status).toBe(400);
+		});
+
+		integrationIt(
+			"returns 400 instead of 500 against PostgreSQL when startDate is 2099-02-31",
+			async () => {
+				const schema = await currentSchema();
+				const repository = new PostgresOrganizationRepository(schema);
+				const organization = await repository.createOrganization({
+					name: "Pacific Festival PG",
+					slug: "pafe-pg",
+				});
+				const admin = await repository.upsertUser({
+					uid: "uid-admin",
+					email: "admin@example.com",
+					displayName: "Admin",
+				});
+				await repository.createMembership({
+					organizationId: organization.id,
+					userId: admin.id,
+					role: "Admin",
+					origin: "creator",
+				});
+
+				const apiApp = new Hono();
+				apiApp.route(
+					"/api",
+					buildAdminOrgRoutes({
+						organizationService: new OrganizationService(repository),
+						authVerifier: new FakeAuth(),
+					}),
+				);
+
+				const response = await apiApp.request(
+					`/api/organizations/${organization.slug}/admin/festivals`,
+					{
+						method: "POST",
+						headers: {
+							Authorization: "Bearer admin",
+							"Content-Type": "application/json",
+						},
+						body: JSON.stringify({
+							name: "Impossible Date Festival",
+							shortName: "impossible-date",
+							startDate: "2099-02-31",
+							endDate: "2099-03-05",
+						}),
+					},
+				);
+
+				expect(response.status).toBe(400);
+			},
+		);
 	});
 });

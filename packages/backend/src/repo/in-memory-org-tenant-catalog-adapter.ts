@@ -34,6 +34,7 @@ import {
 	type InMemoryOrgState,
 } from "./in-memory-org-state.js";
 import {
+	inMemAcceptInvite,
 	inMemCancelInvite,
 	inMemCreateInvite,
 	inMemCreateMembership,
@@ -167,6 +168,11 @@ class InMemoryTenantAdapterBase
 	}
 	async markInviteAccepted(token: string) {
 		inMemMarkInviteAccepted(this.state, token);
+	}
+	async acceptInvite(
+		input: Parameters<AppUserMembershipRepository["acceptInvite"]>[0],
+	) {
+		return inMemAcceptInvite(this.state, input);
 	}
 	async listAdminUsers(organizationId: string, currentUserId: string) {
 		return inMemListAdminUsers(this.state, organizationId, currentUserId);

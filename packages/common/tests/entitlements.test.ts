@@ -150,6 +150,53 @@ describe("Teacher Membership entitlement contracts", () => {
 		).toThrow("startsOn plus durationDays");
 	});
 
+	it("accepts MAX_ENTITLEMENT_DURATION_DAYS grants with and without renewal window and rejects 36501", () => {
+		const startsOn = "2026-08-14";
+		const minEndsOn = addCalendarDays(startsOn, MAX_ENTITLEMENT_DURATION_DAYS);
+		const maxEndsOn = addCalendarDays(
+			minEndsOn,
+			TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS,
+		);
+		const baseGrant = {
+			organizationId: "org-1",
+			customerId: "customer-1",
+			entitlementClass: "teacher_membership" as const,
+			offeringId: "offering-max",
+			durationDays: MAX_ENTITLEMENT_DURATION_DAYS,
+			divisionId: "division-1",
+			divisionNameSnapshot: "High Strings",
+			paidAmount: "750.00",
+			paidCurrencyCode: "USD",
+			checkoutIntentId: "intent-max",
+			shopifyOrderGid: "gid://shopify/Order/99",
+			shopifyOrderLineGid: "gid://shopify/LineItem/99",
+			startsOn,
+			status: "active" as const,
+		};
+
+		expect(() =>
+			assertValidEntitlementGrantSnapshotInput({
+				...baseGrant,
+				endsOn: minEndsOn,
+			}),
+		).not.toThrow();
+
+		expect(() =>
+			assertValidEntitlementGrantSnapshotInput({
+				...baseGrant,
+				endsOn: maxEndsOn,
+			}),
+		).not.toThrow();
+
+		expect(() =>
+			assertValidEntitlementGrantSnapshotInput({
+				...baseGrant,
+				durationDays: MAX_ENTITLEMENT_DURATION_DAYS + 1,
+				endsOn: addCalendarDays(minEndsOn, 1),
+			}),
+		).toThrow("positive integer");
+	});
+
 	it("validates class entitlement statuses", () => {
 		expect(isClassEntitlementStatus("confirmed")).toBe(true);
 		expect(isClassEntitlementStatus("waitlisted")).toBe(true);

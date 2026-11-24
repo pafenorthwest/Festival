@@ -105,6 +105,38 @@ describe("organization helpers", () => {
 		expect(pastDates.errors).toContain(
 			"Festival start date cannot be in the past.",
 		);
+
+		for (const impossibleDate of [
+			"2027-02-29",
+			"2027-02-31",
+			"2026-04-31",
+			"2026-13-01",
+			"2026-00-10",
+		]) {
+			const badStart = validateFestivalDates({
+				startDate: impossibleDate,
+				endDate: "2028-03-05",
+				today: "2026-01-01",
+			});
+			expect(badStart.valid).toBeFalse();
+			expect(badStart.errors.length).toBeGreaterThan(0);
+
+			const badEnd = validateFestivalDates({
+				startDate: "2026-01-10",
+				endDate: impossibleDate,
+				today: "2026-01-01",
+			});
+			expect(badEnd.valid).toBeFalse();
+			expect(badEnd.errors.length).toBeGreaterThan(0);
+		}
+
+		const leapYearFestival = validateFestivalDates({
+			startDate: "2028-02-29",
+			endDate: "2028-03-02",
+			today: "2028-01-01",
+		});
+		expect(leapYearFestival.valid).toBeTrue();
+		expect(leapYearFestival.errors).toEqual([]);
 	});
 
 	describe("subtractCalendarDays", () => {

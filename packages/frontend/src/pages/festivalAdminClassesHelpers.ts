@@ -3,6 +3,7 @@ import type {
 	OrganizationDivision,
 	RegistrationCatalogValue,
 } from "@festival/common";
+import { createMemo, createSignal } from "solid-js";
 
 const PRICE_REGEX = /^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/;
 
@@ -193,4 +194,97 @@ export function formatWaitlistTimestamp(isoDate: string): string {
 		dateStyle: "medium",
 		timeStyle: "short",
 	});
+}
+
+export function replaceClassItem(
+	list: FestivalClassConfigurationDto[],
+	updated: FestivalClassConfigurationDto,
+): FestivalClassConfigurationDto[] {
+	return list.map((c) => (c.id === updated.id ? updated : c));
+}
+
+export function createClassesPageSignals() {
+	const [classes, setClasses] = createSignal<FestivalClassConfigurationDto[]>(
+		[],
+	);
+	const [divisions, setDivisions] = createSignal<OrganizationDivision[]>([]);
+	const [classSubtypes, setClassSubtypes] = createSignal<
+		RegistrationCatalogValue[]
+	>([]);
+	const [isLoadingData, setIsLoadingData] = createSignal(false);
+	const [dataError, setDataError] = createSignal<string | null>(null);
+	const [actionError, setActionError] = createSignal<string | null>(null);
+	const [isCreateModalOpen, setIsCreateModalOpen] = createSignal(false);
+	const [editingClass, setEditingClass] =
+		createSignal<FestivalClassConfigurationDto | null>(null);
+	const [waitlistClass, setWaitlistClass] =
+		createSignal<FestivalClassConfigurationDto | null>(null);
+	const [isSavingModal, setIsSavingModal] = createSignal(false);
+	const [modalError, setModalError] = createSignal<string | null>(null);
+
+	function resetForScopeChange() {
+		setIsLoadingData(false);
+		setClasses([]);
+		setDivisions([]);
+		setClassSubtypes([]);
+		setDataError(null);
+		setActionError(null);
+		setIsCreateModalOpen(false);
+		setEditingClass(null);
+		setWaitlistClass(null);
+		setModalError(null);
+	}
+
+	const activeDivisions = createMemo(() =>
+		divisions().filter((d) => d.isActive),
+	);
+	const activeSubtypes = createMemo(() =>
+		classSubtypes().filter((sub) => sub.isActive),
+	);
+
+	function openCreateModal() {
+		setModalError(null);
+		setIsCreateModalOpen(true);
+	}
+
+	function openEditModal(item: FestivalClassConfigurationDto) {
+		setModalError(null);
+		setEditingClass(item);
+	}
+
+	function closeModal() {
+		setIsCreateModalOpen(false);
+		setEditingClass(null);
+	}
+
+	return {
+		classes,
+		setClasses,
+		divisions,
+		setDivisions,
+		classSubtypes,
+		setClassSubtypes,
+		activeDivisions,
+		activeSubtypes,
+		isLoadingData,
+		setIsLoadingData,
+		dataError,
+		setDataError,
+		actionError,
+		setActionError,
+		isCreateModalOpen,
+		setIsCreateModalOpen,
+		editingClass,
+		setEditingClass,
+		waitlistClass,
+		setWaitlistClass,
+		isSavingModal,
+		setIsSavingModal,
+		modalError,
+		setModalError,
+		openCreateModal,
+		openEditModal,
+		closeModal,
+		resetForScopeChange,
+	};
 }

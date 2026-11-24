@@ -10,6 +10,7 @@ import {
 	validateCreateVolunteerShiftInput,
 	validateEnrollVolunteerInput,
 	validateShiftBookingConflicts,
+	validateUpdateVolunteerShiftInput,
 } from "../src/index.js";
 
 describe("volunteer domain schemas and validation", () => {
@@ -126,6 +127,44 @@ describe("volunteer domain schemas and validation", () => {
 			expect(result.errors).toContain(
 				"Only Room Proctor shifts may have a division or adjudicator.",
 			);
+		});
+
+		it("rejects impossible calendar dates and accepts leap-year dates on create and update", () => {
+			for (const impossibleDate of [
+				"2027-02-29",
+				"2027-02-31",
+				"2026-04-31",
+				"2026-13-01",
+				"2026-00-10",
+			]) {
+				const created = validateCreateVolunteerShiftInput(
+					{ date: impossibleDate, period: "AM" },
+					false,
+				);
+				expect(created.valid).toBe(false);
+				expect(created.errors.length).toBeGreaterThan(0);
+
+				const updated = validateUpdateVolunteerShiftInput(
+					{ date: impossibleDate, period: "PM" },
+					false,
+				);
+				expect(updated.valid).toBe(false);
+				expect(updated.errors.length).toBeGreaterThan(0);
+			}
+
+			const validCreate = validateCreateVolunteerShiftInput(
+				{ date: "2028-02-29", period: "AM" },
+				false,
+			);
+			expect(validCreate.valid).toBe(true);
+			expect(validCreate.data?.date).toBe("2028-02-29");
+
+			const validUpdate = validateUpdateVolunteerShiftInput(
+				{ date: "2028-02-29", period: "PM" },
+				false,
+			);
+			expect(validUpdate.valid).toBe(true);
+			expect(validUpdate.data?.date).toBe("2028-02-29");
 		});
 	});
 

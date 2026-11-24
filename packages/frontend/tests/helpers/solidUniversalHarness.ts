@@ -79,6 +79,7 @@ function resolveSrc(dir: string, spec: string): string | undefined {
 	const rel = relative(SRC_DIR, hit).replaceAll("\\", "/");
 	if (rel === "lib/api.ts") return "safe-res-test-api";
 	if (rel === "lib/firebase-auth.ts") return "safe-res-test-auth";
+	if (rel === "components/ModalBackdrop.tsx") return "safe-res-test-backdrop";
 	return `@safe-res-dom/${rel}`;
 }
 
@@ -197,6 +198,14 @@ const wrappedApi = Object.fromEntries(
 
 mock.module("safe-res-test-dom", () => solidDom);
 mock.module("safe-res-test-css", () => ({}));
+mock.module("safe-res-test-backdrop", () => ({
+	ModalBackdrop: (props: { children: JSX.Element }) => {
+		const el = mkNode("div");
+		el.props.class = "modal-backdrop";
+		solidDom.insert(el, () => props.children);
+		return el;
+	},
+}));
 mock.module("safe-res-test-router", () => ({
 	Route: (props: RouteDefNode): RouteDefNode => ({
 		path: props.path,
