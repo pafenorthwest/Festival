@@ -7,7 +7,7 @@ import {
 	type SchedulingClassRule,
 	type SchedulingRoomCompatibilityRule,
 } from "@festival/common";
-import { For, Show } from "solid-js";
+import { For, Index, Show } from "solid-js";
 import { Button } from "../components/Button.js";
 
 export function SchedulingCompatibilitySection(props: {
@@ -97,149 +97,154 @@ export function SchedulingCompatibilitySection(props: {
 							</tr>
 						</thead>
 						<tbody>
-							<For each={props.rules}>
-								{(rule, index) => (
-									<tr>
-										<td>
-											<select
-												aria-label={`Compatibility ${index() + 1} scope`}
-												value={rule.scopeType}
-												onChange={(e) => {
-													const scopeType = e.currentTarget
-														.value as SchedulingRoomCompatibilityRule["scopeType"];
-													const scopeValue =
-														scopeType === "division"
-															? (props.divisions[0]?.id ?? "")
-															: scopeType === "class_code"
-																? (props.classRules[0]?.code ?? "")
-																: "concerto";
-													updateRule(index(), { scopeType, scopeValue });
-												}}
-											>
-												<option value="division">Division</option>
-												<option value="class_code">Class code</option>
-												<option value="class_type">Class type</option>
-											</select>
-										</td>
-										<td>
-											<Show when={rule.scopeType === "division"}>
+							<Index each={props.rules}>
+								{(rule, i) => {
+									const index = () => i;
+									return (
+										<tr>
+											<td>
 												<select
-													aria-label={`Compatibility ${index() + 1} division`}
-													value={rule.scopeValue}
+													aria-label={`Compatibility ${index() + 1} scope`}
+													value={rule().scopeType}
+													onChange={(e) => {
+														const scopeType = e.currentTarget
+															.value as SchedulingRoomCompatibilityRule["scopeType"];
+														const scopeValue =
+															scopeType === "division"
+																? (props.divisions[0]?.id ?? "")
+																: scopeType === "class_code"
+																	? (props.classRules[0]?.code ?? "")
+																	: "concerto";
+														updateRule(index(), { scopeType, scopeValue });
+													}}
+												>
+													<option value="division">Division</option>
+													<option value="class_code">Class code</option>
+													<option value="class_type">Class type</option>
+												</select>
+											</td>
+											<td>
+												<Show when={rule().scopeType === "division"}>
+													<select
+														aria-label={`Compatibility ${index() + 1} division`}
+														value={rule().scopeValue}
+														onChange={(e) =>
+															updateRule(index(), {
+																scopeValue: e.currentTarget.value,
+															})
+														}
+													>
+														<For each={props.divisions}>
+															{(div) => (
+																<option value={div.id}>
+																	{div.displayName}
+																</option>
+															)}
+														</For>
+													</select>
+												</Show>
+												<Show when={rule().scopeType === "class_type"}>
+													<select
+														aria-label={`Compatibility ${index() + 1} class type`}
+														value={rule().scopeValue}
+														onChange={(e) =>
+															updateRule(index(), {
+																scopeValue: e.currentTarget.value,
+															})
+														}
+													>
+														<For each={SCHEDULING_CLASS_TYPES}>
+															{(ct) => <option value={ct}>{ct}</option>}
+														</For>
+													</select>
+												</Show>
+												<Show when={rule().scopeType === "class_code"}>
+													<input
+														type="text"
+														required
+														aria-label={`Compatibility ${index() + 1} class code`}
+														value={rule().scopeValue}
+														onInput={(e) =>
+															updateRule(index(), {
+																scopeValue: e.currentTarget.value.toUpperCase(),
+															})
+														}
+													/>
+												</Show>
+											</td>
+											<td>
+												<select
+													aria-label={`Compatibility ${index() + 1} piano type`}
+													value={rule().requiredPianoType ?? ""}
 													onChange={(e) =>
 														updateRule(index(), {
-															scopeValue: e.currentTarget.value,
+															requiredPianoType:
+																(e.currentTarget.value as PianoType) || null,
 														})
 													}
 												>
-													<For each={props.divisions}>
-														{(div) => (
-															<option value={div.id}>{div.displayName}</option>
-														)}
+													<option value="">Any</option>
+													<For each={PIANO_TYPES}>
+														{(pt) => <option value={pt}>{pt}</option>}
 													</For>
 												</select>
-											</Show>
-											<Show when={rule.scopeType === "class_type"}>
-												<select
-													aria-label={`Compatibility ${index() + 1} class type`}
-													value={rule.scopeValue}
-													onChange={(e) =>
-														updateRule(index(), {
-															scopeValue: e.currentTarget.value,
-														})
-													}
-												>
-													<For each={SCHEDULING_CLASS_TYPES}>
-														{(ct) => <option value={ct}>{ct}</option>}
-													</For>
-												</select>
-											</Show>
-											<Show when={rule.scopeType === "class_code"}>
+											</td>
+											<td>
 												<input
-													type="text"
-													required
-													aria-label={`Compatibility ${index() + 1} class code`}
-													value={rule.scopeValue}
+													type="number"
+													min="0"
+													max="3"
+													step="1"
+													aria-label={`Compatibility ${index() + 1} min pianos`}
+													value={rule().minimumPianoCount}
 													onInput={(e) =>
 														updateRule(index(), {
-															scopeValue: e.currentTarget.value.toUpperCase(),
+															minimumPianoCount: Number.isFinite(
+																e.currentTarget.valueAsNumber,
+															)
+																? e.currentTarget.valueAsNumber
+																: 0,
 														})
 													}
 												/>
-											</Show>
-										</td>
-										<td>
-											<select
-												aria-label={`Compatibility ${index() + 1} piano type`}
-												value={rule.requiredPianoType ?? ""}
-												onChange={(e) =>
-													updateRule(index(), {
-														requiredPianoType:
-															(e.currentTarget.value as PianoType) || null,
-													})
-												}
-											>
-												<option value="">Any</option>
-												<For each={PIANO_TYPES}>
-													{(pt) => <option value={pt}>{pt}</option>}
-												</For>
-											</select>
-										</td>
-										<td>
-											<input
-												type="number"
-												min="0"
-												max="3"
-												step="1"
-												aria-label={`Compatibility ${index() + 1} min pianos`}
-												value={rule.minimumPianoCount}
-												onInput={(e) =>
-													updateRule(index(), {
-														minimumPianoCount: Number.isFinite(
-															e.currentTarget.valueAsNumber,
-														)
-															? e.currentTarget.valueAsNumber
-															: 0,
-													})
-												}
-											/>
-										</td>
-										<td>
-											<div class="scheduling-checkbox-group">
-												<For each={props.adjudicators}>
-													{(adj) => (
-														<label class="scheduling-checkbox-pill">
-															<input
-																type="checkbox"
-																checked={rule.allowedAdjudicatorIds.includes(
-																	adj.id,
-																)}
-																onChange={(e) =>
-																	toggleAdjudicator(
-																		index(),
+											</td>
+											<td>
+												<div class="scheduling-checkbox-group">
+													<For each={props.adjudicators}>
+														{(adj) => (
+															<label class="scheduling-checkbox-pill">
+																<input
+																	type="checkbox"
+																	checked={rule().allowedAdjudicatorIds.includes(
 																		adj.id,
-																		e.currentTarget.checked,
-																	)
-																}
-															/>
-															<span>{adj.name || adj.id}</span>
-														</label>
-													)}
-												</For>
-											</div>
-										</td>
-										<td>
-											<Button
-												type="button"
-												variant="secondary"
-												onClick={() => removeRule(index())}
-											>
-												Remove
-											</Button>
-										</td>
-									</tr>
-								)}
-							</For>
+																	)}
+																	onChange={(e) =>
+																		toggleAdjudicator(
+																			index(),
+																			adj.id,
+																			e.currentTarget.checked,
+																		)
+																	}
+																/>
+																<span>{adj.name || adj.id}</span>
+															</label>
+														)}
+													</For>
+												</div>
+											</td>
+											<td>
+												<Button
+													type="button"
+													variant="secondary"
+													onClick={() => removeRule(index())}
+												>
+													Remove
+												</Button>
+											</td>
+										</tr>
+									);
+								}}
+							</Index>
 						</tbody>
 					</table>
 				</div>

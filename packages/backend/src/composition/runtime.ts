@@ -114,6 +114,9 @@ function mountApiRouter(app: Hono, deps: RuntimeDependencies): void {
 				commerceProjection.shopifyMembershipProductService,
 			customerAccountService: customerIdentity.customerAccountService,
 			customerAvailabilityService: customerIdentity.customerAvailabilityService,
+			customerAvailabilityRepository:
+				customerIdentity.customerAvailabilityRepository,
+			childProfileRepository: customerIdentity.customerAccountRepository,
 			publicMembershipProductService:
 				commerceProjection.publicMembershipProductService,
 			shopifyIntegrationDiagnosticService:

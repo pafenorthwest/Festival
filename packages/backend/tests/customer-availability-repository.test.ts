@@ -4,6 +4,7 @@ import { sql } from "bun";
 import {
 	CorruptAvailabilityDataError,
 	type CorruptAvailabilityRecordContext,
+	InMemoryCustomerAvailabilityRepository,
 	PostgresCustomerAvailabilityRepository,
 	parseAvailabilityHours,
 	parseHoursJson,
@@ -225,5 +226,57 @@ describe("PostgresCustomerAvailabilityRepository - upsertAvailability multi-row 
 			"2026-07-16",
 			[14, 15],
 		]);
+	});
+});
+
+describe("InMemoryCustomerAvailabilityRepository.listAvailabilityForFestival", () => {
+	it("returns every customer's rows for one festival, scoped by organization", async () => {
+		const repository = new InMemoryCustomerAvailabilityRepository();
+		const base = {
+			organizationId: "org-a",
+			festivalId: "fest-a",
+			festivalDate: "2027-04-05",
+		};
+		await repository.upsertAvailability([
+			{
+				...base,
+				customerId: "parent-1",
+				subjectType: "child",
+				subjectId: "child-1",
+				availableHours: [10, 9],
+			},
+			{
+				...base,
+				customerId: "acc-1",
+				subjectType: "accompanist",
+				subjectId: "acc-1",
+				availableHours: [],
+			},
+			{
+				...base,
+				festivalId: "fest-b",
+				customerId: "parent-1",
+				subjectType: "child",
+				subjectId: "child-1",
+				availableHours: [11],
+			},
+			{
+				...base,
+				organizationId: "org-b",
+				customerId: "parent-2",
+				subjectType: "child",
+				subjectId: "child-2",
+				availableHours: [12],
+			},
+		]);
+		const rows = await repository.listAvailabilityForFestival({
+			organizationId: "org-a",
+			festivalId: "fest-a",
+		});
+		expect(rows).toMatchObject([
+			{ subjectType: "accompanist", subjectId: "acc-1", availableHours: [] },
+			{ subjectType: "child", subjectId: "child-1", availableHours: [9, 10] },
+		]);
+		expect(rows).toHaveLength(2);
 	});
 });

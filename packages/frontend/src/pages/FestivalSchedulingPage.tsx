@@ -10,11 +10,13 @@ import {
 	UpdateSchedulingConfigurationSchema,
 } from "@festival/common";
 import {
+	createEffect,
 	createMemo,
 	createResource,
 	createSignal,
 	For,
 	Match,
+	onCleanup,
 	Show,
 	Switch,
 } from "solid-js";
@@ -26,6 +28,7 @@ import {
 	getAdminDivisions,
 	getAdminFestival,
 	getSchedulingConfiguration,
+	getSchedulingReadiness,
 	listFestivalClasses,
 	listRooms,
 	saveSchedulingConfiguration,
@@ -36,7 +39,22 @@ import { SchedulingCapacityPreviewPanel } from "./SchedulingCapacityPreviewPanel
 import { SchedulingClassRuleRow } from "./SchedulingClassRuleRow.js";
 import { SchedulingCompatibilitySection } from "./SchedulingCompatibilitySection.js";
 import { SchedulingDatesAndPoliciesSection } from "./SchedulingDatesAndPoliciesSection.js";
+import {
+	createSchedulingEditorState,
+	type SchedulingEditorState,
+	SchedulingMetaLine,
+	type SchedulingSaveFn,
+} from "./SchedulingEditorState.js";
+import {
+	type SchedulingReadinessLoader,
+	SchedulingReadinessTabs,
+} from "./SchedulingReadinessTabs.js";
 import { SchedulingRoomWindowsSection } from "./SchedulingRoomWindowsSection.js";
+import {
+	formatSchedulingIssues,
+	formatServerSchedulingIssue,
+	SchedulingValidationIssues,
+} from "./SchedulingValidationIssues.js";
 
 type SchedulingTab = "setup" | "review" | "generate" | "versions" | "export";
 
@@ -58,40 +76,45 @@ function SchedulingSetupForm(props: {
 	classes: FestivalClassConfigurationDto[];
 	rooms: Room[];
 	divisions: OrganizationDivision[];
-	initial: SchedulingConfigurationRevision;
-	save: (
-		expectedRevision: number,
-		config: SchedulingConfiguration,
-	) => Promise<SchedulingConfigurationRevision>;
+	state: SchedulingEditorState;
+	save: SchedulingSaveFn;
 	reload: () => void;
 }) {
-	const [saved, setSaved] = createSignal(props.initial);
-	const [draft, setDraft] = createSignal<SchedulingConfiguration>(
-		structuredClone(props.initial.config),
-	);
-	const [saving, setSaving] = createSignal(false);
-	const [stale, setStale] = createSignal(false);
-	const [notice, setNotice] = createSignal("");
-	const [error, setError] = createSignal("");
+	const {
+		saved,
+		setSaved,
+		draft,
+		setDraft,
+		saving,
+		setSaving,
+		stale,
+		setStale,
+		notice,
+		setNotice,
+		error,
+		setError,
+		issues,
+		setIssues,
+		changed,
+	} = props.state;
 
 	const savedByClass = createMemo(() => byClass(saved().config.classRules));
 	const draftByClass = createMemo(() => byClass(draft().classRules));
-
-	const changed = createMemo(
-		() => JSON.stringify(draft()) !== JSON.stringify(saved().config),
-	);
 
 	const preview = createMemo(() =>
 		evaluateSchedulingConfigPreview(draft(), {
 			rooms: props.rooms,
 			catalogClasses: props.classes,
 			divisions: props.divisions,
+			festivalStartDate: props.festivalStartDate,
+			festivalEndDate: props.festivalEndDate,
 		}),
 	);
 
 	function updateConfig(patch: Partial<SchedulingConfiguration>) {
 		setDraft((prev) => ({ ...prev, ...patch }));
 		setError("");
+		setIssues([]);
 		setNotice("");
 	}
 
@@ -110,12 +133,13 @@ function SchedulingSetupForm(props: {
 			config: draft(),
 		});
 		if (!parsed.success) {
-			const issue = parsed.issues[0];
-			setError(issue.message);
+			setError("");
+			setIssues(formatSchedulingIssues(parsed.issues));
 			return;
 		}
 		setSaving(true);
 		setError("");
+		setIssues([]);
 		setNotice("");
 		try {
 			const result = await props.save(
@@ -131,6 +155,12 @@ function SchedulingSetupForm(props: {
 				setError(
 					"Another editor saved a newer revision. Reload the saved configuration to replace these unsaved edits.",
 				);
+			} else if (
+				cause instanceof ApiError &&
+				cause.status === 400 &&
+				(cause.path || cause.code)
+			) {
+				setIssues([formatServerSchedulingIssue(cause)]);
 			} else {
 				setError(
 					cause instanceof Error
@@ -145,10 +175,7 @@ function SchedulingSetupForm(props: {
 
 	return (
 		<>
-			<p class="scheduling-meta-line">
-				<span>Configuration revision {saved().revision}</span> ·{" "}
-				<span>Active version: None published</span>
-			</p>
+			<SchedulingMetaLine state={props.state} />
 			<form onSubmit={save}>
 				<fieldset class="scheduling-fieldset" disabled={saving() || stale()}>
 					<SchedulingDatesAndPoliciesSection
@@ -237,6 +264,7 @@ function SchedulingSetupForm(props: {
 						</Button>
 					</div>
 				</fieldset>
+				<SchedulingValidationIssues issues={issues()} />
 				<Show when={error()}>
 					<p role="alert">{error()}</p>
 				</Show>
@@ -248,6 +276,59 @@ function SchedulingSetupForm(props: {
 				<p role="status">{notice()}</p>
 			</form>
 		</>
+	);
+}
+
+function SchedulingWorkspace(props: {
+	activeTab: SchedulingTab;
+	festivalStartDate: string;
+	festivalEndDate: string;
+	classes: FestivalClassConfigurationDto[];
+	rooms: Room[];
+	divisions: OrganizationDivision[];
+	initial: SchedulingConfigurationRevision;
+	save: SchedulingSaveFn;
+	loadReadiness: SchedulingReadinessLoader;
+	reload: () => void;
+	onSelectTab: (tab: SchedulingTab) => void;
+}) {
+	const state = createSchedulingEditorState(props.initial);
+
+	createEffect(() => {
+		if (!state.changed() || typeof window === "undefined") return;
+		const guard = (event: BeforeUnloadEvent) => {
+			event.preventDefault();
+			event.returnValue = "";
+		};
+		window.addEventListener("beforeunload", guard);
+		onCleanup(() => window.removeEventListener("beforeunload", guard));
+	});
+
+	return (
+		<Show
+			when={props.activeTab === "setup"}
+			fallback={
+				<SchedulingReadinessTabs
+					activeTab={props.activeTab}
+					state={state}
+					load={props.loadReadiness}
+					save={props.save}
+					reload={props.reload}
+					onOpenReview={() => props.onSelectTab("review")}
+				/>
+			}
+		>
+			<SchedulingSetupForm
+				festivalStartDate={props.festivalStartDate}
+				festivalEndDate={props.festivalEndDate}
+				classes={props.classes}
+				rooms={props.rooms}
+				divisions={props.divisions}
+				state={state}
+				save={props.save}
+				reload={props.reload}
+			/>
+		</Show>
 	);
 }
 
@@ -309,6 +390,8 @@ export function FestivalSchedulingPage(props: {
 							<button
 								type="button"
 								role="tab"
+								id={`scheduling-tab-${tab.id}`}
+								aria-controls="scheduling-tab-panel"
 								aria-selected={activeTab() === tab.id}
 								class={`scheduling-tab ${activeTab() === tab.id ? "is-active" : ""}`}
 								onClick={() => setActiveTab(tab.id)}
@@ -318,53 +401,41 @@ export function FestivalSchedulingPage(props: {
 						)}
 					</For>
 				</div>
-				<Switch>
-					<Match when={data.loading}>
-						<p role="status">Loading scheduling configuration…</p>
-					</Match>
-					<Match when={data.error}>
-						<p role="alert">
-							{data.error instanceof Error
-								? data.error.message
-								: "Could not load the scheduling setup."}
-						</p>
-						<Button
-							type="button"
-							variant="secondary"
-							onClick={() => void refetch()}
-						>
-							Retry
-						</Button>
-					</Match>
-					<Match when={data()} keyed>
-						{(loaded) => (
-							<>
-								<p>
-									<strong>{loaded.festival.name}</strong> ·{" "}
-									{loaded.festival.startDate} – {loaded.festival.endDate}
-									<Show when={props.app.organization()?.timezone}>
-										{(zone) => <> · {zone()}</>}
-									</Show>
-								</p>
-								<Show
-									when={activeTab() === "setup"}
-									fallback={
-										<div class="scheduling-card">
-											<p class="scheduling-meta-line">
-												<span>
-													Configuration revision{" "}
-													{loaded.configRevision.revision}
-												</span>{" "}
-												· <span>Active version: None published</span>
-											</p>
-											<p class="muted">
-												This view is planned in the next scheduling milestone
-												once Setup inputs are finalized.
-											</p>
-										</div>
-									}
-								>
-									<SchedulingSetupForm
+				<div
+					id="scheduling-tab-panel"
+					role="tabpanel"
+					aria-labelledby={`scheduling-tab-${activeTab()}`}
+				>
+					<Switch>
+						<Match when={data.loading}>
+							<p role="status">Loading scheduling configuration…</p>
+						</Match>
+						<Match when={data.error}>
+							<p role="alert">
+								{data.error instanceof Error
+									? data.error.message
+									: "Could not load the scheduling setup."}
+							</p>
+							<Button
+								type="button"
+								variant="secondary"
+								onClick={() => void refetch()}
+							>
+								Retry
+							</Button>
+						</Match>
+						<Match when={data()} keyed>
+							{(loaded) => (
+								<>
+									<p>
+										<strong>{loaded.festival.name}</strong> ·{" "}
+										{loaded.festival.startDate} – {loaded.festival.endDate}
+										<Show when={props.app.organization()?.timezone}>
+											{(zone) => <> · {zone()}</>}
+										</Show>
+									</p>
+									<SchedulingWorkspace
+										activeTab={activeTab()}
 										festivalStartDate={loaded.festival.startDate}
 										festivalEndDate={loaded.festival.endDate}
 										classes={loaded.classes}
@@ -372,6 +443,14 @@ export function FestivalSchedulingPage(props: {
 										divisions={loaded.divisions}
 										initial={loaded.configRevision}
 										reload={() => void refetch()}
+										onSelectTab={setActiveTab}
+										loadReadiness={async () =>
+											getSchedulingReadiness(
+												await loaded.user.getIdToken(),
+												loaded.slug,
+												loaded.festivalSlug,
+											)
+										}
 										save={async (expectedRevision, config) =>
 											saveSchedulingConfiguration(
 												await loaded.user.getIdToken(),
@@ -381,11 +460,11 @@ export function FestivalSchedulingPage(props: {
 											)
 										}
 									/>
-								</Show>
-							</>
-						)}
-					</Match>
-				</Switch>
+								</>
+							)}
+						</Match>
+					</Switch>
+				</div>
 			</section>
 		</Show>
 	);

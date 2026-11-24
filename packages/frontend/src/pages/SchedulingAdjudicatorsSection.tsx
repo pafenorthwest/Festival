@@ -2,7 +2,7 @@ import type {
 	OrganizationDivision,
 	SchedulingAdjudicator,
 } from "@festival/common";
-import { For, Show } from "solid-js";
+import { For, Index, Show } from "solid-js";
 import { Button } from "../components/Button.js";
 
 export function SchedulingAdjudicatorsSection(props: {
@@ -73,63 +73,66 @@ export function SchedulingAdjudicatorsSection(props: {
 							</tr>
 						</thead>
 						<tbody>
-							<For each={props.adjudicators}>
-								{(adj, index) => (
-									<tr>
-										<td>
-											<code>{adj.id}</code>
-										</td>
-										<td>
-											<input
-												type="text"
-												required
-												maxLength={200}
-												aria-label={`Adjudicator name for ${adj.id}`}
-												placeholder="e.g. Dr. Jane Doe"
-												value={adj.name}
-												onInput={(e) =>
-													updateAdjudicator(index(), {
-														name: e.currentTarget.value,
-													})
-												}
-											/>
-										</td>
-										<td>
-											<div class="scheduling-checkbox-group">
-												<For each={props.divisions}>
-													{(div) => (
-														<label class="scheduling-checkbox-pill">
-															<input
-																type="checkbox"
-																checked={adj.eligibleDivisionIds.includes(
-																	div.id,
-																)}
-																onChange={(e) =>
-																	toggleDivision(
-																		index(),
+							<Index each={props.adjudicators}>
+								{(adj, i) => {
+									const index = () => i;
+									return (
+										<tr>
+											<td>
+												<code>{adj().id}</code>
+											</td>
+											<td>
+												<input
+													type="text"
+													required
+													maxLength={200}
+													aria-label={`Adjudicator name for ${adj().id}`}
+													placeholder="e.g. Dr. Jane Doe"
+													value={adj().name}
+													onInput={(e) =>
+														updateAdjudicator(index(), {
+															name: e.currentTarget.value,
+														})
+													}
+												/>
+											</td>
+											<td>
+												<div class="scheduling-checkbox-group">
+													<For each={props.divisions}>
+														{(div) => (
+															<label class="scheduling-checkbox-pill">
+																<input
+																	type="checkbox"
+																	checked={adj().eligibleDivisionIds.includes(
 																		div.id,
-																		e.currentTarget.checked,
-																	)
-																}
-															/>
-															<span>{div.displayName}</span>
-														</label>
-													)}
-												</For>
-											</div>
-										</td>
-										<td>
-											<Button
-												type="button"
-												variant="secondary"
-												onClick={() => removeAdjudicator(index())}
-											>
-												Remove
-											</Button>
-										</td>
-									</tr>
-								)}
-							</For>
+																	)}
+																	onChange={(e) =>
+																		toggleDivision(
+																			index(),
+																			div.id,
+																			e.currentTarget.checked,
+																		)
+																	}
+																/>
+																<span>{div.displayName}</span>
+															</label>
+														)}
+													</For>
+												</div>
+											</td>
+											<td>
+												<Button
+													type="button"
+													variant="secondary"
+													onClick={() => removeAdjudicator(index())}
+												>
+													Remove
+												</Button>
+											</td>
+										</tr>
+									);
+								}}
+							</Index>
 						</tbody>
 					</table>
 				</div>

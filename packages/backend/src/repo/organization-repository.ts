@@ -40,7 +40,6 @@ export interface OrganizationRepository
 		AppUserMembershipRepository,
 		DivisionFestivalRepository,
 		RegistrationCatalogRepository {
-	readonly schedulingClassRules: SchedulingConfigRepository;
 	readonly schedulingConfig: SchedulingConfigRepository;
 	getShopifyIntegration(
 		organizationId: string,

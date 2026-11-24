@@ -18,6 +18,7 @@ import {
 import { calendarDateSchema, nonEmptyText } from "./schema-utils.js";
 import { PIANO_TYPES } from "./tenant.js";
 
+export * from "./scheduling-config-checks.js";
 export * from "./scheduling-defaults.js";
 
 const schedulingMinutes = v.pipe(
@@ -114,16 +115,6 @@ const uniqueClassRulesSchema = v.pipe(
 	),
 );
 
-export const UpdateSchedulingClassRulesSchema = v.strictObject({
-	expectedRevision: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
-	rules: uniqueClassRulesSchema,
-});
-
-export interface SchedulingClassRulesRevision {
-	revision: number;
-	rules: SchedulingClassRule[];
-}
-
 export const SchedulingAdjudicatorSchema = v.strictObject({
 	id: nonEmptyText("Adjudicator ID", 200),
 	name: nonEmptyText("Adjudicator name", 200),
@@ -200,28 +191,69 @@ export type SchedulingRoomWindow = v.InferOutput<
 	typeof SchedulingRoomWindowSchema
 >;
 
-export const SchedulingRoomCompatibilityRuleSchema = v.strictObject({
-	id: nonEmptyText("Compatibility rule ID", 200),
-	scopeType: v.picklist(["division", "class_code", "class_type"]),
-	scopeValue: nonEmptyText("Compatibility scope value", 200),
-	requiredPianoType: v.nullable(v.picklist(PIANO_TYPES)),
-	minimumPianoCount: v.pipe(
-		v.number(),
-		v.safeInteger(),
-		v.minValue(0),
-		v.maxValue(3),
-	),
-	allowedAdjudicatorIds: v.pipe(
-		v.array(nonEmptyText("Adjudicator ID", 200)),
-		v.check(
-			(ids) => new Set(ids).size === ids.length,
-			"Duplicate adjudicator IDs are not allowed in compatibility mapping.",
+const schedulingClassTypeSet = new Set<string>(SCHEDULING_CLASS_TYPES);
+
+export const SchedulingRoomCompatibilityRuleSchema = v.pipe(
+	v.strictObject({
+		id: nonEmptyText("Compatibility rule ID", 200),
+		scopeType: v.picklist(["division", "class_code", "class_type"]),
+		scopeValue: nonEmptyText("Compatibility scope value", 200),
+		requiredPianoType: v.nullable(v.picklist(PIANO_TYPES)),
+		minimumPianoCount: v.pipe(
+			v.number(),
+			v.safeInteger(),
+			v.minValue(0),
+			v.maxValue(3),
 		),
+		allowedAdjudicatorIds: v.pipe(
+			v.array(nonEmptyText("Adjudicator ID", 200)),
+			v.check(
+				(ids) => new Set(ids).size === ids.length,
+				"Duplicate adjudicator IDs are not allowed in compatibility mapping.",
+			),
+		),
+	}),
+	v.forward(
+		v.check(
+			(rule) =>
+				rule.scopeType !== "class_type" ||
+				schedulingClassTypeSet.has(rule.scopeValue),
+			`Compatibility class_type scope must be one of: ${SCHEDULING_CLASS_TYPES.join(", ")}.`,
+		),
+		["scopeValue"],
 	),
-});
+);
 export type SchedulingRoomCompatibilityRule = v.InferOutput<
 	typeof SchedulingRoomCompatibilityRuleSchema
 >;
+
+export const SchedulingEnsemblePairingSchema = v.pipe(
+	v.strictObject({
+		additionalEntitlementId: nonEmptyText("Additional entitlement ID", 200),
+		primaryEntitlementId: nonEmptyText("Primary entitlement ID", 200),
+	}),
+	v.check(
+		(pairing) =>
+			pairing.additionalEntitlementId !== pairing.primaryEntitlementId,
+		"An additional ensemble participant cannot be paired with itself.",
+	),
+);
+export type SchedulingEnsemblePairing = v.InferOutput<
+	typeof SchedulingEnsemblePairingSchema
+>;
+
+const ensemblePairingsSchema = v.optional(
+	v.pipe(
+		v.array(SchedulingEnsemblePairingSchema),
+		v.check(
+			(items) =>
+				new Set(items.map((p) => p.additionalEntitlementId)).size ===
+				items.length,
+			"Each additional ensemble participant may be paired only once.",
+		),
+	),
+	() => [],
+);
 
 export const SchedulingConfigurationSchema = v.pipe(
 	v.strictObject({
@@ -263,6 +295,7 @@ export const SchedulingConfigurationSchema = v.pipe(
 		morningBreakWindowEnd: timeOfDaySchema,
 		afternoonBreakWindowStart: timeOfDaySchema,
 		afternoonBreakWindowEnd: timeOfDaySchema,
+		ensemblePairings: ensemblePairingsSchema,
 	}),
 	v.check(
 		(cfg) =>
@@ -331,5 +364,6 @@ export function createDefaultSchedulingConfiguration(
 		morningBreakWindowEnd: DEFAULT_MORNING_BREAK_WINDOW_END,
 		afternoonBreakWindowStart: DEFAULT_AFTERNOON_BREAK_WINDOW_START,
 		afternoonBreakWindowEnd: DEFAULT_AFTERNOON_BREAK_WINDOW_END,
+		ensemblePairings: [],
 	};
 }

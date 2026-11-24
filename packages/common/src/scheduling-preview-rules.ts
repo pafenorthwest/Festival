@@ -33,6 +33,10 @@ export interface SchedulingPreviewContext {
 	rooms: readonly Room[];
 	catalogClasses: readonly SchedulingPreviewCatalogClass[];
 	divisions?: readonly SchedulingPreviewDivision[];
+	/** Festival start (YYYY-MM-DD); festival dates are range-checked only when both bounds are set. */
+	festivalStartDate?: string;
+	/** Festival end (YYYY-MM-DD); festival dates are range-checked only when both bounds are set. */
+	festivalEndDate?: string;
 }
 
 export interface SchedulingDiagnosticIssue {
@@ -40,6 +44,8 @@ export interface SchedulingDiagnosticIssue {
 	severity: "error" | "warning";
 	message: string;
 	targetId?: string;
+	/** Configuration field path, e.g. "roomWindows[0].adjudicatorId". */
+	path?: string;
 }
 
 export interface RoomWindowPreview {
@@ -86,6 +92,10 @@ export interface EffectiveClassRulePreview {
 	differsFromCatalogMinutes: boolean;
 	issues: SchedulingDiagnosticIssue[];
 }
+
+const defaultCodeSet = new Set(
+	SCHEDULING_CLASS_DEFAULTS.map((row) => row.code),
+);
 
 const additionalCodeSet = new Set(
 	SCHEDULING_CLASS_DEFAULTS.filter((row) => row.additionalParticipant).map(
@@ -315,6 +325,14 @@ export function evaluateEffectiveClassRules(
 					message: `Concerto class ${rule.code} has no eligible room window finishing on or before ${config.wednesdayDeadlineDate}.`,
 				});
 			}
+		}
+		if (!defaultCodeSet.has(rule.code.trim().toUpperCase())) {
+			issues.push({
+				code: "custom-class-code",
+				severity: "warning",
+				targetId: rule.classId,
+				message: `${rule.code} is a custom code; concerto/Wednesday-deadline rules are inferred from the code name and may not apply.`,
+			});
 		}
 		if (
 			isConcerto &&

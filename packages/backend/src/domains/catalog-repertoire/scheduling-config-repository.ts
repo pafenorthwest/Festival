@@ -1,8 +1,6 @@
 import {
 	AppError,
 	createDefaultSchedulingConfiguration,
-	type SchedulingClassRule,
-	type SchedulingClassRulesRevision,
 	type SchedulingConfiguration,
 	type SchedulingConfigurationRevision,
 } from "@festival/common";
@@ -17,14 +15,6 @@ export interface SaveSchedulingConfig {
 	config: SchedulingConfiguration;
 }
 
-export interface SaveClassRules {
-	organizationId: string;
-	festivalId: string;
-	actorUid: string;
-	expectedRevision: number;
-	rules: SchedulingClassRule[];
-}
-
 export interface SchedulingConfigRepository {
 	currentConfig(
 		organizationId: string,
@@ -33,11 +23,6 @@ export interface SchedulingConfigRepository {
 	saveConfig(
 		input: SaveSchedulingConfig,
 	): Promise<SchedulingConfigurationRevision>;
-	current(
-		organizationId: string,
-		festivalId: string,
-	): Promise<SchedulingClassRulesRevision>;
-	save(input: SaveClassRules): Promise<SchedulingClassRulesRevision>;
 }
 
 function staleRevision() {
@@ -52,9 +37,14 @@ function parseConfig(raw: unknown): SchedulingConfiguration {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
 		throw new AppError("Stored scheduling configuration is invalid.", 500);
 	}
+	const stored = value as Partial<SchedulingConfiguration>;
 	return {
 		...createDefaultSchedulingConfiguration(),
-		...(value as Partial<SchedulingConfiguration>),
+		...stored,
+		// Revisions saved before ensemble pairings existed omit the field.
+		ensemblePairings: Array.isArray(stored.ensemblePairings)
+			? stored.ensemblePairings
+			: [],
 	};
 }
 
@@ -118,30 +108,6 @@ export class PostgresSchedulingConfigRepository
 			config: parseConfig(rows[0].config),
 		};
 	}
-
-	async current(
-		organizationId: string,
-		festivalId: string,
-	): Promise<SchedulingClassRulesRevision> {
-		const latest = await this.currentConfig(organizationId, festivalId);
-		return { revision: latest.revision, rules: latest.config.classRules };
-	}
-
-	async save(input: SaveClassRules): Promise<SchedulingClassRulesRevision> {
-		const latest = await this.currentConfig(
-			input.organizationId,
-			input.festivalId,
-		);
-		if (latest.revision !== input.expectedRevision) throw staleRevision();
-		const saved = await this.saveConfig({
-			organizationId: input.organizationId,
-			festivalId: input.festivalId,
-			actorUid: input.actorUid,
-			expectedRevision: input.expectedRevision,
-			config: { ...latest.config, classRules: input.rules },
-		});
-		return { revision: saved.revision, rules: saved.config.classRules };
-	}
 }
 
 export class InMemorySchedulingConfigRepository
@@ -185,29 +151,5 @@ export class InMemorySchedulingConfigRepository
 		});
 		this.history.set(key, history);
 		return { revision, config: structuredClone(cloned) };
-	}
-
-	async current(
-		organizationId: string,
-		festivalId: string,
-	): Promise<SchedulingClassRulesRevision> {
-		const latest = await this.currentConfig(organizationId, festivalId);
-		return { revision: latest.revision, rules: latest.config.classRules };
-	}
-
-	async save(input: SaveClassRules): Promise<SchedulingClassRulesRevision> {
-		const latest = await this.currentConfig(
-			input.organizationId,
-			input.festivalId,
-		);
-		if (latest.revision !== input.expectedRevision) throw staleRevision();
-		const saved = await this.saveConfig({
-			organizationId: input.organizationId,
-			festivalId: input.festivalId,
-			actorUid: input.actorUid,
-			expectedRevision: input.expectedRevision,
-			config: { ...latest.config, classRules: input.rules },
-		});
-		return { revision: saved.revision, rules: saved.config.classRules };
 	}
 }

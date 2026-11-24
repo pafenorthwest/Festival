@@ -58,7 +58,14 @@ export type {
 export {
 	InMemorySchedulingConfigRepository,
 	PostgresSchedulingConfigRepository,
-	type SaveClassRules,
 	type SaveSchedulingConfig,
 	type SchedulingConfigRepository,
 } from "./scheduling-config-repository.js";
+export {
+	loadSchedulingAvailability,
+	loadSchedulingRoster,
+	type SchedulingRosterScope,
+	type SchedulingRosterSources,
+	selectAgeSnapshotAt,
+	sumRepertoireSeconds,
+} from "./scheduling-roster-loader.js";

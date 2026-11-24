@@ -10,6 +10,38 @@ import {
 import { createSignal, For, Show } from "solid-js";
 import { Button } from "../components/Button.js";
 
+export interface WednesdayDeadlineOption {
+	value: string;
+	label: string;
+	invalid: boolean;
+}
+
+/**
+ * Options for the Wednesday deadline select: the Wednesdays among the
+ * configured festival dates. A saved value outside that set is kept as an
+ * extra option marked invalid so the preview error stays understandable.
+ */
+export function buildWednesdayDeadlineOptions(
+	festivalDates: readonly string[],
+	current: string | null,
+): WednesdayDeadlineOption[] {
+	const options = [...new Set(festivalDates)]
+		.filter((date) => isWednesdayDate(date))
+		.sort()
+		.map((date) => ({ value: date, label: `${date} (Wed)`, invalid: false }));
+	if (current && !options.some((option) => option.value === current)) {
+		const reason = isWednesdayDate(current)
+			? "not a festival date"
+			: "not a Wednesday festival date";
+		options.unshift({
+			value: current,
+			label: `${current} (invalid: ${reason})`,
+			invalid: true,
+		});
+	}
+	return options;
+}
+
 export function SchedulingDatesAndPoliciesSection(props: {
 	config: SchedulingConfiguration;
 	festivalStartDate: string;
@@ -17,8 +49,17 @@ export function SchedulingDatesAndPoliciesSection(props: {
 	onUpdate: (patch: Partial<SchedulingConfiguration>) => void;
 }) {
 	const [newDate, setNewDate] = createSignal("");
-	const wednesdayOptions = () =>
-		props.config.festivalDates.filter((d) => isWednesdayDate(d));
+	const [rangeError, setRangeError] = createSignal("");
+	const deadlineOptions = () =>
+		buildWednesdayDeadlineOptions(
+			props.config.festivalDates,
+			props.config.wednesdayDeadlineDate,
+		);
+	const deadlineInvalid = () =>
+		deadlineOptions().some(
+			(option) =>
+				option.invalid && option.value === props.config.wednesdayDeadlineDate,
+		);
 
 	function addDate() {
 		const candidate = newDate().trim();
@@ -49,10 +90,21 @@ export function SchedulingDatesAndPoliciesSection(props: {
 	}
 
 	function resetToFestivalRange() {
-		const festivalDates = enumerateDateRange(
-			props.festivalStartDate,
-			props.festivalEndDate,
-		);
+		let festivalDates: string[];
+		try {
+			festivalDates = enumerateDateRange(
+				props.festivalStartDate,
+				props.festivalEndDate,
+			);
+		} catch (error) {
+			setRangeError(
+				error instanceof Error
+					? `Could not use the festival range: ${error.message}`
+					: "Could not use the festival range.",
+			);
+			return;
+		}
+		setRangeError("");
 		props.onUpdate({
 			festivalDates,
 			wednesdayDeadlineDate:
@@ -94,6 +146,8 @@ export function SchedulingDatesAndPoliciesSection(props: {
 							<input
 								type="date"
 								aria-label="Add festival date"
+								min={props.festivalStartDate}
+								max={props.festivalEndDate}
 								value={newDate()}
 								onInput={(e) => setNewDate(e.currentTarget.value)}
 							/>
@@ -109,31 +163,48 @@ export function SchedulingDatesAndPoliciesSection(props: {
 							Use festival range
 						</Button>
 					</div>
+					<Show when={rangeError()}>
+						<p role="alert" class="scheduling-error-text">
+							{rangeError()}
+						</p>
+					</Show>
 					<label class="field" style="margin-top: 0.75rem;">
 						<span>Concerto Wednesday deadline date</span>
-						<input
-							type="date"
+						<select
 							aria-label="Concerto Wednesday deadline date"
+							aria-invalid={deadlineInvalid() ? "true" : undefined}
 							value={props.config.wednesdayDeadlineDate ?? ""}
-							onInput={(e) =>
+							onChange={(e) =>
 								props.onUpdate({
 									wednesdayDeadlineDate: e.currentTarget.value || null,
 								})
 							}
-						/>
-						<Show
-							when={
-								props.config.wednesdayDeadlineDate &&
-								!isWednesdayDate(props.config.wednesdayDeadlineDate)
-							}
 						>
+							<option value="" selected={!props.config.wednesdayDeadlineDate}>
+								Not set
+							</option>
+							<For each={deadlineOptions()}>
+								{(option) => (
+									<option
+										value={option.value}
+										selected={
+											option.value === props.config.wednesdayDeadlineDate
+										}
+									>
+										{option.label}
+									</option>
+								)}
+							</For>
+						</select>
+						<Show when={deadlineInvalid()}>
 							<small class="scheduling-error-text">
-								Selected deadline is not a Wednesday.
+								The saved deadline must be a Wednesday among the festival
+								scheduling dates.
 							</small>
 						</Show>
-						<Show when={wednesdayOptions().length > 0}>
+						<Show when={deadlineOptions().every((option) => option.invalid)}>
 							<small class="muted">
-								Wednesdays in festival dates: {wednesdayOptions().join(", ")}
+								Add a Wednesday to the festival dates to choose a deadline.
 							</small>
 						</Show>
 					</label>

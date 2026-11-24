@@ -27,6 +27,7 @@ import {
 import { jsonValidator } from "../shared/schema-validator.js";
 import {
 	ADMIN_FESTIVAL_SCHEDULING_ROUTE_SECURITY,
+	type AdminSchedulingRoutesOptions,
 	buildAdminFestivalSchedulingRoutes,
 } from "./admin-festival-scheduling.routes.js";
 
@@ -75,7 +76,11 @@ export const ADMIN_FESTIVAL_CATALOG_ROUTE_SECURITY = [
 	),
 ] as const satisfies readonly CoLocatedRouteSecurity[];
 
-export interface AdminOrgRoutesOptions {
+export interface AdminOrgRoutesOptions
+	extends Omit<
+		AdminSchedulingRoutesOptions,
+		"organizationService" | "authVerifier"
+	> {
 	organizationService: OrganizationService;
 	authVerifier: AuthVerifier;
 }

@@ -2,12 +2,15 @@ import { describe, expect, it } from "bun:test";
 import { safeParse } from "valibot";
 import {
 	createDefaultSchedulingConfiguration,
+	enumerateDateRange,
+	findSchedulingDateIssues,
+	findSchedulingReferenceIssues,
+	MAX_SCHEDULING_DATE_RANGE_DAYS,
 	SCHEDULING_CLASS_DEFAULTS,
 	type SchedulingClassRule,
 	type SchedulingConfiguration,
 	schedulingSectionLimits,
 	schedulingSectionSeconds,
-	UpdateSchedulingClassRulesSchema,
 	UpdateSchedulingConfigurationSchema,
 } from "../src/scheduling.js";
 import { evaluateSchedulingConfigPreview } from "../src/scheduling-preview.js";
@@ -21,9 +24,9 @@ const baseRule: SchedulingClassRule = {
 };
 
 function validateRules(...rules: SchedulingClassRule[]) {
-	return safeParse(UpdateSchedulingClassRulesSchema, {
+	return safeParse(UpdateSchedulingConfigurationSchema, {
 		expectedRevision: 0,
-		rules,
+		config: { ...createDefaultSchedulingConfiguration(), classRules: rules },
 	});
 }
 
@@ -60,7 +63,9 @@ describe("scheduling class rules", () => {
 				playingMinutes,
 				sectionLimits,
 			});
-			expect(result.output?.rules[0]?.sectionLimits).toEqual(sectionLimits);
+			expect(result.output?.config.classRules[0]?.sectionLimits).toEqual(
+				sectionLimits,
+			);
 		}
 		for (const invalid of [
 			{ min: 0, max: 1 },
@@ -322,5 +327,196 @@ describe("scheduling class rules", () => {
 				(w) => w.code === "concerto-capacity-exceeds-single-day",
 			),
 		).toBe(true);
+	});
+});
+
+describe("scheduling config dates and references", () => {
+	const refConfig: SchedulingConfiguration = {
+		...createDefaultSchedulingConfiguration(["2027-04-06", "2027-04-07"]),
+		adjudicators: [{ id: "adj-1", name: "Dr. Chen", eligibleDivisionIds: [] }],
+		roomWindows: [
+			{
+				id: "win-1",
+				festivalDate: "2027-04-07",
+				roomId: "room-1",
+				adjudicatorId: "adj-1",
+				startTime: "08:00",
+				endTime: "12:00",
+				dayType: "half",
+				eligibleDivisionIds: [],
+				eligibleClassTypes: [],
+				concertoEligible: true,
+				blockedIntervals: [],
+			},
+		],
+		classRules: [{ ...baseRule }],
+		roomCompatibilityRules: [
+			{
+				id: "compat-1",
+				scopeType: "class_code",
+				scopeValue: "PS.6-7",
+				requiredPianoType: null,
+				minimumPianoCount: 1,
+				allowedAdjudicatorIds: ["adj-1"],
+			},
+		],
+	};
+	const range = {
+		festivalStartDate: "2027-04-05",
+		festivalEndDate: "2027-04-09",
+	};
+	const previewContext = { rooms: [], catalogClasses: [], ...range };
+	const codes = (issues: { code: string }[]) => issues.map((i) => i.code);
+
+	it("accepts a consistent configuration", () => {
+		expect(findSchedulingDateIssues(refConfig, range)).toEqual([]);
+		expect(findSchedulingReferenceIssues(refConfig)).toEqual([]);
+	});
+
+	it("flags festival dates outside the festival only when the range is known", () => {
+		const cfg = { ...refConfig, festivalDates: ["2027-04-07", "2027-04-12"] };
+		expect(findSchedulingDateIssues(cfg, range)).toEqual([
+			expect.objectContaining({
+				code: "festival-date-outside-festival",
+				path: "festivalDates[1]",
+			}),
+		]);
+		expect(findSchedulingDateIssues(cfg)).toEqual([]);
+		expect(
+			codes(
+				evaluateSchedulingConfigPreview(cfg, previewContext).blockingIssues,
+			),
+		).toContain("festival-date-outside-festival");
+		expect(
+			codes(
+				evaluateSchedulingConfigPreview(cfg, { rooms: [], catalogClasses: [] })
+					.blockingIssues,
+			),
+		).not.toContain("festival-date-outside-festival");
+	});
+
+	it("flags a Wednesday deadline that is not a selected festival date", () => {
+		const cfg = { ...refConfig, festivalDates: ["2027-04-06"] };
+		expect(findSchedulingDateIssues(cfg, range)).toEqual([
+			expect.objectContaining({
+				code: "wednesday-deadline-not-in-festival-dates",
+				path: "wednesdayDeadlineDate",
+			}),
+		]);
+		expect(
+			codes(
+				evaluateSchedulingConfigPreview(cfg, previewContext).blockingIssues,
+			),
+		).toContain("wednesday-deadline-not-in-festival-dates");
+	});
+
+	it("flags unknown adjudicators in room windows and compatibility rules", () => {
+		const cfg: SchedulingConfiguration = {
+			...refConfig,
+			roomWindows: [{ ...refConfig.roomWindows[0], adjudicatorId: "ghost" }],
+			roomCompatibilityRules: [
+				{
+					...refConfig.roomCompatibilityRules[0],
+					allowedAdjudicatorIds: ["adj-1", "phantom"],
+				},
+			],
+		};
+		expect(findSchedulingReferenceIssues(cfg)).toEqual([
+			expect.objectContaining({
+				code: "unknown-window-adjudicator",
+				path: "roomWindows[0].adjudicatorId",
+			}),
+			expect.objectContaining({
+				code: "unknown-compatibility-adjudicator",
+				path: "roomCompatibilityRules[0].allowedAdjudicatorIds[1]",
+			}),
+		]);
+		const blocking = codes(
+			evaluateSchedulingConfigPreview(cfg, previewContext).blockingIssues,
+		);
+		expect(blocking).toContain("unknown-compatibility-adjudicator");
+		expect(blocking).toContain("missing-adjudicator-reference");
+		expect(blocking).not.toContain("unknown-window-adjudicator");
+	});
+
+	it("flags class_code scopes without a matching class rule", () => {
+		const cfg: SchedulingConfiguration = {
+			...refConfig,
+			roomCompatibilityRules: [
+				{ ...refConfig.roomCompatibilityRules[0], scopeValue: "PC.16-17" },
+			],
+		};
+		expect(findSchedulingReferenceIssues(cfg)).toEqual([
+			expect.objectContaining({
+				code: "unknown-compatibility-class-code",
+				path: "roomCompatibilityRules[0].scopeValue",
+			}),
+		]);
+		expect(
+			findSchedulingReferenceIssues({
+				...cfg,
+				roomCompatibilityRules: [
+					{ ...cfg.roomCompatibilityRules[0], scopeValue: " ps.6-7 " },
+				],
+			}),
+		).toEqual([]);
+	});
+
+	it("restricts class_type scopes to the inferred class types", () => {
+		const parse = (scopeValue: string) =>
+			safeParse(UpdateSchedulingConfigurationSchema, {
+				expectedRevision: 0,
+				config: {
+					...refConfig,
+					roomCompatibilityRules: [
+						{
+							...refConfig.roomCompatibilityRules[0],
+							scopeType: "class_type",
+							scopeValue,
+						},
+					],
+				},
+			});
+		for (const value of ["solo", "concerto", "ensemble"]) {
+			expect(parse(value).success).toBe(true);
+		}
+		const invalid = parse("chamber");
+		expect(invalid.success).toBe(false);
+		expect(invalid.issues?.[0]?.path?.map((p) => p.key)).toEqual([
+			"config",
+			"roomCompatibilityRules",
+			0,
+			"scopeValue",
+		]);
+	});
+
+	it("warns when a class rule uses a code outside the default table", () => {
+		const cfg: SchedulingConfiguration = {
+			...refConfig,
+			classRules: [{ ...baseRule, code: "CX.18-20" }],
+			roomCompatibilityRules: [],
+		};
+		const preview = evaluateSchedulingConfigPreview(cfg, previewContext);
+		const warning = preview.warnings.find(
+			(w) => w.code === "custom-class-code",
+		);
+		expect(warning?.message).toContain("custom code");
+		expect(
+			codes(
+				evaluateSchedulingConfigPreview(refConfig, previewContext).warnings,
+			),
+		).not.toContain("custom-class-code");
+	});
+
+	it("enumerates long date ranges without truncation and rejects oversized ones", () => {
+		const dates = enumerateDateRange("2027-03-01", "2027-04-15");
+		expect(dates).toHaveLength(46);
+		expect(dates.at(-1)).toBe("2027-04-15");
+		expect(enumerateDateRange("2027-01-01", "2027-12-31")).toHaveLength(365);
+		expect(MAX_SCHEDULING_DATE_RANGE_DAYS).toBe(366);
+		expect(() => enumerateDateRange("2027-01-01", "2028-01-02")).toThrow(
+			RangeError,
+		);
+		expect(enumerateDateRange("2027-04-09", "2027-04-05")).toEqual([]);
 	});
 });

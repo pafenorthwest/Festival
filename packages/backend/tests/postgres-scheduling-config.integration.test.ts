@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
+import { createDefaultSchedulingConfiguration } from "@festival/common";
 import { sql } from "bun";
 import { PostgresOrganizationRepository } from "../src/repo/postgres-organization-repository.js";
 import { currentPostgresFixture } from "./postgres-test-fixture.js";
 
-const currentSchema = currentPostgresFixture("scheduling_class_rules");
+const currentSchema = currentPostgresFixture("scheduling_config");
 const integrationTest = process.env.POSTGRES_INTEGRATION_URL ? test : test.skip;
 
 integrationTest(
@@ -24,7 +25,7 @@ integrationTest(
 			startDate: "2027-04-05",
 			endDate: "2027-04-09",
 		});
-		const store = repository.schedulingClassRules;
+		const store = repository.schedulingConfig;
 		const rule = {
 			classId: "catalog-piano",
 			code: "PS.6-7",
@@ -37,15 +38,15 @@ integrationTest(
 			festivalId: festival.id,
 			actorUid: "first-admin",
 			expectedRevision: 0,
-			rules: [rule],
+			config: { ...createDefaultSchedulingConfiguration(), classRules: [rule] },
 		};
-		expect(await store.current(org.id, festival.id)).toEqual({
+		expect(await store.currentConfig(org.id, festival.id)).toEqual({
 			revision: 0,
-			rules: [],
+			config: createDefaultSchedulingConfiguration(),
 		});
 		const writes = await Promise.allSettled([
-			store.save(first),
-			store.save(first),
+			store.saveConfig(first),
+			store.saveConfig(first),
 		]);
 		expect(
 			writes.filter((attempt) => attempt.status === "fulfilled"),
@@ -53,17 +54,17 @@ integrationTest(
 		expect(
 			writes.find((attempt) => attempt.status === "rejected"),
 		).toMatchObject({ reason: { status: 409 } });
-		expect(
-			await store.save({
-				...first,
-				expectedRevision: 1,
-				actorUid: "next-admin",
-				rules: [],
-			}),
-		).toEqual({ revision: 2, rules: [] });
-		expect(await store.current(org.id, festival.id)).toEqual({
+		const next = await store.saveConfig({
+			...first,
+			expectedRevision: 1,
+			actorUid: "next-admin",
+			config: createDefaultSchedulingConfiguration(),
+		});
+		expect(next.revision).toBe(2);
+		expect(next.config.classRules).toEqual([]);
+		expect(await store.currentConfig(org.id, festival.id)).toEqual({
 			revision: 2,
-			rules: [],
+			config: createDefaultSchedulingConfiguration(),
 		});
 		const stored = await sql.unsafe<
 			Array<{

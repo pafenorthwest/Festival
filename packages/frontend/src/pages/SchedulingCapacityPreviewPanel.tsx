@@ -1,5 +1,6 @@
 import type { SchedulingConfigurationPreview } from "@festival/common";
 import { For, Show } from "solid-js";
+import { SchedulingIssueList } from "./SchedulingIssueList.js";
 
 function formatMinutes(seconds: number): string {
 	const rem = seconds % 60;
@@ -37,35 +38,18 @@ export function SchedulingCapacityPreviewPanel(props: {
 				</div>
 			</div>
 
-			<Show when={props.preview.blockingIssues.length > 0}>
-				<section
-					class="scheduling-card scheduling-alert-box"
-					aria-label="Configuration blocking issues"
-				>
-					<h4>Blocking setup issues ({props.preview.blockingIssues.length})</h4>
-					<ul class="scheduling-issue-list">
-						<For each={props.preview.blockingIssues}>
-							{(issue) => (
-								<li class="scheduling-error-text">{issue.message}</li>
-							)}
-						</For>
-					</ul>
-				</section>
-			</Show>
-
-			<Show when={props.preview.warnings.length > 0}>
-				<section
-					class="scheduling-card scheduling-warning-box"
-					aria-label="Configuration warnings"
-				>
-					<h4>Warnings ({props.preview.warnings.length})</h4>
-					<ul class="scheduling-issue-list">
-						<For each={props.preview.warnings}>
-							{(issue) => <li>{issue.message}</li>}
-						</For>
-					</ul>
-				</section>
-			</Show>
+			<SchedulingIssueList
+				title="Blocking setup issues"
+				issues={props.preview.blockingIssues}
+				tone="error"
+				ariaLabel="Configuration blocking issues"
+			/>
+			<SchedulingIssueList
+				title="Warnings"
+				issues={props.preview.warnings}
+				tone="warning"
+				ariaLabel="Configuration warnings"
+			/>
 
 			<Show when={props.preview.effectiveClassRules.length > 0}>
 				<h4>Effective values by class code</h4>

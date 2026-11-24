@@ -8,6 +8,10 @@ import {
 	type SchedulingConfiguration,
 } from "./scheduling.js";
 import {
+	findSchedulingDateIssues,
+	findSchedulingReferenceIssues,
+} from "./scheduling-config-checks.js";
+import {
 	type EffectiveClassRulePreview,
 	evaluateEffectiveClassRules,
 	type RoomWindowPreview,
@@ -101,6 +105,17 @@ export function evaluateSchedulingConfigPreview(
 			severity: "error",
 			message: `Concerto deadline ${config.wednesdayDeadlineDate} is not a Wednesday.`,
 		});
+	}
+
+	const configIssues = [
+		...findSchedulingDateIssues(config, context),
+		// Window adjudicator references are reported per window below.
+		...findSchedulingReferenceIssues(config).filter(
+			(issue) => issue.code !== "unknown-window-adjudicator",
+		),
+	];
+	for (const issue of configIssues) {
+		blockingIssues.push({ ...issue, severity: "error" });
 	}
 
 	const windowSummaries: RoomWindowPreview[] = config.roomWindows.map((win) => {

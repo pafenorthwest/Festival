@@ -155,6 +155,15 @@ export function parseTimeOfDayMinutes(timeStr: string): number {
 	return Number(match[1]) * 60 + Number(match[2]);
 }
 
+/** Longest festival date range (in days) that enumerateDateRange will expand. */
+export const MAX_SCHEDULING_DATE_RANGE_DAYS = 366;
+
+/**
+ * Lists every calendar date from startDate through endDate inclusive. Returns
+ * an empty list for malformed or reversed input, and throws a RangeError when
+ * the range is longer than MAX_SCHEDULING_DATE_RANGE_DAYS rather than silently
+ * truncating it.
+ */
 export function enumerateDateRange(
 	startDate: string,
 	endDate: string,
@@ -174,9 +183,16 @@ export function enumerateDateRange(
 	) {
 		return [];
 	}
+	const dayCount =
+		Math.round((end.getTime() - start.getTime()) / 86_400_000) + 1;
+	if (dayCount > MAX_SCHEDULING_DATE_RANGE_DAYS) {
+		throw new RangeError(
+			`Festival date range ${startDate} to ${endDate} spans ${dayCount} days; at most ${MAX_SCHEDULING_DATE_RANGE_DAYS} are supported.`,
+		);
+	}
 	const dates: string[] = [];
 	const cursor = new Date(start);
-	for (let i = 0; i < 31 && cursor <= end; i += 1) {
+	while (cursor <= end) {
 		dates.push(cursor.toISOString().slice(0, 10));
 		cursor.setUTCDate(cursor.getUTCDate() + 1);
 	}

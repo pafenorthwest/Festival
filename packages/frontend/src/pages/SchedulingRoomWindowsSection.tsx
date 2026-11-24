@@ -7,7 +7,7 @@ import {
 	type SchedulingClassType,
 	type SchedulingRoomWindow,
 } from "@festival/common";
-import { For, Show } from "solid-js";
+import { For, Index, Show } from "solid-js";
 import { Button } from "../components/Button.js";
 
 function formatRoomPianos(room: Room | undefined): string {
@@ -142,16 +142,17 @@ export function SchedulingRoomWindowsSection(props: {
 				fallback={<p class="muted">No room/day windows configured yet.</p>}
 			>
 				<div class="scheduling-window-list">
-					<For each={props.windows}>
-						{(win, index) => {
-							const room = () => roomById().get(win.roomId);
-							const summary = () => summaryById().get(win.id);
+					<Index each={props.windows}>
+						{(win, i) => {
+							const index = () => i;
+							const room = () => roomById().get(win().roomId);
+							const summary = () => summaryById().get(win().id);
 							return (
 								<div class="scheduling-card scheduling-window-card">
 									<div class="scheduling-section-header">
 										<div>
 											<strong>Window {index() + 1}</strong>{" "}
-											<code class="muted">{win.id}</code>
+											<code class="muted">{win().id}</code>
 											<Show when={summary()}>
 												{(s) => (
 													<span class="scheduling-usable-pill">
@@ -179,7 +180,7 @@ export function SchedulingRoomWindowsSection(props: {
 												required
 												aria-label={`Window ${index() + 1} date`}
 												list="scheduling-festival-dates"
-												value={win.festivalDate}
+												value={win().festivalDate}
 												onInput={(e) =>
 													updateWindow(index(), {
 														festivalDate: e.currentTarget.value,
@@ -192,7 +193,7 @@ export function SchedulingRoomWindowsSection(props: {
 											Room
 											<select
 												aria-label={`Window ${index() + 1} room`}
-												value={win.roomId}
+												value={win().roomId}
 												onChange={(e) =>
 													updateWindow(index(), {
 														roomId: e.currentTarget.value,
@@ -213,7 +214,7 @@ export function SchedulingRoomWindowsSection(props: {
 											Adjudicator
 											<select
 												aria-label={`Window ${index() + 1} adjudicator`}
-												value={win.adjudicatorId}
+												value={win().adjudicatorId}
 												onChange={(e) =>
 													updateWindow(index(), {
 														adjudicatorId: e.currentTarget.value,
@@ -233,7 +234,7 @@ export function SchedulingRoomWindowsSection(props: {
 											Day type
 											<select
 												aria-label={`Window ${index() + 1} day type`}
-												value={win.dayType}
+												value={win().dayType}
 												onChange={(e) =>
 													updateWindow(index(), {
 														dayType: e.currentTarget.value as "full" | "half",
@@ -251,7 +252,7 @@ export function SchedulingRoomWindowsSection(props: {
 												type="time"
 												required
 												aria-label={`Window ${index() + 1} start time`}
-												value={win.startTime}
+												value={win().startTime}
 												onInput={(e) =>
 													updateWindow(index(), {
 														startTime: e.currentTarget.value,
@@ -266,7 +267,7 @@ export function SchedulingRoomWindowsSection(props: {
 												type="time"
 												required
 												aria-label={`Window ${index() + 1} end time`}
-												value={win.endTime}
+												value={win().endTime}
 												onInput={(e) =>
 													updateWindow(index(), {
 														endTime: e.currentTarget.value,
@@ -287,7 +288,7 @@ export function SchedulingRoomWindowsSection(props: {
 														<label class="scheduling-checkbox-pill">
 															<input
 																type="checkbox"
-																checked={win.eligibleDivisionIds.includes(
+																checked={win().eligibleDivisionIds.includes(
 																	div.id,
 																)}
 																onChange={(e) =>
@@ -315,7 +316,7 @@ export function SchedulingRoomWindowsSection(props: {
 														<label class="scheduling-checkbox-pill">
 															<input
 																type="checkbox"
-																checked={win.eligibleClassTypes.includes(ct)}
+																checked={win().eligibleClassTypes.includes(ct)}
 																onChange={(e) =>
 																	toggleClassType(
 																		index(),
@@ -331,7 +332,7 @@ export function SchedulingRoomWindowsSection(props: {
 												<label class="scheduling-checkbox-pill">
 													<input
 														type="checkbox"
-														checked={win.concertoEligible}
+														checked={win().concertoEligible}
 														onChange={(e) =>
 															updateWindow(index(), {
 																concertoEligible: e.currentTarget.checked,
@@ -355,53 +356,56 @@ export function SchedulingRoomWindowsSection(props: {
 												Add block
 											</Button>
 										</div>
-										<For each={win.blockedIntervals}>
-											{(block, blockIdx) => (
-												<div class="scheduling-inline-row">
-													<input
-														type="time"
-														aria-label={`Window ${index() + 1} block ${blockIdx() + 1} start`}
-														value={block.startTime}
-														onInput={(e) =>
-															updateBlockedInterval(index(), blockIdx(), {
-																startTime: e.currentTarget.value,
-															})
-														}
-													/>
-													<span>–</span>
-													<input
-														type="time"
-														aria-label={`Window ${index() + 1} block ${blockIdx() + 1} end`}
-														value={block.endTime}
-														onInput={(e) =>
-															updateBlockedInterval(index(), blockIdx(), {
-																endTime: e.currentTarget.value,
-															})
-														}
-													/>
-													<input
-														type="text"
-														placeholder="Reason"
-														aria-label={`Window ${index() + 1} block ${blockIdx() + 1} label`}
-														value={block.label ?? ""}
-														onInput={(e) =>
-															updateBlockedInterval(index(), blockIdx(), {
-																label: e.currentTarget.value,
-															})
-														}
-													/>
-													<Button
-														type="button"
-														variant="secondary"
-														onClick={() =>
-															removeBlockedInterval(index(), blockIdx())
-														}
-													>
-														Remove
-													</Button>
-												</div>
-											)}
-										</For>
+										<Index each={win().blockedIntervals}>
+											{(block, bi) => {
+												const blockIdx = () => bi;
+												return (
+													<div class="scheduling-inline-row">
+														<input
+															type="time"
+															aria-label={`Window ${index() + 1} block ${blockIdx() + 1} start`}
+															value={block().startTime}
+															onInput={(e) =>
+																updateBlockedInterval(index(), blockIdx(), {
+																	startTime: e.currentTarget.value,
+																})
+															}
+														/>
+														<span>–</span>
+														<input
+															type="time"
+															aria-label={`Window ${index() + 1} block ${blockIdx() + 1} end`}
+															value={block().endTime}
+															onInput={(e) =>
+																updateBlockedInterval(index(), blockIdx(), {
+																	endTime: e.currentTarget.value,
+																})
+															}
+														/>
+														<input
+															type="text"
+															placeholder="Reason"
+															aria-label={`Window ${index() + 1} block ${blockIdx() + 1} label`}
+															value={block().label ?? ""}
+															onInput={(e) =>
+																updateBlockedInterval(index(), blockIdx(), {
+																	label: e.currentTarget.value,
+																})
+															}
+														/>
+														<Button
+															type="button"
+															variant="secondary"
+															onClick={() =>
+																removeBlockedInterval(index(), blockIdx())
+															}
+														>
+															Remove
+														</Button>
+													</div>
+												);
+											}}
+										</Index>
 									</div>
 
 									<Show when={(summary()?.issues.length ?? 0) > 0}>
@@ -416,7 +420,7 @@ export function SchedulingRoomWindowsSection(props: {
 								</div>
 							);
 						}}
-					</For>
+					</Index>
 				</div>
 				<datalist id="scheduling-festival-dates">
 					<For each={props.festivalDates}>

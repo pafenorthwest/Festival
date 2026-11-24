@@ -127,7 +127,6 @@ export class InMemoryOrganizationRepository
 	implements OrganizationRepository
 {
 	readonly schedulingConfig = new InMemorySchedulingConfigRepository();
-	readonly schedulingClassRules = this.schedulingConfig;
 	async getShopifyIntegration(organizationId: string) {
 		return this.state.shopifyIntegrations.get(organizationId) ?? null;
 	}

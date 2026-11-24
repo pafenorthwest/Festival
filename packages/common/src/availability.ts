@@ -89,6 +89,63 @@ export function buildDefaultAvailabilityDays(
 	}));
 }
 
+export type AvailabilityProvenance = "saved" | "default";
+
+export interface EffectiveAvailabilityDay {
+	date: string;
+	availableHours: AvailabilityHour[];
+	provenance: AvailabilityProvenance;
+}
+
+/** A saved availability row; either `festivalDate` (storage) or `date` (API) names the day. */
+export interface SavedAvailabilityDayInput {
+	festivalDate?: string;
+	date?: string;
+	availableHours: readonly number[];
+}
+
+/** Minimum available festival days before stated availability constrains placement. */
+export const AVAILABILITY_ENFORCEMENT_MIN_DAYS = 3;
+
+/**
+ * Effective availability for each festival date: saved hours where a row exists
+ * for that date (the last row wins), otherwise DEFAULT_AVAILABLE_HOURS. Saved
+ * rows for dates outside `dates` are ignored.
+ */
+export function buildEffectiveAvailabilityDays(
+	dates: readonly string[],
+	saved: readonly SavedAvailabilityDayInput[],
+): EffectiveAvailabilityDay[] {
+	const savedByDate = new Map<string, AvailabilityHour[]>();
+	for (const record of saved) {
+		const date = record.festivalDate ?? record.date;
+		if (date === undefined) continue;
+		savedByDate.set(date, normalizeAvailableHours(record.availableHours));
+	}
+	return dates.map((date) => {
+		const hours = savedByDate.get(date);
+		return hours
+			? { date, availableHours: hours, provenance: "saved" }
+			: {
+					date,
+					availableHours: [...DEFAULT_AVAILABLE_HOURS],
+					provenance: "default",
+				};
+	});
+}
+
+/** Number of days with at least one available hour. */
+export function countAvailableDays(
+	days: readonly { availableHours: readonly number[] }[],
+): number {
+	return days.filter((day) => day.availableHours.length > 0).length;
+}
+
+/** The three-day rule: availability constrains placement only at 3+ available days. */
+export function isAvailabilityEnforced(availableDayCount: number): boolean {
+	return availableDayCount >= AVAILABILITY_ENFORCEMENT_MIN_DAYS;
+}
+
 export function isAvailabilityHour(value: number): value is AvailabilityHour {
 	return (
 		Number.isInteger(value) &&

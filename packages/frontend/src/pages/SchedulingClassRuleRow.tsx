@@ -153,6 +153,7 @@ export function SchedulingClassRuleRow(props: {
 				{props.item.performanceMinutes} min
 				<Show
 					when={
+						!additional() &&
 						Number.isFinite(props.rule?.playingMinutes) &&
 						props.rule?.playingMinutes !== props.item.performanceMinutes
 					}
@@ -295,9 +296,9 @@ export function SchedulingClassRuleRow(props: {
 								<span>Tue/Wed split</span>
 							</label>
 							<Show when={capacitySeconds() > 0}>
-								<small>
-									Est. at capacity ({props.item.capacity}):{" "}
-									{duration(capacitySeconds())}
+								<small title="Estimated from the class registration capacity, not actual registrations.">
+									Est. from registration capacity ({props.item.capacity}{" "}
+									entries): {duration(capacitySeconds())}
 									{capacitySeconds() > ADJUDICATOR_DAY_BUDGET_MINUTES * 60
 										? ` (> ${ADJUDICATOR_DAY_BUDGET_MINUTES}m day)`
 										: ""}

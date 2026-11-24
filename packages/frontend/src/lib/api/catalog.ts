@@ -17,11 +17,10 @@ import type {
 	RepertoireReviewQueueSummary,
 	ResolveRepertoireFlagInput,
 	Room,
-	SchedulingClassRule,
-	SchedulingClassRulesRevision,
 	SchedulingConfiguration,
 	SchedulingConfigurationPreview,
 	SchedulingConfigurationRevision,
+	SchedulingReadiness,
 	UpdateFestivalClassInput,
 } from "@festival/common";
 import { hc } from "hono/client";
@@ -32,6 +31,11 @@ import {
 	resolveAuthToken,
 	rpcCall,
 } from "./client.js";
+
+export interface SchedulingReadinessResponse {
+	configRevision: number;
+	readiness: SchedulingReadiness;
+}
 
 export type {
 	AddRepertoireCatalogWorkInput,
@@ -277,32 +281,6 @@ export function listFestivalClasses(
 	return rpcCall(endpoint.$get({ param }), endpoint.$path({ param }));
 }
 
-export function getSchedulingClassRules(
-	idToken: string,
-	slug: string,
-	festivalSlug: string,
-): Promise<SchedulingClassRulesRevision> {
-	const endpoint = catalogOrg({ idToken }).admin.festivals[":festivalShortName"]
-		.scheduling["class-rules"];
-	const param = festivalParam(slug, festivalSlug);
-	return rpcCall(endpoint.$get({ param }), endpoint.$path({ param }));
-}
-
-export function saveSchedulingClassRules(
-	idToken: string,
-	slug: string,
-	festivalSlug: string,
-	input: { expectedRevision: number; rules: SchedulingClassRule[] },
-): Promise<SchedulingClassRulesRevision> {
-	const endpoint = catalogOrg({ idToken }).admin.festivals[":festivalShortName"]
-		.scheduling["class-rules"];
-	const param = festivalParam(slug, festivalSlug);
-	return rpcCall(
-		endpoint.$put({ param, json: input }),
-		endpoint.$path({ param }),
-	);
-}
-
 export function getSchedulingConfiguration(
 	idToken: string,
 	slug: string,
@@ -327,6 +305,20 @@ export function saveSchedulingConfiguration(
 		endpoint.$put({ param, json: input }),
 		endpoint.$path({ param }),
 	);
+}
+
+/**
+ * Loads the readiness report for the saved scheduling configuration revision.
+ */
+export function getSchedulingReadiness(
+	idToken: string,
+	slug: string,
+	festivalSlug: string,
+): Promise<SchedulingReadinessResponse> {
+	const endpoint = catalogOrg({ idToken }).admin.festivals[":festivalShortName"]
+		.scheduling.readiness;
+	const param = festivalParam(slug, festivalSlug);
+	return rpcCall(endpoint.$get({ param }), endpoint.$path({ param }));
 }
 
 export function previewSchedulingConfiguration(

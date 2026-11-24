@@ -13,7 +13,6 @@ export class PostgresOrganizationRepository
 {
 	private readonly shopifyDelegate: PostgresShopifyIntegrationDelegate;
 	readonly schedulingConfig: PostgresSchedulingConfigRepository;
-	readonly schedulingClassRules: PostgresSchedulingConfigRepository;
 	private readonly grantDelegate: PostgresMembershipGrantDelegate;
 	private readonly profileDelegate: PostgresProfileDirectoryDelegate;
 
@@ -23,7 +22,6 @@ export class PostgresOrganizationRepository
 			this.schema,
 			this.ensureReadyCallback,
 		);
-		this.schedulingClassRules = this.schedulingConfig;
 		this.shopifyDelegate = new PostgresShopifyIntegrationDelegate(
 			this.schema,
 			this.ensureReadyCallback,
