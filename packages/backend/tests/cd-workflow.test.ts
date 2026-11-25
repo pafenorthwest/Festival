@@ -7,6 +7,14 @@ async function readRepoFile(relativePath: string): Promise<string> {
 	return Bun.file(resolve(repositoryRoot, relativePath)).text();
 }
 
+function ghaExpr(expression: string): string {
+	return ["$", `{{ ${expression} }}`].join("");
+}
+
+function shVar(expression: string): string {
+	return ["$", `{${expression}}`].join("");
+}
+
 function assertBlockingVerifyGates(workflowOrJob: string): void {
 	expect(workflowOrJob).toContain("services:");
 	expect(workflowOrJob).toContain("image: postgres:17-alpine");
@@ -113,7 +121,129 @@ describe("Continuous Deployment & CI workflow contracts (#281)", () => {
 		);
 		expect(deployWorkflow).toContain("smoke-test:");
 		expect(deployWorkflow).toContain("/healthz");
-		expect(deployWorkflow).toContain("/api/organizations/pafe/landing");
+		expect(deployWorkflow).toContain("/api/bootstrap");
+		expect(deployWorkflow).toContain(
+			`smoke_org_slug="${shVar("DEPLOY_SMOKE_ORG_SLUG:-pafe")}"`,
+		);
+		expect(deployWorkflow).toContain(
+			`/api/organizations/${shVar("smoke_org_slug")}/landing`,
+		);
+	});
+
+	it("binds build-and-push to target environment and guards GHCR frontend push when Firebase vars are unset", async () => {
+		const deployWorkflow = await readRepoFile(".github/workflows/deploy.yml");
+		const [, afterVerify = ""] = deployWorkflow.split("\n  build-and-push:");
+		const [buildAndPushJob = ""] = afterVerify.split("\n  deploy:");
+
+		expect(buildAndPushJob).toContain("environment:");
+		expect(buildAndPushJob).toContain(
+			`name: ${ghaExpr("(github.event_name == 'workflow_dispatch' && github.event.inputs.environment) || (startsWith(github.ref, 'refs/tags/v') && 'production') || (startsWith(github.ref, 'refs/heads/release/v') && 'staging') || (github.ref == 'refs/heads/release' && 'integration') || 'integration'")}`,
+		);
+		expect(buildAndPushJob).toContain(
+			"- name: Check Frontend Firebase build configuration",
+		);
+		expect(buildAndPushJob).toContain("id: frontend_config");
+		expect(buildAndPushJob).toContain(
+			'if [ -n "$FRONT_FIREBASE_API_KEY" ] && [ -n "$FRONT_FIREBASE_AUTH_DOMAIN" ] && [ -n "$FRONT_FIREBASE_PROJECT_ID" ] && [ -n "$FRONT_FIREBASE_APP_ID" ]; then',
+		);
+		expect(buildAndPushJob).toContain(
+			'echo "push_frontend=true" >> "$GITHUB_OUTPUT"',
+		);
+		expect(buildAndPushJob).toContain(
+			'echo "push_frontend=false" >> "$GITHUB_OUTPUT"',
+		);
+		expect(buildAndPushJob).toContain("::notice::");
+		expect(buildAndPushJob).toContain(
+			`push: ${ghaExpr("steps.frontend_config.outputs.push_frontend == 'true'")}`,
+		);
+		expect(buildAndPushJob).toContain("build-args: |");
+		expect(buildAndPushJob).toContain(
+			`FRONT_API_BASE=${ghaExpr("vars.FRONT_API_BASE || ''")}`,
+		);
+		expect(buildAndPushJob).toContain(
+			`FRONT_FIREBASE_API_KEY=${ghaExpr("vars.FRONT_FIREBASE_API_KEY || 'demo-api-key'")}`,
+		);
+		expect(buildAndPushJob).toContain(
+			`FRONT_FIREBASE_AUTH_DOMAIN=${ghaExpr("vars.FRONT_FIREBASE_AUTH_DOMAIN || 'demo-festival.firebaseapp.com'")}`,
+		);
+		expect(buildAndPushJob).toContain(
+			`FRONT_FIREBASE_PROJECT_ID=${ghaExpr("vars.FRONT_FIREBASE_PROJECT_ID || 'demo-festival'")}`,
+		);
+		expect(buildAndPushJob).toContain(
+			`FRONT_FIREBASE_APP_ID=${ghaExpr("vars.FRONT_FIREBASE_APP_ID || '1:000000000000:web:demo'")}`,
+		);
+		expect(buildAndPushJob).toContain("FRONT_FIREBASE_AUTH_EMULATOR_URL=");
+	});
+
+	it("fails closed on partial or required missing deploy host config and warns when unconfigured", async () => {
+		const deployWorkflow = await readRepoFile(".github/workflows/deploy.yml");
+		const [, afterBuild = ""] = deployWorkflow.split("\n  deploy:");
+		const [deployJob = ""] = afterBuild.split("\n  smoke-test:");
+
+		expect(deployJob).toContain("outputs:");
+		expect(deployJob).toContain(
+			`deployed: ${ghaExpr("steps.host_check.outputs.configured")}`,
+		);
+		expect(deployJob).toContain(
+			'elif [ -n "$TARGET_HOST" ] || [ -n "$SSH_KEY" ] || [ -n "$PUBLIC_URL" ]; then',
+		);
+		expect(deployJob).toContain("::error::Partial deployment configuration");
+		expect(deployJob).toContain(
+			'elif [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "$REQUIRE_DEPLOY_TARGET" = "true" ] || [[ "$GIT_REF" =~ ^refs/tags/v[1-9][0-9]*\\. ]]; then',
+		);
+		expect(deployJob).toContain(
+			"::error::Missing required deployment configuration",
+		);
+		expect(deployJob).toContain(
+			`::warning::Skipping remote SSH rollout for ${shVar("TARGET_ENVIRONMENT")}`,
+		);
+	});
+
+	it("gates smoke-test on deploy output and verifies healthz, bootstrap, and configurable org landing", async () => {
+		const deployWorkflow = await readRepoFile(".github/workflows/deploy.yml");
+		const [, smokeTestJob = ""] = deployWorkflow.split("\n  smoke-test:");
+
+		expect(smokeTestJob).toContain(
+			`DEPLOYED: ${ghaExpr("needs.deploy.outputs.deployed")}`,
+		);
+		expect(smokeTestJob).toContain('if [ "$DEPLOYED" != "true" ]; then');
+		expect(smokeTestJob).toContain(
+			"::warning::Skipping post-deploy smoke verification because remote SSH rollout was skipped.",
+		);
+		expect(smokeTestJob).toContain('\'{"status":"ok"}\'');
+		expect(smokeTestJob).toContain(
+			`"${shVar("normalized_base")}/api/bootstrap"`,
+		);
+		expect(smokeTestJob).toContain(".session.authenticated == false");
+		expect(smokeTestJob).toContain('[ "$smoke_org_slug" = "none" ]');
+		expect(smokeTestJob).toContain(
+			`"${shVar("normalized_base")}/api/organizations/${shVar("smoke_org_slug")}/landing"`,
+		);
+		expect(smokeTestJob).toContain(
+			"::error::Post-deploy smoke verification failed after 12 attempts.",
+		);
+	});
+
+	it("shares cd-integration concurrency and runs scripts/migrate.ts with oven/bun:1.4.2-alpine", async () => {
+		const deployWorkflow = await readRepoFile(".github/workflows/deploy.yml");
+		const integration = await readRepoFile(".github/workflows/integration.yml");
+		const rebuildScript = await readRepoFile(
+			"cloud-setup/05-rebuild-and-validate.sh",
+		);
+
+		expect(integration).toContain("group: cd-integration");
+		expect(integration).not.toContain("group: integration-deployment");
+		expect(deployWorkflow).toContain(
+			"oven/bun:1.4.2-alpine bun run scripts/migrate.ts",
+		);
+		expect(integration).toContain(
+			"oven/bun:1.4.2-alpine bun run scripts/migrate.ts",
+		);
+		expect(rebuildScript).toContain(
+			"oven/bun:1.4.2-alpine bun run scripts/migrate.ts",
+		);
+		expect(deployWorkflow).not.toContain("oven/bun:1.4.2 ");
+		expect(integration).not.toContain("oven/bun:1.4.2 ");
 	});
 
 	it("maps refs explicitly to target environments without blind integration fallbacks for host secrets or public URLs", async () => {
