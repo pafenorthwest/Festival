@@ -9,13 +9,13 @@ import {
 	type WaitlistPromotionResult,
 } from "@festival/common";
 import {
-	processDropRefundWorkflow,
+	finalizePendingDropRefund,
+	recordInitialDropRefundEvent,
 	resolveDropRefundAmountCents,
 	type ShopifyRefundProvider,
 } from "./drop-transfer-fees.js";
+import { runDropTransferTransaction } from "./drop-transfer-transaction.js";
 import {
-	assertDroppableEntitlement,
-	assertTransferableEntitlement,
 	type ClassCapacityResolver,
 	entitlementStateSnapshot,
 	resolveClassCapacity,
@@ -41,17 +41,26 @@ export interface PromoteTopWaitlistedParams {
 	reason?: string | null;
 }
 
+export interface PromotionActionInput {
+	organizationId: string;
+	actorUid?: string;
+	actorRole?: RegistrationActorRole;
+	reason?: string | null;
+}
+
 export function emitCapacityChanged(
 	eventBus: ClassCheckoutEventBus | undefined,
-	organizationId: string,
-	festivalId: string,
-	festivalClassId: string,
+	target: {
+		organizationId: string;
+		festivalId: string;
+		festivalClassId: string;
+	},
 ): void {
 	eventBus?.emit({
 		type: "ClassCapacityChanged",
-		organizationId,
-		festivalId,
-		festivalClassId,
+		organizationId: target.organizationId,
+		festivalId: target.festivalId,
+		festivalClassId: target.festivalClassId,
 	});
 }
 
@@ -66,17 +75,19 @@ export async function getEntitlementOp(
 
 export async function updateEntitlementStatusOrThrow(
 	entitlements: CheckoutCommerceReadPort,
-	organizationId: string,
-	entitlementId: string,
-	status: ClassEntitlement["status"],
-	expectedStatus: ClassEntitlement["status"] | ClassEntitlement["status"][],
+	params: {
+		organizationId: string;
+		entitlementId: string;
+		status: ClassEntitlement["status"];
+		expectedStatus: ClassEntitlement["status"] | ClassEntitlement["status"][];
+	},
 ): Promise<ClassEntitlement> {
 	const updated = entitlements.updateClassEntitlement
 		? await entitlements.updateClassEntitlement(
-				organizationId,
-				entitlementId,
-				{ status, expectedStatus },
-				expectedStatus,
+				params.organizationId,
+				params.entitlementId,
+				{ status: params.status, expectedStatus: params.expectedStatus },
+				params.expectedStatus,
 			)
 		: null;
 	if (!updated) {
@@ -90,18 +101,20 @@ export async function updateEntitlementStatusOrThrow(
 
 async function updateEntitlementTransferOrThrow(
 	entitlements: CheckoutCommerceReadPort,
-	organizationId: string,
-	entitlementId: string,
-	targetFestivalClassId: string,
-	status: ClassEntitlement["status"],
+	params: {
+		organizationId: string;
+		entitlementId: string;
+		targetFestivalClassId: string;
+		status: ClassEntitlement["status"];
+	},
 ): Promise<ClassEntitlement> {
 	const updated = entitlements.updateClassEntitlement
 		? await entitlements.updateClassEntitlement(
-				organizationId,
-				entitlementId,
+				params.organizationId,
+				params.entitlementId,
 				{
-					festivalClassId: targetFestivalClassId,
-					status,
+					festivalClassId: params.targetFestivalClassId,
+					status: params.status,
 					expectedStatus: ["confirmed", "waitlisted"],
 				},
 				["confirmed", "waitlisted"],
@@ -116,25 +129,19 @@ async function updateEntitlementTransferOrThrow(
 	return updated;
 }
 
-export async function executePromotionOp(
-	ctx: DropTransferOpsContext,
+async function executePromotionTxOp(
+	txCtx: DropTransferOpsContext,
 	existing: ClassEntitlement,
-	input: {
-		organizationId: string;
-		actorUid?: string;
-		actorRole?: RegistrationActorRole;
-		reason?: string | null;
-	},
+	input: PromotionActionInput,
 ): Promise<WaitlistPromotionResult> {
 	const previousState = entitlementStateSnapshot(existing);
-	const updated = await updateEntitlementStatusOrThrow(
-		ctx.entitlements,
-		input.organizationId,
-		existing.id,
-		"confirmed",
-		"waitlisted",
-	);
-	const changeLog = await ctx.changeRepo.createChangeLog({
+	const updated = await updateEntitlementStatusOrThrow(txCtx.entitlements, {
+		organizationId: input.organizationId,
+		entitlementId: existing.id,
+		status: "confirmed",
+		expectedStatus: "waitlisted",
+	});
+	const changeLog = await txCtx.changeRepo.createChangeLog({
 		organizationId: input.organizationId,
 		festivalId: existing.festivalId,
 		classEntitlementId: existing.id,
@@ -145,12 +152,11 @@ export async function executePromotionOp(
 		newState: entitlementStateSnapshot(updated),
 		reason: input.reason ?? null,
 	});
-	emitCapacityChanged(
-		ctx.eventBus,
-		input.organizationId,
-		existing.festivalId,
-		existing.festivalClassId,
-	);
+	emitCapacityChanged(txCtx.eventBus, {
+		organizationId: input.organizationId,
+		festivalId: existing.festivalId,
+		festivalClassId: existing.festivalClassId,
+	});
 	return {
 		classEntitlementId: existing.id,
 		festivalClassId: existing.festivalClassId,
@@ -159,6 +165,47 @@ export async function executePromotionOp(
 		newStatus: updated.status,
 		changeLog,
 	};
+}
+
+export async function executePromotionOp(
+	ctx: DropTransferOpsContext,
+	existing: ClassEntitlement,
+	input: PromotionActionInput,
+): Promise<WaitlistPromotionResult> {
+	return runDropTransferTransaction(ctx, (txDeps) =>
+		executePromotionTxOp({ ...ctx, ...txDeps }, existing, input),
+	);
+}
+
+async function promoteTopWaitlistedTxOp(
+	txCtx: DropTransferOpsContext,
+	input: PromoteTopWaitlistedParams,
+	capacity: number | null,
+): Promise<WaitlistPromotionResult | null> {
+	const confirmed = await txCtx.entitlements.listClassEntitlements({
+		organizationId: input.organizationId,
+		festivalClassId: input.festivalClassId,
+		status: "confirmed",
+	});
+	if (capacity !== null && confirmed.length >= capacity) {
+		return null;
+	}
+	const waitlisted = await txCtx.entitlements.listClassEntitlements({
+		organizationId: input.organizationId,
+		festivalClassId: input.festivalClassId,
+		status: "waitlisted",
+	});
+	const top = waitlisted.sort(
+		(a, b) =>
+			a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+	)[0];
+	if (!top) return null;
+	return executePromotionTxOp(txCtx, top, {
+		organizationId: input.organizationId,
+		actorUid: input.actorUid,
+		actorRole: input.actorRole ?? "system",
+		reason: input.reason ?? "Waitlist promotion on drop/transfer",
+	});
 }
 
 export async function promoteTopWaitlistedUnlockedOp(
@@ -171,103 +218,55 @@ export async function promoteTopWaitlistedUnlockedOp(
 		input.festivalId,
 		input.festivalClassId,
 	);
-	const confirmed = await ctx.entitlements.listClassEntitlements({
-		organizationId: input.organizationId,
-		festivalClassId: input.festivalClassId,
-		status: "confirmed",
-	});
-	if (capacity !== null && confirmed.length >= capacity) {
-		return null;
-	}
-	const waitlisted = await ctx.entitlements.listClassEntitlements({
-		organizationId: input.organizationId,
-		festivalClassId: input.festivalClassId,
-		status: "waitlisted",
-	});
-	const top = waitlisted.sort(
-		(a, b) =>
-			a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-	)[0];
-	if (!top) return null;
-	return executePromotionOp(ctx, top, {
-		organizationId: input.organizationId,
-		actorUid: input.actorUid,
-		actorRole: input.actorRole ?? "system",
-		reason: input.reason ?? "Waitlist promotion on drop/transfer",
-	});
+	return runDropTransferTransaction(ctx, (txDeps) =>
+		promoteTopWaitlistedTxOp({ ...ctx, ...txDeps }, input, capacity),
+	);
 }
 
-async function finalizeDropSideEffects(
-	ctx: DropTransferOpsContext,
+async function maybePromoteSourceClass(
+	txCtx: DropTransferOpsContext,
+	target: {
+		wasConfirmed: boolean;
+		organizationId: string;
+		festivalId: string;
+		festivalClassId: string;
+		actorUid?: string;
+	},
+	capacity: number | null,
+): Promise<WaitlistPromotionResult[]> {
+	if (!target.wasConfirmed) return [];
+	const promo = await promoteTopWaitlistedTxOp(
+		txCtx,
+		{
+			organizationId: target.organizationId,
+			festivalClassId: target.festivalClassId,
+			festivalId: target.festivalId,
+			actorUid: target.actorUid ?? "system",
+			actorRole: "system",
+		},
+		capacity,
+	);
+	return promo?.promoted ? [promo] : [];
+}
+
+async function runDropTxBody(
+	txCtx: DropTransferOpsContext,
 	params: {
-		orgId: string;
 		existing: ClassEntitlement;
-		changeLogId: string;
-		shouldRefund: boolean;
 		input: DropRegistrationInput;
-		promoteLocked: (
-			params: PromoteTopWaitlistedParams,
-		) => Promise<WaitlistPromotionResult | null>;
+		shouldRefund: boolean;
+		sourceCapacity: number | null;
 	},
 ) {
-	const { existing, input } = params;
-	const promotedWaitlistEntitlements: WaitlistPromotionResult[] = [];
-	if (existing.status === "confirmed") {
-		const promo = await params.promoteLocked({
-			organizationId: existing.organizationId,
-			festivalClassId: existing.festivalClassId,
-			festivalId: existing.festivalId,
-			actorUid: input.actorUid ?? "system",
-			actorRole: "system",
-		});
-		if (promo?.promoted) promotedWaitlistEntitlements.push(promo);
-	}
-	const refundEvent = params.shouldRefund
-		? await processDropRefundWorkflow({
-				changeRepo: ctx.changeRepo,
-				refundProvider: ctx.refundProvider,
-				entitlement: existing,
-				changeLogId: params.changeLogId,
-				refundAmountCents: input.refundAmountCents,
-				refundReason: input.refundReason ?? input.reason,
-			})
-		: null;
-	emitCapacityChanged(
-		ctx.eventBus,
-		params.orgId,
-		existing.festivalId,
-		existing.festivalClassId,
-	);
-	return { promotedWaitlistEntitlements, refundEvent };
-}
-
-export async function executeDropOp(
-	ctx: DropTransferOpsContext,
-	orgId: string,
-	input: DropRegistrationInput,
-	promoteLocked: (
-		params: PromoteTopWaitlistedParams,
-	) => Promise<WaitlistPromotionResult | null>,
-): Promise<DropRegistrationResult> {
-	const existing = await getEntitlementOp(
-		ctx.entitlements,
-		orgId,
-		input.classEntitlementId,
-	);
-	assertDroppableEntitlement(existing, input.festivalId);
-	const shouldRefund = Boolean(input.issueRefund ?? input.requestRefund);
-	if (shouldRefund) {
-		resolveDropRefundAmountCents(existing, input.refundAmountCents);
-	}
+	const { existing, input, shouldRefund, sourceCapacity } = params;
 	const previousState = entitlementStateSnapshot(existing);
-	const updated = await updateEntitlementStatusOrThrow(
-		ctx.entitlements,
-		existing.organizationId,
-		existing.id,
-		"cancelled",
-		["confirmed", "waitlisted"],
-	);
-	const changeLog = await ctx.changeRepo.createChangeLog({
+	const updated = await updateEntitlementStatusOrThrow(txCtx.entitlements, {
+		organizationId: existing.organizationId,
+		entitlementId: existing.id,
+		status: "cancelled",
+		expectedStatus: ["confirmed", "waitlisted"],
+	});
+	const changeLog = await txCtx.changeRepo.createChangeLog({
 		organizationId: existing.organizationId,
 		festivalId: existing.festivalId,
 		classEntitlementId: existing.id,
@@ -278,88 +277,104 @@ export async function executeDropOp(
 		newState: entitlementStateSnapshot(updated),
 		reason: input.reason ?? null,
 	});
-	const { promotedWaitlistEntitlements, refundEvent } =
-		await finalizeDropSideEffects(ctx, {
-			orgId,
-			existing,
-			changeLogId: changeLog.id,
-			shouldRefund,
-			input,
-			promoteLocked,
-		});
+	const promotedWaitlistEntitlements = await maybePromoteSourceClass(
+		txCtx,
+		{
+			wasConfirmed: existing.status === "confirmed",
+			organizationId: existing.organizationId,
+			festivalId: existing.festivalId,
+			festivalClassId: existing.festivalClassId,
+			actorUid: input.actorUid,
+		},
+		sourceCapacity,
+	);
+	const preparedRefund = shouldRefund
+		? await recordInitialDropRefundEvent({
+				changeRepo: txCtx.changeRepo,
+				refundProvider: txCtx.refundProvider,
+				entitlement: existing,
+				changeLogId: changeLog.id,
+				refundAmountCents: input.refundAmountCents,
+				refundReason: input.refundReason ?? input.reason,
+			})
+		: null;
+	emitCapacityChanged(txCtx.eventBus, {
+		organizationId: existing.organizationId,
+		festivalId: existing.festivalId,
+		festivalClassId: existing.festivalClassId,
+	});
+	return { updated, changeLog, promotedWaitlistEntitlements, preparedRefund };
+}
+
+export async function executeDropOp(
+	ctx: DropTransferOpsContext,
+	existing: ClassEntitlement,
+	input: DropRegistrationInput,
+): Promise<DropRegistrationResult> {
+	const shouldRefund = Boolean(input.issueRefund ?? input.requestRefund);
+	if (shouldRefund) {
+		resolveDropRefundAmountCents(existing, input.refundAmountCents);
+	}
+	const sourceCapacity =
+		existing.status === "confirmed"
+			? await resolveClassCapacity(
+					ctx.capacityResolver,
+					existing.organizationId,
+					existing.festivalId,
+					existing.festivalClassId,
+				)
+			: null;
+	const txResult = await runDropTransferTransaction(ctx, (txDeps) =>
+		runDropTxBody(
+			{ ...ctx, ...txDeps },
+			{ existing, input, shouldRefund, sourceCapacity },
+		),
+	);
+	const refundEvent = txResult.preparedRefund
+		? txResult.preparedRefund.pendingDispatch
+			? await finalizePendingDropRefund(
+					ctx.changeRepo,
+					txResult.preparedRefund.pendingDispatch,
+				)
+			: txResult.preparedRefund.refundEvent
+		: null;
 	return {
 		success: true,
 		classEntitlementId: existing.id,
-		classEntitlement: updated,
-		changeLog,
+		classEntitlement: txResult.updated,
+		changeLog: txResult.changeLog,
 		refundEvent,
-		promotedWaitlistEntitlements,
+		promotedWaitlistEntitlements: txResult.promotedWaitlistEntitlements,
 	};
 }
 
-async function finalizeTransferSideEffects(
-	ctx: DropTransferOpsContext,
-	orgId: string,
-	existing: ClassEntitlement,
-	previousClassId: string,
-	input: TransferRegistrationInput,
-): Promise<WaitlistPromotionResult[]> {
-	const promotedWaitlistEntitlements: WaitlistPromotionResult[] = [];
-	if (existing.status === "confirmed") {
-		const promo = await promoteTopWaitlistedUnlockedOp(ctx, {
-			organizationId: orgId,
-			festivalClassId: previousClassId,
-			festivalId: existing.festivalId,
-			actorUid: input.actorUid ?? "system",
-			actorRole: "system",
-		});
-		if (promo?.promoted) promotedWaitlistEntitlements.push(promo);
-	}
-	emitCapacityChanged(
-		ctx.eventBus,
-		orgId,
-		existing.festivalId,
-		previousClassId,
-	);
-	emitCapacityChanged(
-		ctx.eventBus,
-		orgId,
-		existing.festivalId,
-		input.targetFestivalClassId,
-	);
-	return promotedWaitlistEntitlements;
-}
-
-export async function executeTransferOp(
-	ctx: DropTransferOpsContext,
-	initial: ClassEntitlement,
-	input: TransferRegistrationInput,
-	targetCapacity: number,
-): Promise<TransferRegistrationResult> {
-	const orgId = initial.organizationId;
-	const existing = await getEntitlementOp(ctx.entitlements, orgId, initial.id);
-	assertTransferableEntitlement(
-		existing,
-		input.targetFestivalClassId,
-		input.festivalId,
-	);
-	const targetConfirmed = await ctx.entitlements.listClassEntitlements({
+async function runTransferTxBody(
+	txCtx: DropTransferOpsContext,
+	params: {
+		existing: ClassEntitlement;
+		input: TransferRegistrationInput;
+		targetCapacity: number;
+		sourceCapacity: number | null;
+	},
+) {
+	const { existing, input, targetCapacity, sourceCapacity } = params;
+	const orgId = existing.organizationId;
+	const previousClassId = existing.festivalClassId;
+	const targetConfirmed = await txCtx.entitlements.listClassEntitlements({
 		organizationId: orgId,
 		festivalClassId: input.targetFestivalClassId,
 		status: "confirmed",
 	});
 	const nextStatus: ClassEntitlement["status"] =
 		targetConfirmed.length < targetCapacity ? "confirmed" : "waitlisted";
-	const previousClassId = existing.festivalClassId;
 	const previousState = entitlementStateSnapshot(existing);
-	const updated = await updateEntitlementTransferOrThrow(
-		ctx.entitlements,
-		orgId,
-		existing.id,
-		input.targetFestivalClassId,
-		nextStatus,
-	);
-	const changeLog = await ctx.changeRepo.createChangeLog({
+	const updated = await updateEntitlementTransferOrThrow(txCtx.entitlements, {
+		organizationId: orgId,
+		entitlementId: existing.id,
+		targetFestivalClassId: input.targetFestivalClassId,
+		status: nextStatus,
+	});
+	const changeLog = await txCtx.changeRepo.createChangeLog({
 		organizationId: orgId,
 		festivalId: existing.festivalId,
 		classEntitlementId: existing.id,
@@ -370,21 +385,62 @@ export async function executeTransferOp(
 		newState: entitlementStateSnapshot(updated),
 		reason: input.reason ?? null,
 	});
-	const promotedWaitlistEntitlements = await finalizeTransferSideEffects(
-		ctx,
-		orgId,
-		existing,
-		previousClassId,
-		input,
+	const promotedWaitlistEntitlements = await maybePromoteSourceClass(
+		txCtx,
+		{
+			wasConfirmed: existing.status === "confirmed",
+			organizationId: orgId,
+			festivalId: existing.festivalId,
+			festivalClassId: previousClassId,
+			actorUid: input.actorUid,
+		},
+		sourceCapacity,
+	);
+	emitCapacityChanged(txCtx.eventBus, {
+		organizationId: orgId,
+		festivalId: existing.festivalId,
+		festivalClassId: previousClassId,
+	});
+	emitCapacityChanged(txCtx.eventBus, {
+		organizationId: orgId,
+		festivalId: existing.festivalId,
+		festivalClassId: input.targetFestivalClassId,
+	});
+	return { previousClassId, updated, changeLog, promotedWaitlistEntitlements };
+}
+
+export async function executeTransferOp(
+	ctx: DropTransferOpsContext,
+	params: {
+		existing: ClassEntitlement;
+		input: TransferRegistrationInput;
+		targetCapacity: number;
+	},
+): Promise<TransferRegistrationResult> {
+	const { existing, input, targetCapacity } = params;
+	const sourceCapacity =
+		existing.status === "confirmed"
+			? await resolveClassCapacity(
+					ctx.capacityResolver,
+					existing.organizationId,
+					existing.festivalId,
+					existing.festivalClassId,
+				)
+			: null;
+	const txResult = await runDropTransferTransaction(ctx, (txDeps) =>
+		runTransferTxBody(
+			{ ...ctx, ...txDeps },
+			{ existing, input, targetCapacity, sourceCapacity },
+		),
 	);
 	return {
 		success: true,
 		classEntitlementId: existing.id,
 		targetFestivalClassId: input.targetFestivalClassId,
-		previousFestivalClassId: previousClassId,
-		classEntitlement: updated,
-		changeLog,
+		previousFestivalClassId: txResult.previousClassId,
+		classEntitlement: txResult.updated,
+		changeLog: txResult.changeLog,
 		refundEvent: null,
-		promotedWaitlistEntitlements,
+		promotedWaitlistEntitlements: txResult.promotedWaitlistEntitlements,
 	};
 }

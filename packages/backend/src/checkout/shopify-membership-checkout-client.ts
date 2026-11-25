@@ -44,7 +44,7 @@ export class ShopifyMembershipCheckoutClient
 			attributes?: Array<{ key: string; value: string }>;
 		}>;
 	}) {
-		const payload = await this.call(
+		const { payload } = await this.call(
 			input.organizationId,
 			`mutation FestivalCreateCart($input: CartInput!) { cartCreate(input: $input) { cart { id } userErrors { message } warnings { message } } }`,
 			{
@@ -82,21 +82,46 @@ export class ShopifyMembershipCheckoutClient
 		organizationId: string;
 		shopifyCartId: string;
 		expectedStorefrontBinding?: ClassCheckoutStorefrontBinding;
+		includeShopPrimaryDomain?: true;
 		signal?: AbortSignal;
 	}) {
-		const payload = await this.call(
+		const { payload, storefrontBinding } = await this.call(
 			input.organizationId,
 			`query FestivalCartCheckout($id: ID!) { cart(id: $id) { id checkoutUrl } }`,
 			{ id: input.shopifyCartId },
 			input.expectedStorefrontBinding,
 			input.signal,
 		);
-		const cart =
-			record(payload.data) && record(payload.data.cart)
-				? payload.data.cart
-				: undefined;
+		const data = record(payload.data) ? payload.data : undefined;
+		const cart = record(data?.cart) ? data.cart : undefined;
 		if (!cart || typeof cart.checkoutUrl !== "string") throw unavailable();
-		return { checkoutUrl: cart.checkoutUrl };
+		const { checkoutUrl } = cart;
+		if (!input.includeShopPrimaryDomain) return { checkoutUrl };
+		const checkoutDestination = URL.parse(checkoutUrl);
+		if (!checkoutDestination) throw unavailable();
+		if (
+			checkoutDestination.origin === `https://${storefrontBinding.shopDomain}`
+		)
+			return { checkoutUrl };
+
+		const { payload: shopPayload } = await this.call(
+			input.organizationId,
+			`query FestivalShopPrimaryDomain { shop { primaryDomain { url } } }`,
+			{},
+			storefrontBinding,
+			input.signal,
+		);
+		const shop =
+			record(shopPayload.data) && record(shopPayload.data.shop)
+				? shopPayload.data.shop
+				: undefined;
+		const primaryDomain = record(shop?.primaryDomain)
+			? shop.primaryDomain.url
+			: undefined;
+		if (typeof primaryDomain === "string") {
+			return { checkoutUrl, shopPrimaryDomainUrl: primaryDomain };
+		}
+		return { checkoutUrl };
 	}
 
 	/** Refresh only the existing cart's buyer for the current authenticated owner. */
@@ -107,7 +132,7 @@ export class ShopifyMembershipCheckoutClient
 		expectedStorefrontBinding?: ClassCheckoutStorefrontBinding;
 	}): Promise<void> {
 		if (!input.buyerAccessToken) throw unavailable();
-		const payload = await this.call(
+		const { payload } = await this.call(
 			input.organizationId,
 			`mutation FestivalRefreshCartBuyer($cartId: ID!, $buyer: CartBuyerIdentityInput!) { cartBuyerIdentityUpdate(cartId: $cartId, buyerIdentity: $buyer) { cart { id } userErrors { message } } }`,
 			{
@@ -137,7 +162,7 @@ export class ShopifyMembershipCheckoutClient
 		shopifyCartId: string;
 		expectedStorefrontBinding?: ClassCheckoutStorefrontBinding;
 	}) {
-		const payload = await this.call(
+		const { payload } = await this.call(
 			input.organizationId,
 			`query FestivalCartEvidence($id: ID!) { cart(id: $id) { attributes { key value } buyerIdentity { customer { id } } cost { totalAmount { amount currencyCode } } lines(first: 250) { pageInfo { hasNextPage } nodes { quantity attributes { key value } merchandise { ... on ProductVariant { id } } } } } }`,
 			{ id: input.shopifyCartId },
@@ -248,16 +273,23 @@ export class ShopifyMembershipCheckoutClient
 		variables: Record<string, unknown>,
 		expectedStorefrontBinding?: ClassCheckoutStorefrontBinding,
 		signal?: AbortSignal,
-	): Promise<Record<string, unknown>> {
+	): Promise<{
+		payload: Record<string, unknown>;
+		storefrontBinding: ClassCheckoutStorefrontBinding;
+	}> {
 		signal?.throwIfAborted();
 		const { integration, token } = await this.storefrontCredentials(
 			organizationId,
 			expectedStorefrontBinding,
 		);
+		const storefrontBinding = {
+			shopDomain: integration.storeDomain.toLowerCase(),
+			integrationVersion: integration.integrationVersion,
+		};
 		try {
 			const payload = await this.transport.json(
 				new URL(
-					`https://${integration.storeDomain.toLowerCase()}/api/${API_VERSION}/graphql.json`,
+					`https://${storefrontBinding.shopDomain}/api/${API_VERSION}/graphql.json`,
 				),
 				integration.storeDomain,
 				{
@@ -285,7 +317,7 @@ export class ShopifyMembershipCheckoutClient
 					throw new ClassCheckoutCartObservationError(creation.cart.id);
 				throw unavailable();
 			}
-			return payload;
+			return { payload, storefrontBinding };
 		} catch (error) {
 			signal?.throwIfAborted();
 			if (error instanceof AppError) throw error;

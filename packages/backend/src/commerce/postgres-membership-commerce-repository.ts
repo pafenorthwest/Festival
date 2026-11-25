@@ -4,6 +4,7 @@ import type {
 	CreateClassEntitlementInput,
 	EntitlementClass,
 } from "@festival/common";
+import type { sql } from "bun";
 import {
 	type ClassEntitlementFilter,
 	type FinalizeDecisionInput,
@@ -52,6 +53,14 @@ export class PostgresMembershipCommerceRepository
 
 	async ensureReady(): Promise<void> {
 		await initializePostgresSchema(this.schema);
+	}
+
+	async prepareTransaction(): Promise<void> {
+		await this.ensureReady();
+	}
+
+	withTransaction(tx: Pick<typeof sql, "unsafe">) {
+		return this.classEntitlements.withTransaction(tx);
 	}
 
 	recordDelivery(input: RecordWebhookDeliveryInput) {

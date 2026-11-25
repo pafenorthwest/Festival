@@ -7,8 +7,15 @@ import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organizati
 import { PublicMembershipProductService } from "../src/shopify/public-membership-product-service.js";
 import type { ShopifyPublicCatalogClient } from "../src/shopify/shopify-public-catalog-client.js";
 
+const apiDomain = "jrke10-1k.myshopify.com";
+const primaryDomain = "performing-arts-festival-eastside.myshopify.com";
+const primaryCheckoutUrl = `https://${primaryDomain}/checkouts/fresh`;
+
 describe("membership checkout service", () => {
-	async function membershipCheckoutFixture() {
+	async function membershipCheckoutFixture(
+		storeDomain = "festival.myshopify.com",
+		checkoutResult?: { checkoutUrl: string; shopPrimaryDomainUrl?: string },
+	) {
 		const organizations = new InMemoryOrganizationRepository();
 		const organization = await organizations.createOrganization({
 			name: "Festival",
@@ -21,7 +28,7 @@ describe("membership checkout service", () => {
 		});
 		await organizations.upsertShopifyIntegration({
 			organizationId: organization.id,
-			storeDomain: "festival.myshopify.com",
+			storeDomain,
 			clientId: "client",
 			encryptedClientSecret: "encrypted",
 		});
@@ -31,7 +38,7 @@ describe("membership checkout service", () => {
 			verifiedAtIso: new Date().toISOString(),
 			lastTestedAtIso: new Date().toISOString(),
 			verifiedShopGid: "gid://shopify/Shop/1",
-			verifiedShopDomain: "festival.myshopify.com",
+			verifiedShopDomain: storeDomain,
 			grantedScopes: ["read_products"],
 			capabilities: {
 				read_products: "granted",
@@ -79,9 +86,11 @@ describe("membership checkout service", () => {
 					expect(input.correlationId).toBeTruthy();
 					return { shopifyCartId: "gid://shopify/Cart/private" };
 				},
-				async checkout() {
+				async checkout(input) {
 					checkoutRequests += 1;
 					expect(cartCreated).toBeGreaterThan(0);
+					expect(input).toMatchObject({ includeShopPrimaryDomain: true });
+					if (checkoutResult) return checkoutResult;
 					return {
 						checkoutUrl:
 							checkoutRequests > 2
@@ -132,6 +141,55 @@ describe("membership checkout service", () => {
 				idempotencyKey: "00000000-0000-4000-8000-000000000003",
 			}),
 		).rejects.toMatchObject({ code: "checkout_in_progress" });
+	});
+
+	it("hands off fresh and resumed checkouts to Shopify's verified primary domain", async () => {
+		const { service, input, cartCreated, checkoutRequests } =
+			await membershipCheckoutFixture(apiDomain, {
+				checkoutUrl: primaryCheckoutUrl,
+				shopPrimaryDomainUrl: `https://${primaryDomain}`,
+			});
+		await expect(service.start(input)).resolves.toEqual({
+			checkoutUrl: primaryCheckoutUrl,
+		});
+		await expect(service.start(input)).resolves.toEqual({
+			checkoutUrl: primaryCheckoutUrl,
+		});
+		expect(cartCreated()).toBe(1);
+		expect(checkoutRequests()).toBe(2);
+	});
+
+	it.each([
+		{ checkoutUrl: primaryCheckoutUrl },
+		{
+			checkoutUrl: `https://${primaryDomain}.example.org/checkouts/fresh`,
+			shopPrimaryDomainUrl: `https://${primaryDomain}`,
+		},
+		{
+			checkoutUrl: `https://another-store.myshopify.com/checkouts/fresh`,
+			shopPrimaryDomainUrl: `https://${primaryDomain}`,
+		},
+		{
+			checkoutUrl: `http://${primaryDomain}/checkouts/fresh`,
+			shopPrimaryDomainUrl: `https://${primaryDomain}`,
+		},
+		{
+			checkoutUrl: `https://${primaryDomain}:444/checkouts/fresh`,
+			shopPrimaryDomainUrl: `https://${primaryDomain}`,
+		},
+		{
+			checkoutUrl: `https://user:password@${primaryDomain}/checkouts/fresh`,
+			shopPrimaryDomainUrl: `https://${primaryDomain}`,
+		},
+	])("rejects an unverified or unsafe checkout destination $checkoutUrl", async (result) => {
+		const { service, input } = await membershipCheckoutFixture(
+			apiDomain,
+			result,
+		);
+		await expect(service.start(input)).rejects.toMatchObject({
+			status: 503,
+			code: "checkout_retryable_upstream",
+		});
 	});
 
 	for (const lookup of ["getOutcome", "createIntent"] as const) {

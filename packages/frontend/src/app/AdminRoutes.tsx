@@ -1,5 +1,5 @@
 import { Route, useParams } from "@solidjs/router";
-import type { JSX } from "solid-js";
+import { createMemo, type JSX, Show } from "solid-js";
 import {
 	AdminCommerceProvider,
 	useAdminCommerce,
@@ -14,47 +14,78 @@ import * as Pages from "./lazyPages.js";
 
 type Shell = ReturnType<typeof useFestivalShell>;
 
-export const withDir =
-	(render: (slug: string, app: Shell) => JSX.Element) => () => {
-		const slug = useParams().slug ?? "";
-		return (
-			<TeacherDirectoryProvider slug={slug}>
-				{render(slug, useFestivalShell())}
-			</TeacherDirectoryProvider>
-		);
-	};
+function useOrgScope() {
+	const p = useParams();
+	return createMemo(() => ({ slug: p.slug ?? "" }), undefined, {
+		equals: (prev, next) => prev.slug === next.slug,
+	});
+}
 
-export const withVol =
-	(render: (slug: string, festivalSlug: string, app: Shell) => JSX.Element) =>
-	() => {
-		const p = useParams();
-		const slug = p.slug ?? "";
-		return (
-			<VolunteersProvider slug={slug}>
-				{render(slug, p.festivalSlug ?? "", useFestivalShell())}
-			</VolunteersProvider>
-		);
-	};
+function useFestivalScope() {
+	const p = useParams();
+	return createMemo(
+		() => ({ slug: p.slug ?? "", festivalSlug: p.festivalSlug ?? "" }),
+		undefined,
+		{
+			equals: (prev, next) =>
+				prev.slug === next.slug && prev.festivalSlug === next.festivalSlug,
+		},
+	);
+}
 
-export const withCat =
-	(render: (slug: string, festivalSlug: string, app: Shell) => JSX.Element) =>
-	() => {
-		const p = useParams();
-		return (
-			<CatalogRepertoireProvider>
-				{render(p.slug ?? "", p.festivalSlug ?? "", useFestivalShell())}
-			</CatalogRepertoireProvider>
-		);
-	};
-
-const withCom = (render: (slug: string, app: Shell) => JSX.Element) => () => {
-	const slug = useParams().slug ?? "";
+const withOrg = (render: (slug: string, app: Shell) => JSX.Element) => () => {
+	const scope = useOrgScope();
+	const app = useFestivalShell();
 	return (
-		<AdminCommerceProvider slug={slug}>
-			{render(slug, useFestivalShell())}
-		</AdminCommerceProvider>
+		<Show when={scope()} keyed>
+			{({ slug }) => render(slug, app)}
+		</Show>
 	);
 };
+
+const withFestival =
+	(render: (slug: string, festivalSlug: string, app: Shell) => JSX.Element) =>
+	() => {
+		const scope = useFestivalScope();
+		const app = useFestivalShell();
+		return (
+			<Show when={scope()} keyed>
+				{({ slug, festivalSlug }) => render(slug, festivalSlug, app)}
+			</Show>
+		);
+	};
+
+export const withDir = (render: (slug: string, app: Shell) => JSX.Element) =>
+	withOrg((slug, app) => (
+		<TeacherDirectoryProvider slug={slug}>
+			{render(slug, app)}
+		</TeacherDirectoryProvider>
+	));
+
+export const withVol = (
+	render: (slug: string, festivalSlug: string, app: Shell) => JSX.Element,
+) =>
+	withFestival((slug, festivalSlug, app) => (
+		<VolunteersProvider slug={slug}>
+			{render(slug, festivalSlug, app)}
+		</VolunteersProvider>
+	));
+
+export const withCat = (
+	render: (slug: string, festivalSlug: string, app: Shell) => JSX.Element,
+) =>
+	withFestival((slug, festivalSlug, app) => (
+		<CatalogRepertoireProvider>
+			{render(slug, festivalSlug, app)}
+		</CatalogRepertoireProvider>
+	));
+
+export const withCom = (render: (slug: string, app: Shell) => JSX.Element) =>
+	withOrg((slug, app) => (
+		<AdminCommerceProvider slug={slug}>
+			{render(slug, app)}
+		</AdminCommerceProvider>
+	));
 
 function AdminMembershipsInner(props: { app: Shell; slug: string }) {
 	const commerce = useAdminCommerce();
@@ -140,26 +171,17 @@ export function adminRoutes() {
 			/>
 			<Route
 				path="/admin/concerto-repertoire"
-				component={() => {
-					const slug = useParams().slug ?? "";
-					const app = useFestivalShell();
-					return <Pages.AdminConcertoRepertoirePage app={app} slug={slug} />;
-				}}
+				component={withOrg((slug, app) => (
+					<Pages.AdminConcertoRepertoirePage app={app} slug={slug} />
+				))}
 			/>
 			<Route
 				path="/admin/checkout-recovery"
-				component={() => {
-					const p = useParams();
-					const app = useFestivalShell();
-					return (
-						<ClassRegistrationProvider
-							slug={p.slug ?? ""}
-							festivalSlug={p.festivalSlug ?? ""}
-						>
-							<Pages.AdminCheckoutRecoveryPage app={app} />
-						</ClassRegistrationProvider>
-					);
-				}}
+				component={withFestival((slug, festivalSlug, app) => (
+					<ClassRegistrationProvider slug={slug} festivalSlug={festivalSlug}>
+						<Pages.AdminCheckoutRecoveryPage app={app} />
+					</ClassRegistrationProvider>
+				))}
 			/>
 			<Route
 				path={["/music-review", "/admin/music-review"]}

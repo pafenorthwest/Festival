@@ -6,6 +6,7 @@ import type {
 import { createEffect, createSignal, Show } from "solid-js";
 import { joinClassWaitlist, withdrawClassWaitlist } from "../lib/api.js";
 import { Button } from "./Button.js";
+import { CHECKBOX_HELP_TEXT, HelpTooltip } from "./HelpTooltip.js";
 
 export interface FestivalWaitlistCardProfile {
 	name?: string;
@@ -269,21 +270,28 @@ export function FestivalWaitlistCard(props: FestivalWaitlistCardProps) {
 								placeholder="e.g. 555-123-4567"
 							/>
 						</label>
-						<label
-							class="checkbox-label"
-							style="display: flex; gap: 0.5rem; align-items: flex-start; cursor: pointer;"
-						>
-							<input
-								type="checkbox"
-								required
-								checked={consent()}
-								onChange={(e) => setConsent(e.currentTarget.checked)}
+						<div class="checkbox-help-row">
+							<label
+								class="checkbox-label"
+								style="display: flex; gap: 0.5rem; align-items: flex-start; cursor: pointer;"
+							>
+								<input
+									type="checkbox"
+									required
+									checked={consent()}
+									onChange={(e) => setConsent(e.currentTarget.checked)}
+								/>
+								<span>
+									I consent to festival staff accessing my contact information
+									regarding waitlist placement.
+								</span>
+							</label>
+							<HelpTooltip
+								id="waitlist-consent-help"
+								label="About waitlist contact consent"
+								text={CHECKBOX_HELP_TEXT.waitlistDataConsent}
 							/>
-							<span>
-								I consent to festival staff accessing my contact information
-								regarding waitlist placement.
-							</span>
-						</label>
+						</div>
 						<div class="waitlist-actions" style="margin-top: 1rem;">
 							<Button type="submit" disabled={isSubmitting() || !consent()}>
 								{isSubmitting() ? "Joining waitlist…" : "Join waitlist ($0)"}

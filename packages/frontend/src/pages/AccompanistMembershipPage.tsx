@@ -1,6 +1,11 @@
 import { createEffect, createSignal, For, onMount, Show } from "solid-js";
 import { Button } from "../components/Button.js";
 import {
+	CHECKBOX_HELP_TEXT,
+	CUSTOMER_HELP_TEXT,
+	HelpTooltip,
+} from "../components/HelpTooltip.js";
+import {
 	ApiError,
 	acquireAccompanistMembership,
 	customerAccompanistMembershipSignInPath,
@@ -260,7 +265,14 @@ export function AccompanistMembershipPage(props: { slug: string }) {
 						/>
 					</label>
 					<fieldset class="field">
-						<legend>Divisions</legend>
+						<legend class="help-legend">
+							Divisions
+							<HelpTooltip
+								id="accompanist-divisions-help"
+								label="About accompanist divisions"
+								text={CUSTOMER_HELP_TEXT.accompanistDivisions}
+							/>
+						</legend>
 						<For each={divisions()}>
 							{(division) => (
 								<label class="membership-consent">
@@ -274,19 +286,26 @@ export function AccompanistMembershipPage(props: { slug: string }) {
 							)}
 						</For>
 					</fieldset>
-					<label class="membership-consent">
-						<input
-							type="checkbox"
-							checked={publicDirectoryOptIn()}
-							disabled={submitting()}
-							onChange={(event) =>
-								setPublicDirectoryOptIn(event.currentTarget.checked)
-							}
+					<div class="checkbox-help-row">
+						<label class="membership-consent">
+							<input
+								type="checkbox"
+								checked={publicDirectoryOptIn()}
+								disabled={submitting()}
+								onChange={(event) =>
+									setPublicDirectoryOptIn(event.currentTarget.checked)
+								}
+							/>
+							<span>
+								List my name and approved divisions in the Public Directory
+							</span>
+						</label>
+						<HelpTooltip
+							id="accompanist-directory-opt-in-help"
+							label="About Public Directory publishing"
+							text={CHECKBOX_HELP_TEXT.accompanistDirectoryPublishing}
 						/>
-						<span>
-							List my name and approved divisions in the Public Directory
-						</span>
-					</label>
+					</div>
 					<Button type="submit" disabled={submitting()}>
 						{submitting() ? "Saving…" : "Activate membership"}
 					</Button>

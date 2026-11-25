@@ -12,6 +12,8 @@ import type {
 	PublicMembershipProductSummary,
 	RegistrationCatalogValue,
 } from "@festival/common";
+import type { ClassCheckoutStorefrontBinding } from "./checkout-execution-types.js";
+import type { SqlRunner } from "./registration-metadata-queries.js";
 
 export interface CheckoutShopifyIntegrationRecord {
 	storeDomain?: string;
@@ -296,6 +298,9 @@ export interface CheckoutCommerceReadPort {
 		},
 		expectedStatus?: ClassEntitlementStatus | ClassEntitlementStatus[],
 	): Promise<ClassEntitlement | null>;
+	prepareTransaction?(): Promise<void>;
+	withTransaction?(tx: SqlRunner): CheckoutCommerceReadPort;
+	createTransactionSnapshot?(): () => void;
 }
 
 export interface MembershipListingsPort {
@@ -379,7 +384,9 @@ export interface MembershipCheckoutStorefrontPort {
 	checkout(input: {
 		organizationId: string;
 		shopifyCartId: string;
-	}): Promise<{ checkoutUrl: string }>;
+		expectedStorefrontBinding?: ClassCheckoutStorefrontBinding;
+		includeShopPrimaryDomain?: true;
+	}): Promise<{ checkoutUrl: string; shopPrimaryDomainUrl?: string }>;
 }
 
 export interface WaitlistEntitlementPort {

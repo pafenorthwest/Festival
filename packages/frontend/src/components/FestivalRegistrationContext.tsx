@@ -1,9 +1,11 @@
 import { For, Show } from "solid-js";
+import { readSafeResource } from "../lib/readSafeResource.js";
 import type {
 	FestivalClassRegistrationPageProps,
 	useFestivalRegistrationPage,
 } from "../pages/useFestivalRegistrationPage.js";
 import { Button } from "./Button.js";
+import { CUSTOMER_HELP_TEXT, HelpTooltip } from "./HelpTooltip.js";
 
 export function FestivalRegistrationContext(input: {
 	page: FestivalClassRegistrationPageProps;
@@ -75,7 +77,7 @@ export function FestivalRegistrationContext(input: {
 						<option value="" selected={!selectedDivisionId()}>
 							Select division…
 						</option>
-						<For each={divisions()?.divisions ?? []}>
+						<For each={readSafeResource(divisions)?.divisions ?? []}>
 							{(division) => (
 								<option
 									value={division.id}
@@ -144,7 +146,14 @@ export function FestivalRegistrationContext(input: {
 				when={selectedChild() && !selectedChild()?.hasCurrentValidAgeSnapshot}
 			>
 				<section class="parent-panel">
-					<h2>Confirm performer age</h2>
+					<div class="help-heading-row">
+						<h2>Confirm performer age</h2>
+						<HelpTooltip
+							id="confirm-performer-age-help"
+							label="About age verification"
+							text={CUSTOMER_HELP_TEXT.ageVerification}
+						/>
+					</div>
 					<p>
 						Provide {selectedChild()?.displayName}’s birthdate to refresh their
 						eligibility.

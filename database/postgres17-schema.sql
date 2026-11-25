@@ -2933,6 +2933,13 @@ CREATE UNIQUE INDEX idx_festivals_org_short_name ON orgs.festivals USING btree (
 
 
 --
+-- Name: idx_invites_pending_org_email_lower; Type: INDEX; Schema: orgs; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_invites_pending_org_email_lower ON orgs.invites USING btree (organization_id, lower(email)) WHERE (accepted_at IS NULL);
+
+
+--
 -- Name: idx_memberships_user_org; Type: INDEX; Schema: orgs; Owner: -
 --
 

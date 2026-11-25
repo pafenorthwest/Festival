@@ -3,6 +3,7 @@ import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { AccessDeniedPanel } from "../components/AccessDeniedPanel.js";
 import { Button } from "../components/Button.js";
 import { getAdminFestival } from "../lib/api.js";
+import { readSafeResource } from "../lib/readSafeResource.js";
 import {
 	buildFestivalAdminClassesPath,
 	buildOrgBillingPath,
@@ -65,9 +66,9 @@ export function FestivalAdminDashboardPage(props: {
 					<p role="alert">Festival not found.</p>
 				</section>
 			</Show>
-			<Show when={festival()}>
+			<Show when={readSafeResource(festival)}>
 				<section class="panel">
-					<h2>{festival()?.festival.name}</h2>
+					<h2>{readSafeResource(festival)?.festival.name}</h2>
 					<p>Festival dashboard</p>
 					<div class="admin-card-grid">
 						<button

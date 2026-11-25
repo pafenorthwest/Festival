@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { createRoot } from "solid-js";
+import { useMusicReviewModalState } from "../src/domains/catalog/useMusicReviewModalState.js";
 import {
 	addRepertoireCatalogWork,
 	claimRepertoireReview,
@@ -8,16 +10,19 @@ import {
 	normalizeRepertoireReview,
 	REPERTOIRE_FLAG_REASONS,
 	REPERTOIRE_REVIEW_STATUSES,
+	type RepertoireReviewItem,
 	resolveRepertoireFlag,
 	searchRepertoireCatalog,
 	unclaimRepertoireReview,
 } from "../src/lib/api.js";
 import { buildOrgMusicReviewPath, parseRoute } from "../src/lib/routes.js";
 import {
+	filterReviewQueueItems,
 	formatDuration,
 	formatFlagReason,
 	formatStatus,
 	statusBadgeClass,
+	summarizeReviewQueueItems,
 } from "../src/pages/musicReviewHelpers.js";
 
 const read = (path: string) => Bun.file(new URL(path, import.meta.url)).text();
@@ -29,10 +34,20 @@ afterEach(() => {
 
 describe("repertoire API client", () => {
 	it("exports repertoire constants and validators", () => {
-		expect(REPERTOIRE_REVIEW_STATUSES).toContain("pending");
-		expect(REPERTOIRE_REVIEW_STATUSES).toContain("approved");
+		expect(REPERTOIRE_REVIEW_STATUSES).toEqual([
+			"pending",
+			"claimed",
+			"flagged",
+			"approved",
+		]);
 		expect(REPERTOIRE_FLAG_REASONS).toContain("ambiguous_title");
 		expect(isRepertoireReviewStatus("pending")).toBe(true);
+		expect(isRepertoireReviewStatus("claimed")).toBe(true);
+		expect(isRepertoireReviewStatus("flagged")).toBe(true);
+		expect(isRepertoireReviewStatus("approved")).toBe(true);
+		expect(isRepertoireReviewStatus("in_review")).toBe(false);
+		expect(isRepertoireReviewStatus("needs_follow_up")).toBe(false);
+		expect(isRepertoireReviewStatus("approved_for_publication")).toBe(false);
 		expect(isRepertoireReviewStatus("invalid_status")).toBe(false);
 	});
 
@@ -186,7 +201,7 @@ describe("repertoire API client", () => {
 			"rev-2",
 			{
 				resolutionNotes: "Confirmed BWV 846 with teacher",
-				status: "in_review",
+				status: "pending",
 			},
 			"token-2",
 		);
@@ -196,7 +211,7 @@ describe("repertoire API client", () => {
 		expect(calls[2].method).toBe("POST");
 		expect(calls[2].body).toEqual({
 			resolutionNotes: "Confirmed BWV 846 with teacher",
-			status: "in_review",
+			status: "pending",
 		});
 	});
 
@@ -256,22 +271,180 @@ describe("music review helpers", () => {
 		expect(formatDuration(300)).toBe("5:00");
 	});
 
-	it("formats review status and badges", () => {
+	it("formats review status and badges across the 4 canonical statuses", () => {
 		expect(formatStatus("pending")).toBe("Pending");
-		expect(formatStatus("in_review")).toBe("In Review");
-		expect(formatStatus("approved")).toBe("Approved");
+		expect(formatStatus("claimed")).toBe("Claimed");
 		expect(formatStatus("flagged")).toBe("Flagged");
+		expect(formatStatus("approved")).toBe("Approved");
 
-		expect(statusBadgeClass("approved")).toBe("badge-active");
+		expect(statusBadgeClass("pending")).toBe("badge-review");
 		expect(statusBadgeClass("claimed")).toBe("badge-processing");
 		expect(statusBadgeClass("flagged")).toBe("badge-rejected");
-		expect(statusBadgeClass("pending")).toBe("badge-review");
+		expect(statusBadgeClass("approved")).toBe("badge-active");
 	});
 
 	it("formats flag reasons", () => {
 		expect(formatFlagReason("ambiguous_title")).toBe("Ambiguous Title");
 		expect(formatFlagReason("missing_composer")).toBe("Missing Composer");
 		expect(formatFlagReason("duplicate_work")).toBe("Duplicate Work");
+	});
+
+	it("filters and summarizes queue items across the 4 canonical statuses", () => {
+		const queue: RepertoireReviewItem[] = [
+			makeFlaggedReviewItem({
+				id: "1",
+				status: "pending",
+				isFlagged: false,
+				flagReason: null,
+				rawTitle: "Prelude",
+			}),
+			makeFlaggedReviewItem({
+				id: "2",
+				status: "claimed",
+				isFlagged: false,
+				flagReason: null,
+				claimedByUid: "u-1",
+				rawComposer: "Bach",
+			}),
+			makeFlaggedReviewItem({ id: "3", status: "flagged", isFlagged: true }),
+			makeFlaggedReviewItem({
+				id: "4",
+				status: "approved",
+				isFlagged: false,
+				flagReason: null,
+			}),
+		];
+		expect(summarizeReviewQueueItems(queue)).toEqual({
+			total: 4,
+			pending: 1,
+			inReview: 1,
+			reviewed: 0,
+			flagged: 1,
+			approved: 1,
+		});
+		for (const status of REPERTOIRE_REVIEW_STATUSES) {
+			const matched = filterReviewQueueItems(queue, { statusFilter: status });
+			expect(matched.every((i) => i.status === status)).toBe(true);
+			expect(matched).toHaveLength(1);
+		}
+		expect(
+			filterReviewQueueItems(queue, {
+				statusFilter: "all",
+				myClaimsOnly: true,
+				currentUserId: "u-1",
+			}).map((i) => i.id),
+		).toEqual(["2"]);
+	});
+});
+
+function makeFlaggedReviewItem(
+	overrides: Partial<RepertoireReviewItem> = {},
+): RepertoireReviewItem {
+	return {
+		id: "rev-flagged-1",
+		organizationId: "org-1",
+		rawTitle: "Sonata in C",
+		rawComposer: "Mozart",
+		status: "flagged",
+		isFlagged: true,
+		flagReason: "ambiguous_title",
+		claimedByUid: null,
+		createdAtIso: "2026-01-01T00:00:00.000Z",
+		updatedAtIso: "2026-01-01T00:00:00.000Z",
+		...overrides,
+	};
+}
+
+function installResolveFlagFetchMock(item: RepertoireReviewItem) {
+	const calls: { url: string; body?: Record<string, unknown> }[] = [];
+	globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+		const url = typeof input === "string" ? input : input.toString();
+		const body = init?.body
+			? (JSON.parse(init.body as string) as Record<string, unknown>)
+			: undefined;
+		calls.push({ url, body });
+		return new Response(
+			JSON.stringify({
+				item: {
+					...item,
+					status: body?.status ?? "pending",
+					isFlagged: false,
+					flagReason: null,
+				},
+			}),
+			{ status: 200, headers: { "Content-Type": "application/json" } },
+		);
+	}) as typeof fetch;
+	return calls;
+}
+
+describe("useMusicReviewModalState resolve-flag workflow", () => {
+	it("resolves unclaimed flagged item to canonical pending status (never in_review)", async () => {
+		const item = makeFlaggedReviewItem({ claimedByUid: null });
+		const calls = installResolveFlagFetchMock(item);
+		const updatedItems: RepertoireReviewItem[] = [];
+
+		await createRoot(async (dispose) => {
+			try {
+				const state = useMusicReviewModalState({
+					isOpen: true,
+					item,
+					slug: "pafe",
+					currentUserId: "reviewer-1",
+					onUpdated: (updated) => updatedItems.push(updated),
+				});
+				state.setIsResolving(true);
+				state.setResolutionNotes("  Verified K. 545  ");
+				await state.handleConfirmResolve();
+
+				expect(calls).toHaveLength(1);
+				expect(calls[0].url).toBe(
+					"/api/organizations/pafe/repertoire/queue/rev-flagged-1/resolve-flag",
+				);
+				expect(calls[0].body?.status).not.toBe("in_review");
+				expect(calls[0].body).toEqual({
+					resolutionNotes: "Verified K. 545",
+					status: "pending",
+				});
+				expect(state.isResolving()).toBe(false);
+				expect(updatedItems).toHaveLength(1);
+				expect(updatedItems[0].status).toBe("pending");
+			} finally {
+				dispose();
+			}
+		});
+	});
+
+	it("resolves claimed flagged item to canonical claimed status preserving claimant consistency", async () => {
+		const item = makeFlaggedReviewItem({
+			id: "rev-flagged-2",
+			claimedByUid: "reviewer-1",
+			claimedByName: "Reviewer One",
+		});
+		const calls = installResolveFlagFetchMock(item);
+
+		await createRoot(async (dispose) => {
+			try {
+				const state = useMusicReviewModalState({
+					isOpen: true,
+					item,
+					slug: "pafe",
+					currentUserId: "reviewer-1",
+					onUpdated: () => {},
+				});
+				state.setIsResolving(true);
+				await state.handleConfirmResolve();
+
+				expect(calls).toHaveLength(1);
+				expect(calls[0].body?.status).not.toBe("in_review");
+				expect(calls[0].body).toEqual({
+					resolutionNotes: null,
+					status: "claimed",
+				});
+			} finally {
+				dispose();
+			}
+		});
 	});
 });
 

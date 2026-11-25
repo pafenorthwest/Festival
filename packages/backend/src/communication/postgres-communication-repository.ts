@@ -169,14 +169,6 @@ export class PostgresCommunicationRepository
 		input: CreateMessageTemplateInput & { organizationId: string },
 	): Promise<MessageTemplate> {
 		const id = randomUUID();
-		const maxRows = (await sql.unsafe(
-			`SELECT COALESCE(MAX(version), 0) + 1 AS next_version FROM ${this.schema}.message_templates WHERE organization_id = $1 AND template_key = $2`,
-			[input.organizationId, input.templateKey],
-		)) as Array<{ next_version: number | string }>;
-
-		const version = maxRows[0]?.next_version
-			? Number(maxRows[0].next_version)
-			: 1;
 		const variables =
 			input.variables && input.variables.length > 0
 				? input.variables
@@ -184,26 +176,38 @@ export class PostgresCommunicationRepository
 						input.subject ? `${input.subject} ${input.body}` : input.body,
 					);
 
-		const rows = (await sql.unsafe(
-			`INSERT INTO ${this.schema}.message_templates (
-				id, organization_id, template_key, channel, version, subject, body, variables, is_active, created_at, updated_at
-			) VALUES (
-				$1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, NOW(), NOW()
-			) RETURNING id, organization_id, template_key, channel, version, subject, body, variables, is_active, created_at::text, updated_at::text`,
-			[
-				id,
-				input.organizationId,
-				input.templateKey,
-				input.channel,
-				version,
-				input.subject ?? null,
-				input.body,
-				variables,
-				input.isActive ?? true,
-			],
-		)) as TemplateRow[];
-
-		return mapTemplate(rows[0]);
+		return sql.begin(async (tx) => {
+			await tx.unsafe(
+				`SELECT pg_advisory_xact_lock(hashtextextended($1 || ':' || $2, 0))`,
+				[input.organizationId, input.templateKey],
+			);
+			const maxRows = (await tx.unsafe(
+				`SELECT COALESCE(MAX(version), 0) + 1 AS next_version FROM ${this.schema}.message_templates WHERE organization_id = $1 AND template_key = $2`,
+				[input.organizationId, input.templateKey],
+			)) as Array<{ next_version: number | string }>;
+			const version = maxRows[0]?.next_version
+				? Number(maxRows[0].next_version)
+				: 1;
+			const rows = (await tx.unsafe(
+				`INSERT INTO ${this.schema}.message_templates (
+					id, organization_id, template_key, channel, version, subject, body, variables, is_active, created_at, updated_at
+				) VALUES (
+					$1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, NOW(), NOW()
+				) RETURNING id, organization_id, template_key, channel, version, subject, body, variables, is_active, created_at::text, updated_at::text`,
+				[
+					id,
+					input.organizationId,
+					input.templateKey,
+					input.channel,
+					version,
+					input.subject ?? null,
+					input.body,
+					variables,
+					input.isActive ?? true,
+				],
+			)) as TemplateRow[];
+			return mapTemplate(rows[0]);
+		});
 	}
 
 	async getTemplate(

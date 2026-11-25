@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
 import { TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS } from "@festival/common";
 import { InMemoryCheckoutRecoveryRepository } from "../src/checkout/checkout-recovery-repository.js";
@@ -17,10 +17,12 @@ import type { MembershipCheckoutStorefront } from "../src/checkout/membership-ch
 import { AppError } from "../src/errors/app-error.js";
 import { InMemoryOrganizationRepository } from "../src/repo/in-memory-organization-repository.js";
 
-async function setupServiceTest() {
+const recoveryNow = () => new Date("2026-09-27T12:00:00.000Z");
+
+async function setupServiceTest(shopPrimaryDomainUrl?: string) {
 	const orgRepo = new InMemoryOrganizationRepository();
 	const recoveryRepo = new InMemoryCheckoutRecoveryRepository();
-	const checkoutRepo = new InMemoryCheckoutRepository();
+	const checkoutRepo = new InMemoryCheckoutRepository(recoveryNow);
 	const auditLogger = new InMemoryCheckoutRecoveryAuditLogger();
 
 	const org = await orgRepo.createOrganization({
@@ -59,7 +61,10 @@ async function setupServiceTest() {
 		},
 		async checkout(input) {
 			storefrontCalls.push({ action: "checkout", ...input });
-			return { checkoutUrl: "https://store.myshopify.com/checkout/c100" };
+			return {
+				checkoutUrl: `${shopPrimaryDomainUrl ?? "https://store.myshopify.com"}/checkout/c100`,
+				...(shopPrimaryDomainUrl ? { shopPrimaryDomainUrl } : {}),
+			};
 		},
 	};
 
@@ -69,7 +74,7 @@ async function setupServiceTest() {
 		auditLogger,
 		checkoutRepository: checkoutRepo,
 		storefront,
-		now: () => new Date("2026-09-27T12:00:00.000Z"),
+		now: recoveryNow,
 	});
 
 	return {
@@ -83,6 +88,67 @@ async function setupServiceTest() {
 		storefront,
 		storefrontCalls,
 		service,
+	};
+}
+
+async function setupMembershipRecovery(shopPrimaryDomainUrl?: string) {
+	const ctx = await setupServiceTest(shopPrimaryDomainUrl);
+	const rawToken = "test-token-resume-member";
+	const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+	const customerId = "cust-1";
+	const session = {
+		sessionId: "sess-resumed",
+		integrationVersion: 1,
+		buyerAccessToken: "token-buyer",
+	};
+	const source = await ctx.checkoutRepo.createIntent({
+		organizationId: ctx.org.id,
+		customerId,
+		sessionId: "sess-source",
+		idempotencyKey: `idem-${randomUUID()}`,
+		intentType: "membership",
+		offeringId: ctx.offering.id,
+		entitlementClass: "teacher_membership",
+		durationDays: 365,
+		shopifyProductGid: "gid://shopify/Product/1",
+		shopifyVariantGid: "gid://shopify/ProductVariant/1",
+		divisionId: ctx.division.id,
+		divisionNameSnapshot: "Senior Strings",
+		staffAccessConsent: true,
+		amount: "50.00",
+		currencyCode: "USD",
+		expiresAtIso: "2030-01-01T00:00:00.000Z",
+	});
+	if (source.kind !== "created") throw new Error("setup failed");
+	ctx.recoveryRepo.addIntent(source.intent);
+	const request = await ctx.recoveryRepo.createRecoveryRequest({
+		organizationId: ctx.org.id,
+		sourceCheckoutIntentId: source.intent.id,
+		customerId,
+		tokenHash,
+		requestedByActorUid: "admin-1",
+		expiresAtIso: "2030-01-01T00:00:00.000Z",
+	});
+
+	return {
+		...ctx,
+		getSource: () => ctx.checkoutRepo.getOutcome(source.intent),
+		resume: () =>
+			ctx.service.resumeCustomerCheckout(
+				ctx.org.slug,
+				rawToken,
+				customerId,
+				session,
+			),
+		getRequest: () =>
+			ctx.recoveryRepo.findRecoveryRequestByTokenHash(tokenHash, ctx.org.id),
+		getReplacement: () =>
+			ctx.checkoutRepo.getOutcome({
+				organizationId: ctx.org.id,
+				customerId,
+				sessionId: session.sessionId,
+				idempotencyKey: `recovery:${request.id}`,
+			}),
 	};
 }
 
@@ -360,76 +426,161 @@ describe("CheckoutRecoveryService - Issue #259 class_entry recovery guardrails",
 			expect(resumeEvents).toHaveLength(0);
 		});
 
-		it("resumes membership recovery successfully", async () => {
-			const ctx = await setupServiceTest();
-			const rawToken = "test-token-resume-member";
-			const tokenHash = createHash("sha256").update(rawToken).digest("hex");
-
-			// Seed intent in checkoutRepo first
-			const created = await ctx.checkoutRepo.createIntent({
-				organizationId: ctx.org.id,
-				customerId: "cust-1",
-				sessionId: "sess-source",
-				idempotencyKey: `idem-${randomUUID()}`,
-				intentType: "membership",
-				offeringId: ctx.offering.id,
-				entitlementClass: "teacher_membership",
-				durationDays: 365,
-				shopifyProductGid: "gid://shopify/Product/1",
-				shopifyVariantGid: "gid://shopify/ProductVariant/1",
-				divisionId: ctx.division.id,
-				divisionNameSnapshot: "Senior Strings",
-				staffAccessConsent: true,
-				amount: "50.00",
-				currencyCode: "USD",
-				expiresAtIso: "2030-01-01T00:00:00.000Z",
-			});
-			if (created.kind !== "created") throw new Error("setup failed");
-			const memberIntent = created.intent;
-			ctx.recoveryRepo.addIntent(memberIntent);
-
-			await ctx.recoveryRepo.createRecoveryRequest({
-				organizationId: ctx.org.id,
-				sourceCheckoutIntentId: memberIntent.id,
-				customerId: "cust-1",
-				tokenHash,
-				requestedByActorUid: "admin-1",
-				expiresAtIso: "2030-01-01T00:00:00.000Z",
+		it.each([
+			{ type: "the API domain", shopPrimaryDomainUrl: undefined },
+			{
+				type: "Shopify's primary domain",
+				shopPrimaryDomainUrl: "https://branded-store.myshopify.com",
+			},
+		])("resumes membership recovery using $type", async ({
+			shopPrimaryDomainUrl,
+		}) => {
+			const ctx = await setupMembershipRecovery(shopPrimaryDomainUrl);
+			await expect(ctx.resume()).resolves.toEqual({
+				checkoutUrl: `${shopPrimaryDomainUrl ?? "https://store.myshopify.com"}/checkout/c100`,
 			});
 
-			const result = await ctx.service.resumeCustomerCheckout(
-				ctx.org.slug,
-				rawToken,
-				"cust-1",
+			expect(await ctx.getRequest()).toMatchObject({ status: "consumed" });
+			expect(await ctx.getSource()).toMatchObject({ kind: "failed" });
+			expect(await ctx.getReplacement()).toMatchObject({
+				intent: { status: "checkout_started" },
+				cart: { status: "checkout_started" },
+			});
+			expect(ctx.storefrontCalls).toHaveLength(2);
+			expect(ctx.storefrontCalls[1]).toMatchObject({
+				action: "checkout",
+				includeShopPrimaryDomain: true,
+			});
+		});
+
+		it("reuses the attached cart when the Storefront binding changes during checkout lookup", async () => {
+			const primaryDomainUrl = "https://primary.example.com";
+			const ctx = await setupMembershipRecovery(primaryDomainUrl);
+			const checkout = ctx.storefront.checkout.bind(ctx.storefront);
+			const checkoutSpy = spyOn(
+				ctx.storefront,
+				"checkout",
+			).mockImplementationOnce(async (input) => {
+				const result = await checkout(input);
+				await ctx.orgRepo.upsertShopifyIntegration({
+					organizationId: ctx.org.id,
+					storeDomain: "renamed.myshopify.com",
+					clientId: "client-id",
+					encryptedClientSecret: "updated-secret",
+				});
+				return result;
+			});
+
+			await expect(ctx.resume()).rejects.toMatchObject({
+				status: 503,
+				code: "checkout_retryable_upstream",
+			});
+			expect(await ctx.getRequest()).toMatchObject({
+				status: "pending",
+				consumedAtIso: null,
+			});
+			const replacement = await ctx.getReplacement();
+			expect(replacement).toMatchObject({
+				kind: "ready",
+				intent: { status: "ready" },
+				cart: { shopifyCartId: "gid://shopify/Cart/100", status: "ready" },
+			});
+			expect(ctx.auditLogger.events).toHaveLength(0);
+
+			await expect(ctx.resume()).resolves.toEqual({
+				checkoutUrl: `${primaryDomainUrl}/checkout/c100`,
+			});
+
+			expect(checkoutSpy.mock.calls.map(([input]) => input)).toMatchObject([
 				{
-					sessionId: "sess-resumed",
-					integrationVersion: 1,
-					buyerAccessToken: "token-buyer",
+					shopifyCartId: "gid://shopify/Cart/100",
+					expectedStorefrontBinding: {
+						shopDomain: "store.myshopify.com",
+						integrationVersion: 1,
+					},
 				},
+				{
+					shopifyCartId: "gid://shopify/Cart/100",
+					expectedStorefrontBinding: {
+						shopDomain: "renamed.myshopify.com",
+						integrationVersion: 2,
+					},
+				},
+			]);
+			expect(ctx.storefrontCalls.map(({ action }) => action)).toEqual([
+				"createCart",
+				"checkout",
+				"checkout",
+			]);
+			expect(await ctx.getRequest()).toMatchObject({ status: "consumed" });
+			expect(await ctx.getReplacement()).toMatchObject({
+				intent: { status: "checkout_started" },
+				cart: { status: "checkout_started" },
+			});
+		});
+
+		it("allows one concurrent retry to complete recovery after finalization failed", async () => {
+			const ctx = await setupMembershipRecovery();
+			const complete = spyOn(
+				ctx.recoveryRepo,
+				"completeRecoveryCheckout",
+			).mockRejectedValueOnce(new Error("Checkout commit failed."));
+			const markStarted = spyOn(
+				ctx.checkoutRepo,
+				"markRecoveryCheckoutStarted",
 			);
 
-			expect(result.checkoutUrl).toBe(
-				"https://store.myshopify.com/checkout/c100",
-			);
+			await expect(ctx.resume()).rejects.toBeInstanceOf(Error);
+			expect(await ctx.getRequest()).toMatchObject({
+				status: "pending",
+				consumedAtIso: null,
+			});
+			const ready = await ctx.getReplacement();
+			if (ready?.kind !== "ready")
+				throw new Error("expected a ready replacement");
 
-			// Check old intent marked failed in checkoutRepo
-			const checkoutIntents = (
-				ctx.checkoutRepo as unknown as {
-					intents: Map<string, CheckoutIntentRecord>;
-				}
-			).intents;
-			expect(checkoutIntents.get(memberIntent.id)?.status).toBe("failed");
+			const checkout = ctx.storefront.checkout.bind(ctx.storefront);
+			const bothLookingUp = Promise.withResolvers<void>();
+			let lookups = 0;
+			spyOn(ctx.storefront, "checkout").mockImplementation(async (input) => {
+				const result = await checkout(input);
+				lookups += 1;
+				if (lookups === 2) bothLookingUp.resolve();
+				await bothLookingUp.promise;
+				return result;
+			});
 
-			// Check recovery request consumed
-			const storedRequest =
-				await ctx.recoveryRepo.findRecoveryRequestByTokenHash(
-					tokenHash,
-					ctx.org.id,
-				);
-			expect(storedRequest?.status).toBe("consumed");
-
-			// Check storefront called
-			expect(ctx.storefrontCalls).toHaveLength(2); // createCart + checkout
+			const results = await Promise.allSettled([
+				ctx.resume().finally(bothLookingUp.resolve),
+				ctx.resume().finally(bothLookingUp.resolve),
+			]);
+			expect(results).toContainEqual({
+				status: "fulfilled",
+				value: { checkoutUrl: "https://store.myshopify.com/checkout/c100" },
+			});
+			expect(results).toContainEqual({
+				status: "rejected",
+				reason: expect.objectContaining({ status: 409 }),
+			});
+			expect(complete).toHaveBeenCalledTimes(3);
+			expect(markStarted).toHaveBeenCalledTimes(1);
+			expect(ctx.storefrontCalls.map(({ action }) => action)).toEqual([
+				"createCart",
+				"checkout",
+				"checkout",
+				"checkout",
+			]);
+			expect(await ctx.getRequest()).toMatchObject({
+				status: "consumed",
+				consumedAtIso: expect.any(String),
+			});
+			expect(await ctx.getReplacement()).toMatchObject({
+				intent: { status: "checkout_started" },
+				cart: { status: "checkout_started" },
+			});
+			expect(ctx.auditLogger.events).toMatchObject([
+				{ action: "resume_checkout", intentId: ready.intent.id },
+			]);
 		});
 	});
 });

@@ -1,6 +1,10 @@
 import { createHash, randomBytes } from "node:crypto";
+import { isAllowedCheckoutUrl } from "../domains/class-checkout/checkout-recovery-helpers.js";
 import { AppError } from "../errors/app-error.js";
-import type { OrganizationRepository } from "../repo/organization-repository.js";
+import type {
+	OrganizationRepository,
+	ShopifyIntegrationRecord,
+} from "../repo/organization-repository.js";
 import type {
 	CheckoutRecoveryRepository,
 	CheckoutRecoveryRequestRecord,
@@ -8,9 +12,10 @@ import type {
 	RecoverableCheckoutIntentRecord,
 } from "./checkout-recovery-repository.js";
 import type {
-	CheckoutIntentRecord,
+	CheckoutIntentOutcome,
 	CheckoutRepository,
 } from "./checkout-repository.js";
+import { retryableCheckoutError } from "./membership-checkout-helpers.js";
 import type { MembershipCheckoutStorefront } from "./membership-checkout-service.js";
 
 export const DEFAULT_EXPIRY_HOURS = 24;
@@ -198,19 +203,9 @@ export function assertSourceIntentValid(
 export function assertAllowedCheckoutUrl(
 	value: string,
 	storeDomain: string,
+	shopPrimaryDomainUrl?: string,
 ): void {
-	try {
-		const url = new URL(value);
-		if (
-			url.protocol === "https:" &&
-			url.hostname === storeDomain.toLowerCase() &&
-			url.port === ""
-		) {
-			return;
-		}
-	} catch {
-		// fall through
-	}
+	if (isAllowedCheckoutUrl(value, storeDomain, shopPrimaryDomainUrl)) return;
 	throw new AppError("Shopify checkout is unavailable.", 503);
 }
 
@@ -248,12 +243,16 @@ export async function resolveRecoveryCustomerId(
 	return providedCustomerId;
 }
 
-function assertRecoveryIntentCreated(outcome: {
-	kind: string;
-	intent?: CheckoutIntentRecord;
-}): CheckoutIntentRecord {
-	if (outcome.kind === "created" && outcome.intent) {
-		return outcome.intent;
+type RecoveryCheckoutIntent = Extract<
+	CheckoutIntentOutcome,
+	{ kind: "created" | "ready" }
+>;
+
+function requireRecoveryCheckoutIntent(
+	outcome: CheckoutIntentOutcome,
+): RecoveryCheckoutIntent {
+	if (outcome.kind === "created" || outcome.kind === "ready") {
+		return outcome;
 	}
 	if (outcome.kind === "in_progress") {
 		throw new AppError(
@@ -279,7 +278,7 @@ function assertRecoveryIntentCreated(outcome: {
 	);
 }
 
-export async function createNewCheckoutIntent(params: {
+export async function getOrCreateRecoveryCheckoutIntent(params: {
 	checkoutRepository: CheckoutRepository;
 	organizationId: string;
 	customerId: string;
@@ -289,7 +288,7 @@ export async function createNewCheckoutIntent(params: {
 	division: { id: string; displayName: string } | null;
 	offering: RecoveryReviewOffering | null;
 	now: Date;
-}): Promise<CheckoutIntentRecord> {
+}): Promise<RecoveryCheckoutIntent> {
 	const expiresAtIso = new Date(
 		params.now.getTime() + 30 * 60_000,
 	).toISOString();
@@ -314,55 +313,89 @@ export async function createNewCheckoutIntent(params: {
 			params.offering?.price.currencyCode ?? params.sourceIntent.currencyCode,
 		expiresAtIso,
 	});
-	return assertRecoveryIntentCreated(outcome);
+	return requireRecoveryCheckoutIntent(outcome);
 }
 
-export async function createStorefrontCheckout(params: {
+export async function resolveRecoveryCheckoutUrl(params: {
 	storefront: MembershipCheckoutStorefront;
 	checkoutRepository: CheckoutRepository;
 	organizationRepository: OrganizationRepository;
 	organizationId: string;
 	customerId: string;
 	session: CustomerRecoveryCheckoutSession;
-	intent: CheckoutIntentRecord;
+	outcome: RecoveryCheckoutIntent;
+	storefrontIntegration: ShopifyIntegrationRecord;
 }): Promise<string> {
+	const { outcome, storefrontIntegration } = params;
+	const cart =
+		outcome.kind === "ready"
+			? outcome.cart
+			: await attachRecoveryCart(params, outcome.intent);
+	if (cart.integrationVersion !== params.session.integrationVersion) {
+		throw retryableCheckoutError();
+	}
 	try {
-		const upstream = await params.storefront.createCart({
-			organizationId: params.organizationId,
-			shopifyVariantGid: params.intent.shopifyVariantGid,
-			buyerAccessToken: params.session.buyerAccessToken,
-			correlationId: params.intent.correlationId,
-		});
-		const cart = await params.checkoutRepository.attachCart({
-			intentId: params.intent.id,
-			shopifyCartId: upstream.shopifyCartId,
-			organizationId: params.organizationId,
-			customerId: params.customerId,
-			sessionId: params.session.sessionId,
-			integrationVersion: params.session.integrationVersion,
-			expiresAtIso: params.intent.expiresAtIso,
-		});
-		await params.checkoutRepository.markCheckoutStarted(params.intent.id);
 		const checkout = await params.storefront.checkout({
 			organizationId: params.organizationId,
 			shopifyCartId: cart.shopifyCartId,
+			expectedStorefrontBinding: {
+				shopDomain: storefrontIntegration.storeDomain,
+				integrationVersion: storefrontIntegration.integrationVersion,
+			},
+			includeShopPrimaryDomain: true,
 		});
 		const integration =
 			await params.organizationRepository.getShopifyIntegration(
 				params.organizationId,
 			);
-		if (!integration) {
-			throw new AppError("Shopify checkout is unavailable.", 503);
+		if (
+			!integration ||
+			integration.integrationVersion !==
+				storefrontIntegration.integrationVersion ||
+			integration.storeDomain !== storefrontIntegration.storeDomain
+		) {
+			throw retryableCheckoutError();
 		}
-		assertAllowedCheckoutUrl(checkout.checkoutUrl, integration.storeDomain);
-		return checkout.checkoutUrl;
-	} catch (error) {
-		await params.checkoutRepository.markFailed(params.intent.id);
-		if (error instanceof AppError) throw error;
-		throw new AppError(
-			"Shopify checkout is temporarily unavailable. Please try again.",
-			503,
-			"checkout_retryable_upstream",
+		assertAllowedCheckoutUrl(
+			checkout.checkoutUrl,
+			integration.storeDomain,
+			checkout.shopPrimaryDomainUrl,
 		);
+		return checkout.checkoutUrl;
+	} catch {
+		throw retryableCheckoutError();
+	}
+}
+
+async function attachRecoveryCart(
+	params: {
+		storefront: MembershipCheckoutStorefront;
+		checkoutRepository: CheckoutRepository;
+		organizationId: string;
+		customerId: string;
+		session: CustomerRecoveryCheckoutSession;
+	},
+	intent: RecoveryCheckoutIntent["intent"],
+) {
+	try {
+		const upstream = await params.storefront.createCart({
+			organizationId: params.organizationId,
+			shopifyVariantGid: intent.shopifyVariantGid,
+			buyerAccessToken: params.session.buyerAccessToken,
+			correlationId: intent.correlationId,
+		});
+		return await params.checkoutRepository.attachCart({
+			intentId: intent.id,
+			shopifyCartId: upstream.shopifyCartId,
+			organizationId: params.organizationId,
+			customerId: params.customerId,
+			sessionId: params.session.sessionId,
+			integrationVersion: params.session.integrationVersion,
+			expiresAtIso: intent.expiresAtIso,
+		});
+	} catch (error) {
+		await params.checkoutRepository.markFailed(intent.id);
+		if (error instanceof AppError) throw error;
+		throw retryableCheckoutError();
 	}
 }

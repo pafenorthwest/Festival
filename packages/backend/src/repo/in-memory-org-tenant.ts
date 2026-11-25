@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
-import type {
-	AccompanistDivisionSelectionPolicy,
-	AuthenticatedUser,
-	OrganizationAdminUserEntry,
-	OrganizationInviteRecord,
-	OrganizationMembershipRecord,
-	OrganizationRecord,
-	OrganizationUserRecord,
-	RegistrationAgeConfiguration,
+import {
+	type AccompanistDivisionSelectionPolicy,
+	AppError,
+	type AuthenticatedUser,
+	type OrganizationAdminUserEntry,
+	type OrganizationInviteRecord,
+	type OrganizationMembershipRecord,
+	type OrganizationRecord,
+	type OrganizationUserRecord,
+	type RegistrationAgeConfiguration,
 } from "@festival/common";
 import type { InMemoryOrgState } from "./in-memory-org-state.js";
 import type {
@@ -164,11 +165,21 @@ export function inMemCreateInvite(
 	state: InMemoryOrgState,
 	input: CreateInviteRecordInput,
 ): OrganizationInviteRecord {
+	const normalizedEmail = input.email.trim().toLowerCase();
+	const duplicatePending = [...state.invites.values()].some(
+		(existing) =>
+			existing.organizationId === input.organizationId &&
+			!existing.acceptedAtIso &&
+			existing.email.trim().toLowerCase() === normalizedEmail,
+	);
+	if (duplicatePending) {
+		throw new AppError("That email has already been added.", 409);
+	}
 	const invite: OrganizationInviteRecord = {
 		id: randomUUID(),
 		token: randomUUID(),
 		organizationId: input.organizationId,
-		email: input.email.toLowerCase(),
+		email: normalizedEmail,
 		role: input.role,
 		invitedByUserId: input.invitedByUserId,
 		createdAtIso: new Date().toISOString(),
@@ -176,6 +187,44 @@ export function inMemCreateInvite(
 	state.invites.set(invite.id, invite);
 	state.invitesByToken.set(invite.token, invite.id);
 	return invite;
+}
+
+export function inMemAcceptInvite(
+	state: InMemoryOrgState,
+	input: { token: string; user: AuthenticatedUser },
+): MembershipWithOrganization {
+	const record = inMemFindInviteByToken(state, input.token);
+	if (!record) throw new AppError("Invite not found.", 404);
+	const normalizedEmail = input.user.email.trim().toLowerCase();
+	if (record.invite.email.trim().toLowerCase() !== normalizedEmail) {
+		throw new AppError(
+			"Invite email does not match the authenticated user.",
+			403,
+		);
+	}
+	if (record.invite.acceptedAtIso) {
+		throw new AppError("Invite has already been accepted.", 409);
+	}
+
+	inMemMarkInviteAccepted(state, input.token);
+	const user = inMemUpsertUser(state, {
+		...input.user,
+		email: normalizedEmail,
+	});
+	const existing = inMemFindMembershipByUserAndSlug(
+		state,
+		user.id,
+		record.organization.slug,
+	);
+	const membership =
+		existing?.membership ??
+		inMemCreateMembership(state, {
+			organizationId: record.organization.id,
+			userId: user.id,
+			role: record.invite.role,
+			origin: "invite",
+		});
+	return { membership, organization: record.organization };
 }
 
 export function inMemFindInviteByToken(

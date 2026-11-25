@@ -2,6 +2,7 @@ import {
 	CUSTOMER_STAFF_ACCESS_PRIVACY_NOTICE_VERSION,
 	calendarDaysUntil,
 	deriveEntitlementDates,
+	normalizeVerifiedShopifyIdentityEmail,
 	TEACHER_MEMBERSHIP_ENTITLEMENT_CLASS,
 	TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS,
 } from "@festival/common";
@@ -185,6 +186,43 @@ async function validateMembershipRenewalWindow(
 	return blockedActive ? "duplicate_purchase" : undefined;
 }
 
+function hasValidOrderIdentityEmail(email: string | undefined): boolean {
+	if (!email) return false;
+	try {
+		normalizeVerifiedShopifyIdentityEmail(email);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function validateMembershipLineAndMoney(
+	intent: CheckoutIntentRecord,
+	order: ShopifyPaidOrder,
+): MembershipReasonCode | undefined {
+	const line = order.lineItems[0];
+	if (
+		order.lineItems.length !== 1 ||
+		line?.productGid !== intent.shopifyProductGid ||
+		line?.variantGid !== intent.shopifyVariantGid ||
+		line?.quantity !== 1
+	) {
+		return "offering_mismatch";
+	}
+	if (
+		order.currencyCode !== intent.currencyCode ||
+		!hasMatchingPaidMoney(
+			intent.amount,
+			intent.currencyCode,
+			line.paidAmount,
+			line.paidCurrencyCode,
+		)
+	) {
+		return "payment_mismatch";
+	}
+	return undefined;
+}
+
 export async function validateMembershipPurchase(
 	deps: ProjectionServiceDeps,
 	organizationId: string,
@@ -207,25 +245,10 @@ export async function validateMembershipPurchase(
 	if (!customer || customer.shopifyCustomerGid !== order.customerGid) {
 		return "customer_mismatch";
 	}
-	const line = order.lineItems[0];
-	if (
-		order.lineItems.length !== 1 ||
-		line?.productGid !== intent.shopifyProductGid ||
-		line?.variantGid !== intent.shopifyVariantGid ||
-		line?.quantity !== 1
-	) {
-		return "offering_mismatch";
-	}
-	if (
-		order.currencyCode !== intent.currencyCode ||
-		!hasMatchingPaidMoney(
-			intent.amount,
-			intent.currencyCode,
-			line.paidAmount,
-			line.paidCurrencyCode,
-		)
-	) {
-		return "payment_mismatch";
+	const lineReason = validateMembershipLineAndMoney(intent, order);
+	if (lineReason) return lineReason;
+	if (!hasValidOrderIdentityEmail(order.customerEmail)) {
+		return "upstream_invalid";
 	}
 	return validateMembershipRenewalWindow(
 		deps,

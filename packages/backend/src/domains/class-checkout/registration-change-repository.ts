@@ -12,6 +12,7 @@ import {
 import { sql } from "bun";
 import { initializePostgresSchema } from "../../infra/s11-infra.js";
 import { validateCheckoutSchemaName } from "./checkout-intent-helpers.js";
+import type { SqlRunner } from "./registration-metadata-queries.js";
 
 export interface CreateRegistrationChangeLogInput {
 	id?: string;
@@ -84,6 +85,9 @@ export function normalizeUpdateRefundEventInput(
 
 export interface RegistrationChangeRepository {
 	ensureReady?(): Promise<void>;
+	prepareTransaction?(): Promise<void>;
+	withTransaction?(tx: SqlRunner): RegistrationChangeRepository;
+	createTransactionSnapshot?(): () => void;
 	createChangeLog(
 		input: CreateRegistrationChangeLogInput,
 	): Promise<RegistrationChangeLog>;
@@ -195,12 +199,23 @@ export class PostgresRegistrationChangeRepository
 {
 	private readonly schema: string;
 
-	constructor(schema: string) {
+	constructor(
+		schema: string,
+		private readonly db: SqlRunner = sql,
+	) {
 		this.schema = validateCheckoutSchemaName(schema);
 	}
 
 	async ensureReady(): Promise<void> {
 		await initializePostgresSchema(this.schema);
+	}
+
+	async prepareTransaction(): Promise<void> {
+		await this.ensureReady();
+	}
+
+	withTransaction(tx: SqlRunner): PostgresRegistrationChangeRepository {
+		return new PostgresRegistrationChangeRepository(this.schema, tx);
 	}
 
 	async createChangeLog(
@@ -213,7 +228,7 @@ export class PostgresRegistrationChangeRepository
 			throw new Error(`Invalid registration actor role: ${input.actorRole}`);
 		}
 		const id = input.id ?? randomUUID();
-		const rows = (await sql.unsafe(
+		const rows = (await this.db.unsafe(
 			`INSERT INTO ${this.schema}.registration_change_logs (
 				id, organization_id, festival_id, class_entitlement_id,
 				action, actor_uid, actor_role, previous_state, new_state, reason
@@ -241,13 +256,13 @@ export class PostgresRegistrationChangeRepository
 	): Promise<RegistrationChangeLog[]> {
 		const rows = (
 			maybeEntitlementId !== undefined
-				? await sql.unsafe(
+				? await this.db.unsafe(
 						`SELECT * FROM ${this.schema}.registration_change_logs
 						WHERE organization_id = $1 AND class_entitlement_id = $2
 						ORDER BY created_at DESC, id DESC`,
 						[orgOrEntitlementId, maybeEntitlementId],
 					)
-				: await sql.unsafe(
+				: await this.db.unsafe(
 						`SELECT * FROM ${this.schema}.registration_change_logs
 						WHERE class_entitlement_id = $1
 						ORDER BY created_at DESC, id DESC`,
@@ -265,7 +280,7 @@ export class PostgresRegistrationChangeRepository
 			throw new Error("Refund amountCents must be a non-negative integer.");
 		}
 		const id = input.id ?? randomUUID();
-		const rows = (await sql.unsafe(
+		const rows = (await this.db.unsafe(
 			`INSERT INTO ${this.schema}.refund_events (
 				id, organization_id, registration_change_log_id,
 				class_entitlement_id, shopify_order_id, shopify_order_line_id,
@@ -295,13 +310,13 @@ export class PostgresRegistrationChangeRepository
 	): Promise<RefundEvent | null> {
 		const rows = (
 			maybeId !== undefined
-				? await sql.unsafe(
+				? await this.db.unsafe(
 						`SELECT * FROM ${this.schema}.refund_events
 						WHERE organization_id = $1 AND id = $2
 						LIMIT 1`,
 						[orgOrId, maybeId],
 					)
-				: await sql.unsafe(
+				: await this.db.unsafe(
 						`SELECT * FROM ${this.schema}.refund_events
 						WHERE id = $1
 						LIMIT 1`,
@@ -327,7 +342,7 @@ export class PostgresRegistrationChangeRepository
 		const reason = normalized.failureReason ?? null;
 		const rows = (
 			normalized.organizationId !== undefined
-				? await sql.unsafe(
+				? await this.db.unsafe(
 						`UPDATE ${this.schema}.refund_events
 						SET status = $1,
 							shopify_refund_id = COALESCE($2, shopify_refund_id),
@@ -343,7 +358,7 @@ export class PostgresRegistrationChangeRepository
 							normalized.id,
 						],
 					)
-				: await sql.unsafe(
+				: await this.db.unsafe(
 						`UPDATE ${this.schema}.refund_events
 						SET status = $1,
 							shopify_refund_id = COALESCE($2, shopify_refund_id),

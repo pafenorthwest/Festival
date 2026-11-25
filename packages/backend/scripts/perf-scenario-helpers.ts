@@ -1,12 +1,37 @@
 import { appendFileSync } from "node:fs";
 
+export const DEFAULT_CONCURRENCY = 500;
+export const PEAK_CONCURRENCY = 1000;
+export const MAX_CONCURRENCY = 1000;
+
 export interface ScenarioConfig {
 	baseUrl: string;
 	slug: string;
 	festival: string;
 	classId: string;
+	divisionId: string;
+	openClassId: string;
+	concurrency: number;
 	origin: string;
-	scenario: "1" | "2" | "3" | "4" | "all";
+	scenario: "1" | "2" | "3" | "4" | "5" | "all";
+}
+
+export interface ScenarioResult {
+	summary: string;
+	errorCount: number;
+}
+
+export interface IndexRange {
+	start: number;
+	end: number;
+}
+
+export interface ScenarioIndexRanges {
+	s1: IndexRange;
+	s2: IndexRange;
+	s3: IndexRange;
+	s4: IndexRange;
+	s5: IndexRange;
 }
 
 export interface MetricStats {
@@ -26,6 +51,7 @@ export interface MetricStats {
 export interface StepResult {
 	label: string;
 	status: number;
+	expectedStatus?: number;
 	latencyMs: number;
 	childId?: string;
 	errorSnippet?: string;
@@ -36,29 +62,79 @@ export interface ParseConfigOptions {
 	argv?: readonly string[];
 }
 
+export function computePeakConcurrency(concurrency: number): number {
+	return Math.min(
+		MAX_CONCURRENCY,
+		concurrency >= DEFAULT_CONCURRENCY ? PEAK_CONCURRENCY : concurrency * 2,
+	);
+}
+
+export function computeScenarioIndexRanges(
+	concurrency: number,
+): ScenarioIndexRanges {
+	const peak = computePeakConcurrency(concurrency);
+	const withdrawCount = Math.floor(concurrency / 2);
+	const joinCount = concurrency - withdrawCount;
+	return {
+		s1: { start: 1, end: concurrency },
+		s2: { start: 1001, end: 1000 + concurrency },
+		s3: { start: 2001, end: 2000 + peak },
+		s4: { start: 3001, end: 3000 + concurrency + joinCount },
+		s5: { start: 4501, end: 4500 + concurrency },
+	};
+}
+
+export function authHeaders(
+	config: ScenarioConfig,
+	index: number,
+): Record<string, string> {
+	const id = String(index).padStart(4, "0");
+	return {
+		Origin: config.origin,
+		Cookie: `festival_customer_session=perf-sess-${id}`,
+		"X-CSRF-Token": `perf-csrf-${id}`,
+		"Content-Type": "application/json",
+	};
+}
+
 function normalizeScenario(
 	raw: string | undefined,
 ): ScenarioConfig["scenario"] {
 	const cleaned = raw?.trim().toLowerCase();
 	const normalized =
-		cleaned && /^s[1-4]$/.test(cleaned) ? cleaned.slice(1) : cleaned;
-	const valid = ["1", "2", "3", "4", "all"] as const;
+		cleaned && /^s[1-5]$/.test(cleaned) ? cleaned.slice(1) : cleaned;
+	const valid = ["1", "2", "3", "4", "5", "all"] as const;
 	return valid.includes(normalized as (typeof valid)[number])
 		? (normalized as ScenarioConfig["scenario"])
 		: "all";
 }
 
+function parseConcurrency(raw: string | undefined): number {
+	if (raw === undefined || raw.trim() === "") return DEFAULT_CONCURRENCY;
+	const parsed = Number(raw.trim());
+	if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_CONCURRENCY) {
+		throw new Error(
+			`Invalid concurrency "${raw}": must be an integer between 1 and ${MAX_CONCURRENCY}.`,
+		);
+	}
+	return parsed;
+}
+
 function parseCliFlags(argv: readonly string[]) {
 	let scenario: string | undefined;
 	let baseUrl: string | undefined;
+	let concurrency: string | undefined;
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i] ?? "";
 		if (arg === "--scenario" && i + 1 < argv.length) scenario = argv[++i];
 		else if (arg.startsWith("--scenario=")) scenario = arg.slice(11);
 		else if (arg === "--base-url" && i + 1 < argv.length) baseUrl = argv[++i];
 		else if (arg.startsWith("--base-url=")) baseUrl = arg.slice(11);
+		else if (arg === "--concurrency" && i + 1 < argv.length)
+			concurrency = argv[++i];
+		else if (arg.startsWith("--concurrency=")) concurrency = arg.slice(14);
 	}
-	return { scenario, baseUrl };
+	return { scenario, baseUrl, concurrency };
 }
 
 export function parseConfig(options?: ParseConfigOptions): ScenarioConfig {
@@ -75,6 +151,10 @@ export function parseConfig(options?: ParseConfigOptions): ScenarioConfig {
 		slug: env.SLUG?.trim() || "perf-test",
 		festival: env.FESTIVAL?.trim() || "perf-2026",
 		classId: env.CLASS_ID?.trim() || "perf-class-01",
+		divisionId:
+			env.DIVISION_ID?.trim() || "11111111-1111-4111-8111-111111111111",
+		openClassId: env.OPEN_CLASS_ID?.trim() || "perf-class-open-01",
+		concurrency: parseConcurrency(flags.concurrency ?? env.CONCURRENCY),
 		origin: new URL(baseUrl).origin,
 		scenario: normalizeScenario(flags.scenario ?? env.SCENARIO),
 	};
@@ -185,8 +265,19 @@ export function renderStatusBreakdown(
 	].join("\n");
 }
 
+export function isStepError(step: StepResult): boolean {
+	if (step.expectedStatus !== undefined) {
+		return step.status !== step.expectedStatus;
+	}
+	return step.status < 200 || step.status >= 400;
+}
+
+export function countStepErrors(results: readonly StepResult[]): number {
+	return results.filter(isStepError).length;
+}
+
 function renderErrorSection(allResults: StepResult[]): string {
-	const failed = allResults.filter((r) => r.status < 200 || r.status >= 400);
+	const failed = allResults.filter(isStepError);
 	if (failed.length === 0) return "";
 	const rows = failed
 		.slice(0, 15)

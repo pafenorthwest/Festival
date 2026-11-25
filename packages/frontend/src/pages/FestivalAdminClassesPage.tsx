@@ -1,14 +1,11 @@
-import type {
-	FestivalClassConfigurationDto,
-	OrganizationDivision,
-	RegistrationCatalogValue,
-} from "@festival/common";
+import type { FestivalClassConfigurationDto } from "@festival/common";
 import {
 	createEffect,
-	createMemo,
 	createResource,
-	createSignal,
+	on,
+	onCleanup,
 	Show,
+	untrack,
 } from "solid-js";
 import type { FestivalAppController } from "../app/useFestivalAppController.js";
 import { AccessDeniedPanel } from "../components/AccessDeniedPanel.js";
@@ -24,14 +21,17 @@ import {
 	listFestivalClassSubtypes,
 	updateFestivalClass,
 } from "../lib/api.js";
+import { readSafeResource } from "../lib/readSafeResource.js";
 import { buildFestivalAdminPath } from "../lib/routes.js";
 import {
+	createClassesPageSignals,
 	draftToCreateInput,
 	draftToUpdateInput,
 	type FestivalClassFormDraft,
 	getModalDivisionName,
 	getModalInitialDraft,
 	getModalSubtypeName,
+	replaceClassItem,
 	resolveErrorMessage,
 } from "./festivalAdminClassesHelpers.js";
 
@@ -47,68 +47,66 @@ export function FestivalAdminClassesPage(props: {
 				? ([props.slug, props.festivalSlug, user] as const)
 				: null;
 		},
-		async (input) => {
-			if (!input) throw new Error("Sign in to manage this festival.");
-			const [slug, festivalSlug, user] = input;
-			return getAdminFestival(await user.getIdToken(), slug, festivalSlug);
-		},
+		async ([slug, festivalSlug, user]) =>
+			getAdminFestival(await user.getIdToken(), slug, festivalSlug),
 	);
+	const readyFestival = () =>
+		festival.loading ? undefined : readSafeResource(festival);
 
-	const [classes, setClasses] = createSignal<FestivalClassConfigurationDto[]>(
-		[],
-	);
-	const [divisions, setDivisions] = createSignal<OrganizationDivision[]>([]);
-	const [classSubtypes, setClassSubtypes] = createSignal<
-		RegistrationCatalogValue[]
-	>([]);
-	const [isLoadingData, setIsLoadingData] = createSignal(false);
-	const [dataError, setDataError] = createSignal<string | null>(null);
-	const [actionError, setActionError] = createSignal<string | null>(null);
-	const [isCreateModalOpen, setIsCreateModalOpen] = createSignal(false);
-	const [editingClass, setEditingClass] =
-		createSignal<FestivalClassConfigurationDto | null>(null);
-	const [waitlistClass, setWaitlistClass] =
-		createSignal<FestivalClassConfigurationDto | null>(null);
-	const [isSavingModal, setIsSavingModal] = createSignal(false);
-	const [modalError, setModalError] = createSignal<string | null>(null);
+	const s = createClassesPageSignals();
+	const { waitlistClass, setWaitlistClass } = s;
+
+	let loadRequestId = 0;
+	onCleanup(() => {
+		loadRequestId += 1;
+	});
 
 	async function loadData() {
 		const user = props.app.firebaseUser();
 		if (!user) return;
-		setIsLoadingData(true);
-		setDataError(null);
+		const { slug, festivalSlug } = props;
+		const requestId = ++loadRequestId;
+		s.setIsLoadingData(true);
+		s.setDataError(null);
 		try {
 			const token = await user.getIdToken();
+			if (requestId !== loadRequestId) return;
 			const [classList, divisionRes, subtypeResponse] = await Promise.all([
-				listFestivalClasses(token, props.slug, props.festivalSlug),
-				listDivisions(token, props.slug),
-				listFestivalClassSubtypes(token, props.slug, props.festivalSlug),
+				listFestivalClasses(token, slug, festivalSlug),
+				listDivisions(token, slug),
+				listFestivalClassSubtypes(token, slug, festivalSlug),
 			]);
-			setClasses(classList);
-			setDivisions(divisionRes.divisions);
-			setClassSubtypes(subtypeResponse.classSubtypes ?? []);
+			if (requestId !== loadRequestId) return;
+			s.setClasses(classList);
+			s.setDivisions(divisionRes.divisions);
+			s.setClassSubtypes(subtypeResponse.classSubtypes ?? []);
 		} catch (err) {
-			setDataError(resolveErrorMessage(err, "Could not load class catalog."));
+			if (requestId !== loadRequestId) return;
+			s.setDataError(resolveErrorMessage(err, "Could not load class catalog."));
 		} finally {
-			setIsLoadingData(false);
+			if (requestId === loadRequestId) s.setIsLoadingData(false);
 		}
 	}
 
-	createEffect(() => {
-		if (festival()) void loadData();
-	});
+	createEffect(
+		on(
+			() => [props.slug, props.festivalSlug] as const,
+			() => {
+				loadRequestId += 1;
+				s.resetForScopeChange();
+			},
+			{ defer: true },
+		),
+	);
 
-	const activeDivisions = createMemo(() =>
-		divisions().filter((d) => d.isActive),
-	);
-	const activeSubtypes = createMemo(() =>
-		classSubtypes().filter((s) => s.isActive),
-	);
+	createEffect(() => {
+		if (readyFestival()) untrack(() => void loadData());
+	});
 
 	async function handleToggleActive(item: FestivalClassConfigurationDto) {
 		const user = props.app.firebaseUser();
 		if (!user) return;
-		setActionError(null);
+		s.setActionError(null);
 		try {
 			const token = await user.getIdToken();
 			const updated = await updateFestivalClass(
@@ -118,11 +116,9 @@ export function FestivalAdminClassesPage(props: {
 				item.id,
 				{ isActive: !item.isActive },
 			);
-			setClasses((prev) =>
-				prev.map((c) => (c.id === updated.id ? updated : c)),
-			);
+			s.setClasses((prev) => replaceClassItem(prev, updated));
 		} catch (err) {
-			setActionError(
+			s.setActionError(
 				resolveErrorMessage(err, "Could not update class status."),
 			);
 		}
@@ -135,15 +131,15 @@ export function FestivalAdminClassesPage(props: {
 	) {
 		const user = props.app.firebaseUser();
 		if (!user) return;
-		setIsSavingModal(true);
-		setModalError(null);
+		s.setIsSavingModal(true);
+		s.setModalError(null);
 		try {
 			await action(await user.getIdToken());
 			onSuccess();
 		} catch (err) {
-			setModalError(resolveErrorMessage(err, fallbackErr));
+			s.setModalError(resolveErrorMessage(err, fallbackErr));
 		} finally {
-			setIsSavingModal(false);
+			s.setIsSavingModal(false);
 		}
 	}
 
@@ -156,15 +152,15 @@ export function FestivalAdminClassesPage(props: {
 					props.festivalSlug,
 					draftToCreateInput(draft),
 				);
-				setClasses((prev) => [...prev, created]);
+				s.setClasses((prev) => [...prev, created]);
 			},
 			"Could not create class.",
-			() => setIsCreateModalOpen(false),
+			() => s.setIsCreateModalOpen(false),
 		);
 	}
 
 	async function handleEditClass(draft: FestivalClassFormDraft) {
-		const current = editingClass();
+		const current = s.editingClass();
 		if (!current) return;
 		await saveModalClass(
 			async (token) => {
@@ -175,12 +171,10 @@ export function FestivalAdminClassesPage(props: {
 					current.id,
 					draftToUpdateInput(draft),
 				);
-				setClasses((prev) =>
-					prev.map((c) => (c.id === updated.id ? updated : c)),
-				);
+				s.setClasses((prev) => replaceClassItem(prev, updated));
 			},
 			"Could not update class.",
-			() => setEditingClass(null),
+			() => s.setEditingClass(null),
 		);
 	}
 
@@ -204,52 +198,40 @@ export function FestivalAdminClassesPage(props: {
 					<p role="alert">Festival not found.</p>
 				</section>
 			</Show>
-			<Show when={festival()}>
+			<Show when={readyFestival()}>
 				<section class="panel flow-panel">
 					<header class="admin-page-header">
 						<div>
-							<h2>{festival()?.festival.name} classes</h2>
+							<h2>{readyFestival()?.festival.name} classes</h2>
 							<p>Class catalog management is scoped to this Festival.</p>
 						</div>
-						<Button
-							type="button"
-							onClick={() => {
-								setModalError(null);
-								setIsCreateModalOpen(true);
-							}}
-						>
+						<Button type="button" onClick={s.openCreateModal}>
 							Create class
 						</Button>
 					</header>
-
-					<Show when={isLoadingData()}>
+					<Show when={s.isLoadingData()}>
 						<p class="muted">Loading class catalog...</p>
 					</Show>
-
-					<Show when={dataError()}>
+					<Show when={s.dataError()}>
 						<section class="banner error-banner" role="alert">
-							<p>{dataError()}</p>
+							<p>{s.dataError()}</p>
 							<Button type="button" onClick={() => void loadData()}>
 								Try again
 							</Button>
 						</section>
 					</Show>
-
-					<Show when={actionError()}>
+					<Show when={s.actionError()}>
 						<p class="field-error" role="alert">
-							{actionError()}
+							{s.actionError()}
 						</p>
 					</Show>
 
 					<FestivalClassTable
-						classes={classes()}
-						divisions={divisions()}
-						classSubtypes={classSubtypes()}
-						isLoading={isLoadingData()}
-						onEdit={(item) => {
-							setModalError(null);
-							setEditingClass(item);
-						}}
+						classes={s.classes()}
+						divisions={s.divisions()}
+						classSubtypes={s.classSubtypes()}
+						isLoading={s.isLoadingData()}
+						onEdit={s.openEditModal}
 						onToggleActive={(item) => void handleToggleActive(item)}
 						onViewWaitlist={(item) => setWaitlistClass(item)}
 					/>
@@ -264,21 +246,21 @@ export function FestivalAdminClassesPage(props: {
 					</Button>
 
 					<FestivalClassModal
-						isOpen={isCreateModalOpen() || Boolean(editingClass())}
-						mode={editingClass() ? "edit" : "create"}
-						festivalName={festival()?.festival.name ?? ""}
-						activeDivisions={activeDivisions()}
-						activeSubtypes={activeSubtypes()}
-						divisionName={getModalDivisionName(editingClass(), divisions())}
-						subtypeName={getModalSubtypeName(editingClass(), classSubtypes())}
-						initialDraft={getModalInitialDraft(editingClass())}
-						isSaving={isSavingModal()}
-						error={modalError()}
-						onSave={editingClass() ? handleEditClass : handleCreateClass}
-						onClose={() => {
-							setIsCreateModalOpen(false);
-							setEditingClass(null);
-						}}
+						isOpen={s.isCreateModalOpen() || Boolean(s.editingClass())}
+						mode={s.editingClass() ? "edit" : "create"}
+						festivalName={readyFestival()?.festival.name ?? ""}
+						activeDivisions={s.activeDivisions()}
+						activeSubtypes={s.activeSubtypes()}
+						divisionName={getModalDivisionName(s.editingClass(), s.divisions())}
+						subtypeName={getModalSubtypeName(
+							s.editingClass(),
+							s.classSubtypes(),
+						)}
+						initialDraft={getModalInitialDraft(s.editingClass())}
+						isSaving={s.isSavingModal()}
+						error={s.modalError()}
+						onSave={s.editingClass() ? handleEditClass : handleCreateClass}
+						onClose={s.closeModal}
 					/>
 
 					<FestivalClassWaitlistModal

@@ -181,17 +181,34 @@ export function assertSourceIntentValid(
 export function isAllowedCheckoutUrl(
 	checkoutUrl: string,
 	storeDomain: string,
+	shopPrimaryDomainUrl?: string,
 ): boolean {
 	try {
+		if (!/^https:\/\//i.test(checkoutUrl)) return false;
 		const parsed = new URL(checkoutUrl);
+		if (
+			parsed.protocol !== "https:" ||
+			parsed.port ||
+			parsed.username ||
+			parsed.password
+		) {
+			return false;
+		}
 		const normalizedDomain = storeDomain.includes("://")
 			? storeDomain
 			: `https://${storeDomain}`;
-		const expectedOrigin = new URL(normalizedDomain).origin;
+		if (parsed.origin === new URL(normalizedDomain).origin) return true;
+		if (!shopPrimaryDomainUrl || !/^https:\/\//i.test(shopPrimaryDomainUrl)) {
+			return false;
+		}
+		const primaryDomain = new URL(shopPrimaryDomainUrl);
 		return (
-			parsed.protocol === "https:" &&
-			parsed.port === "" &&
-			parsed.origin === expectedOrigin
+			!primaryDomain.username &&
+			!primaryDomain.password &&
+			primaryDomain.pathname === "/" &&
+			!primaryDomain.search &&
+			!primaryDomain.hash &&
+			parsed.origin === primaryDomain.origin
 		);
 	} catch {
 		return false;

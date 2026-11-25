@@ -289,37 +289,17 @@ describe("domains/tenant-org services (unit)", () => {
 
 	it("handles staff invite creation, acceptance, and guards last admin deletion", async () => {
 		const memberships = {
-			upsertUser: mock(
-				async (u: AuthenticatedUser & { displayName: string }) => ({
-					id: "u-2",
-					firebaseUid: u.uid,
-					email: u.email,
-					displayName: u.displayName,
-					createdAtIso: "2026-01-01T00:00:00.000Z",
-				}),
-			),
-			findInviteByToken: mock(async (token: string) => ({
-				invite: {
-					id: "inv-1",
+			acceptInvite: mock(async () => ({
+				membership: {
+					id: "m-2",
 					organizationId: "org-1",
-					email: "staff@example.com",
+					userId: "u-2",
 					role: "Music Reviewer" as const,
-					token,
-					invitedByUserId: "u-1",
-					createdAtIso: "2026-01-01T00:00:00.000Z",
+					origin: "invite" as const,
+					joinedAtIso: "2026-01-01T00:00:00.000Z",
 				},
 				organization: sampleTenantContext().organization,
 			})),
-			findMembershipByUserAndSlug: mock(async () => null),
-			createMembership: mock(async () => ({
-				id: "m-2",
-				organizationId: "org-1",
-				userId: "u-2",
-				role: "Music Reviewer" as const,
-				origin: "invite" as const,
-				createdAtIso: "2026-01-01T00:00:00.000Z",
-			})),
-			markInviteAccepted: mock(async () => {}),
 			deleteMembership: mock(async () => {
 				throw new Error("Organization must keep at least one Admin.");
 			}),

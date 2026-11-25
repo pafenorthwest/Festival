@@ -2,10 +2,14 @@ import type {
 	CheckoutIntentRecord,
 	CheckoutRecoveryRepository,
 	CheckoutRecoveryRequestRecord,
+	CheckoutRepository,
+	CompleteRecoveryCheckoutParams,
 	ConsumeRecoveryRequestParams,
 	CreateRecoveryRequestParams,
 	RecoverableCheckoutIntentRecord,
 } from "../domains/class-checkout/index.js";
+import { AppError } from "../errors/app-error.js";
+import { InMemoryCheckoutRepository } from "./checkout-repository.js";
 import {
 	cancelPendingRecoveryRequestsInMemory,
 	consumeRecoveryRequestInMemory,
@@ -180,5 +184,32 @@ export class InMemoryCheckoutRecoveryRepository
 			paramsOrToken,
 			maybeOrgId,
 		);
+	}
+
+	async completeRecoveryCheckout(
+		params: CompleteRecoveryCheckoutParams,
+		checkoutRepository: CheckoutRepository,
+	): Promise<void> {
+		if (!(checkoutRepository instanceof InMemoryCheckoutRepository)) {
+			throw new AppError("Checkout recovery is unavailable.", 503);
+		}
+		const request = this.recoveryRequests.get(params.recoveryRequestId);
+		if (
+			!request ||
+			request.organizationId !== params.organizationId ||
+			request.customerId !== params.customerId ||
+			request.tokenHash !== params.tokenHash ||
+			request.sourceCheckoutIntentId === params.intentId ||
+			request.status !== "pending"
+		) {
+			throw new AppError("Recovery request is no longer pending.", 409);
+		}
+		if (Date.parse(request.expiresAtIso) <= Date.parse(params.nowIso)) {
+			throw new AppError("Recovery request has expired.", 410);
+		}
+		// Both mutations are synchronous, so a competing completion cannot interleave.
+		checkoutRepository.markRecoveryCheckoutStarted(params);
+		request.status = "consumed";
+		request.consumedAtIso = params.nowIso;
 	}
 }

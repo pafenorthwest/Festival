@@ -1,6 +1,7 @@
 import type {
 	CheckoutIntentStatus,
 	CheckoutIntentType,
+	CheckoutRepository,
 } from "./checkout-types.js";
 
 export type CheckoutRecoveryStatus =
@@ -66,6 +67,16 @@ export interface ConsumeRecoveryRequestParams {
 	consumedAtIso?: string;
 }
 
+export interface CompleteRecoveryCheckoutParams {
+	organizationId: string;
+	customerId: string;
+	sessionId: string;
+	recoveryRequestId: string;
+	tokenHash: string;
+	intentId: string;
+	nowIso: string;
+}
+
 export interface CheckoutRecoveryRepository {
 	listRecoverableIntents(params: {
 		organizationId: string;
@@ -117,6 +128,10 @@ export interface CheckoutRecoveryRepository {
 		tokenHash: string,
 		organizationId?: string,
 	): Promise<CheckoutRecoveryRequestRecord>;
+	completeRecoveryCheckout(
+		params: CompleteRecoveryCheckoutParams,
+		checkoutRepository: CheckoutRepository,
+	): Promise<void>;
 
 	hasCompletedOrderOrEntitlement?(
 		organizationId: string,

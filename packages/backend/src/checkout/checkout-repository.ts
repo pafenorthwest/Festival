@@ -1,8 +1,8 @@
-import type {
+import {
 	AppError,
-	ClassRegistrationMetadata,
-	ClassRegistrationSnapshot,
-	RepertoirePiece,
+	type ClassRegistrationMetadata,
+	type ClassRegistrationSnapshot,
+	type RepertoirePiece,
 } from "@festival/common";
 import type {
 	CheckoutCartRecord,
@@ -10,6 +10,7 @@ import type {
 	CheckoutIntentType,
 	CheckoutRepository,
 	ClassCheckoutClaim,
+	CompleteRecoveryCheckoutParams,
 	CreateCheckoutIntentInput,
 } from "../domains/class-checkout/index.js";
 import { PENDING_CLASS_CHECKOUT_LIMIT } from "../domains/class-checkout/pending-checkout-queries.js";
@@ -196,6 +197,31 @@ export class InMemoryCheckoutRepository implements CheckoutRepository {
 
 	async markCheckoutStarted(intentId: string) {
 		markInMemoryCheckoutStarted(this.store(), intentId);
+	}
+
+	markRecoveryCheckoutStarted(params: CompleteRecoveryCheckoutParams): void {
+		const intent = this.intents.get(params.intentId);
+		const cart = intent?.cartReference
+			? this.carts.get(intent.cartReference)
+			: undefined;
+		const now = Date.parse(params.nowIso);
+		if (
+			intent?.status !== "ready" ||
+			intent.intentType !== "membership" ||
+			intent.organizationId !== params.organizationId ||
+			intent.customerId !== params.customerId ||
+			intent.sessionId !== params.sessionId ||
+			intent.idempotencyKey !== `recovery:${params.recoveryRequestId}` ||
+			Date.parse(intent.expiresAtIso) <= now ||
+			cart?.status !== "ready" ||
+			cart.organizationId !== params.organizationId ||
+			cart.customerId !== params.customerId ||
+			cart.sessionId !== params.sessionId ||
+			Date.parse(cart.expiresAtIso) <= now
+		) {
+			throw new AppError("Recovery checkout is no longer ready.", 409);
+		}
+		markInMemoryCheckoutStarted(this.store(), params.intentId);
 	}
 
 	async markFailed(intentId: string) {

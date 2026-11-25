@@ -161,7 +161,10 @@ export type CreateEntitlementGrantSnapshotInput = Omit<
 /** Normalizes an email already verified by Shopify before it binds entitlement ownership. */
 export function normalizeVerifiedShopifyIdentityEmail(value: string): string {
 	const normalized = value.trim().toLowerCase();
-	if ((normalized.match(/[a-z0-9]/gi) ?? []).length < 8) {
+	if (
+		normalized.length > 254 ||
+		!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)
+	) {
 		throw new Error("Verified Shopify identity email is required.");
 	}
 	return normalized;
@@ -243,8 +246,8 @@ export function assertValidEntitlementGrantSnapshotInput(
 	parseCalendarDate(input.endsOn);
 	const minEndsOn = addCalendarDays(input.startsOn, input.durationDays);
 	const maxEndsOn = addCalendarDays(
-		input.startsOn,
-		input.durationDays + TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS,
+		minEndsOn,
+		TEACHER_MEMBERSHIP_RENEWAL_WINDOW_DAYS,
 	);
 	if (input.endsOn < minEndsOn || input.endsOn > maxEndsOn) {
 		throw new Error(

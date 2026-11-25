@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type {
 	CanonicalWork,
 	RepertoireFlagReason,
+	RepertoireResolveFlagTargetStatus,
 	RepertoireReviewItem,
 	RepertoireReviewQueueSummary,
 	RepertoireReviewStatus,
@@ -68,7 +69,7 @@ export interface ResolveFlagInput {
 	organizationId: string;
 	reviewItemId: string;
 	resolutionNotes?: string | null;
-	status?: RepertoireReviewStatus;
+	status?: RepertoireResolveFlagTargetStatus;
 	resolvedByUid?: string;
 }
 

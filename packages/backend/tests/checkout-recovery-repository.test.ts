@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { sql } from "bun";
+import { PostgresCheckoutRepository } from "../src/domains/class-checkout/checkout-intent-repository.js";
 import { PostgresCheckoutRecoveryRepository } from "../src/domains/class-checkout/checkout-recovery-repository.js";
 import {
 	currentPostgresFixture,
@@ -57,6 +58,7 @@ async function seedIntent(
 		organizationId?: string;
 		customerId?: string;
 		correlationId?: string;
+		idempotencyKey?: string;
 		intentType?: "membership" | "class_entry";
 		status?: string;
 	},
@@ -71,7 +73,7 @@ async function seedIntent(
 			policy_version, division_id, division_name_snapshot,
 			staff_access_consent, amount, currency_code, status, expires_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $5, $6, $7, 'teacher_membership',
+			$1, $2, $3, $4, $5, $9, $6, $7, 'teacher_membership',
 			365, 'gid://shopify/Product/1', 'gid://shopify/ProductVariant/1',
 			'v1', 'div-1', 'Piano', TRUE, '75.00', 'USD', $8, '2030-01-01T00:00:00.000Z'
 		)`,
@@ -84,6 +86,7 @@ async function seedIntent(
 			params.intentType ?? "membership",
 			offeringId,
 			params.status ?? "ready",
+			params.idempotencyKey ?? `sess-${params.id}`,
 		],
 	);
 }
@@ -310,6 +313,114 @@ describe("PostgresCheckoutRecoveryRepository integration", () => {
 			expect(
 				(await repo.findRecoveryRequestByTokenHash("tok-expired"))?.status,
 			).toBe("expired");
+		},
+	);
+
+	postgresTest(
+		"rolls back a failed recovery handoff and completes the replacement exactly once",
+		async () => {
+			const schema = await setupFixture();
+			const repo = new PostgresCheckoutRecoveryRepository(schema);
+			const checkout = new PostgresCheckoutRepository(schema);
+			const organizationId = "org-1";
+			const customerId = "cust-1";
+			const sourceCheckoutIntentId = "i-source";
+			const intentId = "i-replacement";
+			const sessionId = `sess-${intentId}`;
+			const tokenHash = "tok-replacement";
+			const expiresAtIso = "2030-01-01T00:00:00.000Z";
+			await seedIntent(schema, {
+				id: sourceCheckoutIntentId,
+				status: "failed",
+			});
+			const request = await repo.createRecoveryRequest({
+				organizationId,
+				customerId,
+				sourceCheckoutIntentId,
+				tokenHash,
+				requestedByActorUid: "admin-1",
+				expiresAtIso,
+			});
+			await seedIntent(schema, {
+				id: intentId,
+				idempotencyKey: `recovery:${request.id}`,
+				status: "creating",
+			});
+			const cart = await checkout.attachCart({
+				intentId,
+				organizationId,
+				customerId,
+				sessionId,
+				shopifyCartId: "gid://shopify/Cart/private",
+				integrationVersion: 1,
+				expiresAtIso,
+			});
+			const params = {
+				organizationId,
+				customerId,
+				sessionId,
+				recoveryRequestId: request.id,
+				tokenHash,
+				intentId,
+				nowIso: "2026-06-01T00:00:00.000Z",
+			};
+			await expect(
+				repo.completeRecoveryCheckout({
+					...params,
+					sessionId: "wrong-session",
+				}),
+			).rejects.toMatchObject({ status: 409 });
+
+			await sql.unsafe(`ALTER TABLE ${schema}.checkout_recovery_requests
+				ADD CONSTRAINT reject_recovery_consumption CHECK (status <> 'consumed')`);
+			try {
+				await expect(repo.completeRecoveryCheckout(params)).rejects.toThrow(
+					"reject_recovery_consumption",
+				);
+			} finally {
+				await sql.unsafe(`ALTER TABLE ${schema}.checkout_recovery_requests
+					DROP CONSTRAINT reject_recovery_consumption`);
+			}
+			expect(
+				(await repo.findIntentById(organizationId, intentId))?.status,
+			).toBe("ready");
+			expect(
+				(
+					await checkout.getCart(
+						cart.reference,
+						organizationId,
+						customerId,
+						params.nowIso,
+					)
+				)?.status,
+			).toBe("ready");
+			expect(
+				(await repo.getRecoveryRequestById(organizationId, request.id))?.status,
+			).toBe("pending");
+
+			const outcomes = await Promise.allSettled([
+				repo.completeRecoveryCheckout(params),
+				repo.completeRecoveryCheckout(params),
+			]);
+			expect(
+				outcomes.filter(({ status }) => status === "fulfilled"),
+			).toHaveLength(1);
+			expect(
+				outcomes.find(({ status }) => status === "rejected"),
+			).toMatchObject({
+				reason: { status: 409 },
+			});
+			expect(
+				(await repo.findIntentById(organizationId, intentId))?.status,
+			).toBe("checkout_started");
+			const [startedCart] = await sql.unsafe(
+				`SELECT status FROM ${schema}.checkout_carts WHERE reference = $1`,
+				[cart.reference],
+			);
+			expect(startedCart?.status).toBe("checkout_started");
+			expect(
+				(await repo.getRecoveryRequestById(organizationId, request.id))?.status,
+			).toBe("consumed");
 		},
 	);
 });

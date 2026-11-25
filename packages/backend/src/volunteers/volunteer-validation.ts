@@ -1,3 +1,8 @@
+import {
+	getShiftDateBounds,
+	isDateWithinShiftWindow,
+	MAX_SHIFT_BATCH_DATES,
+} from "@festival/common";
 import type {
 	ShiftPeriod,
 	VolunteerRoleRecord,
@@ -26,6 +31,19 @@ export interface CreateShiftRequest {
 	timeText: string | null;
 	division: string | null;
 	adjudicator: string | null;
+}
+
+export interface CreateShiftsBatchRequest {
+	dates: string[];
+	period: ShiftPeriod;
+	timeText: string | null;
+	division: string | null;
+	adjudicator: string | null;
+}
+
+export interface FestivalDateWindow {
+	startDate: string;
+	endDate: string;
 }
 
 export interface EnrollVolunteerRequest {
@@ -114,18 +132,23 @@ export function validateUpdateRoleRequest(
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
-export function validateCreateShiftRequest(
-	payload: unknown,
-	role: VolunteerRoleRecord,
-): { request: CreateShiftRequest } | { errors: string[] } {
-	const body = (payload ?? {}) as Record<string, unknown>;
-	const errors: string[] = [];
-
-	const date = asString(body.date);
-	if (!DATE_PATTERN.test(date)) {
-		errors.push("Shift date is required and must use YYYY-MM-DD format.");
+export function validateShiftDateWithinFestivalWindow(
+	date: string,
+	festival: FestivalDateWindow,
+): string | null {
+	const bounds = getShiftDateBounds(festival.startDate, festival.endDate);
+	if (!bounds) return null;
+	if (!isDateWithinShiftWindow(date, festival.startDate, festival.endDate)) {
+		return `Shift date ${date} must be within ${bounds.minDate} to ${bounds.maxDate} for this festival.`;
 	}
+	return null;
+}
 
+function parseShiftCommonFields(
+	body: Record<string, unknown>,
+	role: VolunteerRoleRecord,
+	errors: string[],
+) {
 	const period = asString(body.period).toUpperCase();
 	if (period !== "AM" && period !== "PM") {
 		errors.push("Shift period is required and must be AM or PM.");
@@ -143,24 +166,75 @@ export function validateCreateShiftRequest(
 		if (!division) errors.push("Room Proctor shifts require a division.");
 		if (!adjudicator)
 			errors.push("Room Proctor shifts require an adjudicator.");
+	} else if (division || adjudicator) {
+		errors.push("Only Room Proctor shifts may have a division or adjudicator.");
+	}
+
+	return { period: period as ShiftPeriod, timeText, division, adjudicator };
+}
+
+export function validateCreateShiftRequest(
+	payload: unknown,
+	role: VolunteerRoleRecord,
+): { request: CreateShiftRequest } | { errors: string[] } {
+	const body = (payload ?? {}) as Record<string, unknown>;
+	const errors: string[] = [];
+
+	const date = asString(body.date);
+	if (!DATE_PATTERN.test(date)) {
+		errors.push("Shift date is required and must use YYYY-MM-DD format.");
+	}
+
+	const common = parseShiftCommonFields(body, role, errors);
+	if (errors.length > 0) return { errors };
+	return { request: { date, ...common } };
+}
+
+export function validateCreateShiftsBatchRequest(
+	payload: unknown,
+	role: VolunteerRoleRecord,
+	festival?: FestivalDateWindow,
+): { request: CreateShiftsBatchRequest } | { errors: string[] } {
+	const body = (payload ?? {}) as Record<string, unknown>;
+	const errors: string[] = [];
+	const dates: string[] = [];
+
+	if (!Array.isArray(body.dates) || body.dates.length === 0) {
+		errors.push("Select at least one shift date.");
+	} else if (body.dates.length > MAX_SHIFT_BATCH_DATES) {
+		errors.push(
+			`At most ${MAX_SHIFT_BATCH_DATES} shift dates may be created at once.`,
+		);
 	} else {
-		if (division || adjudicator) {
-			errors.push(
-				"Only Room Proctor shifts may have a division or adjudicator.",
-			);
+		const seen = new Set<string>();
+		for (const rawDate of body.dates) {
+			const date = asString(rawDate);
+			if (!DATE_PATTERN.test(date)) {
+				errors.push("Each shift date must use YYYY-MM-DD format.");
+				break;
+			}
+			if (seen.has(date)) {
+				errors.push(`Duplicate date in request: ${date}.`);
+				break;
+			}
+			seen.add(date);
+			if (festival) {
+				const windowError = validateShiftDateWithinFestivalWindow(
+					date,
+					festival,
+				);
+				if (windowError) {
+					errors.push(windowError);
+					break;
+				}
+			}
+			dates.push(date);
 		}
 	}
 
+	const common = parseShiftCommonFields(body, role, errors);
 	if (errors.length > 0) return { errors };
-	return {
-		request: {
-			date,
-			period: period as ShiftPeriod,
-			timeText,
-			division,
-			adjudicator,
-		},
-	};
+	return { request: { dates, ...common } };
 }
 
 export const validateUpdateShiftRequest = validateCreateShiftRequest;

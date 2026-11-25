@@ -17,14 +17,14 @@ import {
 	type CreateRecoveryParams,
 	type CreateRecoveryResult,
 	calculateExpiry,
-	createNewCheckoutIntent,
-	createStorefrontCheckout,
 	generateRecoveryToken,
+	getOrCreateRecoveryCheckoutIntent,
 	type InvalidateIntentParams,
 	type RecoveryReviewDto,
 	type RecoveryReviewOffering,
 	type ResumeCustomerCheckoutParams,
 	resolveOrganizationSlug,
+	resolveRecoveryCheckoutUrl,
 	resolveRecoveryCustomerId,
 } from "./checkout-recovery-helpers.js";
 import type {
@@ -33,7 +33,10 @@ import type {
 	RecoverableCheckoutIntentRecord,
 } from "./checkout-recovery-repository.js";
 import type { CheckoutRepository } from "./checkout-repository.js";
-import type { MembershipCheckoutStorefront } from "./membership-checkout-helpers.js";
+import {
+	type MembershipCheckoutStorefront,
+	retryableCheckoutError,
+} from "./membership-checkout-helpers.js";
 
 export interface CheckoutRecoveryWorkflowDeps {
 	recoveryRepository: CheckoutRecoveryRepository;
@@ -361,8 +364,11 @@ export async function resumeCustomerCheckoutWorkflow(
 	if (!deps.checkoutRepository || !deps.storefront) {
 		throw new AppError("Checkout is unavailable.", 503);
 	}
+	const storefrontIntegration =
+		await deps.organizationRepository.getShopifyIntegration(ctx.org.id);
+	if (!storefrontIntegration) throw retryableCheckoutError();
 	await deps.checkoutRepository.markFailed(ctx.sourceIntent.id);
-	const newIntent = await createNewCheckoutIntent({
+	const outcome = await getOrCreateRecoveryCheckoutIntent({
 		checkoutRepository: deps.checkoutRepository,
 		organizationId: ctx.org.id,
 		customerId: params.customerId,
@@ -373,27 +379,37 @@ export async function resumeCustomerCheckoutWorkflow(
 		offering: ctx.offering,
 		now: deps.now(),
 	});
-	const checkoutUrl = await createStorefrontCheckout({
+	const checkoutUrl = await resolveRecoveryCheckoutUrl({
 		storefront: deps.storefront,
 		checkoutRepository: deps.checkoutRepository,
 		organizationRepository: deps.organizationRepository,
 		organizationId: ctx.org.id,
 		customerId: params.customerId,
 		session: params.session,
-		intent: newIntent,
+		outcome,
+		storefrontIntegration,
 	});
-	await deps.recoveryRepository.consumeRecoveryRequest({
-		tokenHash: ctx.tokenHash,
-		organizationId: ctx.org.id,
-	});
+	const nowIso = deps.now().toISOString();
+	await deps.recoveryRepository.completeRecoveryCheckout(
+		{
+			tokenHash: ctx.tokenHash,
+			organizationId: ctx.org.id,
+			customerId: params.customerId,
+			sessionId: params.session.sessionId,
+			recoveryRequestId: ctx.recoveryRequest.id,
+			intentId: outcome.intent.id,
+			nowIso,
+		},
+		deps.checkoutRepository,
+	);
 	await deps.auditLogger.log({
 		action: "resume_checkout",
 		actorUid: params.customerId,
 		organizationId: ctx.org.id,
 		targetCustomerId: params.customerId,
-		intentId: newIntent.id,
+		intentId: outcome.intent.id,
 		tokenHash: ctx.tokenHash,
-		occurredAtIso: deps.now().toISOString(),
+		occurredAtIso: nowIso,
 	});
 	return { checkoutUrl };
 }

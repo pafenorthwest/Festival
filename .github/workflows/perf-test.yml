@@ -1,4 +1,4 @@
-name: Performance Benchmark (500 Parents)
+name: Performance Benchmark (500 Baseline / 1000 Peak)
 
 on:
   workflow_dispatch:
@@ -8,11 +8,26 @@ on:
         required: true
         type: string
       concurrency:
-        description: 'Concurrent parent requests'
+        description: 'Concurrent parent requests (default 500, max 1000)'
         required: true
         default: '500'
+        type: string
+      suite:
+        description: 'Benchmark suite to run'
+        required: true
+        type: choice
+        default: 'all'
+        options:
+          - all
+          - children
+          - scenarios
+          - s1
+          - s2
+          - s3
+          - s4
+          - s5
       apply_seed:
-        description: 'Seed perf-test org and sessions'
+        description: 'Seed perf-test org, venue, catalog, and sessions'
         type: boolean
         default: true
 
@@ -24,24 +39,32 @@ jobs:
     name: Safety guard check
     runs-on: ubuntu-latest
     steps:
-      - name: Validate actor and confirmation
+      - name: Validate actor, confirmation, and concurrency
         env:
           ACTOR: ${{ github.actor }}
           CONFIRMATION: ${{ inputs.confirmation }}
+          CONCURRENCY: ${{ inputs.concurrency }}
         run: |
           FAILED=0
-          if [ "$ACTOR" != "gustobru" ] && [ "$ACTOR" != "ericpassmore" ]; then
-            echo "::error::Actor '$ACTOR' is not authorized to run performance benchmarks. Allowed actors: gustobru, ericpassmore"
+          if [ "$ACTOR" != "gustobru" ] && [ "$ACTOR" != "ericpassmore" ] && [ "$ACTOR" != "gttps" ]; then
+            echo "::error::Actor '$ACTOR' is not authorized to run performance benchmarks. Allowed actors: gustobru, ericpassmore, gttps"
             FAILED=1
           fi
           if [ "$CONFIRMATION" != "RUN_LOAD_TEST" ]; then
             echo "::error::Invalid confirmation '$CONFIRMATION'. Must type 'RUN_LOAD_TEST' to execute."
             FAILED=1
           fi
+          if ! [[ "$CONCURRENCY" =~ ^[0-9]+$ ]]; then
+            echo "::error::Invalid concurrency '$CONCURRENCY'. Must be an integer between 1 and 1000."
+            FAILED=1
+          elif [ "$CONCURRENCY" -lt 1 ] || [ "$CONCURRENCY" -gt 1000 ]; then
+            echo "::error::Concurrency '$CONCURRENCY' is out of allowed range (1 to 1000 inclusive)."
+            FAILED=1
+          fi
           if [ "$FAILED" -ne 0 ]; then
             exit 1
           fi
-          echo "Guard check passed for $ACTOR."
+          echo "Guard check passed for $ACTOR (concurrency=$CONCURRENCY)."
 
   seed-remote:
     needs: [guard-check]
@@ -67,9 +90,25 @@ jobs:
             cd /opt/Festival
             git fetch origin "$DEPLOY_SHA"
             git checkout --detach "$DEPLOY_SHA"
-            DB_NAME=$(docker compose --env-file cloud-setup/.env -f cloud-setup/compose.yml exec -T postgres psql -U festivaladmin -d postgres -t -A -c "SELECT datname FROM pg_database WHERE datname NOT IN ('postgres','template0','template1') LIMIT 1;" | tr -d '\r')
+            DB_NAME=""
+            if [ -f cloud-setup/.env ]; then
+              DB_NAME=$(grep -E '^POSTGRES_DB=' cloud-setup/.env | head -n 1 | cut -d '=' -f 2- | tr -d '"\047\r' | xargs || true)
+              if [ -z "$DB_NAME" ]; then
+                DB_NAME=$(grep -E '^DATABASE=' cloud-setup/.env | head -n 1 | cut -d '=' -f 2- | tr -d '"\047\r' | xargs || true)
+              fi
+            fi
+            if [ -z "$DB_NAME" ]; then
+              DB_NAME=$(docker compose --env-file cloud-setup/.env -f cloud-setup/compose.yml exec -T postgres psql -U festivaladmin -d postgres -t -A -c "SELECT datname FROM pg_database WHERE datname = 'festival_octv3_db' LIMIT 1;" | tr -d '\r')
+            fi
+            if [ -z "$DB_NAME" ]; then
+              DB_NAME=$(docker compose --env-file cloud-setup/.env -f cloud-setup/compose.yml exec -T postgres psql -U festivaladmin -d postgres -t -A -c "SELECT datname FROM pg_database WHERE datname NOT IN ('postgres','template0','template1') ORDER BY datname LIMIT 1;" | tr -d '\r')
+            fi
+            if [ -z "$DB_NAME" ]; then
+              echo "::error::Unable to resolve target PostgreSQL database name."
+              exit 1
+            fi
             echo "Found database: $DB_NAME"
-            docker compose --env-file cloud-setup/.env -f cloud-setup/compose.yml exec -T postgres psql -U festivaladmin -d "$DB_NAME" < database/seeds/04-perf-test.sql
+            docker compose --env-file cloud-setup/.env -f cloud-setup/compose.yml exec -T postgres psql -v ON_ERROR_STOP=1 -U festivaladmin -d "$DB_NAME" < database/seeds/04-perf-test.sql
 
   benchmark:
     needs: [guard-check, seed-remote]
@@ -91,21 +130,47 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Verify perf-test landing
+      - name: Verify integration directory and perf-test landing
         run: |
           for i in {1..12}; do
+            ORG_OK=0
+            LANDING_OK=0
+            if ORG_BODY=$(curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
+              https://int.artsfestival.online/api/organizations) \
+              && echo "$ORG_BODY" | jq -e '(.organizations | type == "array") and (all(.organizations[]; has("name")))' > /dev/null; then
+              ORG_OK=1
+            fi
             if curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
               https://int.artsfestival.online/api/organizations/perf-test/landing > /dev/null; then
-              echo "perf-test landing endpoint is reachable and healthy on attempt $i"
+              LANDING_OK=1
+            fi
+            if [ "$ORG_OK" -eq 1 ] && [ "$LANDING_OK" -eq 1 ]; then
+              echo "Organizations directory and perf-test landing endpoints are reachable and healthy on attempt $i"
               exit 0
             fi
             if [ "$i" -lt 12 ]; then
-              echo "Attempt $i failed, retrying in 5s..."
+              echo "Attempt $i failed (organizations=$ORG_OK, landing=$LANDING_OK), retrying in 5s..."
               sleep 5
             fi
           done
-          echo "perf-test landing check failed after 12 attempts"
+          echo "::error::Integration health check failed after 12 attempts"
           exit 1
 
-      - name: Run benchmark
-        run: BASE_URL=https://int.artsfestival.online CONCURRENCY=${{ inputs.concurrency }} bun run --cwd packages/backend perf:children
+      - name: Run child creation benchmark
+        if: inputs.suite == 'all' || inputs.suite == 'children'
+        env:
+          CONCURRENCY: ${{ inputs.concurrency }}
+        run: BASE_URL=https://int.artsfestival.online CONCURRENCY="$CONCURRENCY" bun run --cwd packages/backend perf:children
+
+      - name: Run end-to-end & advanced scenarios
+        if: inputs.suite != 'children'
+        env:
+          SUITE: ${{ inputs.suite }}
+          CONCURRENCY: ${{ inputs.concurrency }}
+        run: |
+          if [ "$SUITE" = "all" ] || [ "$SUITE" = "scenarios" ]; then
+            SCENARIO_ARG="all"
+          else
+            SCENARIO_ARG="$SUITE"
+          fi
+          BASE_URL=https://int.artsfestival.online CONCURRENCY="$CONCURRENCY" SCENARIO="$SCENARIO_ARG" bun run --cwd packages/backend perf:scenarios

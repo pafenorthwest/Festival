@@ -1,6 +1,6 @@
 # Festival Release Performance & Benchmark Report
 
-This document specifies the repeatable performance testing framework, operational guardrails, and empirical benchmark results for the Festival registration platform. It covers baseline bottleneck resolution, high-concurrency stress ramps (up to 5,000 concurrent submissions), multi-step registration funnels, high-contention waitlist allocation races, flash-mob traffic mixes, and queue churn behavior.
+This document specifies the repeatable performance testing framework, operational guardrails, and empirical benchmark results for the Festival registration platform. For **v0.4.2**, the target load envelope is **500 simultaneous registrations baseline, 1,000 peak maximum (no higher)** across child creation, waitlist contention races, multi-step registration funnels, flash-mob traffic mixes, queue churn, and the full end-to-end venue & registration journey (Scenario 5). Historical v0.3.0/v0.4.0 baseline and stress-ramp tables are preserved in Section 5 for regression reference.
 
 ---
 
@@ -18,11 +18,12 @@ Prior to the performance optimizations in Issue #347 and PR #358, the backend ar
   3. Redundant uncached SQL queries for static organization metadata and registration age rules executed repeatedly under concurrency.
   4. Database connection starvation led to Nginx reverse proxy gateway timeouts.
 
-### 1.2 Performance Goals for this Release
-The release benchmarks establish strict, empirical performance criteria:
-1. **Zero Error Rate at Scale**: 100.00% success rate (HTTP 200/201) under $\ge 500$ concurrent submissions with zero 502 Bad Gateway, 504 Gateway Timeout, or 500 Internal Server errors.
-2. **Sub-2.0s Response Time Under Normal Peak**: Maintain median ($P_{50}$) response times under 1.5 seconds and $P_{95}$ under 2.5 seconds at 500–1,000 concurrent users.
-3. **High-Burst Survivability**: Sustain flash bursts of up to 5,000 concurrent requests without socket exhaustion, process crashes, or transaction deadlocks, with total drain time under 10 seconds.
+### 1.2 Performance Goals & Target Concurrency Policy (v0.4.2)
+The v0.4.2 release establishes a strict, bounded concurrency policy and empirical performance criteria:
+- **Target Load Envelope**: **500 simultaneous registrations baseline, 1,000 peak maximum (no higher)**. CI and release-gate runs enforce `1 <= concurrency <= 1000`; workloads above 1,000 concurrent registrations are explicitly out of scope for v0.4.2 validation.
+1. **Zero Error Rate at Target Scale**: 100.00% success rate (HTTP 200/201) at 500 baseline and up to 1,000 peak concurrent submissions with zero 502 Bad Gateway, 504 Gateway Timeout, or 500 Internal Server errors.
+2. **Sub-2.5s Response Time Across Target Envelope**: Maintain median ($P_{50}$) response times under 1.5 seconds and $P_{95}$ under 2.5 seconds at 500–1,000 concurrent users.
+3. **End-to-End v0.4.2 Journey Coverage**: Validate the complete public-to-checkout venue and registration journey (Scenario 5) under target concurrency, including organization directory, membership products, session/membership status, child creation, teacher/class/concerto/accompanist lookups, eligibility evaluation, class registrations, pending checkout, and checkout restart.
 4. **Deterministic Queue & Waitlist Integrity**: Under extreme write contention (500 parents racing for a single class at zero capacity), guarantee strict serial ordering, atomic position assignment, zero orphaned records, and clean concurrent withdrawal/churn handling.
 5. **Hermetic & Repeatable Benchmarking**: Maintain an automated benchmark suite running against an isolated integration tenant with zero data pollution to production or staging organizations.
 
@@ -67,10 +68,15 @@ To prevent noisy-neighbor interference and protect operational data, performance
     DELETE FROM orgs.festival_child_age_snapshots WHERE organization_id = 'perf-test' AND child_id != 'perf-child-seed-01';
     DELETE FROM orgs.festival_children WHERE organization_id = 'perf-test' AND id != 'perf-child-seed-01';
     ```
-- **CI / GitHub Actions Safeguards**:
-  - `.github/workflows/perf-test.yml` enforces two mandatory guard checks:
-    1. **Actor Whitelist**: Benchmark execution is restricted to authorized maintainers (`gustobru`, `ericpassmore`).
-    2. **Explicit Confirmation**: Requires manual dispatch with confirmation string `RUN_LOAD_TEST`.
+- **CI / GitHub Actions Safeguards (`.github/workflows/perf-test.yml`)**:
+  - Workflow name: `Performance Benchmark (500 Baseline / 1000 Peak)`.
+  - Enforces mandatory `guard-check` validations before any remote seeding or load generation:
+    1. **Actor Whitelist**: Benchmark execution is restricted to authorized maintainers (`gustobru`, `ericpassmore`, `gttps`).
+    2. **Explicit Confirmation**: Requires manual dispatch with `confirmation` set to `RUN_LOAD_TEST`.
+    3. **Hard Concurrency Cap (`concurrency <= 1000`)**: `concurrency` (default `'500'`) must be an integer between `1` and `1000` inclusive; values outside `1..1000` fail fast in `guard-check`.
+  - **Selectable Benchmark Suite (`suite`)**: Choice input with default `'all'` and options `all`, `children`, `scenarios`, `s1`, `s2`, `s3`, `s4`, `s5`.
+  - **Remote Seeding Toggle (`apply_seed`)**: Boolean input (default `true`) that seeds the `perf-test` org, venue, catalog, and sessions via `database/seeds/04-perf-test.sql` with safe database name resolution (`POSTGRES_DB` / `DATABASE` in `cloud-setup/.env`, falling back to `festival_octv3_db` if present, else first non-template database).
+  - **Pre-Benchmark Health Gate**: Verifies both `GET /api/organizations` (validating `.organizations` is an array with `name` fields) and `GET /api/organizations/perf-test/landing` (up to 12 retries x 5s) before dispatching load.
 
 ---
 
@@ -80,93 +86,115 @@ To prevent noisy-neighbor interference and protect operational data, performance
 The benchmark framework is provided through two native Bun test runners inside `packages/backend`:
 
 1. **`packages/backend/scripts/perf-500-children.ts`**:
-   - Focuses on simultaneous child creation concurrency (Scenario 0 and Concurrency Ramp).
-   - Configurable concurrency via `CONCURRENCY=<N>`.
+   - Focuses on simultaneous child creation concurrency (Scenario 0: 500 baseline / 1,000 peak maximum).
+   - Configurable concurrency via `CONCURRENCY=<N>` (target policy: `1` to `1000`).
    - Generates summary statistics and appends to GitHub Step Summary if present.
    - Command: `bun run perf:children`
 2. **`packages/backend/scripts/perf-advanced-scenarios.ts`**:
-   - Executes multi-step registration funnels, waitlist contention races, flash-mob mixed distributions, and queue churn (Scenarios 1–4).
-   - Configurable via `--scenario <1|2|3|4|all>` or `SCENARIO=<1|2|3|4|all>`.
+   - Executes waitlist contention races, multi-step registration funnels, flash-mob mixed distributions, queue churn, and the v0.4.2 end-to-end venue & registration journey (Scenarios 1–5).
+   - Configurable via `--scenario <1|2|3|4|5|s1|s2|s3|s4|s5|all>` or `SCENARIO=<s1|s2|s3|s4|s5|all>` and `CONCURRENCY=<N>`.
    - Command: `bun run perf:scenarios`
 
 ### 3.2 Protocol Execution Sequence
 
 ```mermaid
 flowchart TD
-    A["1. Pre-Run Reset: Seed / Clean Database via SSH"] --> B["2. Endpoint Reachability Check: GET /landing"]
-    B --> C{"3. Select Benchmark Scenario"}
-    C -->|Scenario 0| D["Run perf:children (Concurrency 500 - 5,000)"]
-    C -->|Scenario 1| E["Run perf:scenarios --scenario 1 (Waitlist Join Race)"]
-    C -->|Scenario 2| F["Run perf:scenarios --scenario 2 (Multi-Step Funnel)"]
-    C -->|Scenario 3| G["Run perf:scenarios --scenario 3 (Flash-Mob Traffic 80/15/5)"]
-    C -->|Scenario 4| H["Run perf:scenarios --scenario 4 (Queue Churn & Concurrency)"]
-    D --> I["4. Post-Run Cleanup: SQL Purge of perf-test Children/Waitlists"]
+    A["1. Pre-Run Reset: Seed / Clean Database via SSH"] --> B["2. Endpoint Reachability Check: GET /organizations & GET /landing"]
+    B --> C{"3. Select Benchmark Suite / Scenario"}
+    C -->|children / Scenario 0| D["Run perf:children (500 Baseline / 1,000 Peak Max)"]
+    C -->|s1 / Scenario 1| E["Run perf:scenarios --scenario s1 (Waitlist Join Race)"]
+    C -->|s2 / Scenario 2| F["Run perf:scenarios --scenario s2 (Multi-Step Funnel)"]
+    C -->|s3 / Scenario 3| G["Run perf:scenarios --scenario s3 (Flash-Mob 1,000 Peak: 800/150/50)"]
+    C -->|s4 / Scenario 4| H["Run perf:scenarios --scenario s4 (Queue Churn & Concurrency)"]
+    C -->|s5 / Scenario 5| K["Run perf:scenarios --scenario s5 (E2E Venue & Registration Journey)"]
+    D --> I["4. Post-Run Cleanup: SQL Purge of perf-test Data"]
     E --> I
     F --> I
     G --> I
     H --> I
+    K --> I
     I --> J["5. Verify Clean State (0 Non-Seed Records)"]
 ```
 
 #### Step 1: Pre-Run Database Reset
 Execute the seed script against the remote integration database to establish a clean state:
 ```bash
-# Execute on integration host or via SSH
+# Execute on integration host or via SSH (DB_NAME resolved from cloud-setup/.env or festival_octv3_db)
 docker compose --env-file cloud-setup/.env -f cloud-setup/compose.yml exec -T postgres \
-  psql -U festivaladmin -d Octv3 < database/seeds/04-perf-test.sql
+  psql -v ON_ERROR_STOP=1 -U festivaladmin -d "$DB_NAME" < database/seeds/04-perf-test.sql
 ```
 
 #### Step 2: Verify Endpoint Reachability
-Ensure the Nginx reverse proxy and backend container are responsive:
+Ensure the Nginx reverse proxy, organization directory, and `perf-test` landing endpoint are responsive:
 ```bash
+curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
+  https://int.artsfestival.online/api/organizations | jq -e '(.organizations | type == "array") and (all(.organizations[]; has("name")))' > /dev/null
 curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
   https://int.artsfestival.online/api/organizations/perf-test/landing > /dev/null
 ```
 
 #### Step 3: Run Benchmark Commands
 
-##### Scenario 0: Simultaneous Child Creation (500 parents)
+##### Scenario 0: Simultaneous Child Creation (500 baseline / 1,000 peak max)
 ```bash
 BASE_URL=https://int.artsfestival.online \
 CONCURRENCY=500 \
 bun run --cwd packages/backend perf:children
 ```
 
-##### Scenario 0: Concurrency Ramp (e.g., 2,500 parents)
+##### Scenario 0: Peak Concurrency Validation (1,000 parents max)
 ```bash
 BASE_URL=https://int.artsfestival.online \
-CONCURRENCY=2500 \
+CONCURRENCY=1000 \
 bun run --cwd packages/backend perf:children
 ```
 
 ##### Scenario 1: High-Contention Waitlist Join Race
 ```bash
 BASE_URL=https://int.artsfestival.online \
-bun run --cwd packages/backend perf:scenarios --scenario 1
+CONCURRENCY=500 \
+SCENARIO=s1 \
+bun run --cwd packages/backend perf:scenarios
 ```
 
 ##### Scenario 2: Full Multi-Step Registration Funnel
 ```bash
 BASE_URL=https://int.artsfestival.online \
-bun run --cwd packages/backend perf:scenarios --scenario 2
+CONCURRENCY=500 \
+SCENARIO=s2 \
+bun run --cwd packages/backend perf:scenarios
 ```
 
-##### Scenario 3: Flash-Mob Mixed Traffic Distribution
+##### Scenario 3: Flash-Mob Mixed Traffic Distribution (1,000 Peak)
 ```bash
 BASE_URL=https://int.artsfestival.online \
-bun run --cwd packages/backend perf:scenarios --scenario 3
+CONCURRENCY=1000 \
+SCENARIO=s3 \
+bun run --cwd packages/backend perf:scenarios
 ```
 
 ##### Scenario 4: Waitlist Queue Churn & Concurrency
 ```bash
 BASE_URL=https://int.artsfestival.online \
-bun run --cwd packages/backend perf:scenarios --scenario 4
+CONCURRENCY=500 \
+SCENARIO=s4 \
+bun run --cwd packages/backend perf:scenarios
 ```
 
-##### Run All Advanced Scenarios (1 through 4 sequentially)
+##### Scenario 5: End-to-End Venue & Registration Journey (v0.4.2)
 ```bash
 BASE_URL=https://int.artsfestival.online \
-bun run --cwd packages/backend perf:scenarios --scenario all
+CONCURRENCY=500 \
+SCENARIO=s5 \
+bun run --cwd packages/backend perf:scenarios
+```
+
+##### Run All Advanced Scenarios (s1 through s5 sequentially)
+```bash
+BASE_URL=https://int.artsfestival.online \
+CONCURRENCY=500 \
+SCENARIO=all \
+bun run --cwd packages/backend perf:scenarios
 ```
 
 #### Step 4: Post-Run Cleanup
@@ -187,7 +215,7 @@ docker compose --env-file cloud-setup/.env -f cloud-setup/compose.yml exec -T po
 
 ### Scenario 0: Core Child Creation Concurrency Benchmark
 - **Endpoint**: `POST /api/organizations/perf-test/customer/children`
-- **Concurrency Range**: 500 to 5,000 simultaneous requests dispatched via `Promise.all`.
+- **Target Concurrency Range (v0.4.2)**: 500 simultaneous requests baseline, up to 1,000 peak maximum (no higher) dispatched via `Promise.all`. (Historical stress ramps up to 5,000 from v0.3.0/v0.4.0 are preserved in Section 5.2.)
 - **Payload**:
   ```json
   {
@@ -223,13 +251,13 @@ docker compose --env-file cloud-setup/.env -f cloud-setup/compose.yml exec -T po
 - **Total Requests**: 2,000 HTTP requests (500 parents $\times$ 4 sequential operations).
 - **Operations Under Test**: Combined read/write pipeline, customer account profile updates, session cache hydration, and end-to-end user journey latency.
 
-### Scenario 3: Flash-Mob Mixed Traffic Distribution (80/15/5)
-- **Scale**: 2,000 total concurrent requests dispatched across 2,000 distinct parent sessions (indices 1001..3000).
+### Scenario 3: Flash-Mob Mixed Traffic Distribution (80/15/5 at 1,000 Peak)
+- **Scale (v0.4.2 Target Peak)**: 1,000 total concurrent requests dispatched across 1,000 distinct parent sessions (aligned with the 1,000 peak concurrency ceiling).
 - **Traffic Ratio**:
-  - **80% Read Traffic (1,600 requests)**: Dispatched across `GET /landing`, `GET /divisions`, and `GET /customer/session`. Simulates browsing catalog and verifying account status.
-  - **15% Write Traffic (300 requests)**: Simultaneous `POST /customer/children`. Simulates parents submitting child profiles.
-  - **5% Contended Write Traffic (100 requests)**: Simultaneous `POST .../waitlist` for full class `perf-class-01`. Simulates highly contended waitlist queue joins.
-- **Operations Under Test**: PostgreSQL connection pool behavior under simultaneous read contention, standard writes, and row-locked queue writes.
+  - **80% Read Traffic (800 requests)**: Dispatched across `GET /landing`, `GET /divisions`, and `GET /customer/session`. Simulates browsing catalog and verifying account status.
+  - **15% Child Write Traffic (150 requests)**: Simultaneous `POST /customer/children`. Simulates parents submitting child profiles.
+  - **5% Contended Waitlist Write Traffic (50 requests)**: Simultaneous `POST .../waitlist` for full class `perf-class-01`. Simulates highly contended waitlist queue joins.
+- **Operations Under Test**: PostgreSQL connection pool behavior under simultaneous read contention, standard writes, and row-locked queue writes within the 1,000 peak load envelope.
 
 ### Scenario 4: Waitlist Queue Churn & Concurrency
 - **Participants**: 750 parents (session indices 3001..3750) exercising dynamic waitlist queue operations.
@@ -241,11 +269,37 @@ docker compose --env-file cloud-setup/.env -f cloud-setup/compose.yml exec -T po
   - Position compaction and non-blocking read/write concurrency on waitlist indices.
   - Concurrent status updates without deadlocks or table-level locking bottlenecks.
 
+### Scenario 5: End-to-End Venue & Registration Journey (v0.4.2)
+- **Participants**: Concurrent parent sessions within the v0.4.2 target load envelope (500 baseline, up to 1,000 peak maximum) executing the full v0.4.2 public-to-checkout venue and registration lifecycle.
+- **Journey Coverage**:
+  1. **Public Homepage & Directory**: Organization directory (`GET /api/organizations`), `perf-test` venue landing/homepage (`GET /api/organizations/perf-test/landing`), and public membership products listing.
+  2. **Session & Membership Status**: Authenticated customer session verification (`GET /api/organizations/perf-test/customer/session`) and membership status retrieval.
+  3. **Child Creation**: Registering a child profile (`POST /api/organizations/perf-test/customer/children`).
+  4. **Catalog & Reference Lookups**: Fetching teachers, eligible classes, concerto catalog, and accompanists for the `perf-test` festival.
+  5. **Eligibility Evaluation**: Running class/child eligibility checks prior to registration submission.
+  6. **Class Registrations**: Submitting class registration entries for the newly created child.
+  7. **Pending Checkout & Checkout Restart**: Fetching pending checkout state and executing checkout restart to validate idempotent cart/checkout session transitions under concurrency.
+- **Operations Under Test**: End-to-end read/write fan-out across public discovery, authenticated session & membership state, catalog queries, eligibility engine, registration writes, and checkout state transitions.
+
+### v0.4.2 Live Verification Results (2026-11-23)
+
+- **Integration Deployment Run**: `45097258940` (`main` SHA `134185c`, v0.4.2) — **PASS**
+- **Performance Benchmark Run**: `45099487934` (`concurrency=500`, `suite=all`, `apply_seed=true`) — **PASS** (0 errors across all suites)
+
+| Suite / Scenario | Scale & Status | Throughput | P50 | P95 | P99 / Notes |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **`perf:children`** | 500 req, 500x201 (0 errors) | 275.8 req/s | 1380.2ms | 1790.0ms | P99 1809.7ms |
+| **S1 Waitlist Join Race** | Step 1: 500x201; Step 2: 500x200 (0 errors) | — | Step 1: 985.8ms<br>Step 2: 1984.1ms | Step 1: 1436.0ms<br>Step 2: 2992.5ms | Contended waitlist race |
+| **S2 Full Multi-Step Funnel** | 500 users / 2000 req (0 errors) | — | 3929.5ms | 4075.7ms | End-to-end 4-step funnel |
+| **S3 Peak Flash-Mob Mixed Traffic** | 1000 peak req — 800 reads / 150 child writes / 50 waitlist writes (0 errors) | 562.6 req/s | 840.2ms | 1615.2ms | P99 1760.2ms |
+| **S4 Waitlist Queue Churn** | Phase 1: 500x200; Phase 2: 500x200 (0 errors) | — | Phase 1: 1999.1ms<br>Phase 2: 1568.1ms | Phase 1: 3100.5ms<br>Phase 2: 2580.0ms | Concurrent join/withdraw churn |
+| **S5 End-to-End Venue & Registration Journey** | 500 users / 7500 req across all 10 v0.4.2 steps (0 errors) | — | 16413.6ms | 16683.6ms | Individual steps: P50 296.8ms–1609.2ms, P95 434.6ms–2310.4ms |
+
 ---
 
-## 5. Current Release Benchmark Results
+## 5. Historical Baseline Benchmark Results (v0.3.0 / v0.4.0 Reference)
 
-All empirical benchmark results documented below were executed on the integration host (`https://int.artsfestival.online`) against the isolated `perf-test` tenant.
+All empirical benchmark tables below are preserved intact as historical v0.3.0/v0.4.0 reference data executed on the integration host (`https://int.artsfestival.online`) against the isolated `perf-test` tenant (including the earlier 2,000-request Scenario 3 run and up-to-5,000 stress ramp prior to the v0.4.2 500-baseline / 1,000-peak policy).
 
 ### 5.1 Scenario 0: Baseline vs. Optimized (500 Parents)
 

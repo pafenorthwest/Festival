@@ -12,6 +12,7 @@ import {
 	type RepertoireReviewItem,
 	type RepertoireReviewQueueFilter,
 	type RepertoireReviewQueueSummary,
+	type RepertoireReviewStatus,
 	validateAddCatalogWorkInput,
 	validateClaimReviewInput,
 	validateFlagReviewInput,
@@ -22,25 +23,27 @@ import {
 
 describe("repertoire review domain types and validation", () => {
 	describe("RepertoireReviewStatus and constants", () => {
-		it("includes expected review statuses", () => {
-			expect(REPERTOIRE_REVIEW_STATUSES).toContain("pending");
-			expect(REPERTOIRE_REVIEW_STATUSES).toContain("claimed");
-			expect(REPERTOIRE_REVIEW_STATUSES).toContain("in_review");
-			expect(REPERTOIRE_REVIEW_STATUSES).toContain("reviewed");
-			expect(REPERTOIRE_REVIEW_STATUSES).toContain("flagged");
-			expect(REPERTOIRE_REVIEW_STATUSES).toContain("needs_follow_up");
-			expect(REPERTOIRE_REVIEW_STATUSES).toContain("approved");
+		it("includes only the 4 canonical database review statuses", () => {
+			expect(REPERTOIRE_REVIEW_STATUSES).toEqual([
+				"pending",
+				"claimed",
+				"flagged",
+				"approved",
+			]);
 		});
 
 		it("validates status values correctly with isRepertoireReviewStatus", () => {
 			expect(isRepertoireReviewStatus("pending")).toBe(true);
 			expect(isRepertoireReviewStatus("claimed")).toBe(true);
-			expect(isRepertoireReviewStatus("in_review")).toBe(true);
-			expect(isRepertoireReviewStatus("reviewed")).toBe(true);
 			expect(isRepertoireReviewStatus("flagged")).toBe(true);
-			expect(isRepertoireReviewStatus("needs_follow_up")).toBe(true);
 			expect(isRepertoireReviewStatus("approved")).toBe(true);
-			expect(isRepertoireReviewStatus("approved_for_publication")).toBe(true);
+			expect(isRepertoireReviewStatus("in_review")).toBe(false);
+			expect(isRepertoireReviewStatus("reviewed")).toBe(false);
+			expect(isRepertoireReviewStatus("needs_follow_up")).toBe(false);
+			expect(isRepertoireReviewStatus("approved_for_publication")).toBe(false);
+			expect(isRepertoireReviewStatus("needs_info")).toBe(false);
+			expect(isRepertoireReviewStatus("rejected")).toBe(false);
+			expect(isRepertoireReviewStatus("resolved")).toBe(false);
 			expect(isRepertoireReviewStatus("unknown_status")).toBe(false);
 			expect(isRepertoireReviewStatus(null)).toBe(false);
 			expect(isRepertoireReviewStatus(123)).toBe(false);
@@ -118,7 +121,7 @@ describe("repertoire review domain types and validation", () => {
 				normalizedComposer: "Ludwig van Beethoven",
 				imslpUrl:
 					"https://imslp.org/wiki/Piano_Sonata_No.14,_Op.27_No.2_(Beethoven,_Ludwig_van)",
-				status: "reviewed",
+				status: "approved",
 				canonicalWorkId: "work-1",
 				canonicalContributorId: "comp-1",
 				notes: "Verified against Henle Urtext edition",
@@ -131,7 +134,7 @@ describe("repertoire review domain types and validation", () => {
 				"Moonlight Sonata, Op. 27 No. 2",
 			);
 			expect(result.data?.normalizedComposer).toBe("Ludwig van Beethoven");
-			expect(result.data?.status).toBe("reviewed");
+			expect(result.data?.status).toBe("approved");
 			expect(result.data?.canonicalWorkId).toBe("work-1");
 		});
 
@@ -191,15 +194,24 @@ describe("repertoire review domain types and validation", () => {
 			);
 		});
 
-		it("rejects invalid status", () => {
-			const result = validateNormalizeReviewInput({
-				reviewItemId: "item-1",
-				normalizedTitle: "Valid Title",
-				normalizedComposer: "Valid Composer",
-				status: "invalid_status" as RepertoireReviewStatus,
-			});
-			expect(result.valid).toBe(false);
-			expect(result.errors[0]).toContain("Invalid review status");
+		it("rejects invalid or non-approved status", () => {
+			for (const badStatus of [
+				"invalid_status",
+				"in_review",
+				"reviewed",
+				"pending",
+				"claimed",
+				"flagged",
+			]) {
+				const result = validateNormalizeReviewInput({
+					reviewItemId: "item-1",
+					normalizedTitle: "Valid Title",
+					normalizedComposer: "Valid Composer",
+					status: badStatus as RepertoireReviewStatus,
+				});
+				expect(result.valid).toBe(false);
+				expect(result.errors[0]).toContain("Invalid review status");
+			}
 		});
 	});
 
@@ -259,21 +271,23 @@ describe("repertoire review domain types and validation", () => {
 	});
 
 	describe("validateResolveFlagInput", () => {
-		it("validates resolution with reviewItemId", () => {
-			const result = validateResolveFlagInput({
-				reviewItemId: "item-1",
-				resolutionNotes: "Disambiguated to K. 545",
-				status: "reviewed",
-				resolvedBy: "user-2",
-			});
-			expect(result.valid).toBe(true);
-			expect(result.errors).toEqual([]);
-			expect(result.data?.reviewItemId).toBe("item-1");
-			expect(result.data?.resolutionNotes).toBe("Disambiguated to K. 545");
-			expect(result.data?.status).toBe("reviewed");
+		it("validates resolution with reviewItemId and valid post-flag target statuses", () => {
+			for (const targetStatus of ["pending", "claimed", "approved"] as const) {
+				const result = validateResolveFlagInput({
+					reviewItemId: "item-1",
+					resolutionNotes: "Disambiguated to K. 545",
+					status: targetStatus,
+					resolvedBy: "user-2",
+				});
+				expect(result.valid).toBe(true);
+				expect(result.errors).toEqual([]);
+				expect(result.data?.reviewItemId).toBe("item-1");
+				expect(result.data?.resolutionNotes).toBe("Disambiguated to K. 545");
+				expect(result.data?.status).toBe(targetStatus);
+			}
 		});
 
-		it("validates resolution with flagId only", () => {
+		it("validates resolution with flagId only and defaults status to pending when omitted", () => {
 			const result = validateResolveFlagInput({
 				flagId: "flag-99",
 				notes: "Resolved via catalog match",
@@ -282,6 +296,25 @@ describe("repertoire review domain types and validation", () => {
 			expect(result.data?.reviewItemId).toBe("flag-99");
 			expect(result.data?.flagId).toBe("flag-99");
 			expect(result.data?.resolutionNotes).toBe("Resolved via catalog match");
+			expect(result.data?.status).toBe("pending");
+		});
+
+		it("rejects non-target statuses such as in_review, flagged, and reviewed", () => {
+			for (const disallowedStatus of [
+				"in_review",
+				"flagged",
+				"reviewed",
+				"needs_info",
+				"rejected",
+				"resolved",
+			]) {
+				const result = validateResolveFlagInput({
+					reviewItemId: "item-1",
+					status: disallowedStatus as RepertoireReviewStatus,
+				});
+				expect(result.valid).toBe(false);
+				expect(result.errors[0]).toContain("Invalid review status");
+			}
 		});
 
 		it("rejects non-object payload", () => {
@@ -311,7 +344,7 @@ describe("repertoire review domain types and validation", () => {
 	});
 
 	describe("calculateRepertoireReviewQueueSummary", () => {
-		it("calculates queue summary correctly", () => {
+		it("calculates queue summary correctly for canonical statuses", () => {
 			const items: RepertoireReviewItem[] = [
 				{
 					id: "item-1",
@@ -327,7 +360,7 @@ describe("repertoire review domain types and validation", () => {
 					organizationId: "org-1",
 					rawTitle: "Waltz",
 					rawComposer: "Chopin",
-					status: "in_review",
+					status: "claimed",
 					createdAtIso: "2026-09-01T00:00:00Z",
 					updatedAtIso: "2026-09-01T00:00:00Z",
 				},
@@ -345,15 +378,6 @@ describe("repertoire review domain types and validation", () => {
 				{
 					id: "item-4",
 					organizationId: "org-1",
-					rawTitle: "Prelude",
-					rawComposer: "Bach",
-					status: "reviewed",
-					createdAtIso: "2026-09-01T00:00:00Z",
-					updatedAtIso: "2026-09-01T00:00:00Z",
-				},
-				{
-					id: "item-5",
-					organizationId: "org-1",
 					rawTitle: "Nocturne",
 					rawComposer: "Chopin",
 					status: "approved",
@@ -364,13 +388,13 @@ describe("repertoire review domain types and validation", () => {
 
 			const summary: RepertoireReviewQueueSummary =
 				calculateRepertoireReviewQueueSummary(items);
-			expect(summary.total).toBe(5);
+			expect(summary.total).toBe(4);
 			expect(summary.pending).toBe(1);
 			expect(summary.inReview).toBe(1);
-			expect(summary.reviewed).toBe(1);
+			expect(summary.reviewed).toBe(0);
 			expect(summary.flagged).toBe(1);
 			expect(summary.approved).toBe(1);
-			expect(summary.completed).toBe(2);
+			expect(summary.completed).toBe(1);
 		});
 	});
 

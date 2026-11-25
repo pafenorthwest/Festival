@@ -207,7 +207,7 @@ export function useMusicReviewModalState(props: UseMusicReviewModalStateProps) {
 				(
 					await resolveRepertoireFlag(props.slug, item.id, {
 						resolutionNotes: resolutionNotes().trim() || null,
-						status: "in_review",
+						status: item.claimedByUid ? "claimed" : "pending",
 					})
 				).item,
 			"Flag resolved.",

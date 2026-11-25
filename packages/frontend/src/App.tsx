@@ -1,5 +1,12 @@
 import type { RouteSectionProps } from "@solidjs/router";
-import { createEffect, ErrorBoundary, on, Show, Suspense } from "solid-js";
+import {
+	createEffect,
+	ErrorBoundary,
+	type JSX,
+	on,
+	Show,
+	Suspense,
+} from "solid-js";
 import { FestivalShellProvider } from "./app/FestivalShellContext.js";
 import { preloadNavigation } from "./app/navigationPreload.js";
 import { useFestivalAppController } from "./app/useFestivalAppController.js";
@@ -9,6 +16,20 @@ import { OrganizationSideNavigation } from "./components/OrganizationSideNavigat
 import { SignInModal } from "./components/SignInModal.js";
 import { CustomerIdentityProvider } from "./domains/customer/CustomerIdentityContext.js";
 import { isOrganizationPageRoute } from "./lib/routes.js";
+
+function renderHeaderFallback(
+	route: () => unknown,
+	reset: () => void,
+): JSX.Element {
+	createEffect(on(route, reset, { defer: true }));
+	return (
+		<header class="org-landing-header parent-header">
+			<a class="parent-brand" href="/" aria-label="Festival Home">
+				<span class="parent-brand-copy">Music Festival</span>
+			</a>
+		</header>
+	);
+}
 
 export default function App(props: RouteSectionProps) {
 	const app = useFestivalAppController();
@@ -34,7 +55,13 @@ export default function App(props: RouteSectionProps) {
 					onPointerOver={preloadNavigation}
 					onFocusIn={preloadNavigation}
 				>
-					<AppHeader app={app} />
+					<ErrorBoundary
+						fallback={(_error, reset) =>
+							renderHeaderFallback(() => app.route(), reset)
+						}
+					>
+						<AppHeader app={app} />
+					</ErrorBoundary>
 					<AppBanners app={app} />
 
 					<div

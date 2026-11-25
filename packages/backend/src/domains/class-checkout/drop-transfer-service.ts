@@ -1,12 +1,11 @@
-import {
-	AppError,
-	type ClassEntitlement,
-	type DropRegistrationInput,
-	type DropRegistrationResult,
-	type RegistrationActorRole,
-	type TransferRegistrationInput,
-	type TransferRegistrationResult,
-	type WaitlistPromotionResult,
+import type {
+	ClassEntitlement,
+	DropRegistrationInput,
+	DropRegistrationResult,
+	RegistrationActorRole,
+	TransferRegistrationInput,
+	TransferRegistrationResult,
+	WaitlistPromotionResult,
 } from "@festival/common";
 import type { ShopifyRefundProvider } from "./drop-transfer-fees.js";
 import {
@@ -20,6 +19,8 @@ import {
 } from "./drop-transfer-ops.js";
 import {
 	AsyncLock,
+	assertDroppableEntitlement,
+	assertPromotableEntitlement,
 	assertTargetClassInFestival,
 	assertTransferableEntitlement,
 	type ClassCapacityResolver,
@@ -51,6 +52,8 @@ export interface DropTransferServiceOptions {
 
 export type PromoteTopWaitlistedInput = PromoteTopWaitlistedParams;
 
+const RETRY_CLASS_LOCK = Symbol("RETRY_CLASS_LOCK");
+
 export class DropTransferService {
 	private readonly lock = new AsyncLock();
 	private readonly ops: DropTransferOpsContext;
@@ -80,13 +83,29 @@ export class DropTransferService {
 		input: DropRegistrationInput,
 	): Promise<DropRegistrationResult> {
 		const orgId = input.organizationId ?? "";
-		return this.lock.acquire(
-			`entitlement:${orgId}:${input.classEntitlementId}`,
-			() =>
-				executeDropOp(this.ops, orgId, input, (promo) =>
-					this.promoteTopWaitlisted(promo),
-				),
-		);
+		const initial = await this.getEntitlement(orgId, input.classEntitlementId);
+		assertDroppableEntitlement(initial, input.festivalId);
+		const resolvedOrgId = initial.organizationId;
+		let lockedClassId = initial.festivalClassId;
+
+		while (true) {
+			const outcome = await this.lock.acquire(
+				[
+					`entitlement:${resolvedOrgId}:${initial.id}`,
+					`class:${resolvedOrgId}:${lockedClassId}`,
+				],
+				async () => {
+					const current = await this.getEntitlement(resolvedOrgId, initial.id);
+					assertDroppableEntitlement(current, input.festivalId);
+					if (current.festivalClassId !== lockedClassId) {
+						lockedClassId = current.festivalClassId;
+						return RETRY_CLASS_LOCK;
+					}
+					return executeDropOp(this.ops, current, input);
+				},
+			);
+			if (outcome !== RETRY_CLASS_LOCK) return outcome;
+		}
 	}
 
 	async transferRegistration(
@@ -105,14 +124,36 @@ export class DropTransferService {
 			initial.festivalId,
 			input.targetFestivalClassId,
 		);
-		return this.lock.acquire(
-			[
-				`entitlement:${initial.organizationId}:${initial.id}`,
-				`class:${initial.organizationId}:${initial.festivalClassId}`,
-				`class:${initial.organizationId}:${input.targetFestivalClassId}`,
-			],
-			() => executeTransferOp(this.ops, initial, input, targetCapacity),
-		);
+		const resolvedOrgId = initial.organizationId;
+		let lockedClassId = initial.festivalClassId;
+
+		while (true) {
+			const outcome = await this.lock.acquire(
+				[
+					`entitlement:${resolvedOrgId}:${initial.id}`,
+					`class:${resolvedOrgId}:${lockedClassId}`,
+					`class:${resolvedOrgId}:${input.targetFestivalClassId}`,
+				],
+				async () => {
+					const current = await this.getEntitlement(resolvedOrgId, initial.id);
+					assertTransferableEntitlement(
+						current,
+						input.targetFestivalClassId,
+						input.festivalId,
+					);
+					if (current.festivalClassId !== lockedClassId) {
+						lockedClassId = current.festivalClassId;
+						return RETRY_CLASS_LOCK;
+					}
+					return executeTransferOp(this.ops, {
+						existing: current,
+						input,
+						targetCapacity,
+					});
+				},
+			);
+			if (outcome !== RETRY_CLASS_LOCK) return outcome;
+		}
 	}
 
 	async promoteTopWaitlisted(
@@ -132,33 +173,35 @@ export class DropTransferService {
 		actorRole?: RegistrationActorRole;
 		reason?: string | null;
 	}): Promise<WaitlistPromotionResult> {
-		const existing = await this.getEntitlement(
+		const initial = await this.getEntitlement(
 			input.organizationId,
 			input.classEntitlementId,
 		);
-		if (!existing) {
-			throw new AppError("Class entitlement not found.", 404);
-		}
-		if (input.festivalId && existing.festivalId !== input.festivalId) {
-			throw new AppError(
-				"Class entitlement does not belong to this festival.",
-				400,
+		assertPromotableEntitlement(initial, input.festivalId);
+		const resolvedOrgId = initial.organizationId;
+		let lockedClassId = initial.festivalClassId;
+
+		while (true) {
+			const outcome = await this.lock.acquire(
+				[
+					`entitlement:${resolvedOrgId}:${initial.id}`,
+					`class:${resolvedOrgId}:${lockedClassId}`,
+				],
+				async () => {
+					const current = await this.getEntitlement(resolvedOrgId, initial.id);
+					assertPromotableEntitlement(current, input.festivalId);
+					if (current.festivalClassId !== lockedClassId) {
+						lockedClassId = current.festivalClassId;
+						return RETRY_CLASS_LOCK;
+					}
+					return executePromotionOp(this.ops, current, {
+						...input,
+						actorRole: input.actorRole ?? "admin",
+						reason: input.reason ?? "Admin manual waitlist promotion",
+					});
+				},
 			);
+			if (outcome !== RETRY_CLASS_LOCK) return outcome;
 		}
-		if (existing.status !== "waitlisted") {
-			throw new AppError(
-				`Cannot promote registration with status "${existing.status}".`,
-				400,
-			);
-		}
-		return this.lock.acquire(
-			`class:${input.organizationId}:${existing.festivalClassId}`,
-			() =>
-				executePromotionOp(this.ops, existing, {
-					...input,
-					actorRole: input.actorRole ?? "admin",
-					reason: input.reason ?? "Admin manual waitlist promotion",
-				}),
-		);
 	}
 }

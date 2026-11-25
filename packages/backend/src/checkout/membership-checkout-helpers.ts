@@ -6,7 +6,11 @@ import {
 } from "@festival/common";
 import { lifecycleForEntitlementRead } from "../commerce/entitlement-lifecycle.js";
 import type { MembershipCommerceRepository } from "../commerce/membership-commerce-repository.js";
-import { isAllowedCheckoutUrl } from "../domains/class-checkout/index.js";
+import {
+	type ClassCheckoutStorefrontBinding,
+	isAllowedCheckoutUrl,
+	type MembershipCheckoutStorefrontPort,
+} from "../domains/class-checkout/index.js";
 import { AppError } from "../errors/app-error.js";
 import type { OrganizationRepository } from "../repo/organization-repository.js";
 import type { PublicMembershipProductService } from "../shopify/public-membership-product-service.js";
@@ -16,17 +20,14 @@ import {
 	type CheckoutRepository,
 } from "./checkout-repository.js";
 
-export interface MembershipCheckoutStorefront {
+export interface MembershipCheckoutStorefront
+	extends Pick<MembershipCheckoutStorefrontPort, "checkout"> {
 	createCart(input: {
 		organizationId: string;
 		shopifyVariantGid: string;
 		buyerAccessToken: string;
 		correlationId: string;
 	}): Promise<{ shopifyCartId: string }>;
-	checkout(input: {
-		organizationId: string;
-		shopifyCartId: string;
-	}): Promise<{ checkoutUrl: string }>;
 }
 
 export interface MembershipCheckoutStartInput {
@@ -162,20 +163,27 @@ async function finalizeMembershipStorefrontCheckout(
 		intentId: string;
 		shopifyCartId: string;
 	},
-	storefrontIntegrationVersion: number,
+	storefrontBinding: ClassCheckoutStorefrontBinding,
 ): Promise<{ checkoutUrl: string }> {
 	await deps.checkout.markCheckoutStarted(input.intentId);
 	const checkout = await deps.storefront.checkout({
 		organizationId: input.organizationId,
 		shopifyCartId: input.shopifyCartId,
+		expectedStorefrontBinding: storefrontBinding,
+		includeShopPrimaryDomain: true,
 	});
 	const integration = await deps.organizations.getShopifyIntegration(
 		input.organizationId,
 	);
 	if (
 		!integration ||
-		integration.integrationVersion !== storefrontIntegrationVersion ||
-		!isAllowedCheckoutUrl(checkout.checkoutUrl, integration.storeDomain)
+		integration.integrationVersion !== storefrontBinding.integrationVersion ||
+		integration.storeDomain !== storefrontBinding.shopDomain ||
+		!isAllowedCheckoutUrl(
+			checkout.checkoutUrl,
+			integration.storeDomain,
+			checkout.shopPrimaryDomainUrl,
+		)
 	) {
 		throw new AppError("Shopify checkout is unavailable.", 503);
 	}
@@ -223,7 +231,10 @@ export async function startNewMembershipCartAndCheckout(
 				intentId: intent.id,
 				shopifyCartId: cart.shopifyCartId,
 			},
-			storefrontIntegration.integrationVersion,
+			{
+				shopDomain: storefrontIntegration.storeDomain,
+				integrationVersion: storefrontIntegration.integrationVersion,
+			},
 		);
 	} catch (_error) {
 		await deps.checkout.markFailed(intent.id);
@@ -281,7 +292,10 @@ export async function resumeMembershipCheckoutOutcome(
 				intentId: outcome.intent.id,
 				shopifyCartId: outcome.cart.shopifyCartId,
 			},
-			storefrontIntegration.integrationVersion,
+			{
+				shopDomain: storefrontIntegration.storeDomain,
+				integrationVersion: storefrontIntegration.integrationVersion,
+			},
 		);
 	} catch (_error) {
 		await deps.checkout.markFailed(outcome.intent.id);

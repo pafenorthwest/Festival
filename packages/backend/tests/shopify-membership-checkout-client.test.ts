@@ -117,6 +117,92 @@ describe("ShopifyMembershipCheckoutClient", () => {
 		expect(new Headers(headers).has("Idempotency-Key")).toBe(false);
 	});
 
+	function checkoutFixture(responseForQuery: (query: string) => object) {
+		const apiDomain = "jrke10-1k.myshopify.com";
+		const integrationVersion = 3;
+		const queries: string[] = [];
+		const transport = new CustomerAccountTransport({
+			resolver: async () => [{ address: "8.8.8.8", family: 4, ttlSeconds: 60 }],
+			requester: async (url, _answer, _agent, init) => {
+				expect(url.href).toBe(`https://${apiDomain}/api/2026-07/graphql.json`);
+				expect(
+					new Headers(init?.headers).get("Shopify-Storefront-Private-Token"),
+				).toBe("private-token");
+				const { query } = JSON.parse(String(init?.body)) as { query: string };
+				queries.push(query);
+				const response = responseForQuery(query);
+				return {
+					status: 200,
+					body: (async function* () {
+						yield new TextEncoder().encode(JSON.stringify(response));
+					})(),
+				};
+			},
+		});
+		const client = new ShopifyMembershipCheckoutClient(
+			{
+				getShopifyIntegration: async () => ({
+					storeDomain: apiDomain,
+					integrationVersion,
+					encryptedStorefrontPrivateToken: "ciphertext",
+				}),
+			} as never,
+			{ decrypt: () => "private-token" } as never,
+			transport,
+		);
+		const cart = {
+			organizationId: "org",
+			shopifyCartId: "gid://shopify/Cart/private",
+			expectedStorefrontBinding: { shopDomain: apiDomain, integrationVersion },
+		};
+		return { client, cart, queries };
+	}
+
+	it("queries the primary domain separately for cross-origin membership checkout", async () => {
+		const shopPrimaryDomainUrl =
+			"https://performing-arts-festival-eastside.myshopify.com";
+		const checkoutUrl = `${shopPrimaryDomainUrl}/checkouts/fresh`;
+		const { client, cart, queries } = checkoutFixture((query) =>
+			query.includes("primaryDomain")
+				? { data: { shop: { primaryDomain: { url: shopPrimaryDomainUrl } } } }
+				: { data: { cart: { checkoutUrl } } },
+		);
+		await expect(
+			client.checkout({ ...cart, includeShopPrimaryDomain: true }),
+		).resolves.toEqual({ checkoutUrl, shopPrimaryDomainUrl });
+		expect(queries).toHaveLength(2);
+		const [cartQuery, shopQuery] = queries;
+		expect(cartQuery).toContain("checkoutUrl");
+		expect(cartQuery).not.toContain("primaryDomain");
+		expect(shopQuery).toContain("primaryDomain");
+		expect(shopQuery).not.toContain("checkoutUrl");
+
+		await expect(client.checkout(cart)).resolves.toEqual({ checkoutUrl });
+		expect(queries).toEqual([cartQuery, shopQuery, cartQuery]);
+	});
+
+	it("resolves an existing API-domain checkout with cart-only permissions", async () => {
+		const checkoutUrl = "https://jrke10-1k.myshopify.com/checkouts/pending";
+		const { client, cart, queries } = checkoutFixture((query) =>
+			/\bshop\s*\{/.test(query)
+				? {
+						errors: [
+							{
+								message: "Access denied for shop field.",
+								extensions: { code: "ACCESS_DENIED" },
+							},
+						],
+					}
+				: { data: { cart: { checkoutUrl } } },
+		);
+		await expect(
+			client.checkout({ ...cart, includeShopPrimaryDomain: true }),
+		).resolves.toEqual({ checkoutUrl });
+		expect(queries).toHaveLength(1);
+		expect(queries[0]).toContain("checkoutUrl");
+		expect(queries[0]).not.toMatch(/\bshop\s*\{/);
+	});
+
 	it("rejects a changed Storefront version or shop at the credential read before contacting Shopify", async () => {
 		const decrypt = mock(() => "private-token");
 		const requester = mock(async () => {

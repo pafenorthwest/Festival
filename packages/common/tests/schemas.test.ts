@@ -201,6 +201,27 @@ describe("@festival/common valibot schemas", () => {
 		).toBe(true);
 		expect(
 			v.safeParse(NormalizeRepertoireReviewInputSchema, {
+				normalizedTitle: "Sonata in C",
+				normalizedComposer: "W. A. Mozart",
+			}).success,
+		).toBe(true);
+		for (const badNormalizeStatus of [
+			"in_review",
+			"reviewed",
+			"pending",
+			"claimed",
+			"flagged",
+		]) {
+			expect(
+				v.safeParse(NormalizeRepertoireReviewInputSchema, {
+					normalizedTitle: "Sonata in C",
+					normalizedComposer: "W. A. Mozart",
+					status: badNormalizeStatus,
+				}).success,
+			).toBe(false);
+		}
+		expect(
+			v.safeParse(NormalizeRepertoireReviewInputSchema, {
 				normalizedTitle: "",
 				normalizedComposer: "Mozart",
 			}).success,
@@ -212,12 +233,38 @@ describe("@festival/common valibot schemas", () => {
 				notes: "Check opus number",
 			}).success,
 		).toBe(true);
-		expect(
-			v.safeParse(ResolveRepertoireFlagInputSchema, {
+		const omittedStatusResolve = v.safeParse(ResolveRepertoireFlagInputSchema, {
+			resolutionNotes: "Verified edition",
+		});
+		expect(omittedStatusResolve.success).toBe(true);
+		if (omittedStatusResolve.success) {
+			expect(omittedStatusResolve.output.status).toBe("pending");
+		}
+		for (const validTargetStatus of ["pending", "claimed", "approved"]) {
+			const parsed = v.safeParse(ResolveRepertoireFlagInputSchema, {
 				resolutionNotes: "Verified edition",
-				status: "reviewed",
-			}).success,
-		).toBe(true);
+				status: validTargetStatus,
+			});
+			expect(parsed.success).toBe(true);
+			if (parsed.success) {
+				expect(parsed.output.status).toBe(validTargetStatus);
+			}
+		}
+		for (const invalidTargetStatus of [
+			"in_review",
+			"flagged",
+			"reviewed",
+			"needs_info",
+			"rejected",
+			"resolved",
+		]) {
+			expect(
+				v.safeParse(ResolveRepertoireFlagInputSchema, {
+					resolutionNotes: "Verified edition",
+					status: invalidTargetStatus,
+				}).success,
+			).toBe(false);
+		}
 		expect(
 			v.safeParse(AddRepertoireCatalogWorkInputSchema, {
 				title: "Nocturne Op. 9 No. 2",

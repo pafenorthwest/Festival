@@ -1,5 +1,6 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { Button } from "../components/Button.js";
+import { CUSTOMER_HELP_TEXT, HelpTooltip } from "../components/HelpTooltip.js";
 
 export interface ClassOption {
 	id: string;
@@ -66,13 +67,23 @@ export function CustomerTransferRegistrationModal(
 					</Show>
 
 					<form class="flow-panel" onSubmit={handleSubmit}>
-						<label class="field">
-							<span>Select new festival class</span>
+						<div class="field">
+							<div class="field-help-header">
+								<label for="transfer-target-class">
+									Select new festival class
+								</label>
+								<HelpTooltip
+									id="transfer-class-help"
+									label="About transferring a registration"
+									text={CUSTOMER_HELP_TEXT.transferClass}
+								/>
+							</div>
 							<Show
 								when={!props.isLoadingClasses}
 								fallback={<p class="muted">Loading available classes...</p>}
 							>
 								<select
+									id="transfer-target-class"
 									value={targetClassId()}
 									onChange={(e) => setTargetClassId(e.currentTarget.value)}
 									required
@@ -83,7 +94,7 @@ export function CustomerTransferRegistrationModal(
 									</For>
 								</select>
 							</Show>
-						</label>
+						</div>
 
 						<label class="field">
 							<span>Reason for transfer (optional)</span>

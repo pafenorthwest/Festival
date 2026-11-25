@@ -246,6 +246,39 @@ describe("communication domain", () => {
 					renderTemplate(null as unknown as string, { name: "Test" }),
 				).toBe("");
 			});
+
+			it("blocks prototype chain traversal and only renders primitive values", () => {
+				expect(
+					renderTemplate(
+						"{{user.toString}}|{{user.constructor}}|{{__proto__.toString}}|{{user.valueOf}}|{{user.prototype}}",
+						{ user: { name: "Alice" } },
+					),
+				).toBe("||||");
+				expect(
+					renderTemplate(
+						"{{__proto__}}|{{prototype}}|{{constructor}}|{{toString}}",
+						{ constructor: "injected" },
+					),
+				).toBe("|||");
+
+				const vars = {
+					user: {
+						name: "Alice",
+						meta: { role: "Admin" },
+						tags: ["piano", "strings"],
+						fn: () => "secret",
+					},
+					count: 7,
+					active: true,
+					big: 9007199254740993n,
+				};
+				expect(
+					renderTemplate(
+						"{{user}}|{{user.meta}}|{{user.tags}}|{{user.fn}}|{{user.name}}|{{user.meta.role}}|{{count}}|{{active}}|{{big}}",
+						vars,
+					),
+				).toBe("||||Alice|Admin|7|true|9007199254740993");
+			});
 		});
 	});
 

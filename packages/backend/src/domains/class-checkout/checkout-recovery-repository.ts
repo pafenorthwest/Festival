@@ -3,6 +3,7 @@ import { initializePostgresSchema } from "../../infra/s11-infra.js";
 import { validateCheckoutSchemaName } from "./checkout-intent-helpers.js";
 import {
 	checkCompletedOrderOrEntitlementSql,
+	completeRecoveryCheckoutTx,
 	consumeRecoveryRequestTx,
 	createRecoveryRequestTx,
 	findRecoverableIntentByIdQuery,
@@ -14,6 +15,7 @@ import {
 import type {
 	CheckoutRecoveryRepository,
 	CheckoutRecoveryRequestRecord,
+	CompleteRecoveryCheckoutParams,
 	ConsumeRecoveryRequestParams,
 	CreateRecoveryRequestParams,
 	RecoverableCheckoutIntentRecord,
@@ -131,6 +133,14 @@ export class PostgresCheckoutRecoveryRepository
 	): Promise<CheckoutRecoveryRequestRecord> {
 		return sql.begin((tx) =>
 			consumeRecoveryRequestTx(tx, this.schema, paramsOrToken, maybeOrgId),
+		);
+	}
+
+	async completeRecoveryCheckout(
+		params: CompleteRecoveryCheckoutParams,
+	): Promise<void> {
+		await sql.begin((tx) =>
+			completeRecoveryCheckoutTx(tx, this.schema, params),
 		);
 	}
 }

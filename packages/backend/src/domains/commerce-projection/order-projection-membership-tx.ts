@@ -5,6 +5,7 @@ import {
 	assertValidEntitlementGrantSnapshotInput,
 	type CreateEntitlementGrantSnapshotInput,
 	type EntitlementGrantSnapshot,
+	normalizeVerifiedShopifyIdentityEmail,
 } from "@festival/common";
 import type { sql } from "bun";
 import {
@@ -172,6 +173,14 @@ function reviewDecisionResult(
 	};
 }
 
+function tryNormalizeGrantEmail(value: string | undefined): string | null {
+	try {
+		return normalizeVerifiedShopifyIdentityEmail(value ?? "");
+	} catch {
+		return null;
+	}
+}
+
 export async function prepareMembershipGrantTx(
 	tx: SqlRunner,
 	schema: string,
@@ -182,14 +191,17 @@ export async function prepareMembershipGrantTx(
 	grant?: CreateEntitlementGrantSnapshotInput;
 	nextEntitlementId?: string;
 }> {
-	if (!grantInput.verifiedIdentityEmail) {
+	const verifiedIdentityEmail = tryNormalizeGrantEmail(
+		grantInput.verifiedIdentityEmail,
+	);
+	if (!verifiedIdentityEmail) {
 		return reviewDecisionResult(decisionInput, "upstream_invalid");
 	}
 	const claimed = await claimIdentityEmailTx(
 		tx,
 		schema,
 		decisionInput.organizationId,
-		grantInput.verifiedIdentityEmail,
+		verifiedIdentityEmail,
 		decisionInput.customerId,
 	);
 	if (!claimed) {
@@ -199,7 +211,7 @@ export async function prepareMembershipGrantTx(
 		tx,
 		schema,
 		decisionInput,
-		grantInput,
+		{ ...grantInput, verifiedIdentityEmail },
 	);
 	if (resolved.conflict) {
 		return reviewDecisionResult(decisionInput, "duplicate_purchase");
@@ -284,18 +296,23 @@ async function insertManualApprovalGrantTx(
 		throw new AppError("Approved decision requires a grant.", 422);
 	}
 	assertValidEntitlementGrantSnapshotInput(input.grant);
-	await tx.unsafe(
-		`INSERT INTO ${schema}.membership_identity_emails (organization_id, normalized_email, customer_id) VALUES ($1,$2,$3) ON CONFLICT (organization_id, normalized_email) DO UPDATE SET customer_id = EXCLUDED.customer_id WHERE ${schema}.membership_identity_emails.customer_id = EXCLUDED.customer_id`,
-		[
-			input.grant.organizationId,
-			input.grant.verifiedIdentityEmail ?? "",
-			input.grant.customerId,
-		],
+	const verifiedIdentityEmail = normalizeVerifiedShopifyIdentityEmail(
+		input.grant.verifiedIdentityEmail ?? "",
 	);
+	const claimed = await claimIdentityEmailTx(
+		tx,
+		schema,
+		input.grant.organizationId,
+		verifiedIdentityEmail,
+		input.grant.customerId,
+	);
+	if (!claimed) {
+		throw new Error("Shopify identity email belongs to another customer.");
+	}
 	return insertMembershipGrantTx(
 		tx,
 		schema,
-		input.grant,
+		{ ...input.grant, verifiedIdentityEmail },
 		randomUUID(),
 		input.resolvedAtIso,
 	);

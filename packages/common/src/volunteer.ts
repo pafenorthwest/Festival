@@ -1,3 +1,5 @@
+import { isValidCalendarDate } from "./schema-utils.js";
+
 export const SHIFT_PERIODS = ["AM", "PM"] as const;
 export type ShiftPeriod = (typeof SHIFT_PERIODS)[number];
 
@@ -95,6 +97,18 @@ export interface UpdateVolunteerShiftInput {
 	timeText?: string | null;
 	division?: string | null;
 	adjudicator?: string | null;
+}
+
+export interface CreateVolunteerShiftsBatchInput {
+	dates: string[];
+	period: ShiftPeriod;
+	timeText?: string | null;
+	division?: string | null;
+	adjudicator?: string | null;
+}
+
+export interface CreateVolunteerShiftsBatchResponse {
+	shifts: VolunteerShift[];
 }
 
 export type CreateShiftInput = CreateVolunteerShiftInput;
@@ -316,6 +330,16 @@ export function validateUpdateVolunteerRoleInput(
 	return { valid: true, errors: [], data, request: data };
 }
 
+function validateShiftDate(rawDate: unknown, errors: string[]): string {
+	const date = typeof rawDate === "string" ? rawDate.trim() : "";
+	if (!DATE_PATTERN.test(date)) {
+		errors.push("Shift date is required and must use YYYY-MM-DD format.");
+	} else if (!isValidCalendarDate(date)) {
+		errors.push("Shift date must be a valid calendar date.");
+	}
+	return date;
+}
+
 export function validateCreateVolunteerShiftInput(
 	payload: unknown,
 	roleOrIsRoomProctor?: { isRoomProctor: boolean } | boolean,
@@ -326,10 +350,7 @@ export function validateCreateVolunteerShiftInput(
 	const body = payload as Record<string, unknown>;
 	const errors: string[] = [];
 
-	const date = typeof body.date === "string" ? body.date.trim() : "";
-	if (!DATE_PATTERN.test(date)) {
-		errors.push("Shift date is required and must use YYYY-MM-DD format.");
-	}
+	const date = validateShiftDate(body.date, errors);
 
 	const periodRaw =
 		typeof body.period === "string" ? body.period.trim().toUpperCase() : "";

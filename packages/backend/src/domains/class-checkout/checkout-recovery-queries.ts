@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { AppError } from "@festival/common";
+import { markCheckoutStartedTx } from "./checkout-intent-queries.js";
 import type {
 	CheckoutRecoveryRequestRecord,
 	CheckoutRecoveryStatus,
+	CompleteRecoveryCheckoutParams,
 	ConsumeRecoveryRequestParams,
 	CreateRecoveryRequestParams,
 	RecoverableCheckoutIntentRecord,
@@ -380,4 +383,71 @@ export async function consumeRecoveryRequestTx(
 		throw new Error("Checkout recovery consumption update failed.");
 	}
 	return mapRecoveryRequestRow(updated[0]);
+}
+
+export async function completeRecoveryCheckoutTx(
+	tx: SqlRunner,
+	schema: string,
+	params: CompleteRecoveryCheckoutParams,
+): Promise<void> {
+	const intents = (await tx.unsafe(
+		`SELECT i.id
+		FROM ${schema}.checkout_intents i
+		JOIN ${schema}.checkout_carts c ON c.reference = i.cart_reference
+			AND c.organization_id = i.organization_id
+			AND c.customer_id = i.customer_id
+			AND c.session_id = i.session_id
+		WHERE i.id = $1 AND i.organization_id = $2 AND i.customer_id = $3
+			AND i.session_id = $4 AND i.idempotency_key = $5
+			AND i.intent_type = 'membership'
+			AND i.status = 'ready' AND i.expires_at > $6::timestamptz
+			AND c.status = 'ready' AND c.expires_at > $6::timestamptz
+		FOR UPDATE OF i, c`,
+		[
+			params.intentId,
+			params.organizationId,
+			params.customerId,
+			params.sessionId,
+			`recovery:${params.recoveryRequestId}`,
+			params.nowIso,
+		],
+	)) as Array<{ id: string }>;
+	if (!intents[0]) {
+		throw new AppError("Recovery checkout is no longer ready.", 409);
+	}
+
+	const requests = (await tx.unsafe(
+		`SELECT status, expires_at <= $6::timestamptz AS expired
+		FROM ${schema}.checkout_recovery_requests
+		WHERE id = $1 AND organization_id = $2 AND customer_id = $3
+			AND token_hash = $4 AND source_checkout_intent_id <> $5
+		FOR UPDATE`,
+		[
+			params.recoveryRequestId,
+			params.organizationId,
+			params.customerId,
+			params.tokenHash,
+			params.intentId,
+			params.nowIso,
+		],
+	)) as Array<{ status: CheckoutRecoveryStatus; expired: boolean }>;
+	const request = requests[0];
+	if (request?.status === "expired" || request?.expired) {
+		throw new AppError("Recovery request has expired.", 410);
+	}
+	if (request?.status !== "pending") {
+		throw new AppError("Recovery request is no longer pending.", 409);
+	}
+
+	await markCheckoutStartedTx(tx, schema, params.intentId);
+	const consumed = (await tx.unsafe(
+		`UPDATE ${schema}.checkout_recovery_requests
+		SET status = 'consumed', consumed_at = $2::timestamptz
+		WHERE id = $1
+		RETURNING id`,
+		[params.recoveryRequestId, params.nowIso],
+	)) as Array<{ id: string }>;
+	if (!consumed[0]) {
+		throw new AppError("Recovery request is no longer pending.", 409);
+	}
 }

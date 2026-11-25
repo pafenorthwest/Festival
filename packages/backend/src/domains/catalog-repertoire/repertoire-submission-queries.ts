@@ -137,43 +137,36 @@ export async function queryReviewQueueSummary(
 		`SELECT
 			COUNT(*)::int AS total,
 			COUNT(*) FILTER (WHERE status = 'pending')::int AS pending,
-			COUNT(*) FILTER (WHERE status IN ('claimed', 'in_review'))::int AS in_review,
-			COUNT(*) FILTER (WHERE status = 'reviewed')::int AS reviewed,
+			COUNT(*) FILTER (WHERE status = 'claimed')::int AS claimed,
 			COUNT(*) FILTER (WHERE status = 'flagged' OR flag_reason IS NOT NULL)::int AS flagged,
-			COUNT(*) FILTER (WHERE status = 'needs_follow_up')::int AS needs_follow_up,
-			COUNT(*) FILTER (WHERE status IN ('approved', 'approved_for_publication'))::int AS approved
+			COUNT(*) FILTER (WHERE status = 'approved')::int AS approved
 		 FROM ${schema}.repertoire_review_items
 		 WHERE organization_id = $1`,
 		[organizationId],
 	)) as Array<{
 		total: number;
 		pending: number;
-		in_review: number;
-		reviewed: number;
+		claimed: number;
 		flagged: number;
-		needs_follow_up: number;
 		approved: number;
 	}>;
 	const s = rows[0] ?? {
 		total: 0,
 		pending: 0,
-		in_review: 0,
-		reviewed: 0,
+		claimed: 0,
 		flagged: 0,
-		needs_follow_up: 0,
 		approved: 0,
 	};
-	const reviewed = Number(s.reviewed || 0);
 	const approved = Number(s.approved || 0);
 	return {
 		total: Number(s.total || 0),
 		pending: Number(s.pending || 0),
-		inReview: Number(s.in_review || 0),
-		reviewed,
+		inReview: Number(s.claimed || 0),
+		reviewed: 0,
 		flagged: Number(s.flagged || 0),
-		needsFollowUp: Number(s.needs_follow_up || 0),
+		needsFollowUp: 0,
 		approved,
-		completed: reviewed + approved,
+		completed: approved,
 	};
 }
 
