@@ -11,6 +11,7 @@ import type {
 import type {
 	DivisionFestivalRepository,
 	RegistrationCatalogRepository,
+	SchedulingConfigRepository,
 } from "../domains/catalog-repertoire/index.js";
 import type {
 	AppUserMembershipRepository,
@@ -39,6 +40,7 @@ export interface OrganizationRepository
 		AppUserMembershipRepository,
 		DivisionFestivalRepository,
 		RegistrationCatalogRepository {
+	readonly schedulingConfig: SchedulingConfigRepository;
 	getShopifyIntegration(
 		organizationId: string,
 	): Promise<ShopifyIntegrationRecord | null>;

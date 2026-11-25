@@ -18,6 +18,48 @@ test.describe("Phase 1 admin journeys", () => {
 		await signInAdmin(page);
 	});
 
+	test("Scheduling class rules preview, save and reload independently of catalog timing", async ({
+		page,
+	}) => {
+		const festivalAdmin = `/org/${LOCAL_ORG_SLUG}/festival/spring-2026/admin`;
+		const className = "Junior Piano Solo (Ages 8-11)";
+		await page.goto(festivalAdmin);
+		await page.getByRole("button", { name: /^Scheduling/ }).click();
+		await expect(page).toHaveURL(new RegExp(`${festivalAdmin}/scheduling$`));
+
+		// The capacity preview table also lists the class name, so anchor on the
+		// class-rules row's own code selector.
+		const row = page.getByRole("row").filter({
+			has: page.getByLabel(`Scheduling code for ${className}`),
+		});
+		const code = row.getByLabel(`Scheduling code for ${className}`);
+		const playing = row.getByLabel(`Playing minutes for ${className}`);
+		const nextPlaying =
+			(await playing.inputValue()) === "9" ? "10" : "9";
+		await code.selectOption("PS.8-9");
+		await playing.fill(nextPlaying);
+		await expect(row.getByLabel(`Oral minutes for ${className}`)).toHaveValue(
+			"6",
+		);
+		await expect(row).toContainText(
+			nextPlaying === "9" ? "33 min – 66 min" : "35 min – 70 min",
+		);
+
+		const save = page.getByRole("button", { name: "Save scheduling setup" });
+		await expect(save).toBeEnabled();
+		await save.click();
+		await expect(page.getByText(/^Saved revision \d+\.$/)).toBeVisible();
+		await page.reload();
+		await expect(code).toHaveValue("PS.8-9");
+		await expect(playing).toHaveValue(nextPlaying);
+
+		await page.goto(`${festivalAdmin}/classes`);
+		const catalogRow = page
+			.locator(".listing-table-row")
+			.filter({ hasText: className });
+		await expect(catalogRow.getByText("8 min", { exact: true })).toBeVisible();
+	});
+
 	test("Memberships admin cards, summary badges, 6-column table, moderation switch, and teacher division edit", async ({
 		page,
 	}) => {

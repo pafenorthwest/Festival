@@ -9,6 +9,8 @@ export class ApiError extends Error {
 		readonly status: number,
 		readonly code?: string,
 		readonly recovery?: ClassCheckoutRecoveryStatusDto,
+		/** Field path reported by validation errors (e.g. `config.festivalDates[0]`). */
+		readonly path?: string,
 	) {
 		super(message);
 	}
@@ -110,18 +112,21 @@ export async function unwrapRpcResponse<T>(
 				error?: string;
 				code?: string;
 				recovery?: ClassCheckoutRecoveryStatusDto;
+				path?: string;
 		  };
 	if (!response.ok) {
 		const errorPayload = payload as {
 			error?: string;
 			code?: string;
 			recovery?: ClassCheckoutRecoveryStatusDto;
+			path?: unknown;
 		};
 		throw new ApiError(
 			errorPayload.error ?? `Request failed for ${fallbackPath}`,
 			response.status,
 			errorPayload.code,
 			errorPayload.recovery,
+			typeof errorPayload.path === "string" ? errorPayload.path : undefined,
 		);
 	}
 	return payload as T;

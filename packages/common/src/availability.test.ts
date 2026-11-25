@@ -1,10 +1,14 @@
 import { describe, expect, it } from "bun:test";
 import {
+	AVAILABILITY_ENFORCEMENT_MIN_DAYS,
 	AVAILABILITY_HOURS,
 	buildDefaultAvailabilityDays,
+	buildEffectiveAvailabilityDays,
+	countAvailableDays,
 	DEFAULT_AVAILABLE_HOURS,
 	enumerateFestivalDates,
 	formatAvailabilityHourBlock,
+	isAvailabilityEnforced,
 	normalizeAvailableHours,
 	validateSaveCustomerFestivalAvailabilityRequest,
 } from "./availability.js";
@@ -115,5 +119,36 @@ describe("availability helpers", () => {
 		expect(invalidResult.errors).toContain(
 			"Invalid available hours for date 2026-05-01.",
 		);
+	});
+});
+
+describe("effective availability and the three-day rule", () => {
+	const dates = ["2026-05-04", "2026-05-05", "2026-05-06"];
+
+	it("uses saved hours where present and default hours with provenance elsewhere", () => {
+		const days = buildEffectiveAvailabilityDays(dates, [
+			{ festivalDate: "2026-05-05", availableHours: [10, 9, 9] },
+			{ date: "2026-05-06", availableHours: [] },
+			{ festivalDate: "2026-06-01", availableHours: [8] },
+		]);
+		expect(days).toEqual([
+			{
+				date: "2026-05-04",
+				availableHours: [...DEFAULT_AVAILABLE_HOURS],
+				provenance: "default",
+			},
+			{ date: "2026-05-05", availableHours: [9, 10], provenance: "saved" },
+			{ date: "2026-05-06", availableHours: [], provenance: "saved" },
+		]);
+		expect(countAvailableDays(days)).toBe(2);
+	});
+
+	it("counts unsaved dates as available and enforces from exactly three days", () => {
+		const unsaved = buildEffectiveAvailabilityDays(dates, []);
+		expect(countAvailableDays(unsaved)).toBe(3);
+		expect(AVAILABILITY_ENFORCEMENT_MIN_DAYS).toBe(3);
+		expect(isAvailabilityEnforced(3)).toBe(true);
+		expect(isAvailabilityEnforced(2)).toBe(false);
+		expect(isAvailabilityEnforced(0)).toBe(false);
 	});
 });

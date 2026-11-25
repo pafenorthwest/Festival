@@ -72,6 +72,28 @@ integrationTest(
 					festivalId: fixture.id("festival-b"),
 				}),
 			).toEqual([]);
+			expect(
+				await repository.listAvailabilityForFestival({
+					organizationId: fixture.id("org-a"),
+					festivalId: fixture.id("festival-a"),
+				}),
+			).toMatchObject([
+				{
+					subjectType: "accompanist",
+					customerId: fixture.id("customer-a"),
+					availableHours: [],
+				},
+				{
+					subjectType: "child",
+					subjectId: fixture.id("other-subject"),
+					availableHours: [11],
+				},
+				{
+					subjectType: "child",
+					subjectId: fixture.id("shared-subject"),
+					availableHours: [8, 10, 17],
+				},
+			]);
 			const stored = await sql.unsafe(
 				`SELECT subject_id, jsonb_typeof(available_hours) AS payload_type, available_hours FROM ${schema}.customer_festival_availability WHERE organization_id IN ('${fixture.id("org-a")}' , '${fixture.id("org-b")}') ORDER BY organization_id, subject_type, subject_id`,
 			);

@@ -1,13 +1,12 @@
 import {
 	type AvailabilityDayRecord,
 	type AvailabilitySubject,
+	buildEffectiveAvailabilityDays,
 	type CustomerFestivalAvailabilityResponse,
-	DEFAULT_AVAILABLE_HOURS,
 	enumerateFestivalDates,
 	type FestivalRecord,
 	type FestivalSummary,
 	isAccompanistMembershipGrantActive,
-	normalizeAvailableHours,
 	type SaveCustomerFestivalAvailabilityRequest,
 	type SubjectFestivalAvailability,
 	validateSaveCustomerFestivalAvailabilityRequest,
@@ -70,25 +69,14 @@ function buildSubjectDays(
 	dates: readonly string[],
 	savedRecords: readonly CustomerFestivalAvailabilityRecord[],
 ): AvailabilityDayRecord[] {
-	const savedByDate = new Map<
-		string,
-		AvailabilityDayRecord["availableHours"]
-	>();
-	for (const record of savedRecords) {
-		if (
+	const subjectRecords = savedRecords.filter(
+		(record) =>
 			record.subjectType === subject.subjectType &&
-			record.subjectId === subject.subjectId
-		) {
-			savedByDate.set(
-				record.festivalDate,
-				normalizeAvailableHours(record.availableHours),
-			);
-		}
-	}
-	return dates.map((date) => ({
-		date,
-		availableHours: savedByDate.get(date) ?? [...DEFAULT_AVAILABLE_HOURS],
-	}));
+			record.subjectId === subject.subjectId,
+	);
+	return buildEffectiveAvailabilityDays(dates, subjectRecords).map(
+		({ date, availableHours }) => ({ date, availableHours }),
+	);
 }
 
 function verifySubjectsAuthorized(

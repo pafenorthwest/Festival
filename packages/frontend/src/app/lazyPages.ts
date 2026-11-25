@@ -147,6 +147,11 @@ export const FestivalAdminDashboardPage = lazyPage(() =>
 		default: module.FestivalAdminDashboardPage,
 	})),
 );
+export const FestivalSchedulingPage = lazyPage(() =>
+	import("../pages/FestivalSchedulingPage.js").then((module) => ({
+		default: module.FestivalSchedulingPage,
+	})),
+);
 export const FestivalClassRegistrationPage = lazyPage(() =>
 	import("../pages/FestivalClassRegistrationPage.js").then((module) => ({
 		default: module.FestivalClassRegistrationPage,
@@ -222,6 +227,7 @@ export const routePages = {
 	"festival-volunteers": FestivalVolunteersPage,
 	"festival-admin": FestivalAdminDashboardPage,
 	"festival-admin-classes": FestivalAdminClassesPage,
+	"festival-admin-scheduling": FestivalSchedulingPage,
 	"org-membership": MembershipPage,
 	"org-accompanist-membership": AccompanistMembershipPage,
 	"org-customer-account-legacy": LegacyCustomerAccountRedirect,

@@ -35,6 +35,10 @@ export interface CustomerAvailabilityRepository {
 		festivalId: string;
 		customerId: string;
 	}): Promise<CustomerFestivalAvailabilityRecord[]>;
+	listAvailabilityForFestival(input: {
+		organizationId: string;
+		festivalId: string;
+	}): Promise<CustomerFestivalAvailabilityRecord[]>;
 	upsertAvailability(
 		entries: readonly UpsertCustomerFestivalAvailabilityInput[],
 	): Promise<void>;
@@ -65,13 +69,30 @@ export class InMemoryCustomerAvailabilityRepository
 		festivalId: string;
 		customerId: string;
 	}): Promise<CustomerFestivalAvailabilityRecord[]> {
+		return this.listMatching(
+			(record) =>
+				record.organizationId === input.organizationId &&
+				record.festivalId === input.festivalId &&
+				record.customerId === input.customerId,
+		);
+	}
+
+	async listAvailabilityForFestival(input: {
+		organizationId: string;
+		festivalId: string;
+	}): Promise<CustomerFestivalAvailabilityRecord[]> {
+		return this.listMatching(
+			(record) =>
+				record.organizationId === input.organizationId &&
+				record.festivalId === input.festivalId,
+		);
+	}
+
+	private listMatching(
+		predicate: (record: CustomerFestivalAvailabilityRecord) => boolean,
+	): CustomerFestivalAvailabilityRecord[] {
 		return [...this.records.values()]
-			.filter(
-				(record) =>
-					record.organizationId === input.organizationId &&
-					record.festivalId === input.festivalId &&
-					record.customerId === input.customerId,
-			)
+			.filter(predicate)
 			.map((record) => ({
 				...record,
 				availableHours: [...record.availableHours],
@@ -236,6 +257,39 @@ export function parseHoursJson(
 	});
 }
 
+function mapAvailabilityRow(
+	row: Record<string, unknown>,
+): CustomerFestivalAvailabilityRecord {
+	const organizationId = row.organization_id as string;
+	const festivalId = row.festival_id as string;
+	const customerId = row.customer_id as string;
+	const subjectType = row.subject_type as AvailabilitySubjectType;
+	const subjectId = row.subject_id as string;
+	const festivalDate = row.festival_date as string;
+	const rawPayload = row.available_hours;
+
+	const availableHours = parseAvailabilityHours(rawPayload, {
+		organizationId,
+		festivalId,
+		customerId,
+		subjectType,
+		subjectId,
+		festivalDate,
+		rawPayload,
+	});
+
+	return {
+		organizationId,
+		festivalId,
+		customerId,
+		subjectType,
+		subjectId,
+		festivalDate,
+		availableHours,
+		updatedAtIso: row.updated_at as string,
+	};
+}
+
 export class PostgresCustomerAvailabilityRepository
 	implements CustomerAvailabilityRepository
 {
@@ -269,37 +323,29 @@ export class PostgresCustomerAvailabilityRepository
 			 ORDER BY subject_type, subject_id, festival_date`,
 			[input.organizationId, input.festivalId, input.customerId],
 		)) as Array<Record<string, unknown>>;
+		return rows.map(mapAvailabilityRow);
+	}
 
-		return rows.map((row) => {
-			const organizationId = row.organization_id as string;
-			const festivalId = row.festival_id as string;
-			const customerId = row.customer_id as string;
-			const subjectType = row.subject_type as AvailabilitySubjectType;
-			const subjectId = row.subject_id as string;
-			const festivalDate = row.festival_date as string;
-			const rawPayload = row.available_hours;
-
-			const availableHours = parseAvailabilityHours(rawPayload, {
-				organizationId,
-				festivalId,
-				customerId,
-				subjectType,
-				subjectId,
-				festivalDate,
-				rawPayload,
-			});
-
-			return {
-				organizationId,
-				festivalId,
-				customerId,
-				subjectType,
-				subjectId,
-				festivalDate,
-				availableHours,
-				updatedAtIso: row.updated_at as string,
-			};
-		});
+	async listAvailabilityForFestival(input: {
+		organizationId: string;
+		festivalId: string;
+	}): Promise<CustomerFestivalAvailabilityRecord[]> {
+		const rows = (await sql.unsafe(
+			`SELECT
+				organization_id,
+				festival_id,
+				customer_id,
+				subject_type,
+				subject_id,
+				festival_date::text AS festival_date,
+				available_hours,
+				updated_at::text AS updated_at
+			 FROM ${this.schema}.customer_festival_availability
+			 WHERE organization_id = $1 AND festival_id = $2
+			 ORDER BY subject_type, subject_id, festival_date`,
+			[input.organizationId, input.festivalId],
+		)) as Array<Record<string, unknown>>;
+		return rows.map(mapAvailabilityRow);
 	}
 
 	async upsertAvailability(

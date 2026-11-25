@@ -55,3 +55,17 @@ export type {
 	SearchCatalogWorksInput,
 	UnclaimReviewItemInput,
 } from "./repertoire-types.js";
+export {
+	InMemorySchedulingConfigRepository,
+	PostgresSchedulingConfigRepository,
+	type SaveSchedulingConfig,
+	type SchedulingConfigRepository,
+} from "./scheduling-config-repository.js";
+export {
+	loadSchedulingAvailability,
+	loadSchedulingRoster,
+	type SchedulingRosterScope,
+	type SchedulingRosterSources,
+	selectAgeSnapshotAt,
+	sumRepertoireSeconds,
+} from "./scheduling-roster-loader.js";

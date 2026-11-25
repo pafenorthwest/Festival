@@ -173,7 +173,14 @@ export function buildCatalogGroupRoutes(options: ApiRouterOptions) {
 		)
 		.route(
 			"/",
-			buildAdminFestivalCatalogRoutes({ organizationService, authVerifier }),
+			buildAdminFestivalCatalogRoutes({
+				organizationService,
+				authVerifier,
+				commerceRepository: options.commerceRepository,
+				checkoutRepository: options.checkoutRepository,
+				childProfileRepository: options.childProfileRepository,
+				customerAvailabilityRepository: options.customerAvailabilityRepository,
+			}),
 		)
 		.route(
 			"/",

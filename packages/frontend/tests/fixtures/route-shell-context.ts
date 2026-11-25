@@ -109,6 +109,7 @@ const pageNames = [
 	"FestivalAdminDashboardPage",
 	"FestivalClassRegistrationPage",
 	"FestivalLandingPage",
+	"FestivalSchedulingPage",
 	"FestivalVolunteersPage",
 	"InviteLandingPage",
 	"LegacyCustomerAccountRedirect",
@@ -209,6 +210,7 @@ const requiredAppPages = new Set([
 	"OrganizationRootPage",
 	"CustomerCheckoutRecoveryPage",
 	"FestivalLandingPage",
+	"FestivalSchedulingPage",
 	"CreateOrganizationPage",
 	"InviteLandingPage",
 	"AdminUsersPage",
@@ -239,7 +241,7 @@ for (const entry of capturedClicks) {
 assert.equal(
 	verifiedRequired.size,
 	requiredAppPages.size,
-	"Expected all 10 target routes to be mounted and verified",
+	"Expected all target routes to be mounted and verified",
 );
 
 dispose();

@@ -11,9 +11,11 @@ import type { MembershipStatusService } from "../commerce/membership-status-serv
 import type { ShopifyOrderProjectionService } from "../commerce/shopify-order-projection-service.js";
 import type { CommunicationService } from "../communication/communication-service.js";
 import type { CustomerAccountService } from "../customer/customer-account-service.js";
+import type { CustomerAvailabilityRepository } from "../customer/customer-availability-repository.js";
 import type { CustomerAvailabilityService } from "../customer/customer-availability-service.js";
 import type { RepertoireService } from "../domains/catalog-repertoire/index.js";
 import type { PendingClassCheckoutService } from "../domains/class-checkout/pending-class-checkout-service.js";
+import type { ChildProfileRepository } from "../domains/customer-identity/index.js";
 import type { DropTransferService } from "../registration/drop-transfer-service.js";
 import type { RegistrationChangeRepository } from "../registration/registration-change-repository.js";
 import type { RepertoireRepository } from "../repertoire/index.js";
@@ -36,6 +38,8 @@ export interface ApiRouterOptions {
 	shopifyMembershipProductService?: ShopifyMembershipProductService;
 	customerAccountService?: CustomerAccountService;
 	customerAvailabilityService?: CustomerAvailabilityService;
+	customerAvailabilityRepository?: CustomerAvailabilityRepository;
+	childProfileRepository?: ChildProfileRepository;
 	publicMembershipProductService?: PublicMembershipProductService;
 	shopifyIntegrationDiagnosticService?: ShopifyIntegrationDiagnosticService;
 	membershipCheckoutService?: MembershipCheckoutService;

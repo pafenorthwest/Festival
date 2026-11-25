@@ -1275,6 +1275,22 @@ CREATE TABLE orgs.rooms (
 
 
 --
+-- Name: scheduling_config_revisions; Type: TABLE; Schema: orgs; Owner: -
+--
+
+CREATE TABLE orgs.scheduling_config_revisions (
+    organization_id text NOT NULL,
+    festival_id text NOT NULL,
+    revision integer NOT NULL,
+    config jsonb NOT NULL,
+    actor_uid text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT scheduling_config_revisions_config_check CHECK ((jsonb_typeof(config) = 'object'::text)),
+    CONSTRAINT scheduling_config_revisions_revision_check CHECK ((revision > 0))
+);
+
+
+--
 -- Name: schema_migrations; Type: TABLE; Schema: orgs; Owner: -
 --
 
@@ -2435,6 +2451,14 @@ ALTER TABLE ONLY orgs.rooms
 
 ALTER TABLE ONLY orgs.rooms
     ADD CONSTRAINT rooms_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: scheduling_config_revisions scheduling_config_revisions_pkey; Type: CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.scheduling_config_revisions
+    ADD CONSTRAINT scheduling_config_revisions_pkey PRIMARY KEY (organization_id, festival_id, revision);
 
 
 --
@@ -4724,6 +4748,14 @@ ALTER TABLE ONLY orgs.rooms
 
 ALTER TABLE ONLY orgs.rooms
     ADD CONSTRAINT rooms_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES orgs.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: scheduling_config_revisions scheduling_config_revisions_festival_id_organization_id_fkey; Type: FK CONSTRAINT; Schema: orgs; Owner: -
+--
+
+ALTER TABLE ONLY orgs.scheduling_config_revisions
+    ADD CONSTRAINT scheduling_config_revisions_festival_id_organization_id_fkey FOREIGN KEY (festival_id, organization_id) REFERENCES orgs.festivals(id, organization_id) ON DELETE CASCADE;
 
 
 --

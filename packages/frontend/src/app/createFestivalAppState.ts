@@ -24,6 +24,7 @@ const ADMIN_BREADCRUMBS: Partial<Record<AppRoute["kind"], string>> = {
 	"org-admin-concerto-repertoire": "Admin > Concerto Repertoire",
 	"festival-admin": "Admin > Festival",
 	"festival-admin-classes": "Admin > Festival > Classes",
+	"festival-admin-scheduling": "Admin > Festival > Scheduling",
 	"org-admin-volunteers": "Admin > Volunteers",
 	"org-music-review": "Admin > Music Review",
 	"org-billing": "Admin > Billing Reconciliation",
