@@ -102,6 +102,12 @@ jobs:
             -c "DROP DATABASE IF EXISTS festival_parity;"
           rm -f /tmp/migrated-schema.sql
 
+      - name: Configure test database log level
+        run: |
+          docker run --rm --network host -e PGPASSWORD=postgres postgres:17-alpine \
+            psql -h 127.0.0.1 -p 5432 -U postgres -d postgres -v ON_ERROR_STOP=1 \
+            -c "ALTER DATABASE festival_test SET log_min_messages = 'fatal';"
+
       - name: Test
         env:
           DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/festival_test
@@ -112,6 +118,8 @@ jobs:
     name: Build & Push Images
     needs: verify
     runs-on: ubuntu-latest
+    environment:
+      name: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.environment) || (startsWith(github.ref, 'refs/tags/v') && 'production') || (startsWith(github.ref, 'refs/heads/release/v') && 'staging') || (github.ref == 'refs/heads/release' && 'integration') || 'integration' }}
     outputs:
       image_tag: ${{ steps.meta_backend.outputs.version }}
       target_environment: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.environment) || (startsWith(github.ref, 'refs/tags/v') && 'production') || (startsWith(github.ref, 'refs/heads/release/v') && 'staging') || (github.ref == 'refs/heads/release' && 'integration') || '' }}
@@ -181,14 +189,36 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Check Frontend Firebase build configuration
+        id: frontend_config
+        env:
+          FRONT_FIREBASE_API_KEY: ${{ vars.FRONT_FIREBASE_API_KEY }}
+          FRONT_FIREBASE_AUTH_DOMAIN: ${{ vars.FRONT_FIREBASE_AUTH_DOMAIN }}
+          FRONT_FIREBASE_PROJECT_ID: ${{ vars.FRONT_FIREBASE_PROJECT_ID }}
+          FRONT_FIREBASE_APP_ID: ${{ vars.FRONT_FIREBASE_APP_ID }}
+        run: |
+          if [ -n "$FRONT_FIREBASE_API_KEY" ] && [ -n "$FRONT_FIREBASE_AUTH_DOMAIN" ] && [ -n "$FRONT_FIREBASE_PROJECT_ID" ] && [ -n "$FRONT_FIREBASE_APP_ID" ]; then
+            echo "push_frontend=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "push_frontend=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping GHCR push for festival-frontend (building Dockerfile verification only) because FRONT_FIREBASE_API_KEY, FRONT_FIREBASE_AUTH_DOMAIN, FRONT_FIREBASE_PROJECT_ID, or FRONT_FIREBASE_APP_ID is not configured for this environment."
+          fi
+
       - name: Build and push Frontend image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/frontend.Dockerfile
-          push: true
+          push: ${{ steps.frontend_config.outputs.push_frontend == 'true' }}
           tags: ${{ steps.meta_frontend.outputs.tags }}
           labels: ${{ steps.meta_frontend.outputs.labels }}
+          build-args: |
+            FRONT_API_BASE=${{ vars.FRONT_API_BASE || '' }}
+            FRONT_FIREBASE_API_KEY=${{ vars.FRONT_FIREBASE_API_KEY || 'demo-api-key' }}
+            FRONT_FIREBASE_AUTH_DOMAIN=${{ vars.FRONT_FIREBASE_AUTH_DOMAIN || 'demo-festival.firebaseapp.com' }}
+            FRONT_FIREBASE_PROJECT_ID=${{ vars.FRONT_FIREBASE_PROJECT_ID || 'demo-festival' }}
+            FRONT_FIREBASE_APP_ID=${{ vars.FRONT_FIREBASE_APP_ID || '1:000000000000:web:demo' }}
+            FRONT_FIREBASE_AUTH_EMULATOR_URL=
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -199,20 +229,32 @@ jobs:
     environment:
       name: ${{ needs.build-and-push.outputs.target_environment }}
       url: ${{ vars.DEPLOY_PUBLIC_URL }}
+    outputs:
+      deployed: ${{ steps.host_check.outputs.configured }}
 
     steps:
       - name: Check deployment host configuration
         id: host_check
         env:
+          TARGET_ENVIRONMENT: ${{ needs.build-and-push.outputs.target_environment }}
+          EVENT_NAME: ${{ github.event_name }}
+          GIT_REF: ${{ github.ref }}
+          REQUIRE_DEPLOY_TARGET: ${{ vars.REQUIRE_DEPLOY_TARGET }}
           TARGET_HOST: ${{ secrets.DEPLOY_HOST }}
           SSH_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
           PUBLIC_URL: ${{ vars.DEPLOY_PUBLIC_URL }}
         run: |
           if [ -n "$TARGET_HOST" ] && [ -n "$SSH_KEY" ] && [ -n "$PUBLIC_URL" ]; then
             echo "configured=true" >> "$GITHUB_OUTPUT"
+          elif [ -n "$TARGET_HOST" ] || [ -n "$SSH_KEY" ] || [ -n "$PUBLIC_URL" ]; then
+            echo "::error::Partial deployment configuration for ${TARGET_ENVIRONMENT}: DEPLOY_HOST, DEPLOY_SSH_PRIVATE_KEY, and DEPLOY_PUBLIC_URL must all be set together."
+            exit 1
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "$REQUIRE_DEPLOY_TARGET" = "true" ] || [[ "$GIT_REF" =~ ^refs/tags/v[1-9][0-9]*\. ]]; then
+            echo "::error::Missing required deployment configuration (DEPLOY_HOST, DEPLOY_SSH_PRIVATE_KEY, DEPLOY_PUBLIC_URL) for ${TARGET_ENVIRONMENT}."
+            exit 1
           else
             echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping remote SSH rollout: DEPLOY_HOST, DEPLOY_SSH_PRIVATE_KEY, or DEPLOY_PUBLIC_URL is not configured for this environment."
+            echo "::warning::Skipping remote SSH rollout for ${TARGET_ENVIRONMENT}: DEPLOY_HOST, DEPLOY_SSH_PRIVATE_KEY, and DEPLOY_PUBLIC_URL are not configured."
           fi
 
       - name: Deploy to Target Host via SSH
@@ -241,7 +283,7 @@ jobs:
             docker run --rm --network festival-cloud_default --env-file cloud-setup/.env \
               -e DB_HOST=postgres -e DB_PORT=5432 -e DATABASE=festival_octv3_db \
               -e DB_USER=festivaladmin -e DB_SSL=false -e DB_SCHEMA=orgs \
-              -v "${PWD}:/app:ro" -w /app oven/bun:1.4.2 bun run scripts/migrate.ts
+              -v "${PWD}:/app:ro" -w /app oven/bun:1.4.2-alpine bun run scripts/migrate.ts
             docker compose --env-file cloud-setup/.env -f cloud-setup/compose.yml up -d --no-build --pull never
 
   smoke-test:
@@ -251,31 +293,42 @@ jobs:
     environment:
       name: ${{ needs.build-and-push.outputs.target_environment }}
     env:
+      DEPLOYED: ${{ needs.deploy.outputs.deployed }}
       BASE_URL: ${{ vars.DEPLOY_PUBLIC_URL }}
-      TARGET_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_SMOKE_ORG_SLUG: ${{ vars.DEPLOY_SMOKE_ORG_SLUG }}
 
     steps:
-      - name: Verify /healthz and database-backed landing endpoint
+      - name: Verify /healthz, /api/bootstrap, and tenant landing endpoint
         run: |
-          if [ -z "$TARGET_HOST" ] && [ -z "$BASE_URL" ]; then
-            echo "Skipping remote live smoke test because no deployment target host or DEPLOY_PUBLIC_URL is configured."
+          if [ "$DEPLOYED" != "true" ]; then
+            echo "::warning::Skipping post-deploy smoke verification because remote SSH rollout was skipped."
             exit 0
           fi
           if [ -z "$BASE_URL" ]; then
-            echo "Error: DEPLOY_PUBLIC_URL is required for smoke verification when DEPLOY_HOST is configured." >&2
+            echo "::error::DEPLOY_PUBLIC_URL is required for post-deploy smoke verification."
             exit 1
           fi
           normalized_base="${BASE_URL%/}"
+          smoke_org_slug="${DEPLOY_SMOKE_ORG_SLUG:-pafe}"
           for i in {1..12}; do
             health_payload="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 15 "${normalized_base}/healthz" || true)"
             if [ "$health_payload" = '{"status":"ok"}' ] \
               && curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
-                "${normalized_base}/api/organizations/pafe/landing" \
-                --output "$RUNNER_TEMP/deploy-landing.json" \
-              && jq --exit-status \
-                '.organization.slug == "pafe" and (.organization.name | type == "string") and (.festivals | type == "array")' \
-                "$RUNNER_TEMP/deploy-landing.json" > /dev/null; then
-              echo "Health check (/healthz) and database-backed API smoke check passed on attempt $i"
+                "${normalized_base}/api/bootstrap" \
+                --output "$RUNNER_TEMP/deploy-bootstrap.json" \
+              && jq --exit-status '.session.authenticated == false' \
+                "$RUNNER_TEMP/deploy-bootstrap.json" > /dev/null \
+              && {
+                [ "$smoke_org_slug" = "none" ] || {
+                  curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
+                    "${normalized_base}/api/organizations/${smoke_org_slug}/landing" \
+                    --output "$RUNNER_TEMP/deploy-landing.json" \
+                    && jq --exit-status --arg slug "$smoke_org_slug" \
+                      '.organization.slug == $slug and (.organization.name | type == "string") and (.festivals | type == "array")' \
+                      "$RUNNER_TEMP/deploy-landing.json" > /dev/null
+                }
+              }; then
+              echo "Health check (/healthz), /api/bootstrap, and tenant landing smoke check passed on attempt $i"
               exit 0
             fi
             if [ "$i" -lt 12 ]; then
@@ -283,5 +336,5 @@ jobs:
               sleep 5
             fi
           done
-          echo "Post-deploy smoke verification failed after 12 attempts"
+          echo "::error::Post-deploy smoke verification failed after 12 attempts."
           exit 1

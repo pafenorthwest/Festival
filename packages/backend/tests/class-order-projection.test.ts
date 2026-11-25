@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import type { ClassRegistrationSnapshot } from "@festival/common";
 import {
 	CLASS_CHECKOUT_LINE_IDENTITY_PROTOCOL,
@@ -763,108 +763,131 @@ describe("Class Order Projection and Entitlements", () => {
 
 	for (const failureStage of ["order_read", "projection"] as const) {
 		it(`redacts sensitive ${failureStage} diagnostics and retries without duplicate registrations`, async () => {
+			const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+			try {
+				const f = await fixture();
+				const order = paidClassOrder(f.intent.correlationId);
+				f.orders.values.set(order.id, order);
+				const canaries = [
+					"secret-token-canary",
+					"private-parent@example.test",
+					"private-child-canary",
+				];
+				const originalFinalize = f.commerce.finalizeDecision.bind(f.commerce);
+				if (failureStage === "order_read") {
+					f.orders.readFailure = new ShopifyAdminApiError(canaries.join(" "), {
+						requestId: `request-id\n${canaries.join(" ")}`,
+					});
+				} else {
+					f.commerce.finalizeDecision = async () => {
+						throw new Error(canaries.join(" "));
+					};
+				}
+				const webhookId = `webhook-sensitive-${failureStage}`;
+				const received = await delivery(
+					f.commerce,
+					f.organization.id,
+					webhookId,
+				);
+				expect(await f.service.processDelivery(received.id)).toBe("failed");
+				const recorded = await f.commerce.recordDelivery({
+					organizationId: f.organization.id,
+					shopDomain: "seattle-fest.myshopify.com",
+					webhookId,
+					topic: "orders/paid",
+					apiVersion: "2026-07",
+					shopifyOrderGid: order.id,
+					payloadSha256: "b".repeat(64),
+					receivedAtIso: NOW.toISOString(),
+				});
+				expect(recorded).toMatchObject({
+					kind: "duplicate",
+					delivery: {
+						status: "failed",
+						failureCategory: "upstream",
+						failureStage,
+						failureCode:
+							failureStage === "order_read" ? "shopify_upstream" : "unexpected",
+					},
+				});
+				const decision = await f.commerce.recordPendingDecision({
+					organizationId: f.organization.id,
+					shopifyOrderGid: order.id,
+					updatedAtIso: NOW.toISOString(),
+				});
+				const persisted = JSON.stringify({ recorded, decision });
+				for (const canary of canaries) expect(persisted).not.toContain(canary);
+				if (recorded.kind !== "duplicate")
+					throw new Error("Expected duplicate.");
+				expect(recorded.delivery.shopifyRequestId).toBeUndefined();
+				expect(
+					await f.commerce.listClassEntitlements({
+						organizationId: f.organization.id,
+					}),
+				).toEqual([]);
+
+				f.orders.readFailure = undefined;
+				f.commerce.finalizeDecision = originalFinalize;
+				expect(await f.service.processDelivery(received.id)).toBe("processed");
+				expect(await f.service.processDelivery(received.id)).toBe("skipped");
+				expect(
+					await f.commerce.listClassEntitlements({
+						organizationId: f.organization.id,
+					}),
+				).toMatchObject([
+					{ status: "confirmed", checkoutIntentId: f.intent.id },
+				]);
+				expect(errorSpy).toHaveBeenCalledTimes(
+					failureStage === "projection" ? 1 : 0,
+				);
+				const logged = JSON.stringify(errorSpy.mock.calls);
+				for (const canary of canaries) expect(logged).not.toContain(canary);
+			} finally {
+				errorSpy.mockRestore();
+			}
+		});
+	}
+
+	it("records paid-line conflicts as retryable, diagnosable persistence failures", async () => {
+		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		try {
 			const f = await fixture();
 			const order = paidClassOrder(f.intent.correlationId);
 			f.orders.values.set(order.id, order);
-			const canaries = [
-				"secret-token-canary",
-				"private-parent@example.test",
-				"private-child-canary",
-			];
-			const originalFinalize = f.commerce.finalizeDecision.bind(f.commerce);
-			if (failureStage === "order_read") {
-				f.orders.readFailure = new ShopifyAdminApiError(canaries.join(" "), {
-					requestId: `request-id\n${canaries.join(" ")}`,
-				});
-			} else {
-				f.commerce.finalizeDecision = async () => {
-					throw new Error(canaries.join(" "));
-				};
-			}
-			const webhookId = `webhook-sensitive-${failureStage}`;
-			const received = await delivery(f.commerce, f.organization.id, webhookId);
+			const received = await delivery(
+				f.commerce,
+				f.organization.id,
+				"webhook-paid-line-conflict",
+			);
+			f.commerce.finalizeDecision = async () => {
+				throw new PaidLineConflictError();
+			};
+
 			expect(await f.service.processDelivery(received.id)).toBe("failed");
-			const recorded = await f.commerce.recordDelivery({
+			const replay = await f.commerce.recordDelivery({
 				organizationId: f.organization.id,
 				shopDomain: "seattle-fest.myshopify.com",
-				webhookId,
+				webhookId: "webhook-paid-line-conflict",
 				topic: "orders/paid",
 				apiVersion: "2026-07",
 				shopifyOrderGid: order.id,
 				payloadSha256: "b".repeat(64),
 				receivedAtIso: NOW.toISOString(),
 			});
-			expect(recorded).toMatchObject({
+			expect(replay).toMatchObject({
 				kind: "duplicate",
 				delivery: {
 					status: "failed",
-					failureCategory: "upstream",
-					failureStage,
-					failureCode:
-						failureStage === "order_read" ? "shopify_upstream" : "unexpected",
+					failureCategory: "persistence",
+					failureStage: "projection",
+					failureCode: "paid_line_conflict",
 				},
 			});
-			const decision = await f.commerce.recordPendingDecision({
-				organizationId: f.organization.id,
-				shopifyOrderGid: order.id,
-				updatedAtIso: NOW.toISOString(),
-			});
-			const persisted = JSON.stringify({ recorded, decision });
-			for (const canary of canaries) expect(persisted).not.toContain(canary);
-			if (recorded.kind !== "duplicate") throw new Error("Expected duplicate.");
-			expect(recorded.delivery.shopifyRequestId).toBeUndefined();
-			expect(
-				await f.commerce.listClassEntitlements({
-					organizationId: f.organization.id,
-				}),
-			).toEqual([]);
-
-			f.orders.readFailure = undefined;
-			f.commerce.finalizeDecision = originalFinalize;
-			expect(await f.service.processDelivery(received.id)).toBe("processed");
-			expect(await f.service.processDelivery(received.id)).toBe("skipped");
-			expect(
-				await f.commerce.listClassEntitlements({
-					organizationId: f.organization.id,
-				}),
-			).toMatchObject([{ status: "confirmed", checkoutIntentId: f.intent.id }]);
-		});
-	}
-
-	it("records paid-line conflicts as retryable, diagnosable persistence failures", async () => {
-		const f = await fixture();
-		const order = paidClassOrder(f.intent.correlationId);
-		f.orders.values.set(order.id, order);
-		const received = await delivery(
-			f.commerce,
-			f.organization.id,
-			"webhook-paid-line-conflict",
-		);
-		f.commerce.finalizeDecision = async () => {
-			throw new PaidLineConflictError();
-		};
-
-		expect(await f.service.processDelivery(received.id)).toBe("failed");
-		const replay = await f.commerce.recordDelivery({
-			organizationId: f.organization.id,
-			shopDomain: "seattle-fest.myshopify.com",
-			webhookId: "webhook-paid-line-conflict",
-			topic: "orders/paid",
-			apiVersion: "2026-07",
-			shopifyOrderGid: order.id,
-			payloadSha256: "b".repeat(64),
-			receivedAtIso: NOW.toISOString(),
-		});
-		expect(replay).toMatchObject({
-			kind: "duplicate",
-			delivery: {
-				status: "failed",
-				failureCategory: "persistence",
-				failureStage: "projection",
-				failureCode: "paid_line_conflict",
-			},
-		});
-		expect(await f.commerce.claimDelivery(received.id)).not.toBeNull();
+			expect(await f.commerce.claimDelivery(received.id)).not.toBeNull();
+			expect(errorSpy).toHaveBeenCalledTimes(1);
+		} finally {
+			errorSpy.mockRestore();
+		}
 	});
 
 	it("reconciles a missed paid class order through the same correlation path", async () => {
@@ -1111,41 +1134,47 @@ describe("Class Order Projection and Entitlements", () => {
 	});
 
 	it("retains observed payment history when finalization fails before an incomplete retry", async () => {
-		const f = await fixture();
-		const paid = paidClassOrder(f.intent.correlationId);
-		f.orders.values.set(paid.id, paid);
-		const received = await delivery(
-			f.commerce,
-			f.organization.id,
-			"webhook-class-receipt-retry",
-		);
-		const finalize = f.commerce.finalizeDecision.bind(f.commerce);
-		f.commerce.finalizeDecision = async () => {
-			throw new Error("Temporary finalization failure");
-		};
-		expect(await f.service.processDelivery(received.id)).toBe("failed");
-		f.commerce.finalizeDecision = finalize;
-		const before = await f.commerce.listOrderProjectionsByGids(
-			f.organization.id,
-			[paid.id],
-		);
-		expect(before[0]?.fullyPaidAtIso).toBe(paid.fullyPaidAtIso);
-		f.orders.values.set(paid.id, {
-			...paid,
-			fullyPaid: false,
-			fullyPaidAtIso: undefined,
-		});
-		expect(await f.service.processDelivery(received.id)).toBe("failed");
-		const after = await f.commerce.listOrderProjectionsByGids(
-			f.organization.id,
-			[paid.id],
-		);
-		expect(after[0]?.fullyPaidAtIso).toBe(paid.fullyPaidAtIso);
-		expect(
-			await f.commerce.listClassEntitlements({
-				organizationId: f.organization.id,
-			}),
-		).toHaveLength(0);
+		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		try {
+			const f = await fixture();
+			const paid = paidClassOrder(f.intent.correlationId);
+			f.orders.values.set(paid.id, paid);
+			const received = await delivery(
+				f.commerce,
+				f.organization.id,
+				"webhook-class-receipt-retry",
+			);
+			const finalize = f.commerce.finalizeDecision.bind(f.commerce);
+			f.commerce.finalizeDecision = async () => {
+				throw new Error("Temporary finalization failure");
+			};
+			expect(await f.service.processDelivery(received.id)).toBe("failed");
+			f.commerce.finalizeDecision = finalize;
+			const before = await f.commerce.listOrderProjectionsByGids(
+				f.organization.id,
+				[paid.id],
+			);
+			expect(before[0]?.fullyPaidAtIso).toBe(paid.fullyPaidAtIso);
+			f.orders.values.set(paid.id, {
+				...paid,
+				fullyPaid: false,
+				fullyPaidAtIso: undefined,
+			});
+			expect(await f.service.processDelivery(received.id)).toBe("failed");
+			const after = await f.commerce.listOrderProjectionsByGids(
+				f.organization.id,
+				[paid.id],
+			);
+			expect(after[0]?.fullyPaidAtIso).toBe(paid.fullyPaidAtIso);
+			expect(
+				await f.commerce.listClassEntitlements({
+					organizationId: f.organization.id,
+				}),
+			).toHaveLength(0);
+			expect(errorSpy).toHaveBeenCalledTimes(1);
+		} finally {
+			errorSpy.mockRestore();
+		}
 	});
 
 	it("marks incomplete payment as needs_review when fullyPaidAtIso is missing", async () => {

@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: integration-deployment
+  group: cd-integration
   cancel-in-progress: false
 
 jobs:
@@ -84,6 +84,12 @@ jobs:
             -c "DROP DATABASE IF EXISTS festival_parity;"
           rm -f /tmp/migrated-schema.sql
 
+      - name: Configure test database log level
+        run: |
+          docker run --rm --network host -e PGPASSWORD=postgres postgres:17-alpine \
+            psql -h 127.0.0.1 -p 5432 -U postgres -d postgres -v ON_ERROR_STOP=1 \
+            -c "ALTER DATABASE festival_test SET log_min_messages = 'fatal';"
+
       - name: Test
         env:
           DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/festival_test
@@ -123,7 +129,7 @@ jobs:
             docker run --rm --network festival-cloud_default --env-file cloud-setup/.env \
               -e DB_HOST=postgres -e DB_PORT=5432 -e DATABASE=festival_octv3_db \
               -e DB_USER=festivaladmin -e DB_SSL=false -e DB_SCHEMA=orgs \
-              -v "${PWD}:/app:ro" -w /app oven/bun:1.4.2 bun run scripts/migrate.ts
+              -v "${PWD}:/app:ro" -w /app oven/bun:1.4.2-alpine bun run scripts/migrate.ts
             docker compose --env-file cloud-setup/.env -f cloud-setup/compose.yml up -d --no-build --pull never
 
   smoke-test:

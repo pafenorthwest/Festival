@@ -15,6 +15,7 @@ export type MigrationRunOptions = {
 	databaseUrl?: string;
 	schema?: string;
 	migrationsDir?: string;
+	statementTimeout?: string;
 };
 
 export type MigrationRunResult = {
@@ -22,10 +23,18 @@ export type MigrationRunResult = {
 	skipped: string[];
 };
 
+type MigrationExecutionContext = {
+	safeSchema: string;
+	statementTimeout: string;
+};
+
+export const DEFAULT_MIGRATION_STATEMENT_TIMEOUT = "5min";
+
 const DEFAULT_MIGRATIONS_DIR = resolve(import.meta.dir, "../database/migrations");
 const MIGRATION_FILENAME_PATTERN = /^\d{14}_[a-z0-9_]+\.sql$/;
 const PSQL_META_COMMAND_PATTERN = /^\s*\\(copy|set|i|ir|echo|connect)\b/im;
 const SCHEMA_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,62}$/;
+const STATEMENT_TIMEOUT_PATTERN = /^(?:0|[1-9]\d*(?:ms|s|min|h))$/;
 
 function requireEnvValue(
 	env: Record<string, string | undefined>,
@@ -63,6 +72,22 @@ export function resolveDatabaseUrl(
 	const sslmode = resolveSslMode(env.DB_SSL);
 
 	return `postgres://${user}:${password}@${host}:${port}/${database}?sslmode=${sslmode}`;
+}
+
+export function resolveMigrationStatementTimeout(
+	raw?: string,
+	env: Record<string, string | undefined> = process.env,
+): string {
+	const candidate = (raw ?? env.MIGRATION_STATEMENT_TIMEOUT)?.trim();
+	if (!candidate) {
+		return DEFAULT_MIGRATION_STATEMENT_TIMEOUT;
+	}
+	if (!STATEMENT_TIMEOUT_PATTERN.test(candidate)) {
+		throw new Error(
+			`Invalid migration statement_timeout "${candidate}". Expected "0" or a positive integer with ms, s, min, or h unit (for example "5min").`,
+		);
+	}
+	return candidate;
 }
 
 export function computeMigrationChecksum(content: string): string {
@@ -158,17 +183,20 @@ async function readAppliedLedger(
 
 async function applyPendingMigration(
 	reserved: Awaited<ReturnType<SQL["reserve"]>>,
-	safeSchema: string,
+	context: MigrationExecutionContext,
 	migration: MigrationFile,
 ): Promise<void> {
 	const stripped = stripOuterTransaction(migration.sql);
-	const executableSql = rewriteSchemaReferences(stripped, safeSchema);
+	const executableSql = rewriteSchemaReferences(stripped, context.safeSchema);
 	await reserved.begin(async (tx) => {
+		await tx.unsafe(
+			`SET LOCAL statement_timeout = '${context.statementTimeout}'`,
+		);
 		if (executableSql.length > 0) {
 			await tx.unsafe(executableSql);
 		}
 		await tx.unsafe(
-			`INSERT INTO "${safeSchema}".schema_migrations (version, filename, checksum) VALUES ($1, $2, $3)`,
+			`INSERT INTO "${context.safeSchema}".schema_migrations (version, filename, checksum) VALUES ($1, $2, $3)`,
 			[migration.version, migration.filename, migration.checksum],
 		);
 	});
@@ -176,11 +204,11 @@ async function applyPendingMigration(
 
 async function executeMigrationsOnConnection(
 	reserved: Awaited<ReturnType<SQL["reserve"]>>,
-	safeSchema: string,
+	context: MigrationExecutionContext,
 	migrations: MigrationFile[],
 ): Promise<MigrationRunResult> {
-	await ensureLedgerTable(reserved, safeSchema);
-	const ledger = await readAppliedLedger(reserved, safeSchema);
+	await ensureLedgerTable(reserved, context.safeSchema);
+	const ledger = await readAppliedLedger(reserved, context.safeSchema);
 	const applied: string[] = [];
 	const skipped: string[] = [];
 
@@ -195,7 +223,7 @@ async function executeMigrationsOnConnection(
 			skipped.push(migration.filename);
 			continue;
 		}
-		await applyPendingMigration(reserved, safeSchema, migration);
+		await applyPendingMigration(reserved, context, migration);
 		applied.push(migration.filename);
 	}
 
@@ -209,20 +237,23 @@ export async function runMigrations(
 	const safeSchema = validateSchemaName(
 		options.schema ?? (process.env.DB_SCHEMA || "orgs"),
 	);
+	const statementTimeout = resolveMigrationStatementTimeout(
+		options.statementTimeout,
+	);
 	const migrations = discoverMigrations(options.migrationsDir);
 	const lockKey = `schema_migrations:${safeSchema}`;
 	const db = new SQL(databaseUrl);
-
 	try {
 		const reserved = await db.reserve();
 		try {
+			await reserved.unsafe(`SET statement_timeout = '${statementTimeout}'`);
 			await reserved.unsafe("SELECT pg_advisory_lock(hashtextextended($1, 0))", [
 				lockKey,
 			]);
 			try {
 				return await executeMigrationsOnConnection(
 					reserved,
-					safeSchema,
+					{ safeSchema, statementTimeout },
 					migrations,
 				);
 			} finally {

@@ -16,7 +16,7 @@ echo "Ensuring postgres is healthy and running database migrations"
 docker run --rm --network festival-cloud_default --env-file cloud-setup/.env \
   -e DB_HOST=postgres -e DB_PORT=5432 -e DATABASE=festival_octv3_db \
   -e DB_USER=festivaladmin -e DB_SSL=false -e DB_SCHEMA=orgs \
-  -v "${PWD}:/app:ro" -w /app oven/bun:1.4.2 bun run scripts/migrate.ts
+  -v "${PWD}:/app:ro" -w /app oven/bun:1.4.2-alpine bun run scripts/migrate.ts
 "${compose[@]}" up -d --no-deps --force-recreate --no-build --pull never backend frontend
 "${compose[@]}" ps
 "${compose[@]}" logs --tail=100 backend frontend

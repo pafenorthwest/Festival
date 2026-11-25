@@ -143,6 +143,7 @@ for (const cutoff of ["capacity decrease", "confirmed placement"] as const) {
 		async () => {
 			const f = await fixture();
 			const blocker = await sql.reserve();
+			let blockerInTransaction = false;
 			let attachment: ReturnType<typeof f.attach> | undefined;
 			try {
 				await f.intent("candidate");
@@ -154,6 +155,7 @@ for (const cutoff of ["capacity decrease", "confirmed placement"] as const) {
 					await f.place(sql, "paid");
 				}
 				await blocker.unsafe("BEGIN");
+				blockerInTransaction = true;
 				const [{ pid }] = await blocker.unsafe(
 					"SELECT pg_backend_pid() AS pid",
 				);
@@ -172,6 +174,7 @@ for (const cutoff of ["capacity decrease", "confirmed placement"] as const) {
 				);
 				const blockedPid = await blockedBy(Number(pid));
 				await blocker.unsafe("COMMIT");
+				blockerInTransaction = false;
 				expect(blockedPid).not.toBeNull();
 				expect(await outcome).toMatchObject({
 					cart: null,
@@ -186,7 +189,7 @@ for (const cutoff of ["capacity decrease", "confirmed placement"] as const) {
 				);
 				expect(carts).toHaveLength(0);
 			} finally {
-				await blocker.unsafe("ROLLBACK");
+				if (blockerInTransaction) await blocker.unsafe("ROLLBACK");
 				blocker.release();
 				await attachment?.catch(() => undefined);
 				await resetPostgresFixture(f.schema);
@@ -203,6 +206,7 @@ for (const cutoff of ["capacity decrease", "confirmed placement"] as const) {
 			const f = await fixture();
 			const blocker = await sql.reserve();
 			const writer = await sql.reserve();
+			let blockerInTransaction = false;
 			let attachment: ReturnType<typeof f.attach> | undefined;
 			let change: Promise<unknown> | undefined;
 			try {
@@ -221,6 +225,7 @@ for (const cutoff of ["capacity decrease", "confirmed placement"] as const) {
 					`CREATE FUNCTION ${f.schema}.pause_cart_insert() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_advisory_xact_lock(${barrier}); RETURN NEW; END $$; CREATE TRIGGER pause_cart_insert BEFORE INSERT ON ${f.schema}.checkout_carts FOR EACH ROW EXECUTE FUNCTION ${f.schema}.pause_cart_insert()`,
 				);
 				await blocker.unsafe("BEGIN");
+				blockerInTransaction = true;
 				await blocker.unsafe("SELECT pg_advisory_xact_lock($1)", [barrier]);
 				const [{ pid }] = await blocker.unsafe(
 					"SELECT pg_backend_pid() AS pid",
@@ -243,6 +248,7 @@ for (const cutoff of ["capacity decrease", "confirmed placement"] as const) {
 				void change.catch(() => undefined);
 				const writerBlocked = await blockedBy(attachingPid as number);
 				await blocker.unsafe("COMMIT");
+				blockerInTransaction = false;
 				expect(writerBlocked).not.toBeNull();
 				const cart = await attachment;
 				await change;
@@ -251,7 +257,7 @@ for (const cutoff of ["capacity decrease", "confirmed placement"] as const) {
 					cart_reference: cart.reference,
 				});
 			} finally {
-				await blocker.unsafe("ROLLBACK");
+				if (blockerInTransaction) await blocker.unsafe("ROLLBACK");
 				blocker.release();
 				await attachment?.catch(() => undefined);
 				await change?.catch(() => undefined);
@@ -269,10 +275,12 @@ postgresTest(
 		const f = await fixture();
 		const blocker = await sql.reserve();
 		const writer = await sql.reserve();
+		let blockerInTransaction = false;
 		let audited: Promise<unknown> | undefined;
 		let direct: Promise<unknown> | undefined;
 		try {
 			await blocker.unsafe("BEGIN");
+			blockerInTransaction = true;
 			await blocker.unsafe(
 				"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
 				[`${f.schema}:class-capacity-cutoff`],
@@ -319,9 +327,10 @@ postgresTest(
 			} while (Date.now() < deadline);
 			expect(blockers.map(Number)).toContain(Number(pid));
 			await blocker.unsafe("COMMIT");
+			blockerInTransaction = false;
 			await Promise.all([audited, direct]);
 		} finally {
-			await blocker.unsafe("ROLLBACK");
+			if (blockerInTransaction) await blocker.unsafe("ROLLBACK");
 			blocker.release();
 			await Promise.allSettled([audited, direct]);
 			writer.release();

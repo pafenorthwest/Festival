@@ -11,6 +11,7 @@ interface ParityModule {
 }
 
 interface MigrateModule {
+	DEFAULT_MIGRATION_STATEMENT_TIMEOUT: string;
 	computeMigrationChecksum(content: string): string;
 	discoverMigrations(migrationsDir?: string): Array<{
 		version: string;
@@ -19,10 +20,15 @@ interface MigrateModule {
 		sql: string;
 		checksum: string;
 	}>;
+	resolveMigrationStatementTimeout(
+		raw?: string,
+		env?: Record<string, string | undefined>,
+	): string;
 	runMigrations(options?: {
 		databaseUrl?: string;
 		schema?: string;
 		migrationsDir?: string;
+		statementTimeout?: string;
 	}): Promise<{ applied: string[]; skipped: string[] }>;
 }
 
@@ -30,10 +36,15 @@ const { normalizePgDumpForParity } = (await import(
 	resolve(import.meta.dir, "../../../scripts/check-schema-parity.ts")
 )) as ParityModule;
 
-const { computeMigrationChecksum, discoverMigrations, runMigrations } =
-	(await import(
-		resolve(import.meta.dir, "../../../scripts/migrate.ts")
-	)) as MigrateModule;
+const {
+	DEFAULT_MIGRATION_STATEMENT_TIMEOUT,
+	computeMigrationChecksum,
+	discoverMigrations,
+	resolveMigrationStatementTimeout,
+	runMigrations,
+} = (await import(
+	resolve(import.meta.dir, "../../../scripts/migrate.ts")
+)) as MigrateModule;
 
 if (process.env.POSTGRES_INTEGRATION_URL && !process.env.DATABASE_URL) {
 	process.env.DATABASE_URL = process.env.POSTGRES_INTEGRATION_URL;
@@ -53,6 +64,44 @@ function createTestSchemaName(prefix: string): string {
 	const name = `${prefix}_${randomUUID().replaceAll("-", "")}`;
 	createdSchemas.push(name);
 	return name;
+}
+
+function withStatementTimeoutUrl(baseUrl: string, timeout: string): string {
+	const parsed = new URL(baseUrl);
+	parsed.searchParams.set("options", `-c statement_timeout=${timeout}`);
+	return parsed.toString();
+}
+
+async function probeActiveMigrationTimeout(
+	statementTimeout?: string,
+): Promise<string> {
+	const baseUrl = process.env.POSTGRES_INTEGRATION_URL;
+	if (!baseUrl) {
+		throw new Error("POSTGRES_INTEGRATION_URL is required");
+	}
+	const databaseUrl = withStatementTimeoutUrl(baseUrl, "15s");
+	const schema = createTestSchemaName("it_mig_timeout");
+	const dir = createTempDir("mig-timeout-");
+	try {
+		await sql.unsafe(`CREATE SCHEMA ${schema}`);
+		writeFileSync(
+			join(dir, "20260101000000_timeout_probe.sql"),
+			"CREATE TABLE orgs.timeout_probe AS SELECT current_setting('statement_timeout') AS active_timeout;\n",
+			"utf8",
+		);
+		await runMigrations({
+			databaseUrl,
+			schema,
+			migrationsDir: dir,
+			statementTimeout,
+		});
+		const rows = await sql.unsafe(
+			`SELECT active_timeout FROM ${schema}.timeout_probe`,
+		);
+		return String(rows[0]?.active_timeout ?? "");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 }
 
 afterAll(async () => {
@@ -177,6 +226,39 @@ describe("migrate runner unit tests", () => {
 		expect(normalizePgDumpForParity(dumpA)).not.toBe(
 			normalizePgDumpForParity(dumpDiff),
 		);
+	});
+
+	test("resolveMigrationStatementTimeout defaults to 5min when unset or whitespace", () => {
+		expect(DEFAULT_MIGRATION_STATEMENT_TIMEOUT).toBe("5min");
+		expect(resolveMigrationStatementTimeout(undefined, {})).toBe("5min");
+		expect(resolveMigrationStatementTimeout("   ", {})).toBe("5min");
+		expect(
+			resolveMigrationStatementTimeout(undefined, {
+				MIGRATION_STATEMENT_TIMEOUT: " \t ",
+			}),
+		).toBe("5min");
+	});
+
+	test("resolveMigrationStatementTimeout reads env and lets raw option override", () => {
+		const env = { MIGRATION_STATEMENT_TIMEOUT: "10min" };
+		expect(resolveMigrationStatementTimeout(undefined, env)).toBe("10min");
+		expect(resolveMigrationStatementTimeout("3min", env)).toBe("3min");
+	});
+
+	test("resolveMigrationStatementTimeout accepts valid literals and trims whitespace", () => {
+		for (const valid of ["0", "500ms", "30s", "5min", "2h"]) {
+			expect(resolveMigrationStatementTimeout(valid, {})).toBe(valid);
+		}
+		expect(resolveMigrationStatementTimeout("  30s  ", {})).toBe("30s");
+	});
+
+	test("resolveMigrationStatementTimeout rejects malformed or SQL-unsafe values", () => {
+		const invalidValues = ["15s; DROP TABLE x", "-5s", "15", "5m", "abc", "0s"];
+		for (const invalid of invalidValues) {
+			expect(() => resolveMigrationStatementTimeout(invalid, {})).toThrow(
+				/Invalid migration statement_timeout/i,
+			);
+		}
 	});
 });
 
@@ -316,6 +398,14 @@ describe("migrate runner postgres integration tests", () => {
 			} finally {
 				rmSync(dir, { recursive: true, force: true });
 			}
+		},
+	);
+
+	integrationTest(
+		"overrides tight 15s connection statement_timeout with 5min default and custom timeout",
+		async () => {
+			expect(await probeActiveMigrationTimeout()).toBe("5min");
+			expect(await probeActiveMigrationTimeout("7min")).toBe("7min");
 		},
 	);
 });
