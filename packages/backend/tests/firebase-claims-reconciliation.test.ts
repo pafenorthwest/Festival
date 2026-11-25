@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import type { VolunteerIntentClaims } from "../src/auth/custom-claims.js";
 import {
 	FirebaseClaimsReconciliationService,
@@ -63,22 +63,31 @@ describe("FirebaseClaimsReconciliationService", () => {
 	});
 
 	it("continues after a failed user and returns an actionable count", async () => {
-		const writer = new Writer(new Set(["uid-a"]));
-		const service = new FirebaseClaimsReconciliationService(
-			new Source(
-				new Map([
-					["uid-a", {}],
-					["uid-b", {}],
-				]),
-			),
-			writer,
-		);
+		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		try {
+			const writer = new Writer(new Set(["uid-a"]));
+			const service = new FirebaseClaimsReconciliationService(
+				new Source(
+					new Map([
+						["uid-a", {}],
+						["uid-b", {}],
+					]),
+				),
+				writer,
+			);
 
-		expect(await service.reconcile()).toEqual({
-			discoveredCount: 2,
-			processedCount: 1,
-			failedCount: 1,
-		});
-		expect(writer.calls).toHaveLength(2);
+			expect(await service.reconcile()).toEqual({
+				discoveredCount: 2,
+				processedCount: 1,
+				failedCount: 1,
+			});
+			expect(writer.calls).toHaveLength(2);
+			expect(errorSpy).toHaveBeenCalledWith(
+				"Failed to reconcile Firebase custom claims",
+				{ uid: "uid-a", error: expect.any(Error) },
+			);
+		} finally {
+			errorSpy.mockRestore();
+		}
 	});
 });

@@ -1374,9 +1374,15 @@ describe("CustomerAccountService", () => {
 		await f.service.orders("festival", auth.sessionId);
 		const before = await f.repository.getIntegration(f.org.id);
 		f.setDeny(true);
-		await expect(
-			f.service.orders("festival", auth.sessionId),
-		).rejects.toMatchObject({ status: 403 });
+		const warning = spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			await expect(
+				f.service.orders("festival", auth.sessionId),
+			).rejects.toMatchObject({ status: 403 });
+			expect(warning).toHaveBeenCalledTimes(1);
+		} finally {
+			warning.mockRestore();
+		}
 		const after = await f.repository.getIntegration(f.org.id);
 		expect(after).toMatchObject({
 			readiness: "ready",
@@ -1498,11 +1504,17 @@ describe("CustomerAccountService", () => {
 		const f = await fixture();
 		const auth = await f.authenticate();
 		f.setDeny(true);
-		const denial = await f.service
-			.orders("festival", auth.sessionId)
-			.catch((error) => error);
-		expect(denial.status).toBe(403);
-		expect(denial.message).not.toContain("must-not-leak");
+		const warning = spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			const denial = await f.service
+				.orders("festival", auth.sessionId)
+				.catch((error) => error);
+			expect(denial.status).toBe(403);
+			expect(denial.message).not.toContain("must-not-leak");
+			expect(warning).toHaveBeenCalledTimes(1);
+		} finally {
+			warning.mockRestore();
+		}
 		const session = await f.service.session("festival", auth.sessionId);
 		if (!session.session.authenticated) throw new Error("session");
 		await expect(

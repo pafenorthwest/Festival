@@ -102,6 +102,12 @@ jobs:
             -c "DROP DATABASE IF EXISTS festival_parity;"
           rm -f /tmp/migrated-schema.sql
 
+      - name: Configure test database log level
+        run: |
+          docker run --rm --network host -e PGPASSWORD=postgres postgres:17-alpine \
+            psql -h 127.0.0.1 -p 5432 -U postgres -d postgres -v ON_ERROR_STOP=1 \
+            -c "ALTER DATABASE festival_test SET log_min_messages = 'fatal';"
+
       - name: Test
         env:
           DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/festival_test

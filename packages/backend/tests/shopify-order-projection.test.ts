@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import { InMemoryCheckoutRepository } from "../src/checkout/checkout-repository.js";
 import { InMemoryMembershipCommerceRepository } from "../src/commerce/membership-commerce-repository.js";
 import { MembershipStatusService } from "../src/commerce/membership-status-service.js";
@@ -429,34 +429,40 @@ describe("Shopify order projection", () => {
 	});
 
 	it("retries a failed consent-profile projection after issuing a grant", async () => {
-		const f = await fixture("2030-01-01T00:00:00.000Z", true);
-		f.orders.values.set(
-			"gid://shopify/Order/1",
-			paidOrder(f.intent.correlationId),
-		);
-		f.orders.profileFailure = true;
-		const received = await delivery(
-			f.commerce,
-			f.organization.id,
-			"webhook-0000000008",
-		);
+		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		try {
+			const f = await fixture("2030-01-01T00:00:00.000Z", true);
+			f.orders.values.set(
+				"gid://shopify/Order/1",
+				paidOrder(f.intent.correlationId),
+			);
+			f.orders.profileFailure = true;
+			const received = await delivery(
+				f.commerce,
+				f.organization.id,
+				"webhook-0000000008",
+			);
 
-		expect(await f.service.processDelivery(received.id)).toBe("failed");
-		expect(
-			await f.organizations.listEntitlementGrantSnapshots(
-				f.organization.id,
-				f.customer.id,
-			),
-		).toHaveLength(1);
-		f.orders.profileFailure = false;
-		expect(await f.service.processDelivery(received.id)).toBe("processed");
-		expect(
-			await f.organizations.listEntitlementGrantSnapshots(
-				f.organization.id,
-				f.customer.id,
-			),
-		).toHaveLength(1);
-		expect(f.orders.profileReads).toBe(2);
+			expect(await f.service.processDelivery(received.id)).toBe("failed");
+			expect(
+				await f.organizations.listEntitlementGrantSnapshots(
+					f.organization.id,
+					f.customer.id,
+				),
+			).toHaveLength(1);
+			f.orders.profileFailure = false;
+			expect(await f.service.processDelivery(received.id)).toBe("processed");
+			expect(
+				await f.organizations.listEntitlementGrantSnapshots(
+					f.organization.id,
+					f.customer.id,
+				),
+			).toHaveLength(1);
+			expect(f.orders.profileReads).toBe(2);
+			expect(errorSpy).toHaveBeenCalledTimes(1);
+		} finally {
+			errorSpy.mockRestore();
+		}
 	});
 
 	it("does not grant a fully paid order with mismatched paid money", async () => {

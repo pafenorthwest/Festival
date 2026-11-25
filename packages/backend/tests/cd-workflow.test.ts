@@ -36,6 +36,17 @@ function assertBlockingVerifyGates(workflowOrJob: string): void {
 	expect(workflowOrJob).not.toContain("continue-on-error: true");
 }
 
+function assertTestDatabaseFatalLogLevel(workflowOrJob: string): void {
+	const alterSql =
+		"ALTER DATABASE festival_test SET log_min_messages = 'fatal';";
+	expect(workflowOrJob).toContain("- name: Configure test database log level");
+	expect(workflowOrJob).toContain(alterSql);
+	const alterIndex = workflowOrJob.indexOf(alterSql);
+	const testStepIndex = workflowOrJob.indexOf("run: bun run test");
+	expect(alterIndex).toBeGreaterThan(-1);
+	expect(testStepIndex).toBeGreaterThan(alterIndex);
+}
+
 describe("Continuous Deployment & CI workflow contracts (#281)", () => {
 	it("configures .github/workflows/deploy.yml for automated release branch and tag triggers", async () => {
 		const deployWorkflow = await readRepoFile(".github/workflows/deploy.yml");
@@ -137,5 +148,19 @@ describe("Continuous Deployment & CI workflow contracts (#281)", () => {
 		expect(prChecks).not.toContain("sql_parameter_check:");
 		expect(integration).toContain("bun-version: 1.4.2");
 		expect(integration).toContain("https://int.artsfestival.online/healthz");
+	});
+
+	it("configures festival_test log_min_messages to fatal before running tests in CI workflows", async () => {
+		const deployWorkflow = await readRepoFile(".github/workflows/deploy.yml");
+		const prChecks = await readRepoFile(".github/workflows/pr-checks.yml");
+		const integration = await readRepoFile(".github/workflows/integration.yml");
+		const [deployVerifyJob = ""] = deployWorkflow.split("\n  build-and-push:");
+		const [integrationVerifyJob = ""] = integration.split(
+			"\n  deploy-integration:",
+		);
+
+		assertTestDatabaseFatalLogLevel(deployVerifyJob);
+		assertTestDatabaseFatalLogLevel(prChecks);
+		assertTestDatabaseFatalLogLevel(integrationVerifyJob);
 	});
 });
